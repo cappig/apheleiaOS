@@ -1,0 +1,70 @@
+Language: Cpp
+
+ColumnLimit: 100
+
+AlignAfterOpenBracket: BlockIndent
+AlignConsecutiveAssignments: None
+AlignConsecutiveBitFields: Consecutive
+AlignConsecutiveMacros: Consecutive
+AlignConsecutiveDeclarations: None
+AlignEscapedNewlines: Left
+AlignOperands: Align
+AlignTrailingComments: false
+
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+AlwaysBreakAfterDefinitionReturnType: None
+AlwaysBreakAfterReturnType: None
+AlwaysBreakBeforeMultilineStrings: false
+
+BinPackArguments: false
+BinPackParameters: false
+
+BreakBeforeBinaryOperators: None
+BreakBeforeBraces: Attach
+BreakBeforeTernaryOperators: true
+BreakBeforeInlineASMColon: OnlyMultiline
+BreakStringLiterals: false
+
+UseTab: Never
+TabWidth: 4
+IndentWidth: 4
+IndentCaseLabels: false
+IndentGotoLabels: true
+IndentPPDirectives: BeforeHash
+IndentWrappedFunctionNames: false
+
+MaxEmptyLinesToKeep: 2
+
+SpaceAfterCStyleCast: false
+SpaceInEmptyParentheses: false
+SpacesBeforeTrailingComments: 1
+SpacesInContainerLiterals: false
+SpacesInCStyleCastParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+PenaltyBreakComment: 100
+PenaltyBreakString: 100
+PenaltyExcessCharacter: 50
+PenaltyReturnTypeOnItsOwnLine: 50
+
+ReflowComments: true
+
+PointerAlignment: Left
+
+DerivePointerAlignment: false
+DisableFormat: false
+
+SortIncludes: CaseInsensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: "<[[:alnum:].]+>"
+    Priority: 1
+  - Regex: '"[[:alnum:].]+"'
+    Priority: 2

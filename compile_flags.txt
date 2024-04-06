@@ -1,0 +1,12 @@
+-std=gnu2x
+-Wall
+-Wextra
+-Wshadow
+-Wstrict-prototypes
+-Wno-language-extension-token
+-Wno-gnu-case-range
+-Wvla
+-ffreestanding
+-nostdinc
+-Ilibs/libc
+-Ilibs
