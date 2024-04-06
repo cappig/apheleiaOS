@@ -65,8 +65,7 @@ protected_mode:
 
     ; Jump to the C entrypoint
     push dx
-    ;call _load_entry
-    mov eax, 0x6969420
+    call _load_entry
 
 halt:
     hlt

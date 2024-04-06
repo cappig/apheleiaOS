@@ -27,7 +27,6 @@ bin/boot/libs/%.c.o: libs/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CC_BOOT) -c -o $@ $<
 
-
 bin/boot/mbr.bin: $(MBR_OBJ)
 	$(LD) $(LD_BASE) --oformat=binary -Tboot/mbr/linker.ld -o $@ $^
 

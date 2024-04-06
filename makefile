@@ -4,7 +4,7 @@ VERSION := pre-alpha
 TARGET := x86_hdd
 
 TOOLCHAIN ?= gnu
-PROFILE ?= normal
+PROFILE ?= fast
 
 CC_BASE := \
 	-MD \
