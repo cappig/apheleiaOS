@@ -1,7 +1,7 @@
 NAME := ApheleiaOS
 VERSION := pre-alpha
 
-TARGET := x86_hdd
+TARGET := x86_iso
 
 TOOLCHAIN ?= gnu
 PROFILE ?= fast

@@ -3,7 +3,7 @@ section .text
 
 ; Tiny MBR stub that gets placed at the beginning of the disk image
 ; It jums to the second stage loader (boot/bios/...)
-; This code is based on the syslinux MBR bootloader
+; This code is based on the grub2 MBR bootloader
 
 global _start
 _start:
@@ -26,29 +26,18 @@ _start:
 jmp 0:main
 main:
 
-    ; Scan the partition table for a valid active partition
-    mov si, partition_table
-    xor ax, ax
+    ; We expect the higher half to be zero. Bail if it's not
+    ; This is what grub 2 does ;)
+    mov eax, dword [boot_file_sector + 4]
+    or eax, eax
+    jnz boot_field_err
 
-    mov cx, 4
-table_loop:
-    test byte [si], 0x80 ; is this an active partition
-    jz .skip
-    inc ax
-    mov di, si
-.skip:
-    add si, 16
-    loop table_loop
+    ; Xorrisofs adds an offset of 4
+    mov eax, dword [boot_file_sector]
+    sub eax, 4
 
-    ; Assume that our table is fucked if we have more than one active partition
-    cmp ax, 1
-    jnz part_table_err
-
-    ; Load the partiton info into the dap
-    mov ax, [di + 8]
-    mov [dap.lba], ax
-    mov ax, [di + 12]
-    mov [dap.sectors], ax
+    ; Load the info into the dap and load the first 4 sectors
+    mov word [dap.lba], ax
 
     ; Read the bootloader from disk
     mov ah, 0x42
@@ -85,25 +74,25 @@ disk_err:
    call print_string
    jmp halt
 
-part_table_err:
-   mov si, part_table_err_msg
+boot_field_err:
+   mov si, field_err_msg
    call print_string
    jmp halt
 
-
-disk_err_msg        db 'Error reading from disk!', 13, 10, 0
-part_table_err_msg  db 'Malformed partition table!', 13, 10, 0
-halt_err_msg        db 'Halted execution!', 13, 10, 0
+field_err_msg   db 'Malformed boot file position field!', 13, 10, 0
+disk_err_msg    db 'Error reading from disk!', 13, 10, 0
+halt_err_msg    db 'Halted execution!', 13, 10, 0
 
 ; Disk address packet
 dap:
 .size:      dw 0x10
-.sectors:   dw 0
+.sectors:   dw 4
 .offset:    dd 0x7c00
 .lba:       dq 0
 
-partition_table equ $$+446
-partition_table_size equ 16
+; GRUB2 uses this offset to store the lba of the boot file
+; Xorrisofs can patch this in during build time so we use it here as well
+boot_file_sector equ $$+0x1b0
 
 
 ; Mark as bootable

@@ -27,8 +27,10 @@ bin/boot/libs/%.c.o: libs/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CC_BOOT) -c -o $@ $<
 
-bin/boot/mbr.bin: $(MBR_OBJ)
+bin/image/root/mbr.bin: $(MBR_OBJ)
+	@mkdir -p $(@D)
 	$(LD) $(LD_BASE) --oformat=binary -Tboot/mbr/linker.ld -o $@ $^
 
-bin/boot/boot.bin: $(BOOT_OBJ)
+bin/image/root/boot.bin: $(BOOT_OBJ)
+	@mkdir -p $(@D)
 	$(LD) $(LD_BASE) --oformat=binary -Tboot/bios/linker.ld -o $@ $^
