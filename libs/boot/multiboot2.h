@@ -5,7 +5,7 @@
 // This header file is a modified version of the referance
 // implementation featured in the multiboot2 specification:
 // https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html
-// Original is created by the FSF. and licenced under the MIT licence
+// Original is created by the FSF and licenced under the MIT licence
 
 #define MB_SEARCH_LEN   32768
 #define MB_HEADER_ALIGN 8
@@ -69,8 +69,8 @@ enum multiboot2_header_tag {
 
 typedef struct {
     u32 magic;
-    u32 architecture;
-    u32 header_length;
+    u32 arch;
+    u32 length;
 
     // The above fields plus this one must equal 0 mod 2^32
     u32 checksum;
