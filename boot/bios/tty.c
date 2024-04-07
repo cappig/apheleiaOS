@@ -2,6 +2,7 @@
 #include <base/types.h>
 #include <x86/asm.h>
 #include <x86/regs.h>
+#include <x86/serial.h>
 
 #include "bios.h"
 
@@ -11,6 +12,7 @@ void puts(const char* str) {
 
     while (*str) {
         r.al = *str;
+        send_serial(*str);
         bios_call(0x10, &r, &r);
         str++;
     }

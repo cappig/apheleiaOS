@@ -3,7 +3,8 @@ BOOT_SRC := \
 	$(wildcard boot/bios/*.c) \
 	$(addprefix boot/, $(wildcard libs/base/*.c)) \
 	$(addprefix boot/, $(wildcard libs/libc/*.c)) \
-	$(addprefix boot/, $(wildcard libs/libc_ext/*.c))
+	$(addprefix boot/, $(wildcard libs/libc_ext/*.c)) \
+	$(addprefix boot/, $(wildcard libs/x86/*.c))
 
 BOOT_OBJ := $(patsubst %, bin/%.o, $(BOOT_SRC))
 

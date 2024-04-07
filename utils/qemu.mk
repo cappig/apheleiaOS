@@ -17,6 +17,8 @@ ifeq ($(KVM), true)
 	EMU_ARGS += -enable-kvm -cpu host
 endif
 
-.PHONY: run
+.PHONY: run mbr
 run:
+	$(EMU) $(EMU_ARGS) -drive media=cdrom,file=bin/$(IMG_NAME)
+mbr:
 	$(EMU) $(EMU_ARGS) -drive format=raw,file=bin/$(IMG_NAME)

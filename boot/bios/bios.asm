@@ -7,7 +7,7 @@ section .text
 %define REGS_B 44                           ; Size of the x_regs struct
 %define SREGS_B 16                          ; Size of non scratch regs
 
-extern gdt_desc                             ; Defined in bootstrap.asm
+extern _gdt_desc
 
 ; void bios_call(u8 number, regs* in_regs, regs* out_regs);
 global bios_call
@@ -79,7 +79,7 @@ bits 16
 
     ;; Return to protected mode
     cli
-    lgdt [gdt_desc]                         ; Load 32 bit GDT
+    lgdt [_gdt_desc]                        ; Load 32 bit GDT
 
     ; Set protected mode bit
     mov eax, cr0
