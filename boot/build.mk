@@ -13,8 +13,13 @@ MBR_OBJ := $(patsubst %, bin/%.o, $(MBR_SRC))
 
 CC_BOOT := \
 	$(CC_BASE) \
+	-fdata-sections \
+	-ffunction-sections \
 	-m32
 
+LD_BOOT := \
+	$(LD_BASE) \
+	--gc-sections
 
 bin/boot/%.asm.o: boot/%.asm
 	@mkdir -p $(@D)
@@ -34,4 +39,6 @@ bin/image/root/mbr.bin: $(MBR_OBJ)
 
 bin/image/root/boot.bin: $(BOOT_OBJ)
 	@mkdir -p $(@D)
-	$(LD) $(LD_BASE) --oformat=binary -Tboot/bios/linker.ld -o $@ $^
+	$(LD) $(LD_BOOT) -Tboot/bios/linker.ld -o bin/boot/boot.elf $^
+	$(OC) -O binary bin/boot/boot.elf $@
+

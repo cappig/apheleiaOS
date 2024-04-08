@@ -31,8 +31,4 @@ else ifeq ($(PROFILE), normal)
 	CC_BASE += -O2
 else ifeq ($(PROFILE), fast)
 	CC_BASE += -O3
-
-	ifeq ($(TOOLCHAIN), gnu)
-		CC_BASE += -fvect-cost-model=cheap
-	endif
 endif

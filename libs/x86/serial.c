@@ -31,7 +31,7 @@ char receive_serial(void) {
     return inb(SERIAL_PORT);
 }
 
-void serial_puts(const char* s) {
+void send_serial_string(const char* s) {
     while (*s)
         send_serial(*s++);
 }

@@ -127,7 +127,7 @@ typedef struct PACKED {
 typedef struct PACKED {
     u8 id_length;
     u8 extended_attribute_length;
-    u32 extent_location_LSB;
+    u32 extent_location;
     u16 directory_number;
     char file_id[];
 } iso_path_table;

@@ -1,4 +1,4 @@
-NAME := ApheleiaOS
+NAME := apheleia
 VERSION := pre-alpha
 
 TARGET := x86_iso

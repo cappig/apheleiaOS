@@ -21,7 +21,7 @@ void puts(const char* str) {
 NORETURN void panic(const char* msg) {
     puts("BOOTLOADER PANIC: ");
     puts(msg);
-    puts("\n\rExecution halted!");
+    puts("\n\rExecution halted!\n\r");
 
     halt();
     __builtin_unreachable();

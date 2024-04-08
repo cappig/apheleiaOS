@@ -13,4 +13,4 @@ void init_serial(u32 baud);
 void send_serial(char c);
 char receive_serial(void);
 
-void serial_puts(const char* s);
+void send_serial_string(const char* s);
