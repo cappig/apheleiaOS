@@ -3,7 +3,7 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-// ISO 9660 filesystem strustures as defined by ECMA-119
+// ISO 9660 filesystem structures as defined by ECMA-119
 // https://www.ecma-international.org/wp-content/uploads/ECMA-119_4th_edition_june_2019.pdf
 
 #define ISO_SECTOR_SIZE  2048

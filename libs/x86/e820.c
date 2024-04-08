@@ -46,11 +46,11 @@ void clean_mmap(e820_map* map) {
 
         u64 top = entries[i].address + entries[i].size;
 
-        // Not touching or overlaping, skip
+        // Not touching or overlapping, skip
         if (top < entries[i + 1].address)
             continue;
 
-        // Neighbouring regions have the same type, merge them
+        // Neighboring regions have the same type, merge them
         if (entries[i].type == entries[i + 1].type) {
             // Don't merge bootloader allocations so that we can free individual blocks
             if (entries[i].type == E820_BOOT_ALLOC)
@@ -78,7 +78,7 @@ void clean_mmap(e820_map* map) {
     }
 }
 
-void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, uptr top) {
+void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, u32 alignment, uptr top) {
     e820_entry* entries = (e820_entry*)&mmap->entries;
 
     for (isize i = mmap->count - 1; i >= 0; i--) {
@@ -97,11 +97,16 @@ void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, uptr top) {
         if (entries[i].address + entries[i].size >= top)
             continue;
 
-        u64 base = entries[i].address;
+        u64 entry_top = entries[i].address + entries[i].size;
+        u64 base = ALIGN_DOWN(entry_top - bytes, alignment);
+
+        if (base < entries[i].address)
+            continue;
 
         // Shrink current entry
-        entries[i].address += bytes;
-        entries[i].size -= bytes;
+        u64 size = entry_top - base;
+        entries[i].address += size;
+        entries[i].size -= size;
 
         // Create new entry with memory taken from the current one
         mmap_add_entry(mmap, base, (u64)bytes, type);

@@ -3,7 +3,7 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-// EXT2 filesystem strustures
+// EXT2 filesystem structures
 // https://wiki.osdev.org/Ext2
 // https://cscie28.dce.harvard.edu/lectures/lect04/6_Extras/ext2-struct.html
 // https://www.nongnu.org/ext2-doc/ext2.html

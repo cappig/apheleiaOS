@@ -64,8 +64,8 @@ void get_e820(e820_map* mmap) {
 }
 
 
-void* mmap_alloc(usize bytes, u32 type, uptr top) {
-    void* ret = mmap_alloc_inner(mmap_ptr, bytes, type, top);
+static void* _mmap_alloc_top(usize bytes, u32 type, u32 alignment, uptr top) {
+    void* ret = mmap_alloc_inner(mmap_ptr, bytes, type, alignment, top);
 
     if (ret == NULL)
         panic("Bootloader out of memory!");
@@ -73,26 +73,22 @@ void* mmap_alloc(usize bytes, u32 type, uptr top) {
     return ret;
 }
 
-void* boot_malloc(size_t size) {
-    return mmap_alloc(size, E820_BOOT_ALLOC, (uptr)-1);
+void* mmap_alloc(usize bytes, u32 type, u32 alignment) {
+    return _mmap_alloc_top(bytes, type, alignment, (uptr)-1);
 }
 
-void* boot_calloc(size_t size) {
-    void* ret = boot_malloc(size);
-    memset(ret, 0, size);
+void* bmalloc_aligned(usize size, u32 alignment, bool allow_high) {
+    uptr top = allow_high ? (uptr)-1 : 0x100000;
+    void* ret = _mmap_alloc_top(size, E820_BOOT_ALLOC, alignment, top);
 
     return ret;
 }
 
-// Use this when allocating buffers for disk reads
-void* boot_malloc_low(size_t size) {
-    return mmap_alloc(size, E820_BOOT_ALLOC, 0x100000);
+void* bmalloc(usize size, bool allow_high) {
+    return bmalloc_aligned(size, 1, allow_high);
 }
 
-
-void boot_free(void* ptr) {
-    bool err = mmap_free_inner(mmap_ptr, ptr);
-
-    if (err)
+void bfree(void* ptr) {
+    if (mmap_free_inner(mmap_ptr, ptr))
         panic("Attempted to free non allocated memory!");
 }

@@ -36,5 +36,5 @@ void mmap_add_entry(e820_map* map, u64 address, u64 size, u32 type);
 
 void clean_mmap(e820_map* map);
 
-void* mmap_alloc_inner(e820_map* map, usize bytes, u32 type, uptr top);
+void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, u32 alignment, uptr top);
 bool mmap_free_inner(e820_map* map, void* ptr);

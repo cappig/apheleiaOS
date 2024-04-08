@@ -2,10 +2,10 @@
 
 #include <base/types.h>
 
-// This header file is a modified version of the referance
+// This header file is a modified version of the reference
 // implementation featured in the multiboot2 specification:
 // https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html
-// Original is created by the FSF and licenced under the MIT licence
+// Original is created by the FSF and licensed under the MIT license
 
 #define MB_SEARCH_LEN   32768
 #define MB_HEADER_ALIGN 8

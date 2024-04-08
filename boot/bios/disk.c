@@ -58,7 +58,7 @@ void init_disk(u16 disk) {
     _read_disk_parameters(disk);
 
     // Locate the PVD
-    pvd = boot_malloc_low(sizeof(iso_volume_descriptor));
+    pvd = bmalloc(sizeof(iso_volume_descriptor), false);
 
     for (u32 lba = ISO_VOLUME_START;; lba++) {
         read_disk(pvd, lba * ISO_SECTOR_SIZE, ISO_SECTOR_SIZE);
@@ -76,7 +76,7 @@ void init_disk(u16 disk) {
 void open_root_file(file_handle* file, const char* name) {
     iso_dir* root = (iso_dir*)pvd->root;
 
-    void* buffer = boot_malloc_low(ISO_SECTOR_SIZE);
+    void* buffer = bmalloc(ISO_SECTOR_SIZE, false);
     read_disk(buffer, root->extent_location.lsb * ISO_SECTOR_SIZE, ISO_SECTOR_SIZE);
 
     usize offset = 0;
@@ -87,17 +87,20 @@ void open_root_file(file_handle* file, const char* name) {
         if (!strncasecmp(record->file_id, name, strlen(name))) {
             u32 load_size = ALIGN(record->extent_size.lsb, ISO_SECTOR_SIZE);
 
-            // fuck me the disk buffer must be in low memory. We only have some 800K of that so we
-            // read to a low buffer and memcpy to a higher addr
-            void* low_buffer = boot_malloc_low(ISO_SECTOR_SIZE);
-            void* file_buffer = boot_malloc(load_size);
+            // fuck me the disk buffer must be in low memory.
+            // We only have some 800K of that so we read to a low
+            // buffer sector by sector and then memcpy to a higher addr
+            void* low_buffer = bmalloc(ISO_SECTOR_SIZE, false);
+            void* file_buffer = bmalloc(load_size, true);
 
             for (u32 i = 0; i < load_size / ISO_SECTOR_SIZE; i++) {
-                usize lba = (root->extent_location.lsb + i) * ISO_SECTOR_SIZE;
-                read_disk(low_buffer, lba, ISO_SECTOR_SIZE);
+                u32 addr = (record->extent_location.lsb + i) * ISO_SECTOR_SIZE;
+                read_disk(low_buffer, addr, ISO_SECTOR_SIZE);
 
                 memcpy(file_buffer + i * ISO_SECTOR_SIZE, low_buffer, ISO_SECTOR_SIZE);
             }
+
+            bfree(low_buffer);
 
             file->addr = file_buffer;
             file->size = record->extent_size.lsb;

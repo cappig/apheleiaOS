@@ -2,8 +2,8 @@ section .text
 
 global _gdt_desc
 _gdt_desc:
-.size:  dw _gdt.end - _gdt - 1
-.addr:  dd _gdt
+.size: dw _gdt.end - _gdt - 1
+.addr: dd _gdt
 
 global _gdt
 _gdt:

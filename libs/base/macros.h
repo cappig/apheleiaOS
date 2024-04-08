@@ -12,6 +12,6 @@
 #define __ALIGN_MASK(x, mask) (((x) + (mask)) & ~(mask))
 
 #define ALIGN(x, a)      __ALIGN_MASK(x, (typeof(x))(a)-1)
-#define ALIGN_DOWN(x, a) align((x) - ((a)-1), (a))
+#define ALIGN_DOWN(x, a) ALIGN((x) - ((a)-1), (a))
 
 #define ARRAY_LEN(array) (sizeof(array) / sizeof((array)[0]))
