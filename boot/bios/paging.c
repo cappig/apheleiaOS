@@ -11,16 +11,6 @@
 static page_table* lvl4;
 
 
-static bool supports_1gib_pages() {
-    cpuid_regs r = {0};
-    cpuid(CPUID_EXTENDED_INFO, &r);
-
-    if (r.edx & CPUID_EI_1G_PAGES)
-        return true;
-
-    return false;
-}
-
 static page_table* _walk_table_once(page_table* table, usize index, bool is_kernel) {
     page_table* next_table;
 

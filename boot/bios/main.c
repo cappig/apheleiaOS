@@ -52,8 +52,9 @@ NORETURN void _load_entry(u16 boot_disk) {
 
     init_paging();
 
+    // Allocate the kernel stack
     void* stack = mmap_alloc(BOOT_STACK_SIZE, E820_KERNEL, PAGE_4KIB);
-    handoff.stack_top = ID_MAPPED_PADDR((u64)(uptr)stack + BOOT_STACK_SIZE);
+    handoff.stack_top = ID_MAPPED_VADDR((u64)(uptr)stack + BOOT_STACK_SIZE);
 
     jump_to_kernel(kernel_entry, (u64)(uptr)&handoff, handoff.stack_top);
 

@@ -42,3 +42,6 @@ typedef enum {
 typedef struct ALIGNED(PAGE_4KIB) {
     u64 entries[512];
 } page_table;
+
+
+bool supports_1gib_pages(void);
