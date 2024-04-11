@@ -13,7 +13,7 @@ typedef enum {
     E820_MEM_BADRAM = 5,
 
     // The types bellow are non standard
-    E820_BOOT_ALLOC = 0x100, // Used as heap space for the bootloader allocator
+    E820_ALLOC = 0x100, // A temporary allocation, used by the boot_malloc
     E820_PAGE_TABLE = 0x101, // Temporary page tables set up by the bootloader
     E820_KERNEL = 0x102, // Kernel ELF segments, kernel page tables etc.
 } e820_type;
@@ -38,3 +38,6 @@ void clean_mmap(e820_map* map);
 
 void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, u32 alignment, uptr top);
 bool mmap_free_inner(e820_map* map, void* ptr);
+
+char* mem_map_type_string(e820_type type);
+void dump_map(e820_map* map);

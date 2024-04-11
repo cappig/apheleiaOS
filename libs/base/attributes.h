@@ -7,5 +7,5 @@
 #define ALIGNED(align)   __attribute__((aligned(align)))
 #define SECTION(section) __attribute__((section(section)))
 #define UNUSED           __attribute__((unused))
-#define NAKED            __attribute__((naked))
+#define NONNULL          __attribute__((nonnull))
 #define FALLTHROUGH      __attribute__((fallthrough))

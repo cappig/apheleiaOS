@@ -1,14 +1,13 @@
 bits 64
-
 section .bootstrap
 
-extern _k_main
+extern _kern_entry
 
 global _start
 _start:
-    mov rax, 0xdeadbeef
+    mov rdi, rax
 
-    ;call _k_main
+    call _kern_entry
 
 halt:
     hlt

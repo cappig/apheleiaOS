@@ -4,5 +4,7 @@ docker_image:
 
 .PHONY: docker_build
 docker_build:
-	docker run -it -v "$$PWD":/usr/src/apheleia -w /usr/src/apheleia \
-		-u `stat -c "%u:%g" .` apheleia:latest $(MAKE)
+	docker run -it \
+		-u `stat -c "%u:%g" .` \
+		-v "$$PWD":/usr/src/apheleia \
+		apheleia:latest $(MAKE)

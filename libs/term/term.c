@@ -276,9 +276,6 @@ terminal* term_init(usize width, usize height, term_putc_fn putc_fn) {
 }
 
 int term_resize(terminal* term, usize new_width, usize new_height) {
-    if (!term)
-        return -1;
-
     // FIXME: handle resizing to smaller size
     usize old_height = term->height;
     usize old_width = term->width;
@@ -316,11 +313,6 @@ int term_resize(terminal* term, usize new_width, usize new_height) {
 }
 
 int term_parse(terminal* term, const char* string, usize max_size) {
-    if (!term)
-        return -1;
-    if (!string)
-        return 0;
-
     usize printed = 0;
 
     for (usize i = 0; string[i] && i < max_size; i++) {

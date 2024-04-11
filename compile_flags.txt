@@ -10,3 +10,4 @@
 -nostdinc
 -Ilibs/libc
 -Ilibs
+-Ikernel

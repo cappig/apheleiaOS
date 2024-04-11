@@ -1,5 +1,6 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 #include <gfx/color.h>
 
@@ -64,10 +65,10 @@ typedef struct {
 } terminal;
 
 
-void term_scroll(terminal* term);
-void term_clear(terminal* term);
+void term_scroll(terminal* term) ATTRIBUTE(nonnull);
+void term_clear(terminal* term) ATTRIBUTE(nonnull);
 
 terminal* term_init(usize width, usize height, term_putc_fn putc_fn);
-int term_resize(terminal* term, usize new_width, usize new_height);
+int term_resize(terminal* term, usize new_width, usize new_height) ATTRIBUTE(nonnull);
 
-int term_parse(terminal* term, const char* string, usize max_size);
+int term_parse(terminal* term, const char* string, usize max_size) ATTRIBUTE(nonnull);

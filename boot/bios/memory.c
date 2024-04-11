@@ -1,10 +1,12 @@
 #include "memory.h"
 
+#include <base/addr.h>
 #include <base/macros.h>
 #include <base/types.h>
 #include <stddef.h>
 #include <string.h>
 #include <x86/e820.h>
+#include <x86/paging.h>
 
 #include "bios.h"
 #include "tty.h"
@@ -64,6 +66,13 @@ void get_e820(e820_map* mmap) {
 }
 
 
+u64 alloc_kernel_stack(usize size) {
+    void* stack = mmap_alloc(size, E820_KERNEL, PAGE_4KIB);
+
+    return ID_MAPPED_VADDR((u64)(uptr)stack + size);
+}
+
+
 static void* _mmap_alloc_top(usize bytes, u32 type, u32 alignment, uptr top) {
     void* ret = mmap_alloc_inner(mmap_ptr, bytes, type, alignment, top);
 
@@ -79,7 +88,7 @@ void* mmap_alloc(usize bytes, u32 type, u32 alignment) {
 
 void* bmalloc_aligned(usize size, u32 alignment, bool allow_high) {
     uptr top = allow_high ? (uptr)-1 : 0x100000;
-    void* ret = _mmap_alloc_top(size, E820_BOOT_ALLOC, alignment, top);
+    void* ret = _mmap_alloc_top(size, E820_ALLOC, alignment, top);
 
     return ret;
 }

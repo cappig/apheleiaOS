@@ -25,3 +25,9 @@ typedef __INTPTR_TYPE__ intptr_t;
 #define UINT16_MAX __UINT16_MAX__
 #define UINT32_MAX __UINT32_MAX__
 #define UINT64_MAX __UINT64_MAX__
+
+#define UINTMAX_MAX __UINTMAX_MAX__
+#define INTMAX_MAX  __INTMAX_MAX__
+
+#define UINTPTR_MAX __UINTPTR_MAX__
+#define INTPTR_MAX  __INTPTR_MAX__

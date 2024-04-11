@@ -2,17 +2,12 @@
 
 #include <base/attributes.h>
 #include <base/types.h>
+#include <gfx/state.h>
 #include <x86/e820.h>
 
 #define BOOT_MAGIC 0xA76e1e1a
 
 #define BOOT_STACK_SIZE 0x8000
-
-typedef enum {
-    GFX_NONE,
-    GFX_VESA,
-    GFX_VGA,
-} boot_graphics_mode;
 
 typedef struct PACKED {
     u8 mode;

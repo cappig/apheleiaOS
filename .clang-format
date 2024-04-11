@@ -64,7 +64,7 @@ DisableFormat: false
 SortIncludes: CaseInsensitive
 IncludeBlocks: Regroup
 IncludeCategories:
-  - Regex: "<[[:alnum:].]+>"
+  - Regex: "^<.*>"
     Priority: 1
-  - Regex: '"[[:alnum:].]+"'
+  - Regex: '^".*"'
     Priority: 2

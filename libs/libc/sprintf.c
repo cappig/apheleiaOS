@@ -47,7 +47,7 @@ static int _get_flags(const char* format, size_t* index) {
     return flags;
 }
 
-static int _get_width(const char* format, size_t* index, va_list* vlist) {
+static int _get_width(const char* format, size_t* index, va_list vlist) {
     int width = 0;
 
     if (isdigit(format[*index])) {
@@ -56,7 +56,7 @@ static int _get_width(const char* format, size_t* index, va_list* vlist) {
 
         *index += (size_t)(end - &format[*index]);
     } else if (format[*index] == '*') {
-        width = abs(va_arg(*vlist, int));
+        width = abs(va_arg(vlist, int));
 
         *index += 1;
     }
@@ -64,7 +64,7 @@ static int _get_width(const char* format, size_t* index, va_list* vlist) {
     return width;
 }
 
-static int _get_precision(const char* format, size_t* index, va_list* vlist) {
+static int _get_precision(const char* format, size_t* index, va_list vlist) {
     int precision = -1;
 
     if (format[*index] != '.')
@@ -78,7 +78,7 @@ static int _get_precision(const char* format, size_t* index, va_list* vlist) {
 
         *index += (size_t)(end - &format[*index]);
     } else if (format[*index] == '*') {
-        precision = va_arg(*vlist, int);
+        precision = va_arg(vlist, int);
 
         *index += 1;
     }
@@ -132,35 +132,35 @@ static int _get_size(const char* format, size_t* index) {
     return size;
 }
 
-static long long _get_var_number(int size, va_list* vlist) {
+static long long _get_var_number(int size, va_list vlist) {
     long long number;
 
     switch (size) {
     case SIZE_LLONG:
-        number = va_arg(*vlist, unsigned long long);
+        number = va_arg(vlist, unsigned long long);
         break;
     case -SIZE_LLONG:
-        number = va_arg(*vlist, long long);
+        number = va_arg(vlist, long long);
         break;
 
     case SIZE_LONG:
-        number = va_arg(*vlist, unsigned long);
+        number = va_arg(vlist, unsigned long);
         break;
     case -SIZE_LONG:
-        number = va_arg(*vlist, long);
+        number = va_arg(vlist, long);
         break;
 
     default:
     case SIZE_INT:
     case SIZE_SHORT:
     case SIZE_CHAR:
-        number = va_arg(*vlist, unsigned int);
+        number = va_arg(vlist, unsigned int);
         break;
 
     case -SIZE_INT:
     case -SIZE_SHORT:
     case -SIZE_CHAR:
-        number = va_arg(*vlist, int);
+        number = va_arg(vlist, int);
         break;
     }
 
@@ -267,8 +267,8 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
         i++;
 
         int flags = _get_flags(format, &i);
-        int width = _get_width(format, &i, &vlist);
-        int precision = _get_precision(format, &i, &vlist);
+        int width = _get_width(format, &i, vlist);
+        int precision = _get_precision(format, &i, vlist);
         int size = _get_size(format, &i);
 
         int base = _get_base(format[i]);
@@ -304,7 +304,7 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
 
             printed += _string_to_buffer(&buffer[printed], string, flags, precision, &padding);
         } else {
-            long long number = _get_var_number(size, &vlist);
+            long long number = _get_var_number(size, vlist);
             bool negative = (size < 0 && number < 0);
 
             if (precision > 0) {
@@ -312,7 +312,7 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
                 width = (precision > width) ? precision : width;
             }
 
-            char num_buffer[66];
+            char num_buffer[66] = {0};
             int len = ulltoa(negative ? -number : number, num_buffer, base);
 
             int padding = (width > len) ? width - len : 0;

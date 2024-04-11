@@ -2,6 +2,7 @@
 
 #include <base/types.h>
 #include <data/bitmap.h>
+#include <x86/e820.h>
 
 #define BITMAP_FREE 0
 #define BITMAP_USED 1
@@ -20,6 +21,7 @@ typedef struct {
 } bitmap_alloc;
 
 
-bool bitmap_alloc_init(bitmap_alloc* alloc, void* chunk_start, usize chunk_size, usize block_size);
+bool bitmap_alloc_init(bitmap_alloc* alloc, e820_map* mmap, usize block_size);
 
-void* bitmap_alloc_malloc(bitmap_alloc* alloc, usize bytes);
+void* bitmap_alloc_blocks(bitmap_alloc* alloc, usize blocks);
+void bitmap_alloc_free(bitmap_alloc* alloc, void* ptr, usize size);

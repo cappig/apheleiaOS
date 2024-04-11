@@ -3,6 +3,8 @@
 #include <base/addr.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <inttypes.h>
+#include <log/log.h>
 #include <stddef.h>
 #include <stdlib.h>
 
@@ -52,8 +54,8 @@ void clean_mmap(e820_map* map) {
 
         // Neighboring regions have the same type, merge them
         if (entries[i].type == entries[i + 1].type) {
-            // Don't merge bootloader allocations so that we can free individual blocks
-            if (entries[i].type == E820_BOOT_ALLOC)
+            // Don't merge allocations so that we can free individual blocks
+            if (entries[i].type == E820_ALLOC)
                 continue;
 
             entries[i + 1].address = entries[i].address;
@@ -132,4 +134,40 @@ bool mmap_free_inner(e820_map* mmap, void* ptr) {
     }
 
     return 1;
+}
+
+char* mem_map_type_string(e820_type type) {
+    switch (type) {
+    case E820_AVAILABLE:
+        return "available";
+    case E820_RESERVED:
+        return "reserved";
+    case E820_MEM_ACPI:
+        return "ACPI reclaimable";
+    case E820_MEM_NVS:
+        return "ACPI NVS";
+    case E820_MEM_BADRAM:
+        return "BAD RAM!";
+    case E820_ALLOC:
+        return "temorary allocation";
+    case E820_PAGE_TABLE:
+        return "page tables";
+    case E820_KERNEL:
+        return "kernel data";
+    default:
+        return "unknown";
+    }
+}
+
+void dump_map(e820_map* map) {
+    log_debug("Dump of %u entries in e820 memory map:", map->count);
+
+    for (usize i = 0; i < map->count; i++) {
+        log_debug(
+            "[ %#08" PRIx64 " - %#08" PRIx64 " ] %s",
+            map->entries[i].address,
+            map->entries[i].address + map->entries[i].size - 1,
+            mem_map_type_string(map->entries[i].type)
+        );
+    }
 }

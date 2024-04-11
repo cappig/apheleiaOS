@@ -1,11 +1,13 @@
 KERNEL_SRC := \
 	$(shell find kernel/ -type f -name '*.asm') \
-	$(shell find kernel/ -type f -name '*.c')
+	$(shell find kernel/ -type f -name '*.c') \
+	$(addprefix kernel/, $(wildcard libs/**/*.c))
 
 KERNEL_OBJ := $(patsubst %, bin/%.o, $(KERNEL_SRC))
 
 CC_KERNEL := \
 	$(CC_BASE) \
+	-Ikernel \
 	-fdata-sections \
 	-ffunction-sections \
 	-march=x86-64 \

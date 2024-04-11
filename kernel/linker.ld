@@ -9,7 +9,6 @@ PHDRS
     data    PT_LOAD    FLAGS((1 << 1) | (1 << 2)) ; /* W + R */
 }
 
-
 SECTIONS
 {
     . = 0xffffffff80000000;
@@ -35,7 +34,6 @@ SECTIONS
 
     /DISCARD/ :
     {
-        *(.eh_frame)
         *(.comment)
         *(.note .note.*)
     }
