@@ -13,6 +13,14 @@
         halt();                 \
     })
 
+#define ALPHA_ASCII                     \
+    "\n"                                \
+    " _________                     \n" \
+    "  @-----@     The Apheleia     \n" \
+    "   | | |    operating system   \n" \
+    "   | | |                       \n" \
+    "   | | |    (c) 2024 - GPLv3   \n" \
+    "   | | |                     \n\n"
 
 void puts(const char* s);
 void serial_puts(const char* s);

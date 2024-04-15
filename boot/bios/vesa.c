@@ -86,7 +86,7 @@ static vesa_mode _init_vesa(u16 max_width, u16 max_height, u16 max_bpp) {
 }
 
 
-void init_graphics(boot_graphics* gfx, u8 mode, u16 width, u16 height, u16 bpp) {
+void init_graphics(graphics_state* gfx, u8 mode, u16 width, u16 height, u16 bpp) {
     if (mode == GFX_VESA) {
         vesa_mode vesa = _init_vesa(width, height, bpp);
 

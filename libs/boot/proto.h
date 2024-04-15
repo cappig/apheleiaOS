@@ -1,25 +1,15 @@
 #pragma once
 
 #include <base/attributes.h>
+#include <base/macros.h>
 #include <base/types.h>
 #include <gfx/state.h>
 #include <x86/e820.h>
 
 #define BOOT_MAGIC 0xA76e1e1a
 
-#define BOOT_STACK_SIZE 0x8000
-
-typedef struct PACKED {
-    u8 mode;
-
-    u8 depth;
-    u16 pitch;
-
-    u16 width;
-    u16 height;
-
-    u64 framebuffer;
-} boot_graphics;
+#define KERNEL_STACK_SIZE (8 * KiB)
+#define KERNEL_HEAP_PAGES 100
 
 typedef struct PACKED {
     u32 magic;
@@ -29,5 +19,5 @@ typedef struct PACKED {
 
     e820_map mmap;
 
-    boot_graphics graphics;
+    graphics_state graphics;
 } boot_handoff;

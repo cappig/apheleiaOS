@@ -7,6 +7,7 @@
 #include <gfx/vga.h>
 #include <log/log.h>
 #include <string.h>
+#include <x86/asm.h>
 
 #include "palette.h"
 
@@ -252,6 +253,8 @@ void term_clear(terminal* term) {
 
 terminal* term_init(usize width, usize height, term_putc_fn putc_fn) {
     terminal* term = gcalloc(sizeof(terminal));
+    if (!term)
+        return NULL;
 
     term->term_putc = putc_fn;
 
@@ -265,7 +268,10 @@ terminal* term_init(usize width, usize height, term_putc_fn putc_fn) {
     term->height = height;
 
     term->lines = height + TERM_HISTORY_LINES;
+
     term->buffer = gmalloc(term->lines * width * sizeof(term_char));
+    if (!term->buffer)
+        return NULL;
 
     for (usize y = 0; y < term->lines; y++)
         _clear_line(term, y);

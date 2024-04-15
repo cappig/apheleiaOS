@@ -70,4 +70,4 @@ typedef struct PACKED {
 } vesa_mode;
 
 
-void init_graphics(boot_graphics* gfx, u8 mode, u16 width, u16 height, u16 bpp);
+void init_graphics(graphics_state* gfx, u8 mode, u16 width, u16 height, u16 bpp);

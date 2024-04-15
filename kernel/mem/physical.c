@@ -5,12 +5,13 @@
 #include <x86/paging.h>
 
 #include "video/tty.h"
+#include "virtual.h"
 
 static bitmap_alloc frame_alloc = {0};
 
 
 void pmm_init(e820_map* mmap) {
-    if (!bitmap_alloc_init(&frame_alloc, mmap, PAGE_4KIB))
+    if (!bitmap_alloc_init_mmap(&frame_alloc, mmap, PAGE_4KIB))
         panic("Failed to init page the bage farame allocator!");
 }
 
@@ -28,5 +29,16 @@ void reclaim_boot_map(e820_map* mmap) {
 
         if (current->type == E820_PAGE_TABLE || current->type == E820_ALLOC)
             current->type = E820_AVAILABLE;
+    }
+
+    return;
+
+    u64 inc = PAGE_2MIB;
+    if (supports_1gib_pages())
+        inc = PAGE_1GIB;
+
+    for (u64 i = 0; i <= PROTECTED_MODE_TOP; i += inc) {
+        unmap_page(i, false);
+        tlb_flush(i);
     }
 }

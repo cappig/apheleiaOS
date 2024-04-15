@@ -1,7 +1,10 @@
+#include "virtual.h"
+
 #include <base/addr.h>
 #include <x86/paging.h>
 
 #include "physical.h"
+#include "x86/asm.h"
 
 #define GET_MAPPED_PADDR(paddr) (page_table*)(uptr)(ID_MAPPED_VADDR(GET_PADDR(paddr)))
 
@@ -48,33 +51,38 @@ void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags) {
 }
 
 
-void unmap_page(page_size size, u64 vaddr) {
+void unmap_page(u64 vaddr, bool free) {
     usize lvl4_index = GET_LVL4_INDEX(vaddr);
     page_table* lvl4_vaddr = (page_table*)ID_MAPPED_VADDR(lvl4);
 
     usize lvl3_index = GET_LVL3_INDEX(vaddr);
     page_table* lvl3 = GET_MAPPED_PADDR(lvl4_vaddr->entries[lvl4_index]);
 
-    if (size == PAGE_1GIB) {
-        free_frames(&lvl3->entries[lvl3_index], PAGE_1GIB);
+    if (lvl3->entries[lvl3_index] & PT_HUGE) {
         lvl3->entries[lvl3_index] = 0;
-        return;
+        if (free)
+            free_frames(&lvl3->entries[lvl3_index], PAGE_1GIB);
     }
 
     usize lvl2_index = GET_LVL2_INDEX(vaddr);
     page_table* lvl2 = GET_MAPPED_PADDR(lvl3->entries[lvl3_index]);
 
-    if (size == PAGE_2MIB) {
-        free_frames(&lvl2->entries[lvl2_index], PAGE_2MIB);
+    if (lvl2->entries[lvl2_index] & PT_HUGE) {
         lvl2->entries[lvl2_index] = 0;
-        return;
+        if (free)
+            free_frames(&lvl2->entries[lvl2_index], PAGE_2MIB);
     }
 
     usize lvl1_index = GET_LVL1_INDEX(vaddr);
     page_table* lvl1 = GET_MAPPED_PADDR(lvl2->entries[lvl2_index]);
 
-    if (size == PAGE_4KIB) {
-        free_frames(&lvl1->entries[lvl1_index], PAGE_4KIB);
+    if (lvl1->entries[lvl1_index]) {
         lvl1->entries[lvl1_index] = 0;
+        if (free)
+            free_frames(&lvl1->entries[lvl1_index], PAGE_4KIB);
     }
+}
+
+void vmm_init() {
+    lvl4 = (page_table*)read_cr3();
 }

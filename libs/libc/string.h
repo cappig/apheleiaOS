@@ -26,8 +26,8 @@ void* memchr(const void* ptr, int ch, size_t len);
 
 char* strtok(char* restrict str, const char* restrict delim);
 
-// char* strdup(const char* src);
-// char* strndup(const char* str, size_t size);
+char* strdup(const char* src);
+char* strndup(const char* str, size_t size);
 
 // #include_next <string.h> //TODO: why the fuck is this broken [clangd?]
 #include <libc_ext/string.h>

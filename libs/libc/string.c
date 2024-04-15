@@ -1,5 +1,7 @@
 #include "string.h"
 
+#include <alloc/global.h>
+
 #include "stddef.h"
 
 
@@ -160,4 +162,17 @@ void* memchr(const void* ptr, int ch, size_t len) {
 char* strtok(char* restrict str, const char* restrict delim) {
     static char* save = NULL;
     return strtok_r(str, delim, &save);
+}
+
+// INFO: requires the global allocator to be initialised
+char* strdup(const char* str) {
+    size_t len = strlen(str) + 1;
+    return memcpy(gmalloc(len), str, len);
+}
+
+char* strndup(const char* str, size_t size) {
+    char* ret = memcpy(gmalloc(size + 1), str, size + 1);
+    ret[size] = '\0';
+
+    return ret;
 }
