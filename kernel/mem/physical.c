@@ -31,13 +31,7 @@ void reclaim_boot_map(e820_map* mmap) {
             current->type = E820_AVAILABLE;
     }
 
-    return;
-
-    u64 inc = PAGE_2MIB;
-    if (supports_1gib_pages())
-        inc = PAGE_1GIB;
-
-    for (u64 i = 0; i <= PROTECTED_MODE_TOP; i += inc) {
+    for (u64 i = 0; i <= PROTECTED_MODE_TOP; i += PAGE_2MIB) {
         unmap_page(i, false);
         tlb_flush(i);
     }

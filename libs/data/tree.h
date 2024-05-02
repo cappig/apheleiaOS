@@ -58,6 +58,11 @@ typedef struct rb_tree {
 
 
 tree* tree_create(void* root_data);
+void tree_destory(tree* root);
+
 tree_node* tree_create_node(void* data);
+void tree_destory_node(tree_node* node);
+
+void tree_prune(tree_node* parent);
 
 void tree_insert_child(tree_node* parent, tree_node* child);

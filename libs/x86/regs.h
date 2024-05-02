@@ -1,5 +1,6 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 
 
@@ -50,3 +51,17 @@ typedef union {
         u8 al, ah, ha1, ha2;
     };
 } regs;
+
+// general purpose registers present in long mode
+typedef struct {
+    u64 r15, r14, r13, r12;
+    u64 r11, r10, r9, r8;
+
+    u64 rbp, rdi, rsi;
+    u64 rdx, rcx, rbx, rax;
+} gen_regs;
+
+// specialized registers present in long mode
+typedef struct {
+    u64 rip, cs, rflags, rsp, ss;
+} spec_regs;

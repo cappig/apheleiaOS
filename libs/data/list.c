@@ -12,6 +12,18 @@ linked_list* list_create(void) {
     return new;
 }
 
+void list_destroy(linked_list* list) {
+    list_node* node = list->head;
+    list_node* next = node->next;
+
+    while (next) {
+        next = node->next;
+        gfree(node);
+    }
+
+    gfree(list);
+}
+
 list_node* list_create_node(void* data) {
     list_node* new = gcalloc(sizeof(list_node));
     new->next = NULL;
@@ -19,6 +31,10 @@ list_node* list_create_node(void* data) {
     new->data = data;
 
     return new;
+}
+
+void list_destory_node(list_node* node) {
+    gfree(node);
 }
 
 void list_append(linked_list* list, list_node* node) {

@@ -9,6 +9,10 @@
 #include <x86/asm.h>
 #include <x86/paging.h>
 
+#include "arch/gdt.h"
+#include "arch/idt.h"
+#include "arch/pic.h"
+#include "arch/ps2.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
@@ -21,16 +25,24 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     if (handoff->magic != BOOT_MAGIC)
         panic("Kernel booted with invalid args!");
 
+    gdt_init();
+
     vmm_init();
 
     reclaim_boot_map(&handoff->mmap);
     pmm_init(&handoff->mmap);
-    dump_map(&handoff->mmap);
 
     heap_init();
     galloc_init();
 
     tty_init(&handoff->graphics);
+
+    idt_init();
+    pic_init();
+
+    init_ps2_kbd();
+
+    enable_interrupts();
 
     log_info(ALPHA_ASCII);
 

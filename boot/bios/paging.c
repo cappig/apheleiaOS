@@ -62,10 +62,9 @@ void map_region(usize size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
 }
 
 void identity_map(u64 top_adress, u64 offset, bool is_kernel) {
-    u64 inc = supports_1gib_pages() ? PAGE_1GIB : PAGE_2MIB;
-
-    for (u64 i = 0; i <= top_adress; i += inc)
-        map_page(inc, i + offset, i, PT_READ_WRITE, is_kernel);
+    // TODO: make use of larger page sizes
+    for (u64 i = 0; i <= top_adress; i += PAGE_2MIB)
+        map_page(PAGE_2MIB, i + offset, i, PT_READ_WRITE, is_kernel);
 }
 
 void setup_paging(void) {

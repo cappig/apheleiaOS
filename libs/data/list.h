@@ -25,7 +25,10 @@ typedef struct linked_list {
 
 
 linked_list* list_create(void);
+void list_destroy(linked_list* list);
+
 list_node* list_create_node(void* data);
+void list_destory_node(list_node* node);
 
 void list_append(linked_list* list, list_node* node);
 void list_remove(linked_list* list, list_node* node);
