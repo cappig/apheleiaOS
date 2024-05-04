@@ -2,11 +2,9 @@
 
 #include <stddef.h>
 
-#define foreach(node, list) \
-    for (list_node* node = (list)->head; node->next != NULL; node = node->next)
+#define foreach(node, list) for (list_node* node = (list)->head; node != NULL; node = node->next)
 
-#define foreach_from(node, from) \
-    for (list_node* node = (from); node->next != NULL; node = node->next)
+#define foreach_from(node, from) for (list_node* node = (from); node != NULL; node = node->next)
 
 
 typedef struct list_node {

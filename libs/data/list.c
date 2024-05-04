@@ -39,14 +39,15 @@ void list_destory_node(list_node* node) {
 
 void list_append(linked_list* list, list_node* node) {
     node->next = NULL;
-    list->tail = node;
 
     if (list->length == 0) {
-        list->head = node;
         node->prev = NULL;
+        list->head = node;
+        list->tail = node;
     } else {
         list->tail->next = node;
         node->prev = list->tail;
+        list->tail = node;
     }
 
     list->length++;

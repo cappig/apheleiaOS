@@ -5,6 +5,9 @@
 
 void pmm_init(e820_map* mmap);
 
+usize get_total_mem(void);
+usize get_free_mem(void);
+
 void* alloc_frames(usize count);
 void free_frames(void* ptr, usize size);
 

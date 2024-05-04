@@ -4,7 +4,6 @@
 #include "string.h"
 
 
-// TODO: this is dogshit
 char* asctime(const struct tm* time) {
     static const char days[7][4] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
@@ -15,12 +14,11 @@ char* asctime(const struct tm* time) {
     static char buf[26];
 
     if (!time)
-        return strcpy(buf, "??? ??? ?? ??:??:?? ????\n");
+        return strcpy(buf, "??? ??? ?? ??:??:?? ????");
 
-    snprintf(
+    sprintf(
         buf,
-        26,
-        "%.3s %.3s%3d %.2d:%.2d:%.2d %d\n",
+        "%.3s %.3s%3d %.2d:%.2d:%.2d %d",
         days[time->tm_wday],
         months[time->tm_mon],
         time->tm_mday,

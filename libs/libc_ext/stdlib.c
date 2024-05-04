@@ -83,3 +83,11 @@ lldiv_t ulldiv(unsigned long long num, unsigned long den) {
 
     return ret;
 }
+
+int bcdtoi(int bcd) {
+    return (bcd & 0x0f) + (bcd >> 4) * 10;
+}
+
+int itobcd(int num) {
+    return ((num / 10) << 4) + num % 10;
+}

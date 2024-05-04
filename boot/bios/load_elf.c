@@ -54,7 +54,7 @@ u64 load_elf_sections(file_handle* elf_file) {
 
         // The segment is larger in memory than on disk i.e. a BSS section
         if (p_header->mem_size > p_header->file_size) {
-            u64 bss_vbase = ALIGN_DOWN(p_header->vaddr + p_header->file_size, PAGE_4KIB);
+            u64 bss_vbase = p_header->vaddr + p_header->file_size;
             u64 bss_vtop = p_header->vaddr + p_header->mem_size;
 
             // TODO: handle this edge case
@@ -62,12 +62,12 @@ u64 load_elf_sections(file_handle* elf_file) {
             if (!IS_PAGE_ALIGNED(bss_vbase))
                 panic("TODO! Base of BSS segment is not page aligned!");
 
-            u64 bss_memory_size = ALIGN(bss_vtop - bss_vbase, PAGE_4KIB);
-            usize bss_pages = bss_memory_size / PAGE_4KIB;
+            usize bss_pages = DIV_ROUND_UP(bss_vtop - bss_vbase, PAGE_4KIB);
+            u64 bss_memory_size = bss_pages * PAGE_4KIB;
 
-            u64 bss_pbase = (u64)(uptr)mmap_alloc(bss_pages, E820_KERNEL, attribs.alignment);
+            u64 bss_pbase = (u64)(uptr)mmap_alloc(bss_memory_size, E820_KERNEL, attribs.alignment);
 
-            memset((void*)(uptr)bss_pbase, 0, bss_pages);
+            memset((void*)(uptr)bss_pbase, 0, bss_memory_size);
 
             for (usize j = 0; j < bss_pages; j++) {
                 u64 vaddr = bss_vbase + j * PAGE_4KIB;

@@ -4,15 +4,24 @@
 #include <x86/e820.h>
 #include <x86/paging.h>
 
+#include "base/macros.h"
 #include "video/tty.h"
 #include "virtual.h"
 
-static bitmap_alloc frame_alloc = {0};
+static bitmap_alloc frame_alloc;
 
 
 void pmm_init(e820_map* mmap) {
     if (!bitmap_alloc_init_mmap(&frame_alloc, mmap, PAGE_4KIB))
-        panic("Failed to init page the bage farame allocator!");
+        panic("Failed to initialize the page farame allocator!");
+}
+
+usize get_total_mem() {
+    return frame_alloc.block_count * frame_alloc.block_size;
+}
+
+usize get_free_mem() {
+    return frame_alloc.free_blocks * frame_alloc.block_size;
 }
 
 void* alloc_frames(usize count) {

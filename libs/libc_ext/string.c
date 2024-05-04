@@ -66,17 +66,25 @@ char* strtok_r(char* str, const char* delim, char** save_ptr) {
     while (*str && _is_delim(*str, delim))
         str++;
 
-    char* token = str;
+    if (*str == '\0') {
+        *save_ptr = str;
+        return NULL;
+    }
 
-    while (*str && !_is_delim(*str, delim))
-        str++;
+    // Find the end of the token
+    char* end = str;
+    while (*end && !_is_delim(*end, delim))
+        end++;
 
-    if (*str)
-        *str++ = '\0';
+    if (*end == '\0') {
+        *save_ptr = end;
+        return str;
+    }
 
-    *save_ptr = str;
+    *end = '\0';
+    *save_ptr = end + 1;
 
-    return token;
+    return str;
 }
 
 int strcasecmp(const char* s1, const char* s2) {

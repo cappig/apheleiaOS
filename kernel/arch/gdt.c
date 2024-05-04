@@ -6,6 +6,7 @@
 static tss_entry tss;
 static gdt_desc gdtp;
 
+ALIGNED(0x10)
 static gdt_entry gdt_entries[GDT_ENTRY_COUNT];
 
 

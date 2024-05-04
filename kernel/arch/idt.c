@@ -4,6 +4,7 @@
 #include <log/log.h>
 #include <x86/asm.h>
 
+#include "base/attributes.h"
 #include "mem/heap.h"
 #include "pic.h"
 #include "video/tty.h"
@@ -12,6 +13,9 @@ static idt_register idtr;
 
 extern void* isr_stub_table[ISR_COUNT];
 static int_handler int_handlers[ISR_COUNT];
+
+ALIGNED(0x10)
+static idt_entry idt_entries[ISR_COUNT] = {0};
 
 
 static void generic_int_handler(int_state* s) {
@@ -25,11 +29,8 @@ static void exception_handler(int_state* s) {
 }
 
 void idt_init() {
-    idt_entry* idt = kcalloc(sizeof(idt_entry) * ISR_COUNT);
-
     for (usize vector = 0; vector < ISR_COUNT; vector++) {
-        // idt_entry* descriptor = &idt_entries[vector];
-        idt_entry* descriptor = &idt[vector];
+        idt_entry* descriptor = &idt_entries[vector];
 
         u64 stub_ptr = (u64)isr_stub_table[vector];
 
@@ -41,8 +42,7 @@ void idt_init() {
     }
 
     idtr.limit = ISR_COUNT * sizeof(idt_entry) - 1;
-    idtr.base = (u64)idt;
-    // idtr.base = (u64)idt_entries;
+    idtr.base = (u64)idt_entries;
 
     // Handle the default x86 exceptions
     for (usize exc = 0; exc < INT_COUNT; exc++)
@@ -61,12 +61,11 @@ void set_int_handler(usize int_num, int_handler handler) {
 
 // Called by isr_common_stub in idt_stubs.asm
 void isr_handler(int_state* s) {
-    // This should never happened, but just in case
     if (s->int_num >= ISR_COUNT)
         panic("Unknown interrupt number [int=%#lx]", s->int_num);
 
     int_handlers[s->int_num](s);
 
     if (IS_IRQ(s->int_num) && s->int_num != IRQ_SPURIOUS)
-        pic_end_int(s->int_num - 0x20);
+        pic_end_int(s->int_num - IRQ_OFFSET);
 }

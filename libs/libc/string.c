@@ -167,7 +167,13 @@ char* strtok(char* restrict str, const char* restrict delim) {
 // INFO: requires the global allocator to be initialised
 char* strdup(const char* str) {
     size_t len = strlen(str) + 1;
-    return memcpy(gmalloc(len), str, len);
+
+    char* ret = gmalloc(len);
+    if (ret) {
+        memcpy(ret, str, len);
+    }
+
+    return ret;
 }
 
 char* strndup(const char* str, size_t size) {

@@ -14,6 +14,9 @@ size_t lltoa(long long value, char* buf, int base);
 
 lldiv_t ulldiv(unsigned long long num, unsigned long den);
 
+int bcdtoi(int bcd);
+int itobcd(int num);
+
 
 #define max(a, b)                  \
     ({                             \

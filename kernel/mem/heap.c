@@ -33,6 +33,7 @@ void* kmalloc(usize size) {
 
     usize blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK);
 
+    // FIXME: don't just bail out. Attempt to allocate more heaps
     void* space = bitmap_alloc_blocks(&heap, blocks + 1);
     if (!space)
         panic("Kernel heap out of memory!");
@@ -68,9 +69,6 @@ static global_alloc galloc = {0};
 global_alloc* _global_allocator = NULL;
 
 void galloc_init() {
-    //_global_allocator = kcalloc(sizeof(global_alloc));
-    // if (!_global_allocator) panic("Failed to init galloc");
-
     _global_allocator = &galloc;
 
     _global_allocator->malloc = kmalloc;

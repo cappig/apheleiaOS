@@ -4,6 +4,8 @@
 #include <base/types.h>
 #include <x86/regs.h>
 
+#define IRQ_OFFSET 32
+
 #define ISR_COUNT 256
 
 #define IRQ_COUNT 16

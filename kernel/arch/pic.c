@@ -34,7 +34,7 @@ static void remap_pic(usize offset1, usize offset2) {
 }
 
 void pic_init() {
-    remap_pic(32, 40);
+    remap_pic(IRQ_OFFSET, IRQ_OFFSET + 8);
 
     // Mask all IRQs except the PS2 keyboard
     // https://wiki.osdev.org/8259_PIC#Masking
