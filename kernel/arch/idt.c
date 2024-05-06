@@ -5,7 +5,6 @@
 #include <x86/asm.h>
 
 #include "base/attributes.h"
-#include "mem/heap.h"
 #include "pic.h"
 #include "video/tty.h"
 

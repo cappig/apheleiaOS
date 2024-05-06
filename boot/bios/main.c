@@ -13,6 +13,7 @@
 #include "tty.h"
 #include "vesa.h"
 
+ALIGNED(8)
 static boot_handoff handoff = {.magic = BOOT_MAGIC};
 
 

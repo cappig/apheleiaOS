@@ -2,6 +2,8 @@
 
 #include <base/types.h>
 
+#include "vfs/fs.h"
+
 #define RELEASE_OFFSET 0x80
 #define RELEASED(key)  (key + RELEASE_OFFSET)
 
@@ -32,4 +34,4 @@ enum kbd_non_ascii_keys : u8 {
     KBD_F12 = 0x58,
 };
 
-void init_ps2_kbd(void);
+void init_ps2_kbd(virtual_fs* vfs);

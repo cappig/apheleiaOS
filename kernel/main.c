@@ -18,6 +18,7 @@
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
+#include "vfs/fs.h"
 #include "video/tty.h"
 
 
@@ -25,7 +26,6 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     disble_interrupts();
     log_init(&puts);
 
-    // Can we trust the handoff struct? This will only print to the serial console
     if (handoff->magic != BOOT_MAGIC)
         panic("Kernel booted with invalid args!");
 
@@ -43,24 +43,24 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     tty_init(&handoff->graphics);
 
+    virtual_fs* vfs = vfs_init();
+
     pic_init();
-    init_ps2_kbd();
+    init_ps2_kbd(vfs);
 
     enable_interrupts();
 
     log_info(ALPHA_ASCII);
 
-    log_info("Detected %zu MiB of RAM", get_free_mem() / MiB);
+    log_info("Detected %zu MiB of RAM", get_total_mem() / MiB);
 
     std_time time = get_time();
     log_info("Time at boot is: %s", asctime(&time));
 
-    enum_pci_bus();
+    pci_init();
     dump_pci_devices();
 
-    // virtual_fs* vfs = vfs_init();
-    // dump_vfs(vfs);
-    // // ide_disk_init();
+    dump_vfs(vfs);
 
     halt();
     __builtin_unreachable();

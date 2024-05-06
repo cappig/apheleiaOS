@@ -4,7 +4,10 @@
 #include <x86/asm.h>
 
 #include "idt.h"
-#include "log/log.h"
+#include "vfs/fs.h"
+#include "vfs/pipe.h"
+
+static vfs_node* chardev;
 
 // Zeroes represent non ASCII chars
 static const u8 us_ascii[2][256] = {
@@ -42,9 +45,14 @@ static char get_ascii(u8 scancode) {
 static void ps2_irq_handler(UNUSED int_state* s) {
     u8 scancode = inb(0x60);
 
-    log_debug("PS2 read code: %#x ascii = %c", scancode, get_ascii(scancode));
+    // FIXME: don't just push raw scancodes. Parse into a more common format
+    chardev->interface->file.write(chardev, (u8[]){scancode}, 0, 1);
 }
 
-void init_ps2_kbd() {
+void init_ps2_kbd(virtual_fs* vfs) {
     set_int_handler(IRQ_NUMBER(IRQ_PS2_KEYBOARD), ps2_irq_handler);
+
+    // TODO: number this?
+    chardev = pipe_create("kbd", 128);
+    vfs_mount(vfs, "/dev", chardev);
 }

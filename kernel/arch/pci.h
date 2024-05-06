@@ -122,7 +122,7 @@ enum pci_mass_storage_subclass : u8 {
 typedef void (*pci_search_func)(const pci_device* device);
 
 
-usize enum_pci_bus(void);
+usize pci_init(void);
 void dump_pci_devices(void);
 
 pci_device* pci_find_device(u8 class, u8 subclass, pci_device* from);

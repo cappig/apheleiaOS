@@ -52,7 +52,7 @@ u64 load_elf_sections(file_handle* elf_file) {
             map_page(PAGE_4KIB, vaddr, paddr, flags, true);
         }
 
-        // The segment is larger in memory than on disk i.e. a BSS section
+        // Allocate and map space for .BSS
         if (p_header->mem_size > p_header->file_size) {
             u64 bss_vbase = p_header->vaddr + p_header->file_size;
             u64 bss_vtop = p_header->vaddr + p_header->mem_size;

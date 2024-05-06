@@ -58,7 +58,7 @@ static void pci_check_bus(usize bus) {
         pci_check_slot(bus, slot);
 }
 
-usize enum_pci_bus() {
+usize pci_init() {
     devices = list_create();
 
     // How many PCI host controllers do we have?

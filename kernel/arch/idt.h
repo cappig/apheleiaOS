@@ -115,31 +115,6 @@ static const char* int_strings[32] = {
     "?",
 };
 
-// TODO: move this
-/*
-#define PF_STRINGS_COUNT 7
-
-typedef enum {
-    PF_PROTECTION_VIOLATION = 1,
-    PF_WRITE = 1 << 1,
-    PF_IN_USER_MODE = 1 << 2,
-    PF_RESERVED_WRITE = 1 << 3,
-    PF_INSTRUCTION_FETCH = 1 << 4,
-    PF_PROTECTION_KEY = 1 << 5,
-    PF_SHADOW_STACK = 1 << 5,
-} page_fault_err_codes;
-
-static kv_pair pf_strings[PF_STRINGS_COUNT] = {
-    { PF_PROTECTION_VIOLATION, "Page protection violation" },
-    { PF_WRITE, "Caused by write" },
-    { PF_IN_USER_MODE, "Occurred while in user mode" },
-    { PF_RESERVED_WRITE, "Write to reserved page" },
-    { PF_INSTRUCTION_FETCH, "Caused by instruction fetch" },
-    { PF_PROTECTION_KEY, "Protection key violation" },
-    { PF_SHADOW_STACK, "Caused by shadow stack access" }
-};
-*/
-
 // Save the machine state in the order that they are pushed to the stack
 // Values at the top are pushed last
 typedef struct PACKED {

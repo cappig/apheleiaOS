@@ -25,7 +25,8 @@ CC_BASE := \
 	-fno-pie
 
 ASM_BASE := \
-	-Wall
+	-Wall \
+	-w-reloc-abs
 
 LD_BASE := \
 	-nostdlib \

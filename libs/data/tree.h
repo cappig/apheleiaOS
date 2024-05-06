@@ -14,7 +14,6 @@ typedef struct tree_node {
 
 typedef struct tree {
     size_t nodes;
-
     tree_node* root;
 } tree;
 
