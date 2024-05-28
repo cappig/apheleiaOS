@@ -15,6 +15,15 @@ static void set_timer_freq(usize hz) {
     outb(PIT_A, (divisor >> 8) & PIT_MASK);
 }
 
+void pic_timer_enable() {
+    set_timer_freq(PIT_DEFAULT_FREQ);
+
+    u8 pic1_mask = inb(PIC1_DATA);
+    pic1_mask &= ~(1 << IRQ_SYSTEM_TIMER);
+
+    outb(PIC1_DATA, pic1_mask);
+}
+
 static void irq_sys_timer(UNUSED int_state* s) {
     log_warn(".irq_timer.");
 }
@@ -40,9 +49,6 @@ void pic_init() {
     // https://wiki.osdev.org/8259_PIC#Masking
     outb(PIC1_DATA, 0xFF & ~(1 << IRQ_PS2_KEYBOARD));
     outb(PIC2_DATA, 0xFF);
-
-    // Set up the system timer irq
-    set_timer_freq(100);
 
     set_int_handler(IRQ_NUMBER(IRQ_SYSTEM_TIMER), irq_sys_timer);
 }

@@ -31,6 +31,10 @@ void list_destory_node(list_node* node);
 void list_append(linked_list* list, list_node* node);
 void list_remove(linked_list* list, list_node* node);
 
-void list_queue_swap(linked_list* list);
+void list_swap(list_node* left, list_node* right);
+
+void list_push(linked_list* list, list_node* node);
+list_node* list_pop(linked_list* list);
+list_node* list_pop_front(linked_list* list);
 
 list_node* list_find(linked_list* list, void* data);

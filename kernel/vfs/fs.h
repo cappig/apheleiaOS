@@ -7,9 +7,9 @@
 typedef enum : u32 {
     VFS_FILE = 1,
     VFS_DIR = 2,
-    VFS_BLOCKDEV = 3,
-    VFS_CHARDEV = 4,
-    // TODO: etc . . .
+    VFS_SYMLINK = 3,
+    VFS_BLOCKDEV = 4,
+    VFS_CHARDEV = 5,
 } vfs_node_type;
 
 typedef struct {
@@ -62,7 +62,12 @@ typedef struct {
 
 
 virtual_fs* vfs_init(void);
+
 vfs_node* vfs_create_node(char* name, vfs_node_type type);
+void vfs_destroy_node(vfs_node* node);
+
+vfs_node_interface* vfs_create_file_interface(vfs_read_fn read, vfs_write_fn write);
+void vfs_destroy_interface(vfs_node_interface* interface);
 
 tree_node* vfs_lookup(virtual_fs* vfs, const char* path);
 tree_node* vfs_mount(virtual_fs* vfs, const char* path, vfs_node* node);

@@ -15,7 +15,7 @@
 // FIXME: baaaaaad. A bitmap is far from optimal for this
 
 // We should have more than one heap
-static bitmap_alloc heap = {0};
+static bitmap_alloc heap;
 
 
 void heap_init() {
@@ -48,6 +48,8 @@ void* kmalloc(usize size) {
 
 void* kcalloc(usize size) {
     void* ret = kmalloc(size);
+    if (!ret)
+        return NULL;
 
     memset(ret, 0, size);
 

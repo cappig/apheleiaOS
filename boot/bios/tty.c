@@ -12,7 +12,7 @@ void puts(const char* str) {
 
     while (*str) {
         r.al = *str;
-        send_serial(*str);
+        send_serial(SERIAL_COM(1), *str);
         bios_call(0x10, &r, &r);
         str++;
     }

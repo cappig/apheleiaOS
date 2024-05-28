@@ -3,35 +3,44 @@
 #include "asm.h"
 
 
-void init_serial(u32 baud) {
-    outb(SERIAL_PORT + 1, 0x00);
-    outb(SERIAL_PORT + 3, 0x80);
+bool init_serial(usize port, u32 baud) {
+    outb(port + 1, 0x00);
+    outb(port + 3, 0x80);
 
     u16 divisor = SERIAL_MAX_BAUD / baud;
-    outb(SERIAL_PORT + 0, divisor & 0xff);
-    outb(SERIAL_PORT + 1, (divisor >> 8) & 0xff);
+    outb(port + 0, divisor & 0xff);
+    outb(port + 1, (divisor >> 8) & 0xff);
 
-    outb(SERIAL_PORT + 3, 0x03);
-    outb(SERIAL_PORT + 2, 0xc7);
-    outb(SERIAL_PORT + 4, 0x0b);
+    outb(port + 3, 0x03);
+    outb(port + 2, 0xc7);
+    outb(port + 4, 0x0b);
+
+    // Check if serial is faulty
+    outb(port + 4, 0x1e);
+    outb(port + 0, 0xae);
+    if (inb(port + 0) != 0xae)
+        return false;
+
+    outb(port + 4, 0x0f);
+    return true;
 }
 
-void send_serial(char c) {
+void send_serial(usize port, char c) {
     // These empty loops are not ideal but eehhh it works
-    while ((inb(SERIAL_PORT + 5) & 0x20) == 0)
+    while ((inb(port + 5) & 0x20) == 0)
         continue;
 
-    outb(SERIAL_PORT, c);
+    outb(port, c);
 }
 
-char receive_serial(void) {
-    while ((inb(SERIAL_PORT + 5) & 0x01) == 0)
+char receive_serial(usize port) {
+    while ((inb(port + 5) & 0x01) == 0)
         continue;
 
-    return inb(SERIAL_PORT);
+    return inb(port);
 }
 
-void send_serial_string(const char* s) {
+void send_serial_string(usize port, const char* s) {
     while (*s)
-        send_serial(*s++);
+        send_serial(port, *s++);
 }

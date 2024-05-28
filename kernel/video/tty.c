@@ -32,7 +32,7 @@ static void _putc_vesa(term_char ch, usize index) {
 
 
 void puts(const char* s) {
-    send_serial_string(s);
+    send_serial_string(SERIAL_COM(1), s);
 
     if (term)
         term_parse(term, s, (usize)-1);

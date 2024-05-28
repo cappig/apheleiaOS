@@ -34,9 +34,9 @@ void gdt_init() {
 
     set_gdt_entry(0, 0, 0, 0, 0); // Null segment
     set_gdt_entry(1, 0, 0xfffff, 0x9a, 0x0a); // Code segment
-    set_gdt_entry(2, 0, 0xfffff, 0x92, 0x0a); // Data segment (offset 0x10)
+    set_gdt_entry(2, 0, 0xfffff, 0x92, 0x0c); // Data segment
     set_gdt_entry(3, 0, 0xfffff, 0xfa, 0x0a); // User mode code segment
-    set_gdt_entry(4, 0, 0xfffff, 0xf2, 0x0a); // User mode data segment
+    set_gdt_entry(4, 0, 0xfffff, 0xf2, 0x0c); // User mode data segment
 
     asm volatile("lgdt %0" ::"m"(gdtp) : "memory");
 }

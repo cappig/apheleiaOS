@@ -1,6 +1,7 @@
 #include "list.h"
 
 #include <alloc/global.h>
+#include <string.h>
 
 
 linked_list* list_create(void) {
@@ -70,18 +71,49 @@ void list_remove(linked_list* list, list_node* node) {
     list->length--;
 }
 
-// The current head of the list becomes the new tail
-void list_queue_swap(linked_list* list) {
-    if (list->length <= 1)
-        return;
+void list_swap(list_node* left, list_node* right) {
+    if (left->prev)
+        left->prev->next = right;
+    if (right->prev)
+        right->prev->next = left;
 
-    list_node* current_head = list->head;
+    if (left->next)
+        left->next->prev = right;
+    if (right->next)
+        right->next->prev = left;
 
-    list->head = list->head->next;
-    current_head->next = NULL;
+    memswap(&left->prev, &right->prev, sizeof(list_node*));
+    memswap(&left->next, &right->next, sizeof(list_node*));
+}
 
-    list->tail->next = current_head;
-    list->tail = current_head;
+void list_push(linked_list* list, list_node* node) {
+    node->prev = NULL;
+
+    if (list->length == 0) {
+        node->next = NULL;
+        list->head = node;
+        list->tail = node;
+    } else {
+        list->head->prev = node;
+        node->next = list->head;
+        list->head = node;
+    }
+
+    list->length++;
+}
+
+list_node* list_pop(linked_list* list) {
+    list_node* tail = list->tail;
+    list_remove(list, tail);
+
+    return tail;
+}
+
+list_node* list_pop_front(linked_list* list) {
+    list_node* head = list->head;
+    list_remove(list, head);
+
+    return head;
 }
 
 list_node* list_find(linked_list* list, void* data) {

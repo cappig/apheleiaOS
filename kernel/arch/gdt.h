@@ -21,6 +21,24 @@ typedef struct PACKED {
 } gdt_entry_high;
 
 typedef struct PACKED {
+    u8 accessed               : 1;
+    u8 read_write             : 1;
+    u8 conforming_expand_down : 1;
+    u8 code                   : 1;
+    u8 code_data_segment      : 1;
+    u8 privilege              : 2;
+    u8 present                : 1;
+} gdt_access_byte;
+
+typedef struct PACKED {
+    u8 limit_high  : 4;
+    u8 free_bit    : 1;
+    u8 long_mode   : 1;
+    u8 big         : 1;
+    u8 granularity : 1;
+} gdt_flags_byte;
+
+typedef struct PACKED {
     u32 _reserved0;
     u64 rsp[3];
     u64 _reserved1;

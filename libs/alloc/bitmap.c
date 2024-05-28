@@ -66,6 +66,9 @@ bool bitmap_alloc_init_mmap(bitmap_alloc* alloc, e820_map* mmap, usize block_siz
 
     u64 mem_size = mem_top - mem_base;
 
+    // Shift the base up so that the addresses end up aligned to the size of the block
+    mem_base = ALIGN(mem_base, block_size);
+
     alloc->chuck_start = (void*)mem_base;
     alloc->chunk_size = mem_size;
 
@@ -115,7 +118,8 @@ bool bitmap_alloc_init_mmap(bitmap_alloc* alloc, e820_map* mmap, usize block_siz
 
 
 static usize _first_fit(bitmap_alloc* alloc, usize blocks) {
-    usize region_bottom = 0, region_size = 0;
+    usize region_bottom = 0;
+    usize region_size = 0;
 
     for (usize word = 0; word < alloc->word_count; word++) {
         if (alloc->bitmap[word] == ~(bitmap_word)0) {

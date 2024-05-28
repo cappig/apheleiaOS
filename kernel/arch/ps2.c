@@ -28,7 +28,7 @@ static const u8 us_ascii[2][256] = {
 };
 
 
-static char get_ascii(u8 scancode) {
+static char _get_ascii(u8 scancode) {
     static bool shift_down = false;
 
     if (scancode == KBD_L_SHIFT || scancode == KBD_R_SHIFT) {

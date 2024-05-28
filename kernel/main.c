@@ -29,7 +29,6 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     if (handoff->magic != BOOT_MAGIC)
         panic("Kernel booted with invalid args!");
 
-    vmm_init();
     reclaim_boot_map(&handoff->mmap);
 
     gdt_init();

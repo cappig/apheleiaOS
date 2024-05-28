@@ -4,11 +4,8 @@
 #include <x86/paging.h>
 
 #include "physical.h"
-#include "x86/asm.h"
 
 #define GET_MAPPED_PADDR(paddr) (page_table*)(uptr)(ID_MAPPED_VADDR(GET_PADDR(paddr)))
-
-static page_table* lvl4;
 
 
 static page_table* _walk_table_once(page_table* table, usize index) {
@@ -25,7 +22,7 @@ static page_table* _walk_table_once(page_table* table, usize index) {
     return next_table;
 }
 
-void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags) {
+void map_page(page_table* lvl4, page_size size, u64 vaddr, u64 paddr, u64 flags) {
     usize lvl4_index = GET_LVL4_INDEX(vaddr);
 
     usize lvl3_index = GET_LVL3_INDEX(vaddr);
@@ -51,7 +48,7 @@ void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags) {
 }
 
 
-void unmap_page(u64 vaddr, bool free) {
+void unmap_page(page_table* lvl4, u64 vaddr, bool free) {
     usize lvl4_index = GET_LVL4_INDEX(vaddr);
     page_table* lvl4_vaddr = (page_table*)ID_MAPPED_VADDR(lvl4);
 
@@ -81,8 +78,4 @@ void unmap_page(u64 vaddr, bool free) {
         if (free)
             free_frames(&lvl1->entries[lvl1_index], PAGE_4KIB);
     }
-}
-
-void vmm_init() {
-    lvl4 = (page_table*)read_cr3();
 }

@@ -25,7 +25,11 @@ usize get_free_mem() {
 }
 
 void* alloc_frames(usize count) {
-    return bitmap_alloc_blocks(&frame_alloc, count);
+    void* ret = bitmap_alloc_blocks(&frame_alloc, count);
+    if (!ret)
+        panic("Failed to allocate pages!");
+
+    return ret;
 }
 
 void free_frames(void* ptr, usize size) {
@@ -40,8 +44,9 @@ void reclaim_boot_map(e820_map* mmap) {
             current->type = E820_AVAILABLE;
     }
 
+    page_table* root = (page_table*)read_cr3();
     for (u64 i = 0; i <= PROTECTED_MODE_TOP; i += PAGE_2MIB) {
-        unmap_page(i, false);
+        unmap_page(root, i, false);
         tlb_flush(i);
     }
 }

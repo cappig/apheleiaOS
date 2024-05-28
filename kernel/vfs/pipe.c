@@ -10,7 +10,7 @@
 
 static isize pipe_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
     ring_buffer* ring = node->private;
-    if (!ring)
+    if (!ring || !buf)
         return -1;
 
     return ring_buffer_pop_array(ring, buf, len);
@@ -18,7 +18,7 @@ static isize pipe_read(vfs_node* node, void* buf, UNUSED usize offset, usize len
 
 static isize pipe_write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
     ring_buffer* ring = node->private;
-    if (!ring)
+    if (!ring || !buf)
         return -1;
 
     ring_buffer_push_array(ring, buf, len);

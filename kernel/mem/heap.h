@@ -9,7 +9,7 @@
 
 typedef struct PACKED {
     u32 magic; // 4 bytes = 8 hex digits
-    u32 size; // in blocks
+    u32 size; // Size in blocks
 } kheap_header;
 
 
@@ -17,6 +17,6 @@ void heap_init(void);
 
 void* kmalloc(usize size);
 void* kcalloc(usize size);
-void kfree(void* ptr);
+void kfree(void* ptr) NONNULL;
 
 void galloc_init(void);

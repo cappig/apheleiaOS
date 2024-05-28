@@ -26,10 +26,32 @@ virtual_fs* vfs_init() {
 
 vfs_node* vfs_create_node(char* name, vfs_node_type type) {
     vfs_node* new = kcalloc(sizeof(vfs_node));
-    new->name = strdup(name);
     new->type = type;
 
+    if (name)
+        new->name = strdup(name);
+
     return new;
+}
+
+void vfs_destroy_node(vfs_node* node) {
+    if (node->interface)
+        kfree(node->interface);
+
+    kfree(node->name);
+    kfree(node);
+}
+
+vfs_node_interface* vfs_create_file_interface(vfs_read_fn read, vfs_write_fn write) {
+    vfs_node_interface* interface = kcalloc(sizeof(vfs_node_interface));
+    interface->file.read = read;
+    interface->file.write = write;
+
+    return interface;
+}
+
+void vfs_destroy_interface(vfs_node_interface* interface) {
+    kfree(interface);
 }
 
 tree_node* vfs_lookup(virtual_fs* vfs, const char* path) {
@@ -77,6 +99,17 @@ tree_node* vfs_mount(virtual_fs* vfs, const char* path, vfs_node* node) {
     tree_node* parent_node = vfs_lookup(vfs, path);
     if (!parent_node)
         return NULL;
+
+    // FIXME: baaaaaaad. This should be a hashmap
+    foreach (child, parent_node->children) {
+        tree_node* child_node = child->data;
+        vfs_node* child_vnode = child_node->data;
+
+        if (!strcmp(child_vnode->name, node->name)) {
+            errno = EEXIST;
+            return NULL;
+        }
+    }
 
     tree_node* mount_node = tree_create_node(node);
     tree_insert_child(parent_node, mount_node);

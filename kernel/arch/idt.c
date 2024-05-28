@@ -63,8 +63,8 @@ void isr_handler(int_state* s) {
     if (s->int_num >= ISR_COUNT)
         panic("Unknown interrupt number [int=%#lx]", s->int_num);
 
-    int_handlers[s->int_num](s);
-
     if (IS_IRQ(s->int_num) && s->int_num != IRQ_SPURIOUS)
         pic_end_int(s->int_num - IRQ_OFFSET);
+
+    int_handlers[s->int_num](s);
 }
