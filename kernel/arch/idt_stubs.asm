@@ -53,8 +53,26 @@ isr_common_stub:
     push r14
     push r15
 
+    mov ax, ds
+    push ax
+    mov ax, es
+    push ax
+    mov ax, fs
+    push ax
+    mov ax, gs
+    push ax
+
     mov rdi, rsp
     call isr_handler
+
+    pop ax
+    mov gs, ax
+    pop ax
+    mov fs, ax
+    pop ax
+    mov es, ax
+    pop ax
+    mov ds, ax
 
     pop r15
     pop r14

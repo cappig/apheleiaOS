@@ -17,7 +17,6 @@
 #include "arch/ps2.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
-#include "mem/virtual.h"
 #include "vfs/fs.h"
 #include "video/tty.h"
 
@@ -60,6 +59,14 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     dump_pci_devices();
 
     dump_vfs(vfs);
+
+    // // Wow a rare first try success :^]
+    // map_page((page_table*)read_cr3(), PAGE_4KIB, 0x9000, 0x9000, PT_PRESENT | PT_USER);
+    // unmap_page((page_table*)read_cr3(), 0x9000);
+    // tlb_flush(0x9000);
+    // map_page((page_table*)read_cr3(), PAGE_4KIB, 0xa000, 0xa000, PT_PRESENT | PT_USER);
+    // page_table* pad = clone_table((page_table*)read_cr3());
+    // write_cr3((u64)pad);
 
     halt();
     __builtin_unreachable();

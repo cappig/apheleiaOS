@@ -4,7 +4,6 @@
 #include <x86/e820.h>
 #include <x86/paging.h>
 
-#include "base/macros.h"
 #include "video/tty.h"
 #include "virtual.h"
 
@@ -46,7 +45,7 @@ void reclaim_boot_map(e820_map* mmap) {
 
     page_table* root = (page_table*)read_cr3();
     for (u64 i = 0; i <= PROTECTED_MODE_TOP; i += PAGE_2MIB) {
-        unmap_page(root, i, false);
+        unmap_page(root, i);
         tlb_flush(i);
     }
 }

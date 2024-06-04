@@ -52,7 +52,14 @@ typedef union {
     };
 } regs;
 
-// general purpose registers present in long mode
+typedef struct PACKED {
+    u16 gs;
+    u16 fs;
+    u16 es;
+    u16 ds;
+} seg_regs;
+
+// General purpose registers present in long mode
 typedef struct PACKED {
     u64 r15;
     u64 r14;
@@ -71,7 +78,7 @@ typedef struct PACKED {
     u64 rax;
 } gen_regs;
 
-// specialized registers present in long mode
+// Specialized registers present in long mode
 typedef struct PACKED {
     u64 rip;
     u64 cs;

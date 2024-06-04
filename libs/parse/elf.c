@@ -18,7 +18,7 @@ int elf_verify(elf_header* header) {
 
 // Convert elf segment flags to page flags
 u32 elf_to_page_flags(u32 elf_flags) {
-    u32 flags = 0;
+    u32 flags = PT_PRESENT;
 
     if (!(elf_flags & PF_X))
         flags |= PT_NO_EXECUTE;

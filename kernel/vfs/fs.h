@@ -20,12 +20,12 @@ typedef struct {
 
 typedef u32 vfs_mode;
 
-// Resolve the circular referances and make the compiler shut up
+// Resolve the circular references and make the compiler shut up
 typedef struct vfs_node vfs_node;
 
 typedef isize (*vfs_read_fn)(vfs_node* node, void* buf, usize offset, usize len);
 typedef isize (*vfs_write_fn)(vfs_node* node, void* buf, usize offset, usize len);
-typedef isize (*vfs_touch_fn)(vfs_node* parent, char* name, vfs_node permissions);
+typedef isize (*vfs_touch_fn)(vfs_node* parent, char* name, u32 perm);
 
 typedef struct {
     struct {

@@ -11,9 +11,9 @@
 #define IRQ_COUNT 16
 #define INT_COUNT 32
 
-#define IRQ_NUMBER(irq) (irq + INT_COUNT)
+#define IRQ_NUMBER(irq) ((irq) + INT_COUNT)
 
-#define IS_IRQ(irq) (irq >= INT_COUNT && irq < IRQ_COUNT + INT_COUNT)
+#define IS_IRQ(irq) ((irq) >= INT_COUNT && (irq) < IRQ_COUNT + INT_COUNT)
 
 typedef struct PACKED {
     u16 offset_low;
@@ -116,10 +116,9 @@ static const char* int_strings[32] = {
 };
 
 // Save the machine state in the order that they are pushed to the stack
-// Values at the top are pushed last
+// (values at the top are pushed last)
 typedef struct PACKED {
-    // Save all the general registers so that we can dump them if a fatal
-    // exception occurs
+    seg_regs sg_res;
     gen_regs g_regs;
 
     // Pushed by the isr_stub_xx

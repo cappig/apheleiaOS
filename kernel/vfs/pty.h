@@ -28,4 +28,4 @@ typedef struct vfs_pty {
 
 
 vfs_pty* pty_create(usize buffer_size);
-void pty_destroy(NONNULL vfs_pty* pty);
+void pty_destroy(vfs_pty* pty) NONNULL;

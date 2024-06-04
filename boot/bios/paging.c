@@ -14,13 +14,15 @@ static page_table* lvl4;
 static page_table* _walk_table_once(page_table* table, usize index, bool is_kernel) {
     page_table* next_table;
 
-    if ((u64)table->entries[index] & PT_PRESENT) {
-        next_table = (page_table*)(uptr)GET_PADDR(table->entries[index]);
+    if (table[index].bits.present) {
+        next_table = (page_table*)(uptr)(table[index].bits.addr << PAGE_SHIFT);
     } else {
         u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
         next_table = (page_table*)mmap_alloc(PAGE_4KIB, type, PAGE_4KIB);
 
-        table->entries[index] = (u64)(uptr)next_table | BASE_FLAGS;
+        table[index].bits.present = 1;
+        table[index].bits.writable = 1;
+        table[index].bits.addr = (u64)(uptr)next_table >> PAGE_SHIFT;
     }
 
     return next_table;
@@ -32,23 +34,36 @@ void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     usize lvl3_index = GET_LVL3_INDEX(vaddr);
     page_table* lvl3 = _walk_table_once(lvl4, lvl4_index, is_kernel);
 
+    page_table* entry;
+
     if (size == PAGE_1GIB) {
-        lvl3->entries[lvl3_index] = paddr | PT_PRESENT | PT_HUGE | flags;
-        return;
+        entry = &lvl3[lvl3_index];
+
+        entry->bits.huge = 1;
+        goto finalize;
     }
 
     usize lvl2_index = GET_LVL2_INDEX(vaddr);
     page_table* lvl2 = _walk_table_once(lvl3, lvl3_index, is_kernel);
 
     if (size == PAGE_2MIB) {
-        lvl2->entries[lvl2_index] = paddr | PT_PRESENT | PT_HUGE | flags;
-        return;
+        entry = &lvl2[lvl2_index];
+
+        entry->bits.huge = 1;
+        goto finalize;
     }
 
     usize lvl1_index = GET_LVL1_INDEX(vaddr);
     page_table* lvl1 = _walk_table_once(lvl2, lvl2_index, is_kernel);
 
-    lvl1->entries[lvl1_index] = paddr | PT_PRESENT | flags;
+    entry = &lvl1[lvl1_index];
+
+finalize:
+    entry->raw |= flags;
+    entry->bits.present = 1;
+
+    paddr = ALIGN(paddr, size);
+    entry->bits.addr = paddr >> PAGE_SHIFT;
 }
 
 // TODO: we should try to use larger pages if possible
