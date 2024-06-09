@@ -12,3 +12,10 @@ bool supports_1gib_pages() {
 
     return false;
 }
+
+page_table* page_table_vaddr(page_table* parent) {
+    u64 paddr = parent->bits.addr << PAGE_SHIFT;
+    page_table* ret = (page_table*)(uptr)ID_MAPPED_VADDR(paddr);
+
+    return ret;
+}

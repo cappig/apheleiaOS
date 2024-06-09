@@ -7,6 +7,7 @@
 #include "base/attributes.h"
 #include "pic.h"
 #include "video/tty.h"
+#include "x86/regs.h"
 
 static idt_register idtr;
 
@@ -21,9 +22,24 @@ static void generic_int_handler(int_state* s) {
     log_warn("Unhandled interrupt: [int=%#lx]\n", s->int_num);
 }
 
+void dump_regs(int_state* s) {
+    gen_regs* g = &s->g_regs;
+    spec_regs* r = &s->s_regs;
+
+    log_debug("Dump of machine state: ");
+    log_debug("rax=%#016lx rbx=%#016lx rcx=%#016lx", g->rax, g->rbx, g->rcx);
+    log_debug("rdx=%#016lx rsi=%#016lx rdi=%#016lx", g->rdx, g->rsi, g->rdi);
+    log_debug("rbp=%#016lx r8 =%#016lx r9 =%#016lx", g->rbp, g->r8, g->r9);
+    log_debug("r10=%#016lx r11=%#016lx r12=%#016lx", g->r10, g->r11, g->r12);
+    log_debug("r13=%#016lx r14=%#016lx r15=%#016lx", g->r13, g->r14, g->r15);
+    log_debug("rip=%#016lx rsp=%#016lx flg=%#016lx", r->rip, r->rsp, r->rflags);
+    log_debug("cr0=%#016lx cr2=%#016lx cr3=%#016lx", read_cr0(), read_cr2(), read_cr3());
+}
+
 static void exception_handler(int_state* s) {
     disble_interrupts();
     log_fatal("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
+    dump_regs(s);
     panic("Halting: %s", int_strings[s->int_num]);
 }
 

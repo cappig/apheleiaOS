@@ -235,12 +235,12 @@ static void _term_write(terminal* term) {
 
 void term_scroll(terminal* term) {
     // Move one line up
-    for (usize i = 0; i < ((term->width * term->height) - term->width); i++) {
+    usize scroll_size = (term->width * term->height) - term->width;
+    for (usize i = 0; i < scroll_size; i++)
         term->buffer[i] = term->buffer[i + term->width];
-    }
 
     // Clear the bottom line
-    _clear_line(term, (term->height - 1));
+    _clear_line(term, term->height - 1);
 
     if (term->cur_y > 0)
         term->cur_y--;

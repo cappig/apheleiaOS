@@ -135,4 +135,6 @@ typedef void (*int_handler)(int_state*);
 
 void idt_init(void);
 
+void dump_regs(int_state* s);
+
 void set_int_handler(usize int_num, int_handler handler);

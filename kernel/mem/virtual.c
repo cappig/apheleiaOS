@@ -26,6 +26,8 @@ static page_table* _walk_table_once(page_table* table, usize index) {
     return (page_table*)ID_MAPPED_VADDR(next_table);
 }
 
+// NOTE: edge case: a child page is mapped and the overlapping parent gets mapped as huge to a
+// different address. This creates a floating allocation because the reference to the child is lost
 void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 flags) {
     usize lvl4_index = GET_LVL4_INDEX(vaddr);
     page_table* lvl4 = (page_table*)ID_MAPPED_VADDR(lvl4_paddr);

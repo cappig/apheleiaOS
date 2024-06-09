@@ -8,7 +8,7 @@
 
 #define BOOT_MAGIC 0xA76e1e1a
 
-#define KERNEL_STACK_SIZE (8 * KiB)
+#define KERNEL_STACK_SIZE (16 * KiB)
 #define KERNEL_HEAP_PAGES 100
 
 typedef struct PACKED {

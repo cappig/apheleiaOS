@@ -8,6 +8,7 @@
 #define PAGE_SHIFT 12
 
 #define CANONICAL_MASK 0xffffffffffffUL
+#define PHYSICAL_MASK  0x7fffffffffUL
 #define FLAGS_MASK     0xfff
 
 #define GET_CANONICAL(a) ((u64)(a) & CANONICAL_MASK)
@@ -64,10 +65,6 @@ typedef union {
 } page_table;
 
 
-inline page_table* page_table_vaddr(page_table* parent) {
-    u64 paddr = parent->bits.addr << PAGE_SHIFT;
-    return (page_table*)(uptr)ID_MAPPED_VADDR(paddr);
-}
-
-
 bool supports_1gib_pages(void);
+
+page_table* page_table_vaddr(page_table* parent);

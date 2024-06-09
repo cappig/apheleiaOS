@@ -2,6 +2,8 @@
 
 #include <base/types.h>
 
+#include "paging.h"
+
 
 inline void halt(void) {
     for (;;)
@@ -58,19 +60,26 @@ inline void tlb_flush(u64 addr) {
 #define CR0_PG (1 << 31)
 
 inline u64 read_cr0(void) {
-    u32 value = 0;
-    asm volatile("movl %%cr0, %0" : "=r"(value));
+    u64 value = 0;
+    asm volatile("mov %%cr0, %0" : "=r"(value));
 
     return value;
 }
 
 inline void write_cr0(u32 value) {
-    asm volatile("movl %0, %%cr0" : : "r"(value));
+    asm volatile("mov %0, %%cr0" : : "r"(value));
+}
+
+inline u64 read_cr2(void) {
+    u64 value = 0;
+    asm volatile("mov %%cr2, %0" : "=r"(value));
+
+    return value;
 }
 
 inline u64 read_cr3(void) {
     u64 value = 0;
-    asm volatile("movq %%cr3, %0" : "=r"(value));
+    asm volatile("mov %%cr3, %0" : "=r"(value));
 
     return value;
 }
@@ -78,19 +87,19 @@ inline u64 read_cr3(void) {
 
 #if defined(__x86_64__)
 inline void write_cr3(u64 value) {
-    asm volatile("movq %0, %%cr3" : : "r"(value));
+    asm volatile("movq %0, %%cr3" : : "r"(value & PHYSICAL_MASK));
 }
 #else
 inline void write_cr3(u32 value) {
-    asm volatile("movl %0, %%cr3" : : "r"(value));
+    asm volatile("movl %0, %%cr3" : : "r"(value & PHYSICAL_MASK));
 }
 #endif
 
 #define CR4_PAE (1 << 5)
 
-inline u32 read_cr4(void) {
-    u32 value = 0;
-    asm volatile("movl %%cr4, %0" : "=r"(value));
+inline u64 read_cr4(void) {
+    u64 value = 0;
+    asm volatile("mov %%cr4, %0" : "=r"(value));
 
     return value;
 }

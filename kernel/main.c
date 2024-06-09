@@ -12,9 +12,10 @@
 #include "arch/cmos.h"
 #include "arch/gdt.h"
 #include "arch/idt.h"
-#include "arch/pci.h"
 #include "arch/pic.h"
-#include "arch/ps2.h"
+#include "drivers/ide.h"
+#include "drivers/pci.h"
+#include "drivers/ps2.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "vfs/fs.h"
@@ -28,11 +29,11 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     if (handoff->magic != BOOT_MAGIC)
         panic("Kernel booted with invalid args!");
 
-    reclaim_boot_map(&handoff->mmap);
-
     gdt_init();
     idt_init();
     tss_init(handoff->stack_top);
+
+    reclaim_boot_map(&handoff->mmap);
 
     pmm_init(&handoff->mmap);
 
@@ -58,15 +59,10 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     pci_init();
     dump_pci_devices();
 
-    dump_vfs(vfs);
+    ide_disk_init(vfs);
 
-    // // Wow a rare first try success :^]
-    // map_page((page_table*)read_cr3(), PAGE_4KIB, 0x9000, 0x9000, PT_PRESENT | PT_USER);
-    // unmap_page((page_table*)read_cr3(), 0x9000);
-    // tlb_flush(0x9000);
-    // map_page((page_table*)read_cr3(), PAGE_4KIB, 0xa000, 0xa000, PT_PRESENT | PT_USER);
-    // page_table* pad = clone_table((page_table*)read_cr3());
-    // write_cr3((u64)pad);
+    halt();
+    dump_vfs(vfs);
 
     halt();
     __builtin_unreachable();

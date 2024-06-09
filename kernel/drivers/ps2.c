@@ -3,7 +3,8 @@
 #include <base/types.h>
 #include <x86/asm.h>
 
-#include "idt.h"
+#include "arch/idt.h"
+#include "log/log.h"
 #include "vfs/fs.h"
 #include "vfs/pipe.h"
 
@@ -47,6 +48,8 @@ static void ps2_irq_handler(UNUSED int_state* s) {
 
     // FIXME: don't just push raw scancodes. Parse into a more common format
     chardev->interface->file.write(chardev, (u8[]){scancode}, 0, 1);
+
+    log_debug("PS2 scancode: %#x ascii: %c", scancode, _get_ascii(scancode));
 }
 
 void init_ps2_kbd(virtual_fs* vfs) {
