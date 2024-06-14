@@ -6,9 +6,11 @@
 #include <base/macros.h>
 #include <boot/proto.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include <x86/paging.h>
 
+#include "log/log.h"
 #include "physical.h"
 #include "video/tty.h"
 
@@ -19,8 +21,12 @@ static bitmap_alloc heap;
 
 
 void heap_init() {
-    usize heap_size = KERNEL_HEAP_PAGES * PAGE_4KIB;
-    void* heap_start = (void*)ID_MAPPED_VADDR(alloc_frames(KERNEL_HEAP_PAGES));
+    usize free_pages = get_free_mem() / PAGE_4KIB;
+
+    usize heap_pages = min(KERNEL_HEAP_PAGES, free_pages);
+    usize heap_size = heap_pages * PAGE_4KIB;
+
+    void* heap_start = (void*)ID_MAPPED_VADDR(alloc_frames(min(KERNEL_HEAP_PAGES, free_pages)));
 
     if (!bitmap_alloc_init(&heap, heap_start, heap_size, KERNEL_HEAP_BLOCK))
         panic("Falied to iniralize kernel heap!");

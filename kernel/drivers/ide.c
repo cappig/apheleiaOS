@@ -12,7 +12,7 @@
 #include "vfs/driver.h"
 #include "vfs/fs.h"
 
-// If we read sequential sectors from a ATAPI device with sector
+// If we read sequential sectors from an ATAPI device with sector
 // size 2048 we would end up reading the same sector 4 times
 // To optimize this we cache ATAPI reads
 // TODO: invalidate a cache blocks when we write
@@ -181,11 +181,13 @@ static void ata_probe_controller(pci_device* pci, ide_controller* controller) {
     }
 }
 
-static bool ata_read_sector(ide_device* device, usize lba, u16* buffer) {
+static bool ata_read_sector_pio(ide_device* device, usize lba, u16* buffer) {
     ide_channel* channel = device->channel;
 
     u8 disk = device->is_master ? ATA_MASTER : ATA_SLAVE;
     outb(channel->base + ATA_REG_HDDEVSEL, disk | (u8)(lba >> 24));
+
+    ata_wait(channel);
 
     outb(channel->base + ATA_REG_SECCOUNT0, 1);
     outb(channel->base + ATA_REG_FEATURES, 0x00);
@@ -205,11 +207,13 @@ static bool ata_read_sector(ide_device* device, usize lba, u16* buffer) {
     return 0;
 }
 
-static bool atapi_read_sector(ide_device* device, usize lba, u16* buffer) {
+static bool atapi_read_sector_pio(ide_device* device, usize lba, u16* buffer) {
     ide_channel* channel = device->channel;
 
     u8 disk = device->is_master ? ATA_MASTER : ATA_SLAVE;
     outb(channel->base + ATA_REG_HDDEVSEL, disk);
+
+    ata_wait(channel);
 
     outb(channel->base + ATA_REG_FEATURES, 0x00);
     outb(channel->base + ATA_REG_LBA1, ATAPI_SECTOR_SIZE & 0xff);
@@ -238,7 +242,7 @@ static bool atapi_read_sector(ide_device* device, usize lba, u16* buffer) {
     return 0;
 }
 
-static bool ide_read_sector(vfs_driver* dev, usize lba, void* buffer) {
+static bool ide_read_sector_pio(vfs_driver* dev, usize lba, void* buffer) {
     ide_device* device = dev->private;
 
     if (!device->exists)
@@ -249,9 +253,9 @@ static bool ide_read_sector(vfs_driver* dev, usize lba, void* buffer) {
         return get_cache_sector(lba);
 
     if (TYPE_IS_ATA(device->type)) {
-        return ata_read_sector(device, lba, (u16*)buffer);
+        return ata_read_sector_pio(device, lba, (u16*)buffer);
     } else {
-        if (atapi_read_sector(device, lba / 4, cache.buffer))
+        if (atapi_read_sector_pio(device, lba / 4, cache.buffer))
             return 1;
 
         // We only cache large ATAPI sectors
@@ -271,7 +275,7 @@ static isize ide_read_wrapper(vfs_driver* dev, void* dest, usize offset, usize b
     void* buffer = kmalloc(sectors * dev->sector_size);
 
     for (usize i = 0; i < sectors; i++)
-        ide_read_sector(dev, lba, buffer + i * dev->sector_size);
+        ide_read_sector_pio(dev, lba, buffer + i * dev->sector_size);
 
     memcpy(dest, buffer + offset, bytes);
 
@@ -283,8 +287,10 @@ bool ide_disk_init(virtual_fs* vfs) {
     pci_device* ide_controller_pci = pci_find_device(PCI_MASS_STORAGE, PCI_MS_IDE, NULL);
 
     // No IDE controller found
-    if (ide_controller_pci == NULL)
+    if (ide_controller_pci == NULL) {
+        log_error("IDE disk controller not found!");
         return 1;
+    }
 
     set_int_handler(IRQ_NUMBER(IRQ_PRIMARY_ATA), ata_irq_handler);
     set_int_handler(IRQ_NUMBER(IRQ_SECONDARY_ATA), ata_irq_handler);
@@ -299,7 +305,9 @@ bool ide_disk_init(virtual_fs* vfs) {
     interface->write = NULL;
     interface->init = NULL;
 
-    usize mount_index = 0;
+    usize hd_index = 0;
+    usize cd_index = 0;
+
     for (usize i = 0; i < 4; i++) {
         ide_device* disk = &controller->devices[i];
 
@@ -308,8 +316,15 @@ bool ide_disk_init(virtual_fs* vfs) {
 
         log_debug("IDE disk %zd has model id: %.40s", i, disk->identify->model);
 
-        char name[] = "hd*";
-        name[2] = 'a' + mount_index++;
+        bool is_cd = TYPE_IS_ATAPI(disk->type);
+        usize next_index = is_cd ? cd_index++ : hd_index++;
+
+        // Name our dev file cdX if it's an optical drive or hdX if it's a regular hdd
+        char name[4] = {
+            is_cd ? 'c' : 'h',
+            'd',
+            'a' + next_index,
+        };
 
         ide_device* ide_dev = &controller->devices[i];
         usize disk_size = compute_disk_size(ide_dev);
@@ -323,7 +338,9 @@ bool ide_disk_init(virtual_fs* vfs) {
         log_debug("Mounted /dev/%s", name);
     }
 
-    log_debug("Found and mounted %lu IDE disks", controller->disks);
+    log_info("Found and mounted %lu IDE disks", controller->disks);
+
+    pci_destroy_device(ide_controller_pci);
 
     return !(controller->disks > 0);
 }

@@ -13,3 +13,6 @@ void* bmalloc(usize size, bool allow_high) ATTRIBUTE(malloc);
 void* bmalloc_aligned(usize size, u32 alignment, bool allow_high) ATTRIBUTE(malloc);
 
 void bfree(void* ptr);
+
+
+u64 get_rsdp(void);

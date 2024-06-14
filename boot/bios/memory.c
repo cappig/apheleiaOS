@@ -101,3 +101,22 @@ void bfree(void* ptr) {
     if (mmap_free_inner(mmap_ptr, ptr))
         panic("Attempted to free non allocated memory!");
 }
+
+
+// https://wiki.osdev.org/RSDP#Detecting_the_RSDP
+u64 get_rsdp() {
+    u64 ebda = (u64)(*(u16*)0x40e << 4);
+
+    for (u64 addr = ebda; addr <= 0xfffff; addr += 16) {
+        // No RSDP found in the EBDA; start searching the
+        // other possible memory region
+        if (addr == ebda + 1024)
+            addr = 0xe0000;
+
+        if (!strncmp((char*)(uptr)addr, "RSD PTR ", 8)) {
+            return addr;
+        }
+    }
+
+    return 0;
+}

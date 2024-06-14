@@ -13,6 +13,10 @@
 #define PCI_REG(name)      (offsetof(pci_header, name))
 #define PCI_REG_SIZE(name) (SIZEOF_MEMBER(pci_header, name))
 
+// The PCIE SIG keeps the official PCI express standard _and the drafts as well_ behind a massive
+// paywall so we have to rely on wikis and "leaked PDFs"
+// https://wiki.osdev.org/PCI_Express
+// https://wiki.osdev.org/PCI
 
 typedef struct PACKED {
     u16 vendor_id;
@@ -67,6 +71,8 @@ typedef struct PACKED {
     u16 bridge_control;
 } pci_bridge;
 
+// This struct is 256 bytes long under conventional PCI
+// and 4096 bytes long under PCI express
 typedef struct PACKED {
     pci_header header;
 
@@ -119,10 +125,17 @@ enum pci_mass_storage_subclass : u8 {
     PCI_MS_OTHER = 0x80,
 };
 
-typedef void (*pci_search_func)(const pci_device* device);
+typedef struct {
+    u64 base; // ~0 if conventional PCI
+    u8 bus;
+    u8 slot;
+    u8 func;
+    pci_header header;
+} pci_found;
 
 
 usize pci_init(void);
 void dump_pci_devices(void);
 
 pci_device* pci_find_device(u8 class, u8 subclass, pci_device* from);
+void pci_destroy_device(pci_device* dev);

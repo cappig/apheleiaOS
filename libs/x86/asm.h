@@ -78,7 +78,11 @@ inline u64 read_cr2(void) {
 }
 
 inline u64 read_cr3(void) {
+#if defined(__x86_64__)
     u64 value = 0;
+#else
+    u32 value = 0;
+#endif
     asm volatile("mov %%cr3, %0" : "=r"(value));
 
     return value;
@@ -98,7 +102,12 @@ inline void write_cr3(u32 value) {
 #define CR4_PAE (1 << 5)
 
 inline u64 read_cr4(void) {
+#if defined(__x86_64__)
     u64 value = 0;
+#else
+    u32 value = 0;
+#endif
+
     asm volatile("mov %%cr4, %0" : "=r"(value));
 
     return value;

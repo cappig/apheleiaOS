@@ -1,12 +1,15 @@
 #include "virtual.h"
 
 #include <base/addr.h>
+#include <base/macros.h>
+#include <base/types.h>
 #include <string.h>
 #include <x86/paging.h>
 
-#include "base/macros.h"
-#include "base/types.h"
+#include "libc_ext/stdlib.h"
+#include "log/log.h"
 #include "physical.h"
+#include "x86/asm.h"
 
 
 // Locate the requested index in the child table, allocate if it doesn't exist
@@ -65,6 +68,28 @@ finalize:
 
     paddr = ALIGN(paddr, size);
     entry->bits.addr = paddr >> PAGE_SHIFT;
+}
+
+void map_region(page_table* lvl4_paddr, usize size, u64 vaddr, u64 paddr, u64 flags) {
+    for (usize i = 0; i < DIV_ROUND_UP(size, PAGE_4KIB); i++) {
+        u64 page_vaddr = vaddr + i * PAGE_4KIB;
+        u64 page_paddr = paddr + i * PAGE_4KIB;
+
+        map_page(lvl4_paddr, PAGE_4KIB, page_vaddr, page_paddr, flags);
+    }
+}
+
+void identity_map(page_table* lvl4_paddr, u64 from, u64 to, u64 map_offset, u64 flags, bool remap) {
+    from = ALIGN_DOWN(from, PAGE_4KIB);
+    to = ALIGN(to, PAGE_4KIB);
+
+    // The bottom 4GiB are already mapped by the bootloader
+    if (!remap)
+        from = max(PROTECTED_MODE_TOP, from);
+
+    for (u64 i = from; i <= to; i += PAGE_4KIB) {
+        map_page(lvl4_paddr, PAGE_4KIB, i + map_offset, i, flags);
+    }
 }
 
 void unmap_page(page_table* lvl4_paddr, u64 vaddr) {

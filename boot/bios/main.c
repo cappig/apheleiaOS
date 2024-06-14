@@ -28,6 +28,8 @@ NORETURN void _load_entry(u16 boot_disk) {
 
     get_e820(&handoff.mmap);
 
+    handoff.rsdp = get_rsdp();
+
     init_disk(boot_disk);
 
     // TODO: read this from a config

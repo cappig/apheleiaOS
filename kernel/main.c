@@ -13,6 +13,7 @@
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "arch/pic.h"
+#include "drivers/acpi.h"
 #include "drivers/ide.h"
 #include "drivers/pci.h"
 #include "drivers/ps2.h"
@@ -23,7 +24,6 @@
 
 
 NORETURN void _kern_entry(boot_handoff* handoff) {
-    disble_interrupts();
     log_init(&puts);
 
     if (handoff->magic != BOOT_MAGIC)
@@ -51,17 +51,18 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     log_info(ALPHA_ASCII);
 
-    log_info("Detected %zu MiB of RAM", get_total_mem() / MiB);
+    log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
 
     std_time time = get_time();
-    log_info("Time at boot is: %s", asctime(&time));
+    log_info("Time and date at boot is: %s", asctime(&time));
+
+    acpi_init(handoff->rsdp);
 
     pci_init();
     dump_pci_devices();
 
     ide_disk_init(vfs);
 
-    halt();
     dump_vfs(vfs);
 
     halt();

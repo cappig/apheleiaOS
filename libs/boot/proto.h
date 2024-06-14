@@ -9,13 +9,15 @@
 #define BOOT_MAGIC 0xA76e1e1a
 
 #define KERNEL_STACK_SIZE (16 * KiB)
-#define KERNEL_HEAP_PAGES 100
+#define KERNEL_HEAP_PAGES 512
 
 typedef struct PACKED {
     u32 magic;
     u32 chacksum; // TODO:
 
     u64 stack_top;
+
+    u64 rsdp;
 
     e820_map mmap;
 
