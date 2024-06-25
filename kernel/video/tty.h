@@ -5,13 +5,6 @@
 #include <gfx/state.h>
 #include <log/log.h>
 #include <term/term.h>
-#include <x86/asm.h>
-
-#define panic(...)              \
-    ({                          \
-        log_fatal(__VA_ARGS__); \
-        halt();                 \
-    })
 
 #define ALPHA_ASCII                     \
     "\n"                                \

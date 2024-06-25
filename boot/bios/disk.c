@@ -60,15 +60,17 @@ void init_disk(u16 disk) {
     // Locate the PVD
     pvd = bmalloc(sizeof(iso_volume_descriptor), false);
 
-    for (u32 lba = ISO_VOLUME_START;; lba++) {
+    for (u32 lba = ISO_VOLUME_START; lba < ISO_MAX_VOLUMES; lba++) {
         read_disk(pvd, lba * ISO_SECTOR_SIZE, ISO_SECTOR_SIZE);
 
         if (pvd->type == ISO_PRIMARY)
-            break;
+            return;
 
-        if (pvd->type == ISO_TERMINATOR || lba == ISO_MAX_VOLUMES)
-            panic("No primary volume found on disk!");
+        if (pvd->type == ISO_TERMINATOR)
+            break;
     }
+
+    panic("No primary volume found on disk!");
 }
 
 // All of the bootloader files are in the root of the iso so we don't even bother with subdirs here

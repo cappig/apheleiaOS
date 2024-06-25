@@ -1,13 +1,13 @@
 #include "idt.h"
 
+#include <base/attributes.h>
 #include <base/types.h>
 #include <log/log.h>
 #include <x86/asm.h>
+#include <x86/regs.h>
 
-#include "base/attributes.h"
+#include "panic.h"
 #include "pic.h"
-#include "video/tty.h"
-#include "x86/regs.h"
 
 static idt_register idtr;
 
@@ -20,6 +20,21 @@ static idt_entry idt_entries[ISR_COUNT] = {0};
 
 static void generic_int_handler(int_state* s) {
     log_warn("Unhandled interrupt: [int=%#lx]\n", s->int_num);
+}
+
+typedef struct {
+    u64 rbp;
+    u64 rip;
+} stack_frame;
+
+void dump_stack_trace(u64 rbp) {
+    stack_frame* frame = (stack_frame*)rbp;
+
+    log_debug("Dump of stack trace:");
+    while (frame) {
+        log_debug("rip: %#lx", frame->rip);
+        frame = (stack_frame*)frame->rbp;
+    }
 }
 
 void dump_regs(int_state* s) {
@@ -40,6 +55,7 @@ static void exception_handler(int_state* s) {
     disble_interrupts();
     log_fatal("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
     dump_regs(s);
+    dump_stack_trace(s->g_regs.rbp);
     panic("Halting: %s", int_strings[s->int_num]);
 }
 

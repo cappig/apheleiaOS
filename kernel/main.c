@@ -12,6 +12,7 @@
 #include "arch/cmos.h"
 #include "arch/gdt.h"
 #include "arch/idt.h"
+#include "arch/panic.h"
 #include "arch/pic.h"
 #include "drivers/acpi.h"
 #include "drivers/ide.h"

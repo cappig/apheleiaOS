@@ -10,9 +10,9 @@
 #include <string.h>
 #include <x86/paging.h>
 
+#include "arch/panic.h"
 #include "log/log.h"
 #include "physical.h"
-#include "video/tty.h"
 
 // FIXME: baaaaaad. A bitmap is far from optimal for this
 
@@ -39,17 +39,25 @@ void* kmalloc(usize size) {
 
     usize blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK);
 
-    // FIXME: don't just bail out. Attempt to allocate more heaps
+    // FIXME: don't just panic. Attempt to allocate more heaps
     void* space = bitmap_alloc_blocks(&heap, blocks + 1);
-    if (!space)
-        panic("Kernel heap out of memory!");
+    if (!space) {
+        log_fatal("Attempted to allocate %zd blocks!", blocks);
+        panic("Kernel heap out of memory: %zd free blocks left!", heap.free_blocks);
+    }
 
     // Write the header
     kheap_header* header = space;
     header->magic = KERNEL_HEAP_MAGIC;
     header->size = blocks;
 
-    return space + sizeof(kheap_header);
+    void* ret = space + sizeof(kheap_header);
+
+#ifdef KMALLOC_DEBUG
+    log_debug("[KMALLOC_DEBUG] malloc: bytes = %zd, ptr = %#lx", size, (u64)ret);
+#endif
+
+    return ret;
 }
 
 void* kcalloc(usize size) {
@@ -65,11 +73,17 @@ void* kcalloc(usize size) {
 void kfree(void* ptr) {
     kheap_header* header = ptr - sizeof(kheap_header);
 
+    usize size = header->size * KERNEL_HEAP_BLOCK;
+
+#ifdef KMALLOC_DEBUG
+    log_debug("[KMALLOC_DEBUG] free: bytes = %zd, ptr = %#lx", size, (u64)ptr);
+#endif
+
     // FIXME: This should really not panic
     if (header->magic != KERNEL_HEAP_MAGIC || !header->size)
         panic("Attempted to free unallocated memory!");
 
-    bitmap_alloc_free(&heap, header, (header->size + 1) * KERNEL_HEAP_BLOCK);
+    bitmap_alloc_free(&heap, header, size + sizeof(kheap_header));
 }
 
 

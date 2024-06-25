@@ -13,13 +13,16 @@
 virtual_fs* vfs_init() {
     virtual_fs* vfs = kcalloc(sizeof(virtual_fs));
 
-    vfs_node* root = vfs_create_node("/", VFS_DIR);
+    vfs->mounted = list_create();
 
-    vfs->tree.root = tree_create_node(root);
-    vfs->tree.nodes = 1;
+    vfs_node* root = vfs_create_node(NULL, VFS_DIR);
+    vfs->tree = tree_create(root);
 
-    vfs_mount(vfs, "/", vfs_create_node("dev", VFS_DIR));
-    vfs_mount(vfs, "/", vfs_create_node("mnt", VFS_DIR));
+    vfs_node* dev = vfs_create_node("dev", VFS_DIR);
+    vfs_node* mnt = vfs_create_node("mnt", VFS_DIR);
+
+    vfs_mount(vfs, "/", tree_create_node(dev));
+    vfs_mount(vfs, "/", tree_create_node(mnt));
 
     return vfs;
 }
@@ -60,7 +63,7 @@ tree_node* vfs_lookup(virtual_fs* vfs, const char* path) {
         return NULL;
     }
 
-    tree_node* node = vfs->tree.root;
+    tree_node* node = vfs->tree->root;
     if (!node) {
         errno = ENXIO;
         return NULL;
@@ -95,12 +98,20 @@ tree_node* vfs_lookup(virtual_fs* vfs, const char* path) {
     return node;
 }
 
-tree_node* vfs_mount(virtual_fs* vfs, const char* path, vfs_node* node) {
-    tree_node* parent_node = vfs_lookup(vfs, path);
-    if (!parent_node)
+tree_node* vfs_mount(virtual_fs* vfs, const char* path, tree_node* mount_node) {
+    vfs_node* node = mount_node->data;
+    if (!node->name) {
+        errno = EINVAL;
         return NULL;
+    }
 
-    // FIXME: baaaaaaad. This should be a hashmap
+    tree_node* parent_node = vfs_lookup(vfs, path);
+    if (!parent_node) {
+        errno = ENOENT;
+        return NULL;
+    }
+
+    // TODO: This should be a hash map
     foreach (child, parent_node->children) {
         tree_node* child_node = child->data;
         vfs_node* child_vnode = child_node->data;
@@ -111,12 +122,11 @@ tree_node* vfs_mount(virtual_fs* vfs, const char* path, vfs_node* node) {
         }
     }
 
-    tree_node* mount_node = tree_create_node(node);
     tree_insert_child(parent_node, mount_node);
-    // TODO: add time stuff
 
     return mount_node;
 }
+
 
 static void _recursive_dump(tree_node* parent, usize depth) {
     foreach (node, parent->children) {
@@ -132,5 +142,5 @@ static void _recursive_dump(tree_node* parent, usize depth) {
 void dump_vfs(virtual_fs* vfs) {
     log_debug("Recursive dump of virual file system:");
 
-    _recursive_dump(vfs->tree.root, 0);
+    _recursive_dump(vfs->tree->root, 0);
 }

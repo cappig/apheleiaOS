@@ -108,3 +108,22 @@ int strncasecmp(const char* s1, const char* s2, size_t n) {
     else
         return *(const unsigned char*)s1 - *(const unsigned char*)s2;
 }
+
+
+char* strtrim(char* str) {
+    while (isspace(*str))
+        str++;
+
+    return str;
+}
+
+char* strtrunc(char* str) {
+    char* end = str + strlen(str);
+
+    while (end > str && isspace(*end))
+        end--;
+
+    end[1] = '\0';
+
+    return str;
+}

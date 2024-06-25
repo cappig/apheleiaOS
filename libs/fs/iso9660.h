@@ -67,10 +67,19 @@ typedef struct PACKED {
 } iso_dir;
 
 typedef enum {
-    ISO_BOOT_RECORD,
-    ISO_PRIMARY,
-    ISO_SUPPLEMENTARY,
-    ISO_PARTITION,
+    ISO_DIR_HIDDEN = 1 << 0,
+    ISO_DIR_SUBDIR = 1 << 1,
+    ISO_DIR_ASSOCIATED = 1 << 2,
+    ISO_DIR_HAS_EXTENDED = 1 << 3,
+    ISO_DIR_HAS_OWNER = 1 << 4,
+    ISO_DIR_NOT_FINAL = 1 << 7,
+} iso_dir_flags;
+
+typedef enum {
+    ISO_BOOT_RECORD = 0,
+    ISO_PRIMARY = 1,
+    ISO_SUPPLEMENTARY = 2,
+    ISO_PARTITION = 3,
 
     ISO_TERMINATOR = 255
 } iso_volume_type;
@@ -121,7 +130,7 @@ typedef struct PACKED {
     u8 _unused3;
 
     // extra padding; size of volume_descriptor is 2048 bytes
-    char application_use[1170];
+    char application_use[1165];
 } iso_volume_descriptor;
 
 typedef struct PACKED {

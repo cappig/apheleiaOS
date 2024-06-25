@@ -61,7 +61,6 @@ static bool ata_wait_for_ready(ide_channel* channel) {
             return 1;
 
         if (!(status & ATA_SR_BUSY))
-            // if (!(status & ATA_SR_BUSY) && (status & ATA_SR_DATA_REQEST_READY))
             return 0;
     }
 
@@ -95,14 +94,17 @@ static bool ata_probe_device(ide_device* device) {
     // Disable interrupts because we use PIO mode to read the ID packet
     outb(channel->control, ATA_CNT_NO_INT);
 
+    // An error here most likely indicates that there is no disk in this slot
+    // should we even warn?
     if (ata_wait_for_ready(channel)) {
-        log_error("IDE disk error while waiting for data!");
+        log_debug("IDE disk error while waiting for data!");
         return 0;
     }
 
-    // Sanity check
-    if (inb(channel->base + ATA_REG_SECCOUNT0) != 0x1)
+    if (inb(channel->base + ATA_REG_SECCOUNT0) != 0x1) {
+        log_warn("IDE disk error, failed sanity check!");
         return 0;
+    }
 
     // Check if the drive supports the PACKET command i.e. if it's a optical drive
     // This is defined in section 9.12 of the spec
@@ -113,18 +115,19 @@ static bool ata_probe_device(ide_device* device) {
 
     // Defined in standard Table 206 (page 347)
     u8 id_cmd;
-    if (TYPE_IS_ATAPI(device->type))
+    if (TYPE_IS_ATAPI(device->type)) {
         id_cmd = ATA_CMD_IDENTIFY_PACKET;
-    else if (TYPE_IS_ATA(device->type))
+    } else if (TYPE_IS_ATA(device->type)) {
         id_cmd = ATA_CMD_IDENTIFY;
-    else
+    } else {
         return 0;
+    }
 
     // At this point we have a valid device
     outb(channel->base + ATA_REG_COMMAND, id_cmd);
 
     if (ata_wait_for_ready(channel)) {
-        log_error("IDE disk error while waiting for data!");
+        log_error("IDE disk error while waiting for id packet!");
         return 0;
     }
 
@@ -272,12 +275,12 @@ static isize ide_read_wrapper(vfs_driver* dev, void* dest, usize offset, usize b
     usize sectors = DIV_ROUND_UP(bytes, dev->sector_size);
     usize lba = DIV_ROUND_UP(offset, dev->sector_size);
 
-    void* buffer = kmalloc(sectors * dev->sector_size);
-
     for (usize i = 0; i < sectors; i++)
-        ide_read_sector_pio(dev, lba, buffer + i * dev->sector_size);
+        ide_read_sector_pio(dev, lba, dest + i * dev->sector_size);
 
-    memcpy(dest, buffer + offset, bytes);
+#ifdef DISK_DEBUG
+    log_debug("[DISK_DEBUG] IDE read: lba = %zd, sectors = %zd", lba, sectors);
+#endif
 
     return 1;
 }
@@ -303,7 +306,6 @@ bool ide_disk_init(virtual_fs* vfs) {
     vfs_drive_interface* interface = kcalloc(sizeof(vfs_drive_interface));
     interface->read = ide_read_wrapper;
     interface->write = NULL;
-    interface->init = NULL;
 
     usize hd_index = 0;
     usize cd_index = 0;
@@ -332,10 +334,10 @@ bool ide_disk_init(virtual_fs* vfs) {
         vfs_driver* dev = vfs_create_device(name, ATA_SECTOR_SIZE, disk_size);
 
         dev->private = ide_dev;
-        dev->back_interface = interface;
+        dev->interface = interface;
+        dev->type = is_cd ? VFS_DRIVER_OPTICAL : VFS_DRIVER_HARD;
 
-        vfs_mount(vfs, "/dev", vfs_create_node(name, VFS_BLOCKDEV));
-        log_debug("Mounted /dev/%s", name);
+        vfs_regiter(vfs, "/dev", dev);
     }
 
     log_info("Found and mounted %lu IDE disks", controller->disks);

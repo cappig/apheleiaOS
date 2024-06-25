@@ -61,7 +61,7 @@ static void parse_xsdp(xsdt* xsdt_ptr) {
 
         _append_table(header);
 
-        log_debug("[ id: %.4s oem: %.6s ]", header->signature, header->oem_id, header->oem_table_id);
+        log_debug("[ id: %.4s oem: %.6s ]", header->signature, header->oem_id);
     }
 }
 

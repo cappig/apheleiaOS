@@ -81,6 +81,7 @@ typedef enum {
 } irq_numbers;
 
 // "?" indicate a reserved int number
+MAYBE_UNUSED
 static const char* int_strings[32] = {
     "Divide by zero",
     "Debug",
@@ -136,5 +137,6 @@ typedef void (*int_handler)(int_state*);
 void idt_init(void);
 
 void dump_regs(int_state* s);
+void dump_stack_trace(u64 rbp);
 
 void set_int_handler(usize int_num, int_handler handler);

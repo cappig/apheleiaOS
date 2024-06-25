@@ -7,6 +7,7 @@ global _start
 _start:
     cli
     mov rdi, rax
+    xor rbp, rbp
     call _kern_entry
 
 halt:

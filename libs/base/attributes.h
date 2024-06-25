@@ -9,3 +9,4 @@
 #define UNUSED           __attribute__((unused))
 #define NONNULL          __attribute__((nonnull))
 #define FALLTHROUGH      __attribute__((fallthrough))
+#define MAYBE_UNUSED     __attribute__((unused))

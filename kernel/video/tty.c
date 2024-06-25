@@ -12,6 +12,8 @@
 #include <term/term.h>
 #include <x86/serial.h>
 
+#include "arch/panic.h"
+
 static terminal* term = NULL;
 static graphics_state gfx = {0};
 

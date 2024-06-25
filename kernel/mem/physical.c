@@ -4,7 +4,7 @@
 #include <x86/e820.h>
 #include <x86/paging.h>
 
-#include "video/tty.h"
+#include "arch/panic.h"
 #include "virtual.h"
 
 static bitmap_alloc frame_alloc;

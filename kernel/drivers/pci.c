@@ -16,7 +16,7 @@ static linked_list* devices;
 
 
 static u64 _ecam_addr(u64 base, u8 bus, u8 slot, u8 func) {
-    u64 pddr = base + (bus << 20) | (slot << 15) | (func << 12);
+    u64 pddr = base + ((bus << 20) | (slot << 15) | (func << 12));
     u64 vaddr = ID_MAPPED_VADDR(pddr);
 
     return vaddr;

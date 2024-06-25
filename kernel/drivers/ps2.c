@@ -57,5 +57,5 @@ void init_ps2_kbd(virtual_fs* vfs) {
 
     // TODO: number this?
     chardev = pipe_create("kbd", 128);
-    vfs_mount(vfs, "/dev", chardev);
+    vfs_mount(vfs, "/dev", tree_create_node(chardev));
 }

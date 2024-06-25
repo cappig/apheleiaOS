@@ -24,7 +24,7 @@ else ifeq ($(TOOLCHAIN), llvm)
 endif
 
 ifeq ($(PROFILE), debug)
-	CC_BASE += -Og -g
+	CC_BASE += -Og -g -DDISK_DEBUG -DKMALLOC_DEBUG
 else ifeq ($(PROFILE), small)
 	CC_BASE += -Os
 else ifeq ($(PROFILE), normal)

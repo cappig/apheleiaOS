@@ -1,5 +1,6 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 
 #define SERIAL_COM(number) serial_port_map[(number) - 1]
@@ -7,7 +8,7 @@
 #define SERIAL_DEFAULT_BAUD 9600
 #define SERIAL_MAX_BAUD     115200
 
-// [[maybe_unused]]
+MAYBE_UNUSED
 static usize serial_port_map[] = {
     0x3f8, // COM1
     0x2f8, // COM2

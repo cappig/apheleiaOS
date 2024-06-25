@@ -17,3 +17,10 @@
 #define ARRAY_LEN(array) (sizeof(array) / sizeof((array)[0]))
 
 #define SIZEOF_MEMBER(type, member) (sizeof(((type*)0)->member))
+
+// Tell the compiler that x will most likely evaluate to y
+#define EXPECT(x, y) __builtin_expect((x), (y))
+
+// Branch prediction hints
+#define UNLIKELY(x) EXPECT((x), false)
+#define LIKELY(x)   EXPECT((x), true)
