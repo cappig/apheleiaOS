@@ -10,7 +10,6 @@ ALIGNED(0x10)
 static gdt_entry gdt_entries[GDT_ENTRY_COUNT];
 
 
-// This should probably be computed at compile time
 static void set_gdt_entry(usize index, u64 base, u32 limit, u8 access, u8 flags) {
     gdt_entries[index].limit_low = (limit & 0xffff);
     gdt_entries[index].flags = (limit >> 16) & 0x0f;

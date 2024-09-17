@@ -12,32 +12,6 @@
 #include "vfs/driver.h"
 #include "vfs/fs.h"
 
-// If we read sequential sectors from an ATAPI device with sector
-// size 2048 we would end up reading the same sector 4 times
-// To optimize this we cache ATAPI reads
-// TODO: invalidate a cache blocks when we write
-static atapi_cache cache = {0};
-
-
-static bool cache_has_sector(usize lba) {
-    for (usize i = 0; i < 4; i++)
-        if (cache.lba[i] == lba && cache.valid[i])
-            return true;
-
-    return false;
-}
-
-static inline u16* get_cache_sector(usize lba) {
-    return &cache.buffer[(lba % 4) * ATA_SECTOR_SIZE];
-}
-
-static void cache_sector(usize lba) {
-    for (usize i = 0; i < 4; i++) {
-        cache.lba[i] = lba + i;
-        cache.valid[i] = true;
-    }
-}
-
 
 static void ata_irq_handler(int_state* s) {
     log_warn("ATA irq :: %#lx\n", s->int_num);
@@ -251,23 +225,10 @@ static bool ide_read_sector_pio(vfs_driver* dev, usize lba, void* buffer) {
     if (!device->exists)
         return 1;
 
-    // Is the requested sector in the cache
-    if (cache_has_sector(lba))
-        return get_cache_sector(lba);
-
-    if (TYPE_IS_ATA(device->type)) {
-        return ata_read_sector_pio(device, lba, (u16*)buffer);
-    } else {
-        if (atapi_read_sector_pio(device, lba / 4, cache.buffer))
-            return 1;
-
-        // We only cache large ATAPI sectors
-        cache_sector(lba);
-
-        memcpy(buffer, get_cache_sector(lba), ATA_SECTOR_SIZE);
-
-        return 0;
-    }
+    if (TYPE_IS_ATA(device->type))
+        return ata_read_sector_pio(device, lba, buffer);
+    else
+        return atapi_read_sector_pio(device, lba / 4, buffer);
 }
 
 // isize (*read)(disk_device* dev, void* dest, usize offset, usize bytes);
@@ -275,8 +236,9 @@ static isize ide_read_wrapper(vfs_driver* dev, void* dest, usize offset, usize b
     usize sectors = DIV_ROUND_UP(bytes, dev->sector_size);
     usize lba = DIV_ROUND_UP(offset, dev->sector_size);
 
+    // FIXME: mbr loading brakes witouth this '+1'! Why?????
     for (usize i = 0; i < sectors; i++)
-        ide_read_sector_pio(dev, lba, dest + i * dev->sector_size);
+        ide_read_sector_pio(dev, lba + 1, dest + i * dev->sector_size);
 
 #ifdef DISK_DEBUG
     log_debug("[DISK_DEBUG] IDE read: lba = %zd, sectors = %zd", lba, sectors);
@@ -300,8 +262,6 @@ bool ide_disk_init(virtual_fs* vfs) {
 
     ide_controller* controller = kcalloc(sizeof(ide_controller));
     ata_probe_controller(ide_controller_pci, controller);
-
-    cache.buffer = kmalloc(ATAPI_SECTOR_SIZE);
 
     vfs_drive_interface* interface = kcalloc(sizeof(vfs_drive_interface));
     interface->read = ide_read_wrapper;

@@ -30,8 +30,8 @@ vfs_node* pipe_create(char* name, usize size) {
     ring_buffer* ring = ring_buffer_create(size);
 
     vfs_node_interface* interface = kcalloc(sizeof(vfs_node_interface));
-    interface->file.read = pipe_read;
-    interface->file.write = pipe_write;
+    interface->read = pipe_read;
+    interface->write = pipe_write;
 
     vfs_node* vnode = vfs_create_node(name, VFS_CHARDEV);
     vnode->private = ring;

@@ -1,13 +1,13 @@
 EMU := qemu-system-x86_64
 
 KVM ?= true
-DEBUG ?= false
+QEMU_CONSOLE ?= false
 
 EMU_ARGS := \
 	-no-reboot \
 	-m 128M
 
-ifeq ($(DEBUG), true)
+ifeq ($(QEMU_CONSOLE), true)
 	EMU_ARGS += -s -monitor stdio -d int,cpu_reset,guest_errors -M smm=off
 else
 	EMU_ARGS += -serial stdio

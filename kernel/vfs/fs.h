@@ -26,16 +26,10 @@ typedef struct vfs_node vfs_node;
 
 typedef isize (*vfs_read_fn)(vfs_node* node, void* buf, usize offset, usize len);
 typedef isize (*vfs_write_fn)(vfs_node* node, void* buf, usize offset, usize len);
-typedef isize (*vfs_touch_fn)(vfs_node* parent, char* name, u32 perm);
 
 typedef struct {
-    struct {
-        vfs_read_fn read;
-        vfs_write_fn write;
-    } file;
-    struct {
-        vfs_touch_fn touch;
-    } dir;
+    vfs_read_fn read;
+    vfs_write_fn write;
 } vfs_node_interface;
 
 typedef struct vfs_node {

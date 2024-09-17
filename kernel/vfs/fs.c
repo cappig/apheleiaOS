@@ -41,14 +41,16 @@ void vfs_destroy_node(vfs_node* node) {
     if (node->interface)
         kfree(node->interface);
 
-    kfree(node->name);
+    if (node->name)
+        kfree(node->name);
+
     kfree(node);
 }
 
 vfs_node_interface* vfs_create_file_interface(vfs_read_fn read, vfs_write_fn write) {
     vfs_node_interface* interface = kcalloc(sizeof(vfs_node_interface));
-    interface->file.read = read;
-    interface->file.write = write;
+    interface->read = read;
+    interface->write = write;
 
     return interface;
 }

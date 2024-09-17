@@ -39,27 +39,9 @@ char* mbr_type_string(enum mbr_partition_type type) {
     }
 }
 
-bool validate_mbr(mbr_table* table) {
-    usize valid = 0;
-    for (usize i = 0; i < 4; i++) {
-        u8 status = table->partitions[i].status;
-
-        // It is technically possible for the status byte to be have other data
-        // that is almost never done so we consider the table to be corrupted if its not a know value
-        if (status != MBR_BOOTABLE && status != MBR_INACTIVE)
-            return false;
-
-        if (table->partitions[i].type)
-            valid++;
-    }
-
-    if (valid)
-        return true;
-    else
-        return false;
-}
-
 void dump_mbr(mbr_table* table) {
+    usize printed = false;
+
     for (usize i = 0; i < 4; i++) {
         if (!table->partitions[i].type)
             continue;
@@ -71,15 +53,28 @@ void dump_mbr(mbr_table* table) {
             table->partitions[i].type,
             mbr_type_string(table->partitions[i].type)
         );
+
+        printed = true;
     }
+
+    if (!printed)
+        log_debug("[ empty table ]");
 }
 
-
-void mbr_parse(vfs_driver* dev, mbr_table* table) {
+mbr_table* parse_mbr(vfs_driver* dev) {
     master_boot_record* mbr = kmalloc(sizeof(master_boot_record));
     dev->interface->read(dev, mbr, 0, 512);
 
+    if (mbr->signature != MBR_SIGNATURE) {
+        kfree(mbr);
+        return NULL;
+    }
+
+    mbr_table* table = kmalloc(sizeof(mbr_table));
     memcpy(table, &mbr->table, 4 * sizeof(mbr_partition));
 
+    // TODO: perform more checks
+
     kfree(mbr);
+    return table;
 }

@@ -10,6 +10,7 @@
 
 static vfs_node* chardev;
 
+// TODO: don't just hardcode this
 // Zeroes represent non ASCII chars
 static const u8 us_ascii[2][256] = {
     {
@@ -47,15 +48,16 @@ static void ps2_irq_handler(UNUSED int_state* s) {
     u8 scancode = inb(0x60);
 
     // FIXME: don't just push raw scancodes. Parse into a more common format
-    chardev->interface->file.write(chardev, (u8[]){scancode}, 0, 1);
+    chardev->interface->write(chardev, (u8[]){scancode}, 0, 1);
 
-    log_debug("PS2 scancode: %#x ascii: %c", scancode, _get_ascii(scancode));
+#ifdef PS2_DEBUG
+    log_debug("[PS2 DEBUG] scancode = %#x, ascii = %c", scancode, _get_ascii(scancode));
+#endif
 }
 
 void init_ps2_kbd(virtual_fs* vfs) {
     set_int_handler(IRQ_NUMBER(IRQ_PS2_KEYBOARD), ps2_irq_handler);
 
-    // TODO: number this?
     chardev = pipe_create("kbd", 128);
     vfs_mount(vfs, "/dev", tree_create_node(chardev));
 }

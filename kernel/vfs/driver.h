@@ -14,7 +14,7 @@ typedef enum {
 
 typedef struct vfs_driver vfs_driver;
 
-// NOTE: a device might be read only. In that case read is set to NULL
+// NOTE: a device might be read only. In that case write is set to NULL
 typedef struct {
     isize (*read)(vfs_driver* dev, void* dest, usize offset, usize bytes);
     isize (*write)(vfs_driver* dev, void* src, usize offset, usize bytes);
@@ -39,8 +39,8 @@ typedef struct vfs_driver {
 
 // A vfs_file_system represents an actual file system on a disk. It abstracts
 // away fs specific logic and allows the vfs to provide a uniform API for file access
-// A single vfs_driver might have more that one vfs_file_system, each one is
-// lives on a partition on said drive.
+// A single vfs_driver might have more that one vfs_file_system, each one
+// lives on a separate partition on said drive.
 // A vfs_file_system is responsible for maintaining a subtree, that is a branch
 // of the vfs tree rooted at the fs mount point node
 

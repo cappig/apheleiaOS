@@ -7,5 +7,5 @@ bin/$(IMG_NAME): bin/image/root/mbr.bin bin/image/root/boot.bin bin/image/root/k
 	xorriso -as mkisofs -quiet -J -r -no-pad \
 		-V $(NAME) -c boot.cat -b boot.bin \
 		-no-emul-boot -boot-load-size 4 -boot-info-table \
-		--grub2-mbr $< \
+		--grub2-mbr $< -chrp-boot \
 		-o $@ bin/image/root

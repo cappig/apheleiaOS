@@ -28,62 +28,81 @@ static char* _get_partition_name(char* drive, usize number) {
     return name;
 }
 
-static bool _probe_fs(virtual_fs* vfs, vfs_driver* dev) {
-    // Optical media is not partitioned and can only have one ISO fs
-    if (dev->type == VFS_DRIVER_OPTICAL) {
+static void _destroy_fs(vfs_file_system* fs, vfs_driver* dev) {
+    log_debug("No valid file system found on drive %s", dev->name);
+    kfree(fs->partition.name);
+    kfree(fs);
+}
+
+static bool _probe_iso(virtual_fs* vfs, vfs_driver* dev, vfs_file_system* fs) {
+    if (iso_init(dev, fs)) {
+        log_info("Detected a valid ISO-9660 file system on drive %s", dev->name);
+        vfs_mount(vfs, "/mnt", fs->subtree->root);
+
+        return true;
+    } else {
+        _destroy_fs(fs, dev);
+
+        return false;
+    }
+}
+
+
+static bool _init_optical(virtual_fs* vfs, vfs_driver* dev) {
+    vfs_file_system* fs = kcalloc(sizeof(vfs_file_system));
+
+    fs->partition.name = _get_partition_name(dev->name, 1);
+    fs->partition.size = dev->disk_size;
+    fs->partition.offset = 0;
+
+    return _probe_iso(vfs, dev, fs);
+}
+
+static bool _init_hard(virtual_fs* vfs, vfs_driver* dev) {
+    mbr_table* table = parse_mbr(dev);
+
+    if (!table) {
+        log_debug("No valid file system found on drive %s", dev->name);
+        return false;
+    }
+
+    log_debug("Partitions found on drive %s:", dev->name);
+    dump_mbr(table);
+
+    // We kind of have to trust the partition table at this point
+    for (usize i = 0; i < 4; i++) {
+        mbr_partition* part = &table->partitions[i];
+
+        if (!part->type)
+            continue;
+
         vfs_file_system* fs = kcalloc(sizeof(vfs_file_system));
 
-        fs->partition.name = _get_partition_name(dev->name, 1);
-        fs->partition.size = dev->disk_size;
-        fs->partition.offset = 0;
+        fs->partition.name = _get_partition_name(dev->name, i);
+        fs->partition.type = part->type;
+        fs->partition.size = part->sector_count * dev->sector_size;
+        fs->partition.offset = part->lba_first * dev->sector_size;
 
-        if (iso_init(dev, fs)) {
-            log_info("Detected a valid ISO-9660 file system on drive %s", dev->name);
-            vfs_mount(vfs, "/mnt", fs->subtree->root);
-
-            return true;
-        } else {
-            log_debug("No file system found on drive %s", dev->name);
-            kfree(fs->partition.name);
-            kfree(fs);
-
+        switch (part->type) {
+        case MBR_ISO:
+            return _probe_iso(vfs, dev, fs);
+        default:
+            _destroy_fs(fs, dev);
             return false;
         }
     }
-    // 'Conventional' disks can have multiple partitions. Parse the table and go from there
-    else {
-        mbr_table* table = kmalloc(sizeof(mbr_table));
-        mbr_parse(dev, table);
 
-        if (!validate_mbr(table)) {
-            kfree(table);
-            return false;
-        }
+    return false;
+}
 
-        log_debug("Partitions found on drive %s:", dev->name);
-        dump_mbr(table);
-
-        // We kind of have to trust the partition table at this point
-        for (usize i = 0; i < 4; i++) {
-            mbr_partition* part = &table->partitions[i];
-
-            if (!part->type)
-                continue;
-
-            vfs_file_system* fs = kcalloc(sizeof(vfs_file_system));
-
-            fs->partition.name = _get_partition_name(dev->name, i);
-            fs->partition.type = part->type;
-            fs->partition.size = part->sector_count * dev->sector_size;
-            fs->partition.offset = part->lba_first * dev->sector_size;
-
-            switch (part->type) {
-            case MBR_LINUX:
-                break;
-            }
-        }
-
-        kfree(table);
+static bool _probe_fs(virtual_fs* vfs, vfs_driver* dev) {
+    switch (dev->type) {
+    case VFS_DRIVER_HARD:
+        return _init_hard(vfs, dev);
+    case VFS_DRIVER_OPTICAL:
+        return _init_optical(vfs, dev);
+    default:
+        log_error("Disk has unknow driver type!");
         return false;
     }
 }

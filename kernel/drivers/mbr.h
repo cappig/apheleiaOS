@@ -8,6 +8,4 @@
 char* mbr_type_string(enum mbr_partition_type type);
 void dump_mbr(mbr_table* table);
 
-void mbr_parse(vfs_driver* dev, mbr_table* table);
-
-bool validate_mbr(mbr_table* table);
+mbr_table* parse_mbr(vfs_driver* dev);
