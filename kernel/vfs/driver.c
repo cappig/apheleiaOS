@@ -108,14 +108,14 @@ static bool _probe_fs(virtual_fs* vfs, vfs_driver* dev) {
 }
 
 
-vfs_driver* vfs_create_device(const char* name, usize sector_size, usize disk_size) {
+vfs_driver* vfs_create_device(const char* name, usize sector_size, usize sector_count) {
     vfs_driver* ret = kcalloc(sizeof(vfs_driver));
 
     ret->name = strdup(name);
     ret->id = _get_next_id();
 
     ret->sector_size = sector_size;
-    ret->disk_size = disk_size;
+    ret->disk_size = sector_count * sector_size;
 
     return ret;
 }

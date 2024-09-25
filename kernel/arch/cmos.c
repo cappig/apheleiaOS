@@ -11,7 +11,6 @@ static u8 read_rtc_reg(u16 reg) {
     return bcdtoi(inb(CMOS_DATA));
 }
 
-// FIXME:potential infinite loops !
 std_time get_time() {
     std_time time = {0};
 
@@ -19,18 +18,14 @@ std_time get_time() {
     while (inb(CMOS_DATA) & 0x80)
         outb(CMOS_ADDR, 0x0a);
 
-repeat:
     time.tm_year = read_rtc_reg(0x09) + 100;
     time.tm_mon = read_rtc_reg(0x08) - 1;
     time.tm_mday = read_rtc_reg(0x07);
+    time.tm_wday = read_rtc_reg(0x06) - 1;
 
     time.tm_hour = read_rtc_reg(0x04);
     time.tm_min = read_rtc_reg(0x02);
     time.tm_sec = read_rtc_reg(0x00);
-
-    // Make sure that the RTC values weren't fucked up by an update
-    if (time.tm_mday != read_rtc_reg(0x07))
-        goto repeat;
 
     return time;
 }

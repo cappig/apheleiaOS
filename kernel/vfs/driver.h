@@ -62,7 +62,7 @@ typedef struct vfs_file_system {
 } vfs_file_system;
 
 
-vfs_driver* vfs_create_device(const char* name, usize sector_size, usize disk_size);
+vfs_driver* vfs_create_device(const char* name, usize sector_size, usize sector_count);
 void vfs_destroy_device(vfs_driver* dev);
 
 vfs_file_system* vfs_crete_fs(char* name);

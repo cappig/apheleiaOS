@@ -67,8 +67,10 @@ static void parse_xsdp(xsdt* xsdt_ptr) {
 
 
 void acpi_init(u64 ptr) {
-    if (!ptr)
+    if (!ptr) {
         log_error("RSDP table not found!");
+        return;
+    }
 
     tables = list_create();
     rsdp* table = (rsdp*)ID_MAPPED_VADDR(ptr);

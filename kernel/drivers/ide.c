@@ -3,6 +3,7 @@
 #include <base/types.h>
 #include <boot/mbr.h>
 #include <log/log.h>
+#include <stdlib.h>
 #include <string.h>
 #include <x86/asm.h>
 
@@ -17,7 +18,7 @@ static void ata_irq_handler(int_state* s) {
     log_warn("ATA irq :: %#lx\n", s->int_num);
 }
 
-// Waste 400 nanoseconds so that we can give the disk IO a little rest
+// Waste ~400 nanoseconds so that we can give the disk IO a little rest
 static void ata_wait(ide_channel* channel) {
     for (usize i = 0; i < 4; i++)
         inb(channel->base + ATA_REG_ALTSTATUS);
@@ -27,11 +28,14 @@ static void ata_wait(ide_channel* channel) {
 static bool ata_wait_for_ready(ide_channel* channel) {
     ata_wait(channel);
 
-    // Wait until the busy bit clears i.e. the disk is ready to be read
-    for (usize timeout = 100000; timeout > 0; timeout--) {
+    // Wait until the busy bit clears
+    for (usize timeout = 10000; timeout > 0; timeout--) {
         u8 status = inb(channel->base + ATA_REG_STATUS);
 
         if (status & ATA_SR_ERROR)
+            return 1;
+
+        if (status & ATA_SR_DRIVE_FAULT)
             return 1;
 
         if (!(status & ATA_SR_BUSY))
@@ -51,89 +55,162 @@ static void fix_ata_string(char* string, usize len) {
     }
 }
 
+static u64 set_ata_size(ide_device* device) {
+    ata_identify* id = device->identify;
+
+    u64 blocks = id->long_lba_sectors;
+
+    // Fall back to short sectors if the drive doesn't support lba48
+    if (blocks == 0)
+        blocks = id->short_lba_sectors;
+
+    device->sectors = blocks;
+
+    u32 block_size = id->logical_sector_size * 2;
+
+    // The block size field is optional, fall back to 512 if 0
+    // TODO: compute sthe physical sector size, it's a good performance hint
+    if (block_size == 0)
+        block_size = ATA_SECTOR_SIZE;
+
+    device->sector_size = block_size;
+
+    return blocks;
+}
+
+static u64 set_atapi_size(ide_device* device) {
+    ide_channel* channel = device->channel;
+
+    outb(channel->base + ATA_REG_LBA1, 0x8);
+    outb(channel->base + ATA_REG_LBA2, 0x8);
+
+    outb(channel->base + ATA_REG_COMMAND, ATA_CMD_PACKET);
+
+    if (ata_wait_for_ready(channel))
+        return 0;
+
+    atapi_packet packet = {{
+        [0] = ATAPI_CMD_CAPACITY,
+    }};
+
+    for (int i = 0; i < 6; i++)
+        outw(channel->base, packet.words[i]);
+
+    if (ata_wait_for_ready(channel))
+        return 0;
+
+    // These values are big endian. Fucking kill me now
+    u16 capacity[4];
+    for (usize i = 0; i < 8 / 2; i++)
+        capacity[i] = inw(channel->base + ATA_REG_DATA);
+
+    u32 blocks = 0;
+    memcpy(&blocks, capacity, sizeof(u32));
+
+    u32 block_size = 0;
+    memcpy(&block_size, &capacity[2], sizeof(u32));
+
+    block_size = bswapl(block_size);
+
+    // Just in case. we don't want division by zero
+    if (block_size == 0)
+        block_size = ATAPI_SECTOR_SIZE;
+
+    device->sectors = bswapl(blocks);
+    device->sector_size = block_size;
+
+    return device->sectors;
+}
+
 // https://wiki.osdev.org/ATA_PIO_Mode
+// NOTE: returns true if this slot is valid
 static bool ata_probe_device(ide_device* device) {
     ide_channel* channel = device->channel;
 
     // Select the device
-    u8 disk = device->is_master ? ATA_MASTER : ATA_SLAVE;
-    outb(channel->base + ATA_REG_HDDEVSEL, disk);
-
+    u8 disk = ATA_DEVICE_LBA | (!device->is_master << 4);
+    outb(channel->base + ATA_REG_DEVICE, disk);
     ata_wait(channel);
 
-    // Perform a software reset so that we can read the
-    // initial device state (as defined in table 206)
-    outb(channel->control, ATA_CNT_RESET);
+    // Assume that this is a non packet device, if it is a packet device it will abort
+    // signature will be placed in the lba registers after it is executed
+    outb(channel->base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
+    ata_wait(channel);
 
-    // Disable interrupts because we use PIO mode to read the ID packet
-    outb(channel->control, ATA_CNT_NO_INT);
+    // TODO: filter other garbage values
+    if (inb(channel->base + ATA_REG_STATUS) == 0)
+        return false;
 
-    // An error here most likely indicates that there is no disk in this slot
-    // should we even warn?
+    // This may be a packet device since the command got aborted
     if (ata_wait_for_ready(channel)) {
-        log_debug("IDE disk error while waiting for data!");
-        return 0;
+        u8 cl = inb(channel->base + ATA_REG_LBA1);
+        u8 ch = inb(channel->base + ATA_REG_LBA2);
+
+        if (!TYPE_IS_ATAPI((ch << 8) | cl))
+            return false;
+
+        device->is_atapi = true;
+
+        // Issue the correct command
+        outb(channel->base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY_PACKET);
+        ata_wait(channel);
     }
 
-    if (inb(channel->base + ATA_REG_SECCOUNT0) != 0x1) {
-        log_warn("IDE disk error, failed sanity check!");
-        return 0;
-    }
+    // At this point we most likely have a valid device
+    device->identify = kmalloc(sizeof(ata_identify));
 
-    // Check if the drive supports the PACKET command i.e. if it's a optical drive
-    // This is defined in section 9.12 of the spec
-    u8 cl = inb(channel->base + ATA_REG_LBA1);
-    u8 ch = inb(channel->base + ATA_REG_LBA2);
-
-    device->type = (ata_device_type)((ch << 8) | cl);
-
-    // Defined in standard Table 206 (page 347)
-    u8 id_cmd;
-    if (TYPE_IS_ATAPI(device->type)) {
-        id_cmd = ATA_CMD_IDENTIFY_PACKET;
-    } else if (TYPE_IS_ATA(device->type)) {
-        id_cmd = ATA_CMD_IDENTIFY;
-    } else {
-        return 0;
-    }
-
-    // At this point we have a valid device
-    outb(channel->base + ATA_REG_COMMAND, id_cmd);
-
-    if (ata_wait_for_ready(channel)) {
-        log_error("IDE disk error while waiting for id packet!");
-        return 0;
-    }
-
-    // Read the IDENTIFY packet
-    ata_identify* id = kmalloc(sizeof(ata_identify));
     for (usize i = 0; i < 256; i++)
-        id->raw[i] = inw(channel->base + ATA_REG_DATA);
+        device->identify->raw[i] = inw(channel->base + ATA_REG_DATA);
 
-    // The only string we care about is the model ID, fix it up
-    fix_ata_string(id->model, 40);
+    u64 sectors = 0;
+    if (device->is_atapi)
+        sectors = set_atapi_size(device);
+    else
+        sectors = set_ata_size(device);
+
+    // If the disk reports 0 sectors or if an error occured the disk isn't valid
+    // If we follow this brach the identify field is left dangling but that is fine
+    // since the exists field equals false rendering all other fields irrelevant
+    if (sectors == 0) {
+        kfree(device->identify);
+        return false;
+    }
 
     device->exists = true;
-    device->identify = id;
 
-    return 1;
+    return true;
 }
 
-// NOTE: the device must be initialized when this gets called
-static usize compute_disk_size(ide_device* dev) {
-    if (!dev->exists)
-        return 0;
+static bool ata_mount_disk(virtual_fs* vfs, vfs_drive_interface* interface, ide_device* disk) {
+    if (!disk->exists)
+        return false;
 
-    u64 blocks = dev->identify->long_lba_sectors;
-    if (blocks == 0)
-        blocks = dev->identify->short_lba_sectors;
+    static u8 hd_index = 0;
+    static u8 cd_index = 0;
 
-    return blocks * (TYPE_IS_ATA(dev->type) ? ATA_SECTOR_SIZE : ATAPI_SECTOR_SIZE);
+    usize next_index = disk->is_atapi ? cd_index++ : hd_index++;
+
+    // Name our dev file cdX if it's an optical drive or hdX if it's a regular hdd
+    char name[4] = {
+        disk->is_atapi ? 'c' : 'h',
+        'd',
+        'a' + next_index,
+    };
+
+    vfs_driver* dev = vfs_create_device(name, disk->sector_size, disk->sectors);
+
+    dev->private = disk;
+    dev->interface = interface;
+    dev->type = disk->is_atapi ? VFS_DRIVER_OPTICAL : VFS_DRIVER_HARD;
+
+    vfs_regiter(vfs, "/dev", dev);
+
+    return true;
 }
 
-static void ata_probe_controller(pci_device* pci, ide_controller* controller) {
-    // IDE IO ports are *usually* located on the standard base but this is not always the case
-    // The PCI BAR registers contain the actual offsets so we read them just to be sure
+// IDE IO ports are *usually* located on the standard base but this is not always the case
+// The PCI BAR registers contain the actual offsets so we read them just to be sure
+static void init_controller(pci_device* pci, ide_controller* controller) {
     controller->primary = (ide_channel){
         .base = (pci->generic.bar0 & 0xfffffffc) + ATA_PRIMARY_BASE * (!pci->generic.bar0),
         .control = (pci->generic.bar1 & 0xfffffffc) + ATA_PRIMARY_CONTROL * (!pci->generic.bar1),
@@ -144,6 +221,12 @@ static void ata_probe_controller(pci_device* pci, ide_controller* controller) {
         .control = (pci->generic.bar3 & 0xfffffffc) + ATA_SECONDARY_CONTROL * (!pci->generic.bar3),
         .bus_master = (pci->generic.bar4 & 0xfffffffc) + 8,
     };
+}
+
+static void ata_probe(virtual_fs* vfs, vfs_drive_interface* interface, ide_controller* controller) {
+    // Disable interrupts for now TODO:
+    outb(controller->primary.control, ATA_CNT_NO_INT);
+    outb(controller->secondary.control, ATA_CNT_NO_INT);
 
     // We can have four disks per controller, two on each channel. Probe Them all
     for (usize num = 0; num < 4; num++) {
@@ -153,50 +236,55 @@ static void ata_probe_controller(pci_device* pci, ide_controller* controller) {
         device->channel = channel;
         device->is_master = !(num & 1);
 
-        if (ata_probe_device(device))
+        bool valid = ata_probe_device(device);
+
+        if (valid) {
+            ata_mount_disk(vfs, interface, device);
             controller->disks++;
+        }
     }
 }
 
 static bool ata_read_sector_pio(ide_device* device, usize lba, u16* buffer) {
     ide_channel* channel = device->channel;
 
-    u8 disk = device->is_master ? ATA_MASTER : ATA_SLAVE;
-    outb(channel->base + ATA_REG_HDDEVSEL, disk | (u8)(lba >> 24));
+    u8 disk = ATA_DEVICE_LBA | (!device->is_master << 4);
+    outb(channel->base + ATA_REG_DEVICE, disk | (lba & 0x0f000000) >> 24);
 
     ata_wait(channel);
 
     outb(channel->base + ATA_REG_SECCOUNT0, 1);
-    outb(channel->base + ATA_REG_FEATURES, 0x00);
-    outb(channel->base + ATA_REG_LBA0, (u8)(lba));
-    outb(channel->base + ATA_REG_LBA1, (u8)(lba >> 8));
-    outb(channel->base + ATA_REG_LBA2, (u8)(lba >> 16));
+    outb(channel->base + ATA_REG_LBA0, lba & 0x000000ff);
+    outb(channel->base + ATA_REG_LBA1, (lba & 0x0000ff00) >> 8);
+    outb(channel->base + ATA_REG_LBA2, (lba & 0x00ff0000) >> 16);
 
     outb(channel->base + ATA_REG_COMMAND, ATA_CMD_READ_PIO);
 
     if (ata_wait_for_ready(channel))
-        return 1;
+        return false;
 
     // FIXME: PIO mode is mega dogshit!! Implement irqs asap
     for (usize i = 0; i < ATA_SECTOR_SIZE / 2; i++)
         buffer[i] = inw(channel->base + ATA_REG_DATA);
 
-    return 0;
+    return true;
 }
 
 static bool atapi_read_sector_pio(ide_device* device, usize lba, u16* buffer) {
     ide_channel* channel = device->channel;
 
-    u8 disk = device->is_master ? ATA_MASTER : ATA_SLAVE;
-    outb(channel->base + ATA_REG_HDDEVSEL, disk);
+    u8 disk = ATA_DEVICE_LBA | (!device->is_master << 4);
+    outb(channel->base + ATA_REG_DEVICE, disk);
 
     ata_wait(channel);
 
-    outb(channel->base + ATA_REG_FEATURES, 0x00);
     outb(channel->base + ATA_REG_LBA1, ATAPI_SECTOR_SIZE & 0xff);
     outb(channel->base + ATA_REG_LBA2, ATAPI_SECTOR_SIZE >> 8);
 
     outb(channel->base + ATA_REG_COMMAND, ATA_CMD_PACKET);
+
+    if (ata_wait_for_ready(channel))
+        return false;
 
     atapi_packet packet = {{
         [0] = ATAPI_CMD_READ,
@@ -211,24 +299,24 @@ static bool atapi_read_sector_pio(ide_device* device, usize lba, u16* buffer) {
         outw(channel->base, packet.words[i]);
 
     if (ata_wait_for_ready(channel))
-        return 1;
+        return false;
 
     for (usize i = 0; i < ATAPI_SECTOR_SIZE / 2; i++)
         buffer[i] = inw(channel->base + ATA_REG_DATA);
 
-    return 0;
+    return true;
 }
 
 static bool ide_read_sector_pio(vfs_driver* dev, usize lba, void* buffer) {
     ide_device* device = dev->private;
 
     if (!device->exists)
-        return 1;
+        return false;
 
-    if (TYPE_IS_ATA(device->type))
-        return ata_read_sector_pio(device, lba, buffer);
+    if (device->is_atapi)
+        return atapi_read_sector_pio(device, lba, buffer);
     else
-        return atapi_read_sector_pio(device, lba / 4, buffer);
+        return ata_read_sector_pio(device, lba, buffer);
 }
 
 // isize (*read)(disk_device* dev, void* dest, usize offset, usize bytes);
@@ -236,15 +324,21 @@ static isize ide_read_wrapper(vfs_driver* dev, void* dest, usize offset, usize b
     usize sectors = DIV_ROUND_UP(bytes, dev->sector_size);
     usize lba = DIV_ROUND_UP(offset, dev->sector_size);
 
-    // FIXME: mbr loading brakes witouth this '+1'! Why?????
-    for (usize i = 0; i < sectors; i++)
-        ide_read_sector_pio(dev, lba + 1, dest + i * dev->sector_size);
+    usize read = 0;
+    for (usize i = 0; i < sectors; i++) {
+        if (!ide_read_sector_pio(dev, lba + i, dest + i * dev->sector_size)) {
+            log_warn("Error reading disk");
+            break;
+        }
+
+        read += dev->sector_size;
+    }
 
 #ifdef DISK_DEBUG
     log_debug("[DISK_DEBUG] IDE read: lba = %zd, sectors = %zd", lba, sectors);
 #endif
 
-    return 1;
+    return read;
 }
 
 // TODO: keep a global linked list of detected disks and push these on
@@ -252,7 +346,7 @@ bool ide_disk_init(virtual_fs* vfs) {
     pci_device* ide_controller_pci = pci_find_device(PCI_MASS_STORAGE, PCI_MS_IDE, NULL);
 
     // No IDE controller found
-    if (ide_controller_pci == NULL) {
+    if (!ide_controller_pci) {
         log_error("IDE disk controller not found!");
         return 1;
     }
@@ -260,49 +354,17 @@ bool ide_disk_init(virtual_fs* vfs) {
     set_int_handler(IRQ_NUMBER(IRQ_PRIMARY_ATA), ata_irq_handler);
     set_int_handler(IRQ_NUMBER(IRQ_SECONDARY_ATA), ata_irq_handler);
 
-    ide_controller* controller = kcalloc(sizeof(ide_controller));
-    ata_probe_controller(ide_controller_pci, controller);
-
     vfs_drive_interface* interface = kcalloc(sizeof(vfs_drive_interface));
     interface->read = ide_read_wrapper;
     interface->write = NULL;
 
-    usize hd_index = 0;
-    usize cd_index = 0;
+    ide_controller* controller = kcalloc(sizeof(ide_controller));
+    init_controller(ide_controller_pci, controller);
+    pci_destroy_device(ide_controller_pci);
 
-    for (usize i = 0; i < 4; i++) {
-        ide_device* disk = &controller->devices[i];
-
-        if (!disk->exists)
-            continue;
-
-        log_debug("IDE disk %zd has model id: %.40s", i, disk->identify->model);
-
-        bool is_cd = TYPE_IS_ATAPI(disk->type);
-        usize next_index = is_cd ? cd_index++ : hd_index++;
-
-        // Name our dev file cdX if it's an optical drive or hdX if it's a regular hdd
-        char name[4] = {
-            is_cd ? 'c' : 'h',
-            'd',
-            'a' + next_index,
-        };
-
-        ide_device* ide_dev = &controller->devices[i];
-        usize disk_size = compute_disk_size(ide_dev);
-
-        vfs_driver* dev = vfs_create_device(name, ATA_SECTOR_SIZE, disk_size);
-
-        dev->private = ide_dev;
-        dev->interface = interface;
-        dev->type = is_cd ? VFS_DRIVER_OPTICAL : VFS_DRIVER_HARD;
-
-        vfs_regiter(vfs, "/dev", dev);
-    }
+    ata_probe(vfs, interface, controller);
 
     log_info("Found and mounted %lu IDE disks", controller->disks);
-
-    pci_destroy_device(ide_controller_pci);
 
     return !(controller->disks > 0);
 }

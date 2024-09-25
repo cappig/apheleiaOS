@@ -17,6 +17,10 @@ lldiv_t ulldiv(unsigned long long num, unsigned long den);
 int bcdtoi(int bcd);
 int itobcd(int num);
 
+unsigned short bswaps(unsigned short num);
+unsigned long bswapl(unsigned long num);
+unsigned long long bswapll(unsigned long long num);
+
 
 #define max(a, b)                  \
     ({                             \

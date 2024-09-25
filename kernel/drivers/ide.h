@@ -7,6 +7,7 @@
 
 #include "vfs/fs.h"
 
+// https://wiki.osdev.org/ATAPI
 // https://wiki.osdev.org/PCI_IDE_Controller
 // https://wiki.osdev.org/ATA/ATAPI_using_DMA
 // https://people.freebsd.org/~imp/asiabsdcon2015/works/d2161r5-ATAATAPI_Command_Set_-_3.pdf
@@ -15,22 +16,17 @@
 #define ATA_SECTOR_SIZE   512
 #define ATAPI_SECTOR_SIZE 2048
 
-#define ATA_MASTER 0xa0
-#define ATA_SLAVE  0xb0
-
 #define ATA_PRIMARY_BASE      0x1f0
 #define ATA_PRIMARY_CONTROL   0x3f6
 #define ATA_SECONDARY_BASE    0x170
 #define ATA_SECONDARY_CONTROL 0x376
 
-#define ATA_ID_VALID 0xa5
+#define ATA_DEVICE_CHS 0xa0
+#define ATA_DEVICE_LBA 0xe0
 
-#define TYPE_IS_ATAPI(type) (type == ATA_DEV_PATAPI || type == ATA_DEV_SATAPI)
-#define TYPE_IS_ATA(type)   (type == ATA_DEV_PATA || type == ATA_DEV_SATA)
+#define TYPE_IS_ATAPI(type) ((type) == ATA_DEV_PATAPI || (type) == ATA_DEV_SATAPI)
+#define TYPE_IS_ATA(type)   ((type) == ATA_DEV_PATA || (type) == ATA_DEV_SATA)
 
-#define TYPE_IS_VALID(type) (TYPE_IS_ATAPI(type) || TYPE_IS_ATA(type))
-
-// TODO: these ids are a bit dodgy
 typedef enum {
     ATA_DEV_PATAPI = 0xeb14,
     ATA_DEV_SATAPI = 0x9669,
@@ -43,7 +39,7 @@ typedef enum {
 typedef enum {
     ATA_SR_BUSY = 0x80,
     ATA_SR_READY = 0x40,
-    ATA_SR_DRIVE_WRITE_FAULT = 0x20,
+    ATA_SR_DRIVE_FAULT = 0x20,
     ATA_SR_DRIVE_SEEK_DONE = 0x10,
     ATA_SR_DATA_REQEST_READY = 0x08,
     ATA_SR_CORRECTED = 0x04,
@@ -76,9 +72,11 @@ typedef enum {
     ATA_CMD_PACKET = 0xa0,
     ATA_CMD_IDENTIFY_PACKET = 0xa1,
     ATA_CMD_IDENTIFY = 0xec,
+    ATA_CMD_DIAGNOSTIC = 0x90,
 
     // https://ulinktech.com/wp-content/uploads/2020/05/ATAPI-Command-Table-in-OpCode-Order.pdf
     ATAPI_CMD_READ = 0xa8,
+    ATAPI_CMD_CAPACITY = 0x25,
     ATAPI_CMD_EJECT = 0x1b,
 } ata_command;
 
@@ -96,7 +94,7 @@ typedef enum {
     ATA_REG_LBA0 = 0x03,
     ATA_REG_LBA1 = 0x04,
     ATA_REG_LBA2 = 0x05,
-    ATA_REG_HDDEVSEL = 0x06,
+    ATA_REG_DEVICE = 0x06,
     ATA_REG_COMMAND = 0x07,
     ATA_REG_STATUS = 0x07,
     ATA_REG_SECCOUNT1 = 0x08,
@@ -127,19 +125,33 @@ typedef union {
 // just define the ones we care about
 typedef union PACKED {
     struct {
-        u16 _unused0[27];
+        u16 info;
+        u16 _unused0[26];
         char model[40];
         u16 _unused1[13];
         u32 short_lba_sectors;
         u16 _unused3[38];
         u64 long_lba_sectors;
-        u16 _unused4[150];
-        u8 indicator;
-        u8 checksum;
+        u16 _unused4[2];
+        u16 physical_sector_size;
+        u16 _unused5[10];
+        u32 logical_sector_size;
+        u16 _unused6[90];
+        u16 alignment;
+        u16 _unused7[45];
+        u16 checksum;
     };
     u16 raw[256];
 } ata_identify;
 
+// TODO: figure out the addr mode
+typedef enum {
+    ATA_ADDR_CHS,
+    ATA_ADDR_LBA28,
+    ATA_ADDR_LBA48,
+} ata_address_mode;
+
+// Only applies to non packet devices
 typedef struct PACKED {
     u16 base;
     u16 control;
@@ -155,13 +167,17 @@ typedef enum {
     ATA_SECONDARY_SLAVE = 0b11,
 } ide_disk_number;
 
-typedef struct PACKED {
+typedef struct {
+    // If false all other fields may be garbage
     bool exists;
+
     bool is_master;
+    bool is_atapi;
+
+    u32 sector_size;
+    u64 sectors;
 
     ide_channel* channel;
-
-    ata_device_type type;
 
     ata_identify* identify;
 } ide_device;
@@ -170,7 +186,7 @@ typedef struct {
     ide_channel primary;
     ide_channel secondary;
 
-    // How many disks does this controller have [0, 4]
+    // How many valid disks does this controller have [0, 4]
     usize disks;
 
     // Indexed by `ide_disk_number`

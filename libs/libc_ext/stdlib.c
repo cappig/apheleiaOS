@@ -91,3 +91,16 @@ int bcdtoi(int bcd) {
 int itobcd(int num) {
     return ((num / 10) << 4) + num % 10;
 }
+
+
+unsigned short bswaps(unsigned short num) {
+    return __builtin_bswap16(num);
+}
+
+unsigned long bswapl(unsigned long num) {
+    return __builtin_bswap32(num);
+}
+
+unsigned long long bswapll(unsigned long long num) {
+    return __builtin_bswap64(num);
+}
