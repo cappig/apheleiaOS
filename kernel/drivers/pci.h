@@ -112,6 +112,33 @@ enum pci_class : u8 {
     PCI_UNASSIGNED = 0xff, // vendor specific
 };
 
+MAYBE_UNUSED
+static const char* pci_class_strings[] = {
+    "Unclassified",
+    "Mass Storage Controller",
+    "Network Controller",
+    "Display Controller",
+    "Multimedia Controller",
+    "Memory Controller",
+    "Bridge",
+    "Simple Communication Controller",
+    "Base System Peripheral",
+    "Input Device Controller",
+    "Docking Station",
+    "Processor",
+    "Serial Bus Controller",
+    "Wireless Controller",
+    "Intelligent Controller",
+    "Satellite Communication Controller",
+    "Encryption Controller",
+    "Signal Processing Controller",
+    "Processing Accelerator",
+    "Non-Essential Instrumentation",
+    "?", // ...a buch of reseved space here
+    "Co-Processor", // 0x40
+    "Unassigned (Vendor specific)", // 0xff
+};
+
 enum pci_mass_storage_subclass : u8 {
     PCI_MS_SCSI_BUS = 0x00,
     PCI_MS_IDE = 0x01,
@@ -135,7 +162,9 @@ typedef struct {
 
 
 usize pci_init(void);
+
 void dump_pci_devices(void);
+const char* pci_stringify_class(u8 class);
 
 pci_device* pci_find_device(u8 class, u8 subclass, pci_device* from);
 void pci_destroy_device(pci_device* dev);

@@ -21,8 +21,8 @@ static isize _master_write(vfs_node* node, void* buf, UNUSED usize offset, usize
 
     ring_buffer_push_array(pty->input_buffer, buf, len);
 
-    // TODO: Nope
-    // pty->read(pty, buf, len);
+    if (pty->in_hook)
+        pty->in_hook(pty, buf, len);
 
     return len;
 }
@@ -42,7 +42,8 @@ static isize _slave_write(vfs_node* node, void* buf, UNUSED usize offset, usize 
 
     ring_buffer_push_array(pty->output_buffer, buf, len);
 
-    pty->write(pty, buf, len);
+    if (pty->out_hook)
+        pty->out_hook(pty, buf, len);
 
     return len;
 }

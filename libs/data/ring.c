@@ -1,22 +1,21 @@
 #include "ring.h"
 
+#include <alloc/global.h>
 #include <base/types.h>
-
-#include "mem/heap.h"
 
 
 ring_buffer* ring_buffer_create(usize size) {
-    ring_buffer* ret = kcalloc(sizeof(ring_buffer));
+    ring_buffer* ret = gcalloc(sizeof(ring_buffer));
 
     ret->size = size;
-    ret->buffer = kcalloc(size);
+    ret->buffer = gcalloc(size);
 
     return ret;
 }
 
 void ring_buffer_destroy(ring_buffer* ring) {
-    kfree(ring->buffer);
-    kfree(ring);
+    gfree(ring->buffer);
+    gfree(ring);
 }
 
 

@@ -80,42 +80,6 @@ typedef enum {
     IRQ_SECONDARY_ATA = 0x0f,
 } irq_numbers;
 
-// "?" indicate a reserved int number
-MAYBE_UNUSED
-static const char* int_strings[32] = {
-    "Divide by zero",
-    "Debug",
-    "Non-maskable interrupt",
-    "Breakpoint",
-    "Overflow",
-    "Out of bounds",
-    "Invalid opcode",
-    "No coprocessor",
-    "Double fault",
-    "Coprocessor segover",
-    "Invalid tss",
-    "Segment not present",
-    "Stack segment fault",
-    "General protection fault",
-    "Page fault",
-    "?",
-    "x87 floating point exception",
-    "Alignment check",
-    "Machine check",
-    "SIMD floating point exception",
-    "Virtualization exception",
-    "Control protection exception",
-    "?",
-    "?",
-    "?",
-    "?",
-    "?",
-    "Hypervisor injection exception",
-    "Vmm communication exception",
-    "Security exception",
-    "?",
-};
-
 // Save the machine state in the order that they are pushed to the stack
 // (values at the top are pushed last)
 typedef struct PACKED {
@@ -137,6 +101,5 @@ typedef void (*int_handler)(int_state*);
 void idt_init(void);
 
 void dump_regs(int_state* s);
-void dump_stack_trace(u64 rbp);
 
 void set_int_handler(usize int_num, int_handler handler);

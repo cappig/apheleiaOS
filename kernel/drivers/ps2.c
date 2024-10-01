@@ -1,17 +1,17 @@
 #include "ps2.h"
 
 #include <base/types.h>
+#include <data/ring.h>
 #include <x86/asm.h>
 
 #include "arch/idt.h"
 #include "log/log.h"
 #include "vfs/fs.h"
-#include "vfs/pipe.h"
 
-static vfs_node* chardev;
+static ring_buffer* buffer;
 
-// TODO: don't just hardcode this
 // Zeroes represent non ASCII chars
+// TODO: don't just hardcode this
 static const u8 us_ascii[2][256] = {
     {
         0,   0,   '1', '2', '3', '4', '5', '6', '7',  '8', '9', '0',  '-',  '=', 0,   '\t',
@@ -29,14 +29,38 @@ static const u8 us_ascii[2][256] = {
     },
 };
 
+static void ps2_irq_handler(UNUSED int_state* s) {
+    u8 scancode = inb(0x60);
 
-static char _get_ascii(u8 scancode) {
+    // FIXME: don't just push raw scancodes. Parse into a more common format
+    ring_buffer_push(buffer, scancode);
+
+#ifdef PS2_DEBUG
+    log_debug("[PS2 DEBUG] scancode = %#x, ascii = %c", scancode, _get_ascii(scancode));
+#endif
+}
+
+static isize _read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+    if (!buf)
+        return -1;
+
+    ring_buffer_pop_array(buffer, buf, len);
+
+    return len;
+}
+
+static isize _write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+    return -1;
+}
+
+
+char ps2_to_ascii(u8 scancode) {
     static bool shift_down = false;
 
     if (scancode == KBD_L_SHIFT || scancode == KBD_R_SHIFT) {
         shift_down = true;
         return 0;
-    } else if (scancode == RELEASED(KBD_L_SHIFT) || scancode == RELEASED(KBD_R_SHIFT)) {
+    } else if (scancode == PS2_RELEASED(KBD_L_SHIFT) || scancode == PS2_RELEASED(KBD_R_SHIFT)) {
         shift_down = false;
         return 0;
     }
@@ -44,20 +68,13 @@ static char _get_ascii(u8 scancode) {
     return shift_down ? us_ascii[1][scancode] : us_ascii[0][scancode];
 }
 
-static void ps2_irq_handler(UNUSED int_state* s) {
-    u8 scancode = inb(0x60);
-
-    // FIXME: don't just push raw scancodes. Parse into a more common format
-    chardev->interface->write(chardev, (u8[]){scancode}, 0, 1);
-
-#ifdef PS2_DEBUG
-    log_debug("[PS2 DEBUG] scancode = %#x, ascii = %c", scancode, _get_ascii(scancode));
-#endif
-}
-
 void init_ps2_kbd(virtual_fs* vfs) {
     set_int_handler(IRQ_NUMBER(IRQ_PS2_KEYBOARD), ps2_irq_handler);
 
-    chardev = pipe_create("kbd", 128);
-    vfs_mount(vfs, "/dev", tree_create_node(chardev));
+    vfs_node* dev = vfs_create_node("kbd", VFS_CHARDEV);
+    dev->interface = vfs_create_file_interface(_read, _write);
+
+    buffer = ring_buffer_create(PS2_DEV_BUFFER_SIZE);
+
+    vfs_mount(vfs, "/dev", tree_create_node(dev));
 }

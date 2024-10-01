@@ -142,11 +142,11 @@ char* mem_map_type_string(e820_type type) {
         return "available";
     case E820_RESERVED:
         return "reserved";
-    case E820_MEM_ACPI:
+    case E820_ACPI:
         return "ACPI reclaimable";
-    case E820_MEM_NVS:
+    case E820_NVS:
         return "ACPI NVS";
-    case E820_MEM_BADRAM:
+    case E820_BADRAM:
         return "BAD RAM!";
     case E820_ALLOC:
         return "temorary allocation";

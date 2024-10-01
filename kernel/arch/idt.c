@@ -17,25 +17,46 @@ static int_handler int_handlers[ISR_COUNT];
 ALIGNED(0x10)
 static idt_entry idt_entries[ISR_COUNT] = {0};
 
+// "?" indicate a reserved int number
+static const char* int_strings[32] = {
+    "Divide by zero",
+    "Debug",
+    "Non-maskable interrupt",
+    "Breakpoint",
+    "Overflow",
+    "Out of bounds",
+    "Invalid opcode",
+    "No coprocessor",
+    "Double fault",
+    "Coprocessor segover",
+    "Invalid tss",
+    "Segment not present",
+    "Stack segment fault",
+    "General protection fault",
+    "Page fault",
+    "?",
+    "x87 floating point exception",
+    "Alignment check",
+    "Machine check",
+    "SIMD floating point exception",
+    "Virtualization exception",
+    "Control protection exception",
+    "?",
+    "?",
+    "?",
+    "?",
+    "?",
+    "Hypervisor injection exception",
+    "Vmm communication exception",
+    "Security exception",
+    "?",
+    "?",
+};
 
 static void generic_int_handler(int_state* s) {
     log_warn("Unhandled interrupt: [int=%#lx]\n", s->int_num);
 }
 
-typedef struct {
-    u64 rbp;
-    u64 rip;
-} stack_frame;
-
-void dump_stack_trace(u64 rbp) {
-    stack_frame* frame = (stack_frame*)rbp;
-
-    log_debug("Dump of stack trace:");
-    while (frame) {
-        log_debug("rip: %#lx", frame->rip);
-        frame = (stack_frame*)frame->rbp;
-    }
-}
 
 void dump_regs(int_state* s) {
     gen_regs* g = &s->g_regs;
@@ -53,10 +74,12 @@ void dump_regs(int_state* s) {
 
 static void exception_handler(int_state* s) {
     disble_interrupts();
-    log_fatal("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
     dump_regs(s);
-    dump_stack_trace(s->g_regs.rbp);
-    panic("Halting: %s", int_strings[s->int_num]);
+    // TODO: implement this for real
+    // dump_stack_trace(s->g_regs.rbp);
+
+    log_fatal("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
+    panic("Kernel panic: %s", int_strings[s->int_num]);
 }
 
 void idt_init() {

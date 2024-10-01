@@ -6,6 +6,8 @@
 #include <boot/proto.h>
 #include <gfx/state.h>
 #include <log/log.h>
+#include <stdio.h>
+#include <string.h>
 #include <x86/asm.h>
 #include <x86/paging.h>
 
@@ -18,10 +20,13 @@
 #include "drivers/ide.h"
 #include "drivers/pci.h"
 #include "drivers/ps2.h"
+#include "drivers/serial.h"
+#include "drivers/zero.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "vfs/fs.h"
 #include "video/tty.h"
+#include "x86/e820.h"
 
 
 NORETURN void _kern_entry(boot_handoff* handoff) {
@@ -45,13 +50,16 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     virtual_fs* vfs = vfs_init();
 
-    pic_init();
+    init_serial_dev(vfs);
+    init_zero_devs(vfs);
     init_ps2_kbd(vfs);
 
+    pic_init();
     enable_interrupts();
 
     log_info(ALPHA_ASCII);
 
+    dump_map(&handoff->mmap);
     log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
 
     std_time time = get_time();

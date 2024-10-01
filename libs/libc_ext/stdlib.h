@@ -38,7 +38,7 @@ unsigned long long bswapll(unsigned long long num);
 
 #define clamp(num, min, max)                         \
     ({                                               \
-        const typeof(x) __x = (num);                 \
+        const typeof(num) __x = (num);               \
         const typeof(min) __l = (min);               \
         const typeof(max) __h = (max);               \
         (__x > __h) ? __h : (__x < __l ? __l : __x); \

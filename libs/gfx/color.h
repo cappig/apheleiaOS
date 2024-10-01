@@ -1,12 +1,16 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 
-typedef union {
-    struct {
-        u8 r, g, b, a;
+typedef union PACKED {
+    struct PACKED {
+        u8 r;
+        u8 g;
+        u8 b;
+        u8 a;
     };
-    u32 raw;
+    u32 raw; // NOTE : beware of endianness
 } rgba_color;
 
 typedef enum {
@@ -28,8 +32,15 @@ typedef enum {
     ANSI_BRIGHT_GREY = 15,
 } ansi_colors;
 
+inline rgba_color rgb_to_color(u8 red, u8 green, u8 blue) {
+    return (rgba_color){.r = red, .g = green, .b = blue};
+}
+
 extern const u32 default_ansi_colors[16];
 
 
 int color_palette_index(u32 color);
+
+rgba_color ansi_to_rgb(u8 index);
+
 int color_delta(rgba_color c1, rgba_color c2);

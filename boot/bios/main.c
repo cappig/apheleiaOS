@@ -18,7 +18,7 @@ static boot_handoff handoff = {.magic = BOOT_MAGIC};
 
 
 NORETURN void _load_entry(u16 boot_disk) {
-    init_serial(SERIAL_COM(1), SERIAL_DEFAULT_BAUD);
+    init_serial(SERIAL_COM1, SERIAL_DEFAULT_BAUD);
 
     cpuid_regs r = {0};
     cpuid(CPUID_EXTENDED_INFO, &r);

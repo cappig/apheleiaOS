@@ -11,7 +11,8 @@ static bitmap_alloc frame_alloc;
 
 
 void pmm_init(e820_map* mmap) {
-    if (!bitmap_alloc_init_mmap(&frame_alloc, mmap, PAGE_4KIB))
+    bool ret = bitmap_alloc_init_mmap(&frame_alloc, mmap, PAGE_4KIB);
+    if (!ret)
         panic("Failed to initialize the page farame allocator!");
 }
 

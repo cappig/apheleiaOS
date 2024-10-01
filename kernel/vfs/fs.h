@@ -4,6 +4,8 @@
 #include <data/list.h>
 #include <data/tree.h>
 
+#define VFS_EOF 0
+
 typedef enum {
     VFS_FILE = 1,
     VFS_DIR = 2,
@@ -65,6 +67,8 @@ vfs_node_interface* vfs_create_file_interface(vfs_read_fn read, vfs_write_fn wri
 void vfs_destroy_interface(vfs_node_interface* interface);
 
 tree_node* vfs_mount(virtual_fs* vfs, const char* path, tree_node* mount_node);
-tree_node* vfs_lookup(virtual_fs* vfs, const char* path);
+
+tree_node* vfs_lookup_tree(virtual_fs* vfs, const char* path);
+vfs_node* vfs_lookup(virtual_fs* vfs, const char* path);
 
 void dump_vfs(virtual_fs* vfs);

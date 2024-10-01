@@ -19,7 +19,7 @@ static graphics_state gfx = {0};
 
 
 static void _putc_vga(term_char ch, usize index) {
-    static volatile u16* vga_base = (u16*)VGA_ADDR;
+    static volatile u16* vga_base = (u16*)ID_MAPPED_VADDR(VGA_ADDR);
 
     u16 attr = term_char_to_vga(ch);
     vga_base[index] = ch.ascii | (attr << 8);
@@ -34,7 +34,7 @@ static void _putc_vesa(term_char ch, usize index) {
 
 
 void puts(const char* s) {
-    send_serial_string(SERIAL_COM(1), s);
+    send_serial_string(SERIAL_COM1, s);
 
     if (term)
         term_parse(term, s, (usize)-1);

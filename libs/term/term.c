@@ -5,233 +5,97 @@
 #include <ctype.h>
 #include <gfx/color.h>
 #include <gfx/vga.h>
-#include <log/log.h>
+#include <stdlib.h>
 #include <string.h>
-#include <x86/asm.h>
 
 #include "palette.h"
-
-#define DEFAULT_STYLE                          \
-    ((term_style){                             \
-        .bg = term->palette[term->default_bg], \
-        .fg = term->palette[term->default_fg], \
-    })
+#include "parser.h"
 
 
 static void _term_buffer_place(terminal* term, const char ch) {
-    usize index = term->cur_x + term->cur_y * term->width;
-
+    usize index = term->cursor.x + term->cursor.y * term->width;
     term->buffer[index] = (term_char){
-        .style = term->parser.current,
+        .style = term->parser.style,
         .ascii = ch,
     };
 }
 
-static void _term_putc(terminal* term, const char ch) {
+void term_putc(terminal* term, const char ch) {
     switch (ch) {
     case '\r':
-        term->cur_x = 0;
+        term->cursor.x = 0;
         break;
+
     case '\n':
-        term->cur_x = 0;
-        term->cur_y++;
+        term->cursor.x = 0;
+        term->cursor.y++;
         break;
+
     case '\t':
-        term->cur_x += TERM_TAB_WIDTH;
+        term->cursor.x += TERM_TAB_WIDTH;
         break;
+
+    case '\b':
+        term->cursor.x--;
+        break;
+
     case '\v':
-        term->cur_y++;
+        term->cursor.y++;
         break;
+
     default:
         _term_buffer_place(term, ch);
-        term->cur_x++;
+        term->cursor.x++;
         break;
     }
 
-    // Wrap line
-    if (term->cur_x >= term->width) {
-        term->cur_y++;
-        term->cur_x = 0;
+    // Wrap line, TODO: add ability to disable wrapping
+    if (term->cursor.x >= term->width) {
+        term->cursor.y++;
+        term->cursor.x = 0;
     }
 
     // Scroll one line up
-    if (term->cur_y >= term->height)
+    if (term->cursor.y >= term->height)
         term_scroll(term);
 }
 
-static void _handle_color(terminal* term, usize num) {
-    term_style* next = &term->parser.next;
 
-    switch (num) {
-    case 0:
-        *next = DEFAULT_STYLE;
-        break;
+void term_draw(terminal* term) {
+    for (usize i = 0; i < term->width * term->height; i++) {
+        term_char* ch = &term->buffer[i];
 
-    case 7:
-        memswap(&next->fg, &next->bg, sizeof(rgba_color));
-        break;
-
-    case 30 ... 37:
-        next->fg = term->palette[num - 30];
-        break;
-    case 38:
-        // TODO:
-        break;
-    case 39:
-        next->fg = term->palette[term->default_fg];
-        break;
-
-    case 40 ... 47:
-        next->bg = term->palette[num - 40];
-        break;
-    case 48:
-        // TODO:
-        break;
-    case 49:
-        next->bg = term->palette[term->default_bg];
-        break;
-
-    case 90 ... 97:
-        next->fg = term->palette[num - 90 + 8];
-        break;
-
-    case 100 ... 107:
-        next->bg = term->palette[num - 100 + 8];
-        break;
+        if (isprint(ch->ascii))
+            term->putc_fn(*ch, i);
     }
 }
 
-static void _handle_flags(terminal* term, usize num) {
-    term_style* next = &term->parser.next;
 
-    switch (num) {
-    // Set flags
-    case 1:
-        next->flags |= TERM_FLAG_BOLD;
-        break;
-    case 2:
-        next->flags |= TERM_FLAG_FAINT;
-        break;
-    case 3:
-        next->flags |= TERM_FLAG_ITALIC;
-        break;
+void term_clear(terminal* term, term_pos from, term_pos to) {
+    usize from_index = from.x + term->width * from.y;
+    usize to_index = to.x + term->width * to.y;
 
-    // unset flags
-    case 21:
-        next->flags &= ~(TERM_FLAG_BOLD);
-        break;
-    case 22:
-        next->flags &= ~(TERM_FLAG_FAINT);
-        break;
-    case 23:
-        next->flags &= ~(TERM_FLAG_ITALIC);
-        break;
-    }
-}
-
-static void _handle_csi(terminal* term, usize num) {
-    switch (num) {
-    case 1 ... 3: // set flags
-    case 21 ... 23: // unset flags
-        _handle_flags(term, num);
-        break;
-
-    case 0: // reset
-    case 7: // invert
-    case 30 ... 39: // fg
-    case 40 ... 49: // bg
-    case 90 ... 97: // fg bright
-    case 100 ... 107: // bg bright
-        _handle_color(term, num);
-        break;
-    }
-}
-
-#define STATE_ESC     0
-#define STATE_BRACKET 1
-#define STATE_CSI     2
-#define STATE_END     3
-
-#define ACC_NOTHING 0
-#define ACC_CSI     1
-
-static char _parse_char(terminal* term, const char ch) {
-    char ret = '\0';
-
-    switch (term->parser.state) {
-    case STATE_ESC:
-        if (ch == '\x1b')
-            term->parser.state = STATE_BRACKET;
-        else
-            ret = ch;
-        break;
-
-    case STATE_BRACKET:
-        if (ch == '[') {
-            term->parser.acc_content = ACC_CSI;
-            term->parser.acc = 0;
-            term->parser.state = STATE_CSI;
-        } else {
-            term->parser.state = STATE_ESC;
-            ret = ch;
-        }
-        break;
-
-    case STATE_CSI:
-        if (isdigit(ch)) {
-            term->parser.acc *= 10;
-            term->parser.acc += ch - '0';
-        } else {
-            term->parser.state = STATE_END;
-        }
-        break;
-
-
-    case STATE_END:
-        break;
-    }
-
-    if (term->parser.state == STATE_END) {
-        if (term->parser.acc_content == ACC_CSI)
-            _handle_csi(term, term->parser.acc);
-
-        term->parser.acc_content = ACC_NOTHING;
-        term->parser.acc = 0;
-
-        if (ch == ';') {
-            term->parser.acc_content = ACC_CSI;
-            term->parser.state = STATE_CSI;
-        } else if (ch == 'm') {
-            term->parser.state = STATE_ESC;
-            term->parser.current = term->parser.next;
-        } else {
-            term->parser.state = STATE_ESC;
-            term->parser.next = term->parser.current;
-            ret = ch;
-        }
-    }
-
-    return ret;
-}
-
-static void _clear_line(terminal* term, usize y) {
-    for (usize i = 0; i < term->width; i++) {
-        term_char* ch = &term->buffer[y * term->width + i];
+    for (usize i = from_index; i <= to_index; i++) {
+        term_char* ch = &term->buffer[i];
 
         ch->style = DEFAULT_STYLE;
         ch->ascii = ' ';
     }
 }
 
-static void _term_write(terminal* term) {
-    for (usize i = 0; i < term->width * term->height; i++) {
-        term_char* ch = &term->buffer[i];
+void term_clear_screen(terminal* term) {
+    term_pos from = {0, 0};
+    term_pos to = {term->width - 1, term->height - 1};
 
-        if (isprint(ch->ascii))
-            term->term_putc(*ch, i);
-    }
+    term_clear(term, from, to);
 }
 
+void term_clear_line(terminal* term, usize y) {
+    term_pos from = {0, y};
+    term_pos to = {term->width - 1, y};
+
+    term_clear(term, from, to);
+}
 
 void term_scroll(terminal* term) {
     // Move one line up
@@ -240,29 +104,24 @@ void term_scroll(terminal* term) {
         term->buffer[i] = term->buffer[i + term->width];
 
     // Clear the bottom line
-    _clear_line(term, term->height - 1);
+    term_clear_line(term, term->height - 1);
 
-    if (term->cur_y > 0)
-        term->cur_y--;
+    if (term->cursor.y > 0)
+        term->cursor.y--;
 }
 
-void term_clear(terminal* term) {
-    for (usize y = 0; y < term->height; y++)
-        _clear_line(term, y);
-}
 
 terminal* term_init(usize width, usize height, term_putc_fn putc_fn) {
     terminal* term = gcalloc(sizeof(terminal));
     if (!term)
         return NULL;
 
-    term->term_putc = putc_fn;
+    term->putc_fn = putc_fn;
 
     term->default_bg = TERM_DEFAULT_BG;
     term->default_fg = TERM_DEFAULT_FG;
 
-    term->parser.current = DEFAULT_STYLE;
-    term->parser.next = DEFAULT_STYLE;
+    term->parser.style = DEFAULT_STYLE;
 
     term->width = width;
     term->height = height;
@@ -274,15 +133,15 @@ terminal* term_init(usize width, usize height, term_putc_fn putc_fn) {
         return NULL;
 
     for (usize y = 0; y < term->lines; y++)
-        _clear_line(term, y);
+        term_clear_line(term, y);
 
     term_set_palette(term, default_ansi_colors);
 
     return term;
 }
 
+// FIXME: handle resizing to smaller size
 int term_resize(terminal* term, usize new_width, usize new_height) {
-    // FIXME: handle resizing to smaller size
     usize old_height = term->height;
     usize old_width = term->width;
 
@@ -300,7 +159,7 @@ int term_resize(terminal* term, usize new_width, usize new_height) {
     term->buffer = gmalloc(term->lines * new_width * sizeof(term_char));
 
     for (usize y = 0; y < term->lines; y++) {
-        _clear_line(term, y);
+        term_clear_line(term, y);
 
         if (y >= old_lines)
             continue;
@@ -313,24 +172,25 @@ int term_resize(terminal* term, usize new_width, usize new_height) {
 
     gfree(old_buffer);
 
-    _term_write(term);
+    term_draw(term);
 
     return 1;
 }
+
 
 int term_parse(terminal* term, const char* string, usize max_size) {
     usize printed = 0;
 
     for (usize i = 0; string[i] && i < max_size; i++) {
-        char ch = _parse_char(term, string[i]);
+        char ch = parse_ansi_char(term, &string[i]);
 
         if (ch) {
-            _term_putc(term, ch);
+            term_putc(term, ch);
             printed++;
         }
     }
 
-    _term_write(term);
+    term_draw(term);
 
     return printed;
 }

@@ -27,6 +27,7 @@ virtual_fs* vfs_init() {
     return vfs;
 }
 
+
 vfs_node* vfs_create_node(char* name, vfs_node_type type) {
     vfs_node* new = kcalloc(sizeof(vfs_node));
     new->type = type;
@@ -59,7 +60,8 @@ void vfs_destroy_interface(vfs_node_interface* interface) {
     kfree(interface);
 }
 
-tree_node* vfs_lookup(virtual_fs* vfs, const char* path) {
+
+tree_node* vfs_lookup_tree(virtual_fs* vfs, const char* path) {
     if (!path || path[0] != '/') {
         errno = EINVAL;
         return NULL;
@@ -100,6 +102,16 @@ tree_node* vfs_lookup(virtual_fs* vfs, const char* path) {
     return node;
 }
 
+vfs_node* vfs_lookup(virtual_fs* vfs, const char* path) {
+    tree_node* tnode = vfs_lookup_tree(vfs, path);
+
+    if (tnode)
+        return tnode->data;
+    else
+        return NULL;
+}
+
+
 tree_node* vfs_mount(virtual_fs* vfs, const char* path, tree_node* mount_node) {
     vfs_node* node = mount_node->data;
     if (!node->name) {
@@ -107,7 +119,7 @@ tree_node* vfs_mount(virtual_fs* vfs, const char* path, tree_node* mount_node) {
         return NULL;
     }
 
-    tree_node* parent_node = vfs_lookup(vfs, path);
+    tree_node* parent_node = vfs_lookup_tree(vfs, path);
     if (!parent_node) {
         errno = ENOENT;
         return NULL;

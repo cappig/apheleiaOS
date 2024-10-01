@@ -177,14 +177,27 @@ void pci_destroy_device(pci_device* dev) {
 }
 
 
+const char* pci_stringify_class(u8 class) {
+    if (class <= 0x13)
+        return pci_class_strings[class];
+
+    if (class == 0x40)
+        return pci_class_strings[21];
+
+    if (class == 0xff)
+        return pci_class_strings[22];
+
+    return pci_class_strings[20];
+}
+
 void dump_pci_devices() {
     log_debug("Dump of found PCI devices:");
 
     foreach (device, devices) {
-        pci_device* dev = device->data;
+        pci_found* dev = device->data;
 
         log_debug(
-            "[ class:%.2x subclass:%.2x prog_if:%.2x ]",
+            "[ class:%#.2x subclass:%.2x prog_if:%.2x ]",
             dev->header.class,
             dev->header.subclass,
             dev->header.prog_if

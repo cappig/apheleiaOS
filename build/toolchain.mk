@@ -10,6 +10,10 @@ else ifeq ($(TOOLCHAIN), llvm)
 	LD := ld.lld
 endif
 
+CC_BASE += \
+	-Wno-unused-parameter \
+	-Wno-missing-braces
+
 ifeq ($(TOOLCHAIN), gnu)
 	CC_BASE += \
 		-fanalyzer
