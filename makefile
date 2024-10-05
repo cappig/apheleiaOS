@@ -11,7 +11,7 @@ CC_BASE := \
 	-Wall \
 	-Wextra \
 	-Wshadow \
-	-std=gnu2x \
+	-std=gnu23 \
 	-Ilibs \
 	-Ilibs/libc \
 	-ffreestanding \
@@ -48,6 +48,7 @@ include utils/font.mk
 .DEFAULT_GOAL := all
 .PHONY: all
 all: $(TARGET)
+	$(info Build completed successfully!)
 
 .PHONY: clean
 clean:

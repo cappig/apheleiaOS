@@ -59,10 +59,9 @@ void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     entry = &lvl1[lvl1_index];
 
 finalize:
-    entry->raw |= flags;
+    entry->raw |= flags & FLAGS_MASK;
     entry->bits.present = 1;
 
-    paddr = ALIGN(paddr, size);
     entry->bits.addr = paddr >> PAGE_SHIFT;
 }
 
@@ -76,6 +75,7 @@ void map_region(usize size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     }
 }
 
+// Starts from 0 and go to `top_adress`
 void identity_map(u64 top_adress, u64 offset, bool is_kernel) {
     // TODO: make use of larger page sizes
     for (u64 i = 0; i <= top_adress; i += PAGE_2MIB)

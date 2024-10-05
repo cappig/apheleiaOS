@@ -3,13 +3,11 @@
 #include <base/addr.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <stdlib.h>
 #include <string.h>
 #include <x86/paging.h>
 
-#include "libc_ext/stdlib.h"
-#include "log/log.h"
 #include "physical.h"
-#include "x86/asm.h"
 
 
 // Locate the requested index in the child table, allocate if it doesn't exist
@@ -63,10 +61,9 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
     entry = &lvl1[lvl1_index];
 
 finalize:
-    entry->raw |= flags;
+    entry->raw |= flags & FLAGS_MASK;
     entry->bits.present = 1;
 
-    paddr = ALIGN(paddr, size);
     entry->bits.addr = paddr >> PAGE_SHIFT;
 }
 
@@ -97,23 +94,23 @@ void unmap_page(page_table* lvl4_paddr, u64 vaddr) {
     page_table* lvl4 = (page_table*)ID_MAPPED_VADDR(lvl4_paddr);
 
     usize lvl3_index = GET_LVL3_INDEX(vaddr);
-    page_table* lvl3 = page_table_vaddr(&lvl4[lvl4_index]);
+    page_table* lvl3 = page_get_vaddr(&lvl4[lvl4_index]);
 
-    if (lvl3[lvl3_index].bits.huge) {
+    if (lvl3[lvl3_index].bits.huge && lvl3[lvl3_index].bits.present) {
         lvl3[lvl3_index].raw = 0;
         return;
     }
 
     usize lvl2_index = GET_LVL2_INDEX(vaddr);
-    page_table* lvl2 = page_table_vaddr(&lvl3[lvl3_index]);
+    page_table* lvl2 = page_get_vaddr(&lvl3[lvl3_index]);
 
-    if (lvl2[lvl2_index].bits.huge) {
+    if (lvl2[lvl2_index].bits.huge && lvl2[lvl2_index].bits.present) {
         lvl2[lvl2_index].raw = 0;
         return;
     }
 
     usize lvl1_index = GET_LVL1_INDEX(vaddr);
-    page_table* lvl1 = page_table_vaddr(&lvl2[lvl2_index]);
+    page_table* lvl1 = page_get_vaddr(&lvl2[lvl2_index]);
 
     if (lvl1[lvl1_index].bits.present) {
         lvl1[lvl1_index].raw = 0;
@@ -121,36 +118,22 @@ void unmap_page(page_table* lvl4_paddr, u64 vaddr) {
 }
 
 
-static inline void _clone_page_flags(page_table* src_vaddr, page_table* dest_vaddr) {
-    u64 flags = src_vaddr->raw & FLAGS_MASK;
-    dest_vaddr->raw |= flags;
-}
-
-static inline void _set_page_addr(page_table* dest_vaddr, u64 addr) {
-    dest_vaddr->bits.present = 1;
-    // dest_vaddr->bits.writable = 1;
-    // dest_vaddr->bits.user = 1;
-
-    dest_vaddr->bits.addr = addr;
-}
-
 static void _recursive_clone(page_table* src_vaddr, page_table* dest_vaddr, usize level) {
     page_table* new_paddr = alloc_frames(1);
     page_table* new_vaddr = (page_table*)ID_MAPPED_VADDR(new_paddr);
 
     memset((void*)new_vaddr, 0, 512 * sizeof(page_table));
 
-    _clone_page_flags(src_vaddr, new_vaddr);
-    _set_page_addr(dest_vaddr, (u64)new_paddr >> PAGE_SHIFT);
+    page_set_paddr(dest_vaddr, (u64)new_paddr);
 
-    page_table* next_vaddr = page_table_vaddr(src_vaddr);
+    page_table* next_vaddr = page_get_vaddr(src_vaddr);
 
     for (usize i = 0; i < 512; i++) {
         if (!next_vaddr[i].bits.present)
             continue;
 
-        if (next_vaddr[i].bits.huge || level == 2)
-            _set_page_addr(&new_vaddr[i], next_vaddr[i].bits.addr);
+        if (next_vaddr[i].bits.huge || level == 1)
+            new_vaddr[i].raw = next_vaddr[i].raw;
         else
             _recursive_clone(&next_vaddr[i], &new_vaddr[i], level - 1);
     }
@@ -176,4 +159,36 @@ page_table* clone_table(page_table* src_paddr) {
             _recursive_clone(&src_vaddr[i], &new_vaddr[i], 3);
 
     return new_paddr;
+}
+
+
+// In order to free a page we have to make sure that it doesn't point to any lower level children
+static void _recursive_free(page_table* src_vaddr, usize level) {
+    u64 paddr = page_get_paddr(src_vaddr);
+    page_table* vaddr = (page_table*)ID_MAPPED_VADDR(paddr);
+
+    // A level 1 page can't have children, skip this whole check
+    for (usize i = 0; i < 512 && level != 1; i++) {
+        if (!vaddr[i].bits.present)
+            continue;
+
+        // Free any children, that is follow any pointers to lower level tables
+        if (!vaddr[i].bits.huge)
+            _recursive_free(&vaddr[i], level - 1);
+    }
+
+    // At this point the page has no children
+    // This means that pointers will be left dangling
+    free_frames((void*)paddr, 1);
+}
+
+void free_table(page_table* src_paddr) {
+    page_table* src_vaddr = (page_table*)ID_MAPPED_VADDR(src_paddr);
+
+    // We have to walk the table to the lowest leaf and free all the frames that back valid pages
+    for (usize i = 0; i < 256; i++)
+        if (src_vaddr[i].bits.present)
+            _recursive_free(&src_vaddr[i], 3);
+
+    free_frames(src_paddr, 1);
 }

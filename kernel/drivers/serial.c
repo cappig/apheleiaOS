@@ -7,7 +7,7 @@
 #include "vfs/fs.h"
 #include "vfs/pty.h"
 
-// Should we try to ckeck the EBDA?
+// Should we try to check the EBDA?
 static usize com_port[] = {
     SERIAL_COM1,
     SERIAL_COM2,
@@ -16,7 +16,7 @@ static usize com_port[] = {
 };
 
 static void _read(vfs_pty* term, void* buf, usize len) {
-    // TODO: implment this
+    // TODO: implement this
 }
 
 static void _write(vfs_pty* term, void* buf, usize len) {

@@ -69,7 +69,7 @@ static u64 set_ata_size(ide_device* device) {
     u32 block_size = id->logical_sector_size * 2;
 
     // The block size field is optional, fall back to 512 if 0
-    // TODO: compute sthe physical sector size, it's a good performance hint
+    // TODO: compute the physical sector size, it's a good performance hint
     if (block_size == 0)
         block_size = ATA_SECTOR_SIZE;
 
@@ -168,8 +168,8 @@ static bool ata_probe_device(ide_device* device) {
     else
         sectors = set_ata_size(device);
 
-    // If the disk reports 0 sectors or if an error occured the disk isn't valid
-    // If we follow this brach the identify field is left dangling but that is fine
+    // If the disk reports 0 sectors or if an error occurred the disk isn't valid
+    // If we follow this branch the identify field is left dangling but that is fine
     // since the exists field equals false rendering all other fields irrelevant
     if (sectors == 0) {
         kfree(device->identify);

@@ -37,7 +37,7 @@ static void parse_rsdp(rsdt* rsdt_ptr) {
         sdt_header* header = (sdt_header*)(uptr)ID_MAPPED_VADDR(rsdt_ptr->table_ptrs[i]);
 
         if (!_validate_header(header)) {
-            log_error("RSDP has invalid enrty at index %zd", i);
+            log_error("RSDP has invalid entry at index %zd", i);
             continue;
         }
 
@@ -55,7 +55,7 @@ static void parse_xsdp(xsdt* xsdt_ptr) {
         sdt_header* header = (sdt_header*)ID_MAPPED_VADDR(xsdt_ptr->table_ptrs[i]);
 
         if (!_validate_header(header)) {
-            log_error("XSDP has invalid enrty at index %zd", i);
+            log_error("XSDP has invalid entry at index %zd", i);
             continue;
         }
 

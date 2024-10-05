@@ -29,7 +29,7 @@ void heap_init() {
     void* heap_start = (void*)ID_MAPPED_VADDR(alloc_frames(min(KERNEL_HEAP_PAGES, free_pages)));
 
     if (!bitmap_alloc_init(&heap, heap_start, heap_size, KERNEL_HEAP_BLOCK))
-        panic("Falied to iniralize kernel heap!");
+        panic("Failed to initialize kernel heap!");
 }
 
 

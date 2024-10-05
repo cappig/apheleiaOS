@@ -39,10 +39,10 @@ static void _consume_size(const char* format, size_t* index) {
     }
 }
 
-#define BASE_STRING -1
-#define BASE_CHAR   -2
-#define BASE_SET    -3
-#define BASE_OTHER  -4
+#define BASE_STRING  -1
+#define BASE_CHAR    -2
+#define BASE_SET     -3
+#define BASE_UNKNOWN -4
 
 static int _get_base(char type) {
     switch (type) {
@@ -72,7 +72,7 @@ static int _get_base(char type) {
         return BASE_SET;
 
     default:
-        return BASE_OTHER;
+        return BASE_UNKNOWN;
     }
 }
 

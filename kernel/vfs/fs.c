@@ -154,7 +154,7 @@ static void _recursive_dump(tree_node* parent, usize depth) {
 }
 
 void dump_vfs(virtual_fs* vfs) {
-    log_debug("Recursive dump of virual file system:");
+    log_debug("Recursive dump of viral file system:");
 
     _recursive_dump(vfs->tree->root, 0);
 }

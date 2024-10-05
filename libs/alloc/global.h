@@ -18,8 +18,8 @@ typedef struct {
     free_fn free;
 } global_alloc;
 
-// This global variable MUST be initialised by the "user" (bootloader/kernel)
-// Calling lib functions with this struct uninitialised will lead to null dereferencing
+// This global variable MUST be initialized by the "user" (bootloader/kernel)
+// Calling lib functions with this struct uninitialized will lead to nullptr dereferencing
 extern global_alloc* _global_allocator;
 
 // Wrappers to make our code look pretty :^)

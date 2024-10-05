@@ -31,7 +31,7 @@ u16 term_char_to_vga(term_char ch) {
     return (bg << 4) | (fg & 0x0f);
 }
 
-void term_set_palette(terminal* term, const u32 palette[16]) {
+void term_set_palette(terminal* term, const u32 palette[static 16]) {
     for (usize i = 0; i < 16; i++)
         term->palette[i].raw = palette[i];
 }

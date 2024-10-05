@@ -102,7 +102,7 @@ static bool _probe_fs(virtual_fs* vfs, vfs_driver* dev) {
     case VFS_DRIVER_OPTICAL:
         return _init_optical(vfs, dev);
     default:
-        log_error("Disk has unknow driver type!");
+        log_error("Disk has unknown driver type!");
         return false;
     }
 }

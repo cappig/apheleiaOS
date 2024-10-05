@@ -64,7 +64,18 @@ typedef union {
     u64 raw;
 } page_table;
 
+inline u64 page_get_paddr(page_table* page) {
+    return page->bits.addr << PAGE_SHIFT;
+}
+
+inline page_table* page_get_vaddr(page_table* page) {
+    u64 paddr = page_get_paddr(page);
+    return (page_table*)(uptr)ID_MAPPED_VADDR(paddr);
+}
+
+inline void page_set_paddr(page_table* page, u64 addr) {
+    page->bits.present = 1;
+    page->bits.addr = addr >> PAGE_SHIFT;
+}
 
 bool supports_1gib_pages(void);
-
-page_table* page_table_vaddr(page_table* parent);

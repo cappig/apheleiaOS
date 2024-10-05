@@ -87,13 +87,15 @@ static int _get_precision(const char* format, size_t* index, va_list vlist) {
 }
 
 // Negative values represent signed types
-#define SIZE_INT   1
-#define SIZE_CHAR  2
-#define SIZE_SHORT 3
-#define SIZE_LONG  4
-#define SIZE_LLONG 5
-
-#define type_size(type) ((sizeof(type) == sizeof(long)) ? SIZE_LONG : SIZE_LLONG)
+#define SIZE_CHAR    1
+#define SIZE_SHORT   2
+#define SIZE_INT     3
+#define SIZE_LONG    4
+#define SIZE_LLONG   5
+#define SIZE_SIZE    6
+#define SIZE_PTRDIFF 7
+#define SIZE_INTMAX  8
+#define SIZE_PTR     9
 
 static int _get_size(const char* format, size_t* index) {
     int size = SIZE_INT;
@@ -116,13 +118,13 @@ static int _get_size(const char* format, size_t* index) {
         }
         break;
     case 'z':
-        size = type_size(size_t);
+        size = SIZE_SIZE;
         break;
     case 'j':
-        size = type_size(intmax_t);
+        size = SIZE_INTMAX;
         break;
     case 't':
-        size = type_size(ptrdiff_t);
+        size = SIZE_PTRDIFF;
         break;
     default:
         (*index)--;
@@ -132,39 +134,46 @@ static int _get_size(const char* format, size_t* index) {
     return size;
 }
 
-static long long _get_var_number(int size, va_list vlist) {
-    long long number;
-
+static uintmax_t _get_var_number(int size, va_list vlist) {
     switch (size) {
     case SIZE_LLONG:
-        number = va_arg(vlist, unsigned long long);
-        break;
+        return va_arg(vlist, unsigned long long);
     case -SIZE_LLONG:
-        number = va_arg(vlist, long long);
-        break;
+        return va_arg(vlist, long long);
 
     case SIZE_LONG:
-        number = va_arg(vlist, unsigned long);
-        break;
+        return va_arg(vlist, unsigned long);
     case -SIZE_LONG:
-        number = va_arg(vlist, long);
-        break;
+        return va_arg(vlist, long);
 
     default:
     case SIZE_INT:
     case SIZE_SHORT:
     case SIZE_CHAR:
-        number = va_arg(vlist, unsigned int);
-        break;
+        return va_arg(vlist, unsigned int);
 
     case -SIZE_INT:
     case -SIZE_SHORT:
     case -SIZE_CHAR:
-        number = va_arg(vlist, int);
-        break;
-    }
+        return va_arg(vlist, int);
 
-    return number;
+    case SIZE_SIZE:
+    case -SIZE_SIZE:
+        return va_arg(vlist, size_t);
+
+    case SIZE_PTRDIFF:
+    case -SIZE_PTRDIFF:
+        return va_arg(vlist, ptrdiff_t);
+
+    case SIZE_INTMAX:
+        return va_arg(vlist, uintmax_t);
+    case -SIZE_INTMAX:
+        return va_arg(vlist, intmax_t);
+
+    case SIZE_PTR:
+    case -SIZE_PTR:
+        return (uintptr_t)va_arg(vlist, void*);
+    }
 }
 
 static size_t _string_to_buffer(char* buffer, char* string, int flags, int precision, int* padding) {
@@ -185,7 +194,7 @@ static size_t _string_to_buffer(char* buffer, char* string, int flags, int preci
 }
 
 static size_t
-_append_num_prefix(char* buffer, long long number, int flags, int base, int size, int* padding) {
+_append_num_prefix(char* buffer, uintmax_t number, int flags, int base, int size, int* padding) {
     const char* buf_start = buffer;
 
     if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO))
@@ -193,7 +202,7 @@ _append_num_prefix(char* buffer, long long number, int flags, int base, int size
             *buffer++ = ' ';
 
     char sign = 0;
-    if (size < 0 && number < 0)
+    if (size < 0 && (intmax_t)number < 0)
         sign = '-';
     else if (flags & FLAGS_PLUS)
         sign = '+';
@@ -223,31 +232,46 @@ _append_num_prefix(char* buffer, long long number, int flags, int base, int size
     return (size_t)(buffer - buf_start);
 }
 
-#define BASE_STRING -1
-#define BASE_CHAR   -2
-#define BASE_OTHER  -3
+// String and char are special
+#define BASE_STRING  -314
+#define BASE_CHAR    -271
+#define BASE_UNKNOWN 0
+// These represnt an actual radix, we usze the minus like a flag
+#define BASE_BIN  2
+#define BASE_OCT  8
+#define BASE_UDEC 10
+#define BASE_SDEC -10
+#define BASE_HEX  16
+#define BASE_PTR  -16
 
 static int _get_base(char type) {
     switch (type) {
     case 'p':
+        return BASE_PTR;
     case 'x':
     case 'X':
-        return 16;
+        return BASE_HEX;
+
     case 'i':
     case 'd':
-        return -10;
+        return BASE_SDEC;
     case 'u':
-        return 10;
+        return BASE_UDEC;
+
     case 'o':
-        return 8;
+        return BASE_OCT;
+
     case 'b':
-        return 2;
+        return BASE_BIN;
+
     case 'c':
         return BASE_CHAR;
+
     case 's':
         return BASE_STRING;
+
     default:
-        return BASE_OTHER;
+        return BASE_UNKNOWN;
     }
 }
 
@@ -273,14 +297,19 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
 
         int base = _get_base(format[i]);
 
-        if (base == -10) {
+        if (base == BASE_UNKNOWN) {
+            buffer[printed++] = format[i];
+            continue;
+        }
+
+        if (base == BASE_SDEC) {
             size = -size;
             base = -base;
         }
 
-        if (base == BASE_OTHER) {
-            buffer[printed++] = format[i];
-            continue;
+        if (base == BASE_PTR) {
+            size = SIZE_PTR;
+            base = -base;
         }
 
         if (base < 0) {
@@ -304,8 +333,8 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
 
             printed += _string_to_buffer(&buffer[printed], string, flags, precision, &padding);
         } else {
-            long long number = _get_var_number(size, vlist);
-            bool negative = (size < 0 && number < 0);
+            uintmax_t number = _get_var_number(size, vlist);
+            bool negative = (size < 0 && (intmax_t)number < 0);
 
             if (precision > 0) {
                 flags |= FLAGS_ZERO;

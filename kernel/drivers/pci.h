@@ -134,7 +134,7 @@ static const char* pci_class_strings[] = {
     "Signal Processing Controller",
     "Processing Accelerator",
     "Non-Essential Instrumentation",
-    "?", // ...a buch of reseved space here
+    "?", // ...a bunch of reserved space here
     "Co-Processor", // 0x40
     "Unassigned (Vendor specific)", // 0xff
 };

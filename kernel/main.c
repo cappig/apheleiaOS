@@ -7,7 +7,6 @@
 #include <gfx/state.h>
 #include <log/log.h>
 #include <stdio.h>
-#include <string.h>
 #include <x86/asm.h>
 #include <x86/paging.h>
 

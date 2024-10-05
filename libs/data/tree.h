@@ -5,6 +5,8 @@
 #include "list.h"
 
 // Nary tree
+// This is _the worst_ way to implement this
+// TODO: we should use a c++ style vector instead
 typedef struct tree_node {
     void* data;
 
