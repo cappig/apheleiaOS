@@ -2,7 +2,7 @@
 
 #include <data/ring.h>
 
-#include "vfs/fs.h"
+#include "fs.h"
 
 typedef struct vfs_pty vfs_pty;
 

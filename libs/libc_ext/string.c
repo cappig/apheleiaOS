@@ -127,3 +127,18 @@ char* strtrunc(char* str) {
 
     return str;
 }
+
+
+char* basename(const char* path) {
+    return strrchr(path, '/') + 1;
+}
+
+// NOTE: this function allocates on the stack
+char* dirname(const char* path) {
+    char* slash = strrchr(path, '/');
+
+    if (!slash)
+        return NULL;
+
+    return strndup(path, slash - path);
+}

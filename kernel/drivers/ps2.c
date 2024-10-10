@@ -36,7 +36,7 @@ static void ps2_irq_handler(UNUSED int_state* s) {
     ring_buffer_push(buffer, scancode);
 
 #ifdef PS2_DEBUG
-    log_debug("[PS2 DEBUG] scancode = %#x, ascii = %c", scancode, _get_ascii(scancode));
+    log_debug("[PS2 DEBUG] scancode = %#x, ascii = %c", scancode, ps2_to_ascii(scancode));
 #endif
 }
 

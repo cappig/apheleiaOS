@@ -64,8 +64,8 @@ BEGIN {
 }
 
 END {
-    print "\n#define FONT_WIDTH "width
-    print "#define FONT_HEIGHT "height"\n"
+    print "\n#define HEADER_FONT_WIDTH "width
+    print "#define HEADER_FONT_HEIGHT "height"\n"
 
-    print "static const u"width" font_bitmap["count"]["height"] = {"bitmaps"\n};"
+    print "static const u"width" header_font_bitmap["count"]["height"] = {"bitmaps"\n};"
 }

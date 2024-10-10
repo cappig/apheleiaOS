@@ -2,9 +2,11 @@
 #include <base/types.h>
 #include <boot/proto.h>
 #include <parse/elf.h>
+#include <string.h>
 #include <x86/asm.h>
 #include <x86/serial.h>
 
+#include "config.h"
 #include "disk.h"
 #include "handoff.h"
 #include "load_elf.h"
@@ -15,6 +17,49 @@
 
 ALIGNED(8)
 static boot_handoff handoff = {.magic = BOOT_MAGIC};
+
+
+static void load_config(void) {
+    file_handle args_cfg = {0};
+    open_root_file(&args_cfg, "args.cfg");
+
+    parse_config(&args_cfg, &handoff.args);
+
+    close_root_file(&args_cfg);
+}
+
+static void load_initrd(void) {
+    file_handle initrd = {0};
+    open_root_file(&initrd, "initrd.tar");
+
+    if (!initrd.size)
+        panic("initrd.tar not found");
+
+    void* initrd_perm = mmap_alloc(initrd.size, E820_KERNEL, 512);
+    memcpy(initrd_perm, initrd.addr, initrd.size);
+
+    handoff.initrd_loc = (u32)(uptr)initrd_perm;
+    handoff.initrd_size = initrd.size;
+
+    close_root_file(&initrd);
+}
+
+static u64 load_kernel(void) {
+    file_handle kernel_elf = {0};
+    open_root_file(&kernel_elf, "kernel.elf");
+
+    if (!kernel_elf.size)
+        panic("kernel.elf not found!");
+
+    if (elf_verify(kernel_elf.addr) != VALD_ELF)
+        panic("kernel.elf is not a valid executable!");
+
+    u64 kernel_entry = load_elf_sections(&kernel_elf);
+
+    close_root_file(&kernel_elf);
+
+    return kernel_entry;
+}
 
 
 NORETURN void _load_entry(u16 boot_disk) {
@@ -32,22 +77,21 @@ NORETURN void _load_entry(u16 boot_disk) {
 
     init_disk(boot_disk);
 
-    // TODO: read this from a config
-    init_graphics(&handoff.graphics, GFX_VESA, 1280, 720, 32);
+    load_config();
+
+    init_graphics(
+        &handoff.graphics,
+        handoff.args.gfx_mode,
+        handoff.args.vesa_width,
+        handoff.args.vesa_height,
+        handoff.args.vesa_bpp
+    );
 
     setup_paging();
 
-    // Read the kernel elf file
-    file_handle kernel_elf = {0};
-    open_root_file(&kernel_elf, "kernel.elf");
+    load_initrd();
 
-    if (!kernel_elf.size)
-        panic("kernel.elf not found!");
-
-    if (elf_verify(kernel_elf.addr) != VALD_ELF)
-        panic("kernel.elf is not a valid executable!");
-
-    u64 kernel_entry = load_elf_sections(&kernel_elf);
+    u64 kernel_entry = load_kernel();
 
     identity_map(PROTECTED_MODE_TOP, 0, false);
     identity_map(PROTECTED_MODE_TOP, ID_MAP_OFFSET, true);

@@ -104,24 +104,30 @@ int strncmp(const char* s1, const char* s2, size_t n) {
 
 
 char* strchr(const char* str, int ch) {
-    for (int i = 0; i < strlen(str); i++) {
-        if (str[i] == ch)
-            return (char*)str + i;
+    while (*str) {
+        if (*str == (char)ch)
+            return (char*)str;
+
+        str++;
     }
 
     return NULL;
 }
 
 char* strrchr(const char* str, int ch) {
-    if (strlen(str) == 0)
+    if (!str)
         return NULL;
 
-    for (int i = strlen(str) - 1; i <= 0; i--) {
-        if (str[i] == ch)
-            return (char*)str + i;
+    const char* ptr = NULL;
+
+    while (*str) {
+        if (*str == (char)ch)
+            ptr = str;
+
+        str++;
     }
 
-    return NULL;
+    return (char*)ptr;
 }
 
 

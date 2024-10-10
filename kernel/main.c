@@ -8,6 +8,7 @@
 #include <log/log.h>
 #include <stdio.h>
 #include <x86/asm.h>
+#include <x86/e820.h>
 #include <x86/paging.h>
 
 #include "arch/cmos.h"
@@ -17,6 +18,7 @@
 #include "arch/pic.h"
 #include "drivers/acpi.h"
 #include "drivers/ide.h"
+#include "drivers/initrd.h"
 #include "drivers/pci.h"
 #include "drivers/ps2.h"
 #include "drivers/serial.h"
@@ -25,7 +27,6 @@
 #include "mem/physical.h"
 #include "vfs/fs.h"
 #include "video/tty.h"
-#include "x86/e820.h"
 
 
 NORETURN void _kern_entry(boot_handoff* handoff) {
@@ -45,7 +46,9 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     heap_init();
     galloc_init();
 
-    tty_init(&handoff->graphics);
+    initrd_init(handoff);
+
+    tty_init(&handoff->graphics, handoff);
 
     virtual_fs* vfs = vfs_init();
 
@@ -57,9 +60,12 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     enable_interrupts();
 
     log_info(ALPHA_ASCII);
+    log_debug(ALPHA_BUILD_DATE);
 
     dump_map(&handoff->mmap);
     log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
+
+    initrd_close(handoff);
 
     std_time time = get_time();
     log_info("Time and date at boot is: %s", asctime(&time));

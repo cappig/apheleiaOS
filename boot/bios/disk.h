@@ -28,8 +28,10 @@ typedef struct {
     usize size;
 } file_handle;
 
+
 isize read_disk(void* dest, usize offset, usize bytes);
 
 void init_disk(u16 disk_code);
 
 void open_root_file(file_handle* file, const char* name);
+void close_root_file(file_handle* file);

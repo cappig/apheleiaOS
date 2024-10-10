@@ -103,6 +103,7 @@ void open_root_file(file_handle* file, const char* name) {
             }
 
             bfree(low_buffer);
+            bfree(buffer);
 
             file->addr = file_buffer;
             file->size = record->extent_size.lsb;
@@ -112,7 +113,18 @@ void open_root_file(file_handle* file, const char* name) {
         offset += record->length;
     }
 
+    bfree(buffer);
+
     // We didn't find the file
     file->addr = NULL;
+    file->size = 0;
+}
+
+// We don't _really_ need this because all E820_ALLOC regions get recaimed by the kernel
+void close_root_file(file_handle* file) {
+    if (!file->size)
+        return;
+
+    bfree(file->addr);
     file->size = 0;
 }

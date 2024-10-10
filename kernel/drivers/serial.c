@@ -29,7 +29,7 @@ static void _write(vfs_pty* term, void* buf, usize len) {
 
 static void _init_port(virtual_fs* vfs, u8 index) {
     vfs_pty* pty = pty_create(SERIAL_DEV_BUFFER_SIZE);
-    pty->private = (void*)com_port[index - 1]; // bit hacky but it works
+    pty->private = (void*)com_port[index - 1]; // a bit hacky but it works
     pty->out_hook = _write;
 
     char name[] = "ttyS0";

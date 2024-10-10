@@ -24,7 +24,7 @@
 #define PIT_MASK 0xFF
 #define PIT_SET  0x36
 
-#define PIT_DEFAULT_FREQ 100
+#define PIT_DEFAULT_FREQ 50
 
 #define PIT_BASE_FREQ 1193180
 

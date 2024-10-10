@@ -61,13 +61,13 @@ void vfs_destroy_interface(vfs_node_interface* interface) {
 }
 
 
-tree_node* vfs_lookup_tree(virtual_fs* vfs, const char* path) {
-    if (!path || path[0] != '/') {
+tree_node* vfs_lookup_tree_from(tree_node* from, const char* path) {
+    if (!path) {
         errno = EINVAL;
         return NULL;
     }
 
-    tree_node* node = vfs->tree->root;
+    tree_node* node = from;
     if (!node) {
         errno = ENXIO;
         return NULL;
@@ -100,6 +100,15 @@ tree_node* vfs_lookup_tree(virtual_fs* vfs, const char* path) {
 
     kfree(tok_str);
     return node;
+}
+
+tree_node* vfs_lookup_tree(virtual_fs* vfs, const char* path) {
+    if (!path || path[0] != '/') {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    return vfs_lookup_tree_from(vfs->tree->root, path);
 }
 
 vfs_node* vfs_lookup(virtual_fs* vfs, const char* path) {

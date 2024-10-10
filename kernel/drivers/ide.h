@@ -177,6 +177,8 @@ typedef struct {
     u32 sector_size;
     u64 sectors;
 
+    u8* read_buffer;
+
     ide_channel* channel;
 
     ata_identify* identify;

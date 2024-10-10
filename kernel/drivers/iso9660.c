@@ -2,6 +2,7 @@
 
 #include <fs/iso9660.h>
 #include <log/log.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "base/types.h"
@@ -34,7 +35,7 @@ static iso_device_private* _parse_pvd(vfs_driver* dev, vfs_file_system* fs) {
     return NULL;
 }
 
-static vfs_node* _construct_vfs_node(vfs_file_system* fs, iso_dir* dir) {
+static vfs_node* _construct_vfs_node(vfs_file_system* fs, iso_dir* dir, vfs_driver* driver) {
     vfs_node* vnode = kcalloc(sizeof(vfs_node));
 
     vnode->name = strndup(dir->file_id, dir->file_id_len - 2);
@@ -42,6 +43,7 @@ static vfs_node* _construct_vfs_node(vfs_file_system* fs, iso_dir* dir) {
     vnode->size = dir->extent_size.lsb;
     vnode->inode = dir->extent_location.lsb;
     vnode->interface = fs->interface;
+    vnode->driver = driver;
 
     return vnode;
 }
@@ -70,7 +72,7 @@ _recursive_tree_build(vfs_driver* dev, vfs_file_system* fs, iso_dir* parent, tre
         if (is_dot || is_dot_dot)
             goto next;
 
-        vfs_node* vnode = _construct_vfs_node(fs, record);
+        vfs_node* vnode = _construct_vfs_node(fs, record, dev);
 
         tree_node* tree_child = tree_create_node(vnode);
         tree_insert_child(tree_parent, tree_child);
@@ -86,6 +88,21 @@ _recursive_tree_build(vfs_driver* dev, vfs_file_system* fs, iso_dir* parent, tre
 }
 
 
+// ISO files are just contiguous blocks of disk, nice and easy
+static isize _read(vfs_node* node, void* buf, usize offset, usize len) {
+    if (offset == len)
+        return 0;
+    if (offset > len)
+        return -1;
+
+    vfs_driver* driver = node->driver;
+
+    usize size = min(len, node->size);
+    usize loc = node->inode * ISO_SECTOR_SIZE;
+
+    return driver->interface->read(driver, buf, loc + offset, size);
+}
+
 bool iso_init(vfs_driver* dev, vfs_file_system* fs) {
     iso_device_private* priv = _parse_pvd(dev, fs);
 
@@ -95,7 +112,7 @@ bool iso_init(vfs_driver* dev, vfs_file_system* fs) {
     vfs_node* tree_root = vfs_create_node(fs->partition.name, VFS_MOUNT);
     fs->subtree = tree_create(tree_root);
 
-    fs->interface = kcalloc(sizeof(vfs_node_interface));
+    fs->interface = vfs_create_file_interface(_read, NULL);
 
     iso_dir* root = (iso_dir*)priv->pvd->root;
     _recursive_tree_build(dev, fs, root, fs->subtree->root);

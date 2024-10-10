@@ -4,6 +4,7 @@
 #include "errno.h"
 #include "limits.h"
 
+
 long long strtoll(char const* restrict str, char** restrict endptr, int base) {
     const char* pos = str;
     unsigned long long ret = 0;

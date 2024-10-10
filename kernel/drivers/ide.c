@@ -197,6 +197,8 @@ static bool ata_mount_disk(virtual_fs* vfs, vfs_drive_interface* interface, ide_
         'a' + next_index,
     };
 
+    disk->read_buffer = kmalloc(disk->sector_size);
+
     vfs_driver* dev = vfs_create_device(name, disk->sector_size, disk->sectors);
 
     dev->private = disk;
@@ -321,21 +323,32 @@ static bool ide_read_sector_pio(vfs_driver* dev, usize lba, void* buffer) {
 
 // isize (*read)(disk_device* dev, void* dest, usize offset, usize bytes);
 static isize ide_read_wrapper(vfs_driver* dev, void* dest, usize offset, usize bytes) {
+    ide_device* device = dev->private;
+
     usize sectors = DIV_ROUND_UP(bytes, dev->sector_size);
+    usize remainder = bytes % dev->sector_size;
+
     usize lba = DIV_ROUND_UP(offset, dev->sector_size);
 
     usize read = 0;
     for (usize i = 0; i < sectors; i++) {
-        if (!ide_read_sector_pio(dev, lba + i, dest + i * dev->sector_size)) {
+        if (!ide_read_sector_pio(dev, lba + i, device->read_buffer)) {
             log_warn("Error reading disk");
             break;
         }
 
-        read += dev->sector_size;
+        usize len = dev->sector_size;
+
+        if (i + 1 == sectors && remainder)
+            len = remainder;
+
+        memcpy(dest + i * dev->sector_size, device->read_buffer, len);
+
+        read += len;
     }
 
 #ifdef DISK_DEBUG
-    log_debug("[DISK_DEBUG] IDE read: lba = %zd, sectors = %zd", lba, sectors);
+    log_debug("[DISK_DEBUG] IDE read: lba = %zd, bytes = %zd", lba, bytes);
 #endif
 
     return read;

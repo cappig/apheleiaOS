@@ -26,6 +26,10 @@ typedef u32 vfs_mode;
 // Resolve the circular references and make the compiler shut up
 typedef struct vfs_node vfs_node;
 
+// FIXME: This is a circular header dependancy
+// Forward declaration to "fix", driver.h must be included by user
+typedef struct vfs_driver vfs_driver;
+
 typedef isize (*vfs_read_fn)(vfs_node* node, void* buf, usize offset, usize len);
 typedef isize (*vfs_write_fn)(vfs_node* node, void* buf, usize offset, usize len);
 
@@ -45,9 +49,9 @@ typedef struct vfs_node {
     u32 flags;
 
     u32 inode;
-    u32 device;
 
     vfs_node_interface* interface;
+    vfs_driver* driver;
 
     void* private;
 } vfs_node;
@@ -68,6 +72,7 @@ void vfs_destroy_interface(vfs_node_interface* interface);
 
 tree_node* vfs_mount(virtual_fs* vfs, const char* path, tree_node* mount_node);
 
+tree_node* vfs_lookup_tree_from(tree_node* from, const char* path);
 tree_node* vfs_lookup_tree(virtual_fs* vfs, const char* path);
 vfs_node* vfs_lookup(virtual_fs* vfs, const char* path);
 

@@ -31,8 +31,6 @@ typedef struct vfs_driver {
     usize sector_size;
     usize disk_size;
 
-    u8* buffer;
-
     void* private;
 } vfs_driver;
 

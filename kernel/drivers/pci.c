@@ -191,7 +191,7 @@ const char* pci_stringify_class(u8 class) {
 }
 
 void dump_pci_devices() {
-    log_debug("Dump of found PCI devices:");
+    log_debug("Dump of detected PCI devices:");
 
     foreach (device, devices) {
         pci_found* dev = device->data;
