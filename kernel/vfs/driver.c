@@ -35,16 +35,17 @@ static void _destroy_fs(vfs_file_system* fs, vfs_driver* dev) {
 }
 
 static bool _probe_iso(virtual_fs* vfs, vfs_driver* dev, vfs_file_system* fs) {
-    if (iso_init(dev, fs)) {
-        log_info("Detected a valid ISO-9660 file system on drive %s", dev->name);
-        vfs_mount(vfs, "/mnt", fs->subtree->root);
+    bool success = iso_init(dev, fs);
 
-        return true;
-    } else {
+    if (!success) {
         _destroy_fs(fs, dev);
-
         return false;
     }
+
+    log_info("Detected a valid ISO-9660 file system on drive %s", dev->name);
+
+    vfs_mount(vfs, "/mnt", fs->subtree->root);
+    return true;
 }
 
 
@@ -86,6 +87,7 @@ static bool _init_hard(virtual_fs* vfs, vfs_driver* dev) {
         switch (part->type) {
         case MBR_ISO:
             return _probe_iso(vfs, dev, fs);
+
         default:
             _destroy_fs(fs, dev);
             return false;
@@ -99,8 +101,10 @@ static bool _probe_fs(virtual_fs* vfs, vfs_driver* dev) {
     switch (dev->type) {
     case VFS_DRIVER_HARD:
         return _init_hard(vfs, dev);
+
     case VFS_DRIVER_OPTICAL:
         return _init_optical(vfs, dev);
+
     default:
         log_error("Disk has unknown driver type!");
         return false;

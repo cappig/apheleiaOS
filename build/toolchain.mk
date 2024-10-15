@@ -1,6 +1,7 @@
 AS := nasm
 OC := objcopy
 ST := strip
+NM := nm
 
 ifeq ($(TOOLCHAIN), gnu)
 	CC := gcc
@@ -12,7 +13,8 @@ endif
 
 CC_BASE += \
 	-Wno-unused-parameter \
-	-Wno-missing-braces
+	-Wno-missing-braces \
+	-DVERSION=\"$(VERSION)\"
 
 ifeq ($(TOOLCHAIN), gnu)
 	CC_BASE += \
@@ -27,8 +29,16 @@ else ifeq ($(TOOLCHAIN), llvm)
 		-Wno-gnu-statement-expression
 endif
 
+# If we want to be able to perform stack tracing in the kernel we have
+# to load a symbol table and compile witouth ommiting frame pointers
+TRACEABLE_KERNEL ?= true
+
+ifeq ($(TRACEABLE_KERNEL), true)
+	CC_BASE += -g -fno-omit-frame-pointer
+endif
+
 ifeq ($(PROFILE), debug)
-	CC_BASE += -Og -g -DDISK_DEBUG -DKMALLOC_DEBUG -DPS2_DEBUG
+	CC_BASE += -Og -DDISK_DEBUG -DKMALLOC_DEBUG -DPS2_DEBUG
 else ifeq ($(PROFILE), small)
 	CC_BASE += -Os
 else ifeq ($(PROFILE), normal)

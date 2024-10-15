@@ -18,5 +18,5 @@
             panic("assert: %s is not true", #b); \
     })
 
-NORETURN
-void panic_unwind();
+
+NORETURN void panic_unwind(void);

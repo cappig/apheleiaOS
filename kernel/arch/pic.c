@@ -1,13 +1,13 @@
 #include "pic.h"
 
 #include <base/types.h>
+#include <log/log.h>
 #include <x86/asm.h>
 
-#include "idt.h"
-#include "log/log.h"
+#include "arch/idt.h"
 
 
-static void set_timer_freq(usize hz) {
+void set_timer_freq(usize hz) {
     u16 divisor = (u16)(PIT_BASE_FREQ / hz);
 
     outb(PIT_CONTROL, PIT_SET);
@@ -16,13 +16,19 @@ static void set_timer_freq(usize hz) {
 }
 
 void pic_timer_enable() {
-    set_timer_freq(PIT_DEFAULT_FREQ);
-
     u8 pic1_mask = inb(PIC1_DATA);
     pic1_mask &= ~(1 << IRQ_SYSTEM_TIMER);
 
     outb(PIC1_DATA, pic1_mask);
 }
+
+void pic_timer_disable() {
+    u8 pic1_mask = inb(PIC1_DATA);
+    pic1_mask |= (1 << IRQ_SYSTEM_TIMER);
+
+    outb(PIC1_DATA, pic1_mask);
+}
+
 
 static void irq_sys_timer(UNUSED int_state* s) {
     log_warn(".irq_timer.");
@@ -52,6 +58,7 @@ void pic_init() {
 
     set_int_handler(IRQ_NUMBER(IRQ_SYSTEM_TIMER), irq_sys_timer);
 }
+
 
 void pic_end_int(usize irq) {
     if (irq >= 8)

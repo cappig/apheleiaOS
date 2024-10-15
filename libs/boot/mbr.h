@@ -11,7 +11,7 @@
 
 // https://en.wikipedia.org/wiki/Partition_type
 // Only the important ones
-enum mbr_partition_type : u8 {
+enum mbr_partition_type {
     MBR_EMPTY = 0x00,
     MBR_FAT12 = 0x01,
     MBR_FAT16_SMALL = 0x04,
@@ -30,7 +30,7 @@ enum mbr_partition_type : u8 {
     MBR_UNKNOWN = 0xff,
 };
 
-enum mbr_status : u8 {
+enum mbr_status {
     MBR_INACTIVE = 0x00,
     MBR_BOOTABLE = 0x80,
 };

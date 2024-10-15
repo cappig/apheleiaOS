@@ -83,6 +83,10 @@ void clean_mmap(e820_map* map) {
 void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, u32 alignment, uptr top) {
     e820_entry* entries = (e820_entry*)&mmap->entries;
 
+    // An aligment of 0 means 'do not align'
+    if (alignment == 0)
+        alignment = 1;
+
     for (isize i = mmap->count - 1; i >= 0; i--) {
         if (entries[i].type != E820_AVAILABLE)
             continue;

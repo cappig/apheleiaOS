@@ -1,11 +1,11 @@
 #include "acpi.h"
 
+#include <base/addr.h>
 #include <base/types.h>
+#include <data/list.h>
 #include <log/log.h>
 #include <string.h>
 
-#include "base/addr.h"
-#include "data/list.h"
 #include "mem/heap.h"
 
 static linked_list* tables;

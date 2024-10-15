@@ -8,8 +8,8 @@
 #include <x86/asm.h>
 
 #include "arch/idt.h"
+#include "drivers/pci.h"
 #include "mem/heap.h"
-#include "pci.h"
 #include "vfs/driver.h"
 #include "vfs/fs.h"
 

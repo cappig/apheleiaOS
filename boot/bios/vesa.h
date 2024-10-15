@@ -4,6 +4,7 @@
 #include <base/attributes.h>
 #include <base/types.h>
 #include <boot/proto.h>
+#include <gfx/state.h>
 
 // Implementations of VESA data structures
 // https://pdos.csail.mit.edu/6.828/2018/readings/hardware/vbe3.pdf
@@ -27,8 +28,8 @@ typedef struct PACKED {
 } vesa_info;
 
 typedef struct PACKED {
-    u8 size;
     u8 position;
+    u8 mask;
 } vesa_color;
 
 typedef struct PACKED {
@@ -68,6 +69,46 @@ typedef struct PACKED {
 
     u8 _unused1[206];
 } vesa_mode;
+
+// https://wiki.osdev.org/EDID
+// https://en.wikipedia.org/wiki/Extended_Display_Identification_Data
+
+typedef struct PACKED {
+    u8 _unused1[8];
+
+    u16 manufacture_id_msb;
+    u16 edid_id;
+    u32 serial_num;
+
+    u8 manufacture_week;
+    u8 manufacture_year;
+
+    u8 edid_version;
+    u8 edid_revision;
+
+    u8 video_input_type;
+
+    u8 max_hor_size_cm;
+    u8 max_ver_size_cm;
+
+    u8 gamma_factor;
+    u8 dpms_flags;
+    u8 chroma_info[10];
+
+    u8 timings_1;
+    u8 timings_2;
+    u8 manufacture_timing;
+
+    u16 timing_id[8];
+    u8 timing_desc_1[18];
+    u8 timing_desc_2[18];
+    u8 timing_desc_3[18];
+    u8 timing_desc_4[18];
+
+    u8 _unused2;
+
+    u8 checksum;
+} edid_info;
 
 
 void init_graphics(graphics_state* gfx, u8 mode, u16 width, u16 height, u16 bpp);

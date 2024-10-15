@@ -1,12 +1,12 @@
 #include "pci.h"
 
+#include <base/addr.h>
 #include <base/types.h>
 #include <data/list.h>
 #include <log/log.h>
 #include <string.h>
 #include <x86/asm.h>
 
-#include "base/addr.h"
 #include "drivers/acpi.h"
 #include "mem/heap.h"
 #include "mem/virtual.h"

@@ -90,7 +90,7 @@ isr_common_stub:
     pop rbx
     pop rax
 
-    ; Pop error code and interrupt number
+    ; Pop the error code and interrupt number
     add rsp, 8*2
 
     iretq

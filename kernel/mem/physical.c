@@ -5,7 +5,7 @@
 #include <x86/paging.h>
 
 #include "arch/panic.h"
-#include "virtual.h"
+#include "mem/virtual.h"
 
 static bitmap_alloc frame_alloc;
 
@@ -43,6 +43,8 @@ void reclaim_boot_map(e820_map* mmap) {
         if (current->type == E820_PAGE_TABLE || current->type == E820_ALLOC)
             current->type = E820_AVAILABLE;
     }
+
+    clean_mmap(mmap);
 
     page_table* root = (page_table*)read_cr3();
     for (u64 i = 0; i <= PROTECTED_MODE_TOP; i += PAGE_2MIB) {

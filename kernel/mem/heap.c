@@ -5,14 +5,14 @@
 #include <base/addr.h>
 #include <base/macros.h>
 #include <boot/proto.h>
+#include <log/log.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <x86/paging.h>
 
 #include "arch/panic.h"
-#include "log/log.h"
-#include "physical.h"
+#include "mem/physical.h"
 
 // FIXME: baaaaaad. A bitmap is far from optimal for this
 

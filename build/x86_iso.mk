@@ -7,6 +7,12 @@ bin/image/root/initrd.tar:
 bin/image/root/args.cfg:
 	cp build/args.cfg $@
 
+bin/image/root/sym.map: bin/image/root/kernel.elf
+ifeq ($(TRACEABLE_KERNEL), true)
+	$(NM) $< > $@
+endif
+	$(ST) $<
+
 bin/$(IMG_NAME): bin/image/root/mbr.bin
 	xorriso -as mkisofs -quiet -J -r -no-pad \
 		-V $(NAME) -c boot.cat -b boot.bin \
@@ -18,7 +24,7 @@ bin/$(IMG_NAME): bin/image/root/mbr.bin
 .PHONY: x86_iso
 x86_iso: \
 	bin/image/root/boot.bin \
-	bin/image/root/kernel.elf \
+	bin/image/root/sym.map \
 	bin/image/root/initrd.tar \
 	bin/image/root/args.cfg \
 	bin/$(IMG_NAME)

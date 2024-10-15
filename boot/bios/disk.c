@@ -9,6 +9,7 @@
 #include <x86/serial.h>
 
 #include "bios.h"
+#include "libc_ext/stdlib.h"
 #include "memory.h"
 #include "tty.h"
 
@@ -82,7 +83,7 @@ void open_root_file(file_handle* file, const char* name) {
     read_disk(buffer, root->extent_location.lsb * ISO_SECTOR_SIZE, ISO_SECTOR_SIZE);
 
     usize offset = 0;
-    while (offset <= root->extent_size.lsb) {
+    while (offset <= ISO_SECTOR_SIZE) {
         iso_dir* record = (iso_dir*)(buffer + offset);
 
         // File found, load all the blocks into memory
@@ -110,6 +111,9 @@ void open_root_file(file_handle* file, const char* name) {
             return;
         }
 
+        if (!record->length)
+            break;
+
         offset += record->length;
     }
 
@@ -120,7 +124,7 @@ void open_root_file(file_handle* file, const char* name) {
     file->size = 0;
 }
 
-// We don't _really_ need this because all E820_ALLOC regions get recaimed by the kernel
+// We don't _really_ need this because all E820_ALLOC regions get reclaimed by the kernel
 void close_root_file(file_handle* file) {
     if (!file->size)
         return;

@@ -65,7 +65,7 @@ void term_draw(terminal* term) {
     for (usize i = 0; i < term->width * term->height; i++) {
         term_char* ch = &term->buffer[i];
 
-        if (isprint(ch->ascii))
+        if (isprint(ch->ascii) && term->putc_fn)
             term->putc_fn(*ch, i);
     }
 }

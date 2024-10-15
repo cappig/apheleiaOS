@@ -1,5 +1,6 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 
 typedef enum {
@@ -18,4 +19,8 @@ typedef struct PACKED {
     u16 height;
 
     u64 framebuffer;
+
+    u8 red_mask;
+    u8 green_mask;
+    u8 blue_mask;
 } graphics_state;

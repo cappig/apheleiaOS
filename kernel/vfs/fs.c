@@ -91,6 +91,8 @@ tree_node* vfs_lookup_tree_from(tree_node* from, const char* path) {
         }
 
         if (!found) {
+            kfree(tok_str);
+
             errno = ENOENT;
             return NULL;
         }

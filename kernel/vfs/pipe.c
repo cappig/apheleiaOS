@@ -1,9 +1,9 @@
 #include "pipe.h"
 
+#include <base/attributes.h>
 #include <base/types.h>
 #include <data/ring.h>
 
-#include "base/attributes.h"
 #include "fs.h"
 #include "mem/heap.h"
 
@@ -47,7 +47,7 @@ void pipe_destroy(vfs_node* pipe) {
     if (pipe->type != VFS_CHARDEV)
         return;
 
-    ring_buffer_destroy(pipe->private);
+    ring_buffer_destroy((ring_buffer*)pipe->private);
     kfree(pipe->interface);
     kfree(pipe);
 }

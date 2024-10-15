@@ -3,10 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "log/log.h"
 
 // ustar stores values in _ASCII octal_ yeah
-static u32 _to_num(char* str, int size) {
+u32 ustar_to_num(char* str, int size) {
     u32 ret = 0;
     unsigned char* ch = (unsigned char*)str;
 
@@ -35,7 +34,7 @@ void* ustar_find(void* addr, usize size, const char* file) {
         if (!strcmp(head->name, file))
             return ptr + 512;
 
-        usize file_size = _to_num(head->size, 11);
+        usize file_size = ustar_to_num(head->size, 11);
 
         ptr += (((file_size + 511) / 512) + 1) * 512;
         head = (ustar_header*)ptr;
@@ -51,7 +50,7 @@ isize ustar_read(ustar_header* head, void* buf, usize offset, usize len) {
     if (offset > len)
         return -1;
 
-    usize file_size = _to_num(head->size, 11);
+    usize file_size = ustar_to_num(head->size, 11);
     usize read_size = min(len, file_size);
 
     void* read_base = head + USTAR_BLOCK_SIZE;

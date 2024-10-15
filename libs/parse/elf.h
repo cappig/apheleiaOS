@@ -41,7 +41,7 @@ typedef struct PACKED {
     u16 shstrndx; // index of the section header table entry
 } elf_header;
 
-enum ELF_arch {
+enum elf_arch {
     EARCH_X32 = 1,
     EARCH_X64 = 2,
 };
@@ -122,7 +122,7 @@ typedef struct PACKED {
     u64 align;
 
     u64 ent_size;
-} ELF_sect_header;
+} elf_sect_header;
 
 enum elf_section_type {
     SHT_NULL = 0x00,
@@ -145,7 +145,7 @@ enum elf_section_type {
     SHT_NUM = 0x13,
 };
 
-enum ELF_section_flags {
+enum elf_section_flags {
     SHF_WRITE = 0x1,
     SHF_ALLOC = 0x2,
     SHF_EXECINSTR = 0x4,
@@ -156,6 +156,30 @@ enum ELF_section_flags {
     SHF_OS_NONCONFORMING = 0x100,
     SHF_GROUP = 0x200,
     SHF_TLS = 0x400,
+};
+
+#define ELF_SYMBOL_BIND(info) ((info) >> 4)
+#define ELF_SYMBOL_TYPE(info) ((info) & 0x0F)
+
+typedef struct PACKED {
+    u32 name;
+    u8 info;
+    u8 other;
+    u16 shndx; // section table index
+    u64 value;
+    u64 size;
+} elf_symbol_table;
+
+enum elf_symbol_bindig {
+    STB_LOCAL = 0,
+    STB_GLOBAL = 1,
+    STB_WEAK = 2,
+};
+
+enum elf_symbol_type {
+    STT_NOTYPE = 0,
+    STT_OBJECT = 1,
+    STT_FUNC = 2,
 };
 
 

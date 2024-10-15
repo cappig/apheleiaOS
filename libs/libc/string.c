@@ -174,16 +174,12 @@ char* strtok(char* restrict str, const char* restrict delim) {
 char* strdup(const char* str) {
     size_t len = strlen(str) + 1;
 
-    char* ret = gmalloc(len);
-    if (ret) {
-        memcpy(ret, str, len);
-    }
-
-    return ret;
+    return strndup(str, len);
 }
 
 char* strndup(const char* str, size_t size) {
-    char* ret = memcpy(gmalloc(size + 1), str, size + 1);
+    void* dest = gmalloc(size + 1);
+    char* ret = memcpy(dest, str, size + 1);
     ret[size] = '\0';
 
     return ret;

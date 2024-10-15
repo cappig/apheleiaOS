@@ -1,9 +1,9 @@
 #include "serial.h"
 
+#include <base/types.h>
+#include <string.h>
 #include <x86/serial.h>
 
-#include "base/types.h"
-#include "string.h"
 #include "vfs/fs.h"
 #include "vfs/pty.h"
 

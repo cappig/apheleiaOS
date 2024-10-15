@@ -12,7 +12,7 @@
 
 // Some of these characters do have an ASCII representation but they are
 // never used in text so we do this instead
-enum kbd_non_ascii_keys : u8 {
+enum kbd_non_ascii_keys {
     KBD_NOTHING = 0x00, // scancode doesn't have an associated key
     KBD_ESC = 0x01,
     KBD_BACKSPACE = 0x0e,

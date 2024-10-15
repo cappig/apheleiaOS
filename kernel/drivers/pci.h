@@ -85,7 +85,7 @@ typedef struct PACKED {
 } pci_device;
 
 // TODO: add a string table so that we can print nicer messages
-enum pci_class : u8 {
+enum pci_class {
     PCI_UNCLASSIFIED = 0x00,
     PCI_MASS_STORAGE = 0x01,
     PCI_NETWORK = 0x02,
@@ -139,7 +139,7 @@ static const char* pci_class_strings[] = {
     "Unassigned (Vendor specific)", // 0xff
 };
 
-enum pci_mass_storage_subclass : u8 {
+enum pci_mass_storage_subclass {
     PCI_MS_SCSI_BUS = 0x00,
     PCI_MS_IDE = 0x01,
     PCI_MS_FLOPPY = 0x02,

@@ -47,9 +47,11 @@ enum ustart_type {
     USTAR_TYPE_BLOCK_DEV = '4',
     USTAR_TYPE_DIR = '5',
     USTAR_TYPE_FIFO = '6',
-    // Some othre flags exist as well but ew dont' support them
+    // Some other flags exist as well but we dont' support them
 };
 
+
+u32 ustar_to_num(char* str, int size);
 
 void* ustar_find(void* addr, usize size, const char* file);
 

@@ -25,17 +25,14 @@
     "\e[100m  \e[101m  \e[102m  \e[103m  " \
     "\e[104m  \e[105m  \e[106m  \e[107;0m"
 
-#define ALPHA_BUILD_DATE "Built on " __DATE__ " at " __TIME__
+// Retarded clang-format error pops up if this is left undefined
+#ifndef VERSION
+    #define VERSION "undefined"
+#endif
 
-typedef struct {
-    graphics_state gfx;
-
-    terminal* term;
-
-    psf_font font;
-} kernel_console;
+#define ALPHA_BUILD_DATE "Runnig version " VERSION " built on " __DATE__ " at " __TIME__
 
 
-void puts(const char* s);
+terminal* tty_init(graphics_state* gfx_ptr, boot_handoff* handoff);
 
-void tty_init(graphics_state* gfx_ptr, boot_handoff* handoff);
+void dump_gfx_info(graphics_state* gfx_ptr);

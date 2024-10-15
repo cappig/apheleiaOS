@@ -2,10 +2,10 @@
 
 #include <base/types.h>
 #include <data/ring.h>
+#include <log/log.h>
 #include <x86/asm.h>
 
 #include "arch/idt.h"
-#include "log/log.h"
 #include "vfs/fs.h"
 
 static ring_buffer* buffer;

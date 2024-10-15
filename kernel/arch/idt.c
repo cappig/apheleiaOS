@@ -6,8 +6,8 @@
 #include <x86/asm.h>
 #include <x86/regs.h>
 
-#include "panic.h"
-#include "pic.h"
+#include "arch/panic.h"
+#include "arch/pic.h"
 
 static idt_register idtr;
 

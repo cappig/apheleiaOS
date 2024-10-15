@@ -6,7 +6,6 @@
 #include <gfx/font.h>
 #include <gfx/psf.h>
 #include <gfx/state.h>
-#include <gfx/vesa.h>
 #include <gfx/vga.h>
 #include <log/log.h>
 #include <string.h>
@@ -16,8 +15,11 @@
 
 #include "arch/panic.h"
 #include "drivers/initrd.h"
+#include "drivers/vesa.h"
 
-static kernel_console console = {0};
+static graphics_state gfx = {0};
+static psf_font font = {0};
+static terminal* term;
 
 
 static void _putc_vga(term_char ch, usize index) {
@@ -29,20 +31,21 @@ static void _putc_vga(term_char ch, usize index) {
 
 
 static void _draw_vesa_psf(graphics_state* graphics, u32 x, u32 y, term_char ch) {
-    const u8* glyph = (unsigned char*)console.font.data + ch.ascii * console.font.glyph_size;
+    const u8* glyph = (unsigned char*)font.data + ch.ascii * font.glyph_size;
 
-    usize line_width = DIV_ROUND_UP(console.font.glyph_width, 8);
-    for (usize h = 0; h < console.font.glyph_height; h++) {
+    usize line_width = DIV_ROUND_UP(font.glyph_width, 8);
+    for (usize h = 0; h < font.glyph_height; h++) {
 
-        usize mask = 1 << console.font.glyph_width;
-        for (usize w = 0; w < console.font.glyph_width; w++) {
+        usize mask = 1 << font.glyph_width;
+        for (usize w = 0; w < font.glyph_width; w++) {
             rgba_color color;
             if (*glyph & mask)
                 color = ch.style.fg;
             else
                 color = ch.style.bg;
 
-            vesa_draw_pixel(graphics, x + w, y + h, color);
+            u32 vesa_color = to_vesa_color(graphics, color);
+            vesa_draw_pixel(graphics, x + w, y + h, vesa_color);
 
             mask >>= 1;
         }
@@ -52,10 +55,10 @@ static void _draw_vesa_psf(graphics_state* graphics, u32 x, u32 y, term_char ch)
 }
 
 static void _putc_vesa_psf(term_char ch, usize index) {
-    usize x = index % console.term->width;
-    usize y = index / console.term->width;
+    usize x = index % term->width;
+    usize y = index / term->width;
 
-    _draw_vesa_psf(&console.gfx, x * console.font.glyph_width, y * console.font.glyph_height, ch);
+    _draw_vesa_psf(&gfx, x * font.glyph_width, y * font.glyph_height, ch);
 }
 
 
@@ -70,22 +73,21 @@ static void _draw_vesa_header(graphics_state* graphics, u32 x, u32 y, term_char 
             else
                 color = ch.style.bg;
 
-            vesa_draw_pixel(graphics, x + (HEADER_FONT_WIDTH - w), y + h, color);
+            u32 vesa_color = to_vesa_color(graphics, color);
+            vesa_draw_pixel(graphics, x + (HEADER_FONT_WIDTH - w), y + h, vesa_color);
         }
     }
 }
 
 static void _putc_vesa_header(term_char ch, usize index) {
-    usize x = index % console.term->width;
-    usize y = index / console.term->width;
+    usize x = index % term->width;
+    usize y = index / term->width;
 
-    _draw_vesa_header(&console.gfx, x * HEADER_FONT_WIDTH, y * HEADER_FONT_HEIGHT, ch);
+    _draw_vesa_header(&gfx, x * HEADER_FONT_WIDTH, y * HEADER_FONT_HEIGHT, ch);
 }
 
 
 static bool _load_psf(void* bin) {
-    psf_font* font = &console.font;
-
     if (!bin)
         goto bitmap_fallback;
 
@@ -93,70 +95,86 @@ static bool _load_psf(void* bin) {
     psf2_header* psf2_head = bin;
 
     if (psf2_head->magic == PSF2_MAGIC) {
-        font->type = PSF_FONT_PSF2;
-        font->data = bin + sizeof(psf2_header);
+        font.type = PSF_FONT_PSF2;
+        font.data = bin + sizeof(psf2_header);
 
-        font->glyph_height = psf2_head->height;
-        font->glyph_width = psf2_head->width;
-        font->glyph_size = psf2_head->glyph_bytes;
+        font.glyph_height = psf2_head->height;
+        font.glyph_width = psf2_head->width;
+        font.glyph_size = psf2_head->glyph_bytes;
     }
 
     else if (psf1_head->magic == PSF1_MAGIC) {
-        font->type = PSF_FONT_PSF1;
-        font->data = bin + sizeof(psf1_header);
+        font.type = PSF_FONT_PSF1;
+        font.data = bin + sizeof(psf1_header);
 
-        font->glyph_height = psf1_head->char_size;
-        font->glyph_width = PSF1_WIDTH;
-        font->glyph_size = psf1_head->char_size;
+        font.glyph_height = psf1_head->char_size;
+        font.glyph_width = PSF1_WIDTH;
+        font.glyph_size = psf1_head->char_size;
     }
 
     else {
     bitmap_fallback:
-        font->type = PSF_FONT_NONE;
+        font.type = PSF_FONT_NONE;
 
-        font->glyph_height = HEADER_FONT_HEIGHT;
-        font->glyph_width = HEADER_FONT_WIDTH;
+        font.glyph_height = HEADER_FONT_HEIGHT;
+        font.glyph_width = HEADER_FONT_WIDTH;
 
         return false;
     }
 
-    font->header = bin;
+    font.header = bin;
 
     return true;
 }
 
 
-void puts(const char* s) {
-    send_serial_string(SERIAL_COM1, s);
+terminal* tty_init(graphics_state* gfx_ptr, boot_handoff* handoff) {
+    memcpy(&gfx, gfx_ptr, sizeof(graphics_state));
 
-    if (console.term)
-        term_parse(console.term, s, (usize)-1);
+    bool is_psf = false;
+    if (gfx.mode == GFX_VESA) {
+        void* font_file = initd_find(handoff->args.console_font);
+        is_psf = _load_psf(font_file);
+
+        usize width = gfx.width / font.glyph_width;
+        usize height = gfx.height / font.glyph_height;
+
+        term_putc_fn term_fn = is_psf ? _putc_vesa_psf : _putc_vesa_header;
+        term = term_init(width, height, term_fn);
+    } else {
+        term = term_init(VGA_WIDTH, VGA_HEIGHT, _putc_vga);
+    }
+
+    if (!term)
+        panic("Failed to initialize terminal!");
+
+    if (!is_psf && gfx_ptr->mode == GFX_VESA)
+        log_warn("Initialized kernel console with fallback header font.");
+
+    return term;
 }
 
 
-void tty_init(graphics_state* gfx_ptr, boot_handoff* handoff) {
-    memcpy(&console.gfx, gfx_ptr, sizeof(graphics_state));
+void dump_gfx_info(graphics_state* gfx_ptr) {
+    char* mode_str;
 
-    bool is_psf = false;
-    if (console.gfx.mode == GFX_VESA) {
-
-        void* psf_font = initd_find(handoff->args.console_font);
-        is_psf = _load_psf(psf_font);
-
-        usize width = console.gfx.width / console.font.glyph_width;
-        usize height = console.gfx.height / console.font.glyph_height;
-
-        console.gfx.framebuffer = ID_MAPPED_VADDR(console.gfx.framebuffer);
-
-        term_putc_fn term_fn = is_psf ? _putc_vesa_psf : _putc_vesa_header;
-        console.term = term_init(width, height, term_fn);
-    } else {
-        console.term = term_init(VGA_WIDTH, VGA_HEIGHT, _putc_vga);
+    switch (gfx_ptr->mode) {
+    case GFX_VESA:
+        mode_str = "VESA graphics";
+        break;
+    case GFX_VGA:
+        mode_str = "VGA text";
+        break;
+    default:
+        mode_str = "headless";
+        break;
     }
 
-    if (!console.term)
-        panic("Failed to initialize terminal!");
-
-    if (!is_psf)
-        log_warn("Initialized kernel console with fallback header font.");
+    log_debug(
+        "Runnung in %s mode with a resolution of %dx%d:%d",
+        mode_str,
+        gfx_ptr->width,
+        gfx_ptr->height,
+        gfx_ptr->depth * 8
+    );
 }

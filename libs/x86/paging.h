@@ -13,7 +13,7 @@
 
 #define GET_CANONICAL(a) ((u64)(a) & CANONICAL_MASK)
 
-#define IS_PAGE_ALIGNED(a) (!((u64)a % PAGE_4KIB))
+#define IS_PAGE_ALIGNED(a) (!((a) & 0xfff))
 
 // Intel manual Figure 5-23. (PDF page 604)
 // https://web.archive.org/web/20230324001330/https://www.amd.com/system/files/TechDocs/40332.pdf
@@ -22,7 +22,7 @@
 #define GET_LVL2_INDEX(addr) ((addr >> 21) & 0x1ff)
 #define GET_LVL1_INDEX(addr) ((addr >> 12) & 0x1ff)
 
-enum page_table_flags : u64 {
+enum page_table_flags {
     PT_PRESENT = 1 << 0,
     PT_READ_WRITE = 1 << 1,
     PT_USER = 1 << 2,
@@ -77,5 +77,6 @@ inline void page_set_paddr(page_table* page, u64 addr) {
     page->bits.present = 1;
     page->bits.addr = addr >> PAGE_SHIFT;
 }
+
 
 bool supports_1gib_pages(void);

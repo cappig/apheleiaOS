@@ -7,7 +7,7 @@
 #include <string.h>
 #include <x86/paging.h>
 
-#include "physical.h"
+#include "mem/physical.h"
 
 
 // Locate the requested index in the child table, allocate if it doesn't exist
@@ -178,7 +178,7 @@ static void _recursive_free(page_table* src_vaddr, usize level) {
     }
 
     // At this point the page has no children
-    // This means that pointers will be left dangling
+    // This means that pointers will not be left dangling
     free_frames((void*)paddr, 1);
 }
 

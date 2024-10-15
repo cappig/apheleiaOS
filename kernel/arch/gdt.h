@@ -55,12 +55,13 @@ typedef struct PACKED {
 
 #define GDT_ENTRY_COUNT 7
 
-enum GDT_segments : u64 {
+enum gdt_segments {
     GDT_kernel_code = GDT_OFFSET(1),
     GDT_kernel_data = GDT_OFFSET(2),
     GDT_user_code = GDT_OFFSET(3),
     GDT_user_data = GDT_OFFSET(4),
 };
+
 
 void gdt_init(void);
 void tss_init(u64 kernel_stack_top);
