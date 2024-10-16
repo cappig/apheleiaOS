@@ -1,5 +1,6 @@
 #pragma once
 
+
 int isalnum(int c);
 int isalpha(int c);
 int isblank(int c);

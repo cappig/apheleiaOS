@@ -153,7 +153,7 @@ page_table* clone_table(page_table* src_paddr) {
     // The lower half is where the "fun" begins. We have to clone pages here.
     memset(new_vaddr, 0, 256 * sizeof(u64));
 
-    // Root pages are never leafs
+    // Root pages are never leaves
     for (usize i = 0; i < 256; i++)
         if (src_vaddr[i].bits.present)
             _recursive_clone(&src_vaddr[i], &new_vaddr[i], 3);

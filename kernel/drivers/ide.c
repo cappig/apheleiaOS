@@ -205,7 +205,7 @@ static bool ata_mount_disk(virtual_fs* vfs, vfs_drive_interface* interface, ide_
     dev->interface = interface;
     dev->type = disk->is_atapi ? VFS_DRIVER_OPTICAL : VFS_DRIVER_HARD;
 
-    vfs_regiter(vfs, "/dev", dev);
+    vfs_register(vfs, "/dev", dev);
 
     return true;
 }

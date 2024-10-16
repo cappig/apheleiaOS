@@ -157,7 +157,7 @@ pci_device* pci_find_device(u8 class, u8 subclass, pci_device* from) {
         if ((header->class == class) && (header->subclass == subclass)) {
             u8* ret = kmalloc(256);
 
-            if (dev->base != (u64)~0) {
+            if (dev->base != (u64)-1) {
                 u64 addr = _ecam_addr(dev->base, dev->bus, dev->slot, dev->func);
                 memcpy(ret, (u8*)addr, 256);
             } else {

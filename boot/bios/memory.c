@@ -51,7 +51,7 @@ void get_e820(e820_map* mmap) {
         // End of chain
         if (!out_regs.ebx)
             break;
-    };
+    }
 
     mmap->count = count;
     mmap_ptr = mmap;

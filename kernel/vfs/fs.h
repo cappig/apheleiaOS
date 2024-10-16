@@ -26,7 +26,7 @@ typedef u32 vfs_mode;
 // Resolve the circular references and make the compiler shut up
 typedef struct vfs_node vfs_node;
 
-// FIXME: This is a circular header dependancy
+// FIXME: This is a circular header dependency
 // Forward declaration to "fix", driver.h must be included by user
 typedef struct vfs_driver vfs_driver;
 

@@ -3,6 +3,7 @@
 #include "ctype.h"
 #include "errno.h"
 #include "limits.h"
+#include "stdbool.h"
 
 
 long long strtoll(char const* restrict str, char** restrict endptr, int base) {

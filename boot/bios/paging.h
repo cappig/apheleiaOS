@@ -4,7 +4,7 @@
 #include <x86/paging.h>
 
 
-void identity_map(u64 top_adress, u64 offset, bool is_kernel);
+void identity_map(u64 top_address, u64 offset, bool is_kernel);
 
 void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel);
 void map_region(usize size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel);

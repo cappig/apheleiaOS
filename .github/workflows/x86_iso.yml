@@ -1,0 +1,23 @@
+name: x86_iso
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: prepare environment
+      run: sudo apt update
+    - name: install tools
+      run: sudo apt install -y gcc nasm make xorriso
+    - name: make image
+      run: make all

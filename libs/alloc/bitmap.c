@@ -7,7 +7,6 @@
 #include <string.h>
 #include <x86/e820.h>
 
-
 static inline usize _to_block(bitmap_alloc* alloc, void* ptr) {
     return ((u64)ptr - (uptr)alloc->chuck_start) / alloc->block_size;
 }

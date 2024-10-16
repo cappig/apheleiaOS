@@ -75,10 +75,10 @@ void map_region(usize size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     }
 }
 
-// Starts from 0 and go to `top_adress`
-void identity_map(u64 top_adress, u64 offset, bool is_kernel) {
+// Starts from 0 and go to `top_address`
+void identity_map(u64 top_address, u64 offset, bool is_kernel) {
     // TODO: make use of larger page sizes
-    for (u64 i = 0; i <= top_adress; i += PAGE_2MIB)
+    for (u64 i = 0; i <= top_address; i += PAGE_2MIB)
         map_page(PAGE_2MIB, i + offset, i, PT_READ_WRITE, is_kernel);
 }
 

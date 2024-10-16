@@ -22,6 +22,7 @@ typedef struct {
 // Calling lib functions with this struct uninitialized will lead to nullptr dereferencing
 extern global_alloc* _global_allocator;
 
+
 // Wrappers to make our code look pretty :^)
 inline void* gmalloc(size_t size) {
     return _global_allocator->malloc(size);

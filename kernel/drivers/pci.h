@@ -38,7 +38,7 @@ typedef struct PACKED {
     u32 cardbus_cis_ptr;
     u16 subsystem_vendor_id;
     u16 subsystem_id;
-    u32 expantion_rom_base;
+    u32 expansion_rom_base;
     u8 capability_ptr;
     u8 _reserved0[7];
     u8 int_line;
@@ -65,7 +65,7 @@ typedef struct PACKED {
     u16 io_limit_upper;
     u8 capability_ptr;
     u8 _reserved0[3];
-    u32 expantion_rom_base;
+    u32 expansion_rom_base;
     u8 int_line;
     u8 int_pin;
     u16 bridge_control;

@@ -171,7 +171,7 @@ void dump_gfx_info(graphics_state* gfx_ptr) {
     }
 
     log_debug(
-        "Runnung in %s mode with a resolution of %dx%d:%d",
+        "Running in %s mode with a resolution of %dx%d:%d",
         mode_str,
         gfx_ptr->width,
         gfx_ptr->height,

@@ -34,7 +34,7 @@ list_node* list_create_node(void* data) {
     return new;
 }
 
-void list_destory_node(list_node* node) {
+void list_destroy_node(list_node* node) {
     gfree(node);
 }
 

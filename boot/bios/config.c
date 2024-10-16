@@ -42,8 +42,7 @@ static void _config_cmp(char* key, char* value, void* data) {
     }
 
     else if (!strcasecmp(key, "CONSOLE_FONT")) {
-        strcpy(args->console_font, value);
-        args->console_font[BOOT_CONSOLE_FONT_LEN] = '\0';
+        strncpy(args->console_font, value, BOOT_CONSOLE_FONT_LEN);
     }
 
     else if (!strcasecmp(key, "SERIAL_BAUD")) {

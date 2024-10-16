@@ -1,9 +1,5 @@
 #pragma once
 
-#define errno (*(_errno_impl()))
-
-extern int* _errno_impl(void);
-
 // Error codes as defined by POSIX
 // https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
 
@@ -88,3 +84,8 @@ extern int* _errno_impl(void);
 #define ETIMEDOUT       77
 #define ETXTBSY         78
 #define EXDEV           79
+
+
+#define errno (*(_errno_impl()))
+
+extern int* _errno_impl(void);

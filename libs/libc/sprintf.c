@@ -1,5 +1,6 @@
 #include "ctype.h"
 #include "stdarg.h"
+#include "stdbool.h"
 #include "stddef.h"
 #include "stdint.h"
 #include "stdlib.h"
@@ -236,7 +237,7 @@ _append_num_prefix(char* buffer, uintmax_t number, int flags, int base, int size
 #define BASE_STRING  -314
 #define BASE_CHAR    -271
 #define BASE_UNKNOWN 0
-// These represnt an actual radix, we usze the minus like a flag
+// These represent an actual radix, we use the minus like a flag
 #define BASE_BIN  2
 #define BASE_OCT  8
 #define BASE_UDEC 10

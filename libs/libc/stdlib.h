@@ -17,6 +17,7 @@ typedef struct {
     long long quot, rem;
 } lldiv_t;
 
+
 long long strtoll(char const* restrict str, char** restrict endptr, int base);
 long strtol(char const* restrict str, char** restrict endptr, int base);
 // unsigned long int strtoul(char const* restrict str, char** restrict endptr, int base);

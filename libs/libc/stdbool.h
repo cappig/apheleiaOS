@@ -1,6 +1,6 @@
 #pragma once
 
-#if __STDC_VERSION__ < 202000L
+#if __STDC_VERSION__ < 202311L
     #define bool _Bool
 
     #define true  1

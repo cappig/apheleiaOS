@@ -3,6 +3,7 @@
 #include "stdarg.h"
 #include "stddef.h"
 
+
 int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict format, va_list vlist);
 int vsprintf(char* restrict buffer, const char* restrict format, va_list vlist);
 

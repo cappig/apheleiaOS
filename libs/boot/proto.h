@@ -38,7 +38,7 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     u32 magic;
-    u32 chacksum; // TODO:
+    u32 checksum; // TODO: implement this
 
     u64 stack_top;
     u64 rsdp;

@@ -15,6 +15,7 @@ static usize com_port[] = {
     SERIAL_COM4,
 };
 
+
 static void _read(vfs_pty* term, void* buf, usize len) {
     // TODO: implement this
 }

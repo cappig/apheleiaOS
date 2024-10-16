@@ -131,7 +131,7 @@ void vfs_destroy_device(vfs_driver* dev) {
 }
 
 // Mount a new device to the tree and probe for a valid file system
-tree_node* vfs_regiter(virtual_fs* vfs, const char* path, vfs_driver* dev) {
+tree_node* vfs_register(virtual_fs* vfs, const char* path, vfs_driver* dev) {
     vfs_node* mount_node = vfs_create_node(dev->name, VFS_BLOCKDEV);
     tree_node* mount_point = vfs_mount(vfs, path, tree_create_node(mount_node));
 
@@ -150,12 +150,9 @@ vfs_file_system* vfs_crete_fs(char* name) {
 
     ret->subtree = tree_create(mount);
 
-    // vfs_node_interface* interface = kcalloc(sizeof(vfs_node_interface));
-    // interface->mount.subtree = ret->subtree;
-
     return ret;
 }
 
 void vfs_destroy_fs(vfs_file_system* fs) {
-    tree_destory(fs->subtree);
+    tree_destroy(fs->subtree);
 }

@@ -4,23 +4,6 @@
 
 #include "stddef.h"
 
-size_t uitoa(unsigned int value, char* buf, int base);
-size_t ultoa(unsigned long value, char* buf, int base);
-size_t ulltoa(unsigned long long value, char* buf, int base);
-
-size_t itoa(int value, char* buf, int base);
-size_t ltoa(long value, char* buf, int base);
-size_t lltoa(long long value, char* buf, int base);
-
-lldiv_t ulldiv(unsigned long long num, unsigned long den);
-
-int bcdtoi(int bcd);
-int itobcd(int num);
-
-unsigned short bswaps(unsigned short num);
-unsigned long bswapl(unsigned long num);
-unsigned long long bswapll(unsigned long long num);
-
 
 #define max(a, b)                  \
     ({                             \
@@ -43,3 +26,21 @@ unsigned long long bswapll(unsigned long long num);
         const typeof(max) __h = (max);               \
         (__x > __h) ? __h : (__x < __l ? __l : __x); \
     })
+
+
+size_t uitoa(unsigned int value, char* buf, int base);
+size_t ultoa(unsigned long value, char* buf, int base);
+size_t ulltoa(unsigned long long value, char* buf, int base);
+
+size_t itoa(int value, char* buf, int base);
+size_t ltoa(long value, char* buf, int base);
+size_t lltoa(long long value, char* buf, int base);
+
+lldiv_t ulldiv(unsigned long long num, unsigned long den);
+
+int bcdtoi(int bcd);
+int itobcd(int num);
+
+unsigned short bswaps(unsigned short num);
+unsigned long bswapl(unsigned long num);
+unsigned long long bswapll(unsigned long long num);

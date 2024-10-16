@@ -32,7 +32,7 @@ int color_palette_index(u32 color) {
 }
 
 rgba_color ansi_to_rgb(u8 index) {
-    // Standars 16 colors
+    // Standard 16 colors
     if (index < 16)
         return (rgba_color){.raw = default_ansi_colors[index]};
 

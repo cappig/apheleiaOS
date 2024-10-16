@@ -66,4 +66,4 @@ void vfs_destroy_device(vfs_driver* dev);
 vfs_file_system* vfs_crete_fs(char* name);
 void vfs_destroy_fs(vfs_file_system* fs);
 
-tree_node* vfs_regiter(virtual_fs* vfs, const char* path, vfs_driver* dev);
+tree_node* vfs_register(virtual_fs* vfs, const char* path, vfs_driver* dev);

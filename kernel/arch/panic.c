@@ -8,7 +8,7 @@
 
 
 NORETURN void panic_unwind() {
-    disble_interrupts();
+    disable_interrupts();
 
     dump_stack_trace();
     // TODO: save and dump state

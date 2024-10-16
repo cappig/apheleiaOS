@@ -30,7 +30,7 @@ else ifeq ($(TOOLCHAIN), llvm)
 endif
 
 # If we want to be able to perform stack tracing in the kernel we have
-# to load a symbol table and compile witouth ommiting frame pointers
+# to load a symbol table and compile without omitting frame pointers
 TRACEABLE_KERNEL ?= true
 
 ifeq ($(TRACEABLE_KERNEL), true)

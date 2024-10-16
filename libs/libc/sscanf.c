@@ -1,5 +1,6 @@
 #include "ctype.h"
 #include "stdarg.h"
+#include "stdbool.h"
 #include "stddef.h"
 #include "stdlib.h"
 
@@ -103,8 +104,10 @@ int vsnscanf(const char* restrict str, size_t max, const char* restrict format, 
             i++;
 
             bool ignore = false;
-            if (format[i] == '*')
-                i++, ignore = true;
+            if (format[i] == '*') {
+                ignore = true;
+                i++;
+            }
 
             int width = _get_width(format, &i);
 

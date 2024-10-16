@@ -67,9 +67,9 @@ typedef struct PACKED {
 
     u16 _reserved0;
 
-    u8 jurnal_id[16];
-    u32 jurnal_inode;
-    u32 jurnal_device;
+    u8 journal_id[16];
+    u32 journal_inode;
+    u32 journal_device;
     u32 orphan_list_head;
 
     // some other stuff might be here ...
@@ -88,9 +88,9 @@ enum ext2_error_behavior {
 };
 
 enum ext2_optional_features {
-    EXT2_OF_DIR_PREALOCATE = (1 << 0),
+    EXT2_OF_DIR_PREALLOCATE = (1 << 0),
     EXT2_OF_HAS_AFS = (1 << 1),
-    EXT2_OF_HAS_JURNAL = (1 << 2),
+    EXT2_OF_HAS_JOURNAL = (1 << 2),
     EXT2_OF_EXTENDED_INODES = (1 << 3),
     EXT2_OF_FS_RESIZE = (1 << 4),
     EXT2_OF_DIR_HASH_INDEX = (1 << 5),
@@ -99,8 +99,8 @@ enum ext2_optional_features {
 enum ext2_required_features {
     EXT2_RF_COMPRESSION = (1 << 0),
     EXT2_RF_DIR_HAS_TYPE = (1 << 1),
-    EXT2_RF_JURNAL_REPLAY = (1 << 2),
-    EXT2_RF_JURNAL_DEVICE = (1 << 3),
+    EXT2_RF_JOURNAL_REPLAY = (1 << 2),
+    EXT2_RF_JOURNAL_DEVICE = (1 << 3),
 };
 
 enum ext2_write_features {
@@ -142,7 +142,7 @@ typedef struct PACKED {
 
     u32 flags;
 
-    u32 os_speciffic0; // not used
+    u32 os_specific0; // not used
 
     u32 direct_block_ptr[12];
     u32 indirect_block_ptr[3];
@@ -154,7 +154,7 @@ typedef struct PACKED {
 
     u32 fragment_offset;
 
-    u8 os_speciffic1[12];
+    u8 os_specific1[12];
 } ext2_inode;
 
 #define EXT2_IT_MASK 0xf000
@@ -204,7 +204,7 @@ enum ext2_inode_flags {
     // ... reserved range
     EX2_IF_HASH_INDEX = (1 << 16),
     EX2_IF_AFS = (1 << 17),
-    EX2_IF_JURNAL = (1 << 18),
+    EX2_IF_JOURNAL = (1 << 18),
 };
 
 typedef struct PACKED {

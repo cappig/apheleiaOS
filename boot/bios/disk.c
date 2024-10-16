@@ -9,7 +9,6 @@
 #include <x86/serial.h>
 
 #include "bios.h"
-#include "libc_ext/stdlib.h"
 #include "memory.h"
 #include "tty.h"
 

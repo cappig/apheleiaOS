@@ -11,7 +11,7 @@ CC_BASE := \
 	-Wall \
 	-Wextra \
 	-Wshadow \
-	-std=gnu23 \
+	-std=gnu2x \
 	-Ilibs \
 	-Ilibs/libc \
 	-ffreestanding \

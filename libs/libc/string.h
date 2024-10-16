@@ -2,6 +2,7 @@
 
 #include "stddef.h"
 
+
 void* memcpy(void* restrict dest, const void* restrict src, size_t len);
 void* memmove(void* dest, const void* src, size_t len);
 char* strcpy(char* restrict dest, const char* restrict src);

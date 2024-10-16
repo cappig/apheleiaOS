@@ -33,16 +33,16 @@ void load_symbols(boot_handoff* handoff) {
 
 isize resolve_symbol(u64 addr) {
     if (!sym_table.len)
-        return 0;
+        return -1;
 
-    isize ret_index = -1;
+    isize ret_index = 0;
     u64 ret_addr = 0;
 
     // We have to find the biggest address smaller than the addr
     for (usize i = 0; i < sym_table.len; i++) {
         u64 cur_addr = sym_table.map[i].addr;
 
-        if ((cur_addr >= ret_addr) && (cur_addr <= addr)) {
+        if ((cur_addr > ret_addr) && (cur_addr < addr)) {
             ret_index = i;
             ret_addr = cur_addr;
         }

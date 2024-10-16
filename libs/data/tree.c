@@ -14,7 +14,7 @@ tree_node* tree_create_node(void* data) {
     return new;
 }
 
-void tree_destory_node(tree_node* node) {
+void tree_destroy_node(tree_node* node) {
     gfree(node);
 }
 
@@ -26,7 +26,7 @@ tree* tree_create(void* root_data) {
     return new;
 }
 
-void tree_destory(tree* root) {
+void tree_destroy(tree* root) {
     tree_prune(root->root);
     gfree(root);
 }

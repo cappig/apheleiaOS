@@ -30,7 +30,7 @@
     #define VERSION "undefined"
 #endif
 
-#define ALPHA_BUILD_DATE "Runnig version " VERSION " built on " __DATE__ " at " __TIME__
+#define ALPHA_BUILD_DATE "Running version " VERSION " built on " __DATE__ " at " __TIME__
 
 
 terminal* tty_init(graphics_state* gfx_ptr, boot_handoff* handoff);

@@ -15,7 +15,7 @@ inline void enable_interrupts(void) {
     asm volatile("sti" ::: "memory");
 }
 
-inline void disble_interrupts(void) {
+inline void disable_interrupts(void) {
     asm volatile("cli" ::: "memory");
 }
 
@@ -56,8 +56,8 @@ inline void tlb_flush(u64 addr) {
 }
 
 
-#define CR0_WP (1 << 16)
-#define CR0_PG (1 << 31)
+#define CR0_WP (1ULL << 16)
+#define CR0_PG (1ULL << 31)
 
 inline u64 read_cr0(void) {
     u64 value = 0;

@@ -23,7 +23,7 @@ typedef struct PACKED {
     char type;
     char link_name[100];
 
-    // USTAR extention
+    // USTAR extension
     char ustar[6];
     char version[2];
 
@@ -47,7 +47,7 @@ enum ustart_type {
     USTAR_TYPE_BLOCK_DEV = '4',
     USTAR_TYPE_DIR = '5',
     USTAR_TYPE_FIFO = '6',
-    // Some other flags exist as well but we dont' support them
+    // Some other flags exist as well but we don't support them
 };
 
 

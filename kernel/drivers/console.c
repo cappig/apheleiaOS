@@ -1,5 +1,6 @@
 #include "console.h"
 
+#include <base/types.h>
 #include <data/ring.h>
 #include <stdarg.h>
 #include <stdio.h>

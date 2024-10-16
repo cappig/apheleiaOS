@@ -83,7 +83,7 @@ void clean_mmap(e820_map* map) {
 void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, u32 alignment, uptr top) {
     e820_entry* entries = (e820_entry*)&mmap->entries;
 
-    // An aligment of 0 means 'do not align'
+    // An alignment of 0 means 'do not align'
     if (alignment == 0)
         alignment = 1;
 
@@ -153,7 +153,7 @@ char* mem_map_type_string(e820_type type) {
     case E820_BADRAM:
         return "BAD RAM!";
     case E820_ALLOC:
-        return "temorary allocation";
+        return "temporary allocation";
     case E820_PAGE_TABLE:
         return "page tables";
     case E820_KERNEL:

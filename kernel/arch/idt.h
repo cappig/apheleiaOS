@@ -22,7 +22,7 @@ typedef struct PACKED {
     u8 attributes;
     u16 offset_mid;
     u32 offset_high;
-    u32 _unsued0;
+    u32 _unused0;
 } idt_entry;
 
 typedef struct PACKED {
@@ -98,8 +98,10 @@ typedef struct PACKED {
 // All interrupt handlers must be of this type
 typedef void (*int_handler)(int_state*);
 
+
 void idt_init(void);
 
 void dump_regs(int_state* s);
 
 void set_int_handler(usize int_num, int_handler handler);
+void isr_handler(int_state* s);
