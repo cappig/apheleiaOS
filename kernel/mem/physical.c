@@ -26,6 +26,11 @@ usize get_free_mem() {
 
 void* alloc_frames(usize count) {
     void* ret = bitmap_alloc_blocks(&frame_alloc, count);
+
+#ifdef MMU_DEBUG
+    log_debug("[MMU DEBUG] allocated %zu new frames: paddr = %#lx", count, (u64)ret);
+#endif
+
     if (!ret)
         panic("Failed to allocate pages!");
 
@@ -34,6 +39,10 @@ void* alloc_frames(usize count) {
 
 void free_frames(void* ptr, usize size) {
     bitmap_alloc_free(&frame_alloc, ptr, size);
+
+#ifdef MMU_DEBUG
+    log_debug("[MMU DEBUG] freed %zu frames: paddr = %#lx", size, (u64)ptr);
+#endif
 }
 
 void reclaim_boot_map(e820_map* mmap) {

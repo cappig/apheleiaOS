@@ -51,6 +51,14 @@ isize resolve_symbol(u64 addr) {
     return ret_index;
 }
 
+const char* resolve_symbol_name(u64 addr) {
+    isize index = resolve_symbol(addr);
+
+    if (index < 0)
+        return "(unknown symbol)";
+    else
+        return sym_table.map[index].name;
+}
 
 void dump_stack_trace() {
     u64 rbp = 0;
@@ -60,10 +68,8 @@ void dump_stack_trace() {
 
     log_debug("Dump of stack trace:");
 
-    if (!sym_table.len) {
-        log_debug("  No symbol table loaded!");
-        return;
-    }
+    if (!sym_table.len)
+        log_warn("No symbol table loaded, trace may be unreliable!");
 
     while (frame) {
         isize index = resolve_symbol(frame->rip);

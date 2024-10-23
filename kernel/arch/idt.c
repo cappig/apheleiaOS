@@ -8,7 +8,6 @@
 
 #include "arch/panic.h"
 #include "arch/pic.h"
-#include "arch/stacktrace.h"
 
 static idt_register idtr;
 
@@ -77,7 +76,6 @@ static void exception_handler(int_state* s) {
     disable_interrupts();
 
     dump_regs(s);
-    dump_stack_trace();
 
     log_fatal("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
     panic("Kernel panic: %s", int_strings[s->int_num]);

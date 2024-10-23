@@ -1,5 +1,6 @@
 #include "tty.h"
 
+#include <base/addr.h>
 #include <base/types.h>
 #include <boot/proto.h>
 #include <fs/ustar.h>

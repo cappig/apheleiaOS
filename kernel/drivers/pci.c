@@ -120,7 +120,7 @@ static void init_express(mcfg* table) {
             entry->base_addr,
             entry->base_addr + region_size,
             ID_MAP_OFFSET,
-            PT_PRESENT | PT_READ_WRITE,
+            PT_PRESENT | PT_WRITE,
             false
         );
 

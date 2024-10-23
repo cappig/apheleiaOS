@@ -51,8 +51,11 @@ static u64 load_kernel(void) {
     if (!kernel_elf.size)
         panic("kernel.elf not found!");
 
-    if (elf_verify(kernel_elf.addr) != VALD_ELF)
-        panic("kernel.elf is not a valid executable!");
+    if (elf_verify(kernel_elf.addr) != VALID_ELF)
+        panic("kernel.elf is not valid!");
+
+    if (!elf_is_executable(kernel_elf.addr))
+        panic("kernel.elf is not executable!");
 
     u64 kernel_entry = load_elf_sections(&kernel_elf);
 

@@ -2,8 +2,6 @@
 
 #include <base/types.h>
 
-#include "paging.h"
-
 
 inline void halt(void) {
     for (;;)
@@ -91,11 +89,11 @@ inline u64 read_cr3(void) {
 
 #if defined(__x86_64__)
 inline void write_cr3(u64 value) {
-    asm volatile("movq %0, %%cr3" : : "r"(value & PHYSICAL_MASK));
+    asm volatile("movq %0, %%cr3" : : "r"(value));
 }
 #else
 inline void write_cr3(u32 value) {
-    asm volatile("movl %0, %%cr3" : : "r"(value & PHYSICAL_MASK));
+    asm volatile("movl %0, %%cr3" : : "r"(value));
 }
 #endif
 

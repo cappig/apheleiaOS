@@ -3,6 +3,7 @@
 #include <base/addr.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
 #include <x86/paging.h>
@@ -15,13 +16,14 @@ static page_table* _walk_table_once(page_table* table, usize index) {
     page_table* next_table;
 
     if (table[index].bits.present) {
-        next_table = (page_table*)(uptr)(table[index].bits.addr << PAGE_SHIFT);
+        next_table = (page_table*)page_get_paddr(&table[index]);
     } else {
         next_table = alloc_frames(1);
 
+        page_set_paddr(&table[index], (u64)next_table);
+
         table[index].bits.present = 1;
         table[index].bits.writable = 1;
-        table[index].bits.addr = (u64)next_table >> PAGE_SHIFT;
     }
 
     return (page_table*)ID_MAPPED_VADDR(next_table);
@@ -30,6 +32,9 @@ static page_table* _walk_table_once(page_table* table, usize index) {
 // NOTE: edge case: a child page is mapped and the overlapping parent gets mapped as huge to a
 // different address. This creates a floating allocation because the reference to the child is lost
 void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 flags) {
+    vaddr &= CANONICAL_MASK;
+    paddr %= PHYSICAL_MASK;
+
     usize lvl4_index = GET_LVL4_INDEX(vaddr);
     page_table* lvl4 = (page_table*)ID_MAPPED_VADDR(lvl4_paddr);
 
@@ -41,7 +46,8 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
     if (size == PAGE_1GIB) {
         entry = &lvl3[lvl3_index];
 
-        entry->bits.huge = 1;
+        paddr = ALIGN_DOWN(paddr, PAGE_1GIB);
+        flags |= PT_HUGE;
         goto finalize;
     }
 
@@ -51,7 +57,8 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
     if (size == PAGE_2MIB) {
         entry = &lvl2[lvl2_index];
 
-        entry->bits.huge = 1;
+        paddr = ALIGN_DOWN(paddr, PAGE_2MIB);
+        flags |= PT_HUGE;
         goto finalize;
     }
 
@@ -61,10 +68,19 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
     entry = &lvl1[lvl1_index];
 
 finalize:
-    entry->raw |= flags & FLAGS_MASK;
-    entry->bits.present = 1;
+    page_set_paddr(entry, paddr);
 
-    entry->bits.addr = paddr >> PAGE_SHIFT;
+    entry->raw |= flags;
+
+#ifdef MMU_DEBUG
+    log_debug(
+        "[MMU DEBUG] mapped virtual page (cr3: %#lx): size = %#x, paddr = %#lx, vaddr = %#lx",
+        (u64)lvl4_paddr,
+        size,
+        paddr,
+        vaddr
+    );
+#endif
 }
 
 void map_region(page_table* lvl4_paddr, usize size, u64 vaddr, u64 paddr, u64 flags) {
@@ -84,9 +100,8 @@ void identity_map(page_table* lvl4_paddr, u64 from, u64 to, u64 map_offset, u64 
     if (!remap)
         from = max(PROTECTED_MODE_TOP, from);
 
-    for (u64 i = from; i <= to; i += PAGE_4KIB) {
+    for (u64 i = from; i <= to; i += PAGE_4KIB)
         map_page(lvl4_paddr, PAGE_4KIB, i + map_offset, i, flags);
-    }
 }
 
 void unmap_page(page_table* lvl4_paddr, u64 vaddr) {
@@ -96,9 +111,12 @@ void unmap_page(page_table* lvl4_paddr, u64 vaddr) {
     usize lvl3_index = GET_LVL3_INDEX(vaddr);
     page_table* lvl3 = page_get_vaddr(&lvl4[lvl4_index]);
 
+    MAYBE_UNUSED page_size size = 0;
+
     if (lvl3[lvl3_index].bits.huge && lvl3[lvl3_index].bits.present) {
         lvl3[lvl3_index].raw = 0;
-        return;
+        size = PAGE_1GIB;
+        goto finalize;
     }
 
     usize lvl2_index = GET_LVL2_INDEX(vaddr);
@@ -106,7 +124,8 @@ void unmap_page(page_table* lvl4_paddr, u64 vaddr) {
 
     if (lvl2[lvl2_index].bits.huge && lvl2[lvl2_index].bits.present) {
         lvl2[lvl2_index].raw = 0;
-        return;
+        size = PAGE_2MIB;
+        goto finalize;
     }
 
     usize lvl1_index = GET_LVL1_INDEX(vaddr);
@@ -114,7 +133,18 @@ void unmap_page(page_table* lvl4_paddr, u64 vaddr) {
 
     if (lvl1[lvl1_index].bits.present) {
         lvl1[lvl1_index].raw = 0;
+        size = PAGE_4KIB;
     }
+
+finalize:
+#ifdef MMU_DEBUG
+    log_debug(
+        "[MMU DEBUG] unmapped virtual page (cr3: %#lx): size = %x, vaddr = %#lx",
+        (u64)lvl4_paddr,
+        size,
+        vaddr
+    );
+#endif
 }
 
 

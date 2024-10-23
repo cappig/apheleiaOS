@@ -8,7 +8,7 @@ EMU_ARGS := \
 	-m 128M
 
 ifeq ($(QEMU_CONSOLE), true)
-	EMU_ARGS += -s -monitor stdio -d int,cpu_reset,guest_errors -M smm=off
+	EMU_ARGS += -s -monitor stdio -d int,cpu_reset,guest_errors,mmu
 else
 	EMU_ARGS += -serial stdio
 endif

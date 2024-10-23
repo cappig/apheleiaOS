@@ -59,8 +59,11 @@ void get_e820(e820_map* mmap) {
     if (count == 0)
         panic("BIOS has returned an empty memory map!");
 
-    // Reserve the first page of memory. It will never be used anyway
-    mmap_add_entry(mmap, 0, 0x1000, E820_RESERVED);
+    // Reserve all memory from the bottom of the EBDA to the top of upper memory
+    // This area to contains BIOS mapped memory.
+    u64 ebda = (u64)(*(u16*)0x40e << 4);
+    usize ebda_size = 0xfffff - ebda;
+    mmap_add_entry(mmap, ebda, ebda_size, E820_RESERVED);
 
     clean_mmap(mmap);
 }
@@ -87,7 +90,7 @@ void* mmap_alloc(usize bytes, u32 type, u32 alignment) {
 }
 
 void* bmalloc_aligned(usize size, u32 alignment, bool allow_high) {
-    uptr top = allow_high ? (uptr)-1 : 0x100000;
+    u64 top = allow_high ? (u64)-1 : 0xfffff;
     void* ret = _mmap_alloc_top(size, E820_ALLOC, alignment, top);
 
     return ret;

@@ -38,7 +38,7 @@ ifeq ($(TRACEABLE_KERNEL), true)
 endif
 
 ifeq ($(PROFILE), debug)
-	CC_BASE += -Og -DDISK_DEBUG -DKMALLOC_DEBUG -DPS2_DEBUG
+	CC_BASE += -Og -DDISK_DEBUG -DKMALLOC_DEBUG -DPS2_DEBUG -DMMU_DEBUG
 else ifeq ($(PROFILE), small)
 	CC_BASE += -Os
 else ifeq ($(PROFILE), normal)

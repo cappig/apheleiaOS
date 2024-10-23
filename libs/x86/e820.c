@@ -80,30 +80,36 @@ void clean_mmap(e820_map* map) {
     }
 }
 
-void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, u32 alignment, uptr top) {
+void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, u32 alignment, u64 top) {
     e820_entry* entries = (e820_entry*)&mmap->entries;
 
     // An alignment of 0 means 'do not align'
     if (alignment == 0)
         alignment = 1;
 
-    for (isize i = mmap->count - 1; i >= 0; i--) {
+    // Protected mode (bootloader) can't handle addresses larger than 4 Gib
+#if defined(__i386__)
+    top = min(top, PROTECTED_MODE_TOP);
+#endif
+
+    for (usize i = 0; i < mmap->count; i++) {
         if (entries[i].type != E820_AVAILABLE)
             continue;
 
         if (entries[i].size < bytes)
             continue;
 
-#if defined(__i386__)
-        // Protected mode (bootloader) can't handle addresses larger than 4 Gib
-        if (entries[i].address + entries[i].size >= PROTECTED_MODE_TOP)
-            continue;
-#endif
-
-        if (entries[i].address + entries[i].size >= top)
-            continue;
-
         u64 entry_top = entries[i].address + entries[i].size;
+
+        if (entry_top >= top)
+            continue;
+
+        // Only map conventional memory if asked explicitly to do so
+        // This is a comparatively small slice of memory that is known be unreliable,
+        // for instance writing to it caused a triple fault in VmWare
+        if (top > 0xfffff && entry_top <= 0xfffff)
+            continue;
+
         u64 base = ALIGN_DOWN(entry_top - bytes, alignment);
 
         if (base < entries[i].address)

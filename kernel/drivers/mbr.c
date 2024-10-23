@@ -1,5 +1,6 @@
 #include "mbr.h"
 
+#include <base/macros.h>
 #include <boot/mbr.h>
 #include <log/log.h>
 #include <string.h>

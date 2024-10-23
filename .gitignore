@@ -11,3 +11,5 @@ bin/
 *.swp
 *.swo
 *.bak
+
+*.log

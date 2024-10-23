@@ -7,7 +7,7 @@
 #define BITMAP_FREE 0
 #define BITMAP_USED 1
 
-#define ALLOC_OUT_OF_BLOCKS ((usize)(-1))
+#define ALLOC_OUT_OF_BLOCKS (-1)
 
 typedef struct {
     void* chuck_start;

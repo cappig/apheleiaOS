@@ -6,4 +6,5 @@
 
 typedef struct tm std_time;
 
+
 std_time get_time(void);

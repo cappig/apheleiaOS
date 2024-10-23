@@ -88,7 +88,7 @@ bool bitmap_alloc_init_mmap(bitmap_alloc* alloc, e820_map* mmap, usize block_siz
     alloc->bitmap = (bitmap_word*)ID_MAPPED_VADDR(bitmap_addr);
 
     // Mark the whole bitmap as used
-    memset(alloc->bitmap, 0xff, bitmap_bytes);
+    memset(alloc->bitmap, ~0, bitmap_bytes);
     alloc->free_blocks = 0;
 
     for (usize i = 0; i < mmap->count; i++) {
@@ -116,7 +116,7 @@ bool bitmap_alloc_init_mmap(bitmap_alloc* alloc, e820_map* mmap, usize block_siz
 }
 
 
-static usize _first_fit(bitmap_alloc* alloc, usize blocks) {
+static isize _first_fit(bitmap_alloc* alloc, usize blocks) {
     usize region_bottom = 0;
     usize region_size = 0;
 
@@ -148,7 +148,7 @@ void* bitmap_alloc_blocks(bitmap_alloc* alloc, usize blocks) {
     if (blocks == 0 || blocks > alloc->free_blocks)
         return NULL;
 
-    usize first_block = _first_fit(alloc, blocks);
+    isize first_block = _first_fit(alloc, blocks);
 
     if (first_block == ALLOC_OUT_OF_BLOCKS)
         return NULL;

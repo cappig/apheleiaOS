@@ -15,14 +15,15 @@ static page_table* _walk_table_once(page_table* table, usize index, bool is_kern
     page_table* next_table;
 
     if (table[index].bits.present) {
-        next_table = (page_table*)(uptr)(table[index].bits.addr << PAGE_SHIFT);
+        next_table = (page_table*)(uptr)page_get_paddr(&table[index]);
     } else {
         u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
         next_table = (page_table*)mmap_alloc(PAGE_4KIB, type, PAGE_4KIB);
 
+        page_set_paddr(&table[index], (u64)(uptr)next_table);
+
         table[index].bits.present = 1;
         table[index].bits.writable = 1;
-        table[index].bits.addr = (u64)(uptr)next_table >> PAGE_SHIFT;
     }
 
     return next_table;
@@ -39,7 +40,8 @@ void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     if (size == PAGE_1GIB) {
         entry = &lvl3[lvl3_index];
 
-        entry->bits.huge = 1;
+        paddr = ALIGN_DOWN(paddr, PAGE_1GIB);
+        flags |= PT_HUGE;
         goto finalize;
     }
 
@@ -49,7 +51,8 @@ void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     if (size == PAGE_2MIB) {
         entry = &lvl2[lvl2_index];
 
-        entry->bits.huge = 1;
+        paddr = ALIGN_DOWN(paddr, PAGE_2MIB);
+        flags |= PT_HUGE;
         goto finalize;
     }
 
@@ -59,10 +62,10 @@ void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     entry = &lvl1[lvl1_index];
 
 finalize:
-    entry->raw |= flags & FLAGS_MASK;
-    entry->bits.present = 1;
+    page_set_paddr(entry, paddr);
 
-    entry->bits.addr = paddr >> PAGE_SHIFT;
+    entry->raw |= flags;
+    entry->bits.present = 1;
 }
 
 // TODO: we should try to use larger pages if possible
@@ -76,10 +79,10 @@ void map_region(usize size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
 }
 
 // Starts from 0 and go to `top_address`
+// TODO: make use of larger page sizes
 void identity_map(u64 top_address, u64 offset, bool is_kernel) {
-    // TODO: make use of larger page sizes
     for (u64 i = 0; i <= top_address; i += PAGE_2MIB)
-        map_page(PAGE_2MIB, i + offset, i, PT_READ_WRITE, is_kernel);
+        map_page(PAGE_2MIB, i + offset, i, PT_WRITE, is_kernel);
 }
 
 void setup_paging(void) {

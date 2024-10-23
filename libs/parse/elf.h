@@ -182,9 +182,12 @@ enum elf_symbol_type {
     STT_FUNC = 2,
 };
 
-#define VALD_ELF      1
-#define INVALID_ELF   -1
-#define INVALID_ELF64 -2
+typedef enum {
+    VALID_ELF = 1,
+    INVALID_ELF = -1,
+    INVALID_ELF64 = -2,
+    WRONG_ENDIAN_ELF = -3,
+} elf_validity;
 
 typedef struct {
     u64 base;
@@ -193,7 +196,9 @@ typedef struct {
 } elf_attributes;
 
 
-int elf_verify(elf_header* elf_header);
-u32 elf_to_page_flags(u32 elf_flags);
+bool elf_is_executable(elf_header* eheader);
+elf_validity elf_verify(elf_header* header);
 
-void elf_parse_header(elf_attributes* attribs, elf_header* header);
+u64 elf_to_page_flags(u32 elf_flags);
+
+bool elf_parse_header(elf_attributes* attribs, elf_header* header);

@@ -7,13 +7,9 @@
 
 #define PAGE_SHIFT 12
 
-#define CANONICAL_MASK 0xffffffffffffUL
-#define PHYSICAL_MASK  0x7fffffffffUL
-#define FLAGS_MASK     0xfff
-
-#define GET_CANONICAL(a) ((u64)(a) & CANONICAL_MASK)
-
-#define IS_PAGE_ALIGNED(a) (!((a) & 0xfff))
+#define ADDR_MASK      0x000ffffffffff000ULL
+#define CANONICAL_MASK 0xffffffffffffULL
+#define PHYSICAL_MASK  (1ULL << 52)
 
 // Intel manual Figure 5-23. (PDF page 604)
 // https://web.archive.org/web/20230324001330/https://www.amd.com/system/files/TechDocs/40332.pdf
@@ -24,7 +20,7 @@
 
 enum page_table_flags {
     PT_PRESENT = 1 << 0,
-    PT_READ_WRITE = 1 << 1,
+    PT_WRITE = 1 << 1,
     PT_USER = 1 << 2,
     PT_WRITE_THROUGH = 1 << 3,
     PT_NO_CACHE = 1 << 4,
@@ -65,7 +61,8 @@ typedef union {
 } page_table;
 
 inline u64 page_get_paddr(page_table* page) {
-    return page->bits.addr << PAGE_SHIFT;
+    u64 ret = page->raw & ADDR_MASK;
+    return ret % PHYSICAL_MASK;
 }
 
 inline page_table* page_get_vaddr(page_table* page) {
@@ -74,8 +71,11 @@ inline page_table* page_get_vaddr(page_table* page) {
 }
 
 inline void page_set_paddr(page_table* page, u64 addr) {
+    addr = ALIGN_DOWN(addr, PAGE_4KIB);
+    addr %= PHYSICAL_MASK;
+
+    page->raw = addr;
     page->bits.present = 1;
-    page->bits.addr = addr >> PAGE_SHIFT;
 }
 
 
