@@ -15,6 +15,9 @@
 
 #define IS_IRQ(irq) ((irq) >= INT_COUNT && (irq) < IRQ_COUNT + INT_COUNT)
 
+#define IDT_INT 0x8e
+#define IDT_TRP 0xef
+
 typedef struct PACKED {
     u16 offset_low;
     u16 selector;
@@ -104,4 +107,6 @@ void idt_init(void);
 void dump_regs(int_state* s);
 
 void set_int_handler(usize int_num, int_handler handler);
+void configure_int(usize int_num, u16 selector, u8 ist, u8 attribs);
+
 void isr_handler(int_state* s);

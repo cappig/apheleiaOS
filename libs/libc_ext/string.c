@@ -104,7 +104,7 @@ int strncasecmp(const char* s1, const char* s2, size_t n) {
         n--;
     }
 
-    if (n == 0)
+    if (!n)
         return 0;
     else
         return *(const unsigned char*)s1 - *(const unsigned char*)s2;
@@ -139,7 +139,7 @@ char* basename(const char* path) {
         return (char*)path;
 }
 
-// NOTE: this function allocates on the stack
+#ifdef HAS_GMALLOC
 char* dirname(const char* path) {
     char* slash = strrchr(path, '/');
 
@@ -148,3 +148,4 @@ char* dirname(const char* path) {
 
     return strndup(path, slash - path);
 }
+#endif

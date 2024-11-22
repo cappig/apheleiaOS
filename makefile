@@ -43,6 +43,7 @@ include kernel/build.mk
 include utils/docker.mk
 include utils/qemu.mk
 include utils/font.mk
+include utils/check.mk
 
 
 .DEFAULT_GOAL := all

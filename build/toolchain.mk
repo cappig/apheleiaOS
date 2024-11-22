@@ -16,17 +16,22 @@ CC_BASE += \
 	-Wno-missing-braces \
 	-DVERSION=\"$(VERSION)\"
 
+CC_DEBUG := \
+	-DDISK_DEBUG \
+	-DPS2_DEBUG \
+	-DINT_DEBUG \
+	-DMMU_DEBUG \
+	-DKMALLOC_DEBUG
+
+# scan-build is a nice clang alternative
+GCC_ANALYZER ?= true
+
 ifeq ($(TOOLCHAIN), gnu)
+ifeq ($(GCC_ANALYZER), true)
 	CC_BASE += \
-		-fanalyzer
-else ifeq ($(TOOLCHAIN), llvm)
-	CC_BASE += \
-		-Wno-language-extension-token \
-		-Wno-fixed-enum-extension \
-		-Wno-gnu-binary-literal \
-		-Wno-gnu-case-range \
-		-Wno-gnu-union-cast \
-		-Wno-gnu-statement-expression
+		-fanalyzer \
+		-fanalyzer-transitivity
+endif
 endif
 
 # If we want to be able to perform stack tracing in the kernel we have
@@ -38,7 +43,7 @@ ifeq ($(TRACEABLE_KERNEL), true)
 endif
 
 ifeq ($(PROFILE), debug)
-	CC_BASE += -Og -DDISK_DEBUG -DKMALLOC_DEBUG -DPS2_DEBUG -DMMU_DEBUG
+	CC_BASE += -Og $(CC_DEBUG)
 else ifeq ($(PROFILE), small)
 	CC_BASE += -Os
 else ifeq ($(PROFILE), normal)

@@ -31,10 +31,12 @@ void tree_destroy(tree* root) {
     gfree(root);
 }
 
+// TODO: implement a simple callback function that can free the data
 void tree_prune(tree_node* parent) {
     foreach (node, parent->children) {
         tree_node* child = node->data;
         tree_prune(child);
+        gfree(child);
     }
 
     list_destroy(parent->children);

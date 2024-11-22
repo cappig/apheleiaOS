@@ -6,6 +6,7 @@
 #include <x86/asm.h>
 
 #include "arch/idt.h"
+#include "arch/pic.h"
 #include "vfs/fs.h"
 
 static ring_buffer* buffer;
@@ -40,7 +41,7 @@ static void ps2_irq_handler(UNUSED int_state* s) {
 #endif
 }
 
-static isize _read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize len) {
     if (!buf)
         return -1;
 
@@ -49,7 +50,7 @@ static isize _read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
     return len;
 }
 
-static isize _write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+static isize _write(UNUSED vfs_node* node, UNUSED void* buf, UNUSED usize offset, UNUSED usize len) {
     return -1;
 }
 
@@ -70,6 +71,7 @@ char ps2_to_ascii(u8 scancode) {
 
 void init_ps2_kbd(virtual_fs* vfs) {
     set_int_handler(IRQ_NUMBER(IRQ_PS2_KEYBOARD), ps2_irq_handler);
+    pic_clear_mask(IRQ_PS2_KEYBOARD);
 
     vfs_node* dev = vfs_create_node("kbd", VFS_CHARDEV);
     dev->interface = vfs_create_file_interface(_read, _write);

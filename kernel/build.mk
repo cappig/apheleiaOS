@@ -10,6 +10,7 @@ CC_KERNEL := \
 	-Ikernel \
 	-fdata-sections \
 	-ffunction-sections \
+	-DHAS_GMALLOC \
 	-march=x86-64 \
 	-mcmodel=kernel \
 	-m64

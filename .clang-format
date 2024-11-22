@@ -36,7 +36,7 @@ TabWidth: 4
 IndentWidth: 4
 IndentCaseLabels: false
 IndentGotoLabels: true
-IndentPPDirectives: BeforeHash
+IndentPPDirectives: None
 IndentWrappedFunctionNames: false
 
 MaxEmptyLinesToKeep: 2

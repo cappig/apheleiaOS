@@ -10,8 +10,8 @@
 NORETURN void panic_unwind() {
     disable_interrupts();
 
-    dump_stack_trace();
     // TODO: save and dump state
+    dump_stack_trace();
 
     log_fatal("Kernel panic: halting execution");
 

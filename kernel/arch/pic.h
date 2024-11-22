@@ -6,7 +6,7 @@
 #define PIC1_COMMAND PIC1
 #define PIC1_DATA    (PIC1 + 1)
 
-#define PIC2         0xA0
+#define PIC2         0xa0
 #define PIC2_COMMAND PIC2
 #define PIC2_DATA    (PIC2 + 1)
 
@@ -16,24 +16,10 @@
 
 #define PIC_EOI 0x20
 
-#define PIT_A       0x40
-#define PIT_B       0x41
-#define PIT_C       0x42
-#define PIT_CONTROL 0x43
-
-#define PIT_MASK 0xFF
-#define PIT_SET  0x36
-
-#define PIT_DEFAULT_FREQ 100
-
-#define PIT_BASE_FREQ 1193180
-
 
 void pic_init(void);
 
-void set_timer_freq(usize hz);
-
-void pic_timer_enable();
-void pic_timer_disable();
-
 void pic_end_int(usize irq);
+
+void pic_set_mask(u8 line);
+void pic_clear_mask(u8 line);

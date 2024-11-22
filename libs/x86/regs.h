@@ -3,7 +3,6 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-
 // https://en.wikipedia.org/wiki/FLAGS_register
 #define FLAG_CF 0x0001
 #define FLAG_ZF 0x0040

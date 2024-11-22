@@ -6,6 +6,8 @@
 
 #define GDT_OFFSET(index) (u16)(index * sizeof(gdt_entry))
 
+#define GDT_ENTRY_COUNT 7
+
 typedef struct PACKED {
     u16 limit_low;
     u16 base_low;
@@ -52,8 +54,6 @@ typedef struct PACKED {
     u16 size;
     u64 gdt_ptr;
 } gdt_desc;
-
-#define GDT_ENTRY_COUNT 7
 
 enum gdt_segments {
     GDT_kernel_code = GDT_OFFSET(1),

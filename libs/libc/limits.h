@@ -9,11 +9,11 @@
 #define UCHAR_MAX (SCHAR_MAX * 2ULL + 1ULL)
 
 #ifdef __CHAR_UNSIGNED__
-    #define CHAR_MIN 0
-    #define CHAR_MAX UCHAR_MAX
+#define CHAR_MIN 0
+#define CHAR_MAX UCHAR_MAX
 #else
-    #define CHAR_MIN SCHAR_MIN
-    #define CHAR_MAX SCHAR_MAX
+#define CHAR_MIN SCHAR_MIN
+#define CHAR_MAX SCHAR_MAX
 #endif
 
 #define SHRT_MAX  __SHRT_MAX__

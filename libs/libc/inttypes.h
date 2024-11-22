@@ -3,11 +3,11 @@
 #include <stdint.h>
 
 #if UINTPTR_MAX == UINT64_MAX
-    #define __PRI64  "l"
-    #define __PRIPTR "l"
+#define __PRI64  "l"
+#define __PRIPTR "l"
 #else
-    #define __PRI64  "ll"
-    #define __PRIPTR ""
+#define __PRI64  "ll"
+#define __PRIPTR ""
 #endif
 
 // A lot of stuff is missing here

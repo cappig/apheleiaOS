@@ -42,6 +42,7 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     init_serial(SERIAL_COM1, handoff->args.serial_baud);
 
     gdt_init();
+    pic_init();
     idt_init();
     tss_init(handoff->stack_top);
 
@@ -66,7 +67,6 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     init_zero_devs(vfs);
     init_ps2_kbd(vfs);
 
-    pic_init();
     enable_interrupts();
 
     log_info(ALPHA_ASCII);

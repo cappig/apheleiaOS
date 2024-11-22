@@ -1,6 +1,8 @@
 #include "string.h"
 
+#ifdef HAS_GMALLOC
 #include <alloc/global.h>
+#endif
 
 #include "stddef.h"
 
@@ -170,20 +172,28 @@ char* strtok(char* restrict str, const char* restrict delim) {
     return strtok_r(str, delim, &save);
 }
 
-// INFO: requires the global allocator to be initialized
-char* strdup(const char* str) {
-    size_t len = strlen(str);
 
-    if (!len)
+#ifdef HAS_GMALLOC
+char* strndup(const char* str, size_t size) {
+    if (!str || !size)
         return NULL;
 
-    return strndup(str, len);
+    char* dest = gmalloc(size + 1);
+
+    if (dest) {
+        strncpy(dest, str, size);
+        dest[size] = '\0';
+    }
+
+    return dest;
 }
 
-char* strndup(const char* str, size_t size) {
-    void* dest = gmalloc(size + 1);
-    char* ret = memcpy(dest, str, size + 1);
-    ret[size] = '\0';
+// This function triggers a false positive in gcc's static analyser
+// It trips the memory leak detection
+char* strdup(const char* str) {
+    if (!str)
+        return NULL;
 
-    return ret;
+    return strndup(str, strlen(str));
 }
+#endif

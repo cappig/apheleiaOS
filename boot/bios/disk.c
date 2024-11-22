@@ -102,11 +102,12 @@ void open_root_file(file_handle* file, const char* name) {
                 memcpy(file_buffer + i * ISO_SECTOR_SIZE, low_buffer, ISO_SECTOR_SIZE);
             }
 
+            file->addr = file_buffer;
+            file->size = record->extent_size.lsb;
+
             bfree(low_buffer);
             bfree(buffer);
 
-            file->addr = file_buffer;
-            file->size = record->extent_size.lsb;
             return;
         }
 

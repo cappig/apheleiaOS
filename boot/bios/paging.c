@@ -64,7 +64,7 @@ void map_page(page_size size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
 finalize:
     page_set_paddr(entry, paddr);
 
-    entry->raw |= flags;
+    entry->raw |= flags & FLAGS_MASK;
     entry->bits.present = 1;
 }
 
@@ -78,10 +78,9 @@ void map_region(usize size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     }
 }
 
-// Starts from 0 and go to `top_address`
-// TODO: make use of larger page sizes
+// Should we be assuming the existence of huge pages?
 void identity_map(u64 top_address, u64 offset, bool is_kernel) {
-    for (u64 i = 0; i <= top_address; i += PAGE_2MIB)
+    for (u64 i = 0; i < top_address; i += PAGE_2MIB)
         map_page(PAGE_2MIB, i + offset, i, PT_WRITE, is_kernel);
 }
 

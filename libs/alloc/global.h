@@ -1,5 +1,6 @@
 #pragma once
 
+#ifdef HAS_GMALLOC
 #include <stddef.h>
 
 typedef void* (*alloc_fn)(size_t size);
@@ -35,3 +36,4 @@ inline void* gcalloc(size_t size) {
 inline void gfree(void* ptr) {
     _global_allocator->free(ptr);
 }
+#endif

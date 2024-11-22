@@ -13,12 +13,9 @@ linked_list* list_create(void) {
     return new;
 }
 
+// NOTE: this function does not free the stored data!
 void list_destroy(linked_list* list) {
-    list_node* node = list->head;
-    list_node* next = node->next;
-
-    while (next) {
-        next = node->next;
+    foreach (node, list) {
         gfree(node);
     }
 
@@ -41,7 +38,7 @@ void list_destroy_node(list_node* node) {
 void list_append(linked_list* list, list_node* node) {
     node->next = NULL;
 
-    if (list->length == 0) {
+    if (!list->length) {
         node->prev = NULL;
         list->head = node;
         list->tail = node;
@@ -89,7 +86,7 @@ void list_swap(list_node* left, list_node* right) {
 void list_push(linked_list* list, list_node* node) {
     node->prev = NULL;
 
-    if (list->length == 0) {
+    if (!list->length) {
         node->next = NULL;
         list->head = node;
         list->tail = node;

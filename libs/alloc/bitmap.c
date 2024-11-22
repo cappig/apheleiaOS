@@ -145,7 +145,7 @@ static isize _first_fit(bitmap_alloc* alloc, usize blocks) {
 }
 
 void* bitmap_alloc_blocks(bitmap_alloc* alloc, usize blocks) {
-    if (blocks == 0 || blocks > alloc->free_blocks)
+    if (!blocks || blocks > alloc->free_blocks)
         return NULL;
 
     isize first_block = _first_fit(alloc, blocks);

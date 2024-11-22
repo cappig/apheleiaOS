@@ -6,6 +6,7 @@
 #include <x86/asm.h>
 #include <x86/regs.h>
 
+#include "arch/gdt.h"
 #include "arch/panic.h"
 #include "arch/pic.h"
 
@@ -88,8 +89,8 @@ void idt_init() {
         u64 stub_ptr = (u64)isr_stub_table[vector];
 
         descriptor->offset_low = stub_ptr;
-        descriptor->selector = 0x08;
-        descriptor->attributes = 0x8e;
+        descriptor->selector = GDT_kernel_code;
+        descriptor->attributes = IDT_INT;
         descriptor->offset_mid = stub_ptr >> 16;
         descriptor->offset_high = stub_ptr >> 32;
     }
@@ -109,13 +110,28 @@ void idt_init() {
 }
 
 void set_int_handler(usize int_num, int_handler handler) {
+    assert(int_num < ISR_COUNT);
+
     int_handlers[int_num] = handler;
+}
+
+void configure_int(usize int_num, u16 selector, u8 ist, u8 attribs) {
+    assert(int_num < ISR_COUNT);
+
+    idt_entry* descriptor = &idt_entries[int_num];
+
+    descriptor->selector = selector;
+    descriptor->attributes = attribs;
+    descriptor->ist = ist;
 }
 
 // Called by isr_common_stub in idt_stubs.asm
 void isr_handler(int_state* s) {
-    if (s->int_num >= ISR_COUNT)
-        panic("Unknown interrupt number [int=%#lx]", s->int_num);
+#ifdef INT_DEBUG
+    log_debug("[INT_DEBUG] Handling interrupt: num = %#lx, cs = %#lx", s->int_num, s->s_regs.cs);
+#endif
+
+    assert(s->int_num < ISR_COUNT);
 
     int_handlers[s->int_num](s);
 

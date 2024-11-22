@@ -5,18 +5,17 @@
 #include <base/macros.h>
 #include <base/types.h>
 
-#define PAGE_SHIFT 12
-
+#define FLAGS_MASK     0x8000000000000fffULL
 #define ADDR_MASK      0x000ffffffffff000ULL
 #define CANONICAL_MASK 0xffffffffffffULL
 #define PHYSICAL_MASK  (1ULL << 52)
 
 // Intel manual Figure 5-23. (PDF page 604)
 // https://web.archive.org/web/20230324001330/https://www.amd.com/system/files/TechDocs/40332.pdf
-#define GET_LVL4_INDEX(addr) ((addr >> 39) & 0x1ff)
-#define GET_LVL3_INDEX(addr) ((addr >> 30) & 0x1ff)
-#define GET_LVL2_INDEX(addr) ((addr >> 21) & 0x1ff)
-#define GET_LVL1_INDEX(addr) ((addr >> 12) & 0x1ff)
+#define GET_LVL4_INDEX(addr) (((addr) >> 39) & 0x1ff)
+#define GET_LVL3_INDEX(addr) (((addr) >> 30) & 0x1ff)
+#define GET_LVL2_INDEX(addr) (((addr) >> 21) & 0x1ff)
+#define GET_LVL1_INDEX(addr) (((addr) >> 12) & 0x1ff)
 
 enum page_table_flags {
     PT_PRESENT = 1 << 0,
@@ -59,6 +58,7 @@ typedef union {
 
     u64 raw;
 } page_table;
+
 
 inline u64 page_get_paddr(page_table* page) {
     u64 ret = page->raw & ADDR_MASK;

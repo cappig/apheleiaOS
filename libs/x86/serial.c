@@ -28,14 +28,14 @@ bool init_serial(usize port, u32 baud) {
 
 void send_serial(usize port, char c) {
     // These empty loops are not ideal but eehhh it works
-    while ((inb(port + 5) & 0x20) == 0)
+    while (!(inb(port + 5) & 0x20))
         continue;
 
     outb(port, c);
 }
 
 char receive_serial(usize port) {
-    while ((inb(port + 5) & 0x01) == 0)
+    while (!(inb(port + 5) & 0x01))
         continue;
 
     return inb(port);

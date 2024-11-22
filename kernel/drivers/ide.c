@@ -8,6 +8,7 @@
 #include <x86/asm.h>
 
 #include "arch/idt.h"
+#include "arch/pic.h"
 #include "drivers/pci.h"
 #include "mem/heap.h"
 #include "vfs/driver.h"
@@ -365,7 +366,9 @@ bool ide_disk_init(virtual_fs* vfs) {
     }
 
     set_int_handler(IRQ_NUMBER(IRQ_PRIMARY_ATA), ata_irq_handler);
+    pic_clear_mask(IRQ_PRIMARY_ATA);
     set_int_handler(IRQ_NUMBER(IRQ_SECONDARY_ATA), ata_irq_handler);
+    pic_clear_mask(IRQ_SECONDARY_ATA);
 
     vfs_drive_interface* interface = kcalloc(sizeof(vfs_drive_interface));
     interface->read = ide_read_wrapper;

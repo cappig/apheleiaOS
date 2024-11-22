@@ -43,7 +43,7 @@ void clean_mmap(e820_map* map) {
     qsort(entries, map->count, sizeof(e820_entry), _comp_mmap);
 
     for (usize i = 0; i < map->count; i++) {
-        if (entries[i].size == 0)
+        if (!entries[i].size)
             mmap_remove_entry(map, i--);
 
         u64 top = entries[i].address + entries[i].size;
@@ -66,7 +66,7 @@ void clean_mmap(e820_map* map) {
             u64 overlap = top - entries[i + 1].address;
 
             // We don't care if they're touching
-            if (overlap == 0)
+            if (!overlap)
                 continue;
 
             // Prioritize blocks with the largest `type` value
@@ -81,10 +81,13 @@ void clean_mmap(e820_map* map) {
 }
 
 void* mmap_alloc_inner(e820_map* mmap, usize bytes, u32 type, u32 alignment, u64 top) {
+    if (!bytes)
+        return NULL;
+
     e820_entry* entries = (e820_entry*)&mmap->entries;
 
     // An alignment of 0 means 'do not align'
-    if (alignment == 0)
+    if (!alignment)
         alignment = 1;
 
     // Protected mode (bootloader) can't handle addresses larger than 4 Gib

@@ -13,3 +13,5 @@ bin/
 *.bak
 
 *.log
+
+compile_commands.json

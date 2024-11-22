@@ -11,3 +11,4 @@
 -Ilibs/libc
 -Ilibs
 -Ikernel
+-DHAS_GMALLOC

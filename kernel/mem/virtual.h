@@ -11,3 +11,5 @@ void identity_map(page_table* lvl4_paddr, u64 from, u64 to, u64 map_offset, u64 
 
 page_table* clone_table(page_table* src_paddr);
 void free_table(page_table* src_paddr);
+
+void dump_table(page_table* src_paddr);

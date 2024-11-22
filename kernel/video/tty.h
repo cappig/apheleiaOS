@@ -27,7 +27,7 @@
 
 // Retarded clang-format error pops up if this is left undefined
 #ifndef VERSION
-    #define VERSION "undefined"
+#define VERSION "undefined"
 #endif
 
 #define ALPHA_BUILD_DATE "Running version " VERSION " built on " __DATE__ " at " __TIME__

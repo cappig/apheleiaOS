@@ -12,7 +12,7 @@
 
 
 // Locate the requested index in the child table, allocate if it doesn't exist
-static page_table* _walk_table_once(page_table* table, usize index) {
+static page_table* _walk_table_once(page_table* table, usize index, u64 flags) {
     page_table* next_table;
 
     if (table[index].bits.present) {
@@ -21,6 +21,8 @@ static page_table* _walk_table_once(page_table* table, usize index) {
         next_table = alloc_frames(1);
 
         page_set_paddr(&table[index], (u64)next_table);
+
+        table[index].raw |= flags & FLAGS_MASK;
 
         table[index].bits.present = 1;
         table[index].bits.writable = 1;
@@ -39,7 +41,7 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
     page_table* lvl4 = (page_table*)ID_MAPPED_VADDR(lvl4_paddr);
 
     usize lvl3_index = GET_LVL3_INDEX(vaddr);
-    page_table* lvl3 = _walk_table_once(lvl4, lvl4_index);
+    page_table* lvl3 = _walk_table_once(lvl4, lvl4_index, flags);
 
     page_table* entry;
 
@@ -52,7 +54,7 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
     }
 
     usize lvl2_index = GET_LVL2_INDEX(vaddr);
-    page_table* lvl2 = _walk_table_once(lvl3, lvl3_index);
+    page_table* lvl2 = _walk_table_once(lvl3, lvl3_index, flags);
 
     if (size == PAGE_2MIB) {
         entry = &lvl2[lvl2_index];
@@ -63,14 +65,14 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
     }
 
     usize lvl1_index = GET_LVL1_INDEX(vaddr);
-    page_table* lvl1 = _walk_table_once(lvl2, lvl2_index);
+    page_table* lvl1 = _walk_table_once(lvl2, lvl2_index, flags);
 
     entry = &lvl1[lvl1_index];
 
 finalize:
     page_set_paddr(entry, paddr);
 
-    entry->raw |= flags;
+    entry->raw |= flags & FLAGS_MASK;
 
 #ifdef MMU_DEBUG
     log_debug(
@@ -100,7 +102,8 @@ void identity_map(page_table* lvl4_paddr, u64 from, u64 to, u64 map_offset, u64 
     if (!remap)
         from = max(PROTECTED_MODE_TOP, from);
 
-    for (u64 i = from; i <= to; i += PAGE_4KIB)
+    // Map in a range [from, to>
+    for (u64 i = from; i < to; i += PAGE_4KIB)
         map_page(lvl4_paddr, PAGE_4KIB, i + map_offset, i, flags);
 }
 
@@ -111,7 +114,7 @@ void unmap_page(page_table* lvl4_paddr, u64 vaddr) {
     usize lvl3_index = GET_LVL3_INDEX(vaddr);
     page_table* lvl3 = page_get_vaddr(&lvl4[lvl4_index]);
 
-    MAYBE_UNUSED page_size size = 0;
+    UNUSED page_size size = 0;
 
     if (lvl3[lvl3_index].bits.huge && lvl3[lvl3_index].bits.present) {
         lvl3[lvl3_index].raw = 0;
@@ -221,4 +224,34 @@ void free_table(page_table* src_paddr) {
             _recursive_free(&src_vaddr[i], 3);
 
     free_frames(src_paddr, 1);
+}
+
+
+static void _recursive_dump(page_table* src_paddr, usize level) {
+    page_table* vaddr = (page_table*)ID_MAPPED_VADDR(src_paddr);
+
+    for (usize i = 0; i < 512; i++) {
+        if (!vaddr[i].bits.present)
+            continue;
+
+        bool maps = (!vaddr[i].bits.huge) && (level != 1);
+
+        u64 child_paddr = page_get_paddr(&vaddr[i]);
+
+        int space = 4 - (int)level;
+        char* pre = maps ? "" : "[";
+        char* pst = maps ? "" : "]";
+
+        log_debug("%-*s|- %s%zu -> %#lx%s", space, "", pre, i, child_paddr, pst);
+
+        if (maps)
+            _recursive_dump((page_table*)child_paddr, level - 1);
+    }
+}
+
+// TODO: print flags
+void dump_table(page_table* src_paddr) {
+    log_debug("Recursive dump of page map cr3 = %#lx", (u64)src_paddr);
+
+    _recursive_dump(src_paddr, 4);
 }

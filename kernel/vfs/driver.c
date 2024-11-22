@@ -153,6 +153,7 @@ vfs_file_system* vfs_crete_fs(char* name) {
     return ret;
 }
 
+// FIXME: this leaks memory!
 void vfs_destroy_fs(vfs_file_system* fs) {
     tree_destroy(fs->subtree);
 }

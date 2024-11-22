@@ -66,12 +66,12 @@ static int _get_width(const char* format, size_t* index, va_list vlist) {
 }
 
 static int _get_precision(const char* format, size_t* index, va_list vlist) {
-    int precision = -1;
-
     if (format[*index] != '.')
-        return precision;
+        return -1;
 
     (*index)++;
+
+    int precision = -1;
 
     if (isdigit(format[*index])) {
         char* end;
@@ -184,7 +184,9 @@ static size_t _string_to_buffer(char* buffer, char* string, int flags, int preci
         while ((*padding)-- > 0)
             *buffer++ = ' ';
 
-    while (*string && (precision < 0 || precision--))
+    size_t len = precision < 0 ? -1 : precision;
+
+    for (size_t i = 0; i < len && *string; i++)
         *buffer++ = *string++;
 
     if ((flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO))

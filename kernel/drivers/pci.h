@@ -112,7 +112,7 @@ enum pci_class {
     PCI_UNASSIGNED = 0xff, // vendor specific
 };
 
-MAYBE_UNUSED
+UNUSED
 static const char* pci_class_strings[] = {
     "Unclassified",
     "Mass Storage Controller",

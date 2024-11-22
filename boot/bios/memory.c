@@ -77,9 +77,11 @@ u64 alloc_kernel_stack(usize size) {
 
 
 static void* _mmap_alloc_top(usize bytes, u32 type, u32 alignment, uptr top) {
-    void* ret = mmap_alloc_inner(mmap_ptr, bytes, type, alignment, top);
+    if (!bytes)
+        panic("Attempetd to allocate zero bytes!");
 
-    if (ret == NULL)
+    void* ret = mmap_alloc_inner(mmap_ptr, bytes, type, alignment, top);
+    if (!ret)
         panic("Bootloader out of memory!");
 
     return ret;
@@ -91,9 +93,7 @@ void* mmap_alloc(usize bytes, u32 type, u32 alignment) {
 
 void* bmalloc_aligned(usize size, u32 alignment, bool allow_high) {
     u64 top = allow_high ? (u64)-1 : 0xfffff;
-    void* ret = _mmap_alloc_top(size, E820_ALLOC, alignment, top);
-
-    return ret;
+    return _mmap_alloc_top(size, E820_ALLOC, alignment, top);
 }
 
 void* bmalloc(usize size, bool allow_high) {

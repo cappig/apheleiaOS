@@ -5,6 +5,7 @@
 #include <log/log.h>
 #include <string.h>
 
+#include "arch/panic.h"
 #include "mem/heap.h"
 #include "vfs/driver.h"
 
@@ -71,11 +72,13 @@ mbr_table* parse_mbr(vfs_driver* dev) {
         return NULL;
     }
 
+    // TODO: perform more checks
     mbr_table* table = kmalloc(sizeof(mbr_table));
+    assert(table);
+
     memcpy(table, &mbr->table, 4 * sizeof(mbr_partition));
 
-    // TODO: perform more checks
-
     kfree(mbr);
+
     return table;
 }

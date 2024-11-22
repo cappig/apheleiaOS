@@ -17,6 +17,7 @@ void heap_init(void);
 
 void* kmalloc(usize size);
 void* kcalloc(usize size);
-void kfree(void* ptr) NONNULL;
+
+void kfree(void* ptr);
 
 void galloc_init(void);

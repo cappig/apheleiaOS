@@ -18,4 +18,6 @@ char* strtrim(char* str);
 char* strtrunc(char* str);
 
 char* basename(const char* path);
+#ifdef HAS_GMALLOC
 char* dirname(const char* path);
+#endif

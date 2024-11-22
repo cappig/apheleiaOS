@@ -34,17 +34,20 @@ void heap_init() {
 
 
 void* kmalloc(usize size) {
-    if (!size)
+    if (!size) {
+#ifdef KMALLOC_DEBUG
+        log_warn("[KMALLOC_DEBUG] malloc: bytes = 0");
+#endif
+
         return NULL;
+    }
 
     usize blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK);
-
-    // FIXME: don't just panic. Attempt to allocate more heaps
     void* space = bitmap_alloc_blocks(&heap, blocks + 1);
-    if (!space) {
-        log_fatal("Attempted to allocate %zd blocks!", blocks);
-        panic("Kernel heap out of memory: %zd free blocks left!", heap.free_blocks);
-    }
+
+    // No more memory left. Since were in kernel land we treat this as a fatal error
+    // TODO: attempt to allocate more heaps
+    assert(space != NULL);
 
     // Write the header
     kheap_header* header = space;
@@ -62,26 +65,30 @@ void* kmalloc(usize size) {
 
 void* kcalloc(usize size) {
     void* ret = kmalloc(size);
-    if (!ret)
-        return NULL;
 
-    memset(ret, 0, size);
+    if (ret)
+        memset(ret, 0, size);
 
     return ret;
 }
 
 void kfree(void* ptr) {
-    kheap_header* header = ptr - sizeof(kheap_header);
+    if (!ptr) {
+#ifdef KMALLOC_DEBUG
+        log_warn("[KMALLOC_DEBUG] free: ptr = NULL");
+#endif
+        return;
+    }
 
+    kheap_header* header = ptr - sizeof(kheap_header);
     usize size = header->size * KERNEL_HEAP_BLOCK;
 
 #ifdef KMALLOC_DEBUG
     log_debug("[KMALLOC_DEBUG] free: bytes = %zd, ptr = %#lx", size, (u64)ptr);
 #endif
 
-    // FIXME: This should really not panic
-    if (header->magic != KERNEL_HEAP_MAGIC || !header->size)
-        panic("Attempted to free unallocated memory!");
+    assert(header->magic == KERNEL_HEAP_MAGIC);
+    assert(header->size != 0);
 
     bitmap_alloc_free(&heap, header, size + sizeof(kheap_header));
 }

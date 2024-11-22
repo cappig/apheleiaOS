@@ -1,17 +1,18 @@
 #include <alloc/bitmap.h>
 #include <base/addr.h>
+#include <string.h>
 #include <x86/asm.h>
 #include <x86/e820.h>
 #include <x86/paging.h>
 
 #include "arch/panic.h"
-#include "mem/virtual.h"
 
 static bitmap_alloc frame_alloc;
 
 
 void pmm_init(e820_map* mmap) {
     bool ret = bitmap_alloc_init_mmap(&frame_alloc, mmap, PAGE_4KIB);
+
     if (!ret)
         panic("Failed to initialize the page frame allocator!");
 }
@@ -31,8 +32,7 @@ void* alloc_frames(usize count) {
     log_debug("[MMU DEBUG] allocated %zu new frames: paddr = %#lx", count, (u64)ret);
 #endif
 
-    if (!ret)
-        panic("Failed to allocate pages!");
+    assert(ret != NULL);
 
     return ret;
 }
@@ -55,9 +55,14 @@ void reclaim_boot_map(e820_map* mmap) {
 
     clean_mmap(mmap);
 
-    page_table* root = (page_table*)read_cr3();
-    for (u64 i = 0; i <= PROTECTED_MODE_TOP; i += PAGE_2MIB) {
-        unmap_page(root, i);
-        tlb_flush(i);
-    }
+    u64 root = read_cr3();
+    page_table* root_vaddr = (page_table*)ID_MAPPED_VADDR(root);
+
+    // All of the memory backing these pages has been allocated in the mmap.
+    // We reclaimed that just now. So we can just zero out the lower half of the
+    // root table thus unmapping any memory witouth memory leaks.
+    memset(root_vaddr, 0, 256 * sizeof(page_table));
+
+    // This will flush the TLB
+    write_cr3(root);
 }
