@@ -78,10 +78,11 @@ inline u64 read_cr2(void) {
 inline u64 read_cr3(void) {
 #if defined(__x86_64__)
     u64 value = 0;
+    asm volatile("movq %%cr3, %0" : "=r"(value));
 #else
     u32 value = 0;
+    asm volatile("movl %%cr3, %0" : "=r"(value));
 #endif
-    asm volatile("mov %%cr3, %0" : "=r"(value));
 
     return value;
 }
@@ -100,13 +101,8 @@ inline void write_cr3(u32 value) {
 #define CR4_PAE (1 << 5)
 
 inline u64 read_cr4(void) {
-#if defined(__x86_64__)
-    u64 value = 0;
-#else
     u32 value = 0;
-#endif
-
-    asm volatile("mov %%cr4, %0" : "=r"(value));
+    asm volatile("movl %%cr4, %0" : "=r"(value));
 
     return value;
 }
@@ -149,4 +145,12 @@ inline void write_msr(u32 msr, u64 value) {
     u32 eax = value & 0xffffffff;
 
     asm volatile("wrmsr" : : "a"(eax), "d"(edx), "c"(msr));
+}
+
+
+inline u64 read_tsc(void) {
+    u32 edx = 0, eax = 0;
+    asm volatile("rdtsc" : "=a"(eax), "=d"(edx));
+
+    return ((u64)edx << 32 | eax);
 }

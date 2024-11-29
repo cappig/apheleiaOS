@@ -84,7 +84,6 @@ typedef struct PACKED {
     };
 } pci_device;
 
-// TODO: add a string table so that we can print nicer messages
 enum pci_class {
     PCI_UNCLASSIFIED = 0x00,
     PCI_MASS_STORAGE = 0x01,

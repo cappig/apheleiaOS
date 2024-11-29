@@ -48,6 +48,7 @@ long long strtoll(char const* restrict str, char** restrict endptr, int base) {
 
     bool has_converted = false;
     bool out_of_range = false;
+
     for (;;) {
         int dig = tolower(*pos++);
 

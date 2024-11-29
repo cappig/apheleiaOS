@@ -4,8 +4,9 @@
 #include <base/types.h>
 #include <data/ring.h>
 
-#include "fs.h"
+#include "arch/panic.h"
 #include "mem/heap.h"
+#include "vfs/fs.h"
 
 
 static isize pipe_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
@@ -44,8 +45,7 @@ vfs_node* pipe_create(char* name, usize size) {
 }
 
 void pipe_destroy(vfs_node* pipe) {
-    if (pipe->type != VFS_CHARDEV)
-        return;
+    assert(pipe->type == VFS_CHARDEV);
 
     ring_buffer_destroy((ring_buffer*)pipe->private);
     kfree(pipe->interface);

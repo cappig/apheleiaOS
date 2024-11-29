@@ -99,7 +99,7 @@ int vsnscanf(const char* restrict str, size_t max, const char* restrict format, 
     size_t filled = 0;
     size_t j = 0;
 
-    for (size_t i = 0; format[i] && i < max; i++) {
+    for (size_t i = 0; format[i] && filled < max; i++) {
         if (format[i] == '%') {
             i++;
 

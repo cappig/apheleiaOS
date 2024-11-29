@@ -6,7 +6,7 @@
 #include <x86/asm.h>
 
 #include "arch/idt.h"
-#include "arch/pic.h"
+#include "arch/irq.h"
 #include "vfs/fs.h"
 
 static ring_buffer* buffer;
@@ -33,12 +33,14 @@ static const u8 us_ascii[2][256] = {
 static void ps2_irq_handler(UNUSED int_state* s) {
     u8 scancode = inb(0x60);
 
-    // FIXME: don't just push raw scancodes. Parse into a more common format
+    // TODO: don't just push raw scancodes. Parse into a more common format
     ring_buffer_push(buffer, scancode);
 
 #ifdef PS2_DEBUG
     log_debug("[PS2 DEBUG] scancode = %#x, ascii = %c", scancode, ps2_to_ascii(scancode));
 #endif
+
+    irq_ack(IRQ_PS2_KEYBOARD);
 }
 
 static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize len) {
@@ -70,8 +72,7 @@ char ps2_to_ascii(u8 scancode) {
 }
 
 void init_ps2_kbd(virtual_fs* vfs) {
-    set_int_handler(IRQ_NUMBER(IRQ_PS2_KEYBOARD), ps2_irq_handler);
-    pic_clear_mask(IRQ_PS2_KEYBOARD);
+    irq_register(IRQ_PS2_KEYBOARD, ps2_irq_handler);
 
     vfs_node* dev = vfs_create_node("kbd", VFS_CHARDEV);
     dev->interface = vfs_create_file_interface(_read, _write);

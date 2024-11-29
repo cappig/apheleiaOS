@@ -19,8 +19,10 @@ CC_BASE += \
 CC_DEBUG := \
 	-DDISK_DEBUG \
 	-DPS2_DEBUG \
+	-DMMU_DEBUG
+
+CC_DEBUG_EXTRA := \
 	-DINT_DEBUG \
-	-DMMU_DEBUG \
 	-DKMALLOC_DEBUG
 
 # scan-build is a nice clang alternative
@@ -44,6 +46,8 @@ endif
 
 ifeq ($(PROFILE), debug)
 	CC_BASE += -Og $(CC_DEBUG)
+else ifeq ($(PROFILE), debug_extra)
+	CC_BASE += -Og $(CC_DEBUG) $(CC_DEBUG_EXTRA)
 else ifeq ($(PROFILE), small)
 	CC_BASE += -Os
 else ifeq ($(PROFILE), normal)

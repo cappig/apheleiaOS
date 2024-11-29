@@ -5,18 +5,16 @@
 #include <x86/regs.h>
 
 #define IRQ_OFFSET 32
+#define ISR_COUNT  256
 
-#define ISR_COUNT 256
+#define IRQ_INT(irq) ((irq) + IRQ_OFFSET)
 
-#define IRQ_COUNT 16
-#define INT_COUNT 32
-
-#define IRQ_NUMBER(irq) ((irq) + INT_COUNT)
-
-#define IS_IRQ(irq) ((irq) >= INT_COUNT && (irq) < IRQ_COUNT + INT_COUNT)
+#define EXCEPTION_COUNT 32
 
 #define IDT_INT 0x8e
 #define IDT_TRP 0xef
+
+#define INT_SPURIOUS 0xff
 
 typedef struct PACKED {
     u16 offset_low;
@@ -35,7 +33,7 @@ typedef struct PACKED {
 
 // https://wiki.osdev.org/Exceptions
 // https://wiki.osdev.org/Interrupts
-typedef enum {
+enum exception_numbers {
     INT_DIVIDE_BY_ZERO = 0x00,
     INT_SINGLE_STEP = 0x01,
     INT_NON_MASKABLE = 0x02,
@@ -62,26 +60,7 @@ typedef enum {
     INT_HYPERVISOR_INJECTION_EXCEPTION = 0x1c,
     INT_VMM_COMMUNICATION_EXCEPTION = 0x1d,
     INT_SECURITY_EXCEPTION = 0x1e,
-} int_numbers;
-
-typedef enum {
-    IRQ_SYSTEM_TIMER = 0x00,
-    IRQ_PS2_KEYBOARD = 0x01,
-    IRQ_CASCADE = 0x02,
-    IRQ_COM2 = 0x03,
-    IRQ_COM1 = 0x04,
-    IRQ_LPT2 = 0x05,
-    IRQ_FLOPPY = 0x06,
-    IRQ_SPURIOUS = 0x07, // ignored
-    IRQ_CMOS_RTC = 0x08,
-    IRQ_OPEN_9 = 0x09,
-    IRQ_OPEN_10 = 0x0a,
-    IRQ_OPEN_11 = 0x0b,
-    IRQ_PS2_MOUSE = 0x0c,
-    IRQ_COPROCESSOR = 0x0d,
-    IRQ_PRIMARY_ATA = 0x0e,
-    IRQ_SECONDARY_ATA = 0x0f,
-} irq_numbers;
+};
 
 // Save the machine state in the order that they are pushed to the stack
 // (values at the top are pushed last)

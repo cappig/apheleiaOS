@@ -16,10 +16,13 @@
 
 #define PIC_EOI 0x20
 
+// Support for the legacy 8259 PIC
+// Used as a fallback in case the APIC isn't available
 
 void pic_init(void);
 
 void pic_end_int(usize irq);
 
+void pic_mask_all(void);
 void pic_set_mask(u8 line);
 void pic_clear_mask(u8 line);

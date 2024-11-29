@@ -51,7 +51,18 @@ typedef struct PACKED {
 typedef struct PACKED {
     u8 type;
     u8 length;
-} madt_header;
+    u8 data[];
+} madt_entry;
+
+enum madt_entry_type {
+    MT_LOC_APIC = 0,
+    MT_IO_APIC = 1,
+    MT_IO_APIC_INT_SRC = 2,
+    MT_IO_APIC_NMINT_SRC = 3,
+    MT_LOC_APIC_NMINT = 4,
+    MT_LOC_APIC_ADDR = 5,
+    MT_LOC_APIC2 = 9,
+};
 
 typedef struct PACKED {
     u64 base_addr;

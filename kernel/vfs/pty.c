@@ -4,7 +4,7 @@
 #include "mem/heap.h"
 #include "vfs/fs.h"
 
-// A pseudo terminal vfs file type. Essentially two ring buffers tat allow for duplex communication
+// A pseudo terminal vfs file type. Essentially two ring buffers that allow for duplex communication
 
 static isize _master_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
     vfs_pty* pty = node->private;

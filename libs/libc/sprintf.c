@@ -279,13 +279,14 @@ static int _get_base(char type) {
 }
 
 
+// FIXME: check index bounds inside the loop!
 int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict format, va_list vlist) {
     if (!buffer)
         return 0;
 
     int printed = 0;
 
-    for (size_t i = 0; format[i] && i < max_size; i++) {
+    for (size_t i = 0; format[i] && (size_t)printed < max_size; i++) {
         if (format[i] != '%') {
             buffer[printed++] = format[i];
             continue;

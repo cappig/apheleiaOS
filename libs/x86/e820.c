@@ -173,7 +173,7 @@ char* mem_map_type_string(e820_type type) {
 }
 
 void dump_map(e820_map* map) {
-    log_debug("Dump of %u entries in e820 memory map:", map->count);
+    log_debug("Dump of %u entries in the e820 memory map:", map->count);
 
     for (usize i = 0; i < map->count; i++) {
         log_debug(

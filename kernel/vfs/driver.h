@@ -37,7 +37,7 @@ typedef struct vfs_driver {
 
 // A vfs_file_system represents an actual file system on a disk. It abstracts
 // away fs specific logic and allows the vfs to provide a uniform API for file access
-// A single vfs_driver might have more that one vfs_file_system, each one
+// A single vfs_driver might have more than one vfs_file_system, each one
 // lives on a separate partition on said drive.
 // A vfs_file_system is responsible for maintaining a subtree, that is a branch
 // of the vfs tree rooted at the fs mount point node

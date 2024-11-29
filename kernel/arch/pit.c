@@ -1,14 +1,14 @@
 #include "arch/pit.h"
 
 #include <base/attributes.h>
+#include <log/log.h>
 #include <x86/asm.h>
 
 #include "arch/idt.h"
-#include "arch/pic.h"
-#include "log/log.h"
+#include "arch/irq.h"
 
 static void irq_sys_timer(UNUSED int_state* s) {
-    log_warn(".clock.");
+    log_warn(".PIT CLOCK.");
 }
 
 static void set_timer_freq(usize hz) {
@@ -20,11 +20,7 @@ static void set_timer_freq(usize hz) {
 }
 
 
-// We use the legacy PIT as a fallback device in case the APIC does't init
-// The PIT can only work correctly in a single core setup
 void pit_init() {
     set_timer_freq(PIT_FREQ);
-
-    set_int_handler(IRQ_NUMBER(IRQ_SYSTEM_TIMER), irq_sys_timer);
-    pic_clear_mask(IRQ_SYSTEM_TIMER);
+    irq_register(IRQ_SYSTEM_TIMER, irq_sys_timer);
 }

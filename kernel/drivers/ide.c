@@ -8,7 +8,7 @@
 #include <x86/asm.h>
 
 #include "arch/idt.h"
-#include "arch/pic.h"
+#include "arch/irq.h"
 #include "drivers/pci.h"
 #include "mem/heap.h"
 #include "vfs/driver.h"
@@ -17,6 +17,8 @@
 
 static void ata_irq_handler(int_state* s) {
     log_warn("ATA irq :: %#lx\n", s->int_num);
+
+    irq_ack(IRQ_PRIMARY_ATA);
 }
 
 // Waste ~400 nanoseconds so that we can give the disk IO a little rest
@@ -362,13 +364,11 @@ bool ide_disk_init(virtual_fs* vfs) {
     // No IDE controller found
     if (!ide_controller_pci) {
         log_error("IDE disk controller not found!");
-        return 1;
+        return false;
     }
 
-    set_int_handler(IRQ_NUMBER(IRQ_PRIMARY_ATA), ata_irq_handler);
-    pic_clear_mask(IRQ_PRIMARY_ATA);
-    set_int_handler(IRQ_NUMBER(IRQ_SECONDARY_ATA), ata_irq_handler);
-    pic_clear_mask(IRQ_SECONDARY_ATA);
+    irq_register(IRQ_PRIMARY_ATA, ata_irq_handler);
+    irq_register(IRQ_SECONDARY_ATA, ata_irq_handler);
 
     vfs_drive_interface* interface = kcalloc(sizeof(vfs_drive_interface));
     interface->read = ide_read_wrapper;
@@ -382,5 +382,5 @@ bool ide_disk_init(virtual_fs* vfs) {
 
     log_info("Found and mounted %lu IDE disks", controller->disks);
 
-    return !(controller->disks > 0);
+    return (controller->disks > 0);
 }

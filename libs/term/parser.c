@@ -96,7 +96,7 @@ static void _handle_sgr_number(terminal* term, usize num) {
 // Increment the index if there are more things left in the stack. If not fail
 #define INCREMENT_OR_FAIL(index, max_index) \
     ({                                      \
-        if (++(index) == (max_index))       \
+        if (++(index) >= (max_index))       \
             return false;                   \
     })
 

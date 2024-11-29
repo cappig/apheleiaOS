@@ -8,7 +8,6 @@
 
 #include "arch/gdt.h"
 #include "arch/panic.h"
-#include "arch/pic.h"
 
 static idt_register idtr;
 
@@ -58,6 +57,15 @@ static void generic_int_handler(int_state* s) {
     log_warn("Unhandled interrupt: [int=%#lx]\n", s->int_num);
 }
 
+static void exception_handler(int_state* s) {
+    disable_interrupts();
+
+    dump_regs(s);
+
+    log_fatal("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
+    panic("Kernel panic: %s", int_strings[s->int_num]);
+}
+
 
 void dump_regs(int_state* s) {
     gen_regs* g = &s->g_regs;
@@ -71,15 +79,6 @@ void dump_regs(int_state* s) {
     log_debug("r13=%#016lx r14=%#016lx r15=%#016lx", g->r13, g->r14, g->r15);
     log_debug("rip=%#016lx rsp=%#016lx flg=%#016lx", r->rip, r->rsp, r->rflags);
     log_debug("cr0=%#016lx cr2=%#016lx cr3=%#016lx", read_cr0(), read_cr2(), read_cr3());
-}
-
-static void exception_handler(int_state* s) {
-    disable_interrupts();
-
-    dump_regs(s);
-
-    log_fatal("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
-    panic("Kernel panic: %s", int_strings[s->int_num]);
 }
 
 void idt_init() {
@@ -99,11 +98,11 @@ void idt_init() {
     idtr.base = (u64)idt_entries;
 
     // Handle the default x86 exceptions
-    for (usize exc = 0; exc < INT_COUNT; exc++)
+    for (usize exc = 0; exc < EXCEPTION_COUNT; exc++)
         set_int_handler(exc, exception_handler);
 
     // Handle all the other possible interrupts
-    for (usize trp = INT_COUNT; trp < ISR_COUNT; trp++)
+    for (usize trp = EXCEPTION_COUNT; trp < ISR_COUNT; trp++)
         set_int_handler(trp, generic_int_handler);
 
     asm volatile("lidt %0" ::"m"(idtr) : "memory");
@@ -111,6 +110,7 @@ void idt_init() {
 
 void set_int_handler(usize int_num, int_handler handler) {
     assert(int_num < ISR_COUNT);
+    assert(handler);
 
     int_handlers[int_num] = handler;
 }
@@ -134,7 +134,4 @@ void isr_handler(int_state* s) {
     assert(s->int_num < ISR_COUNT);
 
     int_handlers[s->int_num](s);
-
-    if (IS_IRQ(s->int_num) && s->int_num != IRQ_SPURIOUS)
-        pic_end_int(s->int_num - IRQ_OFFSET);
 }

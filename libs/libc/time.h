@@ -15,4 +15,6 @@ struct tm {
 };
 
 
+time_t mktime(struct tm* tm);
+
 char* asctime(const struct tm* time);

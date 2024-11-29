@@ -187,7 +187,7 @@ const char* pci_stringify_class(u8 class) {
     if (class == 0xff)
         return pci_class_strings[22];
 
-    return pci_class_strings[20];
+    return pci_class_strings[20]; // return "?"
 }
 
 void dump_pci_devices() {
@@ -197,10 +197,11 @@ void dump_pci_devices() {
         pci_found* dev = device->data;
 
         log_debug(
-            "[ class:%#.2x subclass:%.2x prog_if:%.2x ]",
+            "[ class:%#.2x subclass:%.2x prog_if:%.2x ] %s",
             dev->header.class,
             dev->header.subclass,
-            dev->header.prog_if
+            dev->header.prog_if,
+            pci_stringify_class(dev->header.class)
         );
     }
 }

@@ -6,6 +6,7 @@
 #include <boot/proto.h>
 #include <gfx/state.h>
 #include <log/log.h>
+#include <time.h>
 #include <x86/asm.h>
 #include <x86/e820.h>
 #include <x86/paging.h>
@@ -14,9 +15,11 @@
 #include "arch/cmos.h"
 #include "arch/gdt.h"
 #include "arch/idt.h"
+#include "arch/irq.h"
 #include "arch/panic.h"
 #include "arch/pic.h"
 #include "arch/stacktrace.h"
+#include "arch/tsc.h"
 #include "drivers/acpi.h"
 #include "drivers/console.h"
 #include "drivers/ide.h"
@@ -57,17 +60,24 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     initrd_init(handoff);
 
+    calibrate_tsc();
+
     terminal* tty = tty_init(&handoff->graphics, handoff);
 
     virtual_fs* vfs = vfs_init();
+
+    acpi_init(handoff->rsdp);
+
+    pci_init();
+    dump_pci_devices();
+
+    irq_init();
 
     init_console(vfs, tty);
     init_serial_dev(vfs);
     init_framebuffer(vfs, &handoff->graphics);
     init_zero_devs(vfs);
     init_ps2_kbd(vfs);
-
-    enable_interrupts();
 
     log_info(ALPHA_ASCII);
     log_info(ALPHA_BUILD_DATE);
@@ -80,16 +90,15 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     initrd_close(handoff);
 
     std_time time = get_time();
-    log_info("Time and date at boot is: %s", asctime(&time));
+    u64 secs_now = mktime(&time);
 
-    acpi_init(handoff->rsdp);
-
-    pci_init();
-    dump_pci_devices();
+    log_info("Time and date at boot is: %s [%lu]", asctime(&time), secs_now);
 
     ide_disk_init(vfs);
 
     dump_vfs(vfs);
+
+    enable_interrupts();
 
     halt();
     __builtin_unreachable();
