@@ -5,8 +5,6 @@
 #include <base/types.h>
 #include <x86/asm.h>
 
-#include "vfs/fs.h"
-
 // https://wiki.osdev.org/ATAPI
 // https://wiki.osdev.org/PCI_IDE_Controller
 // https://wiki.osdev.org/ATA/ATAPI_using_DMA
@@ -202,4 +200,4 @@ typedef struct {
 } atapi_cache;
 
 
-bool ide_disk_init(virtual_fs* vfs);
+bool ide_disk_init(void);

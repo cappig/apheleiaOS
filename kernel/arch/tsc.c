@@ -24,7 +24,7 @@ static bool _has_tsc(void) {
 
 // This code is based on the linux implementation in linux/arch/x86/kernel/tsc.c
 // Estimate the core frequency by measuring the tsm delta against the PIT
-// FIXME: is the TSC system critical? should we panic on error?
+// Is the TSC system critical? should we panic on error?
 void calibrate_tsc() {
     if (!_has_tsc())
         panic("CPU doesn't have a TSC");
@@ -34,14 +34,14 @@ void calibrate_tsc() {
 retry:
     // Pulse high and disable the PC speaker
     u8 sp = inb(0x61);
-    sp &= ~0x02;
-    sp |= 0x01;
+    sp &= ~(1 << 1);
+    sp |= (1 << 0);
     outb(0x61, sp);
 
     // Configure the PIT
     outb(PIT_CONTROL, 0xb0);
     outb(PIT_C, CAL_COUNTER & 0xff);
-    outb(PIT_C, CAL_COUNTER >> 8);
+    outb(PIT_C, (CAL_COUNTER >> 8) & 0xff);
 
     u64 begin = read_tsc();
 
@@ -66,8 +66,8 @@ retry:
 
     // disable the PIT?
 
+    log_info("Initialised %lu MHz TSC", tsc_khz / 1000);
     log_debug("Took %zu tries to calibrate the TSC", retry_counter);
-    log_info("Measured the TSC frequency to be %lu MHz", tsc_khz / 1000);
 }
 
 

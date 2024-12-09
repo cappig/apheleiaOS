@@ -33,15 +33,15 @@ enum term_ctrl_codes {
 };
 
 typedef struct {
-    u8 flags;
     rgba_color bg;
     rgba_color fg;
+    u8 flags;
 } term_style;
 
 typedef struct {
     term_style style;
-    u8 ascii;
-} term_char;
+    u32 ch;
+} term_cell;
 
 typedef struct {
     usize x;
@@ -53,33 +53,37 @@ typedef struct {
     u8 state;
 
     u8 stack[TERM_PARSER_STACK_SIZE];
-    usize stack_index;
+    u8 stack_index;
 
     term_style style;
 } term_parser;
 
-typedef void (*term_putc_fn)(term_char ch, usize index);
+typedef struct terminal terminal;
+typedef void (*term_putc_fn)(terminal* term, term_cell* cell, usize index);
 
-typedef struct {
+typedef struct terminal {
     usize width;
     usize height;
 
     term_pos cursor;
 
     rgba_color palette[16];
-    usize default_bg;
-    usize default_fg;
+    u8 default_bg;
+    u8 default_fg;
 
     usize lines;
-    term_char* buffer;
+    term_cell* buffer;
 
     term_parser parser;
 
     term_putc_fn putc_fn;
+
+    // For use in the callback
+    void* private;
 } terminal;
 
 
-void term_draw(terminal* term);
+void term_redraw(terminal* term);
 
 // NOTE: if calling these function externally term_draw() must be called to see the change
 void term_clear(terminal* term, term_pos from, term_pos to);
@@ -87,7 +91,8 @@ void term_clear_screen(terminal* term);
 void term_clear_line(terminal* term, usize y);
 void term_scroll(terminal* term);
 
-terminal* term_init(usize width, usize height, term_putc_fn putc_fn);
-int term_resize(terminal* term, usize new_width, usize new_height);
-
+bool term_parse_char(terminal* term, char ch);
 int term_parse(terminal* term, const char* string, usize max_size);
+
+terminal* term_init(usize width, usize height, term_putc_fn putc_fn, void* private);
+int term_resize(terminal* term, usize new_width, usize new_height);

@@ -184,7 +184,7 @@ static bool ata_probe_device(ide_device* device) {
     return true;
 }
 
-static bool ata_mount_disk(virtual_fs* vfs, vfs_drive_interface* interface, ide_device* disk) {
+static bool ata_mount_disk(vfs_drive_interface* interface, ide_device* disk) {
     if (!disk->exists)
         return false;
 
@@ -208,7 +208,7 @@ static bool ata_mount_disk(virtual_fs* vfs, vfs_drive_interface* interface, ide_
     dev->interface = interface;
     dev->type = disk->is_atapi ? VFS_DRIVER_OPTICAL : VFS_DRIVER_HARD;
 
-    vfs_register(vfs, "/dev", dev);
+    vfs_register("/dev", dev);
 
     return true;
 }
@@ -228,7 +228,7 @@ static void init_controller(pci_device* pci, ide_controller* controller) {
     };
 }
 
-static void ata_probe(virtual_fs* vfs, vfs_drive_interface* interface, ide_controller* controller) {
+static void ata_probe(vfs_drive_interface* interface, ide_controller* controller) {
     // Disable interrupts for now TODO:
     outb(controller->primary.control, ATA_CNT_NO_INT);
     outb(controller->secondary.control, ATA_CNT_NO_INT);
@@ -244,7 +244,7 @@ static void ata_probe(virtual_fs* vfs, vfs_drive_interface* interface, ide_contr
         bool valid = ata_probe_device(device);
 
         if (valid) {
-            ata_mount_disk(vfs, interface, device);
+            ata_mount_disk(interface, device);
             controller->disks++;
         }
     }
@@ -358,7 +358,7 @@ static isize ide_read_wrapper(vfs_driver* dev, void* dest, usize offset, usize b
 }
 
 // TODO: keep a global linked list of detected disks and push these on
-bool ide_disk_init(virtual_fs* vfs) {
+bool ide_disk_init() {
     pci_device* ide_controller_pci = pci_find_device(PCI_MASS_STORAGE, PCI_MS_IDE, NULL);
 
     // No IDE controller found
@@ -378,7 +378,7 @@ bool ide_disk_init(virtual_fs* vfs) {
     init_controller(ide_controller_pci, controller);
     pci_destroy_device(ide_controller_pci);
 
-    ata_probe(vfs, interface, controller);
+    ata_probe(interface, controller);
 
     log_info("Found and mounted %lu IDE disks", controller->disks);
 

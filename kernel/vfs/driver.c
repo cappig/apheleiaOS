@@ -34,7 +34,7 @@ static void _destroy_fs(vfs_file_system* fs, vfs_driver* dev) {
     kfree(fs);
 }
 
-static bool _probe_iso(virtual_fs* vfs, vfs_driver* dev, vfs_file_system* fs) {
+static bool _probe_iso(vfs_driver* dev, vfs_file_system* fs) {
     bool success = iso_init(dev, fs);
 
     if (!success) {
@@ -44,22 +44,22 @@ static bool _probe_iso(virtual_fs* vfs, vfs_driver* dev, vfs_file_system* fs) {
 
     log_info("Detected a valid ISO-9660 file system on drive %s", dev->name);
 
-    vfs_mount(vfs, "/mnt", fs->subtree->root);
+    vfs_mount("/mnt", fs->subtree->root);
     return true;
 }
 
 
-static bool _init_optical(virtual_fs* vfs, vfs_driver* dev) {
+static bool _init_optical(vfs_driver* dev) {
     vfs_file_system* fs = kcalloc(sizeof(vfs_file_system));
 
     fs->partition.name = _get_partition_name(dev->name, 1);
     fs->partition.size = dev->disk_size;
     fs->partition.offset = 0;
 
-    return _probe_iso(vfs, dev, fs);
+    return _probe_iso(dev, fs);
 }
 
-static bool _init_hard(virtual_fs* vfs, vfs_driver* dev) {
+static bool _init_hard(vfs_driver* dev) {
     mbr_table* table = parse_mbr(dev);
 
     if (!table) {
@@ -86,7 +86,7 @@ static bool _init_hard(virtual_fs* vfs, vfs_driver* dev) {
 
         switch (part->type) {
         case MBR_ISO:
-            return _probe_iso(vfs, dev, fs);
+            return _probe_iso(dev, fs);
 
         default:
             _destroy_fs(fs, dev);
@@ -97,13 +97,13 @@ static bool _init_hard(virtual_fs* vfs, vfs_driver* dev) {
     return false;
 }
 
-static bool _probe_fs(virtual_fs* vfs, vfs_driver* dev) {
+static bool _probe_fs(vfs_driver* dev) {
     switch (dev->type) {
     case VFS_DRIVER_HARD:
-        return _init_hard(vfs, dev);
+        return _init_hard(dev);
 
     case VFS_DRIVER_OPTICAL:
-        return _init_optical(vfs, dev);
+        return _init_optical(dev);
 
     default:
         log_error("Disk has unknown driver type!");
@@ -131,13 +131,13 @@ void vfs_destroy_device(vfs_driver* dev) {
 }
 
 // Mount a new device to the tree and probe for a valid file system
-tree_node* vfs_register(virtual_fs* vfs, const char* path, vfs_driver* dev) {
+tree_node* vfs_register(const char* path, vfs_driver* dev) {
     vfs_node* mount_node = vfs_create_node(dev->name, VFS_BLOCKDEV);
-    tree_node* mount_point = vfs_mount(vfs, path, tree_create_node(mount_node));
+    tree_node* mount_point = vfs_mount(path, tree_create_node(mount_node));
 
     log_info("Mounted %s/%s", path, dev->name);
 
-    _probe_fs(vfs, dev);
+    _probe_fs(dev);
 
     return mount_point;
 }

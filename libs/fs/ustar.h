@@ -53,6 +53,6 @@ enum ustart_type {
 
 u32 ustar_to_num(char* str, int size);
 
-void* ustar_find(void* addr, usize size, const char* file);
+ustar_header* ustar_find(void* addr, usize size, const char* file);
 
 isize ustar_read(ustar_header* head, void* buf, usize offset, usize len);

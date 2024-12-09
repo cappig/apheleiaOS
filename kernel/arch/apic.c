@@ -10,6 +10,7 @@
 #include "arch/panic.h"
 #include "arch/tsc.h"
 #include "mem/virtual.h"
+#include "sys/clock.h"
 
 // The APIC uses memory mapped registers and x2apic uses MSRs
 static bool x2_mode = false;
@@ -126,7 +127,7 @@ void init_lapic() {
     u32 begin = (u32)-1;
 
     write_lapic(LAPIC_TIMER_ICOUNT_REG, begin);
-    tsc_spin(APIC_TIMER_MS);
+    tsc_spin(MS_PER_TICK);
 
     u32 end = read_lapic(LAPIC_TIMER_CCOUNT_REG);
     write_lapic(LAPIC_TIMER_ICOUNT_REG, begin - end);

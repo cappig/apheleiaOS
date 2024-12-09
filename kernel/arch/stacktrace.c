@@ -66,7 +66,7 @@ void dump_stack_trace() {
 
     stack_frame* frame = (stack_frame*)rbp;
 
-    log_debug("Dump of stack trace:");
+    log_debug("Stack trace:");
 
     if (!sym_table.len)
         log_warn("No symbol table loaded, trace may be unreliable!");

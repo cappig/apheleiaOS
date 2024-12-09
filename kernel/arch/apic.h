@@ -6,15 +6,12 @@
 #define APIC_BASE_MSR   0x1b
 #define X2APIC_MSR_BASE 0x800
 
-#define APIC_MSR_ADDR_MASK (~0xfff)
+#define APIC_MSR_ADDR_MASK (~0xfffUL)
 
 #define X2APIC_REGISTER_MSR(offset) (((offset) >> 4) + X2APIC_MSR_BASE)
 
 #define LAPIC_LVT_MASK       (1 << 16)
 #define LAPIC_TIMER_PERIODIC (1 << 17)
-
-// How many milis should one tick last
-#define APIC_TIMER_MS 10
 
 // Figure 12-26. IA32_APIC_BASE MSR
 enum apic_base_msr_flags {

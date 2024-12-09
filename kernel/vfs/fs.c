@@ -7,11 +7,16 @@
 #include <log/log.h>
 #include <string.h>
 
+#include "arch/panic.h"
 #include "mem/heap.h"
+
+// Our kernel has one single virtual file system
+virtual_fs* vfs = NULL;
 
 
 virtual_fs* vfs_init() {
-    virtual_fs* vfs = kcalloc(sizeof(virtual_fs));
+    vfs = kcalloc(sizeof(virtual_fs));
+    assert(vfs);
 
     vfs->mounted = list_create();
 
@@ -21,8 +26,8 @@ virtual_fs* vfs_init() {
     vfs_node* dev = vfs_create_node("dev", VFS_DIR);
     vfs_node* mnt = vfs_create_node("mnt", VFS_DIR);
 
-    vfs_mount(vfs, "/", tree_create_node(dev));
-    vfs_mount(vfs, "/", tree_create_node(mnt));
+    vfs_mount("/", tree_create_node(dev));
+    vfs_mount("/", tree_create_node(mnt));
 
     return vfs;
 }
@@ -104,7 +109,7 @@ tree_node* vfs_lookup_tree_from(tree_node* from, const char* path) {
     return node;
 }
 
-tree_node* vfs_lookup_tree(virtual_fs* vfs, const char* path) {
+tree_node* vfs_lookup_tree(const char* path) {
     if (!path || path[0] != '/') {
         errno = EINVAL;
         return NULL;
@@ -113,8 +118,8 @@ tree_node* vfs_lookup_tree(virtual_fs* vfs, const char* path) {
     return vfs_lookup_tree_from(vfs->tree->root, path);
 }
 
-vfs_node* vfs_lookup(virtual_fs* vfs, const char* path) {
-    tree_node* tnode = vfs_lookup_tree(vfs, path);
+vfs_node* vfs_lookup(const char* path) {
+    tree_node* tnode = vfs_lookup_tree(path);
 
     if (tnode)
         return tnode->data;
@@ -123,14 +128,14 @@ vfs_node* vfs_lookup(virtual_fs* vfs, const char* path) {
 }
 
 
-tree_node* vfs_mount(virtual_fs* vfs, const char* path, tree_node* mount_node) {
+tree_node* vfs_mount(const char* path, tree_node* mount_node) {
     vfs_node* node = mount_node->data;
     if (!node->name) {
         errno = EINVAL;
         return NULL;
     }
 
-    tree_node* parent_node = vfs_lookup_tree(vfs, path);
+    tree_node* parent_node = vfs_lookup_tree(path);
     if (!parent_node) {
         errno = ENOENT;
         return NULL;
@@ -164,8 +169,8 @@ static void _recursive_dump(tree_node* parent, usize depth) {
     }
 }
 
-void dump_vfs(virtual_fs* vfs) {
-    log_debug("Recursive dump of viral file system:");
+void dump_vfs() {
+    log_debug("Recursive dump of the virtual file system:");
 
     _recursive_dump(vfs->tree->root, 0);
 }

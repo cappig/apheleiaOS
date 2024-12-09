@@ -2,6 +2,7 @@
 *.d
 *.elf
 *.iso
+*.map
 
 bin/
 

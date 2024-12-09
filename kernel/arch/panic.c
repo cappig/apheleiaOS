@@ -5,6 +5,7 @@
 #include <log/log.h>
 
 #include "arch/stacktrace.h"
+#include "sys/console.h"
 
 
 NORETURN void panic_unwind() {
@@ -13,7 +14,9 @@ NORETURN void panic_unwind() {
     // TODO: save and dump state
     dump_stack_trace();
 
-    log_fatal("Kernel panic: halting execution");
+    log_fatal("Kernel panic - halting execution!");
+
+    console_dump_buffer();
 
     halt();
     __builtin_unreachable();

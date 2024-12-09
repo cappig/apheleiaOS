@@ -8,6 +8,7 @@
 
 #include "arch/gdt.h"
 #include "arch/panic.h"
+#include "sched/scheduler.h"
 
 static idt_register idtr;
 
@@ -133,5 +134,11 @@ void isr_handler(int_state* s) {
 
     assert(s->int_num < ISR_COUNT);
 
+    if (sched_instance.running)
+        scheduler_save(s);
+
     int_handlers[s->int_num](s);
+
+    if (sched_instance.running)
+        scheduler_switch();
 }

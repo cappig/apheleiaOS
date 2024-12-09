@@ -13,6 +13,8 @@
 #include "drivers/acpi.h"
 #include "mem/heap.h"
 #include "mem/virtual.h"
+#include "sched/scheduler.h"
+#include "sys/clock.h"
 
 static bool has_apic = false;
 static linked_list* ioapics = NULL;
@@ -20,6 +22,13 @@ static linked_list* ioapics = NULL;
 
 static void spurious_handler(UNUSED int_state* s) {
     log_warn("Received spurious interrupt!");
+}
+
+static void timer_handler(UNUSED int_state* s) {
+    tick_clock();
+    scheduler_tick();
+
+    irq_ack(IRQ_SYSTEM_TIMER);
 }
 
 
@@ -36,8 +45,7 @@ static ioapic* _get_authoritative_apic(usize irq) {
 
 static void _init_legacy(void) {
     has_apic = false;
-
-    // pit_init();
+    pit_init();
 }
 
 static bool _init_advanced(void) {
@@ -136,4 +144,13 @@ void irq_ack(usize irq) {
 #ifdef INT_DEBUG
     log_debug("[INT_DEBUG] Sent EOI for IRQ %#zx", irq);
 #endif
+}
+
+
+// Start generating timer ticks
+void timer_enable() {
+    irq_register(IRQ_SYSTEM_TIMER, timer_handler);
+
+    if (has_apic)
+        lapic_enable_timer();
 }

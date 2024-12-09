@@ -16,15 +16,15 @@ static u8 _get_vga_color(rgba_color color) {
 }
 
 
-u16 term_char_to_vga(term_char ch) {
-    u8 bg = _get_vga_color(ch.style.bg);
-    u8 fg = _get_vga_color(ch.style.fg);
+u16 term_cell_to_vga(term_cell* cell) {
+    u8 bg = _get_vga_color(cell->style.bg);
+    u8 fg = _get_vga_color(cell->style.fg);
 
-    if (ch.style.flags & TERM_FLAG_BOLD)
+    if (cell->style.flags & TERM_FLAG_BOLD)
         if (fg < 8)
             fg += 8;
 
-    if (ch.style.flags & TERM_FLAG_FAINT)
+    if (cell->style.flags & TERM_FLAG_FAINT)
         if (fg >= 8)
             fg -= 8;
 

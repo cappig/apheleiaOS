@@ -57,3 +57,6 @@ typedef struct {
 
     usize glyph_size;
 } psf_font;
+
+
+bool psf_parse(void* bin, psf_font* font);

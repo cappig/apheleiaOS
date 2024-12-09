@@ -61,6 +61,8 @@ typedef struct {
     tree* tree;
 } virtual_fs;
 
+extern virtual_fs* vfs;
+
 
 virtual_fs* vfs_init(void);
 
@@ -70,10 +72,10 @@ void vfs_destroy_node(vfs_node* node);
 vfs_node_interface* vfs_create_file_interface(vfs_read_fn read, vfs_write_fn write);
 void vfs_destroy_interface(vfs_node_interface* interface);
 
-tree_node* vfs_mount(virtual_fs* vfs, const char* path, tree_node* mount_node);
+tree_node* vfs_mount(const char* path, tree_node* mount_node);
 
 tree_node* vfs_lookup_tree_from(tree_node* from, const char* path);
-tree_node* vfs_lookup_tree(virtual_fs* vfs, const char* path);
-vfs_node* vfs_lookup(virtual_fs* vfs, const char* path);
+tree_node* vfs_lookup_tree(const char* path);
+vfs_node* vfs_lookup(const char* path);
 
-void dump_vfs(virtual_fs* vfs);
+void dump_vfs(void);

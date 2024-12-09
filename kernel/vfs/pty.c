@@ -7,7 +7,7 @@
 // A pseudo terminal vfs file type. Essentially two ring buffers that allow for duplex communication
 
 static isize _master_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
-    vfs_pty* pty = node->private;
+    pseudo_tty* pty = node->private;
     if (!pty || !buf)
         return -1;
 
@@ -15,7 +15,7 @@ static isize _master_read(vfs_node* node, void* buf, UNUSED usize offset, usize 
 }
 
 static isize _master_write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
-    vfs_pty* pty = node->private;
+    pseudo_tty* pty = node->private;
     if (!pty || !buf)
         return -1;
 
@@ -28,7 +28,7 @@ static isize _master_write(vfs_node* node, void* buf, UNUSED usize offset, usize
 }
 
 static isize _slave_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
-    vfs_pty* pty = node->private;
+    pseudo_tty* pty = node->private;
     if (!pty || !buf)
         return -1;
 
@@ -36,7 +36,7 @@ static isize _slave_read(vfs_node* node, void* buf, UNUSED usize offset, usize l
 }
 
 static isize _slave_write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
-    vfs_pty* pty = node->private;
+    pseudo_tty* pty = node->private;
     if (!pty || !buf)
         return -1;
 
@@ -49,8 +49,8 @@ static isize _slave_write(vfs_node* node, void* buf, UNUSED usize offset, usize 
 }
 
 
-vfs_pty* pty_create(usize buffer_size) {
-    vfs_pty* ret = kcalloc(sizeof(vfs_pty));
+pseudo_tty* pty_create(usize buffer_size) {
+    pseudo_tty* ret = kcalloc(sizeof(pseudo_tty));
 
     ret->input_buffer = ring_buffer_create(buffer_size);
     ret->output_buffer = ring_buffer_create(buffer_size);
@@ -67,7 +67,7 @@ vfs_pty* pty_create(usize buffer_size) {
     return ret;
 }
 
-void pty_destroy(vfs_pty* pty) {
+void pty_destroy(pseudo_tty* pty) {
     vfs_destroy_node(pty->master);
     vfs_destroy_node(pty->slave);
 

@@ -20,7 +20,7 @@ u32 ustar_to_num(char* str, int size) {
 
 
 // Assuming that the file is loaded in contiguous ram
-void* ustar_find(void* addr, usize size, const char* file) {
+ustar_header* ustar_find(void* addr, usize size, const char* file) {
     ustar_header* head = addr;
     u8* ptr = addr;
 
@@ -32,7 +32,7 @@ void* ustar_find(void* addr, usize size, const char* file) {
             return NULL;
 
         if (!strcmp(head->name, file))
-            return ptr + 512;
+            return head;
 
         usize file_size = ustar_to_num(head->size, 11);
 

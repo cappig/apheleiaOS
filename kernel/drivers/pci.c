@@ -11,7 +11,7 @@
 #include "mem/heap.h"
 #include "mem/virtual.h"
 
-// A list of PCI devices discovered during boot
+static bool is_express = false;
 static linked_list* devices;
 
 
@@ -106,6 +106,8 @@ static void init_legacy() {
 }
 
 static void init_express(mcfg* table) {
+    is_express = true;
+
     usize table_len = table->header.length - sizeof(sdt_header) - sizeof(u64);
     usize len = table_len / sizeof(mcfg_entry);
 
@@ -140,7 +142,8 @@ usize pci_init() {
     else
         init_legacy();
 
-    log_info("Detected %zd devices on %s bus", devices->length, table ? "PCIE" : "PCI");
+
+    log_info("Detected %zd devices on the %s bus", devices->length, is_express ? "PCIE" : "PCI");
 
     return devices->length;
 }
@@ -191,14 +194,13 @@ const char* pci_stringify_class(u8 class) {
 }
 
 void dump_pci_devices() {
-    log_debug("Dump of detected PCI devices:");
+    log_debug("Dump of detected %s devices:", is_express ? "PCIE" : "PCI");
 
     foreach (device, devices) {
         pci_found* dev = device->data;
 
         log_debug(
-            "[ class:%#.2x subclass:%.2x prog_if:%.2x ] %s",
-            dev->header.class,
+            "[ subclass: %.2x prog_if: %.2x ] %s",
             dev->header.subclass,
             dev->header.prog_if,
             pci_stringify_class(dev->header.class)

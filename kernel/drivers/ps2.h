@@ -3,8 +3,6 @@
 #include <base/types.h>
 #include <data/ring.h>
 
-#include "vfs/fs.h"
-
 #define PS2_RELEASE_OFFSET 0x80
 #define PS2_RELEASED(key)  (key + PS2_RELEASE_OFFSET)
 
@@ -38,6 +36,6 @@ enum kbd_non_ascii_keys {
 };
 
 
-void init_ps2_kbd(virtual_fs* vfs);
+void init_ps2_kbd(void);
 
 char ps2_to_ascii(u8 scancode);

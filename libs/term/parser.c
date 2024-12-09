@@ -211,9 +211,10 @@ static bool _handle_csi(terminal* term, char ch) {
     case 'J': // Erase screen
         _csi_erase_screen(term);
         return true;
-    }
 
-    return false;
+    default:
+        return false;
+    }
 }
 
 
@@ -221,10 +222,9 @@ static bool _handle_csi(terminal* term, char ch) {
 #define STATE_CSI 1
 #define STATE_END 2
 
-char parse_ansi_char(terminal* term, const char* ch_ptr) {
+char parse_ansi_char(terminal* term, const char ch) {
     term_parser* parser = &term->parser;
 
-    char ch = *ch_ptr;
     char ret = '\0';
 
     switch (parser->state) {

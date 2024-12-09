@@ -4,11 +4,11 @@
 
 #include "fs.h"
 
-typedef struct vfs_pty vfs_pty;
+typedef struct pseudo_tty pseudo_tty;
 
-typedef void (*vfs_hook_fn)(vfs_pty* term, void* buf, usize len);
+typedef void (*vfs_hook_fn)(pseudo_tty* term, void* buf, usize len);
 
-typedef struct vfs_pty {
+typedef struct pseudo_tty {
     // write to input, read from output
     vfs_node* master;
 
@@ -23,9 +23,9 @@ typedef struct vfs_pty {
     vfs_hook_fn in_hook; // There is new data in the input_buffer, the slave can read
 
     void* private;
-} vfs_pty;
+} pseudo_tty;
 
 
-vfs_pty* pty_create(usize buffer_size);
+pseudo_tty* pty_create(usize buffer_size);
 
-void pty_destroy(vfs_pty* pty);
+void pty_destroy(pseudo_tty* pty);

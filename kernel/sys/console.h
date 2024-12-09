@@ -4,15 +4,14 @@
 #include <data/ring.h>
 #include <term/term.h>
 
-#include "vfs/fs.h"
-
 #define KPRINTF_BUF_SIZE 256
+#define CONSOLE_BUF_SIZE 8192
 
 
-void init_console(virtual_fs* vfs, terminal* term);
-
-void console_set_write(term_putc_fn write_fn);
+void conosle_init_buffer(void);
 void console_set_serial(usize port);
+
+void console_dump_buffer(void);
 
 void kputs(const char* str);
 void kputsn(const char* str, usize len);

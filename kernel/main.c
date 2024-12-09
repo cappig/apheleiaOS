@@ -6,13 +6,11 @@
 #include <boot/proto.h>
 #include <gfx/state.h>
 #include <log/log.h>
-#include <time.h>
 #include <x86/asm.h>
 #include <x86/e820.h>
 #include <x86/paging.h>
 #include <x86/serial.h>
 
-#include "arch/cmos.h"
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "arch/irq.h"
@@ -21,7 +19,6 @@
 #include "arch/stacktrace.h"
 #include "arch/tsc.h"
 #include "drivers/acpi.h"
-#include "drivers/console.h"
 #include "drivers/ide.h"
 #include "drivers/initrd.h"
 #include "drivers/pci.h"
@@ -31,12 +28,14 @@
 #include "drivers/zero.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
+#include "sched/scheduler.h"
+#include "sys/clock.h"
+#include "sys/console.h"
+#include "sys/tty.h"
 #include "vfs/fs.h"
-#include "video/tty.h"
 
 
 NORETURN void _kern_entry(boot_handoff* handoff) {
-    console_set_serial(SERIAL_COM1);
     log_init(&kputs);
 
     if (handoff->magic != BOOT_MAGIC)
@@ -50,55 +49,61 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     tss_init(handoff->stack_top);
 
     reclaim_boot_map(&handoff->mmap);
-
     pmm_init(&handoff->mmap);
 
     heap_init();
     galloc_init();
 
+    conosle_init_buffer();
+
+    log_info(ALPHA_ASCII);
+    log_info(BUILD_DATE);
+
+    log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
+
+    dump_gfx_info(&handoff->graphics);
+
     load_symbols(handoff);
 
     initrd_init(handoff);
 
-    calibrate_tsc();
+    init_framebuffer(&handoff->graphics);
 
-    terminal* tty = tty_init(&handoff->graphics, handoff);
+    vfs_init();
 
-    virtual_fs* vfs = vfs_init();
+    tty_init(&handoff->graphics, handoff);
+    tty_spawn_devs();
+
+    clock_init();
+
+    dump_map(&handoff->mmap);
 
     acpi_init(handoff->rsdp);
+    dump_acpi_tables();
 
     pci_init();
     dump_pci_devices();
 
+    calibrate_tsc();
+
     irq_init();
+    scheduler_init();
 
-    init_console(vfs, tty);
-    init_serial_dev(vfs);
-    init_framebuffer(vfs, &handoff->graphics);
-    init_zero_devs(vfs);
-    init_ps2_kbd(vfs);
+    init_serial_dev();
+    init_framebuffer_dev();
+    init_zero_devs();
+    init_ps2_kbd();
 
-    log_info(ALPHA_ASCII);
-    log_info(ALPHA_BUILD_DATE);
+    ide_disk_init();
 
-    dump_gfx_info(&handoff->graphics);
-
-    dump_map(&handoff->mmap);
-    log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
+    // dump_vfs();
 
     initrd_close(handoff);
 
-    std_time time = get_time();
-    u64 secs_now = mktime(&time);
-
-    log_info("Time and date at boot is: %s [%lu]", asctime(&time), secs_now);
-
-    ide_disk_init(vfs);
-
-    dump_vfs(vfs);
-
+    timer_enable();
     enable_interrupts();
+
+    scheduler_start();
 
     halt();
     __builtin_unreachable();

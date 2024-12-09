@@ -23,7 +23,8 @@ CC_DEBUG := \
 
 CC_DEBUG_EXTRA := \
 	-DINT_DEBUG \
-	-DKMALLOC_DEBUG
+	-DKMALLOC_DEBUG \
+	-DSCHED_DEBUG
 
 # scan-build is a nice clang alternative
 GCC_ANALYZER ?= true

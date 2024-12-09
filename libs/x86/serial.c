@@ -2,7 +2,6 @@
 
 #include "asm.h"
 
-
 bool init_serial(usize port, u32 baud) {
     outb(port + 1, 0x00);
     outb(port + 3, 0x80);
@@ -15,10 +14,10 @@ bool init_serial(usize port, u32 baud) {
     outb(port + 2, 0xc7);
     outb(port + 4, 0x0b);
 
+    // Check if serial is faulty
     outb(port + 4, 0x1e);
     outb(port + 0, 0xae);
 
-    // Check if serial is faulty
     if (inb(port + 0) != 0xae)
         return false;
 

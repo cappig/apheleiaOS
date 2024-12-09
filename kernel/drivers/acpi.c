@@ -8,6 +8,7 @@
 
 #include "mem/heap.h"
 
+static bool is_xsdt = false;
 static linked_list* tables;
 
 
@@ -32,25 +33,23 @@ static void _append_table(sdt_header* header) {
 static void parse_rsdp(rsdt* rsdt_ptr) {
     usize entries = (rsdt_ptr->header.length - sizeof(sdt_header)) / 4;
 
-    log_debug("Dump of RSDT tables:");
     for (usize i = 0; i < entries; i++) {
         sdt_header* header = (sdt_header*)(uptr)ID_MAPPED_VADDR(rsdt_ptr->table_ptrs[i]);
 
         if (!_validate_header(header)) {
-            log_error("RSDP has invalid entry at index %zd", i);
+            log_warn("RSDP has invalid entry at index %zd", i);
             continue;
         }
 
         _append_table(header);
-
-        log_debug("[ id: %.4s oem: %.6s ]", header->signature, header->oem_id);
     }
 }
 
 static void parse_xsdp(xsdt* xsdt_ptr) {
+    is_xsdt = true;
+
     usize entries = (xsdt_ptr->header.length - sizeof(sdt_header)) / 8;
 
-    log_debug("Dump of XSDT tables:");
     for (usize i = 0; i < entries; i++) {
         sdt_header* header = (sdt_header*)ID_MAPPED_VADDR(xsdt_ptr->table_ptrs[i]);
 
@@ -60,8 +59,6 @@ static void parse_xsdp(xsdt* xsdt_ptr) {
         }
 
         _append_table(header);
-
-        log_debug("[ id: %.4s oem: %.6s ]", header->signature, header->oem_id);
     }
 }
 
@@ -79,6 +76,8 @@ void acpi_init(u64 ptr) {
         parse_xsdp((xsdt*)(uptr)ID_MAPPED_VADDR(table->xsdt_addr));
     else
         parse_rsdp((rsdt*)(uptr)ID_MAPPED_VADDR(table->rsdt_addr));
+
+    log_info("Loaded %zd %s tables", tables->length, is_xsdt ? "XSDP" : "RSDP");
 }
 
 
@@ -91,4 +90,15 @@ sdt_header* acpi_find_table(char id[4]) {
     }
 
     return NULL;
+}
+
+
+void dump_acpi_tables() {
+    log_debug("Dump of %s tables:", is_xsdt ? "XSDP" : "RSDP");
+
+    foreach (node, tables) {
+        sdt_header* header = (sdt_header*)node->data;
+
+        log_debug("[ id: %.4s oem: %.6s ]", header->signature, header->oem_id);
+    }
 }

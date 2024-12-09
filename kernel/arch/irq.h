@@ -28,3 +28,5 @@ bool irq_init(void);
 
 void irq_register(usize irq, int_handler handler);
 void irq_ack(usize irq);
+
+void timer_enable(void);

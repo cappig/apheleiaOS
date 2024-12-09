@@ -37,7 +37,12 @@ static void ps2_irq_handler(UNUSED int_state* s) {
     ring_buffer_push(buffer, scancode);
 
 #ifdef PS2_DEBUG
-    log_debug("[PS2 DEBUG] scancode = %#x, ascii = %c", scancode, ps2_to_ascii(scancode));
+    char ascii = ps2_to_ascii(scancode);
+
+    if (ascii)
+        log_debug("[PS2 DEBUG] scancode = %#x, ascii = %c", scancode, ascii);
+    else
+        log_debug("[PS2 DEBUG] scancode = %#x", scancode);
 #endif
 
     irq_ack(IRQ_PS2_KEYBOARD);
@@ -71,7 +76,7 @@ char ps2_to_ascii(u8 scancode) {
     return shift_down ? us_ascii[1][scancode] : us_ascii[0][scancode];
 }
 
-void init_ps2_kbd(virtual_fs* vfs) {
+void init_ps2_kbd() {
     irq_register(IRQ_PS2_KEYBOARD, ps2_irq_handler);
 
     vfs_node* dev = vfs_create_node("kbd", VFS_CHARDEV);
@@ -79,5 +84,5 @@ void init_ps2_kbd(virtual_fs* vfs) {
 
     buffer = ring_buffer_create(PS2_DEV_BUFFER_SIZE);
 
-    vfs_mount(vfs, "/dev", tree_create_node(dev));
+    vfs_mount("/dev", tree_create_node(dev));
 }
