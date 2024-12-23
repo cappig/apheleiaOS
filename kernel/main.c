@@ -31,6 +31,7 @@
 #include "sched/scheduler.h"
 #include "sys/clock.h"
 #include "sys/console.h"
+#include "sys/keyboard.h"
 #include "sys/tty.h"
 #include "vfs/fs.h"
 
@@ -89,6 +90,8 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     irq_init();
     scheduler_init();
 
+    keyboard_init();
+
     init_serial_dev();
     init_framebuffer_dev();
     init_zero_devs();
@@ -103,7 +106,7 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     timer_enable();
     enable_interrupts();
 
-    scheduler_start();
+    // scheduler_start();
 
     halt();
     __builtin_unreachable();

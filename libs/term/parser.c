@@ -53,24 +53,24 @@ static void _handle_flags(terminal* term, usize num) {
     switch (num) {
     // Set flags
     case 1:
-        style->flags |= TERM_FLAG_BOLD;
+        style->flags |= TERM_CHAR_BOLD;
         break;
     case 2:
-        style->flags |= TERM_FLAG_FAINT;
+        style->flags |= TERM_CHAR_FAINT;
         break;
     case 3:
-        style->flags |= TERM_FLAG_ITALIC;
+        style->flags |= TERM_CHAR_ITALIC;
         break;
 
     // Unset flags
     case 21:
-        style->flags &= ~(TERM_FLAG_BOLD);
+        style->flags &= ~(TERM_CHAR_BOLD);
         break;
     case 22:
-        style->flags &= ~(TERM_FLAG_FAINT);
+        style->flags &= ~(TERM_CHAR_FAINT);
         break;
     case 23:
-        style->flags &= ~(TERM_FLAG_ITALIC);
+        style->flags &= ~(TERM_CHAR_ITALIC);
         break;
     }
 }

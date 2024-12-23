@@ -11,19 +11,10 @@
 #include "parser.h"
 
 
-void term_redraw(terminal* term) {
-    if (!term->putc_fn)
-        return;
-
-    for (usize i = 0; i < term->width * term->height; i++) {
-        term_cell* cell = &term->buffer[i];
-
-        term->putc_fn(term, cell, i);
-    }
-}
-
-static void _term_buffer_place(terminal* term, const u32 ch) {
+static void _term_buffer_place(terminal* term, u32 ch) {
     usize index = term->cursor.x + term->cursor.y * term->width;
+
+    ch = clamp(ch, 0, 0xff);
 
     term_cell cell = {term->parser.style, ch};
 
@@ -49,7 +40,14 @@ static void _term_putc(terminal* term, const u32 ch) {
         break;
 
     case '\b':
-        term->cursor.x--;
+        if (term->cursor.x > 0) {
+            term->cursor.x--;
+            _term_buffer_place(term, ' ');
+        }
+        break;
+
+    case 127:
+        // delete
         break;
 
     case '\v':
@@ -62,7 +60,7 @@ static void _term_putc(terminal* term, const u32 ch) {
         break;
     }
 
-    // Wrap line, TODO: add ability to disable wrapping
+    // Wrap lines
     if (term->cursor.x >= term->width) {
         term->cursor.y++;
         term->cursor.x = 0;
@@ -73,6 +71,17 @@ static void _term_putc(terminal* term, const u32 ch) {
         term_scroll(term);
 }
 
+
+void term_redraw(terminal* term) {
+    if (!term->putc_fn)
+        return;
+
+    for (usize i = 0; i < term->width * term->height; i++) {
+        term_cell* cell = &term->buffer[i];
+
+        term->putc_fn(term, cell, i);
+    }
+}
 
 void term_clear(terminal* term, term_pos from, term_pos to) {
     usize from_index = from.x + term->width * from.y;
@@ -191,6 +200,33 @@ int term_resize(terminal* term, usize new_width, usize new_height) {
 }
 
 
+void term_reset_style(terminal* term) {
+    if (!term)
+        return;
+
+    term->default_bg = TERM_DEFAULT_BG;
+    term->default_fg = TERM_DEFAULT_FG;
+
+    term->parser.style = DEFAULT_STYLE;
+}
+
+void term_reset(terminal* term) {
+    if (!term)
+        return;
+
+    // reset the parsers internal state
+    memset(&term->parser, 0, sizeof(term_parser));
+
+    term_reset_style(term);
+    term_set_palette(term, default_ansi_colors);
+
+    term_clear_screen(term);
+
+    term->cursor.x = 0;
+    term->cursor.y = 0;
+}
+
+
 bool term_parse_char(terminal* term, char ch) {
     char print = parse_ansi_char(term, ch);
 
@@ -203,10 +239,15 @@ bool term_parse_char(terminal* term, char ch) {
 }
 
 int term_parse(terminal* term, const char* string, usize max_size) {
+    if (!string)
+        return 0;
+
     usize printed = 0;
 
-    for (usize i = 0; string[i] && i < max_size; i++)
-        printed += term_parse_char(term, string[i]);
+    for (usize i = 0; string[i] && i < max_size; i++) {
+        u8 ch = string[i];
+        printed += term_parse_char(term, ch);
+    }
 
     return printed;
 }

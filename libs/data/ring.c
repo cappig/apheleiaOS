@@ -7,14 +7,27 @@
 ring_buffer* ring_buffer_create(usize size) {
     ring_buffer* ret = gcalloc(sizeof(ring_buffer));
 
+    if (!ret)
+        return NULL;
+
     ret->size = size;
-    ret->buffer = gcalloc(size);
+    ret->buffer = gmalloc(size);
+
+    if (!ret->buffer) {
+        gfree(ret);
+        return NULL;
+    }
 
     return ret;
 }
 
 void ring_buffer_destroy(ring_buffer* ring) {
-    gfree(ring->buffer);
+    if (!ring)
+        return;
+
+    if (ring->buffer)
+        gfree(ring->buffer);
+
     gfree(ring);
 }
 
@@ -47,15 +60,18 @@ void ring_buffer_push_array(ring_buffer* ring, u8* data, usize len) {
         ring_buffer_push(ring, data[i]);
 }
 
+
 bool ring_buffer_pop(ring_buffer* ring, u8* ret) {
     if (ring_buffer_is_empty(ring))
-        return 0;
+        return false;
 
-    *ret = ring->buffer[ring->tail_index];
+    if (ret)
+        *ret = ring->buffer[ring->tail_index];
+
     ring->tail_index += 1;
     ring->tail_index &= ring->size - 1;
 
-    return 1;
+    return true;
 }
 
 usize ring_buffer_pop_array(ring_buffer* ring, u8* ret, usize len) {
@@ -64,9 +80,12 @@ usize ring_buffer_pop_array(ring_buffer* ring, u8* ret, usize len) {
 
     u8* pos = ret;
     usize i = 0;
+
     while ((i < len) && ring_buffer_pop(ring, pos)) {
         i++;
-        pos++;
+
+        if (pos)
+            pos++;
     }
 
     return i;

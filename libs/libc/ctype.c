@@ -9,7 +9,10 @@ int isalnum(int c) {
 }
 
 int isalpha(int c) {
-    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))
+    if (c >= 'a' && c <= 'z')
+        return 1;
+
+    if (c >= 'A' && c <= 'Z')
         return 1;
 
     return 0;
@@ -23,16 +26,10 @@ int isblank(int c) {
 }
 
 int iscntrl(int c) {
-    if (c >= 0x21 && c <= 0x2f)
+    if (c == 0x7f)
         return 1;
 
-    if (c >= 0x3a && c <= 0x40)
-        return 1;
-
-    if (c >= 0x5b && c <= 0x60)
-        return 1;
-
-    if (c >= 0x7b && c <= 0x7e)
+    if (c >= 0x00 && c <= 0x1f)
         return 1;
 
     return 0;
@@ -76,6 +73,7 @@ int ispunct(int c) {
 int isspace(int c) {
     if (c == ' ')
         return 1;
+
     if (c >= 0x9 && c <= 0xd)
         return 1;
 
@@ -92,8 +90,10 @@ int isupper(int c) {
 int isxdigit(int c) {
     if (isdigit(c))
         return 1;
+
     if (c >= 'a' && c <= 'f')
         return 1;
+
     if (c >= 'A' && c <= 'F')
         return 1;
 

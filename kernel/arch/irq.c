@@ -154,3 +154,10 @@ void timer_enable() {
     if (has_apic)
         lapic_enable_timer();
 }
+
+void timer_disable() {
+    if (has_apic)
+        lapic_disable_timer();
+    else
+        pic_set_mask(IRQ_SYSTEM_TIMER);
+}

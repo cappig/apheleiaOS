@@ -26,7 +26,7 @@ void heap_init() {
     usize heap_pages = min(KERNEL_HEAP_PAGES, free_pages);
     usize heap_size = heap_pages * PAGE_4KIB;
 
-    void* heap_start = (void*)ID_MAPPED_VADDR(alloc_frames(min(KERNEL_HEAP_PAGES, free_pages)));
+    void* heap_start = (void*)ID_MAPPED_VADDR(alloc_frames(heap_pages));
 
     if (!bitmap_alloc_init(&heap, heap_start, heap_size, KERNEL_HEAP_BLOCK))
         panic("Failed to initialize kernel heap!");

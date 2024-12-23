@@ -3,6 +3,7 @@
 #include <base/addr.h>
 #include <boot/proto.h>
 #include <fs/ustar.h>
+#include <stddef.h>
 
 #include "arch/panic.h"
 
@@ -10,8 +11,12 @@ static void* initrd_vaddr;
 static usize initrd_size;
 
 
-void* initd_find(const char* name) {
-    return ustar_find(initrd_vaddr, initrd_size, name);
+void* initrd_find(const char* name) {
+    void* header = ustar_find(initrd_vaddr, initrd_size, name);
+    if (!header)
+        return NULL;
+
+    return header + USTAR_BLOCK_SIZE;
 }
 
 void initrd_init(boot_handoff* handoff) {

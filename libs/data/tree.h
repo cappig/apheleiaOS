@@ -8,10 +8,10 @@
 // This is _the worst_ way to implement this
 // TODO: we should use a c++ style vector instead
 typedef struct tree_node {
+    struct tree_node* parent;
     void* data;
 
-    struct tree_node* parent;
-    struct linked_list* children;
+    linked_list* children;
 } tree_node;
 
 typedef struct tree {
@@ -22,16 +22,16 @@ typedef struct tree {
 
 // Simple binary tree
 typedef struct bin_tree_node {
+    struct bin_tree_node* parent;
+
     void* data;
 
-    struct bin_tree_node* parent;
     struct bin_tree_node* left;
     struct bin_tree_node* right;
 } bin_tree_node;
 
 typedef struct bin_tree {
     size_t nodes;
-
     bin_tree_node* root;
 } bin_tree;
 
@@ -41,11 +41,10 @@ typedef struct bin_tree {
 #define RBT_BLACK ('B')
 
 typedef struct rb_tree_node {
-    void* data;
+    struct rb_tree_node* parent;
 
     char color;
-
-    struct rb_tree_node* parent;
+    void* data;
 
     struct rb_tree_node* left;
     struct rb_tree_node* right;
@@ -53,7 +52,6 @@ typedef struct rb_tree_node {
 
 typedef struct rb_tree {
     size_t nodes;
-
     rb_tree_node* root;
 } rb_tree;
 
@@ -67,3 +65,9 @@ void tree_destroy_node(tree_node* node);
 void tree_prune(tree_node* parent);
 
 void tree_insert_child(tree_node* parent, tree_node* child);
+
+
+typedef bool (*tree_comp_fn)(const void* data, const void* private);
+
+tree_node* tree_find_comp(tree* root, tree_comp_fn comp, void* private);
+tree_node* tree_find(tree* root, void* data);

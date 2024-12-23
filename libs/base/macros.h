@@ -5,6 +5,8 @@
 #define GiB (MiB * 1024)
 #define TiB (GiB * 1024)
 
+#define atomic _Atomic
+
 
 #define DIV_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
 

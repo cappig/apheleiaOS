@@ -35,7 +35,10 @@ void list_destroy_node(list_node* node) {
     gfree(node);
 }
 
-void list_append(linked_list* list, list_node* node) {
+bool list_append(linked_list* list, list_node* node) {
+    if (!node || !list)
+        return false;
+
     node->next = NULL;
 
     if (!list->length) {
@@ -49,9 +52,14 @@ void list_append(linked_list* list, list_node* node) {
     }
 
     list->length++;
+
+    return true;
 }
 
-void list_remove(linked_list* list, list_node* node) {
+bool list_remove(linked_list* list, list_node* node) {
+    if (!node || !list)
+        return false;
+
     if (node == list->head)
         list->head = node->next;
     if (node == list->tail)
@@ -66,9 +74,14 @@ void list_remove(linked_list* list, list_node* node) {
     node->next = NULL;
 
     list->length--;
+
+    return true;
 }
 
-void list_swap(list_node* left, list_node* right) {
+bool list_swap(list_node* left, list_node* right) {
+    if (!left || !right)
+        return false;
+
     if (left->prev)
         left->prev->next = right;
     if (right->prev)
@@ -81,9 +94,14 @@ void list_swap(list_node* left, list_node* right) {
 
     memswap(&left->prev, &right->prev, sizeof(list_node*));
     memswap(&left->next, &right->next, sizeof(list_node*));
+
+    return true;
 }
 
-void list_push(linked_list* list, list_node* node) {
+bool list_push(linked_list* list, list_node* node) {
+    if (!node || !list)
+        return false;
+
     node->prev = NULL;
 
     if (!list->length) {
@@ -97,9 +115,14 @@ void list_push(linked_list* list, list_node* node) {
     }
 
     list->length++;
+
+    return true;
 }
 
 list_node* list_pop(linked_list* list) {
+    if (!list->length)
+        return NULL;
+
     list_node* tail = list->tail;
     list_remove(list, tail);
 
@@ -107,6 +130,9 @@ list_node* list_pop(linked_list* list) {
 }
 
 list_node* list_pop_front(linked_list* list) {
+    if (!list->length)
+        return NULL;
+
     list_node* head = list->head;
     list_remove(list, head);
 

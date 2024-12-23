@@ -7,82 +7,156 @@
 
 #include "arch/idt.h"
 #include "arch/irq.h"
-#include "vfs/fs.h"
+#include "input/kbd.h"
+#include "sys/keyboard.h"
 
-static ring_buffer* buffer;
-
-// Zeroes represent non ASCII chars
-// TODO: don't just hardcode this
-static const u8 us_ascii[2][256] = {
-    {
-        0,   0,   '1', '2', '3', '4', '5', '6', '7',  '8', '9', '0',  '-',  '=', 0,   '\t',
-        'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o',  'p', '[', ']',  '\n', 0,   'a', 's',
-        'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,   '\\', 'z',  'x', 'c', 'v',
-        'b', 'n', 'm', ',', '.', '/', 0,   '*', 0,    ' ', 0,   0,    0,    0,   0,   0,
-        0,   0,   0,   0,   0,   0,   0,   0,   0,    0,   '-', 0,    0,    0,   '+',
-    },
-    {
-        0,   0,   '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_',  '+', 0,   '\t',
-        'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', 0,   'A', 'S',
-        'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0,   '|', 'Z',  'X', 'C', 'V',
-        'B', 'N', 'M', '<', '>', '?', 0,   '*', 0,   ' ', 0,   0,   0,    0,   0,   0,
-        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   '-', 0,   0,    0,   '+',
-    },
+static const u8 ps2_codes[128] = {
+    0,
+    KBD_ESCAPE,
+    KBD_1,
+    KBD_2,
+    KBD_3,
+    KBD_4,
+    KBD_5,
+    KBD_6,
+    KBD_7,
+    KBD_8,
+    KBD_9,
+    KBD_0,
+    KBD_MINUS,
+    KBD_EQUALS,
+    KBD_BACKSPACE,
+    KBD_TAB,
+    KBD_Q,
+    KBD_W,
+    KBD_E,
+    KBD_R,
+    KBD_T,
+    KBD_Y,
+    KBD_U,
+    KBD_I,
+    KBD_O,
+    KBD_P,
+    KBD_LEFT_BRACKET,
+    KBD_RIGHT_BRACKET,
+    KBD_ENTER,
+    KBD_LEFT_CTRL,
+    KBD_A,
+    KBD_S,
+    KBD_D,
+    KBD_F,
+    KBD_G,
+    KBD_H,
+    KBD_J,
+    KBD_K,
+    KBD_L,
+    KBD_SEMICOLON,
+    KBD_QUOTE,
+    KBD_BACKTICK,
+    KBD_LEFT_SHIFT,
+    KBD_BACKSLASH,
+    KBD_Z,
+    KBD_X,
+    KBD_C,
+    KBD_V,
+    KBD_B,
+    KBD_N,
+    KBD_M,
+    KBD_COMMA,
+    KBD_DOT,
+    KBD_SLASH,
+    KBD_RIGHT_SHIFT,
+    KBD_KP_MULTIPLY,
+    KBD_LEFT_ALT,
+    KBD_SPACE,
+    KBD_CAPSLOCK,
+    KBD_F1,
+    KBD_F2,
+    KBD_F3,
+    KBD_F4,
+    KBD_F5,
+    KBD_F6,
+    KBD_F7,
+    KBD_F8,
+    KBD_F9,
+    KBD_F10,
+    KBD_NUMLOCK,
+    KBD_SCRLLOCK,
+    KBD_KP_7,
+    KBD_KP_8,
+    KBD_KP_9,
+    KBD_KP_MINUS,
+    KBD_KP_4,
+    KBD_KP_5,
+    KBD_KP_6,
+    KBD_KP_PLUS,
+    KBD_KP_1,
+    KBD_KP_2,
+    KBD_KP_3,
+    KBD_KP_0,
+    KBD_KP_PERIOD,
+    0,
+    0,
+    0,
+    KBD_F11,
+    KBD_F12,
 };
+
+static const u8 ps2_codes_extended[128] = {
+    [0x1c] = KBD_KP_ENTER,
+    [0x1d] = KBD_RIGHT_CTRL,
+    [0x35] = KBD_KP_DIVIDE,
+    [0x38] = KBD_RIGHT_ALT,
+    [0x48] = KBD_UP,
+    [0x49] = KBD_PAGEUP,
+    [0x4b] = KBD_LEFT,
+    [0x4d] = KBD_RIGHT,
+    [0x4f] = KBD_END,
+    [0x50] = KBD_DOWN,
+    [0x51] = KBD_PAGEDOWN,
+    [0x52] = KBD_INSERT,
+    [0x53] = KBD_DELETE,
+    [0x5b] = KBD_LEFT_SUPER,
+    [0x5c] = KBD_RIGHT_SUPER,
+};
+
+static bool extended = false;
+
 
 static void ps2_irq_handler(UNUSED int_state* s) {
     u8 scancode = inb(0x60);
 
-    // TODO: don't just push raw scancodes. Parse into a more common format
-    ring_buffer_push(buffer, scancode);
+    if (scancode == PS2_EXTENDED) {
+        extended = true;
+        goto done;
+    }
+
+    bool released = false;
+
+    if (scancode >= PS2_RELEASE_OFFSET) {
+        scancode -= PS2_RELEASE_OFFSET;
+        released = true;
+    }
+
+    u8 code = extended ? ps2_codes_extended[scancode] : ps2_codes[scancode];
+
+    kbd_handle_key((key_event){
+        .type = !released,
+        .code = code,
+    });
 
 #ifdef PS2_DEBUG
-    char ascii = ps2_to_ascii(scancode);
-
-    if (ascii)
-        log_debug("[PS2 DEBUG] scancode = %#x, ascii = %c", scancode, ascii);
-    else
-        log_debug("[PS2 DEBUG] scancode = %#x", scancode);
+    log_debug("[PS2 DEBUG] scancode = %#x, extended = %u", scancode, extended);
 #endif
 
+    if (extended)
+        extended = false;
+
+done:
     irq_ack(IRQ_PS2_KEYBOARD);
 }
 
-static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize len) {
-    if (!buf)
-        return -1;
-
-    ring_buffer_pop_array(buffer, buf, len);
-
-    return len;
-}
-
-static isize _write(UNUSED vfs_node* node, UNUSED void* buf, UNUSED usize offset, UNUSED usize len) {
-    return -1;
-}
-
-
-char ps2_to_ascii(u8 scancode) {
-    static bool shift_down = false;
-
-    if (scancode == KBD_L_SHIFT || scancode == KBD_R_SHIFT) {
-        shift_down = true;
-        return 0;
-    } else if (scancode == PS2_RELEASED(KBD_L_SHIFT) || scancode == PS2_RELEASED(KBD_R_SHIFT)) {
-        shift_down = false;
-        return 0;
-    }
-
-    return shift_down ? us_ascii[1][scancode] : us_ascii[0][scancode];
-}
 
 void init_ps2_kbd() {
     irq_register(IRQ_PS2_KEYBOARD, ps2_irq_handler);
-
-    vfs_node* dev = vfs_create_node("kbd", VFS_CHARDEV);
-    dev->interface = vfs_create_file_interface(_read, _write);
-
-    buffer = ring_buffer_create(PS2_DEV_BUFFER_SIZE);
-
-    vfs_mount("/dev", tree_create_node(dev));
 }

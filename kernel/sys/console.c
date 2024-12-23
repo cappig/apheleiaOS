@@ -18,14 +18,16 @@ static usize com_port = SERIAL_COM1;
 
 
 // Dump the entire buffer to the ccurrent terminal
-// We use this when the kernel panics
+// We use this when the kernel panics in early boot
 void console_dump_buffer() {
     if (!current_tty)
         return;
 
+    gfx_terminal* gterm = current_tty->private;
+
     u8 ch;
     while (ring_buffer_pop(console_buffer, &ch))
-        term_parse_char(current_tty->term, ch);
+        term_parse_char(gterm->term, ch);
 }
 
 

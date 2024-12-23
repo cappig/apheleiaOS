@@ -20,11 +20,11 @@ u16 term_cell_to_vga(term_cell* cell) {
     u8 bg = _get_vga_color(cell->style.bg);
     u8 fg = _get_vga_color(cell->style.fg);
 
-    if (cell->style.flags & TERM_FLAG_BOLD)
+    if (cell->style.flags & TERM_CHAR_BOLD)
         if (fg < 8)
             fg += 8;
 
-    if (cell->style.flags & TERM_FLAG_FAINT)
+    if (cell->style.flags & TERM_CHAR_FAINT)
         if (fg >= 8)
             fg -= 8;
 

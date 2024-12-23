@@ -12,7 +12,6 @@ typedef enum {
     VFS_SYMLINK = 3,
     VFS_BLOCKDEV = 4,
     VFS_CHARDEV = 5,
-    VFS_MOUNT = 6,
 } vfs_node_type;
 
 typedef struct {
@@ -20,8 +19,6 @@ typedef struct {
     u64 modified;
     u64 accessed;
 } vfs_timestamp;
-
-typedef u32 vfs_mode;
 
 // Resolve the circular references and make the compiler shut up
 typedef struct vfs_node vfs_node;
@@ -40,15 +37,15 @@ typedef struct {
 
 typedef struct vfs_node {
     char* name;
-    u64 size;
-    vfs_timestamp time;
 
+    u64 size;
     vfs_node_type type;
 
     u32 permissions;
-    u32 flags;
 
-    u32 inode;
+    u64 inode;
+
+    vfs_timestamp time;
 
     vfs_node_interface* interface;
     vfs_driver* driver;

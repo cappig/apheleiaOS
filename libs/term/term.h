@@ -9,12 +9,12 @@
 
 #define TERM_PARSER_STACK_SIZE 16
 
-#define TERM_DEFAULT_BG (ANSI_BLACK)
-#define TERM_DEFAULT_FG (ANSI_BRIGHT_GREY)
+#define TERM_DEFAULT_BG ANSI_BLACK
+#define TERM_DEFAULT_FG ANSI_BRIGHT_GREY
 
-#define TERM_FLAG_BOLD   (1 << 0)
-#define TERM_FLAG_FAINT  (1 << 1)
-#define TERM_FLAG_ITALIC (1 << 2)
+#define TERM_CHAR_BOLD   (1 << 0)
+#define TERM_CHAR_FAINT  (1 << 1)
+#define TERM_CHAR_ITALIC (1 << 2)
 
 #define DEFAULT_STYLE                          \
     ((term_style){                             \
@@ -90,6 +90,9 @@ void term_clear(terminal* term, term_pos from, term_pos to);
 void term_clear_screen(terminal* term);
 void term_clear_line(terminal* term, usize y);
 void term_scroll(terminal* term);
+
+void term_reset(terminal* term);
+void term_reset_style(terminal* term);
 
 bool term_parse_char(terminal* term, char ch);
 int term_parse(terminal* term, const char* string, usize max_size);

@@ -146,7 +146,7 @@ tree_node* vfs_register(const char* path, vfs_driver* dev) {
 vfs_file_system* vfs_crete_fs(char* name) {
     vfs_file_system* ret = kcalloc(sizeof(vfs_file_system));
 
-    vfs_node* mount = vfs_create_node(name, VFS_MOUNT);
+    vfs_node* mount = vfs_create_node(name, VFS_DIR);
 
     ret->subtree = tree_create(mount);
 

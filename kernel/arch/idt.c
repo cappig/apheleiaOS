@@ -18,6 +18,11 @@ static int_handler int_handlers[ISR_COUNT];
 ALIGNED(0x10)
 static idt_entry idt_entries[ISR_COUNT] = {0};
 
+// How many interrupts are nested at this moment
+// We only perform task switches when this reaches 0
+// TODO: make this per core
+static atomic usize nest_depth = 0;
+
 // "?" indicate a reserved int number
 static const char* int_strings[32] = {
     "Divide by zero",
@@ -128,17 +133,18 @@ void configure_int(usize int_num, u16 selector, u8 ist, u8 attribs) {
 
 // Called by isr_common_stub in idt_stubs.asm
 void isr_handler(int_state* s) {
+    nest_depth++;
+
 #ifdef INT_DEBUG
     log_debug("[INT_DEBUG] Handling interrupt: num = %#lx, cs = %#lx", s->int_num, s->s_regs.cs);
 #endif
 
     assert(s->int_num < ISR_COUNT);
 
-    if (sched_instance.running)
-        scheduler_save(s);
-
     int_handlers[s->int_num](s);
 
-    if (sched_instance.running)
+    nest_depth--;
+
+    if (sched_instance.running && nest_depth == 0)
         scheduler_switch();
 }

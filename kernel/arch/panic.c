@@ -4,11 +4,13 @@
 #include <base/types.h>
 #include <log/log.h>
 
+#include "arch/irq.h"
 #include "arch/stacktrace.h"
 #include "sys/console.h"
 
 
 NORETURN void panic_unwind() {
+    timer_disable();
     disable_interrupts();
 
     // TODO: save and dump state

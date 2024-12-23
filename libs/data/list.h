@@ -27,12 +27,12 @@ void list_destroy(linked_list* list);
 list_node* list_create_node(void* data);
 void list_destroy_node(list_node* node);
 
-void list_append(linked_list* list, list_node* node);
-void list_remove(linked_list* list, list_node* node);
+bool list_append(linked_list* list, list_node* node);
+bool list_remove(linked_list* list, list_node* node);
 
-void list_swap(list_node* left, list_node* right);
+bool list_swap(list_node* left, list_node* right);
 
-void list_push(linked_list* list, list_node* node);
+bool list_push(linked_list* list, list_node* node);
 list_node* list_pop(linked_list* list);
 list_node* list_pop_front(linked_list* list);
 

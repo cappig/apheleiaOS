@@ -107,39 +107,18 @@ void identity_map(page_table* lvl4_paddr, u64 from, u64 to, u64 map_offset, u64 
         map_page(lvl4_paddr, PAGE_4KIB, i + map_offset, i, flags);
 }
 
+
 void unmap_page(page_table* lvl4_paddr, u64 vaddr) {
-    usize lvl4_index = GET_LVL4_INDEX(vaddr);
-    page_table* lvl4 = (page_table*)ID_MAPPED_VADDR(lvl4_paddr);
-
-    usize lvl3_index = GET_LVL3_INDEX(vaddr);
-    page_table* lvl3 = page_get_vaddr(&lvl4[lvl4_index]);
-
     UNUSED page_size size = 0;
+    page_table* page = NULL;
 
-    if (lvl3[lvl3_index].bits.huge && lvl3[lvl3_index].bits.present) {
-        lvl3[lvl3_index].raw = 0;
-        size = PAGE_1GIB;
-        goto finalize;
-    }
+    size = get_page(lvl4_paddr, vaddr, &page);
 
-    usize lvl2_index = GET_LVL2_INDEX(vaddr);
-    page_table* lvl2 = page_get_vaddr(&lvl3[lvl3_index]);
+    if (size && page)
+        log_warn("Attempted to unmap nonexistent memory!");
+    else
+        page->raw = 0;
 
-    if (lvl2[lvl2_index].bits.huge && lvl2[lvl2_index].bits.present) {
-        lvl2[lvl2_index].raw = 0;
-        size = PAGE_2MIB;
-        goto finalize;
-    }
-
-    usize lvl1_index = GET_LVL1_INDEX(vaddr);
-    page_table* lvl1 = page_get_vaddr(&lvl2[lvl2_index]);
-
-    if (lvl1[lvl1_index].bits.present) {
-        lvl1[lvl1_index].raw = 0;
-        size = PAGE_4KIB;
-    }
-
-finalize:
 #ifdef MMU_DEBUG
     log_debug(
         "[MMU DEBUG] unmapped virtual page (cr3: %#lx): size = %x, vaddr = %#lx",
@@ -151,6 +130,58 @@ finalize:
 }
 
 
+usize get_page(page_table* lvl4_paddr, u64 vaddr, page_table** entry) {
+    usize lvl4_index = GET_LVL4_INDEX(vaddr);
+    page_table* lvl4 = (page_table*)ID_MAPPED_VADDR(lvl4_paddr);
+
+    *entry = NULL;
+
+    if (!lvl4)
+        return 0;
+
+    usize lvl3_index = GET_LVL3_INDEX(vaddr);
+    page_table* lvl3 = page_get_vaddr(&lvl4[lvl4_index]);
+
+    if (lvl3[lvl3_index].bits.huge && lvl3[lvl3_index].bits.present) {
+        *entry = &lvl3[lvl3_index];
+        return PAGE_1GIB;
+    }
+
+    usize lvl2_index = GET_LVL2_INDEX(vaddr);
+    page_table* lvl2 = page_get_vaddr(&lvl3[lvl3_index]);
+
+    if (lvl2[lvl2_index].bits.huge && lvl2[lvl2_index].bits.present) {
+        *entry = &lvl2[lvl2_index];
+        return PAGE_2MIB;
+    }
+
+    usize lvl1_index = GET_LVL1_INDEX(vaddr);
+    page_table* lvl1 = page_get_vaddr(&lvl2[lvl2_index]);
+
+    if (lvl1[lvl1_index].bits.present) {
+        *entry = &lvl1[lvl1_index];
+        return PAGE_4KIB;
+    }
+
+    return 0;
+}
+
+
+// TODO: COW lazy copy
+static void _clone_leaf(page_table* src_vaddr, page_table* dest_vaddr) {
+    if (src_vaddr->bits.writable) {
+        u64 paddr = (u64)alloc_frames(1);
+
+        page_set_paddr(dest_vaddr, paddr);
+        dest_vaddr->raw |= (src_vaddr->raw & FLAGS_MASK);
+
+        memcpy((void*)ID_MAPPED_VADDR(paddr), page_get_vaddr(src_vaddr), PAGE_4KIB);
+    } else {
+        dest_vaddr->raw = src_vaddr->raw;
+    }
+}
+
+
 static void _recursive_clone(page_table* src_vaddr, page_table* dest_vaddr, usize level) {
     page_table* new_paddr = alloc_frames(1);
     page_table* new_vaddr = (page_table*)ID_MAPPED_VADDR(new_paddr);
@@ -158,6 +189,7 @@ static void _recursive_clone(page_table* src_vaddr, page_table* dest_vaddr, usiz
     memset((void*)new_vaddr, 0, 512 * sizeof(page_table));
 
     page_set_paddr(dest_vaddr, (u64)new_paddr);
+    dest_vaddr->raw |= (PT_USER | PT_WRITE | PT_PRESENT);
 
     page_table* next_vaddr = page_get_vaddr(src_vaddr);
 
@@ -166,7 +198,7 @@ static void _recursive_clone(page_table* src_vaddr, page_table* dest_vaddr, usiz
             continue;
 
         if (next_vaddr[i].bits.huge || level == 1)
-            new_vaddr[i].raw = next_vaddr[i].raw;
+            _clone_leaf(&next_vaddr[i], &new_vaddr[i]);
         else
             _recursive_clone(&next_vaddr[i], &new_vaddr[i], level - 1);
     }

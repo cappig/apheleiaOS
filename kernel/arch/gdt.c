@@ -47,7 +47,9 @@ void tss_init(u64 kernel_stack_top) {
     set_gdt_entry(5, tss_addr, sizeof(tss_entry) - 1, 0x89, 0);
     set_gdt_high_entry(5, tss_addr);
 
+    tss.ist[0] = GDT_kernel_data;
     set_tss_stack(kernel_stack_top);
+
     asm volatile("ltr %0" ::"r"(GDT_OFFSET(5)) : "memory");
 }
 

@@ -5,7 +5,8 @@
 #include <term/term.h>
 
 typedef enum {
-    // Output to an array where each element is a 16 color character
+    // Output to an array where each element is a single
+    // character with color attributes
     TERM_VGA = 0,
 
     // Output to a framebuffer like array where each

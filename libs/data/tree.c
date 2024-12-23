@@ -47,3 +47,41 @@ void tree_insert_child(tree_node* parent, tree_node* child) {
     list_append(parent->children, list_create_node(child));
     child->parent = parent;
 }
+
+
+static tree_node* _findc(tree_node* root, tree_comp_fn comp, void* private) {
+    foreach (node, root->children) {
+        tree_node* child = node->data;
+
+        if (comp(child->data, private))
+            return child;
+
+        tree_node* res = _findc(child, comp, private);
+        if (res)
+            return res;
+    }
+
+    return NULL;
+}
+
+tree_node* tree_find_comp(tree* root, tree_comp_fn comp, void* private) {
+    if (!root)
+        return NULL;
+
+    tree_node* rnode = root->root;
+    if (comp(rnode->data, private))
+        return rnode;
+
+    return _findc(root->root, comp, private);
+}
+
+static bool _find_comp(const void* data, const void* private) {
+    return (data == private);
+}
+
+tree_node* tree_find(tree* root, void* data) {
+    if (!root)
+        return NULL;
+
+    return tree_find_comp(root, _find_comp, data);
+}

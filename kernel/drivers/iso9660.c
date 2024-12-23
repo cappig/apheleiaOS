@@ -109,7 +109,7 @@ bool iso_init(vfs_driver* dev, vfs_file_system* fs) {
     if (!priv)
         return false;
 
-    vfs_node* tree_root = vfs_create_node(fs->partition.name, VFS_MOUNT);
+    vfs_node* tree_root = vfs_create_node(fs->partition.name, VFS_DIR);
     fs->subtree = tree_create(tree_root);
 
     fs->interface = vfs_create_file_interface(_read, NULL);
