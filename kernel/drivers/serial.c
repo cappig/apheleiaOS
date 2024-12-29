@@ -1,11 +1,11 @@
 #include "serial.h"
 
 #include <base/types.h>
+#include <data/tree.h>
 #include <string.h>
 #include <x86/serial.h>
 
-#include "arch/irq.h"
-#include "log/log.h"
+#include "arch/panic.h"
 #include "vfs/fs.h"
 #include "vfs/pty.h"
 
@@ -30,22 +30,33 @@ static void _write(pseudo_tty* term, void* buf, usize len) {
         send_serial(port, char_buf[i]);
 }
 
-static void _init_port(u8 index) {
+bool init_serial_port(u8 index) {
+    assert(index < 10);
+
+    usize port = com_port[index];
+
+    if (!init_serial(port, SERIAL_DEFAULT_BAUD))
+        return false;
+
     pseudo_tty* pty = pty_create(SERIAL_DEV_BUFFER_SIZE);
-    pty->private = (void*)com_port[index - 1];
+
+    pty->private = (void*)port;
     pty->out_hook = _write;
 
-    char name[] = "ttyS0";
-    name[4] += index;
+    char name[] = "com0";
+    name[3] += index;
 
     pty->slave->name = strdup(name);
 
-    vfs_mount("/dev", tree_create_node(pty->slave));
+    tree_node* node = tree_create_node(pty->slave);
+    vfs_mount("/dev", node);
+
+    return true;
 }
 
 void init_serial_dev() {
-    _init_port(1);
-    // _init_port(vfs, 2);
-    // _init_port(vfs, 3);
-    // _init_port(vfs, 4);
+    init_serial_port(0);
+    init_serial_port(1);
+    init_serial_port(2);
+    init_serial_port(3);
 }

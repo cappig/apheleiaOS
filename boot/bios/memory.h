@@ -6,7 +6,7 @@
 
 void get_e820(e820_map* mmap);
 
-u64 alloc_kernel_stack(usize size);
+u64 alloc_kernel_stack(usize pages);
 
 void* mmap_alloc(usize bytes, u32 type, u32 alignment);
 

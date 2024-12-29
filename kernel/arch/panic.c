@@ -6,7 +6,6 @@
 
 #include "arch/irq.h"
 #include "arch/stacktrace.h"
-#include "sys/console.h"
 
 
 NORETURN void panic_unwind() {
@@ -18,7 +17,7 @@ NORETURN void panic_unwind() {
 
     log_fatal("Kernel panic - halting execution!");
 
-    console_dump_buffer();
+    // FIXME: what if we panic before the ttys get initialized
 
     halt();
     __builtin_unreachable();

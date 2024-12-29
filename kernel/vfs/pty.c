@@ -59,7 +59,7 @@ static void _process_input(vfs_node* node, u8 ch) {
         if (ch == PTY_RETURN_CHAR)
             _flush_line_buffer(pty);
         else
-            vec_push(pty->line_buffer, ch);
+            vec_push(pty->line_buffer, &ch);
     } else {
         ring_buffer_push(pty->input_buffer, ch);
     }
@@ -92,7 +92,7 @@ pseudo_tty* pty_create(usize buffer_size) {
     ret->input_buffer = ring_buffer_create(buffer_size);
     ret->output_buffer = ring_buffer_create(buffer_size);
 
-    ret->line_buffer = vec_create();
+    ret->line_buffer = vec_create(sizeof(char));
 
     // WARN: this has circular pointers
     ret->master = vfs_create_node(NULL, VFS_CHARDEV);

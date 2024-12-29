@@ -8,6 +8,7 @@
 #include <x86/regs.h>
 
 #include "bios.h"
+#include "gfx/state.h"
 #include "tty.h"
 
 
@@ -44,8 +45,8 @@ static bool _fetch_edid_info(edid_info* buffer) {
 }
 
 void _edid_resolution(u8* edid, u16* x, u16* y) {
-    *x = edid[0x38] | ((int)(edid[0x3A] & 0xF0) << 4);
-    *y = edid[0x3B] | ((int)(edid[0x3D] & 0xF0) << 4);
+    *x = edid[0x38] | ((int)(edid[0x3a] & 0xf0) << 4);
+    *y = edid[0x3b] | ((int)(edid[0x3d] & 0xf0) << 4);
 }
 
 static void _set_vesa_mode(u16 mode_index) {
@@ -104,6 +105,9 @@ static vesa_mode _init_vesa(u16 max_width, u16 max_height, u16 max_bpp) {
 
 
 void init_graphics(graphics_state* gfx, u8 mode, u16 width, u16 height, u16 bpp) {
+    if (mode == GFX_NONE)
+        return;
+
     edid_info edid = {0};
 
     if (!_fetch_edid_info(&edid)) {

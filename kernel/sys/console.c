@@ -9,26 +9,11 @@
 #include <x86/serial.h>
 
 #include "sys/tty.h"
-#include "term/render.h"
-
 
 static ring_buffer* console_buffer = NULL;
 
 static usize com_port = SERIAL_COM1;
-
-
-// Dump the entire buffer to the ccurrent terminal
-// We use this when the kernel panics in early boot
-void console_dump_buffer() {
-    if (!current_tty)
-        return;
-
-    gfx_terminal* gterm = current_tty->private;
-
-    u8 ch;
-    while (ring_buffer_pop(console_buffer, &ch))
-        term_parse_char(gterm->term, ch);
-}
+static isize console_tty = TTY_NONE;
 
 
 void kputsn(const char* str, usize len) {
@@ -37,6 +22,9 @@ void kputsn(const char* str, usize len) {
 
     if (console_buffer)
         ring_buffer_push_array(console_buffer, (u8*)str, len);
+
+    if (console_tty > 0)
+        tty_output(console_tty, (u8*)str, len);
 }
 
 void kputs(const char* str) {
@@ -65,4 +53,8 @@ void conosle_init_buffer() {
 
 void console_set_serial(usize port) {
     com_port = port;
+}
+
+void console_set_tty(usize index) {
+    console_tty = index;
 }

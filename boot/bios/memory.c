@@ -69,7 +69,8 @@ void get_e820(e820_map* mmap) {
 }
 
 
-u64 alloc_kernel_stack(usize size) {
+u64 alloc_kernel_stack(usize pages) {
+    usize size = pages * PAGE_4KIB;
     void* stack = mmap_alloc(size, E820_KERNEL, PAGE_4KIB);
 
     return ID_MAPPED_VADDR((u64)(uptr)stack + size);

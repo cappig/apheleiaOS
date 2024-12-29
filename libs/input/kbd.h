@@ -135,25 +135,17 @@ enum key_action {
 };
 
 enum key_type_flags {
-    KEY_ACTION = 1 << 0,
+    KEY_ACTION = 1 << 7,
 };
 
 typedef struct {
+    u8 source;
     u8 type;
     u8 code;
 } key_event;
 
 
-inline bool is_down(key_event event) {
-    return (event.type & KEY_ACTION) == KEY_DOWN;
-}
-
-inline bool is_up(key_event event) {
-    return (event.type & KEY_ACTION) == KEY_UP;
-}
-
-
-char kbd_to_ascii(key_event event, ascii_keymap map, bool shift);
+char kbd_to_ascii(key_event event, ascii_keymap* map, bool shift);
 char kbd_to_ascii_default(key_event event);
 
 // Convert ASCII control codes to caret notation: ^X

@@ -85,14 +85,16 @@ typedef struct terminal {
 
 void term_redraw(terminal* term);
 
-// NOTE: if calling these function externally term_draw() must be called to see the change
+// NOTE: if calling these function externally term_redraw() must be called to see the change
 void term_clear(terminal* term, term_pos from, term_pos to);
 void term_clear_screen(terminal* term);
-void term_clear_line(terminal* term, usize y);
+void term_clear_line(terminal* term, usize line);
 void term_scroll(terminal* term);
 
 void term_reset(terminal* term);
 void term_reset_style(terminal* term);
+
+void term_place(terminal* term, usize x, usize y, u32 ch);
 
 bool term_parse_char(terminal* term, char ch);
 int term_parse(terminal* term, const char* string, usize max_size);

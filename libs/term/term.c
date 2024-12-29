@@ -11,19 +11,6 @@
 #include "parser.h"
 
 
-static void _term_buffer_place(terminal* term, u32 ch) {
-    usize index = term->cursor.x + term->cursor.y * term->width;
-
-    ch = clamp(ch, 0, 0xff);
-
-    term_cell cell = {term->parser.style, ch};
-
-    term->buffer[index] = cell;
-
-    if (term->putc_fn)
-        term->putc_fn(term, &cell, index);
-}
-
 static void _term_putc(terminal* term, const u32 ch) {
     switch (ch) {
     case '\r':
@@ -42,7 +29,7 @@ static void _term_putc(terminal* term, const u32 ch) {
     case '\b':
         if (term->cursor.x > 0) {
             term->cursor.x--;
-            _term_buffer_place(term, ' ');
+            term_place(term, term->cursor.x, term->cursor.y, ' ');
         }
         break;
 
@@ -55,7 +42,7 @@ static void _term_putc(terminal* term, const u32 ch) {
         break;
 
     default:
-        _term_buffer_place(term, ch);
+        term_place(term, term->cursor.x, term->cursor.y, ch);
         term->cursor.x++;
         break;
     }
@@ -83,6 +70,7 @@ void term_redraw(terminal* term) {
     }
 }
 
+
 void term_clear(terminal* term, term_pos from, term_pos to) {
     usize from_index = from.x + term->width * from.y;
     usize to_index = to.x + term->width * to.y;
@@ -105,12 +93,13 @@ void term_clear_screen(terminal* term) {
     term_clear(term, from, to);
 }
 
-void term_clear_line(terminal* term, usize y) {
-    term_pos from = {0, y};
-    term_pos to = {term->width, y};
+void term_clear_line(terminal* term, usize line) {
+    term_pos from = {0, line};
+    term_pos to = {term->width, line};
 
     term_clear(term, from, to);
 }
+
 
 void term_scroll(terminal* term) {
     // Move one line up
@@ -224,6 +213,18 @@ void term_reset(terminal* term) {
 
     term->cursor.x = 0;
     term->cursor.y = 0;
+}
+
+
+void term_place(terminal* term, usize x, usize y, u32 ch) {
+    usize index = x + y * term->width;
+
+    term_cell cell = {term->parser.style, ch};
+
+    term->buffer[index] = cell;
+
+    if (term->putc_fn)
+        term->putc_fn(term, &cell, index);
 }
 
 

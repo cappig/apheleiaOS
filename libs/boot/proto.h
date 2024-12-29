@@ -8,15 +8,13 @@
 
 #define BOOT_MAGIC 0xA76e1e1a
 
-#define KERNEL_STACK_SIZE (256 * KiB)
-#define KERNEL_HEAP_PAGES 512
+#define KERNEL_STACK_PAGES 16
 
 // -1 means that the bootloader will attempt to autodetect
 #define BOOT_DEFAULT_GFX_MODE    GFX_VESA
 #define BOOT_DEFAULT_VESA_WIDTH  -1
 #define BOOT_DEFAULT_VESA_HEIGHT -1
 #define BOOT_DEFAULT_VESA_BPP    32
-#define BOOT_DEFAULT_SERIAL_BAUD 9600
 
 #define BOOT_CONSOLE_FONT_LEN 20
 
@@ -30,8 +28,6 @@ typedef struct PACKED {
     u16 vesa_width;
     u16 vesa_height;
     u16 vesa_bpp;
-
-    u32 serial_baud;
 
     char console_font[BOOT_CONSOLE_FONT_LEN + 1];
 } boot_args;
@@ -50,6 +46,8 @@ typedef struct PACKED {
     u32 symtab_size;
 
     boot_args args;
+
     e820_map mmap;
+
     graphics_state graphics;
 } boot_handoff;

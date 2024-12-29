@@ -7,11 +7,11 @@
 typedef enum {
     // Output to an array where each element is a single
     // character with color attributes
-    TERM_VGA = 0,
+    TERM_VGA,
 
     // Output to a framebuffer like array where each
     // element represents a single rgba pixel
-    TERM_RASTER = 1,
+    TERM_RASTER,
 } gfx_term_mode;
 
 // Depending on the chosen mode the color is either

@@ -1,4 +1,3 @@
-#include <alloc/bitmap.h>
 #include <alloc/global.h>
 #include <base/addr.h>
 #include <base/attributes.h>
@@ -31,8 +30,8 @@
 #include "sched/scheduler.h"
 #include "sys/clock.h"
 #include "sys/console.h"
-#include "sys/keyboard.h"
 #include "sys/tty.h"
+#include "sys/video.h"
 #include "vfs/fs.h"
 
 
@@ -41,8 +40,6 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     if (handoff->magic != BOOT_MAGIC)
         panic("Kernel booted with invalid args!");
-
-    init_serial(SERIAL_COM1, handoff->args.serial_baud);
 
     gdt_init();
     pic_init();
@@ -55,6 +52,8 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     heap_init();
     galloc_init();
 
+    video_init(&handoff->graphics);
+
     conosle_init_buffer();
 
     log_info(ALPHA_ASCII);
@@ -62,17 +61,13 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
 
-    dump_gfx_info(&handoff->graphics);
-
     load_symbols(handoff);
 
     initrd_init(handoff);
 
-    init_framebuffer(&handoff->graphics);
-
     vfs_init();
 
-    tty_init(&handoff->graphics, handoff);
+    tty_init(handoff);
     tty_spawn_devs();
 
     clock_init();
@@ -90,16 +85,12 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     irq_init();
     scheduler_init();
 
-    keyboard_init();
-
     init_serial_dev();
     init_framebuffer_dev();
     init_zero_devs();
-    init_ps2_kbd();
+    init_ps2();
 
     ide_disk_init();
-
-    // dump_vfs();
 
     initrd_close(handoff);
 

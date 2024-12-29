@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #define foreach(node, list) for (list_node* node = (list)->head; node != NULL; node = node->next)

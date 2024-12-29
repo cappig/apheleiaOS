@@ -14,6 +14,9 @@
 #include "arch/panic.h"
 #include "mem/physical.h"
 
+#define HEAP_MIN (KERNEL_HEAP_PAGES / 2)
+#define HEAP_MAX (KERNEL_HEAP_PAGES * 16)
+
 // FIXME: baaaaaad. A bitmap is far from optimal for this
 
 // We should have more than one heap
@@ -23,10 +26,18 @@ static bitmap_alloc heap;
 void heap_init() {
     usize free_pages = get_free_mem() / PAGE_4KIB;
 
-    usize heap_pages = min(KERNEL_HEAP_PAGES, free_pages);
+    // Aim to take ~10% of the memory for the kernel heap with some reasonable limits
+    usize min_heap = min(free_pages, HEAP_MIN);
+    usize max_heap = HEAP_MAX;
+
+    usize heap_pages = clamp(free_pages / 10, min_heap, max_heap);
     usize heap_size = heap_pages * PAGE_4KIB;
 
-    void* heap_start = (void*)ID_MAPPED_VADDR(alloc_frames(heap_pages));
+    void* paddr = alloc_frames(heap_pages);
+
+    assert(paddr);
+
+    void* heap_start = (void*)ID_MAPPED_VADDR(paddr);
 
     if (!bitmap_alloc_init(&heap, heap_start, heap_size, KERNEL_HEAP_BLOCK))
         panic("Failed to initialize kernel heap!");

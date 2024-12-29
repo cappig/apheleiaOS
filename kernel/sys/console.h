@@ -10,8 +10,7 @@
 
 void conosle_init_buffer(void);
 void console_set_serial(usize port);
-
-void console_dump_buffer(void);
+void console_set_tty(usize index);
 
 void kputs(const char* str);
 void kputsn(const char* str, usize len);

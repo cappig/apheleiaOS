@@ -119,7 +119,7 @@ NORETURN void _load_entry(u16 boot_disk) {
 
     init_paging();
 
-    handoff.stack_top = alloc_kernel_stack(KERNEL_STACK_SIZE);
+    handoff.stack_top = alloc_kernel_stack(KERNEL_STACK_PAGES);
 
     jump_to_kernel(kernel_entry, (u64)ID_MAPPED_VADDR(&handoff), handoff.stack_top);
 

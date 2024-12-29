@@ -7,7 +7,10 @@
 
 #include "vfs/pty.h"
 
+#define TTY_COUNT    4
 #define TTY_BUF_SIZE 512
+
+#define TTY_NONE (-1)
 
 // A virtual terminal is a pseudo terminal that outputs
 // text to the screen and receives input from the keyboard
@@ -15,15 +18,20 @@
 // This means that it will by default receive keyboard input and
 // only and its output is rendered on screen
 
-extern pseudo_tty* current_tty;
+typedef struct {
+    pseudo_tty* pty;
+    gfx_terminal* gterm;
+} virtual_tty;
+
+extern isize current_tty;
 
 
-pseudo_tty* tty_spawn(char* name);
-pseudo_tty* tty_spawn_sized(char* name, usize buffer_size);
+void tty_input(usize index, u8* data, usize len);
+void tty_output(usize index, u8* data, usize len);
 
-bool tty_set_current(pseudo_tty* pty);
+bool tty_set_current(usize index);
 
-void tty_current_input(u8 data);
+void tty_init(boot_handoff* handoff);
 
-void tty_init(graphics_state* gfx_state, boot_handoff* handoff);
+virtual_tty* tty_spawn(usize index);
 void tty_spawn_devs(void);

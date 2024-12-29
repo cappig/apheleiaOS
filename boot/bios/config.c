@@ -44,14 +44,6 @@ static void _config_cmp(char* key, char* value, void* data) {
     else if (!strcasecmp(key, "CONSOLE_FONT")) {
         strncpy(args->console_font, value, BOOT_CONSOLE_FONT_LEN);
     }
-
-    else if (!strcasecmp(key, "SERIAL_BAUD")) {
-        i64 baud = atoi(value);
-        if (baud < 0)
-            return;
-
-        args->serial_baud = baud;
-    }
 }
 
 
@@ -62,7 +54,6 @@ void parse_config(file_handle* file, boot_args* args) {
     args->vesa_width = BOOT_DEFAULT_VESA_WIDTH;
     args->vesa_height = BOOT_DEFAULT_VESA_HEIGHT;
     args->vesa_bpp = BOOT_DEFAULT_VESA_BPP;
-    args->serial_baud = BOOT_DEFAULT_SERIAL_BAUD;
 
     if (!file->size)
         return;
