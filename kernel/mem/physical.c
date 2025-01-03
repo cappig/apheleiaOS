@@ -5,7 +5,7 @@
 #include <x86/e820.h>
 #include <x86/paging.h>
 
-#include "arch/panic.h"
+#include "sys/panic.h"
 
 static bitmap_alloc frame_alloc;
 

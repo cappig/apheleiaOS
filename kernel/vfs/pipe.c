@@ -4,8 +4,8 @@
 #include <base/types.h>
 #include <data/ring.h>
 
-#include "arch/panic.h"
 #include "mem/heap.h"
+#include "sys/panic.h"
 #include "vfs/fs.h"
 
 

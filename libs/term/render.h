@@ -26,6 +26,9 @@ typedef struct {
     usize pixel_width;
     usize pixel_height;
 
+    usize cell_width;
+    usize cell_height;
+
     bool draw;
     term_draw_fn draw_fn;
 

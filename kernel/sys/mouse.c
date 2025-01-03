@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "arch/panic.h"
 #include "mem/heap.h"
 #include "sys/video.h"
 #include "vfs/fs.h"
@@ -35,9 +34,8 @@ static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize 
 
 
 void mouse_handle_event(mouse_event event) {
-    x_pos = clamp(x_pos + event.delta_x, 0, video.width);
-    y_pos = clamp(y_pos + event.delta_y, 0, video.height);
-
+    x_pos = clamp(x_pos + event.delta_x, 0, video.width - 1);
+    y_pos = clamp(y_pos + event.delta_y, 0, video.height - 1);
 
     ring_buffer_push_array(buffer, (u8*)&event, sizeof(mouse_event));
 
@@ -56,7 +54,7 @@ u8 register_mouse(char* name) {
 
     vec_push(mice, mse);
 
-    log_info("Mouse input device registered: %s", name);
+    log_info("Mouse device registered: %s", name);
 
     return mice->size - 1;
 }

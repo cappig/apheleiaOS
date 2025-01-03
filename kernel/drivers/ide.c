@@ -115,7 +115,7 @@ static u64 set_atapi_size(ide_device* device) {
 
     block_size = bswapl(block_size);
 
-    // Just in case. we don't want division by zero
+    // Just in case. We don't want division by zero
     if (block_size == 0)
         block_size = ATAPI_SECTOR_SIZE;
 
@@ -136,7 +136,7 @@ static bool ata_probe_device(ide_device* device) {
     ata_wait(channel);
 
     // Assume that this is a non packet device, if it is a packet device it will abort
-    // signature will be placed in the lba registers after it is executed
+    // The signature will be placed in the lba registers after it is executed
     outb(channel->base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
     ata_wait(channel);
 
@@ -172,8 +172,6 @@ static bool ata_probe_device(ide_device* device) {
         sectors = set_ata_size(device);
 
     // If the disk reports 0 sectors or if an error occurred the disk isn't valid
-    // If we follow this branch the identify field is left dangling but that is fine
-    // since the exists field equals false rendering all other fields irrelevant
     if (sectors == 0) {
         kfree(device->identify);
         return false;

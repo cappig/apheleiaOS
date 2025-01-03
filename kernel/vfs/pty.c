@@ -9,15 +9,31 @@
 
 // A pseudo terminal vfs file type. Essentially two ring buffers that allow for duplex communication
 
-static void _flush_line_buffer(pseudo_tty* pty) {
+static void flush_line_buffer(pseudo_tty* pty) {
     usize len = pty->line_buffer->size;
     u8* data = pty->line_buffer->data;
 
     ring_buffer_push_array(pty->input_buffer, data, len);
 }
 
+static void process_canonical_input(vfs_node* node, u8* buf, usize len) {
+    pseudo_tty* pty = node->private;
 
-static isize _slave_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+    for (usize i = 0; i < len; i++) {
+        char ch = buf[i];
+
+        if (ch == PTY_DELETE_CHAR)
+            vec_pop(pty->line_buffer, NULL);
+
+        if (ch == PTY_RETURN_CHAR)
+            flush_line_buffer(pty);
+        else
+            vec_push(pty->line_buffer, &ch);
+    }
+}
+
+
+static isize slave_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
     pseudo_tty* pty = node->private;
 
     if (!pty || !buf)
@@ -26,7 +42,7 @@ static isize _slave_read(vfs_node* node, void* buf, UNUSED usize offset, usize l
     return ring_buffer_pop_array(pty->input_buffer, buf, len);
 }
 
-static isize _slave_write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+static isize slave_write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
     pseudo_tty* pty = node->private;
 
     if (!pty || !buf)
@@ -40,7 +56,8 @@ static isize _slave_write(vfs_node* node, void* buf, UNUSED usize offset, usize 
     return len;
 }
 
-static isize _master_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+
+static isize master_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
     pseudo_tty* pty = node->private;
 
     if (!pty || !buf)
@@ -49,35 +66,19 @@ static isize _master_read(vfs_node* node, void* buf, UNUSED usize offset, usize 
     return ring_buffer_pop_array(pty->output_buffer, buf, len);
 }
 
-static void _process_input(vfs_node* node, u8 ch) {
-    pseudo_tty* pty = node->private;
-
-    if (pty->flags & PTY_CANONICAL) {
-        if (ch == PTY_DELETE_CHAR)
-            vec_pop(pty->line_buffer, NULL);
-
-        if (ch == PTY_RETURN_CHAR)
-            _flush_line_buffer(pty);
-        else
-            vec_push(pty->line_buffer, &ch);
-    } else {
-        ring_buffer_push(pty->input_buffer, ch);
-    }
-
-    if (pty->flags & PTY_ECHO)
-        _slave_write(node, &ch, 0, 1);
-}
-
-static isize _master_write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+static isize master_write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
     pseudo_tty* pty = node->private;
 
     if (!pty || !buf)
         return -1;
 
-    u8* bytes = (u8*)buf;
+    if (pty->flags & PTY_ECHO)
+        slave_write(node, buf, offset, len);
 
-    for (usize i = 0; i < len; i++)
-        _process_input(node, bytes[i]);
+    if (pty->flags & PTY_CANONICAL)
+        process_canonical_input(node, buf, len);
+    else
+        ring_buffer_push_array(pty->input_buffer, buf, len);
 
     if (pty->in_hook)
         pty->in_hook(pty, buf, len);
@@ -96,11 +97,11 @@ pseudo_tty* pty_create(usize buffer_size) {
 
     // WARN: this has circular pointers
     ret->master = vfs_create_node(NULL, VFS_CHARDEV);
-    ret->master->interface = vfs_create_file_interface(_master_read, _master_write);
+    ret->master->interface = vfs_create_file_interface(master_read, master_write);
     ret->master->private = ret;
 
     ret->slave = vfs_create_node(NULL, VFS_CHARDEV);
-    ret->slave->interface = vfs_create_file_interface(_slave_read, _slave_write);
+    ret->slave->interface = vfs_create_file_interface(slave_read, slave_write);
     ret->slave->private = ret;
 
     return ret;

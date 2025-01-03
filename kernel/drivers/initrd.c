@@ -5,7 +5,7 @@
 #include <fs/ustar.h>
 #include <stddef.h>
 
-#include "arch/panic.h"
+#include "sys/panic.h"
 
 static void* initrd_vaddr;
 static usize initrd_size;

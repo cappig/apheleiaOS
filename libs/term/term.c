@@ -26,23 +26,30 @@ static void _term_putc(terminal* term, const u32 ch) {
         term->cursor.x += TERM_TAB_WIDTH;
         break;
 
-    case '\b':
-        if (term->cursor.x > 0) {
-            term->cursor.x--;
-            term_place(term, term->cursor.x, term->cursor.y, ' ');
-        }
+    case '\v':
+        term->cursor.y++;
         break;
+
+    case '\b':
+        if (term->cursor.x) {
+            term->cursor.x--;
+        } else {
+            if (term->cursor.y) {
+                term->cursor.x = term->width - 1;
+                term->cursor.y--;
+            } else {
+                term->cursor.x = 0;
+            }
+        }
+        term_place(term, ' ');
+        return;
 
     case 127:
         // delete
         break;
 
-    case '\v':
-        term->cursor.y++;
-        break;
-
     default:
-        term_place(term, term->cursor.x, term->cursor.y, ch);
+        term_place(term, ch);
         term->cursor.x++;
         break;
     }
@@ -117,6 +124,22 @@ void term_scroll(terminal* term) {
 
     if (term->cursor.y > 0)
         term->cursor.y--;
+}
+
+
+void term_place_at(terminal* term, usize x, usize y, u32 ch) {
+    usize index = x + y * term->width;
+
+    term_cell cell = {term->parser.style, ch};
+
+    term->buffer[index] = cell;
+
+    if (term->putc_fn)
+        term->putc_fn(term, &cell, index);
+}
+
+void term_place(terminal* term, u32 ch) {
+    term_place_at(term, term->cursor.x, term->cursor.y, ch);
 }
 
 
@@ -213,18 +236,6 @@ void term_reset(terminal* term) {
 
     term->cursor.x = 0;
     term->cursor.y = 0;
-}
-
-
-void term_place(terminal* term, usize x, usize y, u32 ch) {
-    usize index = x + y * term->width;
-
-    term_cell cell = {term->parser.style, ch};
-
-    term->buffer[index] = cell;
-
-    if (term->putc_fn)
-        term->putc_fn(term, &cell, index);
 }
 
 

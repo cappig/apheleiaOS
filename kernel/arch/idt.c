@@ -7,8 +7,8 @@
 #include <x86/regs.h>
 
 #include "arch/gdt.h"
-#include "arch/panic.h"
 #include "sched/scheduler.h"
+#include "sys/panic.h"
 
 static idt_register idtr;
 
@@ -68,8 +68,8 @@ static void exception_handler(int_state* s) {
 
     dump_regs(s);
 
-    log_fatal("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
-    panic("Kernel panic: %s", int_strings[s->int_num]);
+    log_error("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
+    panic("%s", int_strings[s->int_num]);
 }
 
 

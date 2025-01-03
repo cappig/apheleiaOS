@@ -13,9 +13,7 @@
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "arch/irq.h"
-#include "arch/panic.h"
 #include "arch/pic.h"
-#include "arch/stacktrace.h"
 #include "arch/tsc.h"
 #include "drivers/acpi.h"
 #include "drivers/ide.h"
@@ -30,6 +28,8 @@
 #include "sched/scheduler.h"
 #include "sys/clock.h"
 #include "sys/console.h"
+#include "sys/panic.h"
+#include "sys/symbols.h"
 #include "sys/tty.h"
 #include "sys/video.h"
 #include "vfs/fs.h"
@@ -94,9 +94,9 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     initrd_close(handoff);
 
-    timer_enable();
     enable_interrupts();
 
+    // timer_enable();
     // scheduler_start();
 
     halt();

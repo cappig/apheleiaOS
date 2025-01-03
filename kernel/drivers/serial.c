@@ -5,7 +5,7 @@
 #include <string.h>
 #include <x86/serial.h>
 
-#include "arch/panic.h"
+#include "sys/panic.h"
 #include "vfs/fs.h"
 #include "vfs/pty.h"
 

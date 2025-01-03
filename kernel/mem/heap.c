@@ -11,8 +11,8 @@
 #include <string.h>
 #include <x86/paging.h>
 
-#include "arch/panic.h"
 #include "mem/physical.h"
+#include "sys/panic.h"
 
 #define HEAP_MIN (KERNEL_HEAP_PAGES / 2)
 #define HEAP_MAX (KERNEL_HEAP_PAGES * 16)

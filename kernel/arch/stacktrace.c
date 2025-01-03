@@ -5,60 +5,8 @@
 #include <log/log.h>
 #include <parse/sym.h>
 
-#include "mem/heap.h"
+#include "sys/symbols.h"
 
-static symbol_table sym_table = {0};
-
-
-void load_symbols(boot_handoff* handoff) {
-    if (!handoff->symtab_loc || !handoff->symtab_size)
-        return;
-
-    char* symtab_vaddr = (char*)ID_MAPPED_VADDR(handoff->symtab_loc);
-    usize symtab_size = handoff->symtab_size;
-
-    usize lines = sym_count(symtab_vaddr, symtab_size);
-
-    if (!lines)
-        return;
-
-    sym_table.map = kmalloc(lines * sizeof(symbol_entry));
-    sym_table.len = lines;
-
-    if (!sym_parse(symtab_vaddr, &sym_table)) {
-        kfree(sym_table.map);
-        sym_table.len = 0;
-    }
-}
-
-isize resolve_symbol(u64 addr) {
-    if (!sym_table.len)
-        return -1;
-
-    isize ret_index = 0;
-    u64 ret_addr = 0;
-
-    // We have to find the biggest address smaller than the addr
-    for (usize i = 0; i < sym_table.len; i++) {
-        u64 cur_addr = sym_table.map[i].addr;
-
-        if ((cur_addr > ret_addr) && (cur_addr < addr)) {
-            ret_index = i;
-            ret_addr = cur_addr;
-        }
-    }
-
-    return ret_index;
-}
-
-const char* resolve_symbol_name(u64 addr) {
-    isize index = resolve_symbol(addr);
-
-    if (index < 0)
-        return "(unknown symbol)";
-    else
-        return sym_table.map[index].name;
-}
 
 void dump_stack_trace() {
     u64 rbp = 0;
@@ -66,22 +14,20 @@ void dump_stack_trace() {
 
     stack_frame* frame = (stack_frame*)rbp;
 
-    log_debug("Stack trace:");
-
-    if (!sym_table.len)
-        log_warn("No symbol table loaded, trace may be unreliable!");
+    log_error("Stack trace:");
 
     while (frame) {
         isize index = resolve_symbol(frame->rip);
 
         if (index < 0) {
-            log_debug("<%#lx> (unknown symbol)", frame->rip);
+            log_error("<%#lx> (unknown symbol)", frame->rip);
         } else {
-            u64 sym_addr = sym_table.map[index].addr;
-            usize offset = frame->rip - sym_addr;
-            char* sym_name = sym_table.map[index].name;
+            symbol_entry* sym = get_symbol(index);
 
-            log_debug("<%#lx> %s+%#lx", frame->rip, sym_name, offset);
+            usize offset = frame->rip - sym->addr;
+            char* sym_name = sym->name;
+
+            log_error("<%#lx> %s+%#lx", frame->rip, sym_name, offset);
         }
 
         frame = (stack_frame*)frame->rbp;

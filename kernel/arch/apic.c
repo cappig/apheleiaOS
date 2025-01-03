@@ -7,10 +7,10 @@
 
 #include "arch/idt.h"
 #include "arch/irq.h"
-#include "arch/panic.h"
 #include "arch/tsc.h"
 #include "mem/virtual.h"
 #include "sys/clock.h"
+#include "sys/panic.h"
 
 // The APIC uses memory mapped registers and x2apic uses MSRs
 static bool x2_mode = false;

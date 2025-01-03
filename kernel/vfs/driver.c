@@ -42,7 +42,7 @@ static bool _probe_iso(vfs_driver* dev, vfs_file_system* fs) {
         return false;
     }
 
-    log_info("Detected a valid ISO-9660 file system on drive %s", dev->name);
+    log_info("Detected a valid ISO-9660 file system on /dev/%s", dev->name);
 
     vfs_mount("/mnt", fs->subtree->root);
     return true;
@@ -63,11 +63,11 @@ static bool _init_hard(vfs_driver* dev) {
     mbr_table* table = parse_mbr(dev);
 
     if (!table) {
-        log_debug("No valid file system found on drive %s", dev->name);
+        log_debug("No valid file system found on /dev/%s", dev->name);
         return false;
     }
 
-    log_debug("Partitions found on drive %s:", dev->name);
+    log_debug("Partitions found on /dev/%s:", dev->name);
     dump_mbr(table);
 
     // We kind of have to trust the partition table at this point

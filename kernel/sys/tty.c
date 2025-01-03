@@ -13,11 +13,11 @@
 #include <term/render.h>
 #include <term/term.h>
 
-#include "arch/panic.h"
 #include "drivers/initrd.h"
 #include "drivers/vesa.h"
 #include "mem/heap.h"
 #include "sys/console.h"
+#include "sys/panic.h"
 #include "sys/video.h"
 #include "vfs/fs.h"
 #include "vfs/pty.h"
@@ -63,21 +63,13 @@ static bool _load_font(const char* name) {
 static void _mount_tty(pseudo_tty* pty, usize index) {
     assert(index < 10);
 
-    char sname[] = "tty0";
-    sname[3] += index;
+    char name[] = "tty0";
+    name[3] += index;
 
-    pty->slave->name = strdup(sname);
+    pty->slave->name = strdup(name);
 
-    tree_node* slave_node = tree_create_node(pty->slave);
-    vfs_mount("/dev", slave_node);
-
-    char mname[] = "pty0";
-    mname[3] += index;
-
-    pty->master->name = strdup(mname);
-
-    tree_node* master_node = tree_create_node(pty->master);
-    vfs_mount("/dev", master_node);
+    tree_node* node = tree_create_node(pty->slave);
+    vfs_mount("/dev", node);
 }
 
 
@@ -110,11 +102,9 @@ static void _pty_write(pseudo_tty* pty, void* buf, usize len) {
 
 
 void tty_input(usize index, u8* data, usize len) {
-    assert(index < TTY_COUNT);
+    virtual_tty* vtty = get_tty(index);
 
-    virtual_tty* vtty = &ttys[index];
-
-    if (!vtty->pty)
+    if (!vtty)
         return;
 
     vfs_node* node = vtty->pty->master;
@@ -122,11 +112,9 @@ void tty_input(usize index, u8* data, usize len) {
 }
 
 void tty_output(usize index, u8* data, usize len) {
-    assert(index < TTY_COUNT);
+    virtual_tty* vtty = get_tty(index);
 
-    virtual_tty* vtty = &ttys[index];
-
-    if (!vtty->pty)
+    if (!vtty)
         return;
 
     vfs_node* node = vtty->pty->slave;
@@ -149,16 +137,30 @@ bool tty_set_current(usize index) {
     gfx_terminal* gterm = vtty->gterm;
     gterm->draw = true;
 
-    terminal* term = gterm->term;
-    term_reset_style(term);
-    term_redraw(term);
-
     current_tty = index;
 
     pseudo_tty* pty = vtty->pty;
     log_debug("/dev/%s is now the current virtual tty", pty->slave->name);
 
+    terminal* term = gterm->term;
+    term_reset_style(term);
+    term_redraw(term);
+
     return true;
+}
+
+virtual_tty* get_tty(isize index) {
+    if (index == TTY_NONE)
+        return NULL;
+
+    assert(index < TTY_COUNT);
+
+    virtual_tty* vtty = &ttys[index];
+
+    if (!vtty->pty)
+        return NULL;
+
+    return vtty;
 }
 
 
@@ -224,6 +226,6 @@ void tty_spawn_devs() {
     for (usize i = 0; i < TTY_COUNT; i++)
         tty_spawn(i);
 
+    console_set_tty(TTY_CONSOLE);
     tty_set_current(0);
-    console_set_tty(TTY_COUNT - 1);
 }

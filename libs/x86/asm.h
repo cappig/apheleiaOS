@@ -6,6 +6,13 @@
 inline void halt(void) {
     for (;;)
         asm("hlt");
+
+    __builtin_unreachable();
+}
+
+
+inline void swapgs(void) {
+    asm volatile("swapgs");
 }
 
 

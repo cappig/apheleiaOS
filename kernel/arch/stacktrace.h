@@ -9,9 +9,4 @@ typedef struct {
 } stack_frame;
 
 
-void load_symbols(boot_handoff* handoff);
-
-isize resolve_symbol(u64 addr);
-const char* resolve_symbol_name(u64 addr);
-
 void dump_stack_trace(void);

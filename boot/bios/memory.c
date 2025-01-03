@@ -82,8 +82,9 @@ static void* _mmap_alloc_top(usize bytes, u32 type, u32 alignment, uptr top) {
         panic("Attempetd to allocate zero bytes!");
 
     void* ret = mmap_alloc_inner(mmap_ptr, bytes, type, alignment, top);
+
     if (!ret)
-        panic("Bootloader out of memory!");
+        panic("Out of memory!");
 
     return ret;
 }

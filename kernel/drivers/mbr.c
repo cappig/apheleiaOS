@@ -5,8 +5,8 @@
 #include <log/log.h>
 #include <string.h>
 
-#include "arch/panic.h"
 #include "mem/heap.h"
+#include "sys/panic.h"
 #include "vfs/driver.h"
 
 

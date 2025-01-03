@@ -1,9 +1,8 @@
 #include "vector.h"
 
 #include <alloc/global.h>
+#include <base/types.h>
 #include <string.h>
-
-#include "base/types.h"
 
 
 vector* vec_create_sized(usize size, usize elem_size) {
@@ -82,7 +81,7 @@ bool vec_reserve_more(vector* vec, usize additional) {
 
 
 void* vec_at(vector* vec, usize index) {
-    if (index > vec->size)
+    if (index > vec->capacity)
         return NULL;
 
     return vec->data + index * vec->elem_size;

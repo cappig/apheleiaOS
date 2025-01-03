@@ -9,7 +9,7 @@
     "  @-----@     The Apheleia     \n" \
     "   | | |    operating system   \n" \
     "   | | |                       \n" \
-    "   | | |    (c) 2024 - GPLv3   \n" \
+    "   | | |    (c) 2025 - GPLv3   \n" \
     "   | | |                     \n\n"
 
 #define ALPHA_COLORS_DIM               \

@@ -4,7 +4,7 @@
 #include <gfx/state.h>
 #include <string.h>
 
-#include "arch/panic.h"
+#include "sys/panic.h"
 #include "sys/video.h"
 #include "vfs/fs.h"
 

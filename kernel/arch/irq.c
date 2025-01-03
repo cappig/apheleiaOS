@@ -7,7 +7,6 @@
 
 #include "arch/apic.h"
 #include "arch/idt.h"
-#include "arch/panic.h"
 #include "arch/pic.h"
 #include "arch/pit.h"
 #include "drivers/acpi.h"
@@ -15,6 +14,7 @@
 #include "mem/virtual.h"
 #include "sched/scheduler.h"
 #include "sys/clock.h"
+#include "sys/panic.h"
 
 static bool has_apic = false;
 static linked_list* ioapics = NULL;
@@ -147,7 +147,6 @@ void irq_ack(usize irq) {
 }
 
 
-// Start generating timer ticks
 void timer_enable() {
     irq_register(IRQ_SYSTEM_TIMER, timer_handler);
 

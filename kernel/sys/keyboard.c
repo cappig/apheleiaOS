@@ -9,8 +9,8 @@
 #include <log/log.h>
 #include <string.h>
 
-#include "arch/panic.h"
 #include "mem/heap.h"
+#include "sys/panic.h"
 #include "sys/tty.h"
 #include "vfs/fs.h"
 
@@ -130,7 +130,7 @@ u8 register_keyboard(char* name, ascii_keymap* keymap) {
 
     vec_push(kbds, kbd);
 
-    log_info("Keyboard input device registered: %s", name);
+    log_info("Keyboard device registered: %s", name);
 
     return kbds->size - 1;
 }

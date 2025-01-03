@@ -7,7 +7,6 @@
 
 typedef struct {
     const char* name;
-
 } mouse;
 
 

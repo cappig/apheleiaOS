@@ -134,18 +134,28 @@ gfx_term_init(usize width, usize height, bool mode, psf_font* font, term_draw_fn
             width /= font->glyph_width;
             height /= font->glyph_height;
 
+            gfx->cell_width = font->glyph_width;
+            gfx->cell_height = font->glyph_height;
+
             putc_fn = _putc_vesa_psf;
         } else {
             width /= HEADER_FONT_WIDTH;
             height /= HEADER_FONT_HEIGHT;
 
+            gfx->cell_width = HEADER_FONT_WIDTH;
+            gfx->cell_height = HEADER_FONT_HEIGHT;
+
             putc_fn = _putc_vesa_header;
         }
     } else {
         putc_fn = _putc_vga;
+
+        gfx->cell_width = 1;
+        gfx->cell_height = 1;
     }
 
     gfx->term = term_init(width, height, putc_fn, gfx);
+
     if (!gfx->term)
         return NULL;
 

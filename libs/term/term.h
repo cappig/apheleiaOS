@@ -59,6 +59,7 @@ typedef struct {
 } term_parser;
 
 typedef struct terminal terminal;
+
 typedef void (*term_putc_fn)(terminal* term, term_cell* cell, usize index);
 
 typedef struct terminal {
@@ -94,7 +95,8 @@ void term_scroll(terminal* term);
 void term_reset(terminal* term);
 void term_reset_style(terminal* term);
 
-void term_place(terminal* term, usize x, usize y, u32 ch);
+void term_place_at(terminal* term, usize x, usize y, u32 ch);
+void term_place(terminal* term, u32 ch);
 
 bool term_parse_char(terminal* term, char ch);
 int term_parse(terminal* term, const char* string, usize max_size);

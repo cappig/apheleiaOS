@@ -7,8 +7,8 @@
 #include <log/log.h>
 #include <string.h>
 
-#include "arch/panic.h"
 #include "mem/heap.h"
+#include "sys/panic.h"
 
 // Our kernel has one single virtual file system
 virtual_fs* vfs = NULL;

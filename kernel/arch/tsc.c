@@ -3,8 +3,8 @@
 #include <log/log.h>
 #include <x86/asm.h>
 
-#include "arch/panic.h"
 #include "arch/pit.h"
+#include "sys/panic.h"
 
 #define CAL_MILIS   10
 #define CAL_COUNTER (PIT_BASE_FREQ / (1000 / CAL_MILIS))

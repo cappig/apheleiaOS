@@ -7,7 +7,9 @@
 
 #include "vfs/pty.h"
 
-#define TTY_COUNT    4
+#define TTY_COUNT   4
+#define TTY_CONSOLE (TTY_COUNT - 1)
+
 #define TTY_BUF_SIZE 512
 
 #define TTY_NONE (-1)
@@ -30,8 +32,9 @@ void tty_input(usize index, u8* data, usize len);
 void tty_output(usize index, u8* data, usize len);
 
 bool tty_set_current(usize index);
-
-void tty_init(boot_handoff* handoff);
+virtual_tty* get_tty(isize index);
 
 virtual_tty* tty_spawn(usize index);
 void tty_spawn_devs(void);
+
+void tty_init(boot_handoff* handoff);
