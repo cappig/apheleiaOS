@@ -44,9 +44,9 @@ static bool _fetch_edid_info(edid_info* buffer) {
     return (r.al != 0x4f || r.ah != 0);
 }
 
-void _edid_resolution(u8* edid, u16* x, u16* y) {
-    *x = edid[0x38] | ((int)(edid[0x3a] & 0xf0) << 4);
-    *y = edid[0x3b] | ((int)(edid[0x3d] & 0xf0) << 4);
+static void _edid_resolution(u8* edid, graphics_state* gfx) {
+    gfx->monitor_width = edid[0x38] | ((int)(edid[0x3a] & 0xf0) << 4);
+    gfx->monitor_height = edid[0x3b] | ((int)(edid[0x3d] & 0xf0) << 4);
 }
 
 static void _set_vesa_mode(u16 mode_index) {
@@ -111,13 +111,10 @@ void init_graphics(graphics_state* gfx, u8 mode, u16 width, u16 height, u16 bpp)
     edid_info edid = {0};
 
     if (!_fetch_edid_info(&edid)) {
-        u16 edid_width = 0;
-        u16 edid_height = 0;
+        _edid_resolution((u8*)&edid, gfx);
 
-        _edid_resolution((u8*)&edid, &edid_width, &edid_height);
-
-        width = min(width, edid_width);
-        height = min(height, edid_height);
+        width = min(width, gfx->monitor_width);
+        height = min(height, gfx->monitor_height);
     } else {
         width = BOOT_FALLBACK_VESA_WIDTH;
         height = BOOT_FALLBACK_VESA_HEIGHT;

@@ -4,13 +4,15 @@
 #include <time.h>
 
 #include "arch/cmos.h"
+#include "sched/scheduler.h"
 
-static u64 tick_counter = 0;
+static atomic u64 tick_counter = 0;
 static u64 boot_time = 0; // In unix milis
 
 
 void tick_clock() {
     tick_counter++;
+    schedule();
 }
 
 

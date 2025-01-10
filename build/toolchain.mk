@@ -24,6 +24,7 @@ CC_DEBUG := \
 CC_DEBUG_EXTRA := \
 	-DINT_DEBUG \
 	-DKMALLOC_DEBUG \
+	-DSYSCALL_DEBUG \
 	-DSCHED_DEBUG
 
 # scan-build is a nice clang alternative
@@ -37,7 +38,7 @@ ifeq ($(GCC_ANALYZER), true)
 endif
 endif
 
-# If we want to be able to perform stack tracing in the kernel we have
+# If we want to be able to perform reliable stack tracing in the kernel we have
 # to load a symbol table and compile without omitting frame pointers
 TRACEABLE_KERNEL ?= true
 

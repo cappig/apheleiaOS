@@ -34,12 +34,16 @@ bin/boot/libs/%.c.o: libs/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CC_BOOT) -c -o $@ $<
 
-bin/image/root/mbr.bin: $(MBR_OBJ)
+bin/image/mbr.bin: $(MBR_OBJ)
 	@mkdir -p $(@D)
 	$(LD) $(LD_BASE) --oformat=binary -Tboot/mbr/linker.ld -o $@ $^
 
-bin/image/root/boot.bin: $(BOOT_OBJ)
+bin/image/boot.bin: $(BOOT_OBJ)
 	@mkdir -p $(@D)
 	$(LD) $(LD_BOOT) -Tboot/bios/linker.ld -o bin/boot/boot.elf $^
 	$(OC) -O binary bin/boot/boot.elf $@
 
+
+.PHONY: clean_bootloader
+clean_bootloader:
+	rm -rf bin/boot

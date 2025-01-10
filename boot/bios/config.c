@@ -40,10 +40,6 @@ static void _config_cmp(char* key, char* value, void* data) {
 
         args->vesa_bpp = bpp;
     }
-
-    else if (!strcasecmp(key, "CONSOLE_FONT")) {
-        strncpy(args->console_font, value, BOOT_CONSOLE_FONT_LEN);
-    }
 }
 
 

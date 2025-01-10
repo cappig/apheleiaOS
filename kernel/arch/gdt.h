@@ -42,7 +42,7 @@ typedef struct PACKED {
 
 typedef struct PACKED {
     u32 _reserved0;
-    u64 rsp[3];
+    u64 rst[3];
     u64 _reserved1;
     u64 ist[7];
     u64 _reserved2;

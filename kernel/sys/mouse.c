@@ -34,8 +34,11 @@ static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize 
 
 
 void mouse_handle_event(mouse_event event) {
-    x_pos = clamp(x_pos + event.delta_x, 0, video.width - 1);
-    y_pos = clamp(y_pos + event.delta_y, 0, video.height - 1);
+    u16 width = max(video.monitor_width, video.width);
+    u16 height = max(video.monitor_height, video.height);
+
+    x_pos = clamp(x_pos + event.delta_x, 0, width - 1);
+    y_pos = clamp(y_pos + event.delta_y, 0, height - 1);
 
     ring_buffer_push_array(buffer, (u8*)&event, sizeof(mouse_event));
 

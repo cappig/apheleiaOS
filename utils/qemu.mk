@@ -5,7 +5,7 @@ QEMU_CONSOLE ?= false
 
 EMU_ARGS := \
 	-no-reboot \
-	-m 128M
+	-m 64M
 
 ifeq ($(QEMU_CONSOLE), true)
 	EMU_ARGS += -s -monitor stdio -d int,cpu_reset,guest_errors,mmu

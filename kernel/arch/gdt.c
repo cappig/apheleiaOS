@@ -3,11 +3,11 @@
 #include <base/types.h>
 #include <x86/asm.h>
 
-static tss_entry tss;
-static gdt_desc gdtp;
+static tss_entry tss = {0};
+static gdt_desc gdtp = {0};
 
 ALIGNED(0x10)
-static gdt_entry gdt_entries[GDT_ENTRY_COUNT];
+static gdt_entry gdt_entries[GDT_ENTRY_COUNT] = {0};
 
 
 static void set_gdt_entry(usize index, u64 base, u32 limit, u8 access, u8 flags) {
@@ -47,12 +47,11 @@ void tss_init(u64 kernel_stack_top) {
     set_gdt_entry(5, tss_addr, sizeof(tss_entry) - 1, 0x89, 0);
     set_gdt_high_entry(5, tss_addr);
 
-    tss.ist[0] = GDT_kernel_data;
     set_tss_stack(kernel_stack_top);
 
     asm volatile("ltr %0" ::"r"(GDT_OFFSET(5)) : "memory");
 }
 
 void set_tss_stack(u64 stack) {
-    tss.rsp[0] = stack;
+    tss.rst[0] = stack;
 }

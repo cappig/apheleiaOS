@@ -2,15 +2,10 @@
 
 #include <base/addr.h>
 #include <base/types.h>
-#include <boot/proto.h>
-#include <data/tree.h>
 #include <fs/ustar.h>
-#include <gfx/font.h>
-#include <gfx/state.h>
 #include <gfx/vga.h>
 #include <log/log.h>
 #include <string.h>
-#include <term/render.h>
 #include <term/term.h>
 
 #include "drivers/initrd.h"
@@ -35,22 +30,21 @@ static u8 mode = TERM_RASTER;
 static usize width = 0;
 static usize height = 0;
 
-// Only for raster terminals
-static psf_font* font = NULL;
+static psf_font* font = NULL; // only for raster terminals
 
 
 static bool _load_font(const char* name) {
     if (!name)
         return false;
 
-    void* font_file = initrd_find(name);
+    ustar_file* font_file = initrd_find(name);
 
     if (!font_file)
         return false;
 
     font = kcalloc(sizeof(psf_font));
 
-    if (!psf_parse(font_file, font)) {
+    if (!psf_parse(font_file->data, font)) {
         kfree(font);
         font = NULL;
 
@@ -204,7 +198,7 @@ void tty_init(boot_handoff* handoff) {
         return;
 
     if (gfx_state->mode == GFX_VESA) {
-        if (!_load_font(handoff->args.console_font))
+        if (!_load_font(INITRD_FONT_NAME))
             log_warn("Failed to load tty psf font!");
 
         width = gfx_state->width;

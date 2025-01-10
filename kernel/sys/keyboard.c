@@ -137,7 +137,6 @@ u8 register_keyboard(char* name, ascii_keymap* keymap) {
 
 
 bool keyboard_init() {
-    // Since this runs after the drivers
     vfs_node* dev = vfs_create_node("kbd", VFS_CHARDEV);
     dev->interface = vfs_create_file_interface(_read, NULL);
 

@@ -1,22 +1,24 @@
-
 #include <base/addr.h>
 #include <base/types.h>
+#include <boot/proto.h>
 #include <log/log.h>
 #include <parse/sym.h>
 #include <stddef.h>
 
-#include "boot/proto.h"
+#include "drivers/initrd.h"
 #include "mem/heap.h"
 
 static symbol_table sym_table = {0};
 
 
-void load_symbols(boot_handoff* handoff) {
-    if (!handoff->symtab_loc || !handoff->symtab_size)
+void load_symbols() {
+    ustar_file* sym_file = initrd_find(INITRD_SYMTAB_NAME);
+
+    if (!sym_file)
         return;
 
-    char* symtab_vaddr = (char*)ID_MAPPED_VADDR(handoff->symtab_loc);
-    usize symtab_size = handoff->symtab_size;
+    void* symtab_vaddr = sym_file->data;
+    usize symtab_size = ustar_to_num(sym_file->header.size, 12);
 
     usize lines = sym_count(symtab_vaddr, symtab_size);
 

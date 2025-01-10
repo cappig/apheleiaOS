@@ -12,7 +12,6 @@
 #include "drivers/acpi.h"
 #include "mem/heap.h"
 #include "mem/virtual.h"
-#include "sched/scheduler.h"
 #include "sys/clock.h"
 #include "sys/panic.h"
 
@@ -26,8 +25,6 @@ static void spurious_handler(UNUSED int_state* s) {
 
 static void timer_handler(UNUSED int_state* s) {
     tick_clock();
-    scheduler_tick();
-
     irq_ack(IRQ_SYSTEM_TIMER);
 }
 

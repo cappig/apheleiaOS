@@ -35,6 +35,9 @@ typedef struct PACKED {
     u16 width;
     u16 height;
 
+    u16 monitor_width;
+    u16 monitor_height;
+
     u64 framebuffer;
 
     u8 red_mask;

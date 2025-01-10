@@ -56,14 +56,14 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     conosle_init_buffer();
 
+    initrd_init(handoff);
+
+    load_symbols();
+
     log_info(ALPHA_ASCII);
     log_info(BUILD_DATE);
 
     log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
-
-    load_symbols(handoff);
-
-    initrd_init(handoff);
 
     vfs_init();
 
@@ -96,7 +96,6 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     enable_interrupts();
 
-    // timer_enable();
     // scheduler_start();
 
     halt();

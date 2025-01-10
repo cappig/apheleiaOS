@@ -50,6 +50,9 @@ void scheduler_save(int_state* s) {
 
 // Figure out which process should get run on the next context switch
 void schedule() {
+    if (!sched_instance.running)
+        return;
+
     // Check if there are any sleeping tasks to wake up
     // The times have been recalculated by the system clock
     list_node* sleeper_to_wake = NULL;

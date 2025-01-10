@@ -64,22 +64,6 @@ static u64 load_kernel(void) {
     return kernel_entry;
 }
 
-static void load_symbols(void) {
-    file_handle sym_map = {0};
-    open_root_file(&sym_map, "sym.map");
-
-    if (!sym_map.size)
-        return;
-
-    void* sym_perm = mmap_alloc(sym_map.size, E820_KERNEL, 1);
-    memcpy(sym_perm, sym_map.addr, sym_map.size);
-
-    handoff.symtab_loc = (u32)(uptr)sym_perm;
-    handoff.symtab_size = sym_map.size;
-
-    close_root_file(&sym_map);
-}
-
 
 NORETURN void _load_entry(u16 boot_disk) {
     init_serial(SERIAL_COM1, SERIAL_DEFAULT_BAUD);
@@ -111,8 +95,6 @@ NORETURN void _load_entry(u16 boot_disk) {
     load_initrd();
 
     u64 kernel_entry = load_kernel();
-
-    load_symbols();
 
     identity_map(PROTECTED_MODE_TOP, 0, false);
     identity_map(PROTECTED_MODE_TOP, ID_MAP_OFFSET, true);

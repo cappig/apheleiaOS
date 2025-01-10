@@ -34,5 +34,14 @@ bin/kernel/libs/%.c.o: libs/%.c
 	$(CC) $(CC_KERNEL) -c -o $@ $<
 
 
-bin/image/root/kernel.elf: $(KERNEL_OBJ)
+bin/image/kernel.elf: $(KERNEL_OBJ)
 	$(LD) $(LD_KERNEL) -Tkernel/linker.ld -o $@ $^
+ifeq ($(TRACEABLE_KERNEL), true)
+	$(NM) $@ > bin/kernel/sym.map
+endif
+	$(ST) $@
+
+
+.PHONY: clean_kernel
+clean_kernel:
+	rm -rf bin/kernel

@@ -39,6 +39,11 @@ typedef struct PACKED {
     u8 _padding[12];
 } ustar_header;
 
+typedef struct PACKED {
+    ustar_header header;
+    u8 data[];
+} ustar_file;
+
 enum ustart_type {
     USTAR_TYPE_NORMAL = '0',
     USTAR_TYPE_HARD_LINK = '1',
@@ -53,6 +58,6 @@ enum ustart_type {
 
 u32 ustar_to_num(char* str, int size);
 
-ustar_header* ustar_find(void* addr, usize size, const char* file);
+ustar_file* ustar_find(void* addr, usize size, const char* file);
 
 isize ustar_read(ustar_header* head, void* buf, usize offset, usize len);

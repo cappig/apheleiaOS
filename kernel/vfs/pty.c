@@ -1,9 +1,10 @@
 #include "pty.h"
 
+#include <base/types.h>
 #include <data/ring.h>
 #include <data/vector.h>
 
-#include "base/types.h"
+#include "arch/lock.h"
 #include "mem/heap.h"
 #include "vfs/fs.h"
 

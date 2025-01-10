@@ -62,10 +62,9 @@ enum exception_numbers {
     INT_SECURITY_EXCEPTION = 0x1e,
 };
 
-// Save the machine state in the order that they are pushed to the stack
-// (values at the top are pushed last)
+// Save the pre interrupt machine state
+// values at the top are pushed to the stack last
 typedef struct PACKED {
-    seg_regs sg_res;
     gen_regs g_regs;
 
     // Pushed by the isr_stub_xx
