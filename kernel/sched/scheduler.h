@@ -2,6 +2,7 @@
 
 #include <base/types.h>
 
+#include "arch/idt.h"
 #include "sched/process.h"
 
 // Each process will run for at most SCHED_SLICE ticks
@@ -30,19 +31,18 @@ typedef struct {
 extern scheduler sched_instance;
 
 
-void scheduler_init(void);
-NORETURN void scheduler_start(void);
+process* process_with_pid(usize pid);
 
-void schedule();
+void schedule(bool tick);
+void scheduler_switch(void) NORETURN;
+
 void scheduler_save(int_state* s);
 
-NORETURN void scheduler_switch(void);
-
-void scheduler_tick(void);
-
 void scheduler_queue(process* proc);
-void scheduler_kill(process* proc);
-
-void scheduler_exit(int status);
 
 void scheduler_sleep(process* proc, usize milis);
+
+void scheduler_kill(process* proc, usize status);
+
+void scheduler_init(void);
+void scheduler_start(void) NORETURN;

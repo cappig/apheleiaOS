@@ -3,7 +3,7 @@
 #include <base/types.h>
 #include <time.h>
 
-#define CLOCK_FREQ  100
+#define CLOCK_FREQ  1000
 #define MS_PER_TICK (1000 / CLOCK_FREQ)
 
 

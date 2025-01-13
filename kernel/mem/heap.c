@@ -20,7 +20,7 @@
 // FIXME: baaaaaad. A bitmap is far from optimal for this
 
 // We should have more than one heap
-static bitmap_alloc heap;
+static bitmap_alloc heap = {0};
 
 
 void heap_init() {

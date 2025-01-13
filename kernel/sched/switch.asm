@@ -14,15 +14,6 @@ context_switch:
     ; 'kstack' must point to the process state
     mov rsp, rdi
 
-    pop ax
-    mov gs, ax
-    pop ax
-    mov fs, ax
-    pop ax
-    mov es, ax
-    pop ax
-    mov ds, ax
-
     pop r15
     pop r14
     pop r13

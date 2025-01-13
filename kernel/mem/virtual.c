@@ -85,8 +85,8 @@ finalize:
 #endif
 }
 
-void map_region(page_table* lvl4_paddr, usize size, u64 vaddr, u64 paddr, u64 flags) {
-    for (usize i = 0; i < DIV_ROUND_UP(size, PAGE_4KIB); i++) {
+void map_region(page_table* lvl4_paddr, usize pages, u64 vaddr, u64 paddr, u64 flags) {
+    for (usize i = 0; i < pages; i++) {
         u64 page_vaddr = vaddr + i * PAGE_4KIB;
         u64 page_paddr = paddr + i * PAGE_4KIB;
 

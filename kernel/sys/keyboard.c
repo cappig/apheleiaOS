@@ -99,7 +99,8 @@ void kbd_handle_key(key_event event) {
     }
 
 #ifdef INPUT_DEBUG
-    log_debug("[INPUT_DEBUG] keyboard #%u, code = %u", event.source, event.code);
+    char* act_str = action ? "down" : "up";
+    log_debug("[INPUT_DEBUG] keyboard #%u, code = %u (%s)", event.source, event.code, act_str);
 #endif
 
     ring_buffer_push_array(buffer, (u8*)&event, sizeof(key_event));

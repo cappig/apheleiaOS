@@ -96,7 +96,7 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     enable_interrupts();
 
-    // scheduler_start();
+    scheduler_start();
 
     halt();
     __builtin_unreachable();

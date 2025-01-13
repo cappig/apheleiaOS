@@ -39,6 +39,7 @@ include build/$(TARGET).mk
 
 include boot/build.mk
 include kernel/build.mk
+include user/build.mk
 
 include utils/docker.mk
 include utils/qemu.mk

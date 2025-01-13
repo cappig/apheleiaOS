@@ -47,6 +47,3 @@ typedef struct PACKED {
 
     graphics_state graphics;
 } boot_handoff;
-
-
-u32 handoff_checksum(boot_handoff* handoff);

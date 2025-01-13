@@ -88,10 +88,10 @@ void dump_regs(int_state* s) {
 }
 
 void idt_init() {
-    for (usize vector = 0; vector < ISR_COUNT; vector++) {
-        idt_entry* descriptor = &idt_entries[vector];
+    for (usize entry = 0; entry < ISR_COUNT; entry++) {
+        idt_entry* descriptor = &idt_entries[entry];
 
-        u64 stub_ptr = (u64)isr_stub_table[vector];
+        u64 stub_ptr = (u64)isr_stub_table[entry];
 
         descriptor->offset_low = stub_ptr;
         descriptor->selector = GDT_kernel_code;
@@ -140,6 +140,9 @@ void isr_handler(int_state* s) {
 #endif
 
     assert(s->int_num < ISR_COUNT);
+
+    if (sched_instance.running && nest_depth == 1)
+        scheduler_save(s);
 
     int_handlers[s->int_num](s);
 
