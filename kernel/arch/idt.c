@@ -6,8 +6,10 @@
 #include <x86/asm.h>
 #include <x86/regs.h>
 
+#include "aos/signals.h"
 #include "arch/gdt.h"
 #include "sched/scheduler.h"
+#include "sched/signal.h"
 #include "sys/panic.h"
 
 static idt_register idtr;
@@ -63,12 +65,75 @@ static void generic_int_handler(int_state* s) {
     log_warn("Unhandled interrupt: [int=%#lx]\n", s->int_num);
 }
 
-static void exception_handler(int_state* s) {
-    disable_interrupts();
+static isize _exception_to_signal(usize int_num) {
+    switch (int_num) {
+    case INT_DIVIDE_BY_ZERO:
+    case INT_OVERFLOW:
+    case INT_FLOATING_POINT_EXCEPTION:
+    case INT_SIMD_FLOATING_POINT_EXCEPTION:
+        return SIGFPE;
 
+    case INT_INVALID_OPCODE:
+        return SIGILL;
+
+    case INT_GENERAL_PROTECTION_FAULT:
+        return SIGSEGV;
+
+    case INT_PAGE_FAULT:
+        // TODO: page faults are special
+        return SIGSEGV;
+
+    case INT_SINGLE_STEP:
+        // TODO: single stepping
+        return 0;
+
+    case INT_BREAKPOINT:
+        return SIGTRAP;
+
+    case INT_OUT_OF_BOUNDS:
+    case INT_NO_COPROCESSOR:
+    case INT_INVALID_TSS:
+    case INT_SEGMENT_NOT_PRESENT:
+    case INT_STACK_SEGMENT_FAULT:
+    case INT_ALIGNMENT_CHECK:
+    case INT_MACHINE_CHECK:
+    case INT_VIRTUALIZATION_EXCEPTION:
+    case INT_CONTROL_PROTECTION_EXCEPTION:
+    case INT_HYPERVISOR_INJECTION_EXCEPTION:
+    case INT_VMM_COMMUNICATION_EXCEPTION:
+    case INT_SECURITY_EXCEPTION:
+        return SIGBUS; // sigbus is more of a generic "something went wrong error"
+
+    default:
+        return -1; // panic
+    }
+}
+
+static void exception_handler(int_state* s) {
+    bool userspace = (s->s_regs.cs & 3) == 3;
+    bool double_fault = (s->int_num == INT_DOUBLE_FAULT);
+
+    // The exception occurred in userspace (ring 3)
+    // Double faults are special, they always panic
+    if (userspace && !double_fault) {
+        isize signal = _exception_to_signal(s->int_num);
+
+        // Nothing more has to be done
+        if (signal == 0)
+            return;
+
+        // A valid signal has to be delivered to the process
+        if (signal > 1) {
+            signal_send(sched_instance.current, signal);
+            return;
+        }
+    }
+
+    // If the exception originated in the kernel we are fucked
+    disable_interrupts();
     dump_regs(s);
 
-    log_error("Unhandled exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
+    log_error("Fatal exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
     panic("%s", int_strings[s->int_num]);
 }
 
@@ -136,7 +201,12 @@ void isr_handler(int_state* s) {
     nest_depth++;
 
 #ifdef INT_DEBUG
-    log_debug("[INT_DEBUG] Handling interrupt: num = %#lx, cs = %#lx", s->int_num, s->s_regs.cs);
+    log_debug(
+        "[INT_DEBUG] Handling interrupt: num = %#lx, cs = %#lx (depth = %zu)",
+        s->int_num,
+        s->s_regs.cs,
+        nest_depth
+    );
 #endif
 
     assert(s->int_num < ISR_COUNT);
@@ -148,6 +218,10 @@ void isr_handler(int_state* s) {
 
     nest_depth--;
 
-    if (sched_instance.running && nest_depth == 0)
+    if (sched_instance.running && nest_depth == 0) {
+        schedule();
+
         scheduler_switch();
+        __builtin_unreachable();
+    }
 }

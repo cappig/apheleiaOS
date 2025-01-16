@@ -2,6 +2,7 @@
 #include <base/types.h>
 #include <gfx/color.h>
 #include <gfx/vga.h>
+#include <string.h>
 
 #include "term.h"
 
@@ -31,7 +32,6 @@ u16 term_cell_to_vga(term_cell* cell) {
     return (bg << 4) | (fg & 0x0f);
 }
 
-void term_set_palette(terminal* term, const u32 palette[static 16]) {
-    for (usize i = 0; i < 16; i++)
-        term->palette[i].raw = palette[i];
+void term_set_palette(terminal* term, rgba_color palette[static 16]) {
+    memcpy(term->palette, palette, sizeof(rgba_color) * 16);
 }

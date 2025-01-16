@@ -136,9 +136,7 @@ bool tty_set_current(usize index) {
     pseudo_tty* pty = vtty->pty;
     log_debug("/dev/%s is now the current virtual tty", pty->slave->name);
 
-    terminal* term = gterm->term;
-    term_reset_style(term);
-    term_redraw(term);
+    term_redraw(gterm->term);
 
     return true;
 }
@@ -221,5 +219,5 @@ void tty_spawn_devs() {
         tty_spawn(i);
 
     console_set_tty(TTY_CONSOLE);
-    tty_set_current(0);
+    tty_set_current(TTY_CONSOLE);
 }

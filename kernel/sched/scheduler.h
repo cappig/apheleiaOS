@@ -1,5 +1,6 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 
 #include "arch/idt.h"
@@ -33,15 +34,14 @@ extern scheduler sched_instance;
 
 process* process_with_pid(usize pid);
 
-void schedule(bool tick);
-void scheduler_switch(void) NORETURN;
+void schedule(void);
+void scheduler_tick(void);
 
 void scheduler_save(int_state* s);
+void scheduler_switch(void) NORETURN;
 
 void scheduler_queue(process* proc);
-
 void scheduler_sleep(process* proc, usize milis);
-
 void scheduler_kill(process* proc, usize status);
 
 void scheduler_init(void);

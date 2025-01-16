@@ -7,4 +7,4 @@
 
 u16 term_cell_to_vga(term_cell* cell);
 
-void term_set_palette(terminal* term, const u32 palette[static 16]);
+void term_set_palette(terminal* term, rgba_color palette[static 16]);

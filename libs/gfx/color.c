@@ -1,31 +1,33 @@
 #include "color.h"
 
+#define RAW(hex) ((rgba_color){.raw = (hex)})
+
 // Modified xterm color palette
 // In little endian notation (0xAA|BBGGRR)
-const u32 default_ansi_colors[16] = {
-    0x000000,
-    0x0000cd,
-    0x00cd00,
-    0x00cdcd,
-    0xee0000,
-    0xcd00cd,
-    0xcdcd00,
-    0xbfbfbf,
-    0x7f7f7f,
-    0x0000ff,
-    0x00ff00,
-    0x00ffff,
-    0xff5c5c,
-    0xff00ff,
-    0xffff00,
-    0xffffff,
+rgba_color default_ansi_colors[16] = {
+    RAW(0x000000),
+    RAW(0x0000cd),
+    RAW(0x00cd00),
+    RAW(0x00cdcd),
+    RAW(0xee0000),
+    RAW(0xcd00cd),
+    RAW(0xcdcd00),
+    RAW(0xbfbfbf),
+    RAW(0x7f7f7f),
+    RAW(0x0000ff),
+    RAW(0x00ff00),
+    RAW(0x00ffff),
+    RAW(0xff5c5c),
+    RAW(0xff00ff),
+    RAW(0xffff00),
+    RAW(0xffffff),
 };
 
 
 // TODO: this kinda sucks. But it works for now
 int color_palette_index(u32 color) {
     for (usize i = 0; i < 16; i++)
-        if (default_ansi_colors[i] == color)
+        if (default_ansi_colors[i].raw == color)
             return i;
 
     return -1;
@@ -34,7 +36,7 @@ int color_palette_index(u32 color) {
 rgba_color ansi_to_rgb(u8 index) {
     // Standard 16 colors
     if (index < 16)
-        return (rgba_color){.raw = default_ansi_colors[index]};
+        return default_ansi_colors[index];
 
     // Grayscale
     if (index > 231) {

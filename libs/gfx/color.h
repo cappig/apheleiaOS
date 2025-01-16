@@ -10,7 +10,7 @@ typedef union PACKED {
         u8 b;
         u8 a;
     };
-    u32 raw; // NOTE : beware of endianness
+    u32 raw; // NOTE: beware of endianness
 } rgba_color;
 
 typedef enum {
@@ -36,7 +36,7 @@ inline rgba_color rgb_to_color(u8 red, u8 green, u8 blue) {
     return (rgba_color){.r = red, .g = green, .b = blue};
 }
 
-extern const u32 default_ansi_colors[16];
+extern rgba_color default_ansi_colors[16];
 
 
 int color_palette_index(u32 color);

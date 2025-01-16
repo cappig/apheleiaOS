@@ -1,5 +1,6 @@
 #include "syscall.h"
 
+#include <aos/signals.h>
 #include <aos/syscalls.h>
 #include <base/addr.h>
 #include <base/types.h>
@@ -10,10 +11,9 @@
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
-#include "mem/virtual.h"
 #include "sched/process.h"
 #include "sched/scheduler.h"
-#include "sys/tty.h"
+#include "sched/signal.h"
 #include "vfs/fs.h"
 
 
@@ -33,34 +33,7 @@ static bool _valid_fd(usize fd) {
 }
 
 static bool _valid_ptr(const void* ptr, usize len, bool write) {
-    if (!ptr)
-        return false;
-
-    if ((u64)ptr > LOWER_HALF_TOP)
-        return false;
-
-    void* cur = (void*)ptr;
-
-    while (cur < ptr + len) {
-        page_table* page;
-        usize size = get_page(sched_instance.current->user.mem_map, (u64)ptr, &page);
-
-        if (!size || !page)
-            return false;
-
-        if (!page->bits.present)
-            return false;
-
-        if (!page->bits.user)
-            return false;
-
-        if (write && !page->bits.writable)
-            return false;
-
-        cur += size;
-    }
-
-    return true;
+    return process_validate_ptr(sched_instance.current, ptr, len, write);
 }
 
 static bool _valid_signum(usize signum) {
@@ -213,14 +186,68 @@ static isize _open(u64 path_ptr, u64 flags, u64 mode) {
 }
 
 
+static u64 _signal(u64 signum, u64 handler_ptr) {
+    sighandler_t handler = (sighandler_t)handler_ptr;
+
+    if (handler != SIG_IGN && handler != SIG_DFL)
+        if (!_valid_ptr(handler, 0, false))
+            return (u64)SIG_ERR;
+
+    u64 prev = (u64)sched_instance.current->user.signals.handlers[signum - 1];
+
+    if (!signal_set_handler(sched_instance.current, signum, handler))
+        return (u64)SIG_ERR;
+
+    return prev ? prev : (u64)SIG_DFL;
+}
+
+static u64 _sigreturn(void) {
+    if (sched_instance.current->type != PROC_USER)
+        return -ENODATA;
+
+    signal_return(sched_instance.current);
+
+    return 0;
+}
+
+static u64 _kill(u64 pid, u64 signum) {
+    if (!_valid_signum(signum))
+        return -EINVAL;
+
+    process* proc = process_with_pid(pid);
+
+    if (!proc)
+        return -ESRCH;
+
+    // TODO: check perms
+
+    if (signum != 0)
+        signal_send(proc, signum);
+
+    return 0;
+}
+
+
 static u64 _getpid(void) {
     return sched_instance.current->id;
+}
+
+static u64 _getppid(void) {
+    tree_node* tnode = sched_instance.current->user.tree_entry;
+
+    // This means that init called
+    if (!tnode->parent)
+        return 0;
+
+    process* parent = tnode->data;
+
+    return parent->id;
 }
 
 
 static void _syscall_handler(int_state* s) {
 #ifdef SYSCALL_DEBUG
-    log_debug("[SYSCALL_DEBUG] handling syscall rax = %#lx", s->g_regs.rax);
+    log_debug("[SYSCALL_DEBUG] handling syscall rax = %#lu", s->g_regs.rax);
 #endif
 
     u64 arg1 = s->g_regs.rdi;
@@ -258,18 +285,33 @@ static void _syscall_handler(int_state* s) {
         break;
 
 
+    case SYS_SIGNAL:
+        ret = _signal(arg1, arg2);
+        break;
+
+    case SYS_SIGRETURN:
+        ret = _sigreturn();
+        break;
+
+
+    case SYS_KILL:
+        ret = _kill(arg1, arg2);
+        break;
+
+
     case SYS_GETPID:
         ret = _getpid();
         break;
 
-    case SYS_SIGNAL:
-    case SYS_SIGRETURN:
-    case SYS_KILL:
-        // TODO: signals
+    case SYS_GETPPID:
+        ret = _getppid();
+        break;
+
     default:
 #ifdef SYSCALL_DEBUG
-        log_warn("[SYSCALL_DEBUG] Invalid syacall (%#lx)", s->g_regs.rax);
+        log_warn("[SYSCALL_DEBUG] Invalid syacall (%lu)", s->g_regs.rax);
 #endif
+        signal_send(sched_instance.current, SIGSYS);
         break;
     }
 

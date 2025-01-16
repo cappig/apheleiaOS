@@ -98,6 +98,7 @@ bool irq_init() {
         goto fallback;
 
     set_int_handler(0xff, spurious_handler);
+    irq_register(IRQ_SYSTEM_TIMER, timer_handler);
 
     log_info("Configured APIC IRQs");
     return true;
@@ -145,8 +146,6 @@ void irq_ack(usize irq) {
 
 
 void timer_enable() {
-    irq_register(IRQ_SYSTEM_TIMER, timer_handler);
-
     if (has_apic)
         lapic_enable_timer();
 }

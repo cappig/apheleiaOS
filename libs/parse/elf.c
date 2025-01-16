@@ -3,6 +3,7 @@
 #include <base/attributes.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <string.h>
 #include <x86/paging.h>
 
 
@@ -76,4 +77,42 @@ bool elf_parse_header(elf_attributes* attribs, elf_header* header) {
     }
 
     return has_load;
+}
+
+// NOTE: these functions assumes that the elf file is loaded in contiguous memory
+// TODO: deal with vfs_nodes instead
+elf_sect_header* elf_locate_section(elf_header* header, const char* name) {
+    void* soff = (void*)header + header->shoff;
+    elf_sect_header* shst_sect = soff + header->shstrndx * header->shdr_size;
+
+    char* str_table = (void*)header + shst_sect->offset;
+
+    for (usize i = 0; i < header->sh_num; i++) {
+        elf_sect_header* s_header = (void*)header + header->shoff + i * header->shdr_size;
+
+        if (s_header->type == SHT_NULL)
+            continue;
+
+        char* sect_name = str_table + s_header->name;
+
+        if (!strcmp(sect_name, name))
+            return s_header;
+    }
+
+    return NULL;
+}
+
+elf_symbol*
+elf_locate_symbol(elf_symbol* symtab, usize symtab_size, char* strtab, const char* name) {
+    usize count = symtab_size / sizeof(elf_symbol);
+
+    for (usize i = 0; i < count; i++) {
+        elf_symbol* sym = &symtab[i];
+        char* sym_name = &strtab[sym->name];
+
+        if (!strcmp(sym_name, name))
+            return sym;
+    }
+
+    return NULL;
 }

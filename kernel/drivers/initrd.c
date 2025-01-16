@@ -3,8 +3,7 @@
 #include <base/addr.h>
 #include <boot/proto.h>
 #include <fs/ustar.h>
-
-#include "sys/panic.h"
+#include <log/log.h>
 
 static void* initrd_vaddr;
 static usize initrd_size;
@@ -23,5 +22,5 @@ void initrd_close(boot_handoff* handoff) {
     void* paddr = (void*)ID_MAPPED_PADDR(initrd_vaddr);
 
     if (mmap_free_inner(&handoff->mmap, paddr))
-        panic("Failed to free initrd.tar");
+        log_error("Failed to free initrd.tar");
 }

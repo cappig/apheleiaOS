@@ -168,7 +168,7 @@ typedef struct PACKED {
     u16 shndx; // section table index
     u64 value;
     u64 size;
-} elf_symbol_table;
+} elf_symbol;
 
 enum elf_symbol_bindig {
     STB_LOCAL = 0,
@@ -202,3 +202,6 @@ elf_validity elf_verify(elf_header* header);
 u64 elf_to_page_flags(u32 elf_flags);
 
 bool elf_parse_header(elf_attributes* attribs, elf_header* header);
+
+elf_sect_header* elf_locate_section(elf_header* header, const char* name);
+elf_symbol* elf_locate_symbol(elf_symbol* symtab, usize symtab_size, char* strtab, const char* name);

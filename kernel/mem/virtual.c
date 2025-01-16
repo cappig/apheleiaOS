@@ -49,7 +49,7 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
         entry = &lvl3[lvl3_index];
 
         paddr = ALIGN_DOWN(paddr, PAGE_1GIB);
-        flags |= PT_HUGE;
+        flags |= PT_HUGE | PT_PRESENT;
         goto finalize;
     }
 
@@ -60,7 +60,7 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
         entry = &lvl2[lvl2_index];
 
         paddr = ALIGN_DOWN(paddr, PAGE_2MIB);
-        flags |= PT_HUGE;
+        flags |= PT_HUGE | PT_PRESENT;
         goto finalize;
     }
 

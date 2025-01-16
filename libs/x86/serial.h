@@ -24,3 +24,4 @@ void send_serial(usize port, char c);
 char receive_serial(usize port);
 
 void send_serial_string(usize port, const char* s);
+void send_serial_sized_string(usize port, const char* s, usize len);

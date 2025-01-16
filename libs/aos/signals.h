@@ -1,8 +1,8 @@
 #pragma once
 
-#define SIG_ERR 0
-#define SIG_DFL 1
-#define SIG_IGN 2
+#define SIG_ERR ((sighandler_fn)(-1))
+#define SIG_DFL ((sighandler_fn)0)
+#define SIG_IGN ((sighandler_fn)1)
 
 #define EXIT_SIGNAL_BASE 128
 
@@ -10,6 +10,8 @@ typedef void (*sighandler_t)(int signum);
 typedef sighandler_t sighandler_fn;
 
 enum signal_nums {
+    SIGNAL_NONE = 0,
+
     SIGCHLD = 1,
 
     SIGUSR1 = 2,
@@ -17,15 +19,18 @@ enum signal_nums {
 
     SIGINT = 4,
     SIGHUP = 5,
+    SIGTRAP = 6,
 
-    SIGFPE = 6,
-    SIGILL = 7,
-    SIGSYS = 8,
-    SIGSEGV = 9,
-    SIGTERM = 10,
-    SIGABRT = 11,
+    SIGTERM = 7,
+    SIGABRT = 8,
 
-    SIGKILL = 12,
+    SIGSYS = 9,
+    SIGFPE = 10,
+    SIGILL = 11,
+    SIGBUS = 12,
+    SIGSEGV = 13,
 
-    SIGNAL_COUNT
+    SIGKILL = 14,
+
+    SIGNAL_COUNT // SIGNAL_COUNT-1 should be used since we index signals from 1
 };

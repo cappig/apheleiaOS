@@ -26,7 +26,6 @@ bool init_serial(usize port, u32 baud) {
 }
 
 void send_serial(usize port, char c) {
-    // These empty loops are not ideal but eehhh it works
     while (!(inb(port + 5) & 0x20))
         continue;
 
@@ -43,4 +42,9 @@ char receive_serial(usize port) {
 void send_serial_string(usize port, const char* s) {
     while (*s)
         send_serial(port, *s++);
+}
+
+void send_serial_sized_string(usize port, const char* s, usize len) {
+    for (usize i = 0; i < len; i++)
+        send_serial(port, s[i]);
 }

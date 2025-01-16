@@ -152,24 +152,20 @@ terminal* term_init(usize width, usize height, term_putc_fn putc_fn, void* priva
 
     term->private = private;
 
-    term->default_bg = TERM_DEFAULT_BG;
-    term->default_fg = TERM_DEFAULT_FG;
-
-    term->parser.style = DEFAULT_STYLE;
-
     term->width = width;
     term->height = height;
 
     term->lines = height;
 
     term->buffer = gmalloc(term->lines * width * sizeof(term_cell));
+
     if (!term->buffer)
         return NULL;
 
     term_set_palette(term, default_ansi_colors);
 
-    for (usize y = 0; y < term->lines; y++)
-        term_clear_line(term, y);
+    term_clear_screen(term);
+    term_reset_style(term);
 
     return term;
 }

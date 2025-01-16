@@ -11,6 +11,7 @@
 typedef ptrdiff_t ssize_t;
 typedef ssize_t off_t;
 typedef size_t pid_t;
+typedef size_t uid_t;
 
 typedef void (*sighandler_t)(int);
 
@@ -19,6 +20,7 @@ typedef void (*sighandler_t)(int);
 // The syscall number is passed in %rax
 // Arguments are passed in from left to right in %rdi, %rsi, %rdx, %rcx, %r8, %r9
 // A single return value is placed in %rax
+// TODO: implement lighter more modern interfaces (sysenter/syscall)
 
 enum syscall_nums {
     SYS_EXIT = 0,
@@ -32,10 +34,12 @@ enum syscall_nums {
 
     SYS_SIGNAL = 7,
     SYS_SIGRETURN = 8,
-    SYS_KILL = 9,
 
-    SYS_GETPID = 10,
-    SYS_GETPPID = 11,
+    SYS_KILL = 9,
+    SYS_WAIT = 10,
+
+    SYS_GETPID = 11,
+    SYS_GETPPID = 12,
 
     SYSCALL_COUNT
 };
@@ -123,12 +127,13 @@ inline sighandler_t sys_signal(int signum, sighandler_t handler) {
     return (sighandler_t)syscall2(SYS_SIGNAL, signum, (u64)handler);
 }
 
-inline int sys_sigreturn() {
-    return syscall0(SYS_SIGRETURN);
-}
 
 inline int sys_kill(pid_t pid, int signum) {
     return syscall2(SYS_KILL, pid, signum);
+}
+
+inline int sys_wait(pid_t pid, int* state, int options) {
+    return syscall3(SYS_WAIT, pid, (u64)state, options);
 }
 
 

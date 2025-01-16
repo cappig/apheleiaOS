@@ -1,6 +1,8 @@
 #include "scheduler.h"
 
+#include <aos/signals.h>
 #include <base/attributes.h>
+#include <base/macros.h>
 #include <base/types.h>
 #include <data/list.h>
 #include <log/log.h>
@@ -10,13 +12,15 @@
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "arch/irq.h"
-#include "base/macros.h"
+#include "data/tree.h"
 #include "drivers/initrd.h"
 #include "mem/heap.h"
 #include "sched/process.h"
+#include "sched/signal.h"
 #include "sched/syscall.h"
 #include "sys/clock.h"
 #include "sys/panic.h"
+#include "sys/tty.h"
 
 // Defined in switch.asm
 extern NORETURN void context_switch(u64 kernel_stack);
@@ -55,15 +59,12 @@ process* process_with_pid(usize pid) {
 
 
 // Check if a sleeping process has to be woken up
-static bool _wake_sleeper(bool tick) {
+static bool _wake_sleeper(void) {
     list_node* sleeper_to_wake = NULL;
     isize longest_wait = 1;
 
     foreach (node, sched_instance.sleep_queue) {
         sleeping_process* curr = node->data;
-
-        if (tick)
-            curr->time_left--;
 
         // Find the process that has been waiting the longest
         // Prefer processes higher up in the queue
@@ -106,26 +107,34 @@ static void _get_next_process(scheduler* sched) {
 
         // Ignore blocked and finished processes
         if (proc->state == PROC_READY || proc->state == PROC_RUNNING) {
+            list_node* process_node = list_pop_front(sched->run_queue);
+            list_append(sched->run_queue, process_node);
+
             sched->current = proc;
             found = true;
+
             break;
         }
     }
 
-    // There are no processes to run so we schedule idle
+    // There are no processes left to run so we schedule idle
     if (!found)
         sched->current = sched->idle;
 }
 
 
-// Figure out which process should get run on the next context switch
-void schedule(bool tick) {
-    bool sleeper = false;
+void scheduler_tick() {
+    sched_instance.proc_ticks_left--;
 
-    if (tick) {
-        sched_instance.proc_ticks_left--;
-        sleeper = _wake_sleeper(tick);
+    foreach (node, sched_instance.sleep_queue) {
+        sleeping_process* proc = node->data;
+        proc->time_left--;
     }
+}
+
+// Figure out which process should get run on the next context switch
+void schedule() {
+    bool sleeper = _wake_sleeper();
 
     // Is the current timeslice is done
     if (sched_instance.proc_ticks_left <= 0 && !sleeper) {
@@ -133,13 +142,17 @@ void schedule(bool tick) {
         sched_instance.proc_ticks_left = SCHED_SLICE;
     }
 
+    // Are there any pending signals
+    if (sched_instance.current->type == PROC_USER) {
+        usize signum = signal_get_pending(sched_instance.current);
+        prepare_signal(sched_instance.current, signum);
+    }
+
 #ifdef SCHED_DEBUG
     log_debug(
-        "[SCHED_DEBUG] scheduling process: name=%s pid=%lu ksp=%#lx cr3=%#lx",
+        "[SCHED_DEBUG] scheduling process: name=%s pid=%lu",
         sched_instance.current->name,
-        sched_instance.current->id,
-        (u64)sched_instance.current->stack_ptr,
-        (u64)sched_instance.current->user.mem_map
+        sched_instance.current->id
     );
 #endif
 }
@@ -168,6 +181,7 @@ void scheduler_switch() {
 
 // Since kernel processes use a single stack the stack pointer has
 // to be updated once we context switch to a different process
+// This is done automatically for user processes due to the TSS
 void scheduler_save(int_state* s) {
     if (!s)
         return;
@@ -210,8 +224,20 @@ void scheduler_kill(process* proc, usize status) {
 
     proc->status = status;
 
+    // Pass the unfortunate news to the parent
+    tree_node* parent = proc->user.tree_entry->parent;
+
+#ifdef SCHED_DEBUG
+    log_debug("[SCHED_DEBUG] killing process: name=%s pid=%lu", proc->name, proc->id);
+#endif
+
+    if (!parent)
+        panic("Attempted to kill init (pid = %zu)!", proc->id);
+
+    signal_send(parent->data, SIGCHLD);
+
     sched_instance.proc_ticks_left = 0;
-    schedule(false);
+    schedule();
 }
 
 
@@ -241,9 +267,10 @@ void scheduler_init() {
 
     sched_instance.idle = spawn_kproc("[idle]", _spin);
 
-    _spawn_init();
-
+    load_vdso();
     syscall_init();
+
+    _spawn_init();
 }
 
 
@@ -251,8 +278,10 @@ NORETURN
 void scheduler_start() {
     log_info("Starting the scheduler");
 
+    tty_set_current(0);
+
     // Bootstrap the scheduler
-    schedule(false);
+    schedule();
 
     timer_enable();
 

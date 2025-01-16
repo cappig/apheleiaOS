@@ -17,11 +17,11 @@ static isize console_tty = TTY_NONE;
 
 
 void kputsn(const char* str, usize len) {
-    if (com_port)
-        send_serial_string(com_port, str);
-
     if (console_buffer)
         ring_buffer_push_array(console_buffer, (u8*)str, len);
+
+    if (com_port)
+        send_serial_sized_string(com_port, str, len);
 
     if (console_tty > 0)
         tty_output(console_tty, (u8*)str, len);
