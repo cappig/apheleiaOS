@@ -28,6 +28,7 @@
 #include "sched/scheduler.h"
 #include "sys/clock.h"
 #include "sys/console.h"
+#include "sys/cpu.h"
 #include "sys/panic.h"
 #include "sys/symbols.h"
 #include "sys/tty.h"
@@ -40,6 +41,8 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     if (handoff->magic != BOOT_MAGIC)
         panic("Kernel booted with invalid args!");
+
+    cpu_set_gs_base((u64)&cores_local[0]);
 
     gdt_init();
     pic_init();
@@ -56,7 +59,9 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     conosle_init_buffer();
 
-    initrd_init(handoff);
+    vfs_init();
+
+    initrd_mount(handoff);
 
     load_symbols();
 
@@ -64,8 +69,6 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     log_info(BUILD_DATE);
 
     log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
-
-    vfs_init();
 
     tty_init(handoff);
     tty_spawn_devs();
@@ -83,6 +86,7 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     calibrate_tsc();
 
     irq_init();
+    load_vdso();
     scheduler_init();
 
     init_serial_dev();
@@ -91,8 +95,6 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     init_ps2();
 
     ide_disk_init();
-
-    initrd_close(handoff);
 
     enable_interrupts();
 

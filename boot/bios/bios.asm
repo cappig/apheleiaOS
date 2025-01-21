@@ -102,7 +102,7 @@ bits 32
     ; Move out_regs from stack
     mov esi, esp                            ; Start address
 
-    mov edi, dword [esp+REGS_B+SREGS_B +12] ; Destination address
+    mov edi, dword [esp+REGS_B+SREGS_B+12]  ; Destination address
 
     mov ecx, REGS_B/4                       ; repeat cx times
     rep movsd

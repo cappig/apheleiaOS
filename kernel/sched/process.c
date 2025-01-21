@@ -15,10 +15,12 @@
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
-#include "drivers/initrd.h"
+#include "data/list.h"
+#include "data/tree.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
+#include "sched/scheduler.h"
 #include "sched/signal.h"
 #include "sys/panic.h"
 
@@ -60,13 +62,43 @@ bool process_free(process* proc) {
 
     proc->state = PROC_DONE;
 
+    // Init adopts any orphaned children
+    tree_node* proc_node = proc->user.tree_entry;
+    tree_node* init_node = proc_tree->root;
+
+    foreach (node, proc_node->children) {
+        tree_node* child_node = node->data;
+        tree_insert_child(init_node, child_node);
+
+#ifdef SCHED_DEBUG
+        log_debug("[SCHED_DEBUG] init adopted orphan: name=%s pid=%lu", proc->name, proc->id);
+#endif
+    }
+
+    list_destroy(proc_node->children);
+    proc_node->children = NULL;
+
     return true;
 }
 
 // obvously process_free() has to be called before so that nothing is left dangling
-void process_reap(process* proc) {
+pid_t process_reap(process* proc) {
+    pid_t ret = proc->id;
+
+#ifdef SCHED_DEBUG
+    log_debug("[SCHED_DEBUG] reaping process: name=%s pid=%lu", proc->name, proc->id);
+#endif
+
+    tree_node* tnode = proc->user.tree_entry;
+    tree_remove_child(tnode->parent, tnode);
+
+    assert(!tnode->children);
+    tree_destroy_node(tnode);
+
     kfree(proc);
     kfree(proc->name);
+
+    return ret;
 }
 
 
@@ -88,7 +120,7 @@ void process_init_stack(process* parent, process* child) {
 
         // Clone the user stack
         if (child->type == PROC_USER) {
-            child->user.stack = parent->user.stack;
+            child->user.stack_vaddr = parent->user.stack_vaddr;
             child->user.stack_size = parent->user.stack_size;
 
             usize pages = DIV_ROUND_UP(parent->user.stack_size, PAGE_4KIB);
@@ -185,40 +217,6 @@ void process_push_state(process* proc, int_state* state) {
 }
 
 
-// Is a given pointer in the address space of the process valid? Walk the page map and find out :P
-bool process_validate_ptr(process* proc, const void* ptr, usize len, bool write) {
-    if (!ptr)
-        return false;
-
-    // The entire higher half of the memory space is reserved for the kernel
-    if ((u64)ptr > LOWER_HALF_TOP)
-        return false;
-
-    void* cur = (void*)ptr;
-
-    while (cur <= ptr + len) {
-        page_table* page;
-        usize size = get_page(proc->user.mem_map, (u64)ptr, &page);
-
-        if (!size || !page)
-            return false;
-
-        if (!page->bits.present)
-            return false;
-
-        if (!page->bits.user)
-            return false;
-
-        if (write && !page->bits.writable)
-            return false;
-
-        cur += size;
-    }
-
-    return true;
-}
-
-
 // Spawns an orphaned kernel process that runs in ring 0
 // Since these process have kernel level privileges they can run arbitrary kernel code so
 // we only have to pass in a pointer to function that lives in the kernel's memory space
@@ -262,12 +260,12 @@ process* spawn_uproc(const char* name) {
 
 
 static bool _init_ustack(process* proc, u64 base, usize size) {
-    if (proc->user.stack)
+    if (proc->user.stack_vaddr)
         return false;
 
     usize pages = DIV_ROUND_UP(size, PAGE_4KIB);
 
-    proc->user.stack = base;
+    proc->user.stack_vaddr = base;
 
     proc->user.stack_size = size;
     proc->user.stack_paddr = (u64)alloc_frames(pages);
@@ -275,7 +273,7 @@ static bool _init_ustack(process* proc, u64 base, usize size) {
     map_region(
         proc->user.mem_map,
         SCHED_USTACK_PAGES,
-        proc->user.stack,
+        proc->user.stack_vaddr,
         proc->user.stack_paddr,
         PT_PRESENT | PT_NO_EXECUTE | PT_WRITE | PT_USER
     );
@@ -377,7 +375,7 @@ bool process_exec_elf(process* proc, elf_header* header) {
         .s_regs.rip = (u64)header->entry,
         .s_regs.cs = GDT_user_code | 3,
         .s_regs.rflags = 0x200,
-        .s_regs.rsp = proc->user.stack + proc->user.stack_size,
+        .s_regs.rsp = proc->user.stack_vaddr + proc->user.stack_size,
         .s_regs.ss = GDT_user_data | 3,
     };
 
@@ -410,17 +408,14 @@ process* process_fork(process* parent) {
 
 
 void load_vdso() {
-    ustar_file* vdso = initrd_find("usr/vdso.elf");
+    vfs_node* file = vfs_lookup_from("/mnt/initrd/", "usr/vdso.elf");
 
-    if (!vdso)
+    if (!file)
         panic("vdso.elf not found!");
 
-    void* vaddr = vdso->data;
-    usize size = ustar_to_num(vdso->header.size, 12);
+    vdso_elf = kmalloc(file->size);
+    file->interface->read(file, vdso_elf, 0, file->size);
 
-    if (elf_verify(vaddr) != VALID_ELF)
+    if (elf_verify(vdso_elf) != VALID_ELF)
         panic("vdso.elf is invalid!");
-
-    vdso_elf = kmalloc(size);
-    memcpy(vdso_elf, vaddr, size);
 }

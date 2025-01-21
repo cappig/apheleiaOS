@@ -4,9 +4,11 @@
 #include <aos/syscalls.h>
 #include <base/addr.h>
 #include <base/types.h>
+#include <data/list.h>
 #include <data/vector.h>
 #include <errno.h>
 #include <log/log.h>
+#include <string.h>
 #include <x86/paging.h>
 
 #include "arch/gdt.h"
@@ -14,11 +16,12 @@
 #include "sched/process.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
+#include "sys/cpu.h"
 #include "vfs/fs.h"
 
 
 static inline file_desc* _get_fd(usize fd) {
-    vector* fd_table = sched_instance.current->user.fd_table;
+    vector* fd_table = cpu->sched->current->user.fd_table;
 
     return vec_at(fd_table, fd);
 }
@@ -33,7 +36,7 @@ static bool _valid_fd(usize fd) {
 }
 
 static bool _valid_ptr(const void* ptr, usize len, bool write) {
-    return process_validate_ptr(sched_instance.current, ptr, len, write);
+    return process_validate_ptr(cpu->sched->current, ptr, len, write);
 }
 
 static bool _valid_signum(usize signum) {
@@ -45,7 +48,7 @@ static bool _valid_signum(usize signum) {
 
 
 static void _exit(u64 status) {
-    scheduler_kill(sched_instance.current, status);
+    scheduler_kill(cpu->sched->current, status);
 }
 
 
@@ -180,7 +183,7 @@ static isize _open(u64 path_ptr, u64 flags, u64 mode) {
     if (!_valid_ptr(path, 0, false))
         return -EFAULT;
 
-    isize fd = process_open_fd(sched_instance.current, path, -1);
+    isize fd = process_open_fd(cpu->sched->current, path, -1);
 
     return fd;
 }
@@ -193,19 +196,19 @@ static u64 _signal(u64 signum, u64 handler_ptr) {
         if (!_valid_ptr(handler, 0, false))
             return (u64)SIG_ERR;
 
-    u64 prev = (u64)sched_instance.current->user.signals.handlers[signum - 1];
+    u64 prev = (u64)cpu->sched->current->user.signals.handlers[signum - 1];
 
-    if (!signal_set_handler(sched_instance.current, signum, handler))
+    if (!signal_set_handler(cpu->sched->current, signum, handler))
         return (u64)SIG_ERR;
 
     return prev ? prev : (u64)SIG_DFL;
 }
 
 static u64 _sigreturn(void) {
-    if (sched_instance.current->type != PROC_USER)
+    if (cpu->sched->current->type != PROC_USER)
         return -ENODATA;
 
-    signal_return(sched_instance.current);
+    signal_return(cpu->sched->current);
 
     return 0;
 }
@@ -227,13 +230,66 @@ static u64 _kill(u64 pid, u64 signum) {
     return 0;
 }
 
+static u64 _wait(pid_t pid, u64 status_ptr, u64 options) {
+    if (!_valid_ptr((void*)status_ptr, sizeof(int*), true))
+        return -EFAULT;
+
+    int* status = (int*)status_ptr;
+    process* parent = cpu->sched->current;
+
+    // TODO: group ids
+    if (pid < -1 || pid == 0)
+        return -EINVAL;
+
+    if (pid > 0) {
+        // Wait for a specific child
+        process* proc = process_with_pid(pid);
+
+        // Is this process the child of the caller
+        process* real_parent = proc->user.tree_entry->data;
+        if (parent != real_parent)
+            return -ECHILD;
+
+        // Is the process done already?
+        if (proc->state == PROC_DONE) {
+            // The process page map is loaded at this point
+            *status = proc->status;
+            return process_reap(proc);
+        }
+    } else {
+        //  Wait for any child
+        foreach (node, parent->user.tree_entry->children) {
+            tree_node* child_node = node->data;
+            process* child = child_node->data;
+
+            // Are any children done already?
+            if (child->state == PROC_DONE) {
+                *status = child->status;
+                return process_reap(child);
+            }
+        }
+    }
+
+    // Not done but we don't want to hang
+    if (options & WNOHANG)
+        return 0;
+
+    // Not done and we do want to hang (a lot of unfortunate nomenclature in this one)
+    parent->state = PROC_BLOCKED;
+    parent->user.waiting = pid;
+    parent->user.child_status = status;
+    cpu->sched->proc_ticks_left = 0; // make sure that we get rescheduled
+
+    return 0;
+}
+
 
 static u64 _getpid(void) {
-    return sched_instance.current->id;
+    return cpu->sched->current->id;
 }
 
 static u64 _getppid(void) {
-    tree_node* tnode = sched_instance.current->user.tree_entry;
+    tree_node* tnode = cpu->sched->current->user.tree_entry;
 
     // This means that init called
     if (!tnode->parent)
@@ -242,6 +298,20 @@ static u64 _getppid(void) {
     process* parent = tnode->data;
 
     return parent->id;
+}
+
+
+static u64 _fork(void) {
+    process* child = process_fork(cpu->sched->current);
+
+    // When the child returns it will get 0
+    int_state* child_state = (int_state*)child->stack_ptr;
+    child_state->g_regs.rax = 0;
+
+    scheduler_queue(child);
+
+    // And when the parent returns it will get the pid of the child
+    return child->id;
 }
 
 
@@ -298,6 +368,10 @@ static void _syscall_handler(int_state* s) {
         ret = _kill(arg1, arg2);
         break;
 
+    case SYS_WAIT:
+        ret = _wait(arg1, arg2, arg3);
+        break;
+
 
     case SYS_GETPID:
         ret = _getpid();
@@ -307,16 +381,21 @@ static void _syscall_handler(int_state* s) {
         ret = _getppid();
         break;
 
+
+    case SYS_FORK:
+        ret = _fork();
+        break;
+
+
     default:
 #ifdef SYSCALL_DEBUG
         log_warn("[SYSCALL_DEBUG] Invalid syacall (%lu)", s->g_regs.rax);
 #endif
-        signal_send(sched_instance.current, SIGSYS);
+        signal_send(cpu->sched->current, SIGSYS);
         break;
     }
 
-    if (ret)
-        s->g_regs.rax = ret;
+    s->g_regs.rax = ret;
 }
 
 

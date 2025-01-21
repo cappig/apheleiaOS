@@ -10,6 +10,7 @@
 #include "arch/gdt.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
+#include "sys/cpu.h"
 #include "sys/panic.h"
 
 static idt_register idtr;
@@ -110,7 +111,7 @@ static isize _exception_to_signal(usize int_num) {
 }
 
 static void exception_handler(int_state* s) {
-    bool userspace = (s->s_regs.cs & 3) == 3;
+    bool userspace = ((s->s_regs.cs & 3) == 3);
     bool double_fault = (s->int_num == INT_DOUBLE_FAULT);
 
     // The exception occurred in userspace (ring 3)
@@ -124,7 +125,7 @@ static void exception_handler(int_state* s) {
 
         // A valid signal has to be delivered to the process
         if (signal > 1) {
-            signal_send(sched_instance.current, signal);
+            signal_send(cpu->sched->current, signal);
             return;
         }
     }
@@ -211,14 +212,14 @@ void isr_handler(int_state* s) {
 
     assert(s->int_num < ISR_COUNT);
 
-    if (sched_instance.running && nest_depth == 1)
+    if (cpu->sched->running && nest_depth == 1)
         scheduler_save(s);
 
     int_handlers[s->int_num](s);
 
     nest_depth--;
 
-    if (sched_instance.running && nest_depth == 0) {
+    if (cpu->sched->running && nest_depth == 0) {
         schedule();
 
         scheduler_switch();

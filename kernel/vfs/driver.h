@@ -1,5 +1,6 @@
 #pragma once
 
+#include "data/tree.h"
 #include "fs.h"
 
 // A vfs_driver represents an underlying disk device, that is it abstracts the
@@ -49,6 +50,7 @@ typedef struct {
     usize offset;
 } disk_partition;
 
+// TODO: this is a mess, refactor asap
 typedef struct vfs_file_system {
     disk_partition partition;
 
@@ -58,6 +60,10 @@ typedef struct vfs_file_system {
 
     void* private;
 } vfs_file_system;
+
+
+typedef bool (*vfs_mount_fn)(tree_node* mount);
+typedef bool (*vfs_unmount_fn)(void);
 
 
 vfs_driver* vfs_create_device(const char* name, usize sector_size, usize sector_count);

@@ -37,17 +37,20 @@ static bool _load_font(const char* name) {
     if (!name)
         return false;
 
-    ustar_file* font_file = initrd_find(name);
+    vfs_node* file = vfs_lookup_from("/mnt/initrd/", name);
 
-    if (!font_file)
+    if (!file)
         return false;
+
+    void* buffer = kmalloc(file->size);
+    file->interface->read(file, buffer, 0, file->size);
 
     font = kcalloc(sizeof(psf_font));
 
-    if (!psf_parse(font_file->data, font)) {
+    if (!psf_parse(buffer, font)) {
         kfree(font);
-        font = NULL;
 
+        font = NULL;
         return false;
     }
 

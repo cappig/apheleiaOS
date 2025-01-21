@@ -88,7 +88,7 @@ _recursive_tree_build(vfs_driver* dev, vfs_file_system* fs, iso_dir* parent, tre
 }
 
 
-// ISO files are just contiguous blocks of disk, nice and easy
+// ISO files are just contiguous blocks, nice and easy
 static isize _read(vfs_node* node, void* buf, usize offset, usize len) {
     if (offset == len)
         return 0;

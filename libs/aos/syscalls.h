@@ -10,8 +10,8 @@
 
 typedef ptrdiff_t ssize_t;
 typedef ssize_t off_t;
-typedef size_t pid_t;
-typedef size_t uid_t;
+typedef ssize_t pid_t;
+typedef ssize_t uid_t;
 
 typedef void (*sighandler_t)(int);
 
@@ -41,6 +41,8 @@ enum syscall_nums {
     SYS_GETPID = 11,
     SYS_GETPPID = 12,
 
+    SYS_FORK = 13,
+
     SYSCALL_COUNT
 };
 
@@ -54,6 +56,10 @@ enum seek_whence {
     SYS_SEEK_SET = 0, // off = x
     SYS_SEEK_CUR = 1, // off += x
     SYS_SEEK_END = 2, // off = eof + x
+};
+
+enum wait_options {
+    WNOHANG = 1 << 0,
 };
 
 
@@ -132,15 +138,20 @@ inline int sys_kill(pid_t pid, int signum) {
     return syscall2(SYS_KILL, pid, signum);
 }
 
-inline int sys_wait(pid_t pid, int* state, int options) {
-    return syscall3(SYS_WAIT, pid, (u64)state, options);
+inline int sys_wait(pid_t pid, int* status, int options) {
+    return syscall3(SYS_WAIT, pid, (u64)status, options);
 }
 
 
-inline pid_t sys_getpid() {
+inline pid_t sys_fork(void) {
+    return syscall0(SYS_FORK);
+}
+
+
+inline pid_t sys_getpid(void) {
     return syscall0(SYS_GETPID);
 }
 
-inline pid_t sys_getppid() {
+inline pid_t sys_getppid(void) {
     return syscall0(SYS_GETPPID);
 }

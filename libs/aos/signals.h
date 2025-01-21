@@ -4,7 +4,7 @@
 #define SIG_DFL ((sighandler_fn)0)
 #define SIG_IGN ((sighandler_fn)1)
 
-#define EXIT_SIGNAL_BASE 128
+#define EXIT_SIGNAL_BASE 127
 
 typedef void (*sighandler_t)(int signum);
 typedef sighandler_t sighandler_fn;

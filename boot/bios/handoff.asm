@@ -47,7 +47,7 @@ gdt_64:
     db 0x20
     db 0x00
 .longmode_data:
-    dw 0xffff
+    dw 0x0000
     dw 0x0000
     db 0x00
     db 0x92

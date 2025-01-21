@@ -6,7 +6,6 @@
 
 // Nary tree
 // This is _the worst_ way to implement this
-// TODO: we should use a c++ style vector instead
 typedef struct tree_node {
     struct tree_node* parent;
     void* data;
@@ -55,6 +54,9 @@ typedef struct rb_tree {
     rb_tree_node* root;
 } rb_tree;
 
+typedef bool (*tree_comp_fn)(const void* data, const void* private);
+typedef bool (*tree_callback_fn)(tree_node* node);
+
 
 tree* tree_create(void* root_data);
 void tree_destroy(tree* root);
@@ -63,11 +65,10 @@ tree_node* tree_create_node(void* data);
 void tree_destroy_node(tree_node* node);
 
 void tree_prune(tree_node* parent);
+void tree_prune_callback(tree_node* parent, tree_callback_fn callback);
 
 void tree_insert_child(tree_node* parent, tree_node* child);
-
-
-typedef bool (*tree_comp_fn)(const void* data, const void* private);
+bool tree_remove_child(tree_node* parent, tree_node* child);
 
 tree_node* tree_find_comp(tree* root, tree_comp_fn comp, void* private);
 tree_node* tree_find(tree* root, void* data);

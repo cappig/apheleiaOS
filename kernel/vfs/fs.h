@@ -4,7 +4,9 @@
 #include <data/list.h>
 #include <data/tree.h>
 
-#define VFS_EOF 0
+#define VFS_EOF (-1)
+
+#define VFS_INVALID_TYPE ((vfs_node_type)(-1))
 
 typedef enum {
     VFS_FILE = 1,
@@ -38,14 +40,14 @@ typedef struct {
 typedef struct vfs_node {
     char* name;
 
+    vfs_timestamp time;
+
     u64 size;
     vfs_node_type type;
 
-    u32 permissions;
-
     u64 inode;
 
-    vfs_timestamp time;
+    u16 permissions;
 
     vfs_node_interface* interface;
     vfs_driver* driver;
@@ -74,5 +76,6 @@ tree_node* vfs_mount(const char* path, tree_node* mount_node);
 tree_node* vfs_lookup_tree_from(tree_node* from, const char* path);
 tree_node* vfs_lookup_tree(const char* path);
 vfs_node* vfs_lookup(const char* path);
+vfs_node* vfs_lookup_from(const char* from, const char* path);
 
 void dump_vfs(void);

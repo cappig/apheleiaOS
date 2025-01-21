@@ -13,6 +13,7 @@
 #include "mem/heap.h"
 #include "mem/virtual.h"
 #include "sys/clock.h"
+#include "sys/cpu.h"
 #include "sys/panic.h"
 
 static bool has_apic = false;
@@ -121,8 +122,7 @@ void irq_register(usize irq, int_handler handler) {
         ioapic* io = _get_authoritative_apic(irq);
         assert(io != NULL);
 
-        u32 lapic_id = 0; // TODO: fetch the id of the current core?
-        ioapic_map(io, vector, irq, lapic_id, IOAPIC_POL_LOW, IOAPIC_TM_EDGE);
+        ioapic_map(io, vector, irq, cpu->lapic_id, IOAPIC_POL_LOW, IOAPIC_TM_EDGE);
         ioapic_clear_mask(io, irq);
     } else {
         pic_clear_mask(irq);

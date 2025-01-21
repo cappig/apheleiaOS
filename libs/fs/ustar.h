@@ -44,14 +44,15 @@ typedef struct PACKED {
     u8 data[];
 } ustar_file;
 
-enum ustart_type {
-    USTAR_TYPE_NORMAL = '0',
+enum ustar_type {
+    USTAR_TYPE_NORMAL_FILE = '0',
     USTAR_TYPE_HARD_LINK = '1',
     USTAR_TYPE_SYM_LINK = '2',
     USTAR_TYPE_CHAR_DEV = '3',
     USTAR_TYPE_BLOCK_DEV = '4',
     USTAR_TYPE_DIR = '5',
     USTAR_TYPE_FIFO = '6',
+    USTAR_TYPE_CONTIGUOUS_FILE = '7', // treated as a normal file
     // Some other flags exist as well but we don't support them
 };
 

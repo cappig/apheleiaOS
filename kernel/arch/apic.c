@@ -10,6 +10,7 @@
 #include "arch/tsc.h"
 #include "mem/virtual.h"
 #include "sys/clock.h"
+#include "sys/cpu.h"
 #include "sys/panic.h"
 
 // The APIC uses memory mapped registers and x2apic uses MSRs
@@ -118,6 +119,8 @@ void ioapic_set_mask(ioapic* io, usize irq) {
 
 // Enable the local APIC for the current core and calibrate the timer
 void init_lapic() {
+    cpu->lapic_id = read_lapic(LAPIC_ID_REG);
+
     // Configure the spurious interrupt and flip the enable bit
     write_lapic(LAPIC_SPURIOUS_REG, INT_SPURIOUS | (1 << 8));
 

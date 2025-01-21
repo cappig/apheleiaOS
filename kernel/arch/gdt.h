@@ -4,7 +4,7 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-#define GDT_OFFSET(index) (u16)(index * sizeof(gdt_entry))
+#define GDT_OFFSET(index) (u16)((index) * sizeof(gdt_entry))
 
 #define GDT_ENTRY_COUNT 7
 

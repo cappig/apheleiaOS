@@ -67,6 +67,8 @@ void vfs_destroy_interface(vfs_node_interface* interface) {
 
 
 tree_node* vfs_lookup_tree_from(tree_node* from, const char* path) {
+    assert(vfs);
+
     if (!path) {
         errno = EINVAL;
         return NULL;
@@ -121,14 +123,29 @@ tree_node* vfs_lookup_tree(const char* path) {
 vfs_node* vfs_lookup(const char* path) {
     tree_node* tnode = vfs_lookup_tree(path);
 
-    if (tnode)
-        return tnode->data;
-    else
+    if (!tnode)
         return NULL;
+
+    return tnode->data;
 }
 
+vfs_node* vfs_lookup_from(const char* from, const char* path) {
+    tree_node* tnode_from = vfs_lookup_tree(from);
+
+    if (!tnode_from)
+        return NULL;
+
+    tree_node* tnode = vfs_lookup_tree_from(tnode_from, path);
+
+    if (!tnode)
+        return NULL;
+
+    return tnode->data;
+}
 
 tree_node* vfs_mount(const char* path, tree_node* mount_node) {
+    assert(vfs);
+
     vfs_node* node = mount_node->data;
     if (!node->name) {
         errno = EINVAL;
@@ -141,7 +158,7 @@ tree_node* vfs_mount(const char* path, tree_node* mount_node) {
         return NULL;
     }
 
-    // TODO: This should be a hash map
+    // FIXME: VFS file names should be unique inside a given folder
     foreach (child, parent_node->children) {
         tree_node* child_node = child->data;
         vfs_node* child_vnode = child_node->data;
@@ -170,6 +187,8 @@ static void _recursive_dump(tree_node* parent, usize depth) {
 }
 
 void dump_vfs() {
+    assert(vfs);
+
     log_debug("Recursive dump of the virtual file system:");
 
     _recursive_dump(vfs->tree->root, 0);

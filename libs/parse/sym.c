@@ -6,6 +6,7 @@
 
 
 // Since each line in the file maps one symbol we just have to count the lines
+// TODO: this should be a more generic function in a lib
 usize sym_count(const char* sym_file, usize sym_file_len) {
     if (!sym_file)
         return 0;

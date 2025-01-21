@@ -60,7 +60,12 @@ typedef struct {
     // The user stack
     usize stack_size;
     u64 stack_paddr;
-    u64 stack;
+    u64 stack_vaddr;
+
+    // Tells us if this process is waiting for children to die :$
+    // 0 if not waiting, -1 if waiting for any child or > 0 if waiting for a specific child
+    pid_t waiting;
+    int* child_status; // if we are waiting for a process we want the status written here
 
     // File descriptor table
     vector* fd_table;
@@ -90,7 +95,7 @@ typedef struct {
 process* process_create(const char* name, u8 type, usize pid);
 
 bool process_free(process* proc);
-void process_reap(process* proc);
+pid_t process_reap(process* proc);
 
 void process_init_stack(process* parent, process* child);
 void process_init_page_map(process* parent, process* child);
@@ -101,8 +106,6 @@ isize process_open_fd(process* proc, const char* path, isize fd);
 
 void process_set_state(process* proc, int_state* state);
 void process_push_state(process* proc, int_state* state);
-
-bool process_validate_ptr(process* proc, const void* ptr, usize len, bool write);
 
 process* spawn_kproc(const char* name, void* entry);
 process* spawn_uproc(const char* name);

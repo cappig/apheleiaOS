@@ -30,6 +30,9 @@ context_switch:
     pop rbx
     pop rax
 
+    ; we are switching to userspace so we don't have to check the cs
+    swapgs
+
     ; Pop error code and interrupt number
     add rsp, 8*2
 

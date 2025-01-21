@@ -22,6 +22,7 @@ void list_destroy(linked_list* list) {
     gfree(list);
 }
 
+
 list_node* list_create_node(void* data) {
     list_node* new = gcalloc(sizeof(list_node));
     new->next = NULL;
@@ -34,6 +35,7 @@ list_node* list_create_node(void* data) {
 void list_destroy_node(list_node* node) {
     gfree(node);
 }
+
 
 bool list_append(linked_list* list, list_node* node) {
     if (!node || !list)
@@ -78,6 +80,7 @@ bool list_remove(linked_list* list, list_node* node) {
     return true;
 }
 
+
 bool list_swap(list_node* left, list_node* right) {
     if (!left || !right)
         return false;
@@ -97,6 +100,7 @@ bool list_swap(list_node* left, list_node* right) {
 
     return true;
 }
+
 
 bool list_push(linked_list* list, list_node* node) {
     if (!node || !list)
@@ -138,6 +142,7 @@ list_node* list_pop_front(linked_list* list) {
 
     return head;
 }
+
 
 list_node* list_find(linked_list* list, void* data) {
     foreach (node, list) {

@@ -1,11 +1,11 @@
 #include "signal.h"
 
+#include <aos/signals.h>
 #include <base/addr.h>
 #include <base/types.h>
 #include <log/log.h>
 #include <string.h>
 
-#include "aos/signals.h"
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "sched/process.h"
@@ -74,7 +74,7 @@ static bool _unmark_signal(process* proc, usize signum) {
 static void _push_to_ustack(process* proc, u64 rsp, sig_state* state) {
     rsp -= sizeof(sig_state);
 
-    usize offset = rsp - proc->user.stack;
+    usize offset = rsp - proc->user.stack_vaddr;
     u64 paddr = proc->user.stack_paddr + offset;
     void* vaddr = (void*)ID_MAPPED_VADDR(paddr);
 
@@ -98,9 +98,9 @@ bool signal_set_handler(process* proc, usize signum, sighandler_fn handler) {
         return false;
 
     if (handler == SIG_DFL)
-        handler = _default_actions[signum - 1];
+        handler = _default_actions[signum];
 
-    proc->user.signals.handlers[signum - 1] = handler;
+    proc->user.signals.handlers[signum] = handler;
 
     return true;
 }
@@ -151,7 +151,7 @@ void prepare_signal(process* proc, usize signum) {
 
     int_state* current = (int_state*)proc->stack_ptr;
 
-    sighandler_fn handler = proc->user.signals.handlers[signum - 1];
+    sighandler_fn handler = proc->user.signals.handlers[signum];
 
     // TODO: allow for separate signal handler stacks
     u64 old_rsp = current->s_regs.rsp - 128; // Assume that we have a 128 byte red zone
@@ -172,7 +172,7 @@ void prepare_signal(process* proc, usize signum) {
         return;
     }
 
-    assert(proc->user.stack);
+    assert(proc->user.stack_vaddr);
 
     sig_state state = {
         .ret = (u64)proc->user.signals.trampoline,
@@ -218,12 +218,12 @@ bool signal_return(process* proc) {
     // Locate the old state on the userspace stack
     // Compensate for the popped return value
     u64 rsp = current->s_regs.rsp - sizeof(u64);
-    usize offset = rsp - proc->user.stack;
+    usize offset = rsp - proc->user.stack_vaddr;
 
     u64 paddr = proc->user.stack_paddr + offset;
     void* vaddr = (void*)ID_MAPPED_VADDR(paddr);
 
-    void* ptr = (void*)proc->user.stack + offset;
+    void* ptr = (void*)proc->user.stack_vaddr + offset;
 
     if (!process_validate_ptr(proc, ptr, sizeof(sig_state), false))
         goto fail;

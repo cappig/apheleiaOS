@@ -5,33 +5,43 @@
 #include <parse/sym.h>
 #include <stddef.h>
 
-#include "drivers/initrd.h"
 #include "mem/heap.h"
+#include "vfs/fs.h"
 
 static symbol_table sym_table = {0};
 
 
 void load_symbols() {
-    ustar_file* sym_file = initrd_find(INITRD_SYMTAB_NAME);
+    vfs_node* file = vfs_lookup_from("/mnt/initrd/", INITRD_SYMTAB_NAME);
 
-    if (!sym_file)
+    if (!file)
         return;
 
-    void* symtab_vaddr = sym_file->data;
-    usize symtab_size = ustar_to_num(sym_file->header.size, 12);
+    char* buffer = kmalloc(file->size);
+    file->interface->read(file, buffer, 0, file->size);
 
-    usize lines = sym_count(symtab_vaddr, symtab_size);
+    usize lines = sym_count(buffer, file->size);
 
-    if (!lines)
+    if (!lines) {
+        log_warn("Empty kernel symbol file!");
+
+        kfree(buffer);
         return;
+    }
 
     sym_table.map = kmalloc(lines * sizeof(symbol_entry));
     sym_table.len = lines;
 
-    if (!sym_parse(symtab_vaddr, &sym_table)) {
+    if (!sym_parse(buffer, &sym_table)) {
+        log_warn("Error parsing kernel symbols!");
+
         kfree(sym_table.map);
         sym_table.len = 0;
     }
+
+    kfree(buffer);
+
+    log_debug("Loaded kernel debug symbols");
 }
 
 

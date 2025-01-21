@@ -15,8 +15,12 @@ tree_node* tree_create_node(void* data) {
 }
 
 void tree_destroy_node(tree_node* node) {
+    if (node->children)
+        list_destroy(node->children);
+
     gfree(node);
 }
+
 
 tree* tree_create(void* root_data) {
     tree* new = gmalloc(sizeof(tree));
@@ -26,26 +30,49 @@ tree* tree_create(void* root_data) {
     return new;
 }
 
-void tree_destroy(tree* root) {
-    tree_prune(root->root);
-    gfree(root);
+void tree_destroy(tree* trunk) {
+    tree_prune(trunk->root);
+    gfree(trunk);
 }
 
-// TODO: implement a simple callback function that can free the data
-void tree_prune(tree_node* parent) {
+
+void tree_prune_callback(tree_node* parent, tree_callback_fn callback) {
     foreach (node, parent->children) {
         tree_node* child = node->data;
+
+        if (callback)
+            callback(child);
+
         tree_prune(child);
-        gfree(child);
     }
 
     list_destroy(parent->children);
     gfree(parent);
 }
 
+void tree_prune(tree_node* parent) {
+    tree_prune_callback(parent, NULL);
+}
+
+
 void tree_insert_child(tree_node* parent, tree_node* child) {
     list_append(parent->children, list_create_node(child));
     child->parent = parent;
+}
+
+bool tree_remove_child(tree_node* parent, tree_node* child) {
+    linked_list* list = parent->children;
+
+    list_node* lnode = list_find(list, child);
+
+    if (!lnode)
+        return false;
+
+    bool removed = list_remove(list, lnode);
+
+    list_destroy_node(lnode);
+
+    return removed;
 }
 
 

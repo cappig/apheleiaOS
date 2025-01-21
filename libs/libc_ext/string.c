@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "alloc/global.h"
+
 
 void memswap(void* a, void* b, size_t len) {
     char* a_byte = a;
@@ -130,22 +132,70 @@ char* strtrunc(char* str) {
 }
 
 
-char* basename(const char* path) {
+char* basename_ptr(const char* path) {
     char* slash = strrchr(path, '/');
 
     if (slash)
         return slash + 1;
-    else
-        return (char*)path;
+
+    return NULL;
 }
 
 #ifdef HAS_GMALLOC
+
+static char* _strip_trailing(const char* str, size_t len) {
+    char* tmp = gmalloc(len * sizeof(char));
+    strcpy(tmp, str);
+
+    for (size_t i = len - 1; i >= 0; i--) {
+        if (tmp[i] != '/')
+            break;
+
+        tmp[i] = '\0';
+    }
+
+    return tmp;
+}
+
+
 char* dirname(const char* path) {
-    char* slash = strrchr(path, '/');
+    size_t len = strlen(path);
+
+    if (!len)
+        return NULL;
+
+    char* tmp = _strip_trailing(path, len);
+
+    char* slash = strrchr(tmp, '/');
 
     if (!slash)
         return NULL;
 
-    return strndup(path, slash - path);
+    char* ret = strndup(tmp, slash - tmp);
+    gfree(tmp);
+
+    return ret;
 }
+
+char* basename(const char* path) {
+    size_t len = strlen(path);
+
+    if (!len)
+        return NULL;
+
+    char* tmp = _strip_trailing(path, len);
+
+    char* slash = strrchr(tmp, '/');
+
+    if (!slash)
+        slash = tmp;
+    else
+        slash += 1;
+
+    char* ret = strndup(slash, len);
+    gfree(tmp);
+
+    return ret;
+}
+
 #endif

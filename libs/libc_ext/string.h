@@ -17,7 +17,9 @@ int strncasecmp(const char* s1, const char* s2, size_t n);
 char* strtrim(char* str);
 char* strtrunc(char* str);
 
-char* basename(const char* path);
+char* basename_ptr(const char* path);
+
 #ifdef HAS_GMALLOC
 char* dirname(const char* path);
+char* basename(const char* path);
 #endif

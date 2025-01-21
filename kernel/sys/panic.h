@@ -11,12 +11,12 @@
         halt();                                 \
     })
 
-#define assert(b)                              \
-    ({                                         \
-        typeof(b) __as_b = (b);                \
-                                               \
-        if (UNLIKELY(!__as_b))                 \
-            panic("Assertion failed: %s", #b); \
+#define assert(expression)                              \
+    ({                                                  \
+        typeof(expression) __as_e = (expression);       \
+                                                        \
+        if (UNLIKELY(!__as_e))                          \
+            panic("Assertion failed: %s", #expression); \
     })
 
 

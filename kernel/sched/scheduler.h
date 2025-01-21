@@ -28,11 +28,12 @@ typedef struct {
     process* idle;
 } scheduler;
 
-// TODO: make this per core!
-extern scheduler sched_instance;
+extern tree* proc_tree;
 
 
 process* process_with_pid(usize pid);
+
+bool process_validate_ptr(process* proc, const void* ptr, usize len, bool write);
 
 void schedule(void);
 void scheduler_tick(void);
@@ -43,6 +44,8 @@ void scheduler_switch(void) NORETURN;
 void scheduler_queue(process* proc);
 void scheduler_sleep(process* proc, usize milis);
 void scheduler_kill(process* proc, usize status);
+
+void dump_process_tree(void);
 
 void scheduler_init(void);
 void scheduler_start(void) NORETURN;
