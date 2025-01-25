@@ -11,6 +11,7 @@
 #include <string.h>
 #include <x86/paging.h>
 
+#include "base/types.h"
 #include "mem/physical.h"
 #include "sys/panic.h"
 
@@ -39,7 +40,7 @@ void heap_init() {
 
     void* heap_start = (void*)ID_MAPPED_VADDR(paddr);
 
-    if (!bitmap_alloc_init(&heap, heap_start, heap_size, KERNEL_HEAP_BLOCK))
+    if (!bitmap_alloc_init(&heap, heap_start, heap_size, KERNEL_HEAP_BLOCK_SIZE))
         panic("Failed to initialize kernel heap!");
 }
 
@@ -53,8 +54,10 @@ void* kmalloc(usize size) {
         return NULL;
     }
 
-    usize blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK);
-    void* space = bitmap_alloc_blocks(&heap, blocks + 1);
+    usize header_blocks = DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
+    usize blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK_SIZE);
+
+    void* space = bitmap_alloc_reserve(&heap, blocks + header_blocks);
 
     // No more memory left. Since were in kernel land we treat this as a fatal error
     // TODO: attempt to allocate more heaps
@@ -62,6 +65,7 @@ void* kmalloc(usize size) {
 
     // Write the header
     kheap_header* header = space;
+
     header->magic = KERNEL_HEAP_MAGIC;
     header->size = blocks;
 
@@ -92,16 +96,19 @@ void kfree(void* ptr) {
     }
 
     kheap_header* header = ptr - sizeof(kheap_header);
-    usize size = header->size * KERNEL_HEAP_BLOCK;
-
-#ifdef KMALLOC_DEBUG
-    log_debug("[KMALLOC_DEBUG] free: bytes = %zd, ptr = %#lx", size, (u64)ptr);
-#endif
 
     assert(header->magic == KERNEL_HEAP_MAGIC);
     assert(header->size != 0);
 
-    bitmap_alloc_free(&heap, header, size + sizeof(kheap_header));
+    usize header_blocks = DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
+    usize blocks = header->size + header_blocks;
+
+    bitmap_alloc_free(&heap, header, blocks);
+
+#ifdef KMALLOC_DEBUG
+    usize size = header->size * KERNEL_HEAP_BLOCK_SIZE;
+    log_debug("[KMALLOC_DEBUG] free: bytes = %zd, ptr = %#lx", size, (u64)ptr);
+#endif
 }
 
 

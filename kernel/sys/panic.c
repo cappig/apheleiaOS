@@ -14,7 +14,8 @@ void panic_unwind() {
     disable_interrupts();
 
     // Switch to the debug console so that we can dump the error to the screen
-    tty_set_current(TTY_CONSOLE);
+    if (current_tty != TTY_NONE)
+        tty_set_current(TTY_CONSOLE);
 
     dump_stack_trace();
 }

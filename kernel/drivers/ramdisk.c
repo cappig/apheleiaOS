@@ -4,10 +4,10 @@
 #include <string.h>
 
 #include "mem/heap.h"
-#include "vfs/driver.h"
+#include "sys/disk.h"
 
 
-static isize _read(vfs_driver* dev, void* dest, usize offset, usize bytes) {
+static isize _read(disk_dev* dev, void* dest, usize offset, usize bytes) {
     ramdisk_private* private = dev->private;
 
     if (offset + bytes > private->size)
@@ -19,7 +19,7 @@ static isize _read(vfs_driver* dev, void* dest, usize offset, usize bytes) {
     return bytes;
 }
 
-static isize _write(vfs_driver* dev, void* dest, usize offset, usize bytes) {
+static isize _write(disk_dev* dev, void* dest, usize offset, usize bytes) {
     ramdisk_private* private = dev->private;
 
     // if (!private->write)
@@ -35,8 +35,8 @@ static isize _write(vfs_driver* dev, void* dest, usize offset, usize bytes) {
 }
 
 
-vfs_driver* ramdisk_init(char* name, void* addr, usize size, bool write) {
-    vfs_drive_interface* interface = kcalloc(sizeof(vfs_drive_interface));
+disk_dev* ramdisk_init(char* name, void* addr, usize size, bool write) {
+    disk_dev_interface* interface = kcalloc(sizeof(disk_dev_interface));
     interface->read = _read;
     interface->write = write ? _write : NULL;
 
@@ -45,11 +45,18 @@ vfs_driver* ramdisk_init(char* name, void* addr, usize size, bool write) {
     private->size = size;
     private->addr = addr;
 
-    vfs_driver* dev = vfs_create_device(name, 1, size);
+    /// disk_dev* dev = vfs_create_disk(name, 1, size);
+    disk_dev* dev = kcalloc(sizeof(disk_dev));
 
-    dev->type = VFS_DRIVER_VIRTUAL;
-    dev->private = private;
+    dev->name = strdup(name);
+    dev->type = DISK_VIRTUAL;
+
+    dev->sector_size = 1;
+    dev->sector_count = size;
+
     dev->interface = interface;
+
+    dev->private = private;
 
     return dev;
 }

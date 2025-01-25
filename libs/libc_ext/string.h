@@ -19,7 +19,5 @@ char* strtrunc(char* str);
 
 char* basename_ptr(const char* path);
 
-#ifdef HAS_GMALLOC
-char* dirname(const char* path);
-char* basename(const char* path);
-#endif
+char* dirname(char* path);
+char* basename(char* path);

@@ -12,7 +12,7 @@ static inline usize _to_block(bitmap_alloc* alloc, void* ptr) {
 }
 
 static inline bitmap_word* _to_ptr(bitmap_alloc* alloc, usize block) {
-    return (void*)((uptr)alloc->chuck_start + block * alloc->block_size);
+    return (void*)((uptr)alloc->chuck_start + (block * alloc->block_size));
 }
 
 
@@ -88,7 +88,7 @@ bool bitmap_alloc_init_mmap(bitmap_alloc* alloc, e820_map* mmap, usize block_siz
     alloc->bitmap = (bitmap_word*)ID_MAPPED_VADDR(bitmap_addr);
 
     // Mark the whole bitmap as used
-    memset(alloc->bitmap, ~0, bitmap_bytes);
+    memset(alloc->bitmap, (unsigned int)-1, bitmap_bytes);
     alloc->free_blocks = 0;
 
     for (usize i = 0; i < mmap->count; i++) {
@@ -121,7 +121,7 @@ static isize _first_fit(bitmap_alloc* alloc, usize blocks) {
     usize region_size = 0;
 
     for (usize word = 0; word < alloc->word_count; word++) {
-        if (alloc->bitmap[word] == ~(bitmap_word)0) {
+        if (alloc->bitmap[word] == (bitmap_word)-1) {
             region_size = 0;
             region_bottom = (word + 1) * BITMAP_WORD_SIZE;
             continue;
@@ -136,7 +136,7 @@ static isize _first_fit(bitmap_alloc* alloc, usize blocks) {
 
             region_size++;
 
-            if (region_size >= blocks)
+            if (region_size == blocks)
                 return region_bottom;
         }
     }
@@ -144,7 +144,7 @@ static isize _first_fit(bitmap_alloc* alloc, usize blocks) {
     return ALLOC_OUT_OF_BLOCKS;
 }
 
-void* bitmap_alloc_blocks(bitmap_alloc* alloc, usize blocks) {
+void* bitmap_alloc_reserve(bitmap_alloc* alloc, usize blocks) {
     if (!blocks || blocks > alloc->free_blocks)
         return NULL;
 
@@ -154,18 +154,21 @@ void* bitmap_alloc_blocks(bitmap_alloc* alloc, usize blocks) {
         return NULL;
 
     bitmap_set_region(alloc->bitmap, first_block, blocks);
+
     alloc->free_blocks -= blocks;
 
     return _to_ptr(alloc, first_block);
 }
 
-void bitmap_alloc_free(bitmap_alloc* alloc, void* ptr, usize size) {
-    if (!ptr || !size)
-        return;
+bool bitmap_alloc_free(bitmap_alloc* alloc, void* ptr, usize blocks) {
+    if (!ptr || !blocks)
+        return false;
 
     usize first_block = _to_block(alloc, ptr);
-    usize count = DIV_ROUND_UP(size, alloc->block_size);
 
-    bitmap_clear_region(alloc->bitmap, first_block, count);
-    alloc->free_blocks += count;
+    bitmap_clear_region(alloc->bitmap, first_block, blocks);
+
+    alloc->free_blocks += blocks;
+
+    return true;
 }

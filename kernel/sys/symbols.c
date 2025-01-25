@@ -5,6 +5,7 @@
 #include <parse/sym.h>
 #include <stddef.h>
 
+#include "drivers/initrd.h"
 #include "mem/heap.h"
 #include "vfs/fs.h"
 
@@ -12,7 +13,7 @@ static symbol_table sym_table = {0};
 
 
 void load_symbols() {
-    vfs_node* file = vfs_lookup_from("/mnt/initrd/", INITRD_SYMTAB_NAME);
+    vfs_node* file = vfs_lookup_relative(INITRD_MOUNT, INITRD_SYMTAB_NAME);
 
     if (!file)
         return;

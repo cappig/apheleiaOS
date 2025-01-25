@@ -14,7 +14,7 @@ typedef struct {
     bool capslock;
 
     ascii_keymap* keymap;
-} keyboard;
+} keyboard_dev;
 
 
 bool keyboard_init(void);

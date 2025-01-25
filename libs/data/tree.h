@@ -58,6 +58,7 @@ typedef bool (*tree_comp_fn)(const void* data, const void* private);
 typedef bool (*tree_callback_fn)(tree_node* node);
 
 
+tree* tree_create_rooted(tree_node* root);
 tree* tree_create(void* root_data);
 void tree_destroy(tree* root);
 

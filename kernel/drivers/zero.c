@@ -28,13 +28,15 @@ static isize _write_null(vfs_node* node, void* buf, usize offset, usize len) {
 
 
 void init_zero_devs() {
-    vfs_node* zero_dev = vfs_create_node("zero", VFS_CHARDEV);
-    zero_dev->interface = vfs_create_file_interface(_read_zero, _write_zero);
+    vfs_node* dev = vfs_lookup("/dev");
 
-    vfs_mount("/dev", tree_create_node(zero_dev));
+    vfs_node* zero_dev = vfs_create_node("zero", VFS_CHARDEV);
+    zero_dev->interface = vfs_create_interface(_read_zero, _write_zero);
+
+    vfs_insert_child(dev, zero_dev);
 
     vfs_node* null_dev = vfs_create_node("null", VFS_CHARDEV);
-    null_dev->interface = vfs_create_file_interface(_read_null, _write_null);
+    null_dev->interface = vfs_create_interface(_read_null, _write_null);
 
-    vfs_mount("/dev", tree_create_node(null_dev));
+    vfs_insert_child(dev, null_dev);
 }

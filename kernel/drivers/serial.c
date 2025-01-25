@@ -48,8 +48,8 @@ bool init_serial_port(u8 index) {
 
     pty->slave->name = strdup(name);
 
-    tree_node* node = tree_create_node(pty->slave);
-    vfs_mount("/dev", node);
+    vfs_node* dev = vfs_lookup("/dev");
+    vfs_insert_child(dev, pty->slave);
 
     return true;
 }

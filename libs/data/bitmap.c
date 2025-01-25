@@ -18,12 +18,12 @@ void bitmap_clear(bitmap_word* bitmap, usize index) {
 }
 
 void bitmap_set_region(bitmap_word* bitmap, usize index, usize blocks) {
-    for (usize i = 0; i < blocks; i++)
+    for (usize i = 0; i <= blocks; i++)
         bitmap_set(bitmap, index + i);
 }
 
 void bitmap_clear_region(bitmap_word* bitmap, usize index, usize blocks) {
-    for (usize i = 0; i < blocks; i++)
+    for (usize i = 0; i <= blocks; i++)
         bitmap_clear(bitmap, index + i);
 }
 

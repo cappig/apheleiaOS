@@ -59,7 +59,8 @@ bool draw_pixel(usize x, usize y, u32 color) {
 
 void init_framebuffer_dev() {
     vfs_node* node = vfs_create_node("fb", VFS_CHARDEV);
-    node->interface = vfs_create_file_interface(NULL, _write);
+    node->interface = vfs_create_interface(NULL, _write);
 
-    vfs_mount("/dev", tree_create_node(node));
+    vfs_node* dev = vfs_lookup("/dev");
+    vfs_insert_child(dev, node);
 }

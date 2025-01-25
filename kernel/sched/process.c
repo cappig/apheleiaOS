@@ -17,12 +17,14 @@
 #include "arch/idt.h"
 #include "data/list.h"
 #include "data/tree.h"
+#include "drivers/initrd.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
 #include "sys/panic.h"
+#include "vfs/fs.h"
 
 
 static void* vdso_elf;
@@ -408,7 +410,7 @@ process* process_fork(process* parent) {
 
 
 void load_vdso() {
-    vfs_node* file = vfs_lookup_from("/mnt/initrd/", "usr/vdso.elf");
+    vfs_node* file = vfs_lookup_relative(INITRD_MOUNT, "usr/vdso.elf");
 
     if (!file)
         panic("vdso.elf not found!");

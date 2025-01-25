@@ -17,6 +17,7 @@ typedef struct {
 
     u32 lapic_id;
 
+    bool sched_running;
     scheduler* sched;
 } cpu_core;
 

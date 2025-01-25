@@ -7,7 +7,7 @@
 
 typedef struct {
     const char* name;
-} mouse;
+} mouse_dev;
 
 
 void mouse_handle_event(mouse_event event);

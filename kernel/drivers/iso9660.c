@@ -8,22 +8,26 @@
 #include <string.h>
 
 #include "mem/heap.h"
-#include "vfs/driver.h"
+#include "sys/disk.h"
 #include "vfs/fs.h"
 
+static file_system fs = {.name = "iso9660"};
 
-static iso_device_private* _parse_pvd(vfs_driver* dev, vfs_file_system* fs) {
+
+static iso_volume_descriptor* _parse_pvd(disk_partition* part) {
     iso_volume_descriptor* pvd = kmalloc(sizeof(iso_volume_descriptor));
 
+    disk_dev* dev = part->disk;
+
     for (u32 lba = ISO_VOLUME_START; lba < ISO_MAX_VOLUMES; lba++) {
-        usize loc = fs->partition.offset + lba * ISO_SECTOR_SIZE;
+        usize loc = part->offset + lba * ISO_SECTOR_SIZE;
         dev->interface->read(dev, pvd, loc, ISO_SECTOR_SIZE);
 
         if (pvd->type == ISO_PRIMARY) {
-            iso_device_private* priv = kcalloc(sizeof(iso_device_private));
-            priv->pvd = pvd;
+            if (strncmp(pvd->id, "CD001", 5))
+                continue;
 
-            return priv;
+            return pvd;
         }
 
         if (pvd->type == ISO_TERMINATOR)
@@ -35,22 +39,24 @@ static iso_device_private* _parse_pvd(vfs_driver* dev, vfs_file_system* fs) {
     return NULL;
 }
 
-static vfs_node* _construct_vfs_node(vfs_file_system* fs, iso_dir* dir, vfs_driver* driver) {
-    vfs_node* vnode = kcalloc(sizeof(vfs_node));
+static vfs_node* _construct_vfs_node(file_system_instance* instance, iso_dir* dir) {
+    vfs_node* vnode = vfs_create_node(NULL, 0);
 
     vnode->name = strndup(dir->file_id, dir->file_id_len - 2);
     vnode->type = (dir->flags & ISO_DIR_SUBDIR) ? VFS_DIR : VFS_FILE;
     vnode->size = dir->extent_size.lsb;
     vnode->inode = dir->extent_location.lsb;
-    vnode->interface = fs->interface;
-    vnode->driver = driver;
+    vnode->interface = fs.node_interface;
+    vnode->fs = instance;
 
     return vnode;
 }
 
 static void
-_recursive_tree_build(vfs_driver* dev, vfs_file_system* fs, iso_dir* parent, tree_node* tree_parent) {
+_recursive_tree_build(file_system_instance* instance, iso_dir* parent, vfs_node* parent_node) {
     u8* buffer = kmalloc(ISO_SECTOR_SIZE);
+
+    disk_dev* dev = instance->partition->disk;
 
     usize loc = parent->extent_location.lsb * ISO_SECTOR_SIZE;
     dev->interface->read(dev, buffer, loc, parent->extent_size.lsb);
@@ -72,13 +78,13 @@ _recursive_tree_build(vfs_driver* dev, vfs_file_system* fs, iso_dir* parent, tre
         if (is_dot || is_dot_dot)
             goto next;
 
-        vfs_node* vnode = _construct_vfs_node(fs, record, dev);
 
-        tree_node* tree_child = tree_create_node(vnode);
-        tree_insert_child(tree_parent, tree_child);
+        vfs_node* child_node = _construct_vfs_node(instance, record);
+
+        vfs_insert_child(parent_node, child_node);
 
         if (record->flags & ISO_DIR_SUBDIR)
-            _recursive_tree_build(dev, fs, record, tree_child);
+            _recursive_tree_build(instance, record, child_node);
 
     next:
         offset += record->length;
@@ -92,30 +98,66 @@ _recursive_tree_build(vfs_driver* dev, vfs_file_system* fs, iso_dir* parent, tre
 static isize _read(vfs_node* node, void* buf, usize offset, usize len) {
     if (offset == len)
         return 0;
+
     if (offset > len)
         return -1;
 
-    vfs_driver* driver = node->driver;
+    disk_dev* dev = node->fs->partition->disk;
 
     usize size = min(len, node->size);
     usize loc = node->inode * ISO_SECTOR_SIZE;
 
-    return driver->interface->read(driver, buf, loc + offset, size);
+    return dev->interface->read(dev, buf, loc + offset, size);
 }
 
-bool iso_init(vfs_driver* dev, vfs_file_system* fs) {
-    iso_device_private* priv = _parse_pvd(dev, fs);
 
-    if (!priv)
+static file_system_instance* _probe(disk_partition* part) {
+    iso_volume_descriptor* pvd = _parse_pvd(part);
+
+    if (!pvd)
+        return NULL;
+
+    file_system_instance* instance = kcalloc(sizeof(file_system_instance));
+
+    instance->fs = &fs;
+    instance->private = pvd;
+
+    return instance;
+}
+
+static bool _mount(file_system_instance* instance, vfs_node* mount) {
+    if (instance->fs->id != fs.id)
         return false;
 
-    vfs_node* tree_root = vfs_create_node(fs->partition.name, VFS_DIR);
-    fs->subtree = tree_create(tree_root);
+    instance->mount = mount;
 
-    fs->interface = vfs_create_file_interface(_read, NULL);
+    iso_volume_descriptor* pvd = instance->private;
+    iso_dir* root = (iso_dir*)pvd->root;
 
-    iso_dir* root = (iso_dir*)priv->pvd->root;
-    _recursive_tree_build(dev, fs, root, fs->subtree->root);
+    _recursive_tree_build(instance, root, mount);
+
+    instance->tree_build = true;
+
+    return true;
+}
+
+
+bool iso_init() {
+    file_system_interface* fs_interface = kcalloc(sizeof(file_system_interface));
+
+    fs_interface->probe = _probe;
+    fs_interface->mount = _mount;
+
+    fs.fs_interface = fs_interface;
+
+    vfs_node_interface* node_interface = kcalloc(sizeof(vfs_node_interface));
+
+    node_interface->read = _read;
+    node_interface->write = NULL;
+
+    fs.node_interface = node_interface;
+
+    file_system_register(&fs);
 
     return true;
 }

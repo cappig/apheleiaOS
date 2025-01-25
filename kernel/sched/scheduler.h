@@ -16,8 +16,6 @@ typedef struct {
 
 // A single instance of the scheduler. Each CPU has one
 typedef struct {
-    bool running;
-
     // How many ticks does the current processes time slice last
     isize proc_ticks_left;
 

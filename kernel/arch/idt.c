@@ -103,7 +103,7 @@ static isize _exception_to_signal(usize int_num) {
     case INT_HYPERVISOR_INJECTION_EXCEPTION:
     case INT_VMM_COMMUNICATION_EXCEPTION:
     case INT_SECURITY_EXCEPTION:
-        return SIGBUS; // sigbus is more of a generic "something went wrong error"
+        return SIGBUS; // sigbus is more of a generic "something went wrong" error
 
     default:
         return -1; // panic
@@ -212,14 +212,14 @@ void isr_handler(int_state* s) {
 
     assert(s->int_num < ISR_COUNT);
 
-    if (cpu->sched->running && nest_depth == 1)
+    if (cpu->sched_running && nest_depth == 1)
         scheduler_save(s);
 
     int_handlers[s->int_num](s);
 
     nest_depth--;
 
-    if (cpu->sched->running && nest_depth == 0) {
+    if (cpu->sched_running && nest_depth == 0) {
         schedule();
 
         scheduler_switch();

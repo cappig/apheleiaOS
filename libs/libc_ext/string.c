@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "alloc/global.h"
+#include "log/log.h"
 
 
 void memswap(void* a, void* b, size_t len) {
@@ -141,61 +142,59 @@ char* basename_ptr(const char* path) {
     return NULL;
 }
 
-#ifdef HAS_GMALLOC
 
-static char* _strip_trailing(const char* str, size_t len) {
-    char* tmp = gmalloc(len * sizeof(char));
-    strcpy(tmp, str);
+char* dirname(char* path) {
+    size_t len = strlen(path);
 
-    for (size_t i = len - 1; i >= 0; i--) {
-        if (tmp[i] != '/')
-            break;
+    if (!len)
+        return ".";
 
-        tmp[i] = '\0';
+    size_t i = len - 1;
+
+    // Strip trailing slashes at the end of the path
+    while (path[i] == '/') {
+        if (!i--)
+            return "/";
     }
 
-    return tmp;
+    // Remove the base name
+    while (path[i] != '/') {
+        if (!i--)
+            return ".";
+    }
+
+    // Strip the slashes before the basename
+    while (path[i] == '/') {
+        if (!i--)
+            return "/";
+    }
+
+    path[i + 1] = 0;
+
+    return path;
 }
 
-
-char* dirname(const char* path) {
+char* basename(char* path) {
     size_t len = strlen(path);
 
     if (!len)
-        return NULL;
+        return ".";
 
-    char* tmp = _strip_trailing(path, len);
+    size_t i = len - 1;
 
-    char* slash = strrchr(tmp, '/');
+    // Strip trailing slashes at the end of the path
+    while (path[i] == '/') {
+        path[i] = 0;
 
-    if (!slash)
-        return NULL;
+        if (!i--)
+            return "/";
+    }
 
-    char* ret = strndup(tmp, slash - tmp);
-    gfree(tmp);
+    // Find the beginning of the basename
+    while (path[i] != '/') {
+        if (!i--)
+            break;
+    }
 
-    return ret;
+    return path + i + 1;
 }
-
-char* basename(const char* path) {
-    size_t len = strlen(path);
-
-    if (!len)
-        return NULL;
-
-    char* tmp = _strip_trailing(path, len);
-
-    char* slash = strrchr(tmp, '/');
-
-    if (!slash)
-        slash = tmp;
-    else
-        slash += 1;
-
-    char* ret = strndup(slash, len);
-    gfree(tmp);
-
-    return ret;
-}
-
-#endif

@@ -6,9 +6,8 @@
 #include <string.h>
 
 #include "mem/heap.h"
+#include "sys/disk.h"
 #include "sys/panic.h"
-#include "vfs/driver.h"
-
 
 char* mbr_type_string(enum mbr_partition_type type) {
     switch (type) {
@@ -41,8 +40,17 @@ char* mbr_type_string(enum mbr_partition_type type) {
     }
 }
 
+
+bool mbr_is_empty(mbr_table* table) {
+    for (usize i = 0; i < 4; i++)
+        if (table->partitions[i].type)
+            return false;
+
+    return true;
+}
+
 void dump_mbr(mbr_table* table) {
-    usize printed = false;
+    bool printed = false;
 
     for (usize i = 0; i < 4; i++) {
         if (!table->partitions[i].type)
@@ -63,7 +71,7 @@ void dump_mbr(mbr_table* table) {
         log_debug("[ empty table ]");
 }
 
-mbr_table* parse_mbr(vfs_driver* dev) {
+mbr_table* parse_mbr(disk_dev* dev) {
     master_boot_record* mbr = kmalloc(sizeof(master_boot_record));
     dev->interface->read(dev, mbr, 0, 512);
 

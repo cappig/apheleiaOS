@@ -37,7 +37,7 @@ static bool _load_font(const char* name) {
     if (!name)
         return false;
 
-    vfs_node* file = vfs_lookup_from("/mnt/initrd/", name);
+    vfs_node* file = vfs_lookup_relative("/mnt/initrd/", name);
 
     if (!file)
         return false;
@@ -65,8 +65,8 @@ static void _mount_tty(pseudo_tty* pty, usize index) {
 
     pty->slave->name = strdup(name);
 
-    tree_node* node = tree_create_node(pty->slave);
-    vfs_mount("/dev", node);
+    vfs_node* dev = vfs_lookup("/dev");
+    vfs_insert_child(dev, pty->slave);
 }
 
 

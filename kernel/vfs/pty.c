@@ -98,11 +98,11 @@ pseudo_tty* pty_create(usize buffer_size) {
 
     // WARN: this has circular pointers
     ret->master = vfs_create_node(NULL, VFS_CHARDEV);
-    ret->master->interface = vfs_create_file_interface(master_read, master_write);
+    ret->master->interface = vfs_create_interface(master_read, master_write);
     ret->master->private = ret;
 
     ret->slave = vfs_create_node(NULL, VFS_CHARDEV);
-    ret->slave->interface = vfs_create_file_interface(slave_read, slave_write);
+    ret->slave->interface = vfs_create_interface(slave_read, slave_write);
     ret->slave->private = ret;
 
     return ret;

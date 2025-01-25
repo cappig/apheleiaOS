@@ -113,16 +113,16 @@ fallback:
 
 
 void irq_register(usize irq, int_handler handler) {
-    usize vector = irq + IRQ_OFFSET;
-    assert(vector <= 0xff);
+    usize vec = irq + IRQ_OFFSET;
+    assert(vec <= 0xff);
 
-    set_int_handler(vector, handler);
+    set_int_handler(vec, handler);
 
     if (has_apic) {
         ioapic* io = _get_authoritative_apic(irq);
         assert(io != NULL);
 
-        ioapic_map(io, vector, irq, cpu->lapic_id, IOAPIC_POL_LOW, IOAPIC_TM_EDGE);
+        ioapic_map(io, vec, irq, cpu->lapic_id, IOAPIC_POL_LOW, IOAPIC_TM_EDGE);
         ioapic_clear_mask(io, irq);
     } else {
         pic_clear_mask(irq);

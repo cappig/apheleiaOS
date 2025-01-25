@@ -21,26 +21,28 @@ virtual_fs* vfs_init() {
     vfs->mounted = list_create();
 
     vfs_node* root = vfs_create_node(NULL, VFS_DIR);
-    vfs->tree = tree_create(root);
+    vfs->tree = tree_create_rooted(root->tree_entry);
 
     vfs_node* dev = vfs_create_node("dev", VFS_DIR);
     vfs_node* mnt = vfs_create_node("mnt", VFS_DIR);
 
-    vfs_mount("/", tree_create_node(dev));
-    vfs_mount("/", tree_create_node(mnt));
+    vfs_insert_child(root, dev);
+    vfs_insert_child(root, mnt);
 
     return vfs;
 }
 
 
 vfs_node* vfs_create_node(char* name, vfs_node_type type) {
-    vfs_node* new = kcalloc(sizeof(vfs_node));
-    new->type = type;
+    vfs_node* node = kcalloc(sizeof(vfs_node));
+    node->type = type;
+
+    node->tree_entry = tree_create_node(node);
 
     if (name)
-        new->name = strdup(name);
+        node->name = strdup(name);
 
-    return new;
+    return node;
 }
 
 void vfs_destroy_node(vfs_node* node) {
@@ -50,10 +52,14 @@ void vfs_destroy_node(vfs_node* node) {
     if (node->name)
         kfree(node->name);
 
+    if (node->tree_entry)
+        tree_destroy_node(node->tree_entry);
+
     kfree(node);
 }
 
-vfs_node_interface* vfs_create_file_interface(vfs_read_fn read, vfs_write_fn write) {
+
+vfs_node_interface* vfs_create_interface(vfs_read_fn read, vfs_write_fn write) {
     vfs_node_interface* interface = kcalloc(sizeof(vfs_node_interface));
     interface->read = read;
     interface->write = write;
@@ -66,7 +72,18 @@ void vfs_destroy_interface(vfs_node_interface* interface) {
 }
 
 
-tree_node* vfs_lookup_tree_from(tree_node* from, const char* path) {
+bool vfs_validate_name(const char* name) {
+    if (!strcmp(name, "."))
+        return false;
+
+    if (!strcmp(name, ".."))
+        return false;
+
+    return !strchr(name, '/');
+}
+
+
+vfs_node* vfs_lookup_from(vfs_node* from, const char* path) {
     assert(vfs);
 
     if (!path) {
@@ -74,7 +91,8 @@ tree_node* vfs_lookup_tree_from(tree_node* from, const char* path) {
         return NULL;
     }
 
-    tree_node* node = from;
+    tree_node* node = from->tree_entry;
+
     if (!node) {
         errno = ENXIO;
         return NULL;
@@ -85,93 +103,100 @@ tree_node* vfs_lookup_tree_from(tree_node* from, const char* path) {
     char* pos = strtok_r(tok_str, "/", &tok_pos);
 
     while (pos) {
+        // Stay at the same level
+        if (!strcmp(pos, "."))
+            goto next;
+
+        // Go one level up
+        if (!strcmp(pos, "..")) {
+            if (node->parent)
+                node = node->parent;
+
+            goto next;
+        }
+
+        // Go one level down
         bool found = false;
 
         foreach (child, node->children) {
-            vfs_node* child_vfs = ((tree_node*)child->data)->data;
+            tree_node* tnode = child->data;
+            vfs_node* vnode = tnode->data;
 
-            if (!strcmp(child_vfs->name, pos)) {
+            if (!strcmp(vnode->name, pos)) {
                 found = true;
-                node = child->data;
+                node = tnode;
                 break;
             }
         }
 
         if (!found) {
-            kfree(tok_str);
-
+            node = NULL;
             errno = ENOENT;
-            return NULL;
+
+            break;
         }
 
+    next:
         pos = strtok_r(NULL, "/", &tok_pos);
     }
 
     kfree(tok_str);
-    return node;
-}
 
-tree_node* vfs_lookup_tree(const char* path) {
-    if (!path || path[0] != '/') {
-        errno = EINVAL;
+    if (!node)
         return NULL;
-    }
 
-    return vfs_lookup_tree_from(vfs->tree->root, path);
+    return node->data;
 }
 
 vfs_node* vfs_lookup(const char* path) {
-    tree_node* tnode = vfs_lookup_tree(path);
-
-    if (!tnode)
-        return NULL;
-
-    return tnode->data;
-}
-
-vfs_node* vfs_lookup_from(const char* from, const char* path) {
-    tree_node* tnode_from = vfs_lookup_tree(from);
-
-    if (!tnode_from)
-        return NULL;
-
-    tree_node* tnode = vfs_lookup_tree_from(tnode_from, path);
-
-    if (!tnode)
-        return NULL;
-
-    return tnode->data;
-}
-
-tree_node* vfs_mount(const char* path, tree_node* mount_node) {
     assert(vfs);
 
-    vfs_node* node = mount_node->data;
-    if (!node->name) {
+    tree_node* root = vfs->tree->root;
+    return vfs_lookup_from(root->data, path);
+}
+
+vfs_node* vfs_lookup_relative(const char* root, const char* path) {
+    vfs_node* vnode_root = vfs_lookup(root);
+
+    if (!vnode_root)
+        return NULL;
+
+    return vfs_lookup_from(vnode_root, path);
+}
+
+
+bool vfs_insert_child(vfs_node* parent, vfs_node* child) {
+    assert(vfs);
+
+    if (!parent || !child) {
         errno = EINVAL;
-        return NULL;
+        return false;
     }
 
-    tree_node* parent_node = vfs_lookup_tree(path);
-    if (!parent_node) {
-        errno = ENOENT;
-        return NULL;
+    if (!vfs_validate_name(child->name)) {
+        errno = EBADF;
+        return false;
     }
 
-    // FIXME: VFS file names should be unique inside a given folder
-    foreach (child, parent_node->children) {
-        tree_node* child_node = child->data;
-        vfs_node* child_vnode = child_node->data;
+    tree_node* parent_tnode = parent->tree_entry;
 
-        if (!strcmp(child_vnode->name, node->name)) {
+    assert(parent_tnode);
+    assert(child->tree_entry);
+
+    // file names are unique inside a given folder
+    foreach (node, parent_tnode->children) {
+        tree_node* child_tnode = node->data;
+        vfs_node* child_vnode = child_tnode->data;
+
+        if (!strcmp(child_vnode->name, child->name)) {
             errno = EEXIST;
-            return NULL;
+            return false;
         }
     }
 
-    tree_insert_child(parent_node, mount_node);
+    tree_insert_child(parent_tnode, child->tree_entry);
 
-    return mount_node;
+    return true;
 }
 
 

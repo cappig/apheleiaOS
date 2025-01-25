@@ -11,8 +11,7 @@
 #include "arch/irq.h"
 #include "drivers/pci.h"
 #include "mem/heap.h"
-#include "vfs/driver.h"
-#include "vfs/fs.h"
+#include "sys/disk.h"
 
 
 static void ata_irq_handler(int_state* s) {
@@ -182,7 +181,7 @@ static bool ata_probe_device(ide_device* device) {
     return true;
 }
 
-static bool ata_mount_disk(vfs_drive_interface* interface, ide_device* disk) {
+static bool ata_mount_disk(disk_dev_interface* interface, ide_device* disk) {
     if (!disk->exists)
         return false;
 
@@ -200,13 +199,16 @@ static bool ata_mount_disk(vfs_drive_interface* interface, ide_device* disk) {
 
     disk->read_buffer = kmalloc(disk->sector_size);
 
-    vfs_driver* dev = vfs_create_device(name, disk->sector_size, disk->sectors);
+    disk_dev* dev = kcalloc(sizeof(disk_dev));
 
-    dev->private = disk;
+    dev->name = strdup(name);
+    dev->type = disk->is_atapi ? DISK_OPTICAL : DISK_HARD;
     dev->interface = interface;
-    dev->type = disk->is_atapi ? VFS_DRIVER_OPTICAL : VFS_DRIVER_HARD;
+    dev->sector_size = disk->sector_size;
+    dev->sector_count = disk->sectors;
+    dev->private = disk;
 
-    vfs_register("/dev", dev);
+    disk_register(dev);
 
     return true;
 }
@@ -226,7 +228,7 @@ static void init_controller(pci_device* pci, ide_controller* controller) {
     };
 }
 
-static void ata_probe(vfs_drive_interface* interface, ide_controller* controller) {
+static void ata_probe(disk_dev_interface* interface, ide_controller* controller) {
     // Disable interrupts for now TODO:
     outb(controller->primary.control, ATA_CNT_NO_INT);
     outb(controller->secondary.control, ATA_CNT_NO_INT);
@@ -310,7 +312,7 @@ static bool atapi_read_sector_pio(ide_device* device, usize lba, u16* buffer) {
     return true;
 }
 
-static bool ide_read_sector_pio(vfs_driver* dev, usize lba, void* buffer) {
+static bool ide_read_sector_pio(disk_dev* dev, usize lba, void* buffer) {
     ide_device* device = dev->private;
 
     if (!device->exists)
@@ -323,7 +325,7 @@ static bool ide_read_sector_pio(vfs_driver* dev, usize lba, void* buffer) {
 }
 
 // isize (*read)(disk_device* dev, void* dest, usize offset, usize bytes);
-static isize ide_read_wrapper(vfs_driver* dev, void* dest, usize offset, usize bytes) {
+static isize ide_read_wrapper(disk_dev* dev, void* dest, usize offset, usize bytes) {
     ide_device* device = dev->private;
 
     usize sectors = DIV_ROUND_UP(bytes, dev->sector_size);
@@ -368,7 +370,7 @@ bool ide_disk_init() {
     irq_register(IRQ_PRIMARY_ATA, ata_irq_handler);
     irq_register(IRQ_SECONDARY_ATA, ata_irq_handler);
 
-    vfs_drive_interface* interface = kcalloc(sizeof(vfs_drive_interface));
+    disk_dev_interface* interface = kcalloc(sizeof(disk_dev_interface));
     interface->read = ide_read_wrapper;
     interface->write = NULL;
 

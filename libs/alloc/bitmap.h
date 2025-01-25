@@ -25,5 +25,5 @@ typedef struct {
 bool bitmap_alloc_init(bitmap_alloc* alloc, void* chunk_start, usize chunk_size, usize block_size);
 bool bitmap_alloc_init_mmap(bitmap_alloc* alloc, e820_map* mmap, usize block_size);
 
-void* bitmap_alloc_blocks(bitmap_alloc* alloc, usize blocks);
-void bitmap_alloc_free(bitmap_alloc* alloc, void* ptr, usize size);
+void* bitmap_alloc_reserve(bitmap_alloc* alloc, usize blocks);
+bool bitmap_alloc_free(bitmap_alloc* alloc, void* ptr, usize blocks);

@@ -3,8 +3,8 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-#define KERNEL_HEAP_BLOCK 8
-#define KERNEL_HEAP_PAGES 512
+#define KERNEL_HEAP_BLOCK_SIZE 8
+#define KERNEL_HEAP_PAGES      512
 
 #define KERNEL_HEAP_MAGIC 0xA110ca7e
 

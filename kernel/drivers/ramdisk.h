@@ -2,7 +2,7 @@
 
 #include <base/types.h>
 
-#include "vfs/driver.h"
+#include "sys/disk.h"
 
 typedef struct {
     bool write;
@@ -12,4 +12,4 @@ typedef struct {
 
 // Provide a vfs interface for reading and writing to a piece of contiguous ram
 
-vfs_driver* ramdisk_init(char* name, void* addr, usize size, bool write);
+disk_dev* ramdisk_init(char* name, void* addr, usize size, bool write);

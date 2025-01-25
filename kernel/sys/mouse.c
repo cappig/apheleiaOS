@@ -51,7 +51,7 @@ u8 register_mouse(char* name) {
     if (!mice)
         mouse_init();
 
-    mouse* mse = kcalloc(sizeof(mouse));
+    mouse_dev* mse = kcalloc(sizeof(mouse_dev));
 
     mse->name = strdup(name);
 
@@ -63,12 +63,13 @@ u8 register_mouse(char* name) {
 }
 
 bool mouse_init() {
-    vfs_node* dev = vfs_create_node("mouse", VFS_CHARDEV);
-    dev->interface = vfs_create_file_interface(_read, NULL);
+    vfs_node* mse = vfs_create_node("mouse", VFS_CHARDEV);
+    mse->interface = vfs_create_interface(_read, NULL);
 
-    vfs_mount("/dev", tree_create_node(dev));
+    vfs_node* dev = vfs_lookup("/dev");
+    vfs_insert_child(dev, mse);
 
-    mice = vec_create(sizeof(mouse));
+    mice = vec_create(sizeof(mouse_dev));
 
     buffer = ring_buffer_create(MOUSE_DEV_BUFFER_SIZE);
 

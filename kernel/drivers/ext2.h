@@ -2,8 +2,6 @@
 
 #include <fs/ext2.h>
 
-#include "vfs/driver.h"
-
 typedef struct {
     usize block_size;
     usize block_count;
@@ -19,4 +17,4 @@ typedef struct {
 } ext2_device_private;
 
 
-bool ext2_init(vfs_driver* dev, vfs_file_system* fs);
+bool ext2_init(void);

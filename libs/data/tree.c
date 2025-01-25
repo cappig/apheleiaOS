@@ -22,12 +22,17 @@ void tree_destroy_node(tree_node* node) {
 }
 
 
-tree* tree_create(void* root_data) {
+tree* tree_create_rooted(tree_node* root) {
     tree* new = gmalloc(sizeof(tree));
-    new->root = tree_create_node(root_data);
+    new->root = root;
     new->nodes = 1;
 
     return new;
+}
+
+tree* tree_create(void* root_data) {
+    tree_node* root = tree_create_node(root_data);
+    return tree_create_rooted(root);
 }
 
 void tree_destroy(tree* trunk) {
@@ -56,7 +61,8 @@ void tree_prune(tree_node* parent) {
 
 
 void tree_insert_child(tree_node* parent, tree_node* child) {
-    list_append(parent->children, list_create_node(child));
+    list_node* node = list_create_node(child);
+    list_append(parent->children, node);
     child->parent = parent;
 }
 

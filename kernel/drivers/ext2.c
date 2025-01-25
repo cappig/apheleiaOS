@@ -3,13 +3,17 @@
 #include <base/macros.h>
 
 #include "mem/heap.h"
-#include "vfs/driver.h"
+#include "sys/disk.h"
+
+static file_system fs = {.name = "ext2"};
 
 
-static ext2_device_private* _parse_superblock(vfs_driver* dev, vfs_file_system* fs) {
+static ext2_device_private* _parse_superblock(disk_partition* part) {
     ext2_superblock* super = kmalloc(sizeof(ext2_superblock));
 
-    usize loc = fs->partition.offset + 1024;
+    disk_dev* dev = part->disk;
+
+    usize loc = part->offset + 1024;
     dev->interface->read(dev, super, loc, sizeof(ext2_superblock));
 
     if (super->signature != EXT2_SIGNATURE) {
@@ -29,14 +33,15 @@ static ext2_device_private* _parse_superblock(vfs_driver* dev, vfs_file_system* 
     return priv;
 }
 
-static void _read_descriptor_table(vfs_driver* dev, vfs_file_system* fs) {
-    ext2_device_private* priv = fs->private;
+static void _read_descriptor_table(file_system_instance* instance) {
+    ext2_device_private* priv = instance->private;
+    disk_dev* dev = instance->partition->disk;
     ext2_superblock* superblock = priv->superblock;
 
     priv->group_table_count = DIV_ROUND_UP(superblock->block_count, superblock->blocks_in_group);
 
     usize table_size = priv->group_table_count * sizeof(ext2_group_descriptor);
-    usize table_location = fs->partition.offset + 1024 + sizeof(ext2_superblock);
+    usize table_location = instance->partition->offset + 1024 + sizeof(ext2_superblock);
 
     priv->group_table = kmalloc(table_size);
 
@@ -44,16 +49,51 @@ static void _read_descriptor_table(vfs_driver* dev, vfs_file_system* fs) {
 }
 
 
-bool ext2_init(vfs_driver* dev, vfs_file_system* fs) {
+static file_system_instance* _probe(disk_partition* part) {
+    ext2_device_private* priv = _parse_superblock(part);
+
+    if (!priv)
+        return NULL;
+
+    file_system_instance* instance = kcalloc(sizeof(file_system_instance));
+
+    instance->fs = &fs;
+    instance->private = priv;
+
+    return instance;
+}
+
+static bool _mount(file_system_instance* instance, vfs_node* mount) {
+    if (instance->fs->id != fs.id)
+        return false;
+
+    instance->mount = mount;
+
+    // ext2_device_private* priv = instance->private;
+    // instance->tree_build = true;
+
+    return false;
+}
+
+
+bool ext2_init() {
     // TODO: finish ext2 support
     return false;
 
-    ext2_device_private* priv = _parse_superblock(dev, fs);
+    file_system_interface* fs_interface = kcalloc(sizeof(file_system_interface));
 
-    if (!priv)
-        return false;
+    fs_interface->probe = _probe;
+    fs_interface->mount = _mount;
 
-    _read_descriptor_table(dev, fs);
+    fs.fs_interface = fs_interface;
+
+    vfs_node_interface* node_interface = kcalloc(sizeof(vfs_node_interface));
+
+    node_interface->read = NULL;
+    node_interface->write = NULL;
+
+
+    file_system_register(&fs);
 
     return true;
 }

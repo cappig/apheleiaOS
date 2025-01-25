@@ -16,6 +16,7 @@
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "arch/irq.h"
+#include "drivers/initrd.h"
 #include "mem/heap.h"
 #include "mem/virtual.h"
 #include "sched/process.h"
@@ -25,11 +26,12 @@
 #include "sys/cpu.h"
 #include "sys/panic.h"
 #include "sys/tty.h"
+#include "vfs/fs.h"
 
 // Defined in switch.asm
 extern NORETURN void context_switch(u64 kernel_stack);
 
-tree* proc_tree;
+tree* proc_tree = NULL;
 
 
 // This kernel pseudo-process is scheduled if there are no real process left to run
@@ -48,7 +50,7 @@ static bool _proc_comp(const void* data, const void* private) {
 }
 
 process* process_with_pid(usize pid) {
-    assert(cpu->sched->running);
+    assert(proc_tree);
 
     tree_node* res = tree_find_comp(proc_tree, _proc_comp, (void*)pid);
 
@@ -357,7 +359,7 @@ void dump_process_tree() {
 static void _spawn_init(void) {
     process* init = spawn_uproc("init");
 
-    vfs_node* file = vfs_lookup_from("/mnt/initrd/", "usr/init.elf");
+    vfs_node* file = vfs_lookup_relative(INITRD_MOUNT, "usr/init.elf");
 
     if (!file)
         panic("init.elf not found!");
@@ -401,7 +403,7 @@ void scheduler_start() {
 
     timer_enable();
 
-    cpu->sched->running = true;
+    cpu->sched_running = true;
 
     scheduler_switch();
     __builtin_unreachable();

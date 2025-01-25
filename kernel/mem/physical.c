@@ -26,7 +26,7 @@ usize get_free_mem() {
 }
 
 void* alloc_frames(usize count) {
-    void* ret = bitmap_alloc_blocks(&frame_alloc, count);
+    void* ret = bitmap_alloc_reserve(&frame_alloc, count);
 
 #ifdef MMU_DEBUG
     log_debug("[MMU DEBUG] allocated %zu new frames: paddr = %#lx", count, (u64)ret);

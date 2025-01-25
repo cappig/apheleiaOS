@@ -30,7 +30,7 @@ static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize 
 }
 
 // Keep track of modifier keys and latch capslock
-static void _update_modifiers(keyboard* kbd, bool action, u8 code) {
+static void _update_modifiers(keyboard_dev* kbd, bool action, u8 code) {
     if (code == KBD_LEFT_SHIFT || code == KBD_RIGHT_SHIFT)
         kbd->shift = (action == KEY_DOWN);
 
@@ -44,7 +44,7 @@ static void _update_modifiers(keyboard* kbd, bool action, u8 code) {
         kbd->capslock = !kbd->capslock;
 }
 
-static bool _send_to_tty(keyboard* kbd, key_event event) {
+static bool _send_to_tty(keyboard_dev* kbd, key_event event) {
     u8 ch = kbd_to_ascii(event, kbd->keymap, kbd->shift);
 
     if (!ch)
@@ -69,7 +69,7 @@ static bool _send_to_tty(keyboard* kbd, key_event event) {
 // We can switch between virtual ttys here
 // Holding down <Alt>(<Fn>)<F#> will set the surrent tty to #
 // depending on the keyboard Fn may or may not be needed
-static bool _switch_tty(keyboard* kbd, key_event event) {
+static bool _switch_tty(keyboard_dev* kbd, key_event event) {
     if (!kbd->alt)
         return false;
 
@@ -91,7 +91,7 @@ void kbd_handle_key(key_event event) {
     bool action = event.type & KEY_ACTION;
     u8 code = event.code;
 
-    keyboard* kbd = vec_at(kbds, event.source);
+    keyboard_dev* kbd = vec_at(kbds, event.source);
 
     if (!kbd) {
         log_error("Keyboard got input from unknown source!");
@@ -124,7 +124,7 @@ u8 register_keyboard(char* name, ascii_keymap* keymap) {
     if (!kbds)
         keyboard_init();
 
-    keyboard* kbd = kcalloc(sizeof(keyboard));
+    keyboard_dev* kbd = kcalloc(sizeof(keyboard_dev));
 
     kbd->name = strdup(name);
     kbd->keymap = keymap ? keymap : &us_keymap;
@@ -138,12 +138,13 @@ u8 register_keyboard(char* name, ascii_keymap* keymap) {
 
 
 bool keyboard_init() {
-    vfs_node* dev = vfs_create_node("kbd", VFS_CHARDEV);
-    dev->interface = vfs_create_file_interface(_read, NULL);
+    vfs_node* kbd = vfs_create_node("kbd", VFS_CHARDEV);
+    kbd->interface = vfs_create_interface(_read, NULL);
 
-    vfs_mount("/dev", tree_create_node(dev));
+    vfs_node* dev = vfs_lookup("/dev");
+    vfs_insert_child(dev, kbd);
 
-    kbds = vec_create(sizeof(keyboard));
+    kbds = vec_create(sizeof(keyboard_dev));
 
     buffer = ring_buffer_create(KBD_DEV_BUFFER_SIZE);
 

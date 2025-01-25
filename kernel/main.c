@@ -18,6 +18,7 @@
 #include "drivers/acpi.h"
 #include "drivers/ide.h"
 #include "drivers/initrd.h"
+#include "drivers/iso9660.h"
 #include "drivers/pci.h"
 #include "drivers/ps2.h"
 #include "drivers/serial.h"
@@ -62,6 +63,7 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     vfs_init();
 
     initrd_mount(handoff);
+    iso_init();
 
     load_symbols();
 
@@ -95,6 +97,8 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     init_ps2();
 
     ide_disk_init();
+
+    // dump_vfs();
 
     enable_interrupts();
 
