@@ -1,8 +1,7 @@
 #pragma once
 
 #include <base/types.h>
-
-#include "parse/sym.h"
+#include <parse/sym.h>
 
 
 void load_symbols(void);

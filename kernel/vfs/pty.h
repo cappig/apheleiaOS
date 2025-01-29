@@ -1,8 +1,8 @@
 #pragma once
 
 #include <data/ring.h>
+#include <data/vector.h>
 
-#include "data/vector.h"
 #include "fs.h"
 
 #define PTY_RETURN_CHAR '\n'

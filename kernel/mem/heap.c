@@ -4,6 +4,7 @@
 #include <alloc/global.h>
 #include <base/addr.h>
 #include <base/macros.h>
+#include <base/types.h>
 #include <boot/proto.h>
 #include <log/log.h>
 #include <stddef.h>
@@ -11,7 +12,6 @@
 #include <string.h>
 #include <x86/paging.h>
 
-#include "base/types.h"
 #include "mem/physical.h"
 #include "sys/panic.h"
 

@@ -6,8 +6,10 @@ extern __libc_init
 ; Wrapper around main()
 global _start
 _start:
-    xor rbp, rbp
-    xor rax, rax
+    ; Fetch the arguments from the stack
+    mov rdi, [rsp]              ; argc
+    lea rsi, [rsp + 8]          ; argv
+    lea rdx, [rsp + 16 + rdi*8] ; envp
 
     call main
 

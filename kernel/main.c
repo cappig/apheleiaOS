@@ -60,17 +60,17 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     conosle_init_buffer();
 
+    log_info(ALPHA_ASCII);
+    log_info(BUILD_DATE);
+
+    log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
+
     vfs_init();
 
     initrd_mount(handoff);
     iso_init();
 
     load_symbols();
-
-    log_info(ALPHA_ASCII);
-    log_info(BUILD_DATE);
-
-    log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
 
     tty_init(handoff);
     tty_spawn_devs();
@@ -88,7 +88,6 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     calibrate_tsc();
 
     irq_init();
-    load_vdso();
     scheduler_init();
 
     init_serial_dev();

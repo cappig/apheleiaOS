@@ -4,6 +4,8 @@
 #include <base/types.h>
 #include <stddef.h>
 
+#include "x86/asm.h"
+
 #define SYSCALL_INT 0x80
 
 #define _SYS_ASM "int $" STR(SYSCALL_INT)
@@ -42,6 +44,9 @@ enum syscall_nums {
     SYS_GETPPID = 12,
 
     SYS_FORK = 13,
+    // SYS_EXECVE = 14,
+
+    SYS_SLEEP = 15,
 
     SYSCALL_COUNT
 };
@@ -147,6 +152,10 @@ inline pid_t sys_fork(void) {
     return syscall0(SYS_FORK);
 }
 
+// inline int sys_execve(char const* path, char const* argv[], char const* envp[]) {
+//     return syscall3(SYS_EXECVE, (u64)path, (u64)argv, (u64)envp);
+// }
+
 
 inline pid_t sys_getpid(void) {
     return syscall0(SYS_GETPID);
@@ -154,4 +163,8 @@ inline pid_t sys_getpid(void) {
 
 inline pid_t sys_getppid(void) {
     return syscall0(SYS_GETPPID);
+}
+
+inline pid_t sys_sleep(size_t milis) {
+    return syscall1(SYS_SLEEP, milis);
 }

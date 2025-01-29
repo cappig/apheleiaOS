@@ -41,7 +41,6 @@ static void _term_putc(terminal* term, const u32 ch) {
                 term->cursor.x = 0;
             }
         }
-        term_place(term, ' ');
         return;
 
     case 127:

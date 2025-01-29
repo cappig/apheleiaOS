@@ -79,8 +79,6 @@ bool elf_parse_header(elf_attributes* attribs, elf_header* header) {
     return has_load;
 }
 
-// NOTE: these functions assumes that the elf file is loaded in contiguous memory
-// TODO: deal with vfs_nodes instead
 elf_sect_header* elf_locate_section(elf_header* header, const char* name) {
     void* soff = (void*)header + header->shoff;
     elf_sect_header* shst_sect = soff + header->shstrndx * header->shdr_size;

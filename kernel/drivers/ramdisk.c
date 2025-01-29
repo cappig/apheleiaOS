@@ -1,6 +1,7 @@
 #include "ramdisk.h"
 
 #include <base/types.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "mem/heap.h"
@@ -10,8 +11,10 @@
 static isize _read(disk_dev* dev, void* dest, usize offset, usize bytes) {
     ramdisk_private* private = dev->private;
 
-    if (offset + bytes > private->size)
-        return 0;
+    if (offset > private->size)
+        return -1;
+
+    bytes = min(bytes, private->size - offset);
 
     void* src = private->addr + offset;
     memcpy(dest, src, bytes);
@@ -25,8 +28,10 @@ static isize _write(disk_dev* dev, void* dest, usize offset, usize bytes) {
     // if (!private->write)
     //    return -1;
 
-    if (offset + bytes > private->size)
-        return 0;
+    if (offset > private->size)
+        return -1;
+
+    bytes = min(bytes, private->size - offset);
 
     void* src = private->addr + offset;
     memcpy(src, dest, bytes);

@@ -4,6 +4,8 @@
 #include <base/addr.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <data/list.h>
+#include <data/tree.h>
 #include <data/vector.h>
 #include <errno.h>
 #include <fs/ustar.h>
@@ -15,9 +17,6 @@
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
-#include "data/list.h"
-#include "data/tree.h"
-#include "drivers/initrd.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
@@ -26,8 +25,6 @@
 #include "sys/panic.h"
 #include "vfs/fs.h"
 
-
-static void* vdso_elf;
 
 static usize _next_pid(void) {
     static usize pid = 0;
@@ -56,6 +53,10 @@ bool process_free(process* proc) {
     void* stack_paddr = (void*)ID_MAPPED_PADDR(proc->stack);
     free_frames(stack_paddr, proc->stack_size);
 
+    // Kernel processes only need to free the kernel stack
+    if (proc->type != PROC_USER)
+        return true;
+
     if (proc->user.stack_size)
         free_frames((void*)proc->user.stack_paddr, proc->user.stack_size);
 
@@ -80,11 +81,16 @@ bool process_free(process* proc) {
     list_destroy(proc_node->children);
     proc_node->children = NULL;
 
+    if (proc->user.args_paddr)
+        free_frames((void*)proc->user.args_paddr, proc->user.args_pages);
+
     return true;
 }
 
 // obvously process_free() has to be called before so that nothing is left dangling
 pid_t process_reap(process* proc) {
+    assert(proc->type == PROC_USER);
+
     pid_t ret = proc->id;
 
 #ifdef SCHED_DEBUG
@@ -175,6 +181,9 @@ void process_init_signal_handlers(process* parent, process* child) {
         memcpy(child->user.signals.handlers, parent->user.signals.handlers, len);
 
         child->user.signals.masked = parent->user.signals.masked;
+
+        child->user.vdso = parent->user.vdso;
+        child->user.signals.trampoline = parent->user.signals.trampoline;
     } else {
         process_signal_defaults(child);
     }
@@ -261,135 +270,6 @@ process* spawn_uproc(const char* name) {
 }
 
 
-static bool _init_ustack(process* proc, u64 base, usize size) {
-    if (proc->user.stack_vaddr)
-        return false;
-
-    usize pages = DIV_ROUND_UP(size, PAGE_4KIB);
-
-    proc->user.stack_vaddr = base;
-
-    proc->user.stack_size = size;
-    proc->user.stack_paddr = (u64)alloc_frames(pages);
-
-    map_region(
-        proc->user.mem_map,
-        SCHED_USTACK_PAGES,
-        proc->user.stack_vaddr,
-        proc->user.stack_paddr,
-        PT_PRESENT | PT_NO_EXECUTE | PT_WRITE | PT_USER
-    );
-
-    // TODO: map a dummy canary page at the bottom of the stack to detect overflow
-    // Writes to this page will fault, and we can go from there
-    map_page(proc->user.mem_map, PAGE_4KIB, base, 0, PT_NO_EXECUTE);
-
-    return true;
-}
-
-// Returns the highest virtual address in the image map
-static u64 _load_elf_sections(process* proc, elf_header* header, usize load_offset) {
-    u64 top = 0;
-
-    for (usize i = 0; i < header->ph_num; i++) {
-        elf_prog_header* p_header = (void*)header + header->phoff + i * header->phent_size;
-
-        if (p_header->type != PT_LOAD)
-            continue;
-
-        if (!p_header->file_size && !p_header->mem_size)
-            continue;
-
-        usize pages = DIV_ROUND_UP(p_header->mem_size, PAGE_4KIB);
-
-        u64 flags = elf_to_page_flags(p_header->flags);
-        flags |= PT_USER;
-
-        u64 vaddr = p_header->vaddr + load_offset;
-
-        u64 pbase = (u64)alloc_frames(pages);
-        u64 vbase = ALIGN_DOWN(vaddr, PAGE_4KIB);
-
-        void* base = (void*)ID_MAPPED_VADDR(pbase);
-
-        u64 seg_top = vbase + pages * PAGE_4KIB;
-
-        if (seg_top > top)
-            top = seg_top;
-
-        // Map the segment to virtual memory
-        map_region(proc->user.mem_map, pages, vbase, pbase, flags);
-
-        // Copy all loadable data from the file
-        usize offset = vaddr - vbase;
-        memcpy(base + offset, (void*)header + p_header->offset, p_header->file_size);
-
-        // Zero out any additional space
-        usize zero_len = p_header->mem_size - p_header->file_size;
-        memset(base + p_header->file_size, 0, zero_len);
-    }
-
-    return top;
-}
-
-static void _map_vdso(process* proc) {
-    assert(vdso_elf);
-
-    _load_elf_sections(proc, vdso_elf, PROC_VDSO_BASE);
-
-    // Locate the signal_trampoline
-    elf_sect_header* dynsym = elf_locate_section(vdso_elf, ".dynsym");
-    elf_sect_header* dynstr = elf_locate_section(vdso_elf, ".dynstr");
-
-    assert(dynstr && dynsym);
-
-    elf_symbol* symtab = vdso_elf + dynsym->offset;
-    char* strtab = vdso_elf + dynstr->offset;
-
-    elf_symbol* sig_sym = elf_locate_symbol(symtab, dynsym->size, strtab, "signal_trampoline");
-
-    assert(sig_sym);
-
-    proc->user.signals.trampoline = PROC_VDSO_BASE + sig_sym->value;
-}
-
-bool process_exec_elf(process* proc, elf_header* header) {
-    if (!header || !proc)
-        return false;
-
-    if (proc->type != PROC_USER)
-        return false;
-
-    if (elf_verify(header) != VALID_ELF)
-        return false;
-
-    // TODO: handle ET_DYN
-    if (!elf_is_executable(header))
-        return false;
-
-    _load_elf_sections(proc, header, 0);
-
-    // TODO: don't just map to a fixed address
-    _init_ustack(proc, PROC_USTACK_BASE, SCHED_USTACK_SIZE);
-
-    // Set the initial state
-    int_state state = {
-        .s_regs.rip = (u64)header->entry,
-        .s_regs.cs = GDT_user_code | 3,
-        .s_regs.rflags = 0x200,
-        .s_regs.rsp = proc->user.stack_vaddr + proc->user.stack_size,
-        .s_regs.ss = GDT_user_data | 3,
-    };
-
-    process_set_state(proc, &state);
-
-    // Map the vdso to the appropriate address
-    // TODO: don't remap if its already mapped
-    _map_vdso(proc);
-
-    return true;
-}
-
 // TODO: don't just copy everything. Leverage the MMU/page faults
 process* process_fork(process* parent) {
     assert(parent->type == PROC_USER); // why?
@@ -406,18 +286,4 @@ process* process_fork(process* parent) {
     process_init_signal_handlers(parent, child);
 
     return child;
-}
-
-
-void load_vdso() {
-    vfs_node* file = vfs_lookup_relative(INITRD_MOUNT, "usr/vdso.elf");
-
-    if (!file)
-        panic("vdso.elf not found!");
-
-    vdso_elf = kmalloc(file->size);
-    file->interface->read(file, vdso_elf, 0, file->size);
-
-    if (elf_verify(vdso_elf) != VALID_ELF)
-        panic("vdso.elf is invalid!");
 }

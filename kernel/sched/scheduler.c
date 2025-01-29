@@ -19,6 +19,7 @@
 #include "drivers/initrd.h"
 #include "mem/heap.h"
 #include "mem/virtual.h"
+#include "sched/exec.h"
 #include "sched/process.h"
 #include "sched/signal.h"
 #include "sched/syscall.h"
@@ -27,6 +28,7 @@
 #include "sys/panic.h"
 #include "sys/tty.h"
 #include "vfs/fs.h"
+
 
 // Defined in switch.asm
 extern NORETURN void context_switch(u64 kernel_stack);
@@ -279,6 +281,14 @@ void scheduler_kill(process* proc, usize status) {
 
     process_free(proc);
 
+    // kernel processes don't have children so they can just die right now (oof)
+    if (proc->type != PROC_USER) {
+        cpu->sched->proc_ticks_left = 0;
+        schedule();
+
+        return;
+    }
+
     proc->status = status;
     proc->state = PROC_DONE;
 
@@ -364,10 +374,7 @@ static void _spawn_init(void) {
     if (!file)
         panic("init.elf not found!");
 
-    elf_header* elf = kmalloc(file->size);
-    file->interface->read(file, elf, 0, file->size);
-
-    bool exec = process_exec_elf(init, elf);
+    bool exec = exec_elf(init, file, NULL, NULL);
 
     if (!exec)
         panic("Failed to start init");

@@ -99,11 +99,10 @@ static void _tree_build(file_system_instance* instance, vfs_node* mount) {
 
 
 static isize _read(vfs_node* node, void* buf, usize offset, usize len) {
-    if (offset == len)
-        return 0;
-
-    if (offset > len)
+    if (offset > node->size)
         return -1;
+
+    len = min(len, node->size - offset);
 
     disk_dev* dev = node->fs->partition->disk;
 

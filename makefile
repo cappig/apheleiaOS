@@ -49,7 +49,7 @@ include utils/check.mk
 
 .DEFAULT_GOAL := all
 .PHONY: all
-all: $(TARGET)
+all: user $(TARGET)
 	$(info Build completed successfully!)
 
 .PHONY: clean

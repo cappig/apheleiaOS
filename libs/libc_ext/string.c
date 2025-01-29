@@ -3,9 +3,6 @@
 #include <stddef.h>
 #include <string.h>
 
-#include "alloc/global.h"
-#include "log/log.h"
-
 
 void memswap(void* a, void* b, size_t len) {
     char* a_byte = a;

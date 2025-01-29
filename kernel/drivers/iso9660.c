@@ -96,11 +96,10 @@ _recursive_tree_build(file_system_instance* instance, iso_dir* parent, vfs_node*
 
 // ISO files are just contiguous blocks, nice and easy
 static isize _read(vfs_node* node, void* buf, usize offset, usize len) {
-    if (offset == len)
-        return 0;
-
-    if (offset > len)
+    if (offset > node->size)
         return -1;
+
+    len = min(len, node->size - offset);
 
     disk_dev* dev = node->fs->partition->disk;
 

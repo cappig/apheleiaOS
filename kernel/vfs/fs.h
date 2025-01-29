@@ -63,6 +63,27 @@ typedef struct {
 extern virtual_fs* vfs;
 
 
+inline isize vfs_read(vfs_node* node, void* buf, usize offset, usize len) {
+    if (!node)
+        return -1;
+
+    if (!node->interface || !node->interface->read)
+        return -1;
+
+    return node->interface->read(node, buf, offset, len);
+}
+
+inline isize vfs_write(vfs_node* node, void* buf, usize offset, usize len) {
+    if (!node)
+        return -1;
+
+    if (!node->interface || !node->interface->write)
+        return -1;
+
+    return node->interface->write(node, buf, offset, len);
+}
+
+
 virtual_fs* vfs_init(void);
 
 vfs_node* vfs_create_node(char* name, vfs_node_type type);

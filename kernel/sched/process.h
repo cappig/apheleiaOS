@@ -72,6 +72,15 @@ typedef struct {
 
     // Unix signals
     process_signals signals;
+
+    // The base address of the virtual dynamic shared object
+    // NULL if not loaded.
+    void* vdso;
+
+    // The base address of the page(es) that hold the strings for the command
+    // line arguments and the environment variables
+    u64 args_paddr;
+    usize args_pages;
 } process_user;
 
 typedef struct {
@@ -111,7 +120,3 @@ process* spawn_kproc(const char* name, void* entry);
 process* spawn_uproc(const char* name);
 
 process* process_fork(process* parent);
-
-bool process_exec_elf(process* proc, elf_header* header);
-
-void load_vdso(void);

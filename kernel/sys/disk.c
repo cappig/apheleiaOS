@@ -1,12 +1,12 @@
 #include "disk.h"
 
+#include <base/types.h>
 #include <boot/mbr.h>
+#include <data/vector.h>
 #include <log/log.h>
 #include <stdio.h>
 #include <string.h>
 
-#include "base/types.h"
-#include "data/vector.h"
 #include "drivers/mbr.h"
 #include "mem/heap.h"
 #include "sys/panic.h"
@@ -147,7 +147,6 @@ bool disk_register(disk_dev* dev) {
 
     _probe_partitions(dev);
 
-    log_debug("ooosfpsafs");
     return true;
 }
 

@@ -13,6 +13,7 @@
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
+#include "sched/exec.h"
 #include "sched/process.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
@@ -314,6 +315,13 @@ static u64 _fork(void) {
     return child->id;
 }
 
+static u64 _sleep(u64 milis) {
+    scheduler_sleep(cpu->sched->current, milis);
+    cpu->sched->proc_ticks_left = 0;
+
+    return 0;
+}
+
 
 static void _syscall_handler(int_state* s) {
 #ifdef SYSCALL_DEBUG
@@ -384,6 +392,11 @@ static void _syscall_handler(int_state* s) {
 
     case SYS_FORK:
         ret = _fork();
+        break;
+
+
+    case SYS_SLEEP:
+        ret = _sleep(arg1);
         break;
 
 
