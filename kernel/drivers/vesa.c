@@ -9,7 +9,7 @@
 #include "vfs/fs.h"
 
 
-static isize _write(UNUSED vfs_node* node, void* buf, usize offset, usize len) {
+static isize _write(UNUSED vfs_node* node, void* buf, usize offset, usize len, u32 flags) {
     if (!buf)
         return -1;
 
@@ -61,6 +61,6 @@ void init_framebuffer_dev() {
     vfs_node* node = vfs_create_node("fb", VFS_CHARDEV);
     node->interface = vfs_create_interface(NULL, _write);
 
-    vfs_node* dev = vfs_lookup("/dev");
+    vfs_node* dev = vfs_open("/dev", VFS_DIR, true, KDIR_MODE);
     vfs_insert_child(dev, node);
 }

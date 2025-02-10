@@ -16,7 +16,7 @@ tree_node* tree_create_node(void* data) {
 
 void tree_destroy_node(tree_node* node) {
     if (node->children)
-        list_destroy(node->children);
+        list_destroy(node->children, false);
 
     gfree(node);
 }
@@ -51,7 +51,7 @@ void tree_prune_callback(tree_node* parent, tree_callback_fn callback) {
         tree_prune(child);
     }
 
-    list_destroy(parent->children);
+    list_destroy(parent->children, false);
     gfree(parent);
 }
 

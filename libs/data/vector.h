@@ -30,7 +30,11 @@ void* vec_at(vector* vec, usize index);
 bool vec_get(vector* vec, usize index, void* ret);
 void* vec_set(vector* vec, usize index, void* data);
 
+bool vec_clear(vector* vec);
+
 bool vec_insert(vector* vec, usize index, void* data);
+
+bool vec_swap(vector* vec, usize i, usize j);
 
 bool vec_push(vector* vec, void* data);
 bool vec_push_array(vector* vec, void* array, usize len);

@@ -9,7 +9,7 @@
 #include "vfs/fs.h"
 
 
-static isize pipe_read(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+static isize pipe_read(vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
     ring_buffer* ring = node->private;
 
     if (!ring || !buf)
@@ -18,7 +18,7 @@ static isize pipe_read(vfs_node* node, void* buf, UNUSED usize offset, usize len
     return ring_buffer_pop_array(ring, buf, len);
 }
 
-static isize pipe_write(vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+static isize pipe_write(vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
     ring_buffer* ring = node->private;
 
     if (!ring || !buf)

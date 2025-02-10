@@ -12,6 +12,7 @@
 #include "drivers/ramdisk.h"
 #include "mem/heap.h"
 #include "sys/disk.h"
+#include "sys/panic.h"
 #include "vfs/fs.h"
 
 static file_system fs = {.name = "ustar"};
@@ -38,7 +39,7 @@ static vfs_node_type _get_type(char ustar_type) {
         return VFS_DIR;
 
     default:
-        return VFS_INVALID_TYPE;
+        return VFS_INVALID;
     }
 }
 
@@ -46,7 +47,7 @@ static vfs_node*
 _construct_vfs_node(file_system_instance* instance, ustar_header* header, usize offset) {
     vfs_node_type type = _get_type(header->type);
 
-    if (type == VFS_INVALID_TYPE)
+    if (type == VFS_INVALID)
         return NULL;
 
     // This basename is fine since the header getw overwritten on the next iteration
@@ -98,7 +99,7 @@ static void _tree_build(file_system_instance* instance, vfs_node* mount) {
 }
 
 
-static isize _read(vfs_node* node, void* buf, usize offset, usize len) {
+static isize _read(vfs_node* node, void* buf, usize offset, usize len, u32 flags) {
     if (offset > node->size)
         return -1;
 
@@ -116,44 +117,64 @@ static isize _read(vfs_node* node, void* buf, usize offset, usize len) {
 static file_system_instance* _probe(disk_partition* part) {
     disk_dev* dev = part->disk;
 
-    ustar_header* head = kmalloc(sizeof(ustar_header));
+    ustar_header head[sizeof(ustar_header)] = {0};
 
     dev->interface->read(dev, head, 0, sizeof(ustar_header));
 
-    if (strncmp(head->ustar, "ustar", 5)) {
-        kfree(head);
+    if (strncmp(head->ustar, "ustar", 5))
         return NULL;
-    }
 
     file_system_instance* instance = kcalloc(sizeof(file_system_instance));
 
     instance->fs = &fs;
+    instance->partition = part;
+
 
     return instance;
 }
 
-static bool _mount(file_system_instance* instance, vfs_node* mount) {
+static bool _build_tree(file_system_instance* instance) {
+    if (!instance || !instance->fs)
+        return false;
+
     if (instance->fs->id != fs.id)
         return false;
 
-    instance->mount = mount;
+    vfs_node* vroot = vfs_create_node(instance->partition->name, VFS_DIR);
+    instance->subtree = tree_create_rooted(vroot->tree_entry);
 
-    _tree_build(instance, mount);
+    vroot->interface = fs.node_interface;
+    vroot->fs = instance;
 
-    instance->tree_build = true;
+    _tree_build(instance, vroot);
+
+    instance->tree_built = true;
+
+    return true;
+}
+
+static bool _destroy_tree(file_system_instance* instance) {
+    if (!instance || !instance->fs)
+        return false;
+
+    if (instance->fs->id != fs.id)
+        return false;
+
+    if (!instance->tree_built)
+        return false;
+
+    // TODO: implement this
 
     return true;
 }
 
 
-void initrd_mount(boot_handoff* handoff) {
-    void* vaddr = (void*)ID_MAPPED_VADDR(handoff->initrd_loc);
-    usize size = handoff->initrd_size;
-
+void ustar_init() {
     file_system_interface* fs_interface = kcalloc(sizeof(file_system_interface));
 
     fs_interface->probe = _probe;
-    fs_interface->mount = _mount;
+    fs_interface->build_tree = _build_tree;
+    fs_interface->destroy_tree = _destroy_tree;
 
     fs.fs_interface = fs_interface;
 
@@ -164,9 +185,18 @@ void initrd_mount(boot_handoff* handoff) {
 
     fs.node_interface = node_interface;
 
+    file_system_register(&fs);
+}
+
+
+void initrd_mount(boot_handoff* handoff) {
+    assert(handoff->initrd_loc);
+    assert(handoff->initrd_size);
+
+    void* vaddr = (void*)ID_MAPPED_VADDR(handoff->initrd_loc);
+    usize size = handoff->initrd_size;
+
     disk_dev* dev = ramdisk_init("initrd", vaddr, size, false);
 
-    file_system_register(&fs);
-
-    disk_register(dev);
+    mount_rootfs(dev);
 }

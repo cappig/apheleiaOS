@@ -369,7 +369,7 @@ void dump_process_tree() {
 static void _spawn_init(void) {
     process* init = spawn_uproc("init");
 
-    vfs_node* file = vfs_lookup_relative(INITRD_MOUNT, "usr/init.elf");
+    vfs_node* file = vfs_lookup("sbin/init.elf");
 
     if (!file)
         panic("init.elf not found!");
@@ -378,6 +378,14 @@ static void _spawn_init(void) {
 
     if (!exec)
         panic("Failed to start init");
+
+    virtual_tty* tty0 = get_tty(0);
+
+    if (tty0) {
+        process_open_fd_node(init, tty0->pty->slave, STDIN_FD, FD_READ);
+        process_open_fd_node(init, tty0->pty->slave, STDOUT_FD, FD_WRITE);
+        process_open_fd_node(init, tty0->pty->slave, STDERR_FD, FD_WRITE);
+    }
 
     proc_tree = tree_create(init);
     init->user.tree_entry = proc_tree->root;

@@ -30,8 +30,11 @@ context_switch:
     pop rbx
     pop rax
 
-    ; we are switching to userspace so we don't have to check the cs
+    ; Call swapgs if the next processes runs in user mode
+    cmp qword [rsp + 8*3], 0x8
+    je .skip
     swapgs
+.skip:
 
     ; Pop error code and interrupt number
     add rsp, 8*2

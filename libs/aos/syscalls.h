@@ -15,6 +15,8 @@ typedef ssize_t off_t;
 typedef ssize_t pid_t;
 typedef ssize_t uid_t;
 
+typedef size_t mode_t;
+
 typedef void (*sighandler_t)(int);
 
 // Syscalls use int 0x80 to interrupt the kernel
@@ -32,21 +34,26 @@ enum syscall_nums {
     SYS_WRITE = 3,
     SYS_PWRITE = 4,
     SYS_SEEK = 5,
+
     SYS_OPEN = 6,
+    SYS_MKDIR = 7,
 
-    SYS_SIGNAL = 7,
-    SYS_SIGRETURN = 8,
+    SYS_SIGNAL = 8,
+    SYS_SIGRETURN = 9,
 
-    SYS_KILL = 9,
-    SYS_WAIT = 10,
+    SYS_KILL = 10,
+    SYS_WAIT = 11,
 
-    SYS_GETPID = 11,
-    SYS_GETPPID = 12,
+    SYS_GETPID = 12,
+    SYS_GETPPID = 13,
 
-    SYS_FORK = 13,
-    // SYS_EXECVE = 14,
+    SYS_FORK = 14,
+    SYS_EXECVE = 15,
 
-    SYS_SLEEP = 15,
+    SYS_SLEEP = 16,
+
+    SYS_MOUNT = 17,
+    SYS_UNMOUNT = 18,
 
     SYSCALL_COUNT
 };
@@ -61,6 +68,21 @@ enum seek_whence {
     SYS_SEEK_SET = 0, // off = x
     SYS_SEEK_CUR = 1, // off += x
     SYS_SEEK_END = 2, // off = eof + x
+};
+
+enum open_flags {
+    // Only one of these shall be set
+    O_RDONLY = 1 << 0, // reading only
+    O_WRONLY = 1 << 1, // writing only
+    O_RDWR = 1 << 2, // reading and writing
+
+    // These can be mixed and matched
+    O_NONBLOCK = 1 << 3, // dont't block until data becomes available
+    O_APPEND = 1 << 4, // append on each write.
+    O_CREAT = 1 << 5, // create the file if it doesn't exist, mode must be valid
+    O_TRUNC = 1 << 6, // truncate size to 0.
+    O_EXCL = 1 << 7, // error if O_CREAT is set and the file already exists
+    // TODO: add the remaining flags
 };
 
 enum wait_options {
@@ -106,6 +128,31 @@ inline u64 syscall4(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4) {
     return ret;
 }
 
+inline u64 syscall5(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5) {
+    register u64 r8 asm("r8") = arg5;
+
+    u64 ret = num;
+    asm volatile(_SYS_ASM
+                 : "=a"(ret)
+                 : "a"(ret), "D"(arg1), "S"(arg2), "d"(arg3), "c"(arg4), "r"(r8)
+                 : "memory");
+
+    return ret;
+}
+
+inline u64 syscall6(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg5, u64 arg6) {
+    register u64 r8 asm("r8") = (u64)arg5;
+    register u64 r9 asm("r9") = (u64)arg6;
+
+    u64 ret = num;
+    asm volatile(_SYS_ASM
+                 : "=a"(ret)
+                 : "a"(ret), "D"(arg1), "S"(arg2), "d"(arg3), "c"(arg4), "r"(r8), "r"(r9)
+                 : "memory");
+
+    return ret;
+}
+
 
 inline void sys_exit(int status) {
     syscall1(SYS_EXIT, status);
@@ -120,7 +167,6 @@ inline ssize_t sys_pread(int fd, void* buffer, size_t len, off_t offset) {
     return syscall4(SYS_PREAD, fd, (u64)buffer, len, offset);
 }
 
-
 inline ssize_t sys_write(int fd, void* buffer, size_t len) {
     return syscall3(SYS_WRITE, fd, (u64)buffer, len);
 }
@@ -134,9 +180,20 @@ inline off_t sys_seek(int fd, off_t offset, int whence) {
 }
 
 
+inline int sys_open(const char* path, int flags, mode_t mode) {
+    return syscall3(SYS_OPEN, (u64)path, flags, mode);
+}
+
+inline int sys_mkdir(const char* path, mode_t mode) {
+    return syscall2(SYS_MKDIR, (u64)path, mode);
+}
+
+
 inline sighandler_t sys_signal(int signum, sighandler_t handler) {
     return (sighandler_t)syscall2(SYS_SIGNAL, signum, (u64)handler);
 }
+
+// inline void sys_sigreturn(void) { } // should only be called by the sinal trampoline
 
 
 inline int sys_kill(pid_t pid, int signum) {
@@ -167,4 +224,13 @@ inline pid_t sys_getppid(void) {
 
 inline pid_t sys_sleep(size_t milis) {
     return syscall1(SYS_SLEEP, milis);
+}
+
+
+inline int sys_mount(const char* source, const char* target, int flags) {
+    return syscall3(SYS_MOUNT, (u64)source, (u64)target, flags);
+}
+
+inline int sys_unmount(const char* target, int flags) {
+    return syscall2(SYS_UNMOUNT, (u64)target, flags);
 }

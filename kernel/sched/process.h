@@ -19,6 +19,8 @@
 #define PROC_USTACK_BASE 0x700000000000ULL
 #define PROC_VDSO_BASE   0x7ff000000000ULL
 
+#define SUPERUSER_UID 0
+#define SUPERUSER_GID 0
 
 enum process_state {
     PROC_READY,
@@ -32,13 +34,17 @@ enum process_type {
     PROC_KERNEL,
 };
 
+enum fd_flags {
+    FD_READ = 1 << 0,
+    FD_WRITE = 1 << 1,
+    FD_APPEND = 1 << 2,
+    FD_NONBLOCK = 1 << 3,
+};
+
 typedef struct {
     vfs_node* node;
-
     usize offset;
-
     u16 flags;
-    u16 mode;
 } file_desc;
 
 typedef struct {
@@ -52,6 +58,13 @@ typedef struct {
 } process_signals;
 
 typedef struct {
+    // Process identity
+    usize uid;
+    usize euid;
+    usize suid;
+
+    // TODO: usize gid;
+
     page_table* mem_map;
 
     // Points to the entry in the process tree
@@ -74,8 +87,8 @@ typedef struct {
     process_signals signals;
 
     // The base address of the virtual dynamic shared object
-    // NULL if not loaded.
-    void* vdso;
+    // NULL if not loaded
+    u64 vdso;
 
     // The base address of the page(es) that hold the strings for the command
     // line arguments and the environment variables
@@ -85,7 +98,7 @@ typedef struct {
 
 typedef struct {
     char* name;
-    usize id;
+    usize id; // pid
 
     u8 state;
     u8 type;
@@ -111,7 +124,9 @@ void process_init_page_map(process* parent, process* child);
 void process_init_file_descriptors(process* parent, process* child);
 void process_init_signal_handlers(process* parent, process* child);
 
-isize process_open_fd(process* proc, const char* path, isize fd);
+isize process_open_fd_node(process* proc, vfs_node* node, isize fd, u16 flags);
+isize process_open_fd(process* proc, const char* path, isize fd, u16 flags);
+file_desc* process_get_fd(process* proc, usize fd);
 
 void process_set_state(process* proc, int_state* state);
 void process_push_state(process* proc, int_state* state);

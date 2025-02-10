@@ -63,11 +63,9 @@ static file_system_instance* _probe(disk_partition* part) {
     return instance;
 }
 
-static bool _mount(file_system_instance* instance, vfs_node* mount) {
+static bool _build_tree(file_system_instance* instance) {
     if (instance->fs->id != fs.id)
         return false;
-
-    instance->mount = mount;
 
     // ext2_device_private* priv = instance->private;
     // instance->tree_build = true;
@@ -83,7 +81,6 @@ bool ext2_init() {
     file_system_interface* fs_interface = kcalloc(sizeof(file_system_interface));
 
     fs_interface->probe = _probe;
-    fs_interface->mount = _mount;
 
     fs.fs_interface = fs_interface;
 

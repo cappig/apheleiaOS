@@ -48,7 +48,7 @@ bool init_serial_port(u8 index) {
 
     pty->slave->name = strdup(name);
 
-    vfs_node* dev = vfs_lookup("/dev");
+    vfs_node* dev = vfs_open("/dev", VFS_DIR, true, KDIR_MODE);
     vfs_insert_child(dev, pty->slave);
 
     return true;

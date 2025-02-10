@@ -23,7 +23,7 @@ typedef struct linked_list {
 
 
 linked_list* list_create(void);
-void list_destroy(linked_list* list);
+void list_destroy(linked_list* list, bool free_data);
 
 list_node* list_create_node(void* data);
 void list_destroy_node(list_node* node);

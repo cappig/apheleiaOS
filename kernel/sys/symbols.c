@@ -5,7 +5,6 @@
 #include <parse/sym.h>
 #include <stddef.h>
 
-#include "drivers/initrd.h"
 #include "mem/heap.h"
 #include "vfs/fs.h"
 
@@ -13,13 +12,16 @@ static symbol_table sym_table = {0};
 
 
 void load_symbols() {
-    vfs_node* file = vfs_lookup_relative(INITRD_MOUNT, INITRD_SYMTAB_NAME);
+    vfs_node* file = vfs_lookup("/boot/sym.map");
 
-    if (!file)
+    if (!file) {
+        log_warn("Kernel symbol table not found!");
         return;
+    }
 
     char* buffer = kmalloc(file->size);
-    file->interface->read(file, buffer, 0, file->size);
+
+    vfs_read(file, buffer, 0, file->size, 0);
 
     usize lines = sym_count(buffer, file->size);
 
@@ -42,7 +44,7 @@ void load_symbols() {
 
     kfree(buffer);
 
-    log_debug("Loaded kernel debug symbols");
+    log_debug("Loaded kernel symbols");
 }
 
 

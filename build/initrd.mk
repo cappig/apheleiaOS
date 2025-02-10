@@ -1,14 +1,16 @@
-bin/initrd/font.psf:
+INITRD_SRC := bin/initrd
+
+$(INITRD_SRC)/boot/font.psf:
 	@mkdir -p $(@D)
 	cp utils/$(DEFAULT_FONT) $@
 
-bin/initrd/sym.map: bin/image/kernel.elf
+$(INITRD_SRC)/boot/sym.map: bin/image/kernel.elf
 ifeq ($(TRACEABLE_KERNEL), true)
 	@mkdir -p $(@D)
 	cp bin/kernel/sym.map $@
 endif
 
 
-bin/image/initrd.tar: bin/initrd/sym.map bin/initrd/font.psf
-	tar -cf $@ -C $(<D) \
-	$(shell ls -A $(<D))
+bin/image/initrd.tar: bin/initrd/boot/sym.map bin/initrd/boot/font.psf
+	tar -cf $@ -C $(INITRD_SRC) \
+	$(shell ls -A $(INITRD_SRC))

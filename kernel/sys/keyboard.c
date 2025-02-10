@@ -20,7 +20,7 @@ static vector* kbds = NULL;
 // All the keyboards send their input to a single buffer
 static ring_buffer* buffer;
 
-static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
     if (!buf)
         return -1;
 
@@ -141,7 +141,7 @@ bool keyboard_init() {
     vfs_node* kbd = vfs_create_node("kbd", VFS_CHARDEV);
     kbd->interface = vfs_create_interface(_read, NULL);
 
-    vfs_node* dev = vfs_lookup("/dev");
+    vfs_node* dev = vfs_open("/dev", VFS_DIR, true, KDIR_MODE);
     vfs_insert_child(dev, kbd);
 
     kbds = vec_create(sizeof(keyboard_dev));

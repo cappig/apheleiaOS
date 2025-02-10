@@ -95,7 +95,7 @@ _recursive_tree_build(file_system_instance* instance, iso_dir* parent, vfs_node*
 
 
 // ISO files are just contiguous blocks, nice and easy
-static isize _read(vfs_node* node, void* buf, usize offset, usize len) {
+static isize _read(vfs_node* node, void* buf, usize offset, usize len, u32 flags) {
     if (offset > node->size)
         return -1;
 
@@ -120,22 +120,44 @@ static file_system_instance* _probe(disk_partition* part) {
 
     instance->fs = &fs;
     instance->private = pvd;
+    instance->partition = part;
 
     return instance;
 }
 
-static bool _mount(file_system_instance* instance, vfs_node* mount) {
-    if (instance->fs->id != fs.id)
+static bool _build_tree(file_system_instance* instance) {
+    if (!instance || !instance->fs)
         return false;
 
-    instance->mount = mount;
+    if (instance->fs->id != fs.id)
+        return false;
 
     iso_volume_descriptor* pvd = instance->private;
     iso_dir* root = (iso_dir*)pvd->root;
 
-    _recursive_tree_build(instance, root, mount);
+    vfs_node* vroot = vfs_create_node(instance->partition->name, VFS_DIR);
+    vroot->fs = instance;
 
-    instance->tree_build = true;
+    instance->subtree = tree_create_rooted(vroot->tree_entry);
+
+    _recursive_tree_build(instance, root, vroot);
+
+    instance->tree_built = true;
+
+    return true;
+}
+
+static bool _destroy_tree(file_system_instance* instance) {
+    if (!instance || !instance->fs)
+        return false;
+
+    if (instance->fs->id != fs.id)
+        return false;
+
+    if (!instance->tree_built)
+        return false;
+
+    // TODO: implement this
 
     return true;
 }
@@ -145,7 +167,8 @@ bool iso_init() {
     file_system_interface* fs_interface = kcalloc(sizeof(file_system_interface));
 
     fs_interface->probe = _probe;
-    fs_interface->mount = _mount;
+    fs_interface->build_tree = _build_tree;
+    fs_interface->destroy_tree = _destroy_tree;
 
     fs.fs_interface = fs_interface;
 

@@ -4,6 +4,8 @@
 #include <base/types.h>
 #include <string.h>
 
+#include "libc_ext/stdlib.h"
+
 
 vector* vec_create_sized(usize size, usize elem_size) {
     vector* vec = gcalloc(sizeof(vector));
@@ -61,7 +63,7 @@ vector* vec_clone(vector* parent) {
 
 bool vec_reserve(vector* vec, usize capacity) {
     u8* old_buf = vec->data;
-    u8* new_buf = gmalloc(capacity);
+    u8* new_buf = gcalloc(capacity);
 
     if (!new_buf)
         return false;
@@ -109,18 +111,42 @@ void* vec_set(vector* vec, usize index, void* data) {
 }
 
 
+bool vec_clear(vector* vec) {
+    void* ptr = vec->data;
+    usize len = vec->size * vec->elem_size;
+
+    memset(ptr, 0, len);
+
+    vec->size = 0;
+
+    return true;
+}
+
+
 bool vec_insert(vector* vec, usize index, void* data) {
     usize capacity = vec->capacity;
 
-    if (index > capacity) {
+    if (index > capacity)
         vec_reserve(vec, index + 1);
-        vec->size = index + 1;
 
-        void* ptr = vec->data + index * vec->elem_size;
-        memset(ptr, 0, index - capacity);
-    }
+    vec->size = max(vec->size, index + 1);
 
     return vec_set(vec, index, data);
+}
+
+
+bool vec_swap(vector* vec, usize i, usize j) {
+    void* first = vec_at(vec, i);
+    if (!first)
+        return false;
+
+    void* second = vec_at(vec, j);
+    if (!second)
+        return false;
+
+    memswap(first, second, vec->elem_size);
+
+    return true;
 }
 
 

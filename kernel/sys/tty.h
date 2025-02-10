@@ -21,6 +21,7 @@
 // only and its output is rendered on screen
 
 typedef struct {
+    usize id;
     pseudo_tty* pty;
     gfx_terminal* gterm;
 } virtual_tty;
@@ -34,7 +35,7 @@ void tty_output(usize index, u8* data, usize len);
 bool tty_set_current(usize index);
 virtual_tty* get_tty(isize index);
 
-virtual_tty* tty_spawn(usize index);
+virtual_tty* tty_spawn(void);
 void tty_spawn_devs(void);
 
 void tty_init(boot_handoff* handoff);

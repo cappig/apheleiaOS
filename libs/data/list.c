@@ -13,10 +13,15 @@ linked_list* list_create(void) {
     return new;
 }
 
-// NOTE: this function does not free the stored data!
-void list_destroy(linked_list* list) {
+void list_destroy(linked_list* list, bool free_data) {
+    if (!list)
+        return;
+
     foreach (node, list) {
         gfree(node);
+
+        if (free_data)
+            gfree(node->data);
     }
 
     gfree(list);

@@ -12,7 +12,6 @@
 #include "sched/scheduler.h"
 #include "sys/panic.h"
 
-// What if the signal handler is at address 0x0 of 0x2, it is possible?
 #define SIGNAL_TERMINATE ((sighandler_fn)0)
 #define SIGNAL_IGNORE    ((sighandler_fn)1)
 // TODO: core dump

@@ -23,7 +23,7 @@ static i32 y_pos = 10;
 
 static ring_buffer* buffer;
 
-static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize len) {
+static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
     if (!buf)
         return -1;
 
@@ -66,7 +66,7 @@ bool mouse_init() {
     vfs_node* mse = vfs_create_node("mouse", VFS_CHARDEV);
     mse->interface = vfs_create_interface(_read, NULL);
 
-    vfs_node* dev = vfs_lookup("/dev");
+    vfs_node* dev = vfs_open("/dev", VFS_DIR, true, KDIR_MODE);
     vfs_insert_child(dev, mse);
 
     mice = vec_create(sizeof(mouse_dev));

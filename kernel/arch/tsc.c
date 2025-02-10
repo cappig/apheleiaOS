@@ -67,7 +67,9 @@ retry:
     // disable the PIT?
 
     log_info("Initialised %lu MHz TSC", tsc_khz / 1000);
-    log_debug("Took %zu tries to calibrate the TSC", retry_counter);
+
+    char* try_str = (retry_counter > 1) ? "tries" : "try";
+    log_debug("Took %zu %s to calibrate the TSC", retry_counter, try_str);
 }
 
 

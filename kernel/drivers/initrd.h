@@ -4,7 +4,7 @@
 #include <boot/proto.h>
 #include <fs/ustar.h>
 
-#define INITRD_MOUNT "/mnt/initrd"
 
+void ustar_init(void);
 
 void initrd_mount(boot_handoff* handoff);

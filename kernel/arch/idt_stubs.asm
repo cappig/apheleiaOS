@@ -45,6 +45,7 @@ isr_stub_table:
 global isr_common_stub
 isr_common_stub:
     swapgs_if_necessary
+
     push rax
     push rbx
     push rcx
@@ -79,6 +80,7 @@ isr_common_stub:
     pop rcx
     pop rbx
     pop rax
+
     swapgs_if_necessary
 
     ; Pop the error code and interrupt number

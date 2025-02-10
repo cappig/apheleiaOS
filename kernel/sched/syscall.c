@@ -13,7 +13,7 @@
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
-#include "sched/exec.h"
+#include "mem/heap.h"
 #include "sched/process.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
@@ -22,9 +22,7 @@
 
 
 static inline file_desc* _get_fd(usize fd) {
-    vector* fd_table = cpu->sched->current->user.fd_table;
-
-    return vec_at(fd_table, fd);
+    return process_get_fd(cpu->sched->current, fd);
 }
 
 static bool _valid_fd(usize fd) {
@@ -47,6 +45,18 @@ static bool _valid_signum(usize signum) {
     return true;
 }
 
+static bool _has_perms(usize user) {
+    usize current_uid = cpu->sched->current->user.euid;
+
+    if (current_uid == SUPERUSER_UID)
+        return true;
+
+    if (user == current_uid)
+        return true;
+
+    return false;
+}
+
 
 static void _exit(u64 status) {
     scheduler_kill(cpu->sched->current, status);
@@ -63,10 +73,11 @@ static isize __read(u64 fd, u64 buf_ptr, u64 len, u64 offset, bool use_fd_offset
         return -EFAULT;
 
     file_desc* fdesc = _get_fd(fd);
-    vfs_node* node = fdesc->node;
 
-    if (use_fd_offset)
-        offset = fdesc->offset;
+    if (!(fdesc->flags & FD_READ))
+        return -EINVAL;
+
+    vfs_node* node = fdesc->node;
 
     if (!node)
         return -EBADF;
@@ -74,13 +85,15 @@ static isize __read(u64 fd, u64 buf_ptr, u64 len, u64 offset, bool use_fd_offset
     if (node->type == VFS_DIR)
         return -EISDIR;
 
-    if (!node->interface)
-        return -EBADF;
+    if (use_fd_offset)
+        offset = fdesc->offset;
 
-    if (!node->interface->read)
-        return -EBADF;
+    usize flags = 0;
 
-    isize read = node->interface->read(node, buf, offset, len);
+    if (fdesc->flags & FD_NONBLOCK)
+        flags |= VFS_NONBLOCK;
+
+    isize read = vfs_read(node, buf, offset, len, flags);
 
     if (read >= 0 && use_fd_offset)
         fdesc->offset += read;
@@ -108,18 +121,23 @@ static isize __write(u64 fd, u64 buf_ptr, u64 len, u64 offset, bool use_fd_offse
 
     file_desc* fdesc = _get_fd(fd);
 
-    vfs_node* node = fdesc->node;
+    if (!(fdesc->flags & FD_WRITE))
+        return -EINVAL;
 
-    if (use_fd_offset)
-        offset = fdesc->offset;
+    vfs_node* node = fdesc->node;
 
     if (!node)
         return -EBADF;
 
-    if (!node->interface->write)
-        return -EBADF;
+    if (use_fd_offset)
+        offset = fdesc->offset;
 
-    isize written = node->interface->write(node, buf, offset, len);
+    usize flags = 0;
+
+    if (fdesc->flags & FD_NONBLOCK)
+        flags |= VFS_NONBLOCK;
+
+    isize written = vfs_write(node, buf, offset, len, flags);
 
     if (written > 0 && use_fd_offset)
         fdesc->offset += written;
@@ -181,14 +199,63 @@ static isize _seek(int fd, off_t offset, int whence) {
 static isize _open(u64 path_ptr, u64 flags, u64 mode) {
     const char* path = (const char*)path_ptr;
 
-    if (!_valid_ptr(path, 0, false))
+    if (!_valid_ptr(path, 1, false))
         return -EFAULT;
 
-    isize fd = process_open_fd(cpu->sched->current, path, -1);
+    vfs_node* node = vfs_open(path, VFS_FILE, flags & O_CREAT, mode); // TODO: mode
+
+    if (!node)
+        return -ENOENT;
+
+    u16 fd_flags = 0;
+
+    if (flags & O_RDONLY || flags & O_RDWR)
+        fd_flags |= FD_READ;
+
+    if (flags & O_WRONLY || flags & O_RDWR)
+        fd_flags |= FD_WRITE;
+
+    if (flags & O_APPEND)
+        fd_flags |= FD_APPEND;
+
+    if (flags & O_NONBLOCK)
+        fd_flags |= FD_NONBLOCK;
+
+    isize fd = process_open_fd_node(cpu->sched->current, node, -1, fd_flags);
+    file_desc* fdesc = _get_fd(fd);
+
+    if (!fdesc) // wtf?
+        return -EFAULT;
 
     return fd;
 }
 
+static u64 _mkdir(u64 path_ptr, u64 mode) {
+    const char* path = (const char*)path_ptr;
+
+    if (!_valid_ptr(path, 1, false))
+        return -EFAULT;
+
+    char* path_cpy = strdup(path);
+
+    char* dir_name = dirname(path_cpy);
+    char* base_name = basename(path_cpy);
+
+    vfs_node* parent = vfs_lookup(dir_name);
+    if (!parent)
+        return -errno;
+
+    vfs_node* child = vfs_create(parent, base_name, VFS_DIR, mode);
+
+    child->uid = cpu->sched->current->user.euid;
+
+    kfree(path_cpy);
+
+    if (!child)
+        return -EFAULT;
+
+    return 0;
+}
 
 static u64 _signal(u64 signum, u64 handler_ptr) {
     sighandler_t handler = (sighandler_t)handler_ptr;
@@ -316,8 +383,69 @@ static u64 _fork(void) {
 }
 
 static u64 _sleep(u64 milis) {
-    scheduler_sleep(cpu->sched->current, milis);
+    if (milis)
+        scheduler_sleep(cpu->sched->current, milis);
+
     cpu->sched->proc_ticks_left = 0;
+
+    return 0;
+}
+
+static u64 _mount(u64 source_ptr, u64 target_ptr, u64 flags) {
+    // Only the superuser is allowed to mount disks
+    if (!_has_perms(SUPERUSER_UID))
+        return -EPERM;
+
+    const char* source = (const char*)source_ptr;
+    const char* target = (const char*)target_ptr;
+
+    // FIXME: What if one half of the string resides in a vvalid page and the rest resides in an
+    // invalid page This whould return true and we would get a PF/GP exception here in the kernel
+    if (!_valid_ptr(source, 1, false))
+        return -EFAULT;
+
+    if (!_valid_ptr(target, 1, false))
+        return -EFAULT;
+
+    vfs_node* source_vnode = vfs_lookup(source);
+    if (!source_vnode)
+        return -errno;
+
+    if (source_vnode->type != VFS_BLOCKDEV)
+        return -ENODEV;
+
+    if (!source_vnode->fs)
+        return -ENODEV;
+
+    vfs_node* target_vnode = vfs_lookup(target);
+    if (!target_vnode)
+        return -errno;
+
+    if (target_vnode->type != VFS_DIR)
+        return -ENOTDIR;
+
+    if (!vfs_mount(source_vnode->fs, target_vnode))
+        return -EFAULT;
+
+    return 0;
+}
+
+static u64 _unmount(u64 target_ptr, u64 flags) {
+    if (!_has_perms(SUPERUSER_UID))
+        return -EPERM;
+
+    const char* target = (const char*)target_ptr;
+
+    if (!_valid_ptr(target, 1, false))
+        return -EFAULT;
+
+    vfs_node* target_vnode = vfs_lookup(target);
+    if (!target_vnode)
+        return -errno;
+
+    // TODO: destroy_tree by default?
+    if (!vfs_unmount(target_vnode, false))
+        return -EFAULT;
 
     return 0;
 }
@@ -332,6 +460,8 @@ static void _syscall_handler(int_state* s) {
     u64 arg2 = s->g_regs.rsi;
     u64 arg3 = s->g_regs.rdx;
     u64 arg4 = s->g_regs.rcx;
+    u64 arg5 = s->g_regs.r8;
+    u64 arg6 = s->g_regs.r9;
 
     u64 ret = 0;
 
@@ -362,6 +492,9 @@ static void _syscall_handler(int_state* s) {
         ret = _open(arg1, arg2, arg3);
         break;
 
+    case SYS_MKDIR:
+        ret = _mkdir(arg1, arg2);
+        break;
 
     case SYS_SIGNAL:
         ret = _signal(arg1, arg2);
@@ -397,6 +530,15 @@ static void _syscall_handler(int_state* s) {
 
     case SYS_SLEEP:
         ret = _sleep(arg1);
+        break;
+
+
+    case SYS_MOUNT:
+        ret = _mount(arg1, arg2, arg3);
+        break;
+
+    case SYS_UNMOUNT:
+        ret = _unmount(arg1, arg2);
         break;
 
 

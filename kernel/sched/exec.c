@@ -7,6 +7,7 @@
 #include "mem/virtual.h"
 #include "process.h"
 #include "sys/panic.h"
+#include "x86/paging.h"
 
 
 static bool _init_ustack(process* proc, u64 base, usize size) {
@@ -44,7 +45,7 @@ static u64 _load_elf_sections(process* proc, vfs_node* file, elf_header* header,
     for (usize i = 0; i < header->ph_num; i++) {
         usize header_offset = header->phoff + i * header->phent_size;
 
-        if (vfs_read(file, p_header, header_offset, header->phent_size) < 0)
+        if (vfs_read(file, p_header, header_offset, header->phent_size, 0) < 0)
             break;
 
         if (p_header->type != PT_LOAD)
@@ -76,7 +77,7 @@ static u64 _load_elf_sections(process* proc, vfs_node* file, elf_header* header,
         // Copy all loadable data from the file
         usize offset = vaddr - vbase;
 
-        if (vfs_read(file, base + offset, p_header->offset, p_header->file_size) < 0)
+        if (vfs_read(file, base + offset, p_header->offset, p_header->file_size, 0) < 0)
             break;
 
         // Zero out any additional space
@@ -93,13 +94,13 @@ static void _map_vdso(process* proc) {
     if (proc->user.vdso) // the vdso is already loaded
         return;
 
-    vfs_node* file = vfs_lookup_relative(INITRD_MOUNT, "usr/vdso.elf");
+    vfs_node* file = vfs_lookup("sbin/vdso.elf");
 
     if (!file)
         panic("vdso.elf not found!");
 
     elf_header* header = kmalloc(file->size);
-    vfs_read(file, header, 0, file->size);
+    vfs_read(file, header, 0, file->size, 0);
 
     if (elf_verify(header) != VALID_ELF)
         panic("vdso.elf is invalid!");
@@ -119,7 +120,7 @@ static void _map_vdso(process* proc) {
 
     assert(sig_sym);
 
-    proc->user.vdso = (void*)PROC_VDSO_BASE;
+    proc->user.vdso = PROC_VDSO_BASE;
     proc->user.signals.trampoline = PROC_VDSO_BASE + sig_sym->value;
 
     kfree(header);
@@ -228,7 +229,7 @@ bool exec_elf(process* proc, vfs_node* file, char** argv, char** envp) {
     elf_header header[sizeof(elf_header)] = {0};
     // elf_header* header = kmalloc(sizeof(elf_header));
 
-    vfs_read(file, header, 0, sizeof(elf_header));
+    vfs_read(file, header, 0, sizeof(elf_header), 0);
 
     if (elf_verify(header) != VALID_ELF)
         return false;
@@ -238,6 +239,9 @@ bool exec_elf(process* proc, vfs_node* file, char** argv, char** envp) {
         return false;
 
     _load_elf_sections(proc, file, header, 0);
+
+    // Map the null page with no permissions so that we can detect nullptr dereference
+    map_page(proc->user.mem_map, PAGE_4KIB, 0, 0, PT_PRESENT);
 
     // TODO: don't just map to a fixed address
     _init_ustack(proc, PROC_USTACK_BASE, SCHED_USTACK_SIZE);

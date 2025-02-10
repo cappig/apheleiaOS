@@ -78,7 +78,7 @@ bool process_free(process* proc) {
 #endif
     }
 
-    list_destroy(proc_node->children);
+    list_destroy(proc_node->children, false);
     proc_node->children = NULL;
 
     if (proc->user.args_paddr)
@@ -161,16 +161,10 @@ void process_init_page_map(process* parent, process* child) {
 void process_init_file_descriptors(process* parent, process* child) {
     assert(child->type == PROC_USER);
 
-    if (parent) {
+    if (parent)
         child->user.fd_table = vec_clone(parent->user.fd_table);
-    } else {
+    else
         child->user.fd_table = vec_create(sizeof(file_desc));
-
-        // Some reasonable defaults
-        process_open_fd(child, "/dev/kbd", STDIN_FD);
-        process_open_fd(child, "/dev/tty0", STDOUT_FD);
-        process_open_fd(child, "/dev/tty0", STDERR_FD);
-    }
 }
 
 void process_init_signal_handlers(process* parent, process* child) {
@@ -190,13 +184,14 @@ void process_init_signal_handlers(process* parent, process* child) {
 }
 
 
-isize process_open_fd(process* proc, const char* path, isize fd) {
+isize process_open_fd_node(process* proc, vfs_node* node, isize fd, u16 flags) {
     assert(proc->type == PROC_USER);
 
     // TODO: flags and mode
     file_desc fdesc = {
-        .node = vfs_lookup(path),
+        .node = node,
         .offset = 0,
+        .flags = flags,
     };
 
     if (!fdesc.node)
@@ -210,6 +205,17 @@ isize process_open_fd(process* proc, const char* path, isize fd) {
         return -ENOMEM;
 
     return fd;
+}
+
+isize process_open_fd(process* proc, const char* path, isize fd, u16 flags) {
+    vfs_node* node = vfs_lookup(path);
+    return process_open_fd_node(proc, node, fd, flags);
+}
+
+file_desc* process_get_fd(process* proc, usize fd) {
+    assert(proc->type == PROC_USER);
+
+    return vec_at(proc->user.fd_table, fd);
 }
 
 

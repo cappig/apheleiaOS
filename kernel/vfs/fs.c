@@ -7,7 +7,9 @@
 #include <log/log.h>
 #include <string.h>
 
+#include "libc_ext/stdlib.h"
 #include "mem/heap.h"
+#include "sys/disk.h"
 #include "sys/panic.h"
 
 // Our kernel has one single virtual file system
@@ -18,16 +20,14 @@ virtual_fs* vfs_init() {
     vfs = kcalloc(sizeof(virtual_fs));
     assert(vfs);
 
-    vfs->mounted = list_create();
-
     vfs_node* root = vfs_create_node(NULL, VFS_DIR);
     vfs->tree = tree_create_rooted(root->tree_entry);
 
-    vfs_node* dev = vfs_create_node("dev", VFS_DIR);
-    vfs_node* mnt = vfs_create_node("mnt", VFS_DIR);
-
-    vfs_insert_child(root, dev);
-    vfs_insert_child(root, mnt);
+    /* vfs_node* dev = vfs_create_node("dev", VFS_DIR); */
+    /* vfs_node* mnt = vfs_create_node("mnt", VFS_DIR); */
+    /**/
+    /* vfs_insert_child(root, dev); */
+    /* vfs_insert_child(root, mnt); */
 
     return vfs;
 }
@@ -41,6 +41,8 @@ vfs_node* vfs_create_node(char* name, vfs_node_type type) {
 
     if (name)
         node->name = strdup(name);
+
+    // TODO: timestamp
 
     return node;
 }
@@ -115,6 +117,21 @@ vfs_node* vfs_lookup_from(vfs_node* from, const char* path) {
             goto next;
         }
 
+        // Resolve symbolic links
+        vfs_node* parent = node->data;
+        if (VFS_IS_LINK(parent->type)) {
+            parent = parent->link;
+
+            if (!parent) {
+                node = NULL;
+                errno = ENOENT;
+
+                break;
+            }
+
+            node = parent->tree_entry;
+        }
+
         // Go one level down
         bool found = false;
 
@@ -164,6 +181,32 @@ vfs_node* vfs_lookup_relative(const char* root, const char* path) {
     return vfs_lookup_from(vnode_root, path);
 }
 
+// 'mode' is only relevant if the node gets created
+vfs_node* vfs_open(const char* path, vfs_node_type type, bool create, vfs_mode mode) {
+    vfs_node* file = vfs_lookup(path);
+
+    if (file)
+        return file;
+
+    // The file doesn't exist
+    if (!create)
+        return NULL;
+
+    char* dir_cpy = strdup(path);
+    char* dir_name = dirname(dir_cpy);
+
+    char* base_cpy = strdup(path);
+    char* base_name = basename(base_cpy);
+
+    vfs_node* parent = vfs_lookup(dir_name);
+    vfs_node* child = vfs_create(parent, base_name, type, mode);
+
+    kfree(dir_cpy);
+    kfree(base_cpy);
+
+    return child;
+}
+
 
 bool vfs_insert_child(vfs_node* parent, vfs_node* child) {
     assert(vfs);
@@ -176,6 +219,16 @@ bool vfs_insert_child(vfs_node* parent, vfs_node* child) {
     if (!vfs_validate_name(child->name)) {
         errno = EBADF;
         return false;
+    }
+
+    // Resolve links
+    if (VFS_IS_LINK(parent->type)) {
+        parent = parent->link;
+
+        if (!parent) {
+            errno = EINVAL;
+            return false;
+        }
     }
 
     tree_node* parent_tnode = parent->tree_entry;
@@ -196,11 +249,106 @@ bool vfs_insert_child(vfs_node* parent, vfs_node* child) {
 
     tree_insert_child(parent_tnode, child->tree_entry);
 
+    vfs_node_interface* interface = parent->interface;
+
+    if (interface && interface->create)
+        interface->create(parent, child);
+
+    return true;
+}
+
+vfs_node* vfs_create(vfs_node* parent, char* name, vfs_node_type type, vfs_mode mode) {
+    assert(vfs);
+
+    if (!parent)
+        return NULL;
+
+    vfs_node* node = vfs_create_node(name, type);
+
+    if (!vfs_insert_child(parent, node)) {
+        vfs_destroy_node(node);
+        return NULL;
+    }
+
+    return node;
+}
+
+
+bool vfs_mount(file_system_instance* instance, vfs_node* mount) {
+    assert(vfs);
+
+    if (!instance || !mount)
+        return false;
+
+    if (mount->type != VFS_DIR)
+        return false;
+
+    // Do we have to build the subtree
+    if (!instance->tree_built) {
+        if (!instance->fs)
+            return false;
+
+        file_system_interface* interface = instance->fs->fs_interface;
+
+        if (!interface || !interface->build_tree)
+            return false;
+
+        interface->build_tree(instance);
+
+        if (!instance->tree_built)
+            return false;
+    }
+
+    mount->type = VFS_MOUNT;
+    mount->link = instance->subtree->root->data;
+
+    instance->refcount++;
+
+    return true;
+}
+
+// If the refcount goes to 0 the tree will be destroyed in 'destroy_tree' is true
+bool vfs_unmount(vfs_node* mount, bool destroy_tree) {
+    assert(vfs);
+
+    if (mount->type != VFS_MOUNT)
+        return false;
+
+    vfs_node* link = mount->link;
+
+    if (!link)
+        return false;
+
+    file_system_instance* instance = link->fs;
+
+    if (!instance)
+        return false;
+
+    if (!instance->refcount) // wtf?
+        return false;
+
+    instance->refcount--;
+
+    if (!instance->refcount && destroy_tree && instance->fs) {
+        file_system_interface* interface = instance->fs->fs_interface;
+
+        if (interface && interface->destroy_tree)
+            interface->destroy_tree(instance);
+    }
+
+    mount->type = VFS_DIR;
+    mount->link = NULL;
+
     return true;
 }
 
 
 static void _recursive_dump(tree_node* parent, usize depth) {
+    vfs_node* vnode_parent = parent->data;
+
+    if (VFS_IS_LINK(vnode_parent->type))
+        parent = vnode_parent->link->tree_entry;
+
     foreach (node, parent->children) {
         tree_node* child = node->data;
         vfs_node* vnode = child->data;

@@ -78,5 +78,16 @@ inline void page_set_paddr(page_table* page, u64 addr) {
     page->bits.present = 1;
 }
 
+inline u64 construct_vaddr(usize lvl4, usize lvl3, usize lvl2, usize lvl1) {
+    u64 addr = 0;
+
+    addr |= (((u64)lvl1 & 0x1ff) << 12);
+    addr |= (((u64)lvl2 & 0x1ff) << 21);
+    addr |= (((u64)lvl3 & 0x1ff) << 30);
+    addr |= (((u64)lvl4 & 0x1ff) << 39);
+
+    return addr;
+}
+
 
 bool supports_1gib_pages(void);

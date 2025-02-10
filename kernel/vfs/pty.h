@@ -4,6 +4,7 @@
 #include <data/vector.h>
 
 #include "fs.h"
+#include "sched/wait.h"
 
 #define PTY_RETURN_CHAR '\n'
 #define PTY_DELETE_CHAR '\b'
@@ -29,6 +30,8 @@ typedef struct pseudo_tty {
     // Hooks that can be called when there is new data in the buffer, optional
     vfs_hook_fn out_hook; // There is new data in the output_buffer, the master can read
     vfs_hook_fn in_hook; // There is new data in the input_buffer, the slave can read
+
+    wait_list* waiters;
 
     void* private;
 } pseudo_tty;

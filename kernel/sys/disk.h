@@ -1,9 +1,16 @@
 #pragma once
 
 #include <base/types.h>
+#include <data/tree.h>
 #include <data/vector.h>
 
 #include "vfs/fs.h"
+
+// files and directories created by the kernel have these permissions
+// rw-rw----
+#define KFILE_MODE 0660
+// rwxr-xr-x
+#define KDIR_MODE 0755
 
 
 typedef struct vfs_node_interface vfs_node_interface;
@@ -17,6 +24,9 @@ enum disk_dev_type {
 
 typedef struct disk_dev disk_dev;
 
+typedef struct file_system file_system;
+typedef struct file_system_instance file_system_instance;
+
 typedef struct {
     char* name;
     usize type;
@@ -24,6 +34,7 @@ typedef struct {
     usize offset;
 
     disk_dev* disk;
+    file_system_instance* fs_instance;
 } disk_partition;
 
 typedef struct {
@@ -56,11 +67,12 @@ typedef struct vfs_node vfs_node;
 typedef struct {
     file_system_instance* (*probe)(disk_partition* part);
 
-    bool (*mount)(file_system_instance* instance, vfs_node* mount);
-    bool (*unmount)(file_system_instance* instance);
+    bool (*build_tree)(file_system_instance* instance);
+    bool (*destroy_tree)(file_system_instance* instance);
 
     // mkdir
     // touch
+
 } file_system_interface;
 
 typedef struct file_system {
@@ -79,15 +91,21 @@ typedef struct file_system_instance {
 
     disk_partition* partition;
 
-    bool tree_build;
-    vfs_node* mount;
+    bool tree_built;
+    tree* subtree;
+
+    usize refcount;
 
     void* private;
 } file_system_instance;
 
 
-bool file_system_register(file_system* fs);
-
 bool disk_register(disk_dev* dev);
+disk_dev* disk_lookup(usize dev_id);
+
+bool file_system_register(file_system* fs);
+file_system* file_system_lookup(const char* name);
+
+void mount_rootfs(disk_dev* dev);
 
 void dump_partitions(disk_dev* dev);

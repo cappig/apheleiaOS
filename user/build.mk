@@ -1,4 +1,4 @@
-USER_BIN := bin/initrd/usr
+USER_BIN := bin/initrd/sbin
 
 
 CC_USER := \
