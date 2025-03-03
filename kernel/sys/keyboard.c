@@ -60,6 +60,10 @@ static bool _send_to_tty(keyboard_dev* kbd, key_event event) {
             ch = toupper(ch);
     }
 
+    // Convert to control chars
+    if (kbd->ctrl)
+        ch = caret_to_ctrl(ch);
+
     // Send the ascii key to the current virtual tty
     tty_input(current_tty, &ch, 1);
 

@@ -21,43 +21,6 @@
 #include "vfs/fs.h"
 
 
-static inline file_desc* _get_fd(usize fd) {
-    return process_get_fd(cpu->sched->current, fd);
-}
-
-static bool _valid_fd(usize fd) {
-    file_desc* fdesc = _get_fd(fd);
-
-    if (!fdesc)
-        return NULL;
-
-    return fdesc->node;
-}
-
-static bool _valid_ptr(const void* ptr, usize len, bool write) {
-    return process_validate_ptr(cpu->sched->current, ptr, len, write);
-}
-
-static bool _valid_signum(usize signum) {
-    if (signum >= SIGNAL_COUNT)
-        return false;
-
-    return true;
-}
-
-static bool _has_perms(usize user) {
-    usize current_uid = cpu->sched->current->user.euid;
-
-    if (current_uid == SUPERUSER_UID)
-        return true;
-
-    if (user == current_uid)
-        return true;
-
-    return false;
-}
-
-
 static void _exit(u64 status) {
     scheduler_kill(cpu->sched->current, status);
 }
@@ -66,13 +29,13 @@ static void _exit(u64 status) {
 static isize __read(u64 fd, u64 buf_ptr, u64 len, u64 offset, bool use_fd_offset) {
     void* buf = (void*)buf_ptr;
 
-    if (!_valid_fd(fd))
+    if (!validate_fd(fd))
         return -EBADF;
 
-    if (!_valid_ptr(buf, len, false))
+    if (!validate_ptr(buf, len, false))
         return -EFAULT;
 
-    file_desc* fdesc = _get_fd(fd);
+    file_desc* fdesc = get_fd(fd);
 
     if (!(fdesc->flags & FD_READ))
         return -EINVAL;
@@ -113,13 +76,13 @@ static isize _pread(u64 fd, u64 buf_ptr, u64 len, u64 offset) {
 static isize __write(u64 fd, u64 buf_ptr, u64 len, u64 offset, bool use_fd_offset) {
     void* buf = (void*)buf_ptr;
 
-    if (!_valid_fd(fd))
+    if (!validate_fd(fd))
         return -EBADF;
 
-    if (!_valid_ptr(buf, len, true))
+    if (!validate_ptr(buf, len, true))
         return -EFAULT;
 
-    file_desc* fdesc = _get_fd(fd);
+    file_desc* fdesc = get_fd(fd);
 
     if (!(fdesc->flags & FD_WRITE))
         return -EINVAL;
@@ -155,10 +118,14 @@ static isize _pwrite(u64 fd, u64 buf_ptr, u64 len, u64 offset) {
 
 
 static isize _seek(int fd, off_t offset, int whence) {
-    if (!_valid_fd(fd))
+    if (!validate_fd(fd))
         return -EBADF;
 
-    file_desc* fdesc = _get_fd(fd);
+    file_desc* fdesc = get_fd(fd);
+
+    if (!fdesc)
+        return -EBADF;
+
     vfs_node* node = fdesc->node;
 
     if (!node)
@@ -199,7 +166,7 @@ static isize _seek(int fd, off_t offset, int whence) {
 static isize _open(u64 path_ptr, u64 flags, u64 mode) {
     const char* path = (const char*)path_ptr;
 
-    if (!_valid_ptr(path, 1, false))
+    if (!validate_ptr(path, 1, false))
         return -EFAULT;
 
     vfs_node* node = vfs_open(path, VFS_FILE, flags & O_CREAT, mode); // TODO: mode
@@ -222,7 +189,7 @@ static isize _open(u64 path_ptr, u64 flags, u64 mode) {
         fd_flags |= FD_NONBLOCK;
 
     isize fd = process_open_fd_node(cpu->sched->current, node, -1, fd_flags);
-    file_desc* fdesc = _get_fd(fd);
+    file_desc* fdesc = get_fd(fd);
 
     if (!fdesc) // wtf?
         return -EFAULT;
@@ -233,7 +200,7 @@ static isize _open(u64 path_ptr, u64 flags, u64 mode) {
 static u64 _mkdir(u64 path_ptr, u64 mode) {
     const char* path = (const char*)path_ptr;
 
-    if (!_valid_ptr(path, 1, false))
+    if (!validate_ptr(path, 1, false))
         return -EFAULT;
 
     char* path_cpy = strdup(path);
@@ -257,11 +224,49 @@ static u64 _mkdir(u64 path_ptr, u64 mode) {
     return 0;
 }
 
+static u64 _ioctl(u64 fd, u64 request, u64 argp_ptr) {
+    ioctl_argp_t* argp = (ioctl_argp_t*)argp_ptr;
+
+    file_desc* fdesc = get_fd(fd);
+
+    if (!fdesc)
+        return -EBADF;
+
+    vfs_node* node = fdesc->node;
+
+    if (!node)
+        return -EBADF;
+
+    if (node->type != VFS_CHARDEV)
+        return -ENOTTY;
+
+    if (!node->interface || !node->interface->ioctl)
+        return -ENOTTY;
+
+    u64* args = NULL;
+    usize arg_len = 0;
+
+    if (argp) {
+        if (!validate_ptr(argp, sizeof(ioctl_argp_t), false))
+            return -EINVAL;
+
+        if (!validate_ptr(argp->args, argp->len * sizeof(unsigned long long), false))
+            return -EFAULT;
+
+        args = (u64*)argp->args;
+        arg_len = argp->len;
+    }
+
+    node->interface->ioctl(node, request, arg_len, args);
+
+    return 0;
+}
+
 static u64 _signal(u64 signum, u64 handler_ptr) {
     sighandler_t handler = (sighandler_t)handler_ptr;
 
     if (handler != SIG_IGN && handler != SIG_DFL)
-        if (!_valid_ptr(handler, 0, false))
+        if (!validate_ptr(handler, 0, false))
             return (u64)SIG_ERR;
 
     u64 prev = (u64)cpu->sched->current->user.signals.handlers[signum - 1];
@@ -282,7 +287,7 @@ static u64 _sigreturn(void) {
 }
 
 static u64 _kill(u64 pid, u64 signum) {
-    if (!_valid_signum(signum))
+    if (!validate_signum(signum))
         return -EINVAL;
 
     process* proc = process_with_pid(pid);
@@ -299,7 +304,7 @@ static u64 _kill(u64 pid, u64 signum) {
 }
 
 static u64 _wait(pid_t pid, u64 status_ptr, u64 options) {
-    if (!_valid_ptr((void*)status_ptr, sizeof(int*), true))
+    if (!validate_ptr((void*)status_ptr, sizeof(int*), true))
         return -EFAULT;
 
     int* status = (int*)status_ptr;
@@ -393,18 +398,18 @@ static u64 _sleep(u64 milis) {
 
 static u64 _mount(u64 source_ptr, u64 target_ptr, u64 flags) {
     // Only the superuser is allowed to mount disks
-    if (!_has_perms(SUPERUSER_UID))
+    if (!has_perms(SUPERUSER_UID))
         return -EPERM;
 
     const char* source = (const char*)source_ptr;
     const char* target = (const char*)target_ptr;
 
-    // FIXME: What if one half of the string resides in a vvalid page and the rest resides in an
-    // invalid page This whould return true and we would get a PF/GP exception here in the kernel
-    if (!_valid_ptr(source, 1, false))
+    // FIXME: What if one half of the string resides in a valid page and the rest resides in an
+    // invalid page? This would return true and we would get a PF/GP exception here in the kernel
+    if (!validate_ptr(source, 1, false))
         return -EFAULT;
 
-    if (!_valid_ptr(target, 1, false))
+    if (!validate_ptr(target, 1, false))
         return -EFAULT;
 
     vfs_node* source_vnode = vfs_lookup(source);
@@ -431,12 +436,12 @@ static u64 _mount(u64 source_ptr, u64 target_ptr, u64 flags) {
 }
 
 static u64 _unmount(u64 target_ptr, u64 flags) {
-    if (!_has_perms(SUPERUSER_UID))
+    if (!has_perms(SUPERUSER_UID))
         return -EPERM;
 
     const char* target = (const char*)target_ptr;
 
-    if (!_valid_ptr(target, 1, false))
+    if (!validate_ptr(target, 1, false))
         return -EFAULT;
 
     vfs_node* target_vnode = vfs_lookup(target);
@@ -460,8 +465,8 @@ static void _syscall_handler(int_state* s) {
     u64 arg2 = s->g_regs.rsi;
     u64 arg3 = s->g_regs.rdx;
     u64 arg4 = s->g_regs.rcx;
-    u64 arg5 = s->g_regs.r8;
-    u64 arg6 = s->g_regs.r9;
+    // u64 arg5 = s->g_regs.r8;
+    // u64 arg6 = s->g_regs.r9;
 
     u64 ret = 0;
 
@@ -495,6 +500,11 @@ static void _syscall_handler(int_state* s) {
     case SYS_MKDIR:
         ret = _mkdir(arg1, arg2);
         break;
+
+    case SYS_IOCTL:
+        ret = _ioctl(arg1, arg2, arg3);
+        break;
+
 
     case SYS_SIGNAL:
         ret = _signal(arg1, arg2);
@@ -558,5 +568,5 @@ void syscall_init() {
     configure_int(SYSCALL_INT, GDT_kernel_code, 0, 0xef);
     set_int_handler(SYSCALL_INT, _syscall_handler);
 
-    log_info("Initialised the syscall interface");
+    log_debug("Initialised the syscall interface");
 }

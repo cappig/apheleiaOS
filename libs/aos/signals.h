@@ -17,20 +17,27 @@ enum signal_nums {
     SIGUSR1 = 2,
     SIGUSR2 = 3,
 
-    SIGINT = 4,
-    SIGHUP = 5,
-    SIGTRAP = 6,
+    SIGQUIT = 4,
+    SIGINT = 5,
+    SIGHUP = 6,
+    SIGTSTP = 8,
 
-    SIGTERM = 7,
-    SIGABRT = 8,
+    SIGTRAP = 7,
 
-    SIGSYS = 9,
-    SIGFPE = 10,
-    SIGILL = 11,
-    SIGBUS = 12,
-    SIGSEGV = 13,
+    SIGTERM = 9,
+    SIGABRT = 10,
 
-    SIGKILL = 14,
+    SIGCONT = 11,
+
+    SIGSYS = 12,
+    SIGFPE = 13,
+    SIGILL = 14,
+    SIGBUS = 15,
+    SIGSEGV = 16,
+
+    SIGSTOP = 17,
+
+    SIGKILL = 18,
 
     SIGNAL_COUNT // SIGNAL_COUNT-1 should be used since we index signals from 1
 };

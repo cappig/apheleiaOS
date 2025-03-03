@@ -44,6 +44,10 @@ bool ring_buffer_is_empty(ring_buffer* ring) {
 }
 
 
+void ring_buffer_clear(ring_buffer* ring) {
+    ring->head_index = ring->tail_index;
+}
+
 void ring_buffer_push(ring_buffer* ring, u8 data) {
     if (ring_buffer_is_full(ring)) {
         ring->tail_index += 1;

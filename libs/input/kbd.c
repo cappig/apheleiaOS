@@ -28,6 +28,14 @@ char kbd_to_ascii_default(key_event event) {
     return kbd_to_ascii(event, &us_keymap, false);
 }
 
+bool iscaret(char ch) {
+    ch = toupper(ch);
+
+    if (ch >= 63 && ch <= 94)
+        return true;
+
+    return false;
+}
 
 char ctrl_to_caret(char ascii) {
     if (!iscntrl(ascii))
@@ -37,4 +45,14 @@ char ctrl_to_caret(char ascii) {
         return '?';
 
     return '@' + ascii;
+}
+
+char caret_to_ctrl(char ascii) {
+    if (!iscaret(ascii))
+        return ascii;
+
+    if (ascii == '?')
+        return 0;
+
+    return ascii - '`';
 }

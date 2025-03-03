@@ -1,16 +1,15 @@
 #include "tty.h"
 
 #include <base/addr.h>
+#include <base/macros.h>
 #include <base/types.h>
+#include <data/vector.h>
 #include <fs/ustar.h>
 #include <gfx/vga.h>
 #include <log/log.h>
 #include <string.h>
 #include <term/term.h>
 
-#include "data/vector.h"
-#include "drivers/ide.h"
-#include "drivers/initrd.h"
 #include "drivers/vesa.h"
 #include "mem/heap.h"
 #include "sys/console.h"
@@ -84,8 +83,8 @@ static void _draw_vga(usize x, usize y, u32 color) {
     vga_base[index] = (u16)color;
 }
 
-static void _pty_write(pseudo_tty* pty, void* buf, usize len) {
-    if (!buf || !len || !pty)
+static void _pty_write(pseudo_tty* pty, u16 ch) {
+    if (UNLIKELY(!pty))
         return;
 
     gfx_terminal* gterm = pty->private;
@@ -96,7 +95,7 @@ static void _pty_write(pseudo_tty* pty, void* buf, usize len) {
     if (!term)
         return;
 
-    term_parse(term, buf, len);
+    term_parse_char(term, ch);
 }
 
 
@@ -145,8 +144,8 @@ bool tty_set_current(usize index) {
 
     current_tty = index;
 
-    pseudo_tty* pty = vtty->pty;
-    log_debug("/dev/%s is now the current virtual tty", pty->slave->name);
+    // pseudo_tty* pty = vtty->pty;
+    // log_debug("/dev/%s is now the current virtual tty", pty->slave->name);
 
     term_redraw(gterm->term);
 
@@ -174,9 +173,7 @@ virtual_tty* tty_spawn() {
     if (video.mode == GFX_NONE)
         return NULL;
 
-    pseudo_tty* pty = pty_create(TTY_BUF_SIZE);
-
-    pty->flags |= PTY_CANONICAL | PTY_ECHO;
+    pseudo_tty* pty = pty_create(NULL, TTY_BUF_SIZE);
 
     if (!pty)
         return NULL;
@@ -241,6 +238,6 @@ void tty_spawn_devs() {
     for (usize i = 0; i < TTY_COUNT; i++)
         tty_spawn();
 
-    console_set_tty(TTY_CONSOLE);
+    conosle_init(TTY_CONSOLE);
     tty_set_current(TTY_CONSOLE);
 }

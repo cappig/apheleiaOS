@@ -2,7 +2,7 @@
 
 #include "asm.h"
 
-bool init_serial(usize port, u32 baud) {
+void init_serial(usize port, u8 line, u32 baud) {
     outb(port + 1, 0x00);
     outb(port + 3, 0x80);
 
@@ -10,18 +10,25 @@ bool init_serial(usize port, u32 baud) {
     outb(port + 0, divisor & 0xff);
     outb(port + 1, (divisor >> 8) & 0xff);
 
-    outb(port + 3, 0x03);
-    outb(port + 2, 0xc7);
-    outb(port + 4, 0x0b);
+    outb(port + 3, line & 0x8f);
+    outb(port + 2, 0xc7); // Set the FIFO to 14 bytes
 
-    // Check if serial is faulty
+    outb(port + 4, 0x0f);
+    outb(port + 1, 0x01); // enable interrupts
+}
+
+bool check_serial(usize port) {
+    u8 modem_reg = inb(port + 4);
+
+    // loopback mode
     outb(port + 4, 0x1e);
     outb(port + 0, 0xae);
 
     if (inb(port + 0) != 0xae)
         return false;
 
-    outb(port + 4, 0x0f);
+    outb(port + 4, modem_reg);
+
     return true;
 }
 

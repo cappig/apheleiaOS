@@ -25,7 +25,7 @@ typedef struct {
 extern cpu_core cores_local[MAX_CORES];
 
 // This means that our per cpu thread structure lives at %gs + 0
-static __seg_gs cpu_core* cpu = 0;
+static UNUSED __seg_gs cpu_core* cpu = 0;
 
 
 void cpu_set_gs_base(u64 base);

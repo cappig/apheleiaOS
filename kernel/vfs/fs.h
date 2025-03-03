@@ -33,6 +33,7 @@ enum vfs_flags {
     // Flags 0...16 are reserved for the OS
     // Reads and writes should not append the process to a list of waiters
     VFS_NONBLOCK = 1 << 0,
+
     // Flags 16...32 may be used for device specific flags
 };
 
@@ -43,6 +44,7 @@ typedef struct file_system_instance file_system_instance;
 
 typedef isize (*vfs_read_fn)(vfs_node* node, void* buf, usize offset, usize len, u32 flags);
 typedef isize (*vfs_write_fn)(vfs_node* node, void* buf, usize offset, usize len, u32 flags);
+typedef isize (*vfs_ioctl_fn)(vfs_node* node, u64 request, usize arg_len, u64* args);
 typedef isize (*vfs_create_fn)(vfs_node* node, vfs_node* child);
 typedef isize (*vfs_remove_fn)(vfs_node* node, char* name);
 
@@ -50,6 +52,7 @@ typedef struct vfs_node_interface {
     // Operations on the node itself
     vfs_read_fn read;
     vfs_write_fn write;
+    vfs_ioctl_fn ioctl; // only for char devices
 
     // Operations on children
     vfs_create_fn create;
@@ -86,27 +89,6 @@ typedef struct {
 extern virtual_fs* vfs;
 
 
-inline isize vfs_read(vfs_node* node, void* buf, usize offset, usize len, usize flags) {
-    if (!node)
-        return -1;
-
-    if (!node->interface || !node->interface->read)
-        return -1;
-
-    return node->interface->read(node, buf, offset, len, flags);
-}
-
-inline isize vfs_write(vfs_node* node, void* buf, usize offset, usize len, usize flags) {
-    if (!node)
-        return -1;
-
-    if (!node->interface || !node->interface->write)
-        return -1;
-
-    return node->interface->write(node, buf, offset, len, flags);
-}
-
-
 virtual_fs* vfs_init(void);
 
 vfs_node* vfs_create_node(char* name, vfs_node_type type);
@@ -127,5 +109,8 @@ vfs_node* vfs_create(vfs_node* parent, char* name, vfs_node_type type, vfs_mode 
 
 bool vfs_mount(file_system_instance* fs, vfs_node* mount);
 bool vfs_unmount(vfs_node* mount, bool destroy_tree);
+
+isize vfs_read(vfs_node* node, void* buf, usize offset, usize len, usize flags);
+isize vfs_write(vfs_node* node, void* buf, usize offset, usize len, usize flags);
 
 void dump_vfs(void);

@@ -7,8 +7,16 @@
 static void _config_cmp(char* key, char* value, void* data) {
     boot_args* args = data;
 
-    // TODO: we may want to hash the string and use a switch statement
-    if (!strcasecmp(key, "GFX_MODE")) {
+    if (!strcasecmp(key, "DEBUG")) {
+        if (!strcasecmp(value, "all"))
+            args->debug = DEBUG_ALL;
+        else if (!strcasecmp(value, "minimal"))
+            args->debug = DEBUG_MINIMAL;
+        else if (!strcasecmp(value, "none"))
+            args->debug = DEBUG_NONE;
+    }
+
+    else if (!strcasecmp(key, "GFX_MODE")) {
         if (!strcasecmp(value, "vesa"))
             args->gfx_mode = GFX_VESA;
         else if (!strcasecmp(value, "vga"))
@@ -46,6 +54,7 @@ static void _config_cmp(char* key, char* value, void* data) {
 void parse_config(file_handle* file, boot_args* args) {
     memset(args, 0, sizeof(boot_args));
 
+    args->debug = BOOT_DEFAULT_DEBUG;
     args->gfx_mode = BOOT_DEFAULT_GFX_MODE;
     args->vesa_width = BOOT_DEFAULT_VESA_WIDTH;
     args->vesa_height = BOOT_DEFAULT_VESA_HEIGHT;

@@ -12,3 +12,5 @@ void* alloc_frames(usize count);
 void free_frames(void* ptr, usize size);
 
 void reclaim_boot_map(e820_map* mmap);
+
+void dump_mem(void);

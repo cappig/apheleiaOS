@@ -2,16 +2,14 @@
 
 #include <data/ring.h>
 #include <data/vector.h>
+#include <term/termios.h>
 
 #include "fs.h"
 #include "sched/wait.h"
 
-#define PTY_RETURN_CHAR '\n'
-#define PTY_DELETE_CHAR '\b'
-
 typedef struct pseudo_tty pseudo_tty;
 
-typedef void (*vfs_hook_fn)(pseudo_tty* term, void* buf, usize len);
+typedef void (*pty_hook_fn)(pseudo_tty* term, u16 ch);
 
 typedef struct pseudo_tty {
     // write to input, read from output
@@ -23,26 +21,22 @@ typedef struct pseudo_tty {
     ring_buffer* input_buffer;
     ring_buffer* output_buffer;
 
+    termios_t termios;
+    winsize_t winsize;
+
+    bool next_literal; // the next input character should not be interpreted as a control character
     vector* line_buffer; // Used by canonical mode
 
-    u8 flags;
-
     // Hooks that can be called when there is new data in the buffer, optional
-    vfs_hook_fn out_hook; // There is new data in the output_buffer, the master can read
-    vfs_hook_fn in_hook; // There is new data in the input_buffer, the slave can read
+    pty_hook_fn out_hook; // There is new data in the output_buffer, the master can read
+    pty_hook_fn in_hook; // There is new data in the input_buffer, the slave can read
 
     wait_list* waiters;
 
     void* private;
 } pseudo_tty;
 
-enum pty_flags {
-    PTY_ECHO = 1 << 0,
-    PTY_CANONICAL = 1 << 1,
-    PTY_SIGNAL = 1 << 2,
-};
 
-
-pseudo_tty* pty_create(usize buffer_size);
+pseudo_tty* pty_create(winsize_t* win, usize buffer_size);
 
 void pty_destroy(pseudo_tty* pty);

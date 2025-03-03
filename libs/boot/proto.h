@@ -10,10 +10,8 @@
 
 #define KERNEL_STACK_PAGES 16
 
-#define INITRD_FONT_NAME   "font.psf"
-#define INITRD_SYMTAB_NAME "sym.map"
-
 // -1 means that the bootloader will attempt to autodetect
+#define BOOT_DEFAULT_DEBUG       DEBUG_MINIMAL
 #define BOOT_DEFAULT_GFX_MODE    GFX_VESA
 #define BOOT_DEFAULT_VESA_WIDTH  -1
 #define BOOT_DEFAULT_VESA_HEIGHT -1
@@ -22,8 +20,14 @@
 #define BOOT_FALLBACK_VESA_WIDTH  1280
 #define BOOT_FALLBACK_VESA_HEIGHT 720
 
+#define DEBUG_NONE    0
+#define DEBUG_MINIMAL 1
+#define DEBUG_ALL     2
+
 // Options that can be set via args.cfg
 typedef struct PACKED {
+    u8 debug;
+
     u8 gfx_mode;
 
     u16 vesa_width;

@@ -1,26 +1,85 @@
 #include "pty.h"
 
+#include <aos/signals.h>
+#include <aos/syscalls.h>
+#include <base/attributes.h>
 #include <base/types.h>
+#include <ctype.h>
 #include <data/ring.h>
 #include <data/vector.h>
+#include <errno.h>
+#include <input/kbd.h>
 #include <string.h>
+#include <term/termios.h>
 
-#include "log/log.h"
 #include "mem/heap.h"
+#include "sched/scheduler.h"
+#include "sched/signal.h"
+#include "sched/syscall.h"
 #include "sys/cpu.h"
 #include "vfs/fs.h"
 
-// A pseudo terminal vfs file type. Essentially two ring buffers that allow for duplex communication
 
-static void flush_line_buffer(pseudo_tty* pty) {
-    usize len = pty->line_buffer->size;
-    u8* data = pty->line_buffer->data;
+static inline void _send_out(pseudo_tty* pty, u8 ch) {
+    ring_buffer_push(pty->output_buffer, ch);
 
-    ring_buffer_push_array(pty->input_buffer, data, len);
-
-    vec_clear(pty->line_buffer);
+    if (pty->out_hook)
+        pty->out_hook(pty, ch);
 }
 
+
+static bool _process_output(vfs_node* node, u8 ch) {
+    pseudo_tty* pty = node->private;
+    termios_t* tos = &pty->termios;
+
+    // don't perform any output processing
+    if (!(tos->c_oflag & OPOST))
+        return true;
+
+    // ignore CR
+    if (tos->c_iflag & ONOCR && ch == '\r')
+        return false;
+
+    // Map NL to NL-CR
+    if (tos->c_iflag & ONLCR && ch == '\n') {
+        _send_out(pty, '\n');
+        _send_out(pty, '\r');
+
+        return false;
+    }
+
+    // Map CR to NL
+    if (tos->c_iflag & OCRNL && ch == '\r') {
+        _send_out(pty, '\n');
+        return false;
+    }
+
+    // Map NL to CR
+    if (tos->c_iflag & ONLRET && ch == '\n') {
+        _send_out(pty, '\r');
+        return false;
+    }
+
+    return true;
+}
+
+static isize slave_write(vfs_node* node, void* buf, usize offset, usize len, u32 flags) {
+    pseudo_tty* pty = node->private;
+
+    if (!pty || !buf)
+        return -1;
+
+    u8* data = (u8*)buf;
+
+    for (usize i = 0; i < len; i++) {
+        u8 ch = data[i];
+
+        if (_process_output(node, ch))
+            _send_out(pty, ch);
+    }
+
+    return len;
+}
 
 static isize slave_read(vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
     pseudo_tty* pty = node->private;
@@ -28,68 +87,214 @@ static isize slave_read(vfs_node* node, void* buf, UNUSED usize offset, usize le
     if (!pty || !buf)
         return -1;
 
-    bool no_block = flags & VFS_NONBLOCK;
-
-    if (ring_buffer_is_empty(pty->input_buffer) && cpu->sched_running && !no_block)
-        wait_list_append(pty->waiters, cpu->sched->current);
+    // Possibly block the calling process until new data becomes available
+    if (ring_buffer_is_empty(pty->input_buffer)) {
+        if (flags & VFS_NONBLOCK)
+            return -EAGAIN;
+        else if (cpu->sched_running)
+            wait_list_append(pty->waiters, cpu->sched->current);
+    }
 
     return ring_buffer_pop_array(pty->input_buffer, buf, len);
 }
 
-static isize slave_write(vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
-    pseudo_tty* pty = node->private;
 
-    if (!pty || !buf)
-        return -1;
+static usize _flush_line_buffer(pseudo_tty* pty) {
+    usize len = pty->line_buffer->size;
+    u8* data = pty->line_buffer->data;
 
-    ring_buffer_push_array(pty->output_buffer, buf, len);
+    if (!len)
+        return 0;
 
-    if (pty->out_hook)
-        pty->out_hook(pty, buf, len);
+    ring_buffer_push_array(pty->input_buffer, data, len);
+
+    vec_clear(pty->line_buffer);
 
     return len;
 }
 
-static bool process_canonical_input(vfs_node* node, u8* buf, usize len, usize flags) {
+static void _erase_preceding(vfs_node* node, usize chars, u32 flags) {
     pseudo_tty* pty = node->private;
+    termios_t* tos = &pty->termios;
+
+    for (usize i = 0; i < chars; i++) {
+        u8 ch = 0;
+
+        if (!vec_pop(pty->line_buffer, &ch))
+            break;
+
+        if (tos->c_lflag & ECHO && tos->c_lflag & ECHOE) {
+            // Make sure to delete the caret as well ^_^
+            if (!isprint(ch) && ch != '\n')
+                slave_write(node, "\b \b", 0, 3, flags);
+
+            slave_write(node, "\b \b", 0, 3, flags);
+        }
+    }
+}
+
+
+// -1 if a line flush occurred, 1 if ch can be echoed, 0 if ch should not be echoed
+static i8 _canonical_input(vfs_node* node, u8 ch, u32 flags) {
+    pseudo_tty* pty = node->private;
+    termios_t* tos = &pty->termios;
+
+    // Discard the current line
+    if (ch == tos->c_cc[VKILL]) {
+        vec_clear(pty->line_buffer);
+
+        if (tos->c_lflag & ECHOK) {
+            _erase_preceding(node, pty->line_buffer->size, flags);
+            return 0;
+        }
+
+        return 1;
+    }
+
+    // Erase preveous char
+    if (ch == tos->c_cc[VERASE]) {
+        if (!pty->line_buffer->size)
+            return 0;
+
+        _erase_preceding(node, 1, flags);
+
+        return !(tos->c_lflag & ECHOE);
+    }
+
+    // Flush the line buffer
+    if (ch == '\n' || ch == tos->c_cc[VEOL] || ch == tos->c_cc[VEOF]) {
+        _flush_line_buffer(pty);
+        return -1;
+    }
+
+    vec_push(pty->line_buffer, &ch);
+
+    return 1;
+}
+
+// -1 if ch should be ignored
+static i16 _process_input(vfs_node* node, u8 ch) {
+    pseudo_tty* pty = node->private;
+    termios_t* tos = &pty->termios;
+
+    if (!ch)
+        return 0;
+
+    // strip the 7th bit
+    if (tos->c_iflag & ISTRIP)
+        ch &= 0x8f;
+
+    // this char was escaped, don't parse
+    if (pty->next_literal) {
+        pty->next_literal = false;
+        return ch;
+    }
+
+    // send requested signals
+    if (tos->c_lflag & ISIG) {
+        usize signal = 0;
+
+        if (ch == tos->c_cc[VINTR])
+            signal = SIGINT;
+        else if (ch == tos->c_cc[VQUIT])
+            signal = SIGQUIT;
+        else if (ch == tos->c_cc[VSUSP])
+            signal = SIGTSTP;
+
+        if (signal) {
+            // signal_send(cpu->sched->current, signal);
+            return ch;
+        }
+    }
+
+    // deprive the next character of any special meaning
+    if (ch == tos->c_cc[VLNEXT] && tos->c_lflag & IEXTEN) {
+        pty->next_literal = true;
+        return ch;
+    }
+
+    // ignore carriage returns
+    if (tos->c_iflag & IGNCR && ch == '\r')
+        return -1;
+
+    // NL <-> CR conversion
+    if (tos->c_iflag & ICRNL && ch == '\r')
+        ch = '\n';
+    else if (tos->c_iflag & INLCR && ch == '\n')
+        ch = '\r';
+
+    // map upper case chars to lower case
+    if (tos->c_iflag & IUCLC)
+        ch = tolower(ch);
+
+    return ch;
+}
+
+static void _echo_in(vfs_node* node, u8 ch) {
+    pseudo_tty* pty = node->private;
+    termios_t* tos = &pty->termios;
+
+    bool printable = isprint(ch) || ch == '\n';
+    bool special_caret = tos->c_lflag & ECHOCTL;
+
+    if (printable || !special_caret) {
+        slave_write(node, &ch, 0, 1, 0);
+    } else {
+        // Use caret notation for special chars
+        char caret[] = "^X";
+        caret[1] = ctrl_to_caret(ch);
+
+        slave_write(node, caret, 0, 2, 0);
+    }
+}
+
+static isize master_write(vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
+    pseudo_tty* pty = node->private;
+    termios_t* tos = &pty->termios;
+
+    if (!pty || !buf)
+        return -1;
+
+    u8* data = (u8*)buf;
 
     bool has_data = false;
 
     for (usize i = 0; i < len; i++) {
-        char ch = buf[i];
+        i16 ch = _process_input(node, data[i]);
 
-        if (ch == PTY_RETURN_CHAR) {
-            flush_line_buffer(pty);
-
-            char nl[] = "\n";
-            slave_write(node, nl, 0, 1, flags);
-
-            has_data = true;
-
+        if (ch <= 0)
             continue;
-        }
 
-        if (ch == PTY_DELETE_CHAR) {
-            if (!pty->line_buffer->size)
-                continue;
+        bool echo = tos->c_lflag & ECHO;
 
-            vec_pop(pty->line_buffer, NULL);
+        // Canonical mode works with lines of text. The text becomes
+        // readable once the line buffer gets flushed (once enter is presesed etc.)
+        if (tos->c_lflag & ICANON) {
+            i8 canon = _canonical_input(node, ch, flags);
 
-            if (pty->flags & PTY_ECHO) {
-                char space[] = "\b \b"; // wtf?
-                slave_write(node, space, 0, 3, flags);
+            // The line buffer was flushed, we have new data
+            if (canon < 0) {
+                has_data = true;
+
+                if (tos->c_lflag & ECHONL)
+                    echo = true;
+            } else {
+                echo &= canon;
             }
-
-            continue;
+        } else {
+            has_data = true;
         }
 
-        if (pty->flags & PTY_ECHO)
-            slave_write(node, &ch, 0, 1, flags);
-
-        vec_push(pty->line_buffer, &ch);
+        if (echo)
+            _echo_in(node, ch);
     }
 
-    return has_data;
+    if (has_data)
+        wait_list_wake_up(pty->waiters);
+
+    // TODO: implement VMIN and VTIME
+
+    return len;
 }
 
 static isize master_read(vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
@@ -101,56 +306,101 @@ static isize master_read(vfs_node* node, void* buf, UNUSED usize offset, usize l
     return ring_buffer_pop_array(pty->output_buffer, buf, len);
 }
 
-static isize master_write(vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
+
+static isize pty_ioctl(vfs_node* node, u64 request, usize arg_len, u64* args) {
     pseudo_tty* pty = node->private;
 
-    if (!pty || !buf)
-        return -1;
+    if (!pty)
+        return -ENOTTY;
 
-    bool has_data = false;
+    if (!args || !arg_len)
+        return -EINVAL;
 
-    if (pty->flags & PTY_CANONICAL) {
-        has_data = process_canonical_input(node, buf, len, flags);
-    } else {
-        ring_buffer_push_array(pty->input_buffer, buf, len);
+    switch (request) {
 
-        if (pty->flags & PTY_ECHO)
-            slave_write(node, buf, offset, len, flags);
+    // Set the winsize
+    case TIOCSWINSZ:
+        if (!validate_ptr(args, sizeof(winsize_t), false))
+            return -EINVAL;
 
-        has_data = true;
+        memcpy(&pty->winsize, args, sizeof(winsize_t));
+
+        // TODO: sigwinch
+        return 0;
+
+    // Get the winsize struct
+    case TIOCGWINSZ:
+        if (!validate_ptr(args, sizeof(winsize_t), true))
+            return -EINVAL;
+
+        memcpy(args, &pty->winsize, sizeof(winsize_t));
+        return 0;
+
+    // Get the termios struct
+    case TCGETS:
+        if (!validate_ptr(args, sizeof(termios_t), true))
+            return -EINVAL;
+
+        memcpy(args, &pty->termios, sizeof(termios_t));
+        return 0;
+
+    // Set the termios struct
+    case TCSETSF:
+    case TCSETSW: // FIXME: this is not how these should behave
+        vec_clear(pty->line_buffer);
+        ring_buffer_clear(pty->input_buffer);
+
+        FALLTHROUGH;
+    case TCSETS:
+        if (!validate_ptr(args, sizeof(termios_t), false))
+            return -EINVAL;
+
+        memcpy(&pty->termios, args, sizeof(termios_t));
+        return 0;
+
+    default:
+        return -EINVAL;
     }
-
-    if (has_data) {
-        if (pty->in_hook)
-            pty->in_hook(pty, buf, len);
-
-        wait_list_wake_up(pty->waiters);
-    }
-
-    return len;
 }
 
 
-pseudo_tty* pty_create(usize buffer_size) {
-    pseudo_tty* ret = kcalloc(sizeof(pseudo_tty));
+pseudo_tty* pty_create(winsize_t* win, usize buffer_size) {
+    pseudo_tty* pty = kcalloc(sizeof(pseudo_tty));
 
-    ret->input_buffer = ring_buffer_create(buffer_size);
-    ret->output_buffer = ring_buffer_create(buffer_size);
+    pty->input_buffer = ring_buffer_create(buffer_size);
+    pty->output_buffer = ring_buffer_create(buffer_size);
 
-    ret->line_buffer = vec_create_sized(10, sizeof(char));
+    // Configure the 'window' size
+    if (win) {
+        memcpy(&pty->winsize, win, sizeof(winsize_t));
+    } else {
+        pty->winsize.ws_col = 80;
+        pty->winsize.ws_row = 25;
+    }
 
-    // WARN: this has circular pointers
-    ret->master = vfs_create_node(NULL, VFS_CHARDEV);
-    ret->master->interface = vfs_create_interface(master_read, master_write);
-    ret->master->private = ret;
+    // Configure termios
+    termios_default_init(&pty->termios);
 
-    ret->slave = vfs_create_node(NULL, VFS_CHARDEV);
-    ret->slave->interface = vfs_create_interface(slave_read, slave_write);
-    ret->slave->private = ret;
+    pty->line_buffer = vec_create_sized(pty->winsize.ws_col, sizeof(char));
 
-    ret->waiters = wait_list_create();
+    pty->master = vfs_create_node(NULL, VFS_CHARDEV);
+    pty->master->interface = kcalloc(sizeof(vfs_node_interface));
+    pty->master->interface->read = master_read;
+    pty->master->interface->write = master_write;
+    pty->master->private = pty;
 
-    return ret;
+    pty->slave = vfs_create_node(NULL, VFS_CHARDEV);
+    pty->slave->interface = kcalloc(sizeof(vfs_node_interface));
+    pty->slave->interface->read = slave_read;
+    pty->slave->interface->write = slave_write;
+    pty->slave->interface->ioctl = pty_ioctl;
+    pty->slave->private = pty;
+
+    pty->waiters = wait_list_create();
+
+    pty->next_literal = false;
+
+    return pty;
 }
 
 void pty_destroy(pseudo_tty* pty) {

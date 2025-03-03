@@ -366,3 +366,27 @@ void dump_vfs() {
 
     _recursive_dump(vfs->tree->root, 0);
 }
+
+isize vfs_read(vfs_node* node, void* buf, usize offset, usize len, usize flags) {
+    if (!node)
+        return -1;
+
+    if (!node->interface || !node->interface->read)
+        return -1;
+
+    isize ret = node->interface->read(node, buf, offset, len, flags);
+
+    return ret;
+}
+
+isize vfs_write(vfs_node* node, void* buf, usize offset, usize len, usize flags) {
+    if (!node)
+        return -1;
+
+    if (!node->interface || !node->interface->write)
+        return -1;
+
+    isize ret = node->interface->write(node, buf, offset, len, flags);
+
+    return ret;
+}

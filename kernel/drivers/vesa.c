@@ -57,7 +57,10 @@ bool draw_pixel(usize x, usize y, u32 color) {
 }
 
 
-void init_framebuffer_dev() {
+void init_framebuffer_dev(boot_handoff* handoff) {
+    if (handoff->graphics.mode != GFX_VESA)
+        return;
+
     vfs_node* node = vfs_create_node("fb", VFS_CHARDEV);
     node->interface = vfs_create_interface(NULL, _write);
 

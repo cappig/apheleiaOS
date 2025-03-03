@@ -1,6 +1,7 @@
 #pragma once
 
 #include <base/types.h>
+#include <boot/proto.h>
 #include <data/ring.h>
 #include <term/term.h>
 
@@ -12,6 +13,6 @@ void kputs(const char* str);
 void kputsn(const char* str, usize len);
 int kprintf(char* fmt, ...) __attribute__((format(printf, 1, 2)));
 
-void conosle_init_buffer(void);
-void console_set_serial(usize port);
-void console_set_tty(usize index);
+void conosle_init(usize tty_index);
+
+void print_motd(boot_handoff* handoff);

@@ -150,4 +150,7 @@ char kbd_to_ascii_default(key_event event);
 
 // Convert ASCII control codes to caret notation: ^X
 // https://en.wikipedia.org/wiki/Caret_notation
+bool iscaret(char ch);
+
 char ctrl_to_caret(char ascii);
+char caret_to_ctrl(char ascii);

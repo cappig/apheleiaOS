@@ -44,6 +44,9 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
     if (handoff->magic != BOOT_MAGIC)
         panic("Kernel booted with invalid args!");
 
+    if (handoff->args.debug == DEBUG_NONE)
+        log_set_lvl(LOG_INFO);
+
     cpu_set_gs_base((u64)&cores_local[0]);
 
     gdt_init();
@@ -59,43 +62,34 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     video_init(&handoff->graphics);
 
-    conosle_init_buffer();
+    clock_init();
+    calibrate_tsc();
 
-    log_info(ALPHA_ASCII);
-    log_info(BUILD_DATE);
+    acpi_init(handoff->rsdp);
 
-    log_info("Detected %zu MiB of usable RAM", get_total_mem() / MiB);
+    pci_init();
+
+    irq_init();
 
     vfs_init();
 
     ustar_init();
     initrd_mount(handoff);
 
-    iso_init();
-    // ext2_init();
-
-    load_symbols();
+    init_serial_dev();
 
     tty_init(handoff);
     tty_spawn_devs();
 
-    clock_init();
+    iso_init();
 
-    dump_map(&handoff->mmap);
+    load_symbols();
 
-    acpi_init(handoff->rsdp);
-    dump_acpi_tables();
+    print_motd(handoff);
 
-    pci_init();
-    dump_pci_devices();
-
-    calibrate_tsc();
-
-    irq_init();
     scheduler_init();
 
-    init_serial_dev();
-    init_framebuffer_dev();
+    init_framebuffer_dev(handoff);
     init_zero_devs();
     init_ps2();
 

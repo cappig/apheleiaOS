@@ -159,6 +159,7 @@ static void _handle_cur_mov(terminal* term) {
 
 static void _csi_erase_line(terminal* term) {
     switch (term->parser.stack[0]) {
+    default:
     case 0: // from cursor to end of line
         term_pos to = {term->width - 1, term->cursor.y};
         term_clear(term, term->cursor, to);
@@ -177,6 +178,7 @@ static void _csi_erase_line(terminal* term) {
 
 static void _csi_erase_screen(terminal* term) {
     switch (term->parser.stack[0]) {
+    default:
     case 0: // from cursor to end of screen
         term_pos to = {term->width - 1, term->height - 1};
         term_clear(term, term->cursor, to);
@@ -248,19 +250,20 @@ char parse_ansi_char(terminal* term, const char ch) {
         if (isdigit(ch)) {
             parser->stack[parser->stack_index] *= 10;
             parser->stack[parser->stack_index] += ch - '0';
-        } else {
+        } else if (ch == ';') {
             if (parser->stack_index < TERM_PARSER_STACK_SIZE)
                 parser->stack_index++;
-
-            if (ch != ';') {
-                _handle_csi(term, ch);
-
-                memset(parser->stack, 0, TERM_PARSER_STACK_SIZE);
-                parser->stack_index = 0;
-
+            else
                 parser->state = STATE_ESC;
-            }
+        } else {
+            _handle_csi(term, ch);
+
+            memset(parser->stack, 0, TERM_PARSER_STACK_SIZE);
+            parser->stack_index = 0;
+
+            parser->state = STATE_ESC;
         }
+
         break;
     }
 

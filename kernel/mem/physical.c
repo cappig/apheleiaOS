@@ -5,6 +5,7 @@
 #include <x86/e820.h>
 #include <x86/paging.h>
 
+#include "log/log.h"
 #include "sys/panic.h"
 
 static bitmap_alloc frame_alloc;
@@ -58,11 +59,14 @@ void reclaim_boot_map(e820_map* mmap) {
     u64 root = read_cr3();
     page_table* root_vaddr = (page_table*)ID_MAPPED_VADDR(root);
 
-    // All of the memory backing these pages has been allocated in the mmap.
-    // We reclaimed that just now. So we can just zero out the lower half of the
-    // root table thus unmapping any memory witouth memory leaks.
+    // The higher half contains kernel mappings
     memset(root_vaddr, 0, 256 * sizeof(page_table));
 
     // This will flush the TLB
     write_cr3(root);
+}
+
+void dump_mem() {
+    log_info("System has %zu MiB of usable RAM", get_total_mem() / MiB);
+    log_info("%zu MiB are free for allocation", get_free_mem() / MiB);
 }

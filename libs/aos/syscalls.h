@@ -38,22 +38,24 @@ enum syscall_nums {
     SYS_OPEN = 6,
     SYS_MKDIR = 7,
 
-    SYS_SIGNAL = 8,
-    SYS_SIGRETURN = 9,
+    SYS_IOCTL = 8,
 
-    SYS_KILL = 10,
-    SYS_WAIT = 11,
+    SYS_SIGNAL = 9,
+    SYS_SIGRETURN = 10,
 
-    SYS_GETPID = 12,
-    SYS_GETPPID = 13,
+    SYS_KILL = 11,
+    SYS_WAIT = 12,
 
-    SYS_FORK = 14,
-    SYS_EXECVE = 15,
+    SYS_GETPID = 13,
+    SYS_GETPPID = 14,
 
-    SYS_SLEEP = 16,
+    SYS_FORK = 15,
+    SYS_EXECVE = 16,
 
-    SYS_MOUNT = 17,
-    SYS_UNMOUNT = 18,
+    SYS_SLEEP = 17,
+
+    SYS_MOUNT = 18,
+    SYS_UNMOUNT = 19,
 
     SYSCALL_COUNT
 };
@@ -88,6 +90,23 @@ enum open_flags {
 enum wait_options {
     WNOHANG = 1 << 0,
 };
+
+enum ioctl_requests {
+    // Termios control
+    TCGETS = 1,
+    TCSETS = 2,
+    TCSETSW = 3,
+    TCSETSF = 4,
+
+    // Window size control
+    TIOCGWINSZ = 5,
+    TIOCSWINSZ = 6,
+};
+
+typedef struct {
+    size_t len;
+    void* args;
+} ioctl_argp_t;
 
 
 inline u64 syscall0(u64 num) {
@@ -186,6 +205,11 @@ inline int sys_open(const char* path, int flags, mode_t mode) {
 
 inline int sys_mkdir(const char* path, mode_t mode) {
     return syscall2(SYS_MKDIR, (u64)path, mode);
+}
+
+
+inline int sys_ioctl(int fd, unsigned long request, ioctl_argp_t* argp) {
+    return syscall3(SYS_IOCTL, fd, request, (u64)argp);
 }
 
 

@@ -17,6 +17,8 @@ void ring_buffer_destroy(ring_buffer* ring);
 bool ring_buffer_is_full(ring_buffer* ring);
 bool ring_buffer_is_empty(ring_buffer* ring);
 
+void ring_buffer_clear(ring_buffer* ring);
+
 void ring_buffer_push(ring_buffer* ring, u8 data);
 void ring_buffer_push_array(ring_buffer* ring, u8* data, usize len);
 

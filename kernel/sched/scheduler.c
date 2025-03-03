@@ -16,7 +16,6 @@
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "arch/irq.h"
-#include "drivers/initrd.h"
 #include "mem/heap.h"
 #include "mem/virtual.h"
 #include "sched/exec.h"
