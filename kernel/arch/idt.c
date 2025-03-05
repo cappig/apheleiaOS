@@ -9,11 +9,14 @@
 #include "aos/signals.h"
 #include "arch/gdt.h"
 #include "arch/stacktrace.h"
+#include "base/macros.h"
 #include "mem/virtual.h"
+#include "sched/process.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
 #include "sys/cpu.h"
 #include "sys/panic.h"
+#include "x86/paging.h"
 
 static idt_register idtr;
 
@@ -106,27 +109,7 @@ static isize _exception_to_signal(usize int_num) {
     }
 }
 
-void exception_handler(int_state* s) {
-    bool userspace = ((s->s_regs.cs & 3) == 3);
-    bool double_fault = (s->int_num == INT_DOUBLE_FAULT);
-
-    // The exception occurred in userspace (ring 3)
-    // Double faults are special, they always panic
-    if (userspace && !double_fault) {
-        isize signal = _exception_to_signal(s->int_num);
-
-        // Nothing more has to be done
-        if (signal == 0)
-            return;
-
-        // A valid signal has to be delivered to the process
-        if (signal > 1) {
-            signal_send(cpu->scheduler.current->proc, -1, signal);
-            return;
-        }
-    }
-
-    // If the exception originated in the kernel we are fucked
+static NORETURN void _crash(int_state* s) {
     panic_prepare();
 
     log_error("Fatal exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
@@ -140,10 +123,39 @@ void exception_handler(int_state* s) {
     __builtin_unreachable();
 }
 
-void page_fault_handler(int_state* s) {
-    log_debug("PAGE FAULT");
+void exception_handler(int_state* s) {
+    bool userspace = ((s->s_regs.cs & 3) == 3);
+    bool double_fault = (s->int_num == INT_DOUBLE_FAULT);
 
-    exception_handler(s);
+    // The exception has occurred in userspace
+    // Double faults are special, they always panic
+    if (userspace && !double_fault) {
+        isize signal = _exception_to_signal(s->int_num);
+
+        // Nothing more has to be done
+        if (signal == 0)
+            return;
+
+        // A valid signal has to be delivered to the process
+        if (signal > 1) {
+            signal_send(cpu_current_proc(), -1, signal);
+            return;
+        }
+    }
+
+    // If the exception originated in the kernel we are fucked
+    _crash(s);
+}
+
+void page_fault_handler(int_state* s) {
+    // A page fault has occured while in kernel mode
+    if (UNLIKELY(!(s->error_code & PF_USER)))
+        _crash(s);
+
+    sched_process* proc = cpu_current_proc();
+
+    if (!proc_handle_page_fault(proc, s))
+        exception_handler(s);
 }
 
 

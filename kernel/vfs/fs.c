@@ -7,7 +7,6 @@
 #include <log/log.h>
 #include <string.h>
 
-#include "libc_ext/stdlib.h"
 #include "mem/heap.h"
 #include "sys/disk.h"
 #include "sys/panic.h"
@@ -22,12 +21,6 @@ virtual_fs* vfs_init() {
 
     vfs_node* root = vfs_create_node(NULL, VFS_DIR);
     vfs->tree = tree_create_rooted(root->tree_entry);
-
-    /* vfs_node* dev = vfs_create_node("dev", VFS_DIR); */
-    /* vfs_node* mnt = vfs_create_node("mnt", VFS_DIR); */
-    /**/
-    /* vfs_insert_child(root, dev); */
-    /* vfs_insert_child(root, mnt); */
 
     return vfs;
 }
@@ -387,6 +380,21 @@ isize vfs_write(vfs_node* node, void* buf, usize offset, usize len, usize flags)
         return -1;
 
     isize ret = node->interface->write(node, buf, offset, len, flags);
+
+    return ret;
+}
+
+isize vfs_mmap(vfs_node* node, void* buf, usize offset, usize len, usize flags) {
+    if (!node)
+        return -1;
+
+    if (!VFS_IS_DEVICE(node->type))
+        return -1;
+
+    if (!node->interface || !node->interface->mmap)
+        return -1;
+
+    isize ret = node->interface->mmap(node, buf, offset, len, flags);
 
     return ret;
 }

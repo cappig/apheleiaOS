@@ -487,6 +487,12 @@ static u64 _unmount(u64 target_ptr, u64 flags) {
 }
 
 
+static u64 _mmap(u64 addr, size_t len, int prot, int flags, int fd, off_t offset) {
+    sched_process* proc = cpu_current_proc();
+    return proc_mmap(proc, addr, len, prot, flags, fd, offset);
+}
+
+
 static void _syscall_handler(int_state* s) {
 #ifdef SYSCALL_DEBUG
     log_debug("[SYSCALL_DEBUG] handling syscall rax = %lu", s->g_regs.rax);
@@ -496,8 +502,8 @@ static void _syscall_handler(int_state* s) {
     u64 arg2 = s->g_regs.rsi;
     u64 arg3 = s->g_regs.rdx;
     u64 arg4 = s->g_regs.rcx;
-    // u64 arg5 = s->g_regs.r8;
-    // u64 arg6 = s->g_regs.r9;
+    u64 arg5 = s->g_regs.r8;
+    u64 arg6 = s->g_regs.r9;
 
     u64 ret = 0;
 
@@ -580,6 +586,11 @@ static void _syscall_handler(int_state* s) {
 
     case SYS_UNMOUNT:
         ret = _unmount(arg1, arg2);
+        break;
+
+
+    case SYS_MMAP:
+        ret = _mmap(arg1, arg2, arg3, arg4, arg5, arg6);
         break;
 
 

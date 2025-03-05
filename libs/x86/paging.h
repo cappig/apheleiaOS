@@ -59,6 +59,17 @@ typedef union {
     u64 raw;
 } page_table;
 
+enum page_fault_flags {
+    PF_PRESENT = 1 << 0,
+    PF_WRITE = 1 << 1,
+    PF_USER = 1 << 2,
+    PF_RESERVED = 1 << 3,
+    PF_FETCH = 1 << 4,
+    PF_KEY = 1 << 5,
+    PF_SSTACK = 1 << 6,
+    PF_SGX = 1 << 15,
+};
+
 
 inline u64 page_get_paddr(page_table* page) {
     u64 ret = page->raw & ADDR_MASK;
@@ -75,7 +86,7 @@ inline void page_set_paddr(page_table* page, u64 addr) {
     addr %= PHYSICAL_MASK;
 
     page->raw = addr;
-    page->bits.present = 1;
+    // page->bits.present = 1;
 }
 
 inline u64 construct_vaddr(usize lvl4, usize lvl3, usize lvl2, usize lvl1) {

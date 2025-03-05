@@ -43,17 +43,32 @@ int main(void) {
 
     sys_signal(SIGCHLD, child);
 
-    char buf2[] = "Like a record, baby, right round, round, round . . . ";
-    sys_write(STDOUT_FD, buf2, strlen(buf2));
-
     pid_t pid = sys_fork();
 
     if (!pid)
         sys_exit(128);
 
-    for (;;) {
-        advance_cursor();
-        sys_sleep(100);
+    /* for (;;) { */
+    /*     advance_cursor(); */
+    /*     sys_sleep(100); */
+    /* } */
+
+    int fd = sys_open("/sbin/init.elf", O_RDWR, 0);
+
+    u64* addr = sys_mmap((void*)0x100000, 0x1000, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+
+    {
+        char buf3[] = "                                           ";
+        itoa((u64)*addr, buf3, 16);
+        sys_write(STDOUT_FD, buf3, strlen(buf3));
+    }
+
+    addr[0] = 0xdead;
+
+    {
+        char buf3[] = "                                           ";
+        itoa((u64)*addr, buf3, 16);
+        sys_write(STDOUT_FD, buf3, strlen(buf3));
     }
 
     for (;;) {}

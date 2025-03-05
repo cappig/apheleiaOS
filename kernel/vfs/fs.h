@@ -11,6 +11,7 @@
 // regular and device files should provide the read/(write) interface
 #define VFS_IS_READABLE(type) ((type) >= VFS_FILE && (type) <= VFS_CHARDEV)
 #define VFS_IS_LINK(type)     ((type) == VFS_SYMLINK || (type) == VFS_MOUNT)
+#define VFS_IS_DEVICE(type)   ((type) == VFS_BLOCKDEV || (type) == VFS_CHARDEV)
 
 typedef enum {
     VFS_INVALID = 0,
@@ -44,6 +45,7 @@ typedef struct file_system_instance file_system_instance;
 
 typedef isize (*vfs_read_fn)(vfs_node* node, void* buf, usize offset, usize len, u32 flags);
 typedef isize (*vfs_write_fn)(vfs_node* node, void* buf, usize offset, usize len, u32 flags);
+typedef isize (*vfs_mmap_fn)(vfs_node* node, void* buf, usize offset, usize len, u32 flags);
 typedef isize (*vfs_ioctl_fn)(vfs_node* node, u64 request, usize arg_len, u64* args);
 typedef isize (*vfs_create_fn)(vfs_node* node, vfs_node* child);
 typedef isize (*vfs_remove_fn)(vfs_node* node, char* name);
@@ -52,6 +54,8 @@ typedef struct vfs_node_interface {
     // Operations on the node itself
     vfs_read_fn read;
     vfs_write_fn write;
+
+    vfs_mmap_fn mmap; // only for devices
     vfs_ioctl_fn ioctl; // only for char devices
 
     // Operations on children
@@ -110,5 +114,6 @@ bool vfs_unmount(vfs_node* mount, bool destroy_tree);
 
 isize vfs_read(vfs_node* node, void* buf, usize offset, usize len, usize flags);
 isize vfs_write(vfs_node* node, void* buf, usize offset, usize len, usize flags);
+isize vfs_mmap(vfs_node* node, void* buf, usize offset, usize len, usize flags);
 
 void dump_vfs(void);

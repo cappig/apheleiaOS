@@ -240,7 +240,10 @@ bool exec_elf(sched_thread* thread, vfs_node* file, char** argv, char** envp) {
     elf_header header[sizeof(elf_header)] = {0};
     // elf_header* header = kmalloc(sizeof(elf_header));
 
-    vfs_read(file, header, 0, sizeof(elf_header), 0);
+    isize read = vfs_read(file, header, 0, sizeof(elf_header), 0);
+
+    if (read < 0)
+        return false;
 
     if (elf_verify(header) != VALID_ELF)
         return false;
@@ -252,7 +255,7 @@ bool exec_elf(sched_thread* thread, vfs_node* file, char** argv, char** envp) {
     _load_elf_sections(thread, file, header, 0);
 
     // Map the null page with no permissions so that we can detect nullptr dereference
-    map_page(proc->memory.table, PAGE_4KIB, 0, 0, PT_PRESENT);
+    // map_page(proc->memory.table, PAGE_4KIB, 0, 0, PT_PRESENT);
 
     // TODO: don't just map to a fixed address
     _init_ustack(thread, PROC_USTACK_BASE, SCHED_USTACK_PAGES);

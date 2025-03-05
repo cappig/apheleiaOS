@@ -9,17 +9,20 @@
 #include <data/tree.h>
 #include <data/vector.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 #include <x86/asm.h>
 #include <x86/paging.h>
 
 #include "arch/gdt.h"
+#include "arch/idt.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
 #include "sys/panic.h"
+#include "vfs/fs.h"
 
 
 static inline pid_t _next_pid(void) {
@@ -281,10 +284,10 @@ void proc_init_memory(sched_process* parent, sched_process* child) {
     child->memory.table = clone_table(table);
 
     // Clone the memory region table
-    /* if (parent) */
-    /*     child->memory.regions = vec_clone(parent->memory.regions); */
-    /* else */
-    /*     child->memory.regions = vec_create(sizeof(memory_region)); */
+    if (parent)
+        child->memory.regions = vec_clone(parent->memory.regions);
+    else
+        child->memory.regions = vec_create(sizeof(memory_region));
 
     // Clone the defined addresses
     if (parent) {
@@ -507,4 +510,234 @@ bool proc_terminate(sched_process* proc, usize exit_code) {
         proc_destroy(proc); // we can reap the zombie right now
 
     return true;
+}
+
+
+static inline u64 _to_page_flags(u64 prot) {
+    u64 ret = PT_USER;
+
+    if (!(prot & PROT_EXEC))
+        ret |= PT_NO_EXECUTE;
+
+    if (prot & PROT_WRITE)
+        ret |= PT_WRITE;
+
+    return ret;
+}
+
+static int _comp_regions(const void* a, const void* b) {
+    memory_region* a_reg = (memory_region*)a;
+    memory_region* b_reg = (memory_region*)b;
+
+    if (a_reg->base < b_reg->base)
+        return -1;
+    if (a_reg->base > b_reg->base)
+        return 1;
+
+    return 0;
+}
+
+static void
+_mem_insert_region(sched_process* proc, u64 base, u64 size, isize fd, u32 flags, u32 prot) {
+    vector* regions = proc->memory.regions;
+
+    memory_region new_region = {
+        .base = base,
+        .size = size,
+        .fd = fd,
+        .flags = flags,
+        .prot = prot,
+    };
+
+    vec_push(regions, &new_region);
+
+    // Make sure that the vector is sorted, not the best way to do this
+    qsort(regions->data, regions->size, sizeof(memory_region), _comp_regions);
+}
+
+// Does [addr, addr+size] overlap any existing memory region
+static bool _mem_overlap(sched_process* proc, u64 addr, u64 size) {
+    vector* regions = proc->memory.regions;
+
+    for (usize i = 0; i < regions->size; i++) {
+        memory_region* region = vec_at(regions, i);
+
+        // The base of the requested region falls inside an already mapped region
+        if (addr >= region->base && addr <= region->base + region->size)
+            return true;
+
+        // The top of the requested region falls inside an already mapped region
+        if (addr + size >= region->base && addr + size <= region->base + region->size)
+            return true;
+    }
+
+    return false;
+}
+
+static u64 _mem_find_free(sched_process* proc, u64 addr, u64 size) {
+    vector* regions = proc->memory.regions;
+
+    // Just to make sure we dont allocate the zero page by accident
+    if (addr < PAGE_4KIB)
+        addr = PAGE_4KIB;
+
+    u64 current = addr; // ?
+
+    // Find a region of memory that doesn't overlap a single region
+    // To make thing nicer we keep the regions vector sorted by address
+    for (usize i = 0; i < regions->size; i++) {
+        memory_region* region = vec_at(regions, i);
+
+        if (region->base < current)
+            continue;
+
+        // The base of the requested region falls inside an already mapped region
+        if (current >= region->base && current <= region->base + region->size) {
+            current = region->base + region->size + 1; // +1 ????
+            continue;
+        }
+
+        // The top of the requested region falls inside an already mapped region
+        if (current + size >= region->base && current + size <= region->base + region->size) {
+            current = region->base + region->size + 1;
+            continue;
+        }
+    }
+
+    current = ALIGN(current, PAGE_4KIB);
+
+    // Nothing found
+    if (current >= HIGHER_HALF_BASE)
+        return 0;
+
+    return current;
+}
+
+static memory_region* _mem_get_region(sched_process* proc, u64 addr) {
+    vector* regions = proc->memory.regions;
+
+    for (usize i = 0; i < regions->size; i++) {
+        memory_region* region = vec_at(regions, i);
+
+        if (addr >= region->base && addr <= region->base + region->size)
+            return region;
+    }
+
+    return NULL;
+}
+
+// Resove a read PF - a new backing page has to be allocated for 'vaddr'
+static bool
+_fault_page(sched_process* proc, u64 addr, u64 region_base, u64 flags, file_desc* fdesc) {
+    u64 map_vaddr = ALIGN_DOWN(addr, PAGE_4KIB);
+
+    u64 paddr = (u64)alloc_frames(1);
+    void* vaddr = (void*)ID_MAPPED_VADDR(paddr);
+
+    if (fdesc && fdesc->node) {
+        u64 offset = map_vaddr - region_base;
+
+        isize res = 0;
+
+        // TODO: device files
+        /* if (VFS_IS_DEVICE(fdesc->node->type)) */
+        /*     res = vfs_mmap(fdesc->node, vaddr, offset, PAGE_4KIB, 0); */
+        /* else */
+
+        // NOTE: this might block the process for reading
+        res = vfs_read(fdesc->node, vaddr, offset, PAGE_4KIB, 0);
+
+        if (res < 0)
+            return false;
+
+    } else {
+        memset(vaddr, 0, PAGE_4KIB);
+    }
+
+    u64 page_flags = flags | PT_PRESENT;
+    map_page(proc->memory.table, PAGE_4KIB, map_vaddr, paddr, page_flags);
+
+    return true;
+}
+
+// TODO: MAP_SHARED
+u64 proc_mmap(sched_process* proc, u64 addr, u64 size, u32 prot, u32 flags, isize fd, usize offset) {
+    file_desc* fdesc = NULL;
+
+    if (!(flags & MAP_ANON)) {
+        fdesc = process_get_fd(proc, fd);
+
+        if (!fdesc)
+            return -EBADF;
+
+        if (prot & PROT_WRITE) {
+            if (!(fdesc->flags & FD_WRITE))
+                return -EACCES;
+
+            if (fdesc->flags & FD_APPEND)
+                return -EACCES;
+        }
+
+        if (prot & PROT_READ) {
+            if (!(fdesc->flags & FD_READ))
+                return -EACCES;
+        }
+    }
+
+    usize pages = DIV_ROUND_UP(size, PAGE_4KIB);
+    usize map_size = pages * PAGE_4KIB;
+
+    u64 base = 0;
+
+    if (flags & MAP_FIXED) {
+        // We have to try to allocate the _exact_ region
+        if (_mem_overlap(proc, addr, map_size))
+            return -EEXIST;
+
+        base = addr;
+    } else {
+        // We are free to treat the addr as a 'hint' (or we can just ignore it?)
+        base = _mem_find_free(proc, addr, map_size);
+    }
+
+    if (!base)
+        return -ENOMEM;
+
+    _mem_insert_region(proc, base, map_size, fd, flags, prot);
+
+    // Convert the flags
+    u64 page_flags = _to_page_flags(prot);
+
+    // Prefault the region, this reduces the number of page faults
+    if (flags & MAP_POPULATE) {
+        for (usize i = 0; i < pages; i++) {
+            u64 page_addr = base + i * PAGE_4KIB;
+
+            if (!_fault_page(proc, page_addr, base, page_flags, fdesc))
+                return -EFAULT;
+        }
+    } else {
+        u64 paddr = (u64)alloc_frames(pages);
+        map_region(proc->memory.table, pages, base, paddr, page_flags);
+    }
+
+    return base;
+}
+
+bool proc_handle_page_fault(sched_process* proc, int_state* state) {
+    // Page fauls on write are always access violations
+    if (state->error_code & PF_WRITE)
+        return false;
+
+    u64 addr = read_cr2();
+    memory_region* region = _mem_get_region(proc, addr);
+
+    // Segmentation fault
+    if (!region)
+        return false;
+
+    u64 page_flags = _to_page_flags(region->prot);
+    file_desc* fdesc = process_get_fd(proc, region->fd);
+
+    return _fault_page(proc, addr, region->base, page_flags, fdesc);
 }

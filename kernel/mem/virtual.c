@@ -8,7 +8,6 @@
 #include <string.h>
 #include <x86/paging.h>
 
-#include "arch/idt.h"
 #include "mem/physical.h"
 
 
@@ -25,9 +24,12 @@ static page_table* _walk_table_once(page_table* table, usize index, u64 flags) {
 
         table[index].raw |= flags & FLAGS_MASK;
 
-        table[index].bits.present = 1;
+        /* table[index].bits.present = 1; */
         table[index].bits.writable = 1;
     }
+
+    // If we ever map a writable child all the parents must have the write flag set
+    table[index].bits.writable |= flags & PT_WRITE;
 
     return (page_table*)ID_MAPPED_VADDR(next_table);
 }
@@ -50,7 +52,7 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
         entry = &lvl3[lvl3_index];
 
         paddr = ALIGN_DOWN(paddr, PAGE_1GIB);
-        flags |= PT_HUGE | PT_PRESENT;
+        flags |= PT_HUGE; // | PT_PRESENT;
         goto finalize;
     }
 
@@ -61,7 +63,7 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
         entry = &lvl2[lvl2_index];
 
         paddr = ALIGN_DOWN(paddr, PAGE_2MIB);
-        flags |= PT_HUGE | PT_PRESENT;
+        flags |= PT_HUGE; // | PT_PRESENT;
         goto finalize;
     }
 
@@ -77,11 +79,12 @@ finalize:
 
 #ifdef MMU_DEBUG
     log_debug(
-        "[MMU DEBUG] mapped virtual page (cr3: %#lx): size = %#x, paddr = %#lx, vaddr = %#lx",
+        "[MMU DEBUG] mapped virtual page (cr3: %#lx): size = %#x, paddr = %#lx, vaddr = %#lx, flags = %#llx",
         (u64)lvl4_paddr,
         size,
         paddr,
-        vaddr
+        vaddr,
+        entry->raw & FLAGS_MASK
     );
 #endif
 }

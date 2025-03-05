@@ -49,7 +49,7 @@ static sighandler_fn _get_handler(sched_process* proc, usize signum) {
     if (!proc->memory.trampoline)
         return SIG_DFL;
 
-    if (signum == SIGKILL) // TODO: sigstop
+    if (signum == SIGKILL) // TODO: SIGSTOP
         return SIG_DFL;
 
     sighandler_fn handler = proc->signals.handlers[signum];
@@ -90,7 +90,7 @@ void thread_signal_switch(sched_thread* thread, usize signum) {
     int_state* current = (int_state*)thread->kstack.ptr;
     sighandler_fn handler = proc->signals.handlers[signum];
 
-    // TODO: allow for separate signal handler stacks
+    // TODO: separate signal handler stacks
     u64 old_rsp = current->s_regs.rsp - 128; // Assume that we have a 128 byte red zone
     u64 new_rsp = old_rsp - sizeof(sig_state);
 
@@ -192,6 +192,7 @@ usize thread_signal_get_pending(sched_thread* thread) {
     // can nest and the highest possible nest depth is SIGNAL_COUNT-1
     /* if (signum <= thread->current_signal) */
     /*     return 0; */
+    // TODO: this ^
 
     return signum;
 }
@@ -222,7 +223,7 @@ isize signal_send(sched_process* proc, tid_t tid, usize signum) {
     if (tid >= 0) {
         sched_thread* thread = proc_get_thread(proc, tid);
 
-        // note that this means that the user can just mask/ignore fatal signals like SIGSEGV,
+        // Note that this means that the user can just mask/ignore fatal signals like SIGSEGV,
         // this will put the thread into an infinite loop of attempting to rerun the offendig
         // instruction ans segfaulting we would have to send SIGKILL to stop this
         if (_is_masked(thread, signum))

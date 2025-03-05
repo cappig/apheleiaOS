@@ -59,6 +59,8 @@ enum syscall_nums {
     SYS_MOUNT = 18,
     SYS_UNMOUNT = 19,
 
+    SYS_MMAP = 20,
+
     SYSCALL_COUNT
 };
 
@@ -104,6 +106,24 @@ enum ioctl_requests {
     TIOCGWINSZ = 5,
     TIOCSWINSZ = 6,
 };
+
+enum mmap_flags {
+    MAP_PRIVATE = 1 << 0, // Changes are not written to the maped file
+    MAP_SHARED = 1 << 1, // Changes are written to the file
+    MAP_ANON = 1 << 2, // The mapping isn't backed by a real file
+    MAP_FIXED = 1 << 2, // Map at the exact address provided. Existing mappings will be replaced
+    // MAP_STACK = 1 << 3, // Map a canary page for overflow detection
+    MAP_POPULATE = 1 << 4, // Prefault the pages for faster reads
+
+};
+
+enum mmap_prot {
+    PROT_NONE = 0,
+    PROT_READ = 1 << 0,
+    PROT_WRITE = 1 << 1,
+    PROT_EXEC = 1 << 2,
+};
+
 
 typedef struct {
     size_t len;
@@ -259,4 +279,9 @@ inline int sys_mount(const char* source, const char* target, int flags) {
 
 inline int sys_unmount(const char* target, int flags) {
     return syscall2(SYS_UNMOUNT, (u64)target, flags);
+}
+
+
+inline void* sys_mmap(void* addr, size_t length, int prot, int flags, int fd, off_t offset) {
+    return (void*)syscall6(SYS_MMAP, (u64)addr, length, prot, flags, fd, offset);
 }

@@ -31,6 +31,11 @@ typedef enum {
 typedef struct {
     u64 base;
     u64 size;
+
+    isize fd;
+
+    u32 flags;
+    u32 prot;
 } memory_region;
 
 typedef struct {
@@ -195,3 +200,6 @@ void* proc_reap_thread(sched_thread* thread);
 sched_process* proc_fork(sched_process* parent, tid_t tid);
 
 bool proc_terminate(sched_process* proc, usize exit_code);
+
+u64 proc_mmap(sched_process* proc, u64 addr, u64 size, u32 prot, u32 flags, isize fd, usize offset);
+bool proc_handle_page_fault(sched_process* proc, int_state* state);
