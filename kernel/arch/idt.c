@@ -8,6 +8,8 @@
 
 #include "aos/signals.h"
 #include "arch/gdt.h"
+#include "arch/stacktrace.h"
+#include "mem/virtual.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
 #include "sys/cpu.h"
@@ -81,7 +83,6 @@ static isize _exception_to_signal(usize int_num) {
         return SIGSEGV;
 
     case INT_PAGE_FAULT:
-        // TODO: page faults are special
         return SIGSEGV;
 
     case INT_SINGLE_STEP:
@@ -110,7 +111,7 @@ static isize _exception_to_signal(usize int_num) {
     }
 }
 
-static void exception_handler(int_state* s) {
+void exception_handler(int_state* s) {
     bool userspace = ((s->s_regs.cs & 3) == 3);
     bool double_fault = (s->int_num == INT_DOUBLE_FAULT);
 
@@ -131,11 +132,23 @@ static void exception_handler(int_state* s) {
     }
 
     // If the exception originated in the kernel we are fucked
-    disable_interrupts();
-    dump_regs(s);
+    panic_prepare();
 
     log_error("Fatal exception: [int=%#lx | error=%#lx]", s->int_num, s->error_code);
-    panic("%s", int_strings[s->int_num]);
+
+    dump_stack_trace(s->g_regs.rbp);
+    dump_regs(s);
+
+    log_fatal("Kernel panic: %s", int_strings[s->int_num]);
+
+    halt();
+    __builtin_unreachable();
+}
+
+void page_fault_handler(int_state* s) {
+    log_debug("PAGE FAULT");
+
+    exception_handler(s);
 }
 
 
@@ -172,6 +185,9 @@ void idt_init() {
     // Handle the default x86 exceptions
     for (usize exc = 0; exc < EXCEPTION_COUNT; exc++)
         set_int_handler(exc, exception_handler);
+
+    // Page faults are special
+    set_int_handler(INT_PAGE_FAULT, page_fault_handler);
 
     // Handle all the other possible interrupts
     for (usize trp = EXCEPTION_COUNT; trp < ISR_COUNT; trp++)

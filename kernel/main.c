@@ -30,7 +30,6 @@
 #include "sys/clock.h"
 #include "sys/console.h"
 #include "sys/cpu.h"
-#include "sys/disk.h"
 #include "sys/panic.h"
 #include "sys/symbols.h"
 #include "sys/tty.h"
@@ -95,7 +94,7 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
 
     ide_disk_init();
 
-    dump_vfs();
+    // dump_vfs();
 
     enable_interrupts();
 

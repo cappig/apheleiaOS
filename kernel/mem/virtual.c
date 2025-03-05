@@ -8,6 +8,7 @@
 #include <string.h>
 #include <x86/paging.h>
 
+#include "arch/idt.h"
 #include "mem/physical.h"
 
 
@@ -259,10 +260,10 @@ void free_table(page_table* src_paddr) {
 }
 
 
-static void _recursive_dump(page_table* src_paddr, usize level) {
+static void _recursive_dump(page_table* src_paddr, usize level, usize limit) {
     page_table* vaddr = (page_table*)ID_MAPPED_VADDR(src_paddr);
 
-    for (usize i = 0; i < 512; i++) {
+    for (usize i = 0; i < limit; i++) {
         if (!vaddr[i].bits.present)
             continue;
 
@@ -277,13 +278,13 @@ static void _recursive_dump(page_table* src_paddr, usize level) {
         log_debug("%-*s|- %s%zu -> %#lx%s", space, "", pre, i, child_paddr, pst);
 
         if (maps)
-            _recursive_dump((page_table*)child_paddr, level - 1);
+            _recursive_dump((page_table*)child_paddr, level - 1, 512);
     }
 }
 
 // TODO: print flags
-void dump_table(page_table* src_paddr) {
+void dump_table(page_table* src_paddr, bool kernel) {
     log_debug("Recursive dump of page map cr3 = %#lx", (u64)src_paddr);
 
-    _recursive_dump(src_paddr, 4);
+    _recursive_dump(src_paddr, 4, kernel ? 512 : 256);
 }

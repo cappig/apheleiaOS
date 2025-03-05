@@ -84,6 +84,8 @@ void idt_init(void);
 
 void dump_regs(int_state* s);
 
+void exception_handler(int_state* s);
+
 void set_int_handler(usize int_num, int_handler handler);
 void configure_int(usize int_num, u16 selector, u8 ist, u8 attribs);
 

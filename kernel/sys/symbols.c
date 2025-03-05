@@ -48,42 +48,34 @@ void load_symbols() {
 }
 
 
-isize resolve_symbol(u64 addr) {
+symbol_entry* resolve_symbol(u64 addr) {
     if (!sym_table.len || !sym_table.map)
-        return -1;
+        return NULL;
 
-    isize ret_index = 0;
-    u64 ret_addr = 0;
+    isize index = -1;
+    u64 best_addr = 0;
 
     // We have to find the biggest address smaller than the addr
     for (usize i = 0; i < sym_table.len; i++) {
         u64 cur_addr = sym_table.map[i].addr;
 
-        if ((cur_addr > ret_addr) && (cur_addr < addr)) {
-            ret_index = i;
-            ret_addr = cur_addr;
+        if ((cur_addr > best_addr) && (cur_addr < addr)) {
+            index = i;
+            best_addr = cur_addr;
         }
     }
 
-    return ret_index;
-}
-
-char* resolve_symbol_name(u64 addr) {
-    isize index = resolve_symbol(addr);
-
-    if (index < 0)
-        return "(unknown symbol)";
-    else
-        return sym_table.map[index].name;
-}
-
-
-symbol_entry* get_symbol(usize index) {
-    if (!sym_table.len || !sym_table.map)
-        return NULL;
-
-    if (index >= sym_table.len)
+    if (index == -1)
         return NULL;
 
     return &sym_table.map[index];
+}
+
+char* resolve_symbol_name(u64 addr) {
+    symbol_entry* sym = resolve_symbol(addr);
+
+    if (sym)
+        return sym->name;
+
+    return "(unknown symbol)";
 }

@@ -6,7 +6,7 @@
 
 #define panic(...)                              \
     ({                                          \
-        panic_unwind();                         \
+        panic_prepare();                        \
         log_fatal("Kernel panic: "__VA_ARGS__); \
         halt();                                 \
     })
@@ -20,4 +20,4 @@
     })
 
 
-void panic_unwind(void);
+void panic_prepare(void);
