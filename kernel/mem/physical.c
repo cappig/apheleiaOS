@@ -1,5 +1,6 @@
 #include <alloc/bitmap.h>
 #include <base/addr.h>
+#include <base/macros.h>
 #include <string.h>
 #include <x86/asm.h>
 #include <x86/e820.h>
@@ -27,13 +28,16 @@ usize get_free_mem() {
 }
 
 void* alloc_frames(usize count) {
+    assert(count);
+
     void* ret = bitmap_alloc_reserve(&frame_alloc, count);
+
+    if (UNLIKELY(ret == NULL))
+        panic("Out of physical memory!");
 
 #ifdef MMU_DEBUG
     log_debug("[MMU DEBUG] allocated %zu new frames: paddr = %#lx", count, (u64)ret);
 #endif
-
-    assert(ret != NULL);
 
     return ret;
 }

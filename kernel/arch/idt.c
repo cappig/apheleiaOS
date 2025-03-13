@@ -23,11 +23,6 @@ static int_handler int_handlers[ISR_COUNT];
 ALIGNED(0x10)
 static idt_entry idt_entries[ISR_COUNT] = {0};
 
-// How many interrupts are nested at this moment
-// We only perform task switches when this reaches 0
-// TODO: make this per core
-static atomic usize nest_depth = 0;
-
 // "?" indicate a reserved int number
 static const char* int_strings[32] = {
     "Divide by zero",
@@ -126,7 +121,7 @@ void exception_handler(int_state* s) {
 
         // A valid signal has to be delivered to the process
         if (signal > 1) {
-            signal_send(cpu->sched->current, signal);
+            signal_send(cpu->scheduler.current->proc, -1, signal);
             return;
         }
     }
@@ -215,30 +210,24 @@ void configure_int(usize int_num, u16 selector, u8 ist, u8 attribs) {
 
 // Called by isr_common_stub in idt_stubs.asm
 void isr_handler(int_state* s) {
-    nest_depth++;
-
-#ifdef INT_DEBUG
-    log_debug(
-        "[INT_DEBUG] Handling interrupt: num = %#lx, cs = %#lx (depth = %zu)",
-        s->int_num,
-        s->s_regs.cs,
-        nest_depth
-    );
-#endif
+    cpu->nest_depth++;
 
     assert(s->int_num < ISR_COUNT);
 
-    if (cpu->sched_running && nest_depth == 1)
-        scheduler_save(s);
+    if (cpu->scheduler.running && cpu->nest_depth == 1)
+        sched_save(s);
 
     int_handlers[s->int_num](s);
 
-    nest_depth--;
+    cpu->nest_depth--;
 
-    if (cpu->sched_running && nest_depth == 0) {
-        schedule();
+    if (cpu->scheduler.running && !cpu->nest_depth) {
+        if (cpu->scheduler.needs_resched) {
+            schedule();
+            cpu->scheduler.needs_resched = false;
+        }
 
-        scheduler_switch();
+        sched_switch();
         __builtin_unreachable();
     }
 }

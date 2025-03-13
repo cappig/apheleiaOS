@@ -86,8 +86,6 @@ typedef struct {
     tree* tree;
 } virtual_fs;
 
-extern virtual_fs* vfs;
-
 
 virtual_fs* vfs_init(void);
 

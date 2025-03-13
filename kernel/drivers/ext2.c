@@ -1,15 +1,21 @@
 #include "ext2.h"
 
+#include <base/addr.h>
 #include <base/macros.h>
+#include <x86/paging.h>
 
 #include "mem/heap.h"
+#include "mem/physical.h"
 #include "sys/disk.h"
 
 static file_system fs = {.name = "ext2"};
 
 
 static ext2_device_private* _parse_superblock(disk_partition* part) {
-    ext2_superblock* super = kmalloc(sizeof(ext2_superblock));
+    usize pages = DIV_ROUND_UP(sizeof(ext2_superblock), PAGE_4KIB);
+
+    void* paddr = alloc_frames(pages);
+    ext2_superblock* super = (void*)ID_MAPPED_VADDR(paddr);
 
     disk_dev* dev = part->disk;
 
@@ -17,7 +23,7 @@ static ext2_device_private* _parse_superblock(disk_partition* part) {
     dev->interface->read(dev, super, loc, sizeof(ext2_superblock));
 
     if (super->signature != EXT2_SIGNATURE) {
-        kfree(super);
+        free_frames(super, pages);
         return NULL;
     }
 

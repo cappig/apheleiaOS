@@ -6,8 +6,10 @@
 
 #define EXIT_SIGNAL_BASE 127
 
-typedef void (*sighandler_t)(int signum);
-typedef sighandler_t sighandler_fn;
+#define SIGNAL_COUNT (_SIGNAL_COUNT - 1)
+
+typedef void (*sighandler_fn)(int signum);
+typedef sighandler_fn sighandler_t;
 
 enum signal_nums {
     SIGNAL_NONE = 0,
@@ -39,5 +41,5 @@ enum signal_nums {
 
     SIGKILL = 18,
 
-    SIGNAL_COUNT // SIGNAL_COUNT-1 should be used since we index signals from 1
+    _SIGNAL_COUNT // SIGNAL_COUNT-1 should be used since we index signals from 1
 };

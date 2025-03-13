@@ -117,19 +117,21 @@ static isize _read(vfs_node* node, void* buf, usize offset, usize len, u32 flags
 static file_system_instance* _probe(disk_partition* part) {
     disk_dev* dev = part->disk;
 
-    ustar_header head[sizeof(ustar_header)] = {0};
+    ustar_header* head = kmalloc(sizeof(ustar_header));
 
     dev->interface->read(dev, head, 0, sizeof(ustar_header));
 
-    if (strncmp(head->ustar, "ustar", 5))
+    if (strncmp(head->ustar, "ustar", 5)) {
+        kfree(head);
         return NULL;
+    }
 
     file_system_instance* instance = kcalloc(sizeof(file_system_instance));
 
     instance->fs = &fs;
     instance->partition = part;
 
-
+    kfree(head);
     return instance;
 }
 

@@ -47,6 +47,7 @@ NORETURN void _kern_entry(boot_handoff* handoff) {
         log_set_lvl(LOG_INFO);
 
     cpu_set_gs_base((u64)&cores_local[0]);
+    cpu_init_core(0);
 
     gdt_init();
     pic_init();

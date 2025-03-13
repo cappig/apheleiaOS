@@ -1,49 +1,43 @@
 #pragma once
 
-#include <base/attributes.h>
-#include <base/types.h>
+#include <stdbool.h>
 
-#include "arch/idt.h"
-#include "sched/process.h"
+#include "base/attributes.h"
+#include "base/types.h"
+#include "data/list.h"
+#include "process.h"
 
-// Each process will run for at most SCHED_SLICE ticks
 #define SCHED_SLICE 1
 
 typedef struct {
-    isize time_left;
-    process* proc;
-} sleeping_process;
+    bool running;
 
-// A single instance of the scheduler. Each CPU has one
-typedef struct {
-    // How many ticks does the current processes time slice last
-    isize proc_ticks_left;
+    isize ticks_left;
+    bool needs_resched;
 
     linked_list* run_queue;
-    linked_list* sleep_queue;
+    sched_thread* current;
+} core_scheduler;
 
-    process* current;
-    process* idle;
-} scheduler;
-
-extern tree* proc_tree;
+// defined in switch.asm
+extern void context_switch(u64 kernel_stack) NORETURN;
 
 
-process* process_with_pid(usize pid);
+void sched_enqueue(sched_thread* thread);
+bool sched_dequeue(sched_thread* thread, bool and_current);
+void sched_enqueue_proc(sched_process* proc);
+bool sched_dequeue_proc(sched_process* proc);
 
-bool process_validate_ptr(process* proc, const void* ptr, usize len, bool write);
+void sched_thread_sleep(sched_thread* thread, u64 milis);
 
-void schedule(void);
-void scheduler_tick(void);
+sched_process* sched_get_proc(pid_t pid);
 
-void scheduler_save(int_state* s);
-void scheduler_switch(void) NORETURN;
-
-void scheduler_queue(process* proc);
-void scheduler_sleep(process* proc, usize milis);
-void scheduler_kill(process* proc, usize status);
-
-void dump_process_tree(void);
+void sched_switch(void) NORETURN;
+void sched_save(int_state* s);
 
 void scheduler_init(void);
 void scheduler_start(void) NORETURN;
+
+void schedule(void);
+
+void dump_process_tree(void);

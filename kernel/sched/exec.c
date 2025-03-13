@@ -1,43 +1,49 @@
+#include "exec.h"
+
+#include <parse/elf.h>
 #include <string.h>
+#include <x86/paging.h>
 
 #include "arch/gdt.h"
-#include "drivers/initrd.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
 #include "process.h"
 #include "sys/panic.h"
-#include "x86/paging.h"
 
 
-static bool _init_ustack(process* proc, u64 base, usize size) {
-    if (proc->user.stack_vaddr)
+static bool _init_ustack(sched_thread* thread, u64 base, usize pages) {
+    if (thread->ustack.vaddr)
         return false;
 
-    usize pages = DIV_ROUND_UP(size, PAGE_4KIB);
+    sched_process* proc = thread->proc;
 
-    proc->user.stack_vaddr = base;
+    thread->ustack.vaddr = base;
 
-    proc->user.stack_size = size;
-    proc->user.stack_paddr = (u64)alloc_frames(pages);
+    thread->ustack.size = pages * PAGE_4KIB;
+    thread->ustack.paddr = (u64)alloc_frames(pages);
 
     map_region(
-        proc->user.mem_map,
+        proc->memory.table,
         SCHED_USTACK_PAGES,
-        proc->user.stack_vaddr,
-        proc->user.stack_paddr,
+        thread->ustack.vaddr,
+        thread->ustack.paddr,
         PT_PRESENT | PT_NO_EXECUTE | PT_WRITE | PT_USER
     );
 
     // TODO: map a dummy canary page at the bottom of the stack to detect overflow
     // Writes to this page will fault, and we can go from there
-    map_page(proc->user.mem_map, PAGE_4KIB, base, 0, PT_NO_EXECUTE);
+
+    // map_page(proc->memory.table, PAGE_4KIB, base, 0, PT_NO_EXECUTE);
 
     return true;
 }
 
 // Returns the highest virtual address in the image map
-static u64 _load_elf_sections(process* proc, vfs_node* file, elf_header* header, usize load_offset) {
+static u64
+_load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* header, usize load_offset) {
+    sched_process* proc = thread->proc;
+
     u64 top = 0;
 
     elf_prog_header* p_header = kmalloc(header->phent_size);
@@ -72,7 +78,7 @@ static u64 _load_elf_sections(process* proc, vfs_node* file, elf_header* header,
             top = seg_top;
 
         // Map the segment to virtual memory
-        map_region(proc->user.mem_map, pages, vbase, pbase, flags);
+        map_region(proc->memory.table, pages, vbase, pbase, flags);
 
         // Copy all loadable data from the file
         usize offset = vaddr - vbase;
@@ -90,8 +96,10 @@ static u64 _load_elf_sections(process* proc, vfs_node* file, elf_header* header,
     return top;
 }
 
-static void _map_vdso(process* proc) {
-    if (proc->user.vdso) // the vdso is already loaded
+static void _map_vdso(sched_thread* thread) {
+    sched_process* proc = thread->proc;
+
+    if (proc->memory.vdso) // the vdso is already loaded
         return;
 
     vfs_node* file = vfs_lookup("sbin/vdso.elf");
@@ -105,7 +113,7 @@ static void _map_vdso(process* proc) {
     if (elf_verify(header) != VALID_ELF)
         panic("vdso.elf is invalid!");
 
-    _load_elf_sections(proc, file, header, PROC_VDSO_BASE);
+    _load_elf_sections(thread, file, header, PROC_VDSO_BASE);
 
     // Locate the signal_trampoline
     elf_sect_header* dynsym = elf_locate_section(header, ".dynsym");
@@ -120,18 +128,18 @@ static void _map_vdso(process* proc) {
 
     assert(sig_sym);
 
-    proc->user.vdso = PROC_VDSO_BASE;
-    proc->user.signals.trampoline = PROC_VDSO_BASE + sig_sym->value;
+    proc->memory.vdso = PROC_VDSO_BASE;
+    proc->memory.trampoline = PROC_VDSO_BASE + sig_sym->value;
 
     kfree(header);
 }
 
 
-static void _ustack_push(process* proc, u64* rsp, u64 qword) {
+static void _ustack_push(sched_thread* thread, u64* rsp, u64 qword) {
     *rsp -= sizeof(u64);
 
-    usize offset = *rsp - proc->user.stack_vaddr;
-    u64 paddr = proc->user.stack_paddr + offset;
+    usize offset = *rsp - thread->ustack.vaddr;
+    u64 paddr = thread->ustack.paddr + offset;
     u64* vaddr = (void*)ID_MAPPED_VADDR(paddr);
 
     *vaddr = qword;
@@ -140,8 +148,10 @@ static void _ustack_push(process* proc, u64* rsp, u64 qword) {
 
 // We have to allocate new user mapped pages to hold argument strings and environment variables
 // returns the final value of the stack pointer
-static u64 _alloc_args(process* proc, char** argv, char** envp) {
-    u64 rsp = proc->user.stack_vaddr + proc->user.stack_size;
+static u64 _alloc_args(sched_thread* thread, char** argv, char** envp) {
+    sched_process* proc = thread->proc;
+
+    u64 rsp = thread->ustack.vaddr + thread->ustack.size;
 
     // How many environment variables do we have
     usize envc = 0;
@@ -154,9 +164,9 @@ static u64 _alloc_args(process* proc, char** argv, char** envp) {
 
 
     if (!argc && !envc) {
-        _ustack_push(proc, &rsp, 0);
-        _ustack_push(proc, &rsp, 0);
-        _ustack_push(proc, &rsp, 0);
+        _ustack_push(thread, &rsp, 0);
+        _ustack_push(thread, &rsp, 0);
+        _ustack_push(thread, &rsp, 0);
         return rsp;
     }
 
@@ -174,28 +184,28 @@ static u64 _alloc_args(process* proc, char** argv, char** envp) {
     u64 vbase = ID_MAPPED_VADDR(pbase);
 
     // Place the pages right abbove the userspace stack
-    u64 user_vbase = proc->user.stack_vaddr + proc->user.stack_size;
+    u64 user_vbase = thread->ustack.vaddr + thread->ustack.size;
 
     u64 flags = PT_USER | PT_WRITE | PT_PRESENT;
-    map_region(proc->user.mem_map, pages, user_vbase, pbase, flags);
+    map_region(proc->memory.table, pages, user_vbase, pbase, flags);
 
     usize offset = 0;
 
     // Push the environment variables, envp
-    _ustack_push(proc, &rsp, 0); // terminate the environment variable array
+    _ustack_push(thread, &rsp, 0); // terminate the environment variable array
 
     for (isize i = envc - 1; i >= 0; i--) {
         usize slen = strlen(envp[i]);
 
         memcpy((char*)vbase + offset, envp[i], slen);
 
-        _ustack_push(proc, &rsp, user_vbase + offset);
+        _ustack_push(thread, &rsp, user_vbase + offset);
 
         offset += slen + 1;
     }
 
     // Push the arguments, argv
-    _ustack_push(proc, &rsp, 0); // terminate the argument array
+    _ustack_push(thread, &rsp, 0); // terminate the argument array
 
     for (isize i = argc - 1; i >= 0; i--) {
         if (!argv[i])
@@ -205,26 +215,27 @@ static u64 _alloc_args(process* proc, char** argv, char** envp) {
 
         memcpy((char*)vbase + offset, argv[i], slen);
 
-        _ustack_push(proc, &rsp, user_vbase + offset);
+        _ustack_push(thread, &rsp, user_vbase + offset);
 
         offset += slen + 1;
     }
 
     // Push argc
-    _ustack_push(proc, &rsp, argc);
+    _ustack_push(thread, &rsp, argc);
 
-    proc->user.args_paddr = pbase;
-    proc->user.args_pages = pages;
+    proc->memory.args_paddr = pbase;
+    proc->memory.args_pages = pages;
 
     return rsp;
 }
 
-
-bool exec_elf(process* proc, vfs_node* file, char** argv, char** envp) {
-    assert(proc->type == PROC_USER);
-
-    if (!file || !proc)
+bool exec_elf(sched_thread* thread, vfs_node* file, char** argv, char** envp) {
+    if (!file || !thread)
         return false;
+
+    sched_process* proc = thread->proc;
+
+    assert(proc->type == PROC_USER);
 
     elf_header header[sizeof(elf_header)] = {0};
     // elf_header* header = kmalloc(sizeof(elf_header));
@@ -238,15 +249,15 @@ bool exec_elf(process* proc, vfs_node* file, char** argv, char** envp) {
     if (!elf_is_executable(header))
         return false;
 
-    _load_elf_sections(proc, file, header, 0);
+    _load_elf_sections(thread, file, header, 0);
 
     // Map the null page with no permissions so that we can detect nullptr dereference
-    map_page(proc->user.mem_map, PAGE_4KIB, 0, 0, PT_PRESENT);
+    map_page(proc->memory.table, PAGE_4KIB, 0, 0, PT_PRESENT);
 
     // TODO: don't just map to a fixed address
-    _init_ustack(proc, PROC_USTACK_BASE, SCHED_USTACK_SIZE);
+    _init_ustack(thread, PROC_USTACK_BASE, SCHED_USTACK_PAGES);
 
-    u64 rsp = _alloc_args(proc, argv, envp);
+    u64 rsp = _alloc_args(thread, argv, envp);
 
     // Set the initial state
     int_state state = {
@@ -257,10 +268,10 @@ bool exec_elf(process* proc, vfs_node* file, char** argv, char** envp) {
         .s_regs.ss = GDT_user_data | 3,
     };
 
-    process_set_state(proc, &state);
+    thread_set_state(thread, &state);
 
     // Map the vdso to the appropriate address
-    _map_vdso(proc);
+    _map_vdso(thread);
 
     return true;
 }

@@ -1,16 +1,20 @@
 #include "ide.h"
 
+#include <base/addr.h>
+#include <base/macros.h>
 #include <base/types.h>
 #include <boot/mbr.h>
 #include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
 #include <x86/asm.h>
+#include <x86/paging.h>
 
 #include "arch/idt.h"
 #include "arch/irq.h"
 #include "drivers/pci.h"
 #include "mem/heap.h"
+#include "mem/physical.h"
 #include "sys/disk.h"
 
 
@@ -197,7 +201,10 @@ static bool ata_mount_disk(disk_dev_interface* interface, ide_device* disk) {
         'a' + next_index,
     };
 
-    disk->read_buffer = kmalloc(disk->sector_size);
+    usize pages = DIV_ROUND_UP(disk->sector_size, PAGE_4KIB);
+    void* paddr = alloc_frames(pages);
+
+    disk->read_buffer = (void*)ID_MAPPED_VADDR(paddr);
 
     disk_dev* dev = kcalloc(sizeof(disk_dev));
 

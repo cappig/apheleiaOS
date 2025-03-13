@@ -68,7 +68,7 @@ void tree_destroy_node(tree_node* node);
 void tree_prune(tree_node* parent);
 void tree_prune_callback(tree_node* parent, tree_callback_fn callback);
 
-void tree_insert_child(tree_node* parent, tree_node* child);
+bool tree_insert_child(tree_node* parent, tree_node* child);
 bool tree_remove_child(tree_node* parent, tree_node* child);
 
 tree_node* tree_find_comp(tree* root, tree_comp_fn comp, void* private);

@@ -41,8 +41,15 @@ int main(void) {
     char buf[] = "Hello from userland!\n";
     sys_write(STDOUT_FD, buf, strlen(buf));
 
+    sys_signal(SIGCHLD, child);
+
     char buf2[] = "Like a record, baby, right round, round, round . . . ";
     sys_write(STDOUT_FD, buf2, strlen(buf2));
+
+    pid_t pid = sys_fork();
+
+    if (!pid)
+        sys_exit(128);
 
     for (;;) {
         advance_cursor();

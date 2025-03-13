@@ -7,7 +7,7 @@
 
 
 static inline file_desc* get_fd(usize fd) {
-    return process_get_fd(cpu->sched->current, fd);
+    return process_get_fd(cpu->scheduler.current->proc, fd);
 }
 
 static inline bool validate_fd(usize fd) {
@@ -23,10 +23,13 @@ static inline bool validate_ptr(const void* ptr, usize len, bool write) {
     if (!len)
         return false; // ?
 
-    return process_validate_ptr(cpu->sched->current, ptr, len, write);
+    return proc_validate_ptr(cpu->scheduler.current->proc, ptr, len, write);
 }
 
 static inline bool validate_signum(usize signum) {
+    if (!signum)
+        return false;
+
     if (signum >= SIGNAL_COUNT)
         return false;
 
@@ -34,7 +37,8 @@ static inline bool validate_signum(usize signum) {
 }
 
 static inline bool has_perms(usize user) {
-    usize current_uid = cpu->sched->current->user.euid;
+    sched_thread* thread = cpu->scheduler.current;
+    usize current_uid = thread->proc->identity.euid;
 
     if (current_uid == SUPERUSER_UID)
         return true;

@@ -1,6 +1,5 @@
 #include "time.h"
 
-#include "stdbool.h"
 #include "stdio.h"
 #include "string.h"
 
@@ -30,7 +29,7 @@ static const char months_str[12][4] = {
 };
 
 
-static bool _is_leap(int year) {
+static int _is_leap(int year) {
     return ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0));
 }
 
@@ -90,6 +89,7 @@ time_t mktime(struct tm* tm) {
 
 
 // NOTE: this function returns a pointer to static data
+// FIXME: this function is actual canecer, implement 'modern' alternatives ASAP
 char* asctime(const struct tm* time) {
     static char buf[26];
 

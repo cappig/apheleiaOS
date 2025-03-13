@@ -5,6 +5,7 @@
 #include <base/addr.h>
 #include <base/types.h>
 #include <data/list.h>
+#include <data/tree.h>
 #include <data/vector.h>
 #include <errno.h>
 #include <log/log.h>
@@ -22,7 +23,10 @@
 
 
 static void _exit(u64 status) {
-    scheduler_kill(cpu->sched->current, status);
+    sched_process* proc = cpu_current_proc();
+
+    sched_dequeue_proc(proc);
+    proc_terminate(proc, status);
 }
 
 
@@ -188,7 +192,7 @@ static isize _open(u64 path_ptr, u64 flags, u64 mode) {
     if (flags & O_NONBLOCK)
         fd_flags |= FD_NONBLOCK;
 
-    isize fd = process_open_fd_node(cpu->sched->current, node, -1, fd_flags);
+    isize fd = proc_open_fd_node(cpu_current_proc(), node, -1, fd_flags);
     file_desc* fdesc = get_fd(fd);
 
     if (!fdesc) // wtf?
@@ -214,7 +218,8 @@ static u64 _mkdir(u64 path_ptr, u64 mode) {
 
     vfs_node* child = vfs_create(parent, base_name, VFS_DIR, mode);
 
-    child->uid = cpu->sched->current->user.euid;
+    sched_process* proc = cpu_current_proc();
+    child->uid = proc->identity.euid;
 
     kfree(path_cpy);
 
@@ -263,25 +268,30 @@ static u64 _ioctl(u64 fd, u64 request, u64 argp_ptr) {
 }
 
 static u64 _signal(u64 signum, u64 handler_ptr) {
-    sighandler_t handler = (sighandler_t)handler_ptr;
+    sighandler_fn handler = (sighandler_fn)handler_ptr;
 
     if (handler != SIG_IGN && handler != SIG_DFL)
-        if (!validate_ptr(handler, 0, false))
+        if (!validate_ptr(handler, 1, false))
             return (u64)SIG_ERR;
 
-    u64 prev = (u64)cpu->sched->current->user.signals.handlers[signum - 1];
+    sched_process* proc = cpu_current_proc();
+    u64 prev = (u64)proc->signals.handlers[signum - 1];
 
-    if (!signal_set_handler(cpu->sched->current, signum, handler))
+    if (!proc_signal_set_handler(proc, signum, handler))
         return (u64)SIG_ERR;
 
-    return prev ? prev : (u64)SIG_DFL;
+    return prev;
 }
 
 static u64 _sigreturn(void) {
-    if (cpu->sched->current->type != PROC_USER)
+    sched_thread* thread = cpu_current_thread();
+    sched_process* proc = thread->proc;
+
+    if (thread->proc->type != PROC_USER)
         return -ENODATA;
 
-    signal_return(cpu->sched->current);
+    if (!thread_signal_return(thread))
+        signal_send(proc, thread->tid, SIGILL);
 
     return 0;
 }
@@ -290,15 +300,15 @@ static u64 _kill(u64 pid, u64 signum) {
     if (!validate_signum(signum))
         return -EINVAL;
 
-    process* proc = process_with_pid(pid);
+    sched_process* proc = sched_get_proc(pid);
 
-    if (!proc)
+    if (!proc || proc->pid != (pid_t)pid)
         return -ESRCH;
 
     // TODO: check perms
 
     if (signum != 0)
-        signal_send(proc, signum);
+        signal_send(proc, -1, signum);
 
     return 0;
 }
@@ -308,7 +318,8 @@ static u64 _wait(pid_t pid, u64 status_ptr, u64 options) {
         return -EFAULT;
 
     int* status = (int*)status_ptr;
-    process* parent = cpu->sched->current;
+    sched_thread* thread = cpu_current_thread();
+    sched_process* proc = thread->proc;
 
     // TODO: group ids
     if (pid < -1 || pid == 0)
@@ -316,29 +327,43 @@ static u64 _wait(pid_t pid, u64 status_ptr, u64 options) {
 
     if (pid > 0) {
         // Wait for a specific child
-        process* proc = process_with_pid(pid);
+        sched_process* target_proc = sched_get_proc(pid);
+
+        if (!target_proc)
+            return -ESRCH;
 
         // Is this process the child of the caller
-        process* real_parent = proc->user.tree_entry->data;
-        if (parent != real_parent)
+        tree_node* parent_node = proc->tnode->parent;
+
+        if (!parent_node)
+            return -EINVAL;
+
+        sched_process* parent = parent_node->data;
+
+        if (parent != proc)
             return -ECHILD;
 
         // Is the process done already?
-        if (proc->state == PROC_DONE) {
-            // The process page map is loaded at this point
-            *status = proc->status;
-            return process_reap(proc);
+        if (proc->state == PROC_ZOMBIE) {
+            *status = proc->exit_code; // the page map is loaded at this point
+
+            proc_destroy(proc);
+            return proc->pid;
         }
     } else {
         //  Wait for any child
-        foreach (node, parent->user.tree_entry->children) {
+        foreach (node, proc->tnode->children) {
             tree_node* child_node = node->data;
-            process* child = child_node->data;
+            sched_process* child = child_node->data;
 
             // Are any children done already?
-            if (child->state == PROC_DONE) {
-                *status = child->status;
-                return process_reap(child);
+            if (child->state == PROC_ZOMBIE) {
+                *status = child->exit_code;
+
+                pid_t child_pid = child->pid;
+                proc_destroy(child);
+
+                return child_pid;
             }
         }
     }
@@ -348,50 +373,56 @@ static u64 _wait(pid_t pid, u64 status_ptr, u64 options) {
         return 0;
 
     // Not done and we do want to hang (a lot of unfortunate nomenclature in this one)
-    parent->state = PROC_BLOCKED;
-    parent->user.waiting = pid;
-    parent->user.child_status = status;
-    cpu->sched->proc_ticks_left = 0; // make sure that we get rescheduled
+    // This hangs only the calling thread
+    thread->state = T_SLEEPING;
+    thread->waiting.proc = pid;
+    thread->waiting.code_ptr = status;
+
+    cpu->scheduler.needs_resched = true;
 
     return 0;
 }
 
 
 static u64 _getpid(void) {
-    return cpu->sched->current->id;
+    return cpu_current_proc()->pid;
 }
 
 static u64 _getppid(void) {
-    tree_node* tnode = cpu->sched->current->user.tree_entry;
+    sched_process* proc = cpu_current_proc();
+    tree_node* parent_node = proc->tnode->parent;
 
     // This means that init called
-    if (!tnode->parent)
+    if (!parent_node)
         return 0;
 
-    process* parent = tnode->data;
-
-    return parent->id;
+    sched_process* parent = parent_node->data;
+    return parent->pid;
 }
 
 
 static u64 _fork(void) {
-    process* child = process_fork(cpu->sched->current);
+    sched_thread* thread = cpu_current_thread();
+    sched_process* proc = thread->proc;
+
+    sched_process* child = proc_fork(proc, thread->tid);
+    sched_thread* child_thread = proc_get_thread(child, 0);
 
     // When the child returns it will get 0
-    int_state* child_state = (int_state*)child->stack_ptr;
+    int_state* child_state = (int_state*)child_thread->kstack.ptr;
     child_state->g_regs.rax = 0;
 
-    scheduler_queue(child);
+    sched_enqueue_proc(child);
 
     // And when the parent returns it will get the pid of the child
-    return child->id;
+    return child->pid;
 }
 
 static u64 _sleep(u64 milis) {
-    if (milis)
-        scheduler_sleep(cpu->sched->current, milis);
+    sched_thread* thread = cpu_current_thread();
 
-    cpu->sched->proc_ticks_left = 0;
+    if (milis)
+        sched_thread_sleep(thread, milis);
 
     return 0;
 }
@@ -458,7 +489,7 @@ static u64 _unmount(u64 target_ptr, u64 flags) {
 
 static void _syscall_handler(int_state* s) {
 #ifdef SYSCALL_DEBUG
-    log_debug("[SYSCALL_DEBUG] handling syscall rax = %#lu", s->g_regs.rax);
+    log_debug("[SYSCALL_DEBUG] handling syscall rax = %lu", s->g_regs.rax);
 #endif
 
     u64 arg1 = s->g_regs.rdi;
@@ -553,13 +584,13 @@ static void _syscall_handler(int_state* s) {
 
 
     default:
-#ifdef SYSCALL_DEBUG
-        log_warn("[SYSCALL_DEBUG] Invalid syacall (%lu)", s->g_regs.rax);
-#endif
-        signal_send(cpu->sched->current, SIGSYS);
+        sched_thread* thread = cpu_current_thread();
+        signal_send(thread->proc, thread->tid, SIGSYS);
         break;
     }
 
+    // FIXME: the biggest problem in the kernel right now is its shameless reliannce on x86
+    // The kernel should be cpu agnostic (up to a point)
     s->g_regs.rax = ret;
 }
 

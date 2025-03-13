@@ -1,20 +1,19 @@
 #pragma once
 
-#include <aos/signals.h>
 #include <aos/syscalls.h>
-#include <base/types.h>
-#include <data/vector.h>
-#include <parse/elf.h>
-#include <x86/paging.h>
+#include <time.h>
 
+#include "aos/signals.h"
 #include "arch/idt.h"
-#include "vfs/fs.h"
+#include "base/types.h"
+#include "data/list.h"
+#include "data/tree.h"
+#include "data/vector.h"
+#include "sys/disk.h"
+#include "x86/paging.h"
 
 #define SCHED_KSTACK_PAGES 2
-#define SCHED_KSTACK_SIZE  (SCHED_KSTACK_PAGES * PAGE_4KIB)
-
 #define SCHED_USTACK_PAGES 8
-#define SCHED_USTACK_SIZE  (SCHED_USTACK_PAGES * PAGE_4KIB)
 
 #define PROC_USTACK_BASE 0x700000000000ULL
 #define PROC_VDSO_BASE   0x7ff000000000ULL
@@ -22,17 +21,45 @@
 #define SUPERUSER_UID 0
 #define SUPERUSER_GID 0
 
-enum process_state {
-    PROC_READY,
-    PROC_RUNNING,
-    PROC_BLOCKED,
-    PROC_DONE,
-};
+#define PROC_SIGNAL_DEFAULT ((sighandler_fn)0)
 
-enum process_type {
+typedef enum {
     PROC_USER,
     PROC_KERNEL,
-};
+} process_type;
+
+typedef struct {
+    u64 base;
+    u64 size;
+} memory_region;
+
+typedef struct {
+    page_table* table;
+
+    // Mark occupied regions of memory, this aids in the implementation of mmap(2)
+    vector* regions;
+
+    // The address of the virtual dynamic shared object
+    u64 vdso;
+
+    // The address of the signal trampoline
+    // usually located in the vdso
+    u64 trampoline;
+
+    // The address of the page(es) that hold the strings for the command
+    // line arguments and the environment variables
+    u64 args_paddr;
+    usize args_pages;
+} process_memory;
+
+
+typedef struct {
+    u32 pending; // the Nth bit being set marks the (N-1)th signal as pending
+
+    // What action shall be taken when handling the given siganl
+    // 0 if default, 1 if ignored and a valid address if a defined handler should be called
+    sighandler_fn handlers[SIGNAL_COUNT];
+} process_signals;
 
 enum fd_flags {
     FD_READ = 1 << 0,
@@ -48,90 +75,123 @@ typedef struct {
 } file_desc;
 
 typedef struct {
-    u32 pending; // the nth bit being set marks the (n-1)th signal as pending
-    u32 masked; // the nth bit being set masks the (n-1)th signal (except SIGKILL)
+    uid_t uid;
+    uid_t euid;
+    uid_t suid;
 
-    usize current; // the current signal being handled, 0 if none
-    sighandler_t handlers[SIGNAL_COUNT - 1]; // signals are indexed from 1
+    uid_t gid;
+    uid_t egid;
+    uid_t sgid;
+} process_identity;
 
-    u64 trampoline; // located in the vdso
-} process_signals;
-
-typedef struct {
-    // Process identity
-    usize uid;
-    usize euid;
-    usize suid;
-
-    // TODO: usize gid;
-
-    page_table* mem_map;
-
-    // Points to the entry in the process tree
-    tree_node* tree_entry;
-
-    // The user stack
-    usize stack_size;
-    u64 stack_paddr;
-    u64 stack_vaddr;
-
-    // Tells us if this process is waiting for children to die :$
-    // 0 if not waiting, -1 if waiting for any child or > 0 if waiting for a specific child
-    pid_t waiting;
-    int* child_status; // if we are waiting for a process we want the status written here
-
-    // File descriptor table
-    vector* fd_table;
-
-    // Unix signals
-    process_signals signals;
-
-    // The base address of the virtual dynamic shared object
-    // NULL if not loaded
-    u64 vdso;
-
-    // The base address of the page(es) that hold the strings for the command
-    // line arguments and the environment variables
-    u64 args_paddr;
-    usize args_pages;
-} process_user;
+typedef enum {
+    PROC_RUNNING, // at least one thread is alive (may be stopped or sleeping)
+    PROC_ZOMBIE, // all threads are dead (zombies or just nonexistent)
+} process_state;
 
 typedef struct {
     char* name;
-    usize id; // pid
+    pid_t pid;
 
-    u8 state;
-    u8 type;
-    u8 status; // exit code
+    process_type type;
+    process_identity identity;
 
-    // The kernel stack
-    usize stack_size;
-    u64 stack;
-    u64 stack_ptr;
+    process_state state;
+    usize exit_code;
 
-    // Userland information. Not used by kernel processes
-    process_user user;
-} process;
+    tree_node* tnode;
+
+    process_signals signals;
+
+    process_memory memory;
+
+    vector* file_descriptors;
+
+    linked_list threads;
+} sched_process;
 
 
-process* process_create(const char* name, u8 type, usize pid);
+typedef struct {
+    usize size;
+    u64 paddr;
+    union {
+        u64 ptr; // kstack
+        u64 vaddr; // ustack
+    };
+} thread_stack;
 
-bool process_free(process* proc);
-pid_t process_reap(process* proc);
+typedef struct {
+    // 0 if not waiting, -1 if waiting for any child
+    // or > 0 if waiting for a specific child
+    // since we can't wait for init (no parent) this is fine
+    pid_t proc;
+    int* code_ptr; // the exit code of the while shall be written to this address
+} thread_wait;
 
-void process_init_stack(process* parent, process* child);
-void process_init_page_map(process* parent, process* child);
-void process_init_file_descriptors(process* parent, process* child);
-void process_init_signal_handlers(process* parent, process* child);
+typedef enum {
+    T_RUNNING,
+    T_SLEEPING, // a blocked state, the thread is waitong for an event
+    T_STOPPED, // the thread exists it won't get scheduled in this state
+    T_ZOMBIE,
+} thread_state;
 
-isize process_open_fd_node(process* proc, vfs_node* node, isize fd, u16 flags);
-isize process_open_fd(process* proc, const char* path, isize fd, u16 flags);
-file_desc* process_get_fd(process* proc, usize fd);
+typedef struct {
+    tid_t tid;
+    sched_process* proc;
 
-void process_set_state(process* proc, int_state* state);
-void process_push_state(process* proc, int_state* state);
+    list_node lnode;
 
-process* spawn_kproc(const char* name, void* entry);
-process* spawn_uproc(const char* name);
+    thread_state state;
+    void* exit_val;
 
-process* process_fork(process* parent);
+    u32 current_signal;
+    u32 signal_mask;
+
+    thread_stack kstack;
+    thread_stack ustack;
+
+    thread_wait waiting;
+    time_t sleep_target;
+
+    isize cpu_id; // -1 if none
+} sched_thread;
+
+
+sched_process* proc_create_with_pid(const char* name, process_type type, pid_t pid);
+sched_process* proc_create(const char* name, process_type type);
+
+sched_process* spawn_kproc(const char* name, void* entry);
+sched_process* spawn_uproc(const char* name);
+
+void proc_free(sched_process* proc);
+void proc_destroy(sched_process* proc);
+
+void thread_push_state(sched_thread* thread, int_state* state);
+void thread_set_state(sched_thread* thread, int_state* state);
+
+void thread_init_stack(sched_thread* parent, sched_thread* child);
+
+bool proc_validate_ptr(sched_process* proc, const void* ptr, usize len, bool write);
+
+bool thread_wait_wake(sched_thread* thread, sched_process* target);
+bool proc_wait_wake(sched_process* parent, sched_process* target);
+
+void proc_init_memory(sched_process* parent, sched_process* child);
+void proc_init_file_descriptors(sched_process* parent, sched_process* child);
+void proc_init_signal_handlers(sched_process* parent, sched_process* child);
+
+isize proc_open_fd_node(sched_process* proc, vfs_node* node, isize fd, u16 flags);
+isize proc_open_fd(sched_process* proc, const char* path, isize fd, u16 flags);
+file_desc* process_get_fd(sched_process* proc, usize fd);
+
+sched_thread* proc_spawn_thread(sched_process* proc, sched_thread* caller);
+
+list_node* proc_get_thread_node(sched_process* proc, tid_t tid);
+sched_thread* proc_get_thread(sched_process* proc, tid_t tid);
+
+bool proc_exit_thread(sched_thread* thread, void* exit_val);
+void* proc_reap_thread(sched_thread* thread);
+
+sched_process* proc_fork(sched_process* parent, tid_t tid);
+
+bool proc_terminate(sched_process* proc, usize exit_code);

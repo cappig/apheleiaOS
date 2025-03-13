@@ -6,7 +6,7 @@
 
 #define BITMAP_WORD_SIZE (sizeof(bitmap_word) * CHAR_BIT)
 
-typedef u64 bitmap_word;
+typedef u32 bitmap_word;
 
 
 void bitmap_set(bitmap_word* bitmap, usize index);

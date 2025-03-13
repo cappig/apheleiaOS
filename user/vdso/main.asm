@@ -7,6 +7,6 @@ bits 64
 global signal_trampoline
 signal_trampoline:
     ; Call sigreturn
-    mov rax, 8
+    mov rax, 10
     int 0x80
     int3

@@ -1,47 +1,53 @@
 #include "wait.h"
 
+#include <data/list.h>
+
 #include "mem/heap.h"
+#include "sched/process.h"
 #include "sys/cpu.h"
 
 
 wait_list* wait_list_create() {
     wait_list* list = kcalloc(sizeof(wait_list));
-
-    list->procs = vec_create(sizeof(process*));
-
     return list;
 }
 
-bool wait_list_append(wait_list* list, process* proc) {
-    if (!cpu->sched_running)
+void wait_list_destroy(wait_list* list) {
+    list_destroy(&list->list, false);
+}
+
+
+bool wait_list_append(wait_list* list, sched_thread* thread) {
+    if (!cpu->scheduler.running)
         return false;
 
-    vec_push(list->procs, &proc);
+    thread->state = T_SLEEPING;
 
-    proc->state = PROC_BLOCKED;
-    cpu->sched->proc_ticks_left = 0;
+    sched_dequeue(thread, true);
+
+    list_append(&list->list, &thread->lnode);
+
+    cpu->scheduler.needs_resched = true;
 
     return true;
 }
 
 bool wait_list_wake_up(wait_list* list) {
-    if (!cpu->sched_running)
+    if (!cpu->scheduler.running)
         return false;
 
-    for (;;) {
-        process* proc;
+    list_node* node = list->list.head;
+    while (node) {
+        sched_thread* thread = node->data;
+        list_node* next = node->next;
 
-        if (!vec_pop(list->procs, &proc))
-            break;
+        list_remove(&list->list, node);
+        sched_enqueue(thread);
 
-        proc->state = PROC_RUNNING;
-        cpu->sched->proc_ticks_left = 0;
+        node = next;
     }
 
-    return true;
-}
+    cpu->scheduler.needs_resched = true;
 
-void wait_list_destroy(wait_list* list) {
-    vec_destroy(list->procs);
-    kfree(list);
+    return true;
 }

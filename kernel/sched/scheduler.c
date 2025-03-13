@@ -1,23 +1,16 @@
 #include "scheduler.h"
 
-#include <aos/signals.h>
-#include <base/addr.h>
-#include <base/attributes.h>
-#include <base/macros.h>
+#include <aos/syscalls.h>
 #include <base/types.h>
 #include <data/list.h>
 #include <data/tree.h>
 #include <log/log.h>
-#include <parse/elf.h>
-#include <string.h>
+#include <time.h>
 #include <x86/asm.h>
-#include <x86/paging.h>
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "arch/irq.h"
-#include "mem/heap.h"
-#include "mem/virtual.h"
 #include "sched/exec.h"
 #include "sched/process.h"
 #include "sched/signal.h"
@@ -26,14 +19,6 @@
 #include "sys/cpu.h"
 #include "sys/panic.h"
 #include "sys/tty.h"
-#include "vfs/fs.h"
-
-
-// Defined in switch.asm
-extern NORETURN void context_switch(u64 kernel_stack);
-
-tree* proc_tree = NULL;
-
 
 // This kernel pseudo-process is scheduled if there are no real process left to run
 // It just halts the machine and waits for the next time slice
@@ -42,15 +27,127 @@ static void _spin(void) {
         halt();
 }
 
+static sched_process* idle = NULL;
 
-static bool _proc_comp(const void* data, const void* private) {
-    process* proc = (process*)data;
-    usize pid = (usize) private;
+static tree* proc_tree = NULL;
+static linked_list* sleep_queue = NULL;
 
-    return (proc->id == pid);
+
+// A simple sort of round robbin sxheduler
+// pro: super simple, FIXME: con: sucks
+static sched_thread* _get_next_process(bool evict) {
+    list_node* lnode = list_pop_front(cpu->scheduler.run_queue);
+
+    if (!lnode) {
+        if (cpu->scheduler.current->proc != idle && !evict)
+            return cpu->scheduler.current;
+        else
+            return proc_get_thread(idle, 0);
+    }
+
+    return lnode->data;
 }
 
-process* process_with_pid(usize pid) {
+static void _switch_current(sched_thread* next) {
+    if (next == cpu->scheduler.current)
+        return;
+
+    if (cpu->scheduler.current->proc != idle)
+        list_push(cpu->scheduler.run_queue, &cpu->scheduler.current->lnode);
+
+    cpu->scheduler.current = next;
+}
+
+
+void sched_enqueue(sched_thread* thread) {
+    // Find the core that will get this process
+    // TODO: we should be using some kind of score system here
+
+    cpu_core* core = NULL;
+
+    for (usize i = 0; i < MAX_CORES; i++) {
+        cpu_core* cur = &cores_local[i];
+
+        if (!cur->valid) //|| !cur->scheduler.running)
+            continue;
+
+        if (!core) {
+            core = cur;
+            continue;
+        }
+
+        if (cur->scheduler.run_queue->length < core->scheduler.run_queue->length)
+            core = cur;
+    }
+
+    assert(core);
+
+    thread->cpu_id = core->id;
+    thread->state = T_RUNNING;
+
+    list_append(core->scheduler.run_queue, &thread->lnode);
+}
+
+bool sched_dequeue(sched_thread* thread, bool and_current) {
+    isize cpu_id = thread->cpu_id;
+
+    // The thread is not in any run queue
+    if (cpu_id < 0)
+        return false;
+
+    cpu_core* core = &cores_local[thread->cpu_id];
+
+    assert(core);
+
+    // If the thread is currently scheduled we have to reschedule
+    if (core->scheduler.current == thread) {
+        if (!and_current)
+            return false;
+
+        // evict the current process
+        _switch_current(proc_get_thread(idle, 0));
+
+        // remove from the run queue
+        list_remove(core->scheduler.run_queue, &thread->lnode);
+
+        schedule();
+    } else {
+        list_remove(core->scheduler.run_queue, &thread->lnode);
+    }
+
+    thread->cpu_id = -1;
+    thread->state = T_STOPPED;
+
+    return true;
+}
+
+void sched_enqueue_proc(sched_process* proc) {
+    foreach (node, &proc->threads) {
+        sched_thread* thread = node->data;
+        sched_enqueue(thread);
+    }
+}
+
+bool sched_dequeue_proc(sched_process* proc) {
+    bool removed_one = false;
+
+    foreach (node, &proc->threads) {
+        sched_thread* thread = node->data;
+        removed_one = sched_dequeue(thread, true);
+    }
+
+    return removed_one;
+}
+
+
+static bool _proc_comp(const void* data, const void* private) {
+    sched_process* proc = (sched_process*)data;
+    pid_t pid = (pid_t) private;
+
+    return (proc->pid == pid);
+}
+
+sched_process* sched_get_proc(pid_t pid) {
     assert(proc_tree);
 
     tree_node* res = tree_find_comp(proc_tree, _proc_comp, (void*)pid);
@@ -62,173 +159,54 @@ process* process_with_pid(usize pid) {
 }
 
 
-static usize _get_table(process* proc, void* ptr, bool write, page_table** page_ptr) {
-    usize size = get_page(proc->user.mem_map, (u64)ptr, page_ptr);
+// FIXME: this is bad
+static void _wake_sleepers(void) {
+    time_t now = clock_now_ms();
 
-    page_table* page = *page_ptr;
+    list_node* node = sleep_queue->head;
+    while (node) {
+        sched_thread* thread = node->data;
+        list_node* next = node->next;
 
-    if (!size || !page)
-        return 0;
-
-    if (!page->bits.present)
-        return 0;
-
-    if (!page->bits.user)
-        return 0;
-
-    if (write && !page->bits.writable)
-        return 0;
-
-    return size;
-}
-
-// Is a given pointer in the address space of the process valid? Walk the page map and find out :P
-bool process_validate_ptr(process* proc, const void* ptr, usize len, bool write) {
-    if (!ptr)
-        return false;
-
-    // The entire higher half of the memory space is reserved for the kernel
-    if ((u64)ptr > LOWER_HALF_TOP)
-        return false;
-
-    void* cur = (void*)ptr;
-
-    while (cur <= ptr + len) {
-        page_table* page;
-        usize size = _get_table(proc, cur, write, &page);
-
-        if (!size || !page)
-            return false;
-
-        if (!page->bits.present)
-            return false;
-
-        if (!page->bits.user)
-            return false;
-
-        if (write && !page->bits.writable)
-            return false;
-
-        cur += size;
-    }
-
-    return true;
-}
-
-
-// Check if a sleeping process has to be woken up
-static bool _wake_sleeper(void) {
-    list_node* sleeper_to_wake = NULL;
-    isize longest_wait = 1;
-
-    foreach (node, cpu->sched->sleep_queue) {
-        sleeping_process* curr = node->data;
-
-        // Find the process that has been waiting the longest
-        // Prefer processes higher up in the queue
-        if (curr->time_left <= 0 && curr->time_left < longest_wait) {
-            longest_wait = curr->time_left;
-
-            sleeper_to_wake = node;
-            cpu->sched->current = curr->proc;
+        if (thread->sleep_target <= now) {
+            list_remove(sleep_queue, node);
+            sched_enqueue(thread);
         }
-    }
 
-    if (!sleeper_to_wake)
-        return false;
-
-    sleeping_process* sproc = sleeper_to_wake->data;
-    process* proc = sproc->proc;
-
-    kfree(sproc);
-
-    list_remove(cpu->sched->sleep_queue, sleeper_to_wake);
-    list_destroy_node(sleeper_to_wake);
-
-    proc->state = PROC_RUNNING;
-
-    cpu->sched->current = proc;
-
-#ifdef SCHED_DEBUG
-    log_debug("[SCHED_DEBUG] waking up sleeping process: pid=%lu", proc->id);
-#endif
-
-    return true;
-}
-
-// Fetch the process that should get the next time slice
-static void _get_next_process(scheduler* sched) {
-    bool found = false;
-
-    foreach (node, sched->run_queue) {
-        process* proc = node->data;
-
-        // Ignore blocked and finished processes
-        if (proc->state == PROC_READY || proc->state == PROC_RUNNING) {
-            list_node* process_node = list_pop_front(sched->run_queue);
-            list_append(sched->run_queue, process_node);
-
-            sched->current = proc;
-            found = true;
-
-            break;
-        }
-    }
-
-    // There are no processes left to run so we schedule idle
-    if (!found)
-        sched->current = sched->idle;
-}
-
-
-void scheduler_tick() {
-    cpu->sched->proc_ticks_left--;
-
-    foreach (node, cpu->sched->sleep_queue) {
-        sleeping_process* proc = node->data;
-        proc->time_left--;
+        node = next;
     }
 }
 
-// Figure out which process should get run on the next context switch
-void schedule() {
-    bool sleeper = _wake_sleeper();
+void schedule(void) {
+    _wake_sleepers();
 
-    // Is the current timeslice is done
-    if (cpu->sched->proc_ticks_left <= 0 && !sleeper) {
-        _get_next_process(cpu->sched);
-        cpu->sched->proc_ticks_left = SCHED_SLICE;
+    _switch_current(_get_next_process(false));
+
+    sched_thread* thread = cpu->scheduler.current;
+
+    if (thread->proc->type == PROC_USER) {
+        // Is this thread able to handle a signal
+        usize signum = thread_signal_get_pending(thread);
+
+        if (signum)
+            thread_signal_switch(thread, signum);
     }
 
-    // Are there any pending signals
-    if (cpu->sched->current->type == PROC_USER) {
-        usize signum = signal_get_pending(cpu->sched->current);
-        prepare_signal(cpu->sched->current, signum);
-    }
-
-#ifdef SCHED_DEBUG
-    log_debug(
-        "[SCHED_DEBUG] scheduling process: name=%s pid=%lu",
-        cpu->sched->current->name,
-        cpu->sched->current->id
-    );
-#endif
+    cpu->scheduler.ticks_left = SCHED_SLICE;
+    cpu->scheduler.needs_resched = false;
 }
 
 NORETURN
-void scheduler_switch() {
-    assert(cpu->sched->current);
+void sched_switch() {
+    sched_thread* thread = cpu->scheduler.current;
+    sched_process* proc = thread->proc;
 
-    // The process will have valid state to save after this time slice
-    if (cpu->sched->current->state == PROC_READY)
-        cpu->sched->current->state = PROC_RUNNING;
-
-    u64 ksp = (u64)cpu->sched->current->stack_ptr;
+    u64 ksp = thread->kstack.ptr;
 
     // Kernel processes don't have to switch the page table
     // Userspace processes must set the TSS to be able to switch back to ring 0
-    if (cpu->sched->current->type == PROC_USER) {
-        write_cr3((u64)cpu->sched->current->user.mem_map);
+    if (proc->type == PROC_USER) {
+        write_cr3((u64)proc->memory.table);
         set_tss_stack(ksp + sizeof(int_state));
     }
 
@@ -236,144 +214,44 @@ void scheduler_switch() {
     __builtin_unreachable();
 }
 
-
 // Since kernel processes use a single stack the stack pointer has
 // to be updated once we context switch to a different process
 // This is done automatically for user processes due to the TSS
-void scheduler_save(int_state* s) {
-    if (!s)
-        return;
+void sched_save(int_state* s) {
+    assert(s);
 
-    if (cpu->sched->current->type != PROC_KERNEL)
-        return;
+    sched_thread* thread = cpu_current_thread();
 
-    cpu->sched->current->stack_ptr = (u64)s;
+    if (thread->proc->type == PROC_KERNEL)
+        thread->kstack.ptr = (u64)s;
 }
 
 
-void scheduler_queue(process* proc) {
-    list_node* node = list_create_node(proc);
-    list_append(cpu->sched->run_queue, node);
-}
+void sched_thread_sleep(sched_thread* thread, u64 milis) {
+    thread->state = T_SLEEPING;
 
-// NOTE: the sleeping process _must_ be in the run queue as well
-void scheduler_sleep(process* proc, usize milis) {
-    proc->state = PROC_BLOCKED;
+    // Remove the thread from the run queue
+    sched_dequeue(thread, true);
 
-    sleeping_process* sproc = kcalloc(sizeof(sleeping_process));
+    thread->sleep_target = clock_now_ms() + milis;
 
-    sproc->proc = proc;
-    sproc->time_left = DIV_ROUND_UP(milis, MS_PER_TICK);
+    list_append(sleep_queue, &thread->lnode);
 
-    list_node* node = list_create_node(sproc);
-    list_append(cpu->sched->sleep_queue, node);
-}
-
-
-void scheduler_kill(process* proc, usize status) {
-    list_node* node = list_find(cpu->sched->run_queue, proc);
-
-    assert(node);
-
-    list_remove(cpu->sched->run_queue, node);
-    list_destroy_node(node);
-
-    process_free(proc);
-
-    // kernel processes don't have children so they can just die right now (oof)
-    if (proc->type != PROC_USER) {
-        cpu->sched->proc_ticks_left = 0;
-        schedule();
-
-        return;
-    }
-
-    proc->status = status;
-    proc->state = PROC_DONE;
-
-    // Pass the unfortunate news to the parent
-    tree_node* parent_node = proc->user.tree_entry->parent;
-
-#ifdef SCHED_DEBUG
-    log_debug("[SCHED_DEBUG] killing process: name=%s pid=%lu", proc->name, proc->id);
-#endif
-
-    if (!parent_node)
-        panic("Attempted to kill init (pid = %zu)!", proc->id);
-
-    process* parent = parent_node->data;
-
-    assert(parent);
-
-    signal_send(parent, SIGCHLD);
-
-    // Is the parent waiting for a child
-    if (parent->user.waiting) {
-        parent->state = PROC_RUNNING;
-        parent->user.waiting = 0;
-
-        // This will be the value returned by the wait() syscall originally called by the parent
-        // Kind of hacky but eeehh
-        int_state* parent_state = (int_state*)parent->stack_ptr;
-        parent_state->g_regs.rax = cpu->sched->current->id;
-
-        // So unlike the syscall handler we aren't guaranteed to have the process
-        // page table mapped at this moment. This means that we have to walk it
-        // manually and figure out the physical address. >:|
-        u64 status_ptr = (u64)parent->user.child_status;
-        usize page_offset = (u64)status_ptr & 0xfff;
-
-        page_table* page;
-        if (_get_table(parent, (void*)status_ptr, true, &page)) {
-            void* page_vaddr = page_get_vaddr(page);
-
-            int* vaddr = page_vaddr + page_offset;
-            *vaddr = proc->status;
-
-            process_reap(proc);
-        }
-    }
-
-    cpu->sched->proc_ticks_left = 0;
-    schedule();
-}
-
-
-static void _recursive_dump(tree_node* parent, usize depth) {
-    if (!parent->children)
-        return;
-
-    foreach (node, parent->children) {
-        tree_node* child = node->data;
-        process* proc = child->data;
-
-        log_debug("%-*s|- %s (%zu)", (int)depth, "", proc->name, proc->id);
-
-        _recursive_dump(child, depth + 1);
-    }
-}
-
-void dump_process_tree() {
-    log_debug("Recursive dump of the process tree:");
-
-    tree_node* root_tnode = proc_tree->root;
-    process* root_proc = root_tnode->data;
-
-    log_debug("%s (%zu)", root_proc->name, root_proc->id);
-    _recursive_dump(proc_tree->root, 0);
+    cpu->scheduler.needs_resched = true;
 }
 
 
 // Spawn the init process (PID 1)
 static void _spawn_init(void) {
-    process* init = spawn_uproc("init");
+    sched_process* init = spawn_uproc("init");
+    sched_thread* thread = init->threads.head->data;
 
     vfs_node* file = vfs_lookup("sbin/init.elf");
 
     if (!file)
         panic("init.elf not found!");
 
-    bool exec = exec_elf(init, file, NULL, NULL);
+    bool exec = exec_elf(thread, file, NULL, NULL);
 
     if (!exec)
         panic("Failed to start init");
@@ -381,33 +259,51 @@ static void _spawn_init(void) {
     virtual_tty* tty0 = get_tty(0);
 
     if (tty0) {
-        process_open_fd_node(init, tty0->pty->slave, STDIN_FD, FD_READ);
-        process_open_fd_node(init, tty0->pty->slave, STDOUT_FD, FD_WRITE);
-        process_open_fd_node(init, tty0->pty->slave, STDERR_FD, FD_WRITE);
+        proc_open_fd_node(init, tty0->pty->slave, STDIN_FD, FD_READ);
+        proc_open_fd_node(init, tty0->pty->slave, STDOUT_FD, FD_WRITE);
+        proc_open_fd_node(init, tty0->pty->slave, STDERR_FD, FD_WRITE);
     }
 
-    proc_tree = tree_create(init);
-    init->user.tree_entry = proc_tree->root;
+    proc_tree = tree_create_rooted(init->tnode);
 
-    scheduler_queue(init);
+    sched_enqueue(thread);
 }
 
 void scheduler_init() {
-    cpu->sched = kcalloc(sizeof(scheduler));
+    idle = spawn_kproc("[idle]", _spin);
+    sched_thread* idle_thread = idle->threads.head->data;
 
-    cpu->sched->run_queue = list_create();
-    cpu->sched->sleep_queue = list_create();
+    sleep_queue = list_create();
 
-    cpu->sched->idle = spawn_kproc("[idle]", _spin);
+    for (usize i = 0; i < MAX_CORES; i++) {
+        cpu_core* core = &cores_local[i];
 
-    syscall_init();
+        if (!core->valid)
+            continue;
+
+        core->scheduler.run_queue = list_create();
+        core->scheduler.current = idle_thread;
+
+        // core->scheduler.running = true;
+    }
 
     _spawn_init();
+
+    syscall_init();
 }
 
 
 NORETURN
 void scheduler_start() {
+    for (usize i = 0; i < MAX_CORES; i++) {
+        cpu_core* core = &cores_local[i];
+
+        if (!core->valid)
+            continue;
+
+        core->scheduler.running = true;
+    }
+
     log_info("Starting the scheduler");
 
     tty_set_current(0);
@@ -417,8 +313,31 @@ void scheduler_start() {
 
     timer_enable();
 
-    cpu->sched_running = true;
-
-    scheduler_switch();
+    sched_switch();
     __builtin_unreachable();
+}
+
+
+static void _recursive_dump(tree_node* parent, usize depth) {
+    if (!parent->children)
+        return;
+
+    foreach (node, parent->children) {
+        tree_node* child = node->data;
+        sched_process* proc = child->data;
+
+        log_debug("%-*s|- %s (%zu)", (int)depth, "", proc->name, proc->pid);
+
+        _recursive_dump(child, depth + 1);
+    }
+}
+
+void dump_process_tree() {
+    log_debug("Recursive dump of the process tree:");
+
+    tree_node* root_tnode = proc_tree->root;
+    sched_process* root_proc = root_tnode->data;
+
+    log_debug("%s (%zu)", root_proc->name, root_proc->pid);
+    _recursive_dump(proc_tree->root, 0);
 }

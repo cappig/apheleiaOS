@@ -1,10 +1,10 @@
 #include "sys/clock.h"
 
 #include <log/log.h>
+#include <sys/cpu.h>
 #include <time.h>
 
 #include "arch/cmos.h"
-#include "sched/scheduler.h"
 
 static atomic u64 tick_counter = 0;
 static u64 boot_time = 0; // In unix milis
@@ -12,7 +12,9 @@ static u64 boot_time = 0; // In unix milis
 
 void tick_clock() {
     tick_counter++;
-    scheduler_tick();
+
+    if (cpu->scheduler.ticks_left-- <= 0)
+        cpu->scheduler.needs_resched = true;
 }
 
 
@@ -27,7 +29,7 @@ void clock_init() {
 
 
 u64 clock_now_ms() {
-    u64 passed = tick_counter * CLOCK_FREQ;
+    u64 passed = ticks_to_ms(tick_counter);
     return boot_time + passed;
 }
 

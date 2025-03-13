@@ -91,8 +91,8 @@ static isize slave_read(vfs_node* node, void* buf, UNUSED usize offset, usize le
     if (ring_buffer_is_empty(pty->input_buffer)) {
         if (flags & VFS_NONBLOCK)
             return -EAGAIN;
-        else if (cpu->sched_running)
-            wait_list_append(pty->waiters, cpu->sched->current);
+        else
+            wait_list_append(pty->waiters, cpu->scheduler.current);
     }
 
     return ring_buffer_pop_array(pty->input_buffer, buf, len);
@@ -151,7 +151,7 @@ static i8 _canonical_input(vfs_node* node, u8 ch, u32 flags) {
         return 1;
     }
 
-    // Erase preveous char
+    // Erase the preveous char
     if (ch == tos->c_cc[VERASE]) {
         if (!pty->line_buffer->size)
             return 0;
@@ -202,7 +202,8 @@ static i16 _process_input(vfs_node* node, u8 ch) {
             signal = SIGTSTP;
 
         if (signal) {
-            // signal_send(cpu->sched->current, signal);
+            //  TODO: job control, we want to send the signal to the fg process
+            // signal_send(cpu->scheduler.current, -1, signal);
             return ch;
         }
     }
@@ -387,6 +388,7 @@ pseudo_tty* pty_create(winsize_t* win, usize buffer_size) {
     pty->master->interface = kcalloc(sizeof(vfs_node_interface));
     pty->master->interface->read = master_read;
     pty->master->interface->write = master_write;
+    pty->master->interface->ioctl = pty_ioctl;
     pty->master->private = pty;
 
     pty->slave = vfs_create_node(NULL, VFS_CHARDEV);

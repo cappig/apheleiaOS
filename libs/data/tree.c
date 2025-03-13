@@ -60,10 +60,15 @@ void tree_prune(tree_node* parent) {
 }
 
 
-void tree_insert_child(tree_node* parent, tree_node* child) {
+bool tree_insert_child(tree_node* parent, tree_node* child) {
+    if (!parent || !child)
+        return false;
+
     list_node* node = list_create_node(child);
     list_append(parent->children, node);
     child->parent = parent;
+
+    return true;
 }
 
 bool tree_remove_child(tree_node* parent, tree_node* child) {

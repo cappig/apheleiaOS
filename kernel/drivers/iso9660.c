@@ -1,13 +1,17 @@
 #include "iso9660.h"
 
+#include <base/addr.h>
+#include <base/macros.h>
 #include <base/types.h>
 #include <data/tree.h>
 #include <fs/iso9660.h>
 #include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
+#include <x86/paging.h>
 
 #include "mem/heap.h"
+#include "mem/physical.h"
 #include "sys/disk.h"
 #include "vfs/fs.h"
 
@@ -15,7 +19,10 @@ static file_system fs = {.name = "iso9660"};
 
 
 static iso_volume_descriptor* _parse_pvd(disk_partition* part) {
-    iso_volume_descriptor* pvd = kmalloc(sizeof(iso_volume_descriptor));
+    usize pages = DIV_ROUND_UP(sizeof(iso_volume_descriptor), PAGE_4KIB);
+
+    void* paddr = alloc_frames(pages);
+    iso_volume_descriptor* pvd = (void*)ID_MAPPED_VADDR(paddr);
 
     disk_dev* dev = part->disk;
 
@@ -34,7 +41,7 @@ static iso_volume_descriptor* _parse_pvd(disk_partition* part) {
             break;
     }
 
-    kfree(pvd);
+    free_frames(paddr, pages);
 
     return NULL;
 }

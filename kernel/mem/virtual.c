@@ -172,11 +172,12 @@ usize get_page(page_table* lvl4_paddr, u64 vaddr, page_table** entry) {
 static void _clone_leaf(page_table* src_vaddr, page_table* dest_vaddr) {
     if (src_vaddr->bits.writable) {
         u64 paddr = (u64)alloc_frames(1);
+        u64 vaddr = ID_MAPPED_VADDR(paddr);
 
         page_set_paddr(dest_vaddr, paddr);
         dest_vaddr->raw |= (src_vaddr->raw & FLAGS_MASK);
 
-        memcpy((void*)ID_MAPPED_VADDR(paddr), page_get_vaddr(src_vaddr), PAGE_4KIB);
+        memcpy((void*)vaddr, page_get_vaddr(src_vaddr), PAGE_4KIB);
     } else {
         dest_vaddr->raw = src_vaddr->raw;
     }

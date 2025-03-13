@@ -3,9 +3,9 @@
 #include <aos/signals.h>
 #include <base/attributes.h>
 #include <base/types.h>
+#include <x86/regs.h>
 
 #include "sched/process.h"
-#include "x86/regs.h"
 
 #define SIGNAL_MAGIC 0x516beef
 
@@ -23,12 +23,11 @@ typedef struct PACKED {
 } sig_state;
 
 
-bool process_signal_defaults(process* proc);
+usize thread_signal_get_pending(sched_thread* thread);
 
-bool signal_set_handler(process* proc, usize signum, sighandler_fn handler);
-void signal_send(process* proc, usize signum);
+void thread_signal_switch(sched_thread* thread, usize signum);
+bool thread_signal_return(sched_thread* thread);
 
-usize signal_get_pending(process* proc);
+isize signal_send(sched_process* proc, tid_t tid, usize signum);
 
-void prepare_signal(process* proc, usize signum);
-bool signal_return(process* proc);
+bool proc_signal_set_handler(sched_process* proc, usize signum, sighandler_fn handler);
