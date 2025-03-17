@@ -63,6 +63,7 @@ void get_e820(e820_map* mmap) {
     // This area to contains BIOS mapped memory.
     u64 ebda = (u64)(*(u16*)0x40e << 4);
     usize ebda_size = 0xfffff - ebda;
+
     mmap_add_entry(mmap, ebda, ebda_size, E820_RESERVED);
 
     clean_mmap(mmap);

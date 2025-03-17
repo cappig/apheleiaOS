@@ -11,6 +11,36 @@ else ifeq ($(TOOLCHAIN), llvm)
 	LD := ld.lld
 endif
 
+define cc
+	@$(CC) $(CC_BASE) $(1) -c -o $(2) $(3)
+	@echo "CC $(3)"
+endef
+
+define as
+	@$(AS) $(AS_BASE) $(1) -o $(2) $(3)
+	@echo "AS $(3)"
+endef
+
+define ld
+	@$(LD) $(LD_BASE) $(1) -o $(2) $(3)
+	@echo "LD $(2)"
+endef
+
+define oc
+	@$(OC) $(1) $(2) $(3)
+	@echo "OC $(2)"
+endef
+
+define st
+	@$(ST) $(1)
+	@echo "ST $(1)"
+endef
+
+define nm
+	@$(NM) $(1) > $(2)
+	@echo "NM $(2)"
+endef
+
 CC_BASE += \
 	-Wno-unused-parameter \
 	-Wno-missing-braces \

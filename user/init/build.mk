@@ -11,5 +11,5 @@ INIT_OBJ := \
 
 $(USER_BIN)/init.elf: $(INIT_OBJ)
 	@mkdir -p $(@D)
-	$(LD) $(LD_USER) -o $@ $^
-	$(ST) $@
+	$(call ld, $(LD_USER), $@, $^)
+	$(call st, $@)

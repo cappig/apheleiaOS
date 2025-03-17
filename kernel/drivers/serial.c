@@ -43,9 +43,9 @@ void serial_output(usize port, u8* data, usize len) {
     vfs_write(node, data, 0, len, 0);
 }
 
-static void _read(pseudo_tty* term, void* buf, usize len) {
-    // TODO: implement this
-}
+// static void _read(pseudo_tty* term, void* buf, usize len) {
+//  TODO: implement this
+//}
 
 static void _write(pseudo_tty* term, u16 ch) {
     usize port = (usize)term->private;

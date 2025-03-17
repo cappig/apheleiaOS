@@ -1,22 +1,21 @@
 #include "idt.h"
 
+#include <aos/signals.h>
 #include <base/attributes.h>
+#include <base/macros.h>
 #include <base/types.h>
 #include <log/log.h>
 #include <x86/asm.h>
+#include <x86/paging.h>
 #include <x86/regs.h>
 
-#include "aos/signals.h"
 #include "arch/gdt.h"
 #include "arch/stacktrace.h"
-#include "base/macros.h"
-#include "mem/virtual.h"
 #include "sched/process.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
 #include "sys/cpu.h"
 #include "sys/panic.h"
-#include "x86/paging.h"
 
 static idt_register idtr;
 

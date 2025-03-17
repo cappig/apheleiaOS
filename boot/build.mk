@@ -13,35 +13,36 @@ MBR_SRC := $(wildcard boot/mbr/*.asm)
 MBR_OBJ := $(patsubst %, bin/%.o, $(MBR_SRC))
 
 CC_BOOT := \
-	$(CC_BASE) \
 	-fdata-sections \
 	-ffunction-sections \
 	-m32
 
 LD_BOOT := \
-	$(LD_BASE) \
 	--gc-sections
+
+AS_BOOT := \
+	-f elf32
 
 bin/boot/%.asm.o: boot/%.asm
 	@mkdir -p $(@D)
-	$(AS) $(ASM_BASE) -f elf32 -o $@ $<
+	$(call as, $(AS_BOOT), $@, $<)
 
 bin/boot/%.c.o: boot/%.c
 	@mkdir -p $(@D)
-	$(CC) $(CC_BOOT) -c -o $@ $<
+	$(call cc, $(CC_BOOT), $@, $<)
 
 bin/boot/libs/%.c.o: libs/%.c
 	@mkdir -p $(@D)
-	$(CC) $(CC_BOOT) -c -o $@ $<
+	$(call cc, $(CC_BOOT), $@, $<)
 
 bin/image/mbr.bin: $(MBR_OBJ)
 	@mkdir -p $(@D)
-	$(LD) $(LD_BASE) --oformat=binary -Tboot/mbr/linker.ld -o $@ $^
+	$(call ld, --oformat=binary -Tboot/mbr/linker.ld, $@, $^)
 
 bin/image/boot.bin: $(BOOT_OBJ)
 	@mkdir -p $(@D)
-	$(LD) $(LD_BOOT) -Tboot/bios/linker.ld -o bin/boot/boot.elf $^
-	$(OC) -O binary bin/boot/boot.elf $@
+	$(call ld, $(LD_BOOT) -Tboot/bios/linker.ld, bin/boot/boot.elf, $^)
+	$(call oc, -O binary, bin/boot/boot.elf, $@)
 
 
 .PHONY: clean_bootloader

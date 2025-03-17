@@ -1,6 +1,7 @@
 #include "ext2.h"
 
 #include <base/addr.h>
+#include <base/attributes.h>
 #include <base/macros.h>
 #include <x86/paging.h>
 
@@ -79,6 +80,21 @@ static bool _build_tree(file_system_instance* instance) {
     return false;
 }
 
+static bool _destroy_tree(file_system_instance* instance) {
+    if (!instance || !instance->fs)
+        return false;
+
+    if (instance->fs->id != fs.id)
+        return false;
+
+    if (!instance->tree_built)
+        return false;
+
+    // TODO: implement this
+
+    return false;
+}
+
 
 bool ext2_init() {
     // TODO: finish ext2 support
@@ -87,6 +103,8 @@ bool ext2_init() {
     file_system_interface* fs_interface = kcalloc(sizeof(file_system_interface));
 
     fs_interface->probe = _probe;
+    fs_interface->build_tree = _build_tree;
+    fs_interface->destroy_tree = _destroy_tree;
 
     fs.fs_interface = fs_interface;
 

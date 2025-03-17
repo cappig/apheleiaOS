@@ -10,5 +10,5 @@ VDSO_OBJ := \
 
 $(USER_BIN)/vdso.elf: $(VDSO_OBJ)
 	@mkdir -p $(@D)
-	$(LD) $(LD_USER) -shared -o $@ $^
-	$(ST) $@
+	$(call ld, $(LD_USER) -shared, $@, $^)
+	$(call st, $@)

@@ -24,9 +24,11 @@ CC_BASE := \
 	-fno-pic \
 	-fno-pie
 
-ASM_BASE := \
+AS_BASE := \
 	-Wall \
-	-w-reloc-abs
+	-w-reloc-abs \
+	-w-reloc-rel-dword \
+	-w-label-orphan
 
 LD_BASE := \
 	-nostdlib \
@@ -50,8 +52,9 @@ include utils/check.mk
 .DEFAULT_GOAL := all
 .PHONY: all
 all: user $(TARGET)
-	$(info Build completed successfully!)
+	@echo "Build completed successfully!"
 
 .PHONY: clean
 clean:
-	rm -rf bin
+	@rm -rf bin
+	@echo "Build directories cleaned"

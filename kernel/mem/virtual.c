@@ -23,13 +23,14 @@ static page_table* _walk_table_once(page_table* table, usize index, u64 flags) {
         page_set_paddr(&table[index], (u64)next_table);
 
         table[index].raw |= flags & FLAGS_MASK;
-
-        /* table[index].bits.present = 1; */
-        table[index].bits.writable = 1;
     }
 
     // If we ever map a writable child all the parents must have the write flag set
-    table[index].bits.writable |= flags & PT_WRITE;
+    table[index].bits.writable = 1;
+
+    // All parent pages will have nx set to 0 and write set to 1 leaves may set it to 1/0
+    // later in map_page(), this ensures no conflict between parent and children pages
+    table[index].bits.nx = 0;
 
     return (page_table*)ID_MAPPED_VADDR(next_table);
 }
@@ -52,7 +53,7 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
         entry = &lvl3[lvl3_index];
 
         paddr = ALIGN_DOWN(paddr, PAGE_1GIB);
-        flags |= PT_HUGE; // | PT_PRESENT;
+        flags |= PT_HUGE;
         goto finalize;
     }
 
@@ -63,7 +64,7 @@ void map_page(page_table* lvl4_paddr, page_size size, u64 vaddr, u64 paddr, u64 
         entry = &lvl2[lvl2_index];
 
         paddr = ALIGN_DOWN(paddr, PAGE_2MIB);
-        flags |= PT_HUGE; // | PT_PRESENT;
+        flags |= PT_HUGE;
         goto finalize;
     }
 

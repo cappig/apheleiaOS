@@ -108,7 +108,7 @@ enum ioctl_requests {
 };
 
 enum mmap_flags {
-    MAP_PRIVATE = 1 << 0, // Changes are not written to the maped file
+    MAP_PRIVATE = 1 << 0, // Changes are not written to the mapped file
     MAP_SHARED = 1 << 1, // Changes are written to the file
     MAP_ANON = 1 << 2, // The mapping isn't backed by a real file
     MAP_FIXED = 1 << 2, // Map at the exact address provided. Existing mappings will be replaced

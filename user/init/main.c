@@ -4,20 +4,6 @@
 #include <string.h>
 
 
-static void advance_cursor() {
-    static int pos = 0;
-
-    char cursor[4] = {'/', '-', '\\', '|'};
-
-    char buf[] = "X\b";
-    buf[0] = cursor[pos];
-
-    sys_write(STDOUT_FD, buf, strlen(buf));
-
-    pos = (pos + 1) % 4;
-}
-
-
 void child(int signum) {
     for (;;) {
         int status = 0;
@@ -47,29 +33,6 @@ int main(void) {
 
     if (!pid)
         sys_exit(128);
-
-    /* for (;;) { */
-    /*     advance_cursor(); */
-    /*     sys_sleep(100); */
-    /* } */
-
-    int fd = sys_open("/sbin/init.elf", O_RDWR, 0);
-
-    u64* addr = sys_mmap((void*)0x100000, 0x1000, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
-
-    {
-        char buf3[] = "                                           ";
-        itoa((u64)*addr, buf3, 16);
-        sys_write(STDOUT_FD, buf3, strlen(buf3));
-    }
-
-    addr[0] = 0xdead;
-
-    {
-        char buf3[] = "                                           ";
-        itoa((u64)*addr, buf3, 16);
-        sys_write(STDOUT_FD, buf3, strlen(buf3));
-    }
 
     for (;;) {}
 

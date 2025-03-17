@@ -6,7 +6,6 @@ KERNEL_SRC := \
 KERNEL_OBJ := $(patsubst %, bin/%.o, $(KERNEL_SRC))
 
 CC_KERNEL := \
-	$(CC_BASE) \
 	-Ikernel \
 	-fdata-sections \
 	-ffunction-sections \
@@ -16,30 +15,32 @@ CC_KERNEL := \
 	-m64
 
 LD_KERNEL := \
-	$(LD_BASE) \
+	-Tkernel/linker.ld \
 	-melf_x86_64 \
 	--gc-sections
 
+AS_KERNEL := \
+	-f elf64
 
 bin/kernel/%.asm.o: kernel/%.asm
 	@mkdir -p $(@D)
-	$(AS) $(ASM_BASE) -f elf64 -o $@ $<
+	$(call as, $(AS_KERNEL), $@, $<)
 
 bin/kernel/%.c.o: kernel/%.c
 	@mkdir -p $(@D)
-	$(CC) $(CC_KERNEL) -c -o $@ $<
+	$(call cc, $(CC_KERNEL), $@, $<)
 
 bin/kernel/libs/%.c.o: libs/%.c
 	@mkdir -p $(@D)
-	$(CC) $(CC_KERNEL) -c -o $@ $<
+	$(call cc, $(CC_KERNEL), $@, $<)
 
 
 bin/image/kernel.elf: $(KERNEL_OBJ)
-	$(LD) $(LD_KERNEL) -Tkernel/linker.ld -o $@ $^
+	$(call ld, $(LD_KERNEL), $@, $^)
 ifeq ($(TRACEABLE_KERNEL), true)
-	$(NM) $@ > bin/kernel/sym.map
+	$(call nm, $@, bin/kernel/sym.map)
 endif
-	$(ST) $@
+	$(call st, $@)
 
 
 .PHONY: clean_kernel

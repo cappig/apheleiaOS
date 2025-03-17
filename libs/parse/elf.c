@@ -35,11 +35,8 @@ elf_validity elf_verify(elf_header* header) {
 u64 elf_to_page_flags(u32 elf_flags) {
     u64 flags = PT_PRESENT;
 
-    // FIXME: this brakes stuff
-#if 0
     if (!(elf_flags & PF_X))
         flags |= PT_NO_EXECUTE;
-#endif
 
     if (elf_flags & PF_W)
         flags |= PT_WRITE;

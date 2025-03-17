@@ -12,6 +12,7 @@
 
 #include "arch/idt.h"
 #include "arch/irq.h"
+#include "base/attributes.h"
 #include "drivers/pci.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
@@ -53,6 +54,7 @@ static bool ata_wait_for_ready(ide_channel* channel) {
 
 // For some unbelievably retarded reason ATA strings swap each pair of characters.
 // This is defined in section 3.3.10 of the ATA spec
+UNUSED
 static void fix_ata_string(char* string, usize len) {
     for (usize i = 0; i < len; i += 2) {
         char tmp = string[i + 1];
