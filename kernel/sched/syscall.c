@@ -489,7 +489,38 @@ static u64 _unmount(u64 target_ptr, u64 flags) {
 
 static u64 _mmap(u64 addr, size_t len, int prot, int flags, int fd, off_t offset) {
     sched_process* proc = cpu_current_proc();
-    return proc_mmap(proc, addr, len, prot, flags, fd, offset);
+
+    file_desc* fdesc = NULL;
+
+    if (!(flags & MAP_ANONYMOUS)) {
+        fdesc = process_get_fd(proc, fd);
+
+        if (!fdesc)
+            return -EBADF;
+
+        if (prot & PROT_WRITE) {
+            if (!(fdesc->flags & FD_WRITE))
+                return -EACCES;
+
+            if (fdesc->flags & FD_APPEND)
+                return -EACCES;
+        }
+
+        if (prot & PROT_READ) {
+            if (!(fdesc->flags & FD_READ))
+                return -EACCES;
+        }
+
+        if (VFS_IS_DEVICE(fdesc->node->type)) {
+            if (!fdesc->node->interface->mmap)
+                return -EINVAL;
+
+            // FIXME: (TODO) implement mmaping device files!!
+            return -EINVAL;
+        }
+    }
+
+    return proc_mmap(proc, addr, len, prot, flags, fdesc->node, offset);
 }
 
 

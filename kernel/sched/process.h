@@ -1,16 +1,16 @@
 #pragma once
 
+#include <aos/signals.h>
 #include <aos/syscalls.h>
+#include <base/types.h>
+#include <data/list.h>
+#include <data/tree.h>
+#include <data/vector.h>
 #include <time.h>
+#include <x86/paging.h>
 
-#include "aos/signals.h"
 #include "arch/idt.h"
-#include "base/types.h"
-#include "data/list.h"
-#include "data/tree.h"
-#include "data/vector.h"
 #include "sys/disk.h"
-#include "x86/paging.h"
 
 #define SCHED_KSTACK_PAGES 2
 #define SCHED_USTACK_PAGES 8
@@ -30,9 +30,10 @@ typedef enum {
 
 typedef struct {
     u64 base;
-    u64 size;
+    u64 size; // size in bytes, the actual region always takes up a page aligned amount of space
 
-    isize fd;
+    usize offset;
+    vfs_node* file;
 
     u32 flags;
     u32 prot;
@@ -176,8 +177,6 @@ void thread_set_state(sched_thread* thread, int_state* state);
 
 void thread_init_stack(sched_thread* parent, sched_thread* child);
 
-bool proc_validate_ptr(sched_process* proc, const void* ptr, usize len, bool write);
-
 bool thread_wait_wake(sched_thread* thread, sched_process* target);
 bool proc_wait_wake(sched_process* parent, sched_process* target);
 
@@ -201,5 +200,11 @@ sched_process* proc_fork(sched_process* parent, tid_t tid);
 
 bool proc_terminate(sched_process* proc, usize exit_code);
 
-u64 proc_mmap(sched_process* proc, u64 addr, u64 size, u32 prot, u32 flags, isize fd, usize offset);
+u64 proc_mmap(sched_process* proc, u64 addr, u64 size, u32 prot, u32 flags, vfs_node* file, usize off);
 bool proc_handle_page_fault(sched_process* proc, int_state* state);
+
+bool proc_insert_mem_region(sched_process* proc, memory_region* region);
+
+bool proc_validate_ptr(sched_process* proc, const void* ptr, usize len, bool write);
+
+void proc_dump_regions(sched_process* proc);

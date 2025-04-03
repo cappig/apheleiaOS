@@ -44,6 +44,21 @@ u64 elf_to_page_flags(u32 elf_flags) {
     return flags;
 }
 
+u64 elf_to_mmap_prot(u32 elf_flags) {
+    u64 prot = 0;
+
+    if (elf_flags & PF_R)
+        prot |= 1 << 0;
+
+    if (elf_flags & PF_W)
+        prot |= 1 << 1;
+
+    if (elf_flags & PF_X)
+        prot |= 1 << 2;
+
+    return prot;
+}
+
 bool elf_parse_header(elf_attributes* attribs, elf_header* header) {
     u64 ph_base = (u64)(uptr)header + header->phoff;
 
@@ -97,8 +112,7 @@ elf_sect_header* elf_locate_section(elf_header* header, const char* name) {
     return NULL;
 }
 
-elf_symbol*
-elf_locate_symbol(elf_symbol* symtab, usize symtab_size, char* strtab, const char* name) {
+elf_symbol* elf_locate_symbol(elf_symbol* symtab, usize symtab_size, char* strtab, const char* name) {
     usize count = symtab_size / sizeof(elf_symbol);
 
     for (usize i = 0; i < count; i++) {

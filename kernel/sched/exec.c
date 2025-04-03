@@ -1,5 +1,6 @@
 #include "exec.h"
 
+#include <aos/syscalls.h>
 #include <parse/elf.h>
 #include <string.h>
 #include <x86/paging.h>
@@ -23,25 +24,28 @@ static bool _init_ustack(sched_thread* thread, u64 base, usize pages) {
     thread->ustack.size = pages * PAGE_4KIB;
     thread->ustack.paddr = (u64)alloc_frames(pages);
 
-    map_region(
-        proc->memory.table,
-        SCHED_USTACK_PAGES,
-        thread->ustack.vaddr,
-        thread->ustack.paddr,
-        PT_PRESENT | PT_NO_EXECUTE | PT_WRITE | PT_USER
-    );
+    u64 flags = PT_PRESENT | PT_NO_EXECUTE | PT_WRITE | PT_USER;
+    map_region(proc->memory.table, pages, thread->ustack.vaddr, thread->ustack.paddr, flags);
+
+    memory_region new_region = {
+        .base = base,
+        .size = thread->ustack.size,
+
+        .flags = MAP_PRIVATE | MAP_FIXED,
+        .prot = PROT_WRITE | PROT_READ,
+    };
+
+    proc_insert_mem_region(proc, &new_region);
 
     // TODO: map a dummy canary page at the bottom of the stack to detect overflow
     // Writes to this page will fault, and we can go from there
-
     // map_page(proc->memory.table, PAGE_4KIB, base, 0, PT_NO_EXECUTE);
 
     return true;
 }
 
 // Returns the highest virtual address in the image map
-static u64
-_load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* header, usize load_offset) {
+static u64 _load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* header, usize load_offset) {
     sched_process* proc = thread->proc;
 
     u64 top = 0;
@@ -60,35 +64,13 @@ _load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* header, usi
         if (!p_header->file_size && !p_header->mem_size)
             continue;
 
-        usize pages = DIV_ROUND_UP(p_header->mem_size, PAGE_4KIB);
-
-        u64 flags = elf_to_page_flags(p_header->flags);
-        flags |= PT_USER;
-
         u64 vaddr = p_header->vaddr + load_offset;
 
-        u64 pbase = (u64)alloc_frames(pages);
-        u64 vbase = ALIGN_DOWN(vaddr, PAGE_4KIB);
+        u64 prot = elf_to_mmap_prot(p_header->flags);
+        u64 size = p_header->file_size;
+        u64 offset = p_header->offset;
 
-        void* base = (void*)ID_MAPPED_VADDR(pbase);
-
-        u64 seg_top = vbase + pages * PAGE_4KIB;
-
-        if (seg_top > top)
-            top = seg_top;
-
-        // Map the segment to virtual memory
-        map_region(proc->memory.table, pages, vbase, pbase, flags);
-
-        // Copy all loadable data from the file
-        usize offset = vaddr - vbase;
-
-        if (vfs_read(file, base + offset, p_header->offset, p_header->file_size, 0) < 0)
-            break;
-
-        // Zero out any additional space
-        usize zero_len = p_header->mem_size - p_header->file_size;
-        memset(base + p_header->file_size, 0, zero_len);
+        proc_mmap(proc, vaddr, size, prot, MAP_PRIVATE | MAP_FIXED, file, offset);
     }
 
     kfree(p_header);
@@ -161,7 +143,6 @@ static u64 _alloc_args(sched_thread* thread, char** argv, char** envp) {
     usize argc = 0;
     while (argv && argv[argc])
         argc++;
-
 
     if (!argc && !envc) {
         _ustack_push(thread, &rsp, 0);

@@ -4,8 +4,8 @@
 
 // A C++ style dynamic array. Not the ideal name for such a structure but it stuck I guess
 
-#define VEC_GROWTH_RATE  2
-#define VEC_INITIAL_SIZE 4
+#define VEC_GROWTH_RATE      2
+#define VEC_INITIAL_CAPACITY 4
 
 typedef struct {
     usize size;
@@ -17,7 +17,7 @@ typedef struct {
 
 
 vector* vec_create(usize elem_size);
-vector* vec_create_sized(usize size, usize elem_size);
+vector* vec_create_sized(usize capacity, usize elem_size);
 
 void vec_destroy(vector* vec);
 

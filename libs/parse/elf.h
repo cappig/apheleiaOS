@@ -200,6 +200,7 @@ bool elf_is_executable(elf_header* eheader);
 elf_validity elf_verify(elf_header* header);
 
 u64 elf_to_page_flags(u32 elf_flags);
+u64 elf_to_mmap_prot(u32 elf_flags);
 
 bool elf_parse_header(elf_attributes* attribs, elf_header* header);
 

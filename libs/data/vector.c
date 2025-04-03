@@ -2,12 +2,11 @@
 
 #include <alloc/global.h>
 #include <base/types.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include "libc_ext/stdlib.h"
 
-
-vector* vec_create_sized(usize size, usize elem_size) {
+vector* vec_create_sized(usize capacity, usize elem_size) {
     vector* vec = gcalloc(sizeof(vector));
 
     if (!vec)
@@ -16,9 +15,9 @@ vector* vec_create_sized(usize size, usize elem_size) {
     vec->size = 0;
 
     vec->elem_size = elem_size;
-    vec->capacity = size * elem_size;
+    vec->capacity = capacity;
 
-    vec->data = gmalloc(vec->capacity);
+    vec->data = gmalloc(vec->capacity * elem_size);
 
     if (!vec->data) {
         gfree(vec);
@@ -29,7 +28,7 @@ vector* vec_create_sized(usize size, usize elem_size) {
 }
 
 vector* vec_create(usize elem_size) {
-    return vec_create_sized(VEC_INITIAL_SIZE, elem_size);
+    return vec_create_sized(VEC_INITIAL_CAPACITY, elem_size);
 }
 
 void vec_destroy(vector* vec) {
@@ -63,12 +62,12 @@ vector* vec_clone(vector* parent) {
 
 bool vec_reserve(vector* vec, usize capacity) {
     u8* old_buf = vec->data;
-    u8* new_buf = gcalloc(capacity);
+    u8* new_buf = gcalloc(capacity * vec->elem_size);
 
     if (!new_buf)
         return false;
 
-    memcpy(new_buf, old_buf, vec->size);
+    memcpy(new_buf, old_buf, vec->size * vec->elem_size);
     gfree(old_buf);
 
     vec->data = new_buf;
@@ -124,10 +123,9 @@ bool vec_clear(vector* vec) {
 
 
 bool vec_insert(vector* vec, usize index, void* data) {
-    usize capacity = vec->capacity;
-
-    if (index > capacity)
-        vec_reserve(vec, index + 1);
+    if (index > vec->capacity)
+        if (!vec_reserve(vec, index + 1))
+            return false;
 
     vec->size = max(vec->size, index + 1);
 
@@ -151,12 +149,9 @@ bool vec_swap(vector* vec, usize i, usize j) {
 
 
 bool vec_push(vector* vec, void* data) {
-    if (vec->size == vec->capacity) {
-        usize capacity = vec->size * VEC_GROWTH_RATE;
-
-        if (!vec_reserve(vec, capacity))
+    if (vec->size == vec->capacity)
+        if (!vec_reserve(vec, vec->capacity * VEC_GROWTH_RATE))
             return false;
-    }
 
     vec_set(vec, vec->size, data);
 

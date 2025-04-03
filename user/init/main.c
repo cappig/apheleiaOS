@@ -34,7 +34,7 @@ int main(void) {
     if (!pid)
         sys_exit(128);
 
-    for (;;) {}
+    for (;;) {} // init should never ever exit
 
     return 0;
 }

@@ -147,7 +147,7 @@ void exception_handler(int_state* s) {
 }
 
 void page_fault_handler(int_state* s) {
-    // A page fault has occured while in kernel mode
+    // A page fault has occurred while in kernel mode
     if (UNLIKELY(!(s->error_code & PF_USER)))
         _crash(s);
 

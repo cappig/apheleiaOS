@@ -196,8 +196,7 @@ static size_t _string_to_buffer(char* buffer, char* string, int flags, int preci
     return (size_t)(buffer - buf_start);
 }
 
-static size_t
-_append_num_prefix(char* buffer, uintmax_t number, int flags, int base, int size, int* padding) {
+static size_t _append_num_prefix(char* buffer, uintmax_t number, int flags, int base, int size, int* padding) {
     const char* buf_start = buffer;
 
     if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO))

@@ -25,8 +25,7 @@ void vslog(char* restrict buf, int lvl, char* file, int line, char* fmt, va_list
 
 void slog(char* restrict buf, int lvl, char* file, int line, char* fmt, ...)
     __attribute__((format(printf, 5, 6)));
-void log(enum log_lvl lvl, char* file, int line, char* fmt, ...)
-    __attribute__((format(printf, 4, 5)));
+void log(enum log_lvl lvl, char* file, int line, char* fmt, ...) __attribute__((format(printf, 4, 5)));
 
 void log_init(puts_fn_ptr puts);
 void log_set_lvl(int lvl);

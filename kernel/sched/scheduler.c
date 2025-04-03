@@ -320,6 +320,7 @@ void scheduler_start() {
 
 static void _recursive_dump(tree_node* parent, usize depth) {
     if (!parent->children)
+
         return;
 
     foreach (node, parent->children) {
