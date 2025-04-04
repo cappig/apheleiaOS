@@ -109,9 +109,9 @@ enum mmap_flags {
     MAP_PRIVATE = 1 << 0, // Changes are not written to the mapped file
     MAP_SHARED = 1 << 1, // Changes are written to the file
     MAP_ANONYMOUS = 1 << 2, // The mapping isn't backed by a real file
-    MAP_FIXED = 1 << 2, // Map at the exact address provided. Existing mappings will be replaced
-    // MAP_STACK = 1 << 3, // Map a canary page for overflow detection
-    MAP_POPULATE = 1 << 4, // Prefault the pages for faster reads
+    MAP_FIXED = 1 << 3, // Map at the exact address provided. Existing mappings will be replaced
+    // MAP_STACK = 1 << 4, // Map a canary page for overflow detection
+    MAP_POPULATE = 1 << 5, // Prefault the pages for faster reads
 
 };
 
@@ -159,7 +159,10 @@ inline u64 syscall3(u64 num, u64 arg1, u64 arg2, u64 arg3) {
 
 inline u64 syscall4(u64 num, u64 arg1, u64 arg2, u64 arg3, u64 arg4) {
     u64 ret = num;
-    asm volatile(_SYS_ASM : "=a"(ret) : "a"(ret), "D"(arg1), "S"(arg2), "d"(arg3), "c"(arg4) : "memory");
+    asm volatile(_SYS_ASM
+                 : "=a"(ret)
+                 : "a"(ret), "D"(arg1), "S"(arg2), "d"(arg3), "c"(arg4)
+                 : "memory");
 
     return ret;
 }

@@ -490,6 +490,9 @@ static u64 _unmount(u64 target_ptr, u64 flags) {
 static u64 _mmap(u64 addr, size_t len, int prot, int flags, int fd, off_t offset) {
     sched_process* proc = cpu_current_proc();
 
+    if (!len)
+        return -EINVAL;
+
     file_desc* fdesc = NULL;
 
     if (!(flags & MAP_ANONYMOUS)) {
@@ -520,13 +523,13 @@ static u64 _mmap(u64 addr, size_t len, int prot, int flags, int fd, off_t offset
         }
     }
 
-    return proc_mmap(proc, addr, len, prot, flags, fdesc->node, offset);
+    return proc_mmap(proc, addr, len, prot, flags, fdesc ? fdesc->node : NULL, offset);
 }
 
 
 static void _syscall_handler(int_state* s) {
 #ifdef SYSCALL_DEBUG
-    log_debug("[SYSCALL_DEBUG] handling syscall rax = %lu", s->g_regs.rax);
+    log_debug("[SYSCALL_DEBUG] handling syscall %lu", s->g_regs.rax);
 #endif
 
     u64 arg1 = s->g_regs.rdi;
@@ -630,6 +633,10 @@ static void _syscall_handler(int_state* s) {
         signal_send(thread->proc, thread->tid, SIGSYS);
         break;
     }
+
+#ifdef SYSCALL_DEBUG
+    log_debug("[SYSCALL_DEBUG] syscall %lu returning with %ld", s->g_regs.rax, ret);
+#endif
 
     // FIXME: the biggest problem in the kernel right now is its shameless reliannce on x86
     // The kernel should be cpu agnostic (up to a point)

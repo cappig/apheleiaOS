@@ -16,6 +16,7 @@
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
+#include "log/log.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
@@ -665,7 +666,6 @@ u64 proc_mmap(sched_process* proc, u64 addr, u64 size, u32 prot, u32 flags, vfs_
     if (!base)
         return -ENOMEM;
 
-
     memory_region new_region = {
         .base = base,
         .size = size,
@@ -680,7 +680,7 @@ u64 proc_mmap(sched_process* proc, u64 addr, u64 size, u32 prot, u32 flags, vfs_
     proc_insert_mem_region(proc, &new_region);
 
     // Bleh, the regions get sorted in inset so we have to search the vector again
-    memory_region* region = _mem_get_region(proc, addr, 0);
+    memory_region* region = _mem_get_region(proc, base, 0);
 
     assert(region);
 
