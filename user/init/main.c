@@ -27,19 +27,6 @@ int main(void) {
     char buf[] = "Hello from userland!\n";
     sys_write(STDOUT_FD, buf, strlen(buf));
 
-    /* sys_signal(SIGCHLD, child); */
-    /**/
-    /* pid_t pid = sys_fork(); */
-    /**/
-    /* if (!pid) */
-    /*     sys_exit(128); */
-
-    u8* ret = sys_mmap(0, 0x1000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
-
-    char ecode[] = "                 \n";
-    itoa((u64)ret, ecode, 16);
-    sys_write(STDOUT_FD, ecode, strlen(ecode));
-
     for (;;) {} // init should never ever exit
 
     return 0;

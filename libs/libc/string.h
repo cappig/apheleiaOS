@@ -3,6 +3,11 @@
 #include "stddef.h"
 
 
+// #include_next <string.h> //TODO: why the fuck is this broken [clangd?]
+#ifdef EXTEND_LIBC
+#include <libc_ext/string.h>
+#endif
+
 void* memcpy(void* restrict dest, const void* restrict src, size_t len);
 void* memmove(void* dest, const void* src, size_t len);
 char* strcpy(char* restrict dest, const char* restrict src);
@@ -25,12 +30,8 @@ int strlen(const char* str);
 
 void* memchr(const void* ptr, int ch, size_t len);
 
+char* strtok_r(char* str, const char* delim, char** saveptr);
 char* strtok(char* restrict str, const char* restrict delim);
 
-#ifdef HAS_GMALLOC
 char* strdup(const char* src);
 char* strndup(const char* str, size_t size);
-#endif
-
-// #include_next <string.h> //TODO: why the fuck is this broken [clangd?]
-#include <libc_ext/string.h>

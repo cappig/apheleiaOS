@@ -16,6 +16,7 @@ CC_BASE := \
 	-Ilibs/libc \
 	-ffreestanding \
 	-fno-stack-protector \
+	-DEXTEND_LIBC \
 	-nostdinc \
 	-mno-sse \
 	-mno-sse2 \

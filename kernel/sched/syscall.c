@@ -9,6 +9,7 @@
 #include <data/vector.h>
 #include <errno.h>
 #include <log/log.h>
+#include <stddef.h>
 #include <string.h>
 #include <x86/paging.h>
 
@@ -199,6 +200,19 @@ static isize _open(u64 path_ptr, u64 flags, u64 mode) {
         return -EFAULT;
 
     return fd;
+}
+
+static u64 _close(usize fd) {
+    if (!validate_fd(fd))
+        return -1;
+
+    sched_process* proc = cpu_current_proc();
+
+    // the file_desc only referances a node in the vfs tree
+    file_desc* fdesc = process_get_fd(proc, fd);
+    memset(fdesc, 0, sizeof(file_desc));
+
+    return 0;
 }
 
 static u64 _mkdir(u64 path_ptr, u64 mode) {
@@ -566,6 +580,10 @@ static void _syscall_handler(int_state* s) {
 
     case SYS_OPEN:
         ret = _open(arg1, arg2, arg3);
+        break;
+
+    case SYS_CLOSE:
+        ret = _close(arg1);
         break;
 
     case SYS_MKDIR:

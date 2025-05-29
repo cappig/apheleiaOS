@@ -2,7 +2,8 @@ USER_BIN := bin/initrd/sbin
 
 
 CC_USER := \
-	-static
+	-static \
+	-Ilibs/libc
 
 LD_USER := \
 	-melf_x86_64 \

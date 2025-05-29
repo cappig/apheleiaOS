@@ -1,7 +1,10 @@
 #include "string.h"
 
-#ifdef HAS_GMALLOC
+#ifdef _KERNEL
 #include <alloc/global.h>
+#define malloc(size) gmalloc(size)
+#else
+#include <stdlib.h>
 #endif
 
 #include "stddef.h"
@@ -167,18 +170,65 @@ void* memchr(const void* ptr, int ch, size_t len) {
 }
 
 
+static bool _is_delim(char c, const char* delim) {
+    while (*delim) {
+        if (c == *delim)
+            return true;
+
+        delim++;
+    }
+
+    return false;
+}
+
+char* strtok_r(char* str, const char* delim, char** save_ptr) {
+    if (!str)
+        str = *save_ptr;
+
+    if (!str)
+        return NULL;
+
+    if (*str == '\0') {
+        *save_ptr = NULL;
+        return NULL;
+    }
+
+    // Trim leading deliminators
+    while (*str && _is_delim(*str, delim))
+        str++;
+
+    if (*str == '\0') {
+        *save_ptr = str;
+        return NULL;
+    }
+
+    // Find the end of the token
+    char* end = str;
+    while (*end && !_is_delim(*end, delim))
+        end++;
+
+    if (*end == '\0') {
+        *save_ptr = end;
+        return str;
+    }
+
+    *end = '\0';
+    *save_ptr = end + 1;
+
+    return str;
+}
+
 char* strtok(char* restrict str, const char* restrict delim) {
     static char* save = NULL;
     return strtok_r(str, delim, &save);
 }
 
 
-#ifdef HAS_GMALLOC
 char* strndup(const char* str, size_t size) {
-    if (!str || !size)
+    if (!size || !str)
         return NULL;
 
-    char* dest = gmalloc(size + 1);
+    char* dest = malloc(size + 1);
 
     if (dest) {
         strncpy(dest, str, size);
@@ -188,12 +238,7 @@ char* strndup(const char* str, size_t size) {
     return dest;
 }
 
-// This function triggers a false positive in gcc's static analyser
-// It trips the memory leak detection
+// NOTE:  This function triggers a false positive in gcc's static analyser
 char* strdup(const char* str) {
-    if (!str)
-        return NULL;
-
     return strndup(str, strlen(str));
 }
-#endif

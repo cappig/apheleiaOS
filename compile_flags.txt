@@ -11,4 +11,5 @@
 -Ilibs/libc
 -Ilibs
 -Ikernel
--DHAS_GMALLOC
+-DEXTEND_LIBC
+-D_KERNEL

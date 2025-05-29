@@ -9,7 +9,7 @@ CC_KERNEL := \
 	-Ikernel \
 	-fdata-sections \
 	-ffunction-sections \
-	-DHAS_GMALLOC \
+	-D_KERNEL\
 	-march=x86-64 \
 	-mcmodel=kernel \
 	-m64
@@ -40,7 +40,9 @@ bin/image/kernel.elf: $(KERNEL_OBJ)
 ifeq ($(TRACEABLE_KERNEL), true)
 	$(call nm, $@, bin/kernel/sym.map)
 endif
+ifeq ($(STRIP_KERNEL), true)
 	$(call st, $@)
+endif
 
 
 .PHONY: clean_kernel

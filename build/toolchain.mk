@@ -72,12 +72,16 @@ endif
 # to load a symbol table and compile without omitting frame pointers
 TRACEABLE_KERNEL ?= true
 
+STRIP_KERNEL ?= false
+
 ifeq ($(TRACEABLE_KERNEL), true)
 	CC_BASE += -g -fno-omit-frame-pointer
+	STRIP_KERNEL = false
 endif
 
 ifeq ($(PROFILE), debug)
 	CC_BASE += -Og $(CC_DEBUG)
+	TRACEABLE_KERNEL = true
 else ifeq ($(PROFILE), debug_extra)
 	CC_BASE += -Og $(CC_DEBUG) $(CC_DEBUG_EXTRA)
 else ifeq ($(PROFILE), small)

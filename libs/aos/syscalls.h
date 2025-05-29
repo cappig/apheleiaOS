@@ -36,28 +36,30 @@ enum syscall_nums {
     SYS_SEEK = 5,
 
     SYS_OPEN = 6,
-    SYS_MKDIR = 7,
+    SYS_CLOSE = 7,
 
-    SYS_IOCTL = 8,
+    SYS_MKDIR = 8,
 
-    SYS_SIGNAL = 9,
-    SYS_SIGRETURN = 10,
+    SYS_IOCTL = 9,
 
-    SYS_KILL = 11,
-    SYS_WAIT = 12,
+    SYS_SIGNAL = 10,
+    SYS_SIGRETURN = 11,
 
-    SYS_GETPID = 13,
-    SYS_GETPPID = 14,
+    SYS_KILL = 12,
+    SYS_WAIT = 13,
 
-    SYS_FORK = 15,
-    SYS_EXECVE = 16,
+    SYS_GETPID = 14,
+    SYS_GETPPID = 15,
 
-    SYS_SLEEP = 17,
+    SYS_FORK = 16,
+    SYS_EXECVE = 17,
 
-    SYS_MOUNT = 18,
-    SYS_UNMOUNT = 19,
+    SYS_SLEEP = 18,
 
-    SYS_MMAP = 20,
+    SYS_MOUNT = 19,
+    SYS_UNMOUNT = 20,
+
+    SYS_MMAP = 21,
 
     SYSCALL_COUNT
 };
@@ -221,6 +223,10 @@ inline off_t sys_seek(int fd, off_t offset, int whence) {
 
 inline int sys_open(const char* path, int flags, mode_t mode) {
     return syscall3(SYS_OPEN, (u64)path, flags, mode);
+}
+
+inline int sys_close(int fd) {
+    return syscall1(SYS_CLOSE, fd);
 }
 
 inline int sys_mkdir(const char* path, mode_t mode) {

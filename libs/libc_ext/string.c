@@ -40,54 +40,6 @@ size_t strnlen(const char* str, size_t max) {
 }
 
 
-static bool _is_delim(char c, const char* delim) {
-    while (*delim) {
-        if (c == *delim)
-            return true;
-
-        delim++;
-    }
-
-    return false;
-}
-
-char* strtok_r(char* str, const char* delim, char** save_ptr) {
-    if (!str)
-        str = *save_ptr;
-
-    if (!str)
-        return NULL;
-
-    if (*str == '\0') {
-        *save_ptr = NULL;
-        return NULL;
-    }
-
-    // Trim leading deliminators
-    while (*str && _is_delim(*str, delim))
-        str++;
-
-    if (*str == '\0') {
-        *save_ptr = str;
-        return NULL;
-    }
-
-    // Find the end of the token
-    char* end = str;
-    while (*end && !_is_delim(*end, delim))
-        end++;
-
-    if (*end == '\0') {
-        *save_ptr = end;
-        return str;
-    }
-
-    *end = '\0';
-    *save_ptr = end + 1;
-
-    return str;
-}
-
 int strcasecmp(const char* s1, const char* s2) {
     while (*s1 && (tolower(*s1) == tolower(*s2))) {
         s1++;

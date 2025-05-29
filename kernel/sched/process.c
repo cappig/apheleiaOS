@@ -16,7 +16,6 @@
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
-#include "log/log.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"

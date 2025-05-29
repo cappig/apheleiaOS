@@ -18,6 +18,14 @@ typedef struct {
 } lldiv_t;
 
 
+#ifdef EXTEND_LIBC
+#include <libc_ext/stdlib.h>
+#endif
+
+#ifndef _KERNEL
+#include <libc_usr/stdlib.h>
+#endif
+
 long long strtoll(char const* restrict str, char** restrict endptr, int base);
 long strtol(char const* restrict str, char** restrict endptr, int base);
 // unsigned long int strtoul(char const* restrict str, char** restrict endptr, int base);
@@ -33,5 +41,3 @@ long labs(long n);
 int abs(int n);
 
 void qsort(void* base, size_t num, size_t size, int (*comp)(const void*, const void*));
-
-#include <libc_ext/stdlib.h>

@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef HAS_GMALLOC
+#ifdef _KERNEL
 
 #include <stddef.h>
 
@@ -38,4 +38,4 @@ inline void gfree(void* ptr) {
     _global_allocator->free(ptr);
 }
 
-#endif // HAS_GMALLOC
+#endif // _KERNEL

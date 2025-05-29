@@ -21,6 +21,7 @@
 // FIXME: baaaaaad. A bitmap is far from optimal for this
 
 // We should have more than one heap
+// TODO: have more than one heap, if run out of heap space allocate a new heap
 static bitmap_alloc heap = {0};
 
 
