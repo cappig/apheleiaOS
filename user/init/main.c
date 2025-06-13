@@ -1,8 +1,8 @@
 #include <aos/signals.h>
 #include <aos/syscalls.h>
+#include <libc_usr/stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 
 void child(int signum) {
     for (;;) {
@@ -24,8 +24,18 @@ void child(int signum) {
 
 // int main(int argc, char* argv[], char* envp[]) {
 int main(void) {
-    char buf[] = "Hello from userland!\n";
-    sys_write(STDOUT_FD, buf, strlen(buf));
+    printf("TESTING 123");
+    fflush(stdout);
+
+
+    // TEST: remove this shit
+    pid_t pid = sys_fork();
+
+    if (!pid) {
+        printf("\nHello from child!\n");
+
+        sys_execve("/sbin/sh.elf", NULL, NULL);
+    }
 
     for (;;) {} // init should never ever exit
 

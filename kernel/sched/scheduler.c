@@ -246,7 +246,7 @@ static void _spawn_init(void) {
     sched_process* init = spawn_uproc("init");
     sched_thread* thread = init->threads.head->data;
 
-    vfs_node* file = vfs_lookup("sbin/init.elf");
+    vfs_node* file = vfs_lookup("/sbin/init.elf");
 
     if (!file)
         panic("init.elf not found!");

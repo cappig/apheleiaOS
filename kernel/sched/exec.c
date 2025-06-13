@@ -1,11 +1,15 @@
 #include "exec.h"
 
 #include <aos/syscalls.h>
+#include <base/addr.h>
+#include <base/macros.h>
+#include <base/types.h>
 #include <parse/elf.h>
 #include <string.h>
 #include <x86/paging.h>
 
 #include "arch/gdt.h"
+#include "arch/idt.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
@@ -37,18 +41,16 @@ static bool _init_ustack(sched_thread* thread, u64 base, usize pages) {
 
     proc_insert_mem_region(proc, &new_region);
 
-    // TODO: map a dummy canary page at the bottom of the stack to detect overflow
     // Writes to this page will fault, and we can go from there
     // map_page(proc->memory.table, PAGE_4KIB, base, 0, PT_NO_EXECUTE);
+    // TODO: map a dummy canary page at the bottom of the stack to detect overflow
 
     return true;
 }
 
-// Returns the highest virtual address in the image map
-static u64 _load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* header, usize load_offset) {
+static bool
+_load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* header, usize load_offset) {
     sched_process* proc = thread->proc;
-
-    u64 top = 0;
 
     elf_prog_header* p_header = kmalloc(header->phent_size);
 
@@ -64,18 +66,38 @@ static u64 _load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* 
         if (!p_header->file_size && !p_header->mem_size)
             continue;
 
-        u64 vaddr = p_header->vaddr + load_offset;
+        memory_region region = {0};
 
-        u64 prot = elf_to_mmap_prot(p_header->flags);
-        u64 size = p_header->file_size;
-        u64 offset = p_header->offset;
+        usize pages = DIV_ROUND_UP(p_header->mem_size, PAGE_4KIB);
+        region.base = p_header->vaddr + load_offset;
+        region.size = pages * PAGE_4KIB;
 
-        proc_mmap(proc, vaddr, size, prot, MAP_PRIVATE | MAP_FIXED, file, offset);
+        u64 vbase = ALIGN_DOWN(region.base, PAGE_4KIB);
+        u64 pbase = (u64)alloc_frames(pages);
+        void* base = (void*)ID_MAPPED_VADDR(pbase);
+
+        region.offset = region.base - vbase;
+        region.file = file;
+
+        u64 page_flags = elf_to_page_flags(p_header->flags) | PT_USER;
+        region.flags = MAP_PRIVATE | MAP_FIXED;
+        region.prot = page_flags_to_prot(page_flags);
+
+        map_region(proc->memory.table, pages, vbase, pbase, page_flags);
+
+        if (vfs_read(file, base + region.offset, p_header->offset, p_header->file_size, 0) < 0)
+            return false;
+
+        // Zero out any additional space
+        usize zero_len = p_header->mem_size - p_header->file_size;
+        memset(base + p_header->file_size, 0, zero_len);
+
+        proc_insert_mem_region(proc, &region);
     }
 
     kfree(p_header);
 
-    return top;
+    return true;
 }
 
 static void _map_vdso(sched_thread* thread) {
@@ -218,8 +240,8 @@ bool exec_elf(sched_thread* thread, vfs_node* file, char** argv, char** envp) {
 
     assert(proc->type == PROC_USER);
 
-    elf_header header[sizeof(elf_header)] = {0};
     // elf_header* header = kmalloc(sizeof(elf_header));
+    elf_header header[sizeof(elf_header)] = {0}; // FIXME: what the fuck???
 
     isize read = vfs_read(file, header, 0, sizeof(elf_header), 0);
 
@@ -254,7 +276,6 @@ bool exec_elf(sched_thread* thread, vfs_node* file, char** argv, char** envp) {
 
     thread_set_state(thread, &state);
 
-    // Map the vdso to the appropriate address
     _map_vdso(thread);
 
     return true;

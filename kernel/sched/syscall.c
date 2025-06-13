@@ -16,11 +16,13 @@
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "mem/heap.h"
+#include "sched/exec.h"
 #include "sched/process.h"
 #include "sched/scheduler.h"
 #include "sched/signal.h"
 #include "sys/cpu.h"
 #include "vfs/fs.h"
+#include "x86/asm.h"
 
 
 static void _exit(u64 status) {
@@ -432,6 +434,38 @@ static u64 _fork(void) {
     return child->pid;
 }
 
+static u64 _execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr) {
+    char* path = (char*)path_ptr;
+    char** argv = (char**)argv_ptr;
+    char** envp = (char**)envp_ptr;
+
+    if (!path)
+        return -EINVAL;
+
+    // FIXME: the len should be taken into account here
+    if (!validate_ptr(path, 1, false))
+        return -EFAULT;
+
+    if (argv && !validate_ptr(argv, 1, false))
+        return -EFAULT;
+
+    if (envp && !validate_ptr(envp, 1, false))
+        return -EFAULT;
+
+    vfs_node* file = vfs_lookup(path);
+
+    if (!file)
+        return -EFAULT;
+
+    sched_thread* thread = cpu_current_thread();
+    bool exec = exec_elf(thread, file, argv, envp);
+
+    if (!exec)
+        return -EFAULT;
+
+    return 0;
+}
+
 static u64 _sleep(u64 milis) {
     sched_thread* thread = cpu_current_thread();
 
@@ -459,7 +493,7 @@ static u64 _mount(u64 source_ptr, u64 target_ptr, u64 flags) {
 
     vfs_node* source_vnode = vfs_lookup(source);
     if (!source_vnode)
-        return -errno;
+        return -ENODEV;
 
     if (source_vnode->type != VFS_BLOCKDEV)
         return -ENODEV;
@@ -469,7 +503,7 @@ static u64 _mount(u64 source_ptr, u64 target_ptr, u64 flags) {
 
     vfs_node* target_vnode = vfs_lookup(target);
     if (!target_vnode)
-        return -errno;
+        return -ENODEV;
 
     if (target_vnode->type != VFS_DIR)
         return -ENOTDIR;
@@ -626,6 +660,10 @@ static void _syscall_handler(int_state* s) {
         ret = _fork();
         break;
 
+    case SYS_EXECVE:
+        ret = _execve(arg1, arg2, arg3);
+        break;
+
 
     case SYS_SLEEP:
         ret = _sleep(arg1);
@@ -657,7 +695,7 @@ static void _syscall_handler(int_state* s) {
 #endif
 
     // FIXME: the biggest problem in the kernel right now is its shameless reliannce on x86
-    // The kernel should be cpu agnostic (up to a point)
+    // The kernel should be cpu agnostic
     s->g_regs.rax = ret;
 }
 

@@ -50,7 +50,7 @@ disk_dev* ramdisk_init(char* name, void* addr, usize size, bool write) {
     private->size = size;
     private->addr = addr;
 
-    /// disk_dev* dev = vfs_create_disk(name, 1, size);
+    // disk_dev* dev = vfs_create_disk(name, 1, size);
     disk_dev* dev = kcalloc(sizeof(disk_dev));
 
     dev->name = strdup(name);

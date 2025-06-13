@@ -2,15 +2,11 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdio.h>
 #include <string.h>
-
-// FIXME: this is a rough Q&D implementation.. improve ASAP
 
 #define ALIGNMENT        sizeof(void*)
 #define ALIGN_SIZE(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
 
-// 16 KiB
 #define MMAP_CHUNK_SIZE (16 * 1024)
 #define MIN_BLOCK_SIZE  ALIGN_SIZE(sizeof(struct block_header))
 
@@ -42,22 +38,16 @@ static void _add_to_free_list(block_header* block) {
         current = current->next;
     }
 
-    if (!prev) {
-        block->next = free_list_head;
+    block->prev = prev;
+    block->next = current;
 
-        if (free_list_head)
-            free_list_head->prev = block;
-
-        free_list_head = block;
-    } else {
-        block->next = current;
-        block->prev = prev;
-
+    if (prev)
         prev->next = block;
+    else
+        free_list_head = block;
 
-        if (current)
-            current->prev = block;
-    }
+    if (current)
+        current->prev = block;
 }
 
 static void _remove_from_free_list(block_header* block) {
@@ -87,19 +77,20 @@ static block_header* _find_free_block(size_t size) {
 }
 
 static block_header* _get_memory(size_t size) {
-    size_t total = ALIGN_SIZE(size + sizeof(block_header));
+    size_t total_size = ALIGN_SIZE(size + sizeof(block_header));
 
-    if (total < MMAP_CHUNK_SIZE)
-        total = MMAP_CHUNK_SIZE;
+    if (total_size < MMAP_CHUNK_SIZE)
+        total_size = MMAP_CHUNK_SIZE;
 
-    void* ptr = sys_mmap(NULL, total, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* ptr =
+        sys_mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
     if (!ptr)
         return NULL;
 
     block_header* block = (block_header*)ptr;
 
-    block->size = total - sizeof(block_header);
+    block->size = total_size - sizeof(block_header);
     block->is_free = true;
     block->next = NULL;
     block->prev = NULL;
@@ -110,40 +101,32 @@ static block_header* _get_memory(size_t size) {
 }
 
 static void _split_block(block_header* block, size_t size) {
-    size_t total = ALIGN_SIZE(size + sizeof(block_header));
+    if (block->size < size + sizeof(block_header) + MIN_BLOCK_SIZE)
+        return;
 
-    if (block->size >= total + MIN_BLOCK_SIZE) {
-        block_header* new_block = (block_header*)((char*)block + total);
+    block_header* new_block = (block_header*)((void*)block + sizeof(block_header) + size);
 
-        new_block->size = block->size - total;
-        new_block->is_free = true;
-        new_block->next = NULL;
-        new_block->prev = NULL;
+    new_block->size = block->size - size - sizeof(block_header);
+    new_block->is_free = true;
+    new_block->prev = NULL;
+    new_block->next = NULL;
 
-        block->size = size;
+    block->size = size;
 
-        _add_to_free_list(new_block);
-    }
+    _add_to_free_list(new_block);
 }
 
 static void _coalesce_block(block_header* block) {
-    block_header* next_block = (block_header*)((char*)block + sizeof(block_header) + block->size);
-
-    block_header* current_block = free_list_head;
-    block_header* target_block = NULL;
-
-    while (current_block) {
-        if (current_block == next_block && current_block->is_free) {
-            target_block = current_block;
-            break;
-        }
-
-        current_block = current_block->next;
+    block_header* next = block->next;
+    if (next && (char*)block + sizeof(block_header) + block->size == (char*)next) {
+        block->size += sizeof(block_header) + next->size;
+        _remove_from_free_list(next);
     }
 
-    if (target_block) {
-        _remove_from_free_list(target_block);
-        block->size += sizeof(block_header) + target_block->size;
+    block_header* prev = block->prev;
+    if (prev && (char*)prev + sizeof(block_header) + prev->size == (char*)block) {
+        prev->size += sizeof(block_header) + block->size;
+        _remove_from_free_list(block);
     }
 }
 
@@ -163,8 +146,8 @@ void* malloc(size_t size) {
             return NULL;
     }
 
-    _split_block(block, size);
     _remove_from_free_list(block);
+    _split_block(block, size);
 
     block->is_free = false;
 
@@ -214,12 +197,12 @@ void* realloc(void* ptr, size_t size) {
     block_header* old_block = _get_header(ptr);
 
     size_t old_size = old_block->size;
-    size = ALIGN_SIZE(size);
+    size_t new_size = ALIGN_SIZE(size);
 
-    if (size <= old_size)
+    if (new_size <= old_size)
         return ptr;
 
-    void* new_ptr = malloc(size);
+    void* new_ptr = malloc(new_size);
 
     if (!new_ptr)
         return NULL;

@@ -507,18 +507,6 @@ bool proc_insert_mem_region(sched_process* proc, memory_region* region) {
 }
 
 
-static inline u64 _to_page_flags(u64 prot) {
-    u64 ret = PT_USER;
-
-    if (!(prot & PROT_EXEC))
-        ret |= PT_NO_EXECUTE;
-
-    if (prot & PROT_WRITE)
-        ret |= PT_WRITE;
-
-    return ret;
-}
-
 static memory_region* _mem_get_region(sched_process* proc, u64 addr, usize size) {
     vector* regions = proc->memory.regions;
 
@@ -619,10 +607,11 @@ static bool _fault_page(sched_process* proc, u64 addr, memory_region* region, u6
 
     isize read = 0;
 
+    memset(map_vaddr, 0, PAGE_4KIB);
+
     if (region->file && region->size) {
         u64 offset = page * PAGE_4KIB + region->offset;
 
-        // OK so this whole thing is a bit fucky...
         // TODO: revisit this and see if the offset is indeed computed like this
         if (page)
             offset -= region->base % PAGE_4KIB;
@@ -630,12 +619,17 @@ static bool _fault_page(sched_process* proc, u64 addr, memory_region* region, u6
         read = vfs_read(region->file, map_vaddr + read_offset, offset, PAGE_4KIB - read_offset, 0);
 
         if (read < 0)
-            return false;
+            return false; // explicit error - we requested a maped file and got none
     }
 
-    // Fill any remaining space with zeroes
-    memset(map_vaddr, 0, read_offset); // before the region
-    memset(map_vaddr + read_offset + read, 0, PAGE_4KIB - (read_offset + read)); // after the region
+    if (region->flags & MAP_ANONYMOUS) {
+        // zero out the entire page, as per the spec
+        memset(map_vaddr, 0, PAGE_4KIB);
+    } else {
+        // Zero out any memory around the region
+        memset(map_vaddr, 0, read_offset);
+        memset(map_vaddr + read_offset + read, 0, PAGE_4KIB - (read_offset + read));
+    }
 
     map_page(proc->memory.table, PAGE_4KIB, page_addr, map_paddr, flags | PT_PRESENT);
 
@@ -683,8 +677,7 @@ u64 proc_mmap(sched_process* proc, u64 addr, u64 size, u32 prot, u32 flags, vfs_
 
     assert(region);
 
-    // Convert the flags
-    u64 page_flags = _to_page_flags(prot);
+    u64 page_flags = prot_to_page_flags(prot);
 
     // FIXME: currently we don't do lazy mapping
     // we just allocate all of the requested pages right away

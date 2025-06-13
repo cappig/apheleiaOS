@@ -1,10 +1,43 @@
 #include "stdio.h"
 
 #include <aos/syscalls.h>
+#include <libc/stdio.h>
 #include <stddef.h>
 #include <string.h>
 
+#include "stdarg.h"
 #include "stdlib.h"
+
+
+FILE _stdin = {
+    .fd = STDIN_FD,
+    .buf_size = BUFSIZ,
+    .buf_mode = _IOFBF,
+    .mode = MODE_READ,
+};
+
+FILE _stdout = {
+    .fd = STDOUT_FD,
+    .buf_size = BUFSIZ,
+    .buf_mode = _IOLBF,
+    .mode = MODE_WRITE,
+};
+
+FILE _stderr = {
+    .fd = STDERR_FD,
+    .buf_size = BUFSIZ,
+    .buf_mode = _IONBF,
+    .mode = MODE_WRITE,
+};
+
+FILE* stdin = &_stdin;
+FILE* stdout = &_stdout;
+FILE* stderr = &_stderr;
+
+void __init_stdio_buffers(void) {
+    _stdin.buf = malloc(BUFSIZ);
+    _stdout.buf = malloc(BUFSIZ);
+}
 
 
 static int _read_byte(FILE* stream) {
@@ -512,4 +545,36 @@ void clearerr(FILE* f) {
         return;
 
     f->flags &= ~(FLAG_EOF | FLAG_ERROR);
+}
+
+
+int vfprintf(FILE* restrict stream, const char* restrict format, va_list vlist) {
+    char buffer[BUFSIZ] = {0};
+
+    int len = vsnprintf(buffer, BUFSIZ - 1, format, vlist);
+
+    if (!len)
+        return 0;
+
+    return fwrite(buffer, len, 1, stream);
+}
+
+int fprintf(FILE* restrict stream, const char* restrict format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    int result = vfprintf(stream, format, args);
+
+    va_end(args);
+    return result;
+}
+
+int printf(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    int result = vfprintf(stdout, format, args);
+
+    va_end(args);
+    return result;
 }

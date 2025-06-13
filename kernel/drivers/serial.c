@@ -87,7 +87,6 @@ bool pty_hook_serial(pseudo_tty* pty, usize port) {
     if (!tos)
         return false;
 
-
     if (!tos->c_ospeed)
         tos->c_ospeed = SERIAL_DEFAULT_BAUD;
 

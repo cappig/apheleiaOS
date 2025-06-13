@@ -1,4 +1,6 @@
+#pragma once
 
+#include "stdarg.h"
 #include "stdlib.h"
 
 #define EOF (-1)
@@ -39,6 +41,10 @@ typedef struct {
     char flags;
 } FILE;
 
+extern FILE* stdin;
+extern FILE* stdout;
+extern FILE* stderr;
+
 
 FILE* fopen(const char* restrict pathname, const char* restrict mode_str);
 FILE* freopen(const char* restrict pathname, const char* restrict mode, FILE* restrict f);
@@ -68,3 +74,10 @@ long ftell(FILE* f);
 int feof(FILE* f);
 int ferror(FILE* f);
 void clearerr(FILE* f);
+
+int vfprintf(FILE* restrict stream, const char* restrict format, va_list vlist);
+
+int fprintf(FILE* restrict stream, const char* restrict format, ...)
+    __attribute__((format(printf, 2, 3)));
+
+int printf(const char* restrict format, ...) __attribute__((format(printf, 1, 2)));

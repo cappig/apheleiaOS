@@ -42,14 +42,13 @@ typedef struct {
 typedef struct {
     page_table* table;
 
-    // Mark occupied regions of memory, this aids in the implementation of mmap(2)
+    // Mark occupied regions of memory, this aids in the implementation of mmap()
     vector* regions;
 
     // The address of the virtual dynamic shared object
     u64 vdso;
 
-    // The address of the signal trampoline
-    // usually located in the vdso
+    // The address of the signal trampoline - usually the vdso
     u64 trampoline;
 
     // The address of the page(es) that hold the strings for the command
@@ -127,9 +126,9 @@ typedef struct {
 } thread_stack;
 
 typedef struct {
-    // 0 if not waiting, -1 if waiting for any child
-    // or > 0 if waiting for a specific child
-    // since we can't wait for init (no parent) this is fine
+    // 0 if not waiting
+    // -1 if waiting for any child
+    // > 0 if waiting for a specific child (PID)
     pid_t proc;
     int* code_ptr; // the exit code of the while shall be written to this address
 } thread_wait;
@@ -137,7 +136,7 @@ typedef struct {
 typedef enum {
     T_RUNNING,
     T_SLEEPING, // a blocked state, the thread is waitong for an event
-    T_STOPPED, // the thread exists it won't get scheduled in this state
+    T_STOPPED, // the thread exists, it won't get scheduled in this state
     T_ZOMBIE,
 } thread_state;
 
@@ -161,6 +160,31 @@ typedef struct {
 
     isize cpu_id; // -1 if none
 } sched_thread;
+
+
+inline u64 prot_to_page_flags(u64 prot) {
+    u64 ret = PT_USER;
+
+    if (!(prot & PROT_EXEC))
+        ret |= PT_NO_EXECUTE;
+
+    if (prot & PROT_WRITE)
+        ret |= PT_WRITE;
+
+    return ret;
+}
+
+inline u64 page_flags_to_prot(u64 flags) {
+    u64 ret = PROT_READ;
+
+    if (flags & PT_WRITE)
+        ret |= PROT_WRITE;
+
+    if (flags & PT_NO_EXECUTE)
+        ret |= PROT_EXEC;
+
+    return ret;
+}
 
 
 sched_process* proc_create_with_pid(const char* name, process_type type, pid_t pid);

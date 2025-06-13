@@ -259,9 +259,9 @@ inline pid_t sys_fork(void) {
     return syscall0(SYS_FORK);
 }
 
-// inline int sys_execve(char const* path, char const* argv[], char const* envp[]) {
-//     return syscall3(SYS_EXECVE, (u64)path, (u64)argv, (u64)envp);
-// }
+inline int sys_execve(char const* path, char const* argv[], char const* envp[]) {
+    return syscall3(SYS_EXECVE, (u64)path, (u64)argv, (u64)envp);
+}
 
 
 inline pid_t sys_getpid(void) {
