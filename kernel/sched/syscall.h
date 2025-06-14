@@ -1,7 +1,5 @@
 #pragma once
 
-#include <aos/syscalls.h>
-
 #include "sched/process.h"
 #include "sys/cpu.h"
 
@@ -30,7 +28,7 @@ static inline bool validate_signum(usize signum) {
     if (!signum)
         return false;
 
-    if (signum >= SIGNAL_COUNT)
+    if (signum >= NSIG)
         return false;
 
     return true;

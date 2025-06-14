@@ -1,30 +1,34 @@
 #include "stdio.h"
 
-#include <aos/syscalls.h>
-#include <libc/stdio.h>
+#include <fcntl.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
+#include "fcntl.h"
 #include "stdarg.h"
 #include "stdlib.h"
+#include "unistd.h"
 
+// FIXME: A BUNCH OF STFF HERE IS STILL BROKEN
 
 FILE _stdin = {
-    .fd = STDIN_FD,
+    .fd = STDIN_FILENO,
     .buf_size = BUFSIZ,
     .buf_mode = _IOFBF,
     .mode = MODE_READ,
 };
 
 FILE _stdout = {
-    .fd = STDOUT_FD,
+    .fd = STDOUT_FILENO,
     .buf_size = BUFSIZ,
     .buf_mode = _IOLBF,
     .mode = MODE_WRITE,
 };
 
 FILE _stderr = {
-    .fd = STDERR_FD,
+    .fd = STDERR_FILENO,
     .buf_size = BUFSIZ,
     .buf_mode = _IONBF,
     .mode = MODE_WRITE,
@@ -59,19 +63,19 @@ static int _read_byte(FILE* stream) {
             if (fflush(stream))
                 return EOF;
 
-        ssize_t read = sys_read(stream->fd, stream->buf, stream->buf_size);
+        ssize_t r = read(stream->fd, stream->buf, stream->buf_size);
 
-        if (read < 0) {
+        if (r < 0) {
             stream->flags |= FLAG_ERROR;
             return EOF;
         }
 
-        if (!read) {
+        if (!r) {
             stream->flags |= FLAG_EOF;
             return EOF;
         }
 
-        stream->len = read;
+        stream->len = r;
         stream->pos = 0;
     }
 
@@ -194,7 +198,7 @@ FILE* fopen(const char* restrict pathname, const char* restrict mode_str) {
     }
 
     int open_flags = _mode_to_open_flags(file->mode);
-    file->fd = sys_open(pathname, open_flags, 0666);
+    file->fd = open(pathname, open_flags, 0666);
 
     if (file->fd < 0) {
         free(file);
@@ -204,7 +208,7 @@ FILE* fopen(const char* restrict pathname, const char* restrict mode_str) {
     file->buf = calloc(1, BUFSIZ);
 
     if (!file->buf) {
-        sys_close(file->fd);
+        close(file->fd);
         free(file);
         return NULL;
     }
@@ -221,14 +225,14 @@ int fclose(FILE* file) {
 
     fflush(file);
 
-    int close = sys_close(file->fd);
+    int c = close(file->fd);
 
     if (file->buf)
         free(file->buf);
 
     free(file);
 
-    return (close < 0) ? EOF : 0;
+    return (c < 0) ? EOF : 0;
 }
 
 FILE* freopen(const char* restrict pathname, const char* restrict mode, FILE* restrict file) {
@@ -249,10 +253,10 @@ int fflush(FILE* file) {
 
     if (file->mode & MODE_WRITE) {
         if (file->pos > 0) {
-            ssize_t write = sys_write(file->fd, file->buf, file->pos);
+            ssize_t w = write(file->fd, file->buf, file->pos);
 
             // Check if all data was written
-            if (write < 0 || (size_t)write != file->pos) {
+            if (w < 0 || (size_t)w != file->pos) {
                 file->flags |= FLAG_ERROR;
                 return EOF;
             }
@@ -440,7 +444,7 @@ int fgetpos(FILE* restrict f, fpos_t* restrict pos) {
     if (!f || !pos)
         return EOF;
 
-    off_t seek = sys_seek(f->fd, 0, SEEK_CUR);
+    off_t seek = lseek(f->fd, 0, SEEK_CUR);
 
     if (seek < 0) {
         f->flags |= FLAG_ERROR;
@@ -463,7 +467,7 @@ int fsetpos(FILE* f, const fpos_t* pos) {
     if (fflush(f))
         return EOF;
 
-    off_t seek = sys_seek(f->fd, *pos, SEEK_SET);
+    off_t seek = lseek(f->fd, *pos, SEEK_SET);
 
     if (seek < 0) {
         f->flags |= FLAG_ERROR;
@@ -484,7 +488,7 @@ int fseek(FILE* f, long offset, int whence) {
     if (fflush(f))
         return EOF;
 
-    off_t seek = sys_seek(f->fd, offset, whence);
+    off_t seek = lseek(f->fd, offset, whence);
 
     if (seek < 0) {
         f->flags |= FLAG_ERROR;
@@ -512,7 +516,7 @@ long ftell(FILE* f) {
         return EOF;
 
     // get the current offset
-    off_t seek = sys_seek(f->fd, 0, SEEK_CUR);
+    off_t seek = lseek(f->fd, 0, SEEK_CUR);
 
     if (seek < 0) {
         f->flags |= FLAG_ERROR;

@@ -1,11 +1,11 @@
 #include "scheduler.h"
 
-#include <aos/syscalls.h>
 #include <base/types.h>
 #include <data/list.h>
 #include <data/tree.h>
 #include <log/log.h>
 #include <time.h>
+#include <unistd.h>
 #include <x86/asm.h>
 
 #include "arch/gdt.h"
@@ -33,7 +33,7 @@ static tree* proc_tree = NULL;
 static linked_list* sleep_queue = NULL;
 
 
-// A simple sort of round robbin sxheduler
+// A simple sort of round robbin scheduler
 // pro: super simple, FIXME: con: sucks
 static sched_thread* _get_next_process(bool evict) {
     list_node* lnode = list_pop_front(cpu->scheduler.run_queue);
@@ -259,9 +259,9 @@ static void _spawn_init(void) {
     virtual_tty* tty0 = get_tty(0);
 
     if (tty0) {
-        proc_open_fd_node(init, tty0->pty->slave, STDIN_FD, FD_READ);
-        proc_open_fd_node(init, tty0->pty->slave, STDOUT_FD, FD_WRITE);
-        proc_open_fd_node(init, tty0->pty->slave, STDERR_FD, FD_WRITE);
+        proc_open_fd_node(init, tty0->pty->slave, STDIN_FILENO, FD_READ);
+        proc_open_fd_node(init, tty0->pty->slave, STDOUT_FILENO, FD_WRITE);
+        proc_open_fd_node(init, tty0->pty->slave, STDERR_FILENO, FD_WRITE);
     }
 
     proc_tree = tree_create_rooted(init->tnode);

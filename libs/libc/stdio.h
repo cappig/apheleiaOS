@@ -3,6 +3,15 @@
 #include "stdarg.h"
 #include "stddef.h"
 
+#define MODE_READ   (1 << 0)
+#define MODE_WRITE  (1 << 1)
+#define MODE_APPEND (1 << 2)
+#define MODE_PLUS   (1 << 3)
+
+#define FLAG_EOF      (1 << 0)
+#define FLAG_ERROR    (1 << 1)
+#define FLAG_USER_BUF (1 << 2)
+
 
 int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict format, va_list vlist);
 int vsprintf(char* restrict buffer, const char* restrict format, va_list vlist);

@@ -1,8 +1,8 @@
-#include <aos/syscalls.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #define ALIGNMENT        sizeof(void*)
 #define ALIGN_SIZE(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
@@ -82,8 +82,7 @@ static block_header* _get_memory(size_t size) {
     if (total_size < MMAP_CHUNK_SIZE)
         total_size = MMAP_CHUNK_SIZE;
 
-    void* ptr =
-        sys_mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* ptr = mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
     if (!ptr)
         return NULL;

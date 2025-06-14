@@ -2,7 +2,7 @@
 
 #include <data/ring.h>
 #include <data/vector.h>
-#include <term/termios.h>
+#include <termios.h>
 
 #include "fs.h"
 #include "sched/wait.h"

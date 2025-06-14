@@ -2,6 +2,7 @@
 
 #include <data/list.h>
 
+#include "arch/lock.h"
 #include "mem/heap.h"
 #include "sched/process.h"
 #include "sys/cpu.h"
@@ -9,6 +10,10 @@
 
 wait_list* wait_list_create() {
     wait_list* list = kcalloc(sizeof(wait_list));
+
+    // list->list = (linked_list){0};
+    list->spinlock = SPINLOCK_UNLOCKED;
+
     return list;
 }
 
@@ -17,7 +22,7 @@ void wait_list_destroy(wait_list* list) {
 }
 
 
-bool wait_list_append(wait_list* list, sched_thread* thread) {
+bool wait_list_append(wait_list* sem, sched_thread* thread) {
     if (!cpu->scheduler.running)
         return false;
 
@@ -25,7 +30,7 @@ bool wait_list_append(wait_list* list, sched_thread* thread) {
 
     sched_dequeue(thread, true);
 
-    list_append(&list->list, &thread->lnode);
+    list_append(&sem->list, &thread->lnode);
 
     cpu->scheduler.needs_resched = true;
 

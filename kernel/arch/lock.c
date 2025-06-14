@@ -3,7 +3,7 @@
 
 void spin_lock(lock* l) {
     while (__atomic_test_and_set(l, __ATOMIC_ACQUIRE))
-        asm volatile("hlt"); // TODO: yield to a process
+        asm volatile("pause");
 }
 
 void spin_unlock(lock* l) {

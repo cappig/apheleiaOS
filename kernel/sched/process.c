@@ -1,7 +1,5 @@
 #include "sched/process.h"
 
-#include <aos/signals.h>
-#include <aos/syscalls.h>
 #include <base/addr.h>
 #include <base/macros.h>
 #include <base/types.h>
@@ -26,7 +24,7 @@
 
 
 static inline pid_t _next_pid(void) {
-    static pid_t pid = -1; // the idle process gets a pid = -1 since its not a real process
+    static pid_t pid = 0; // the idle process gets a pid = -1 since its not a real process
     return pid++;
 }
 
@@ -168,7 +166,7 @@ void thread_init_stack(sched_thread* parent, sched_thread* child) {
                 PT_PRESENT | PT_NO_EXECUTE | PT_WRITE | PT_USER
             );
 
-            memcpy(child_vaddr, parent_vaddr, pages);
+            memcpy(child_vaddr, parent_vaddr, pages * PAGE_4KIB);
         }
     }
 
@@ -279,7 +277,7 @@ void proc_init_file_descriptors(sched_process* parent, sched_process* child) {
 void proc_init_signal_handlers(sched_process* parent, sched_process* child) {
     assert(child->type == PROC_USER);
 
-    usize len = SIGNAL_COUNT * sizeof(sighandler_fn);
+    usize len = NSIG * sizeof(sighandler_t);
 
     if (parent)
         memcpy(child->signals.handlers, parent->signals.handlers, len);
@@ -462,7 +460,7 @@ bool proc_terminate(sched_process* proc, usize exit_code) {
     signal_send(parent, -1, SIGCHLD);
 
     // All children get adopted by init
-    sched_process* init = sched_get_proc(0);
+    sched_process* init = sched_get_proc(1);
     assert(init);
 
     tree_node* init_node = init->tnode;

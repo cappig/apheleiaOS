@@ -11,19 +11,6 @@
 
 #define BUFSIZ 8192
 
-#define MODE_READ   (1 << 0)
-#define MODE_WRITE  (1 << 1)
-#define MODE_APPEND (1 << 2)
-#define MODE_PLUS   (1 << 3)
-
-#define FLAG_EOF      (1 << 0)
-#define FLAG_ERROR    (1 << 1)
-#define FLAG_USER_BUF (1 << 2)
-
-#define SEEK_CUR SYS_SEEK_CUR
-#define SEEK_END SYS_SEEK_END
-#define SEEK_SET SYS_SEEK_SET
-
 typedef ptrdiff_t ssize_t;
 typedef ssize_t fpos_t;
 

@@ -1,11 +1,12 @@
 #pragma once
 
-#include <aos/signals.h>
-#include <aos/syscalls.h>
 #include <base/types.h>
 #include <data/list.h>
 #include <data/tree.h>
 #include <data/vector.h>
+#include <signal.h>
+#include <sys/mman.h>
+#include <sys/types.h>
 #include <time.h>
 #include <x86/paging.h>
 
@@ -21,7 +22,7 @@
 #define SUPERUSER_UID 0
 #define SUPERUSER_GID 0
 
-#define PROC_SIGNAL_DEFAULT ((sighandler_fn)0)
+#define PROC_SIGNAL_DEFAULT ((sighandler_t)0)
 
 typedef enum {
     PROC_USER,
@@ -63,7 +64,7 @@ typedef struct {
 
     // What action shall be taken when handling the given siganl
     // 0 if default, 1 if ignored and a valid address if a defined handler should be called
-    sighandler_fn handlers[SIGNAL_COUNT];
+    sighandler_t handlers[NSIG];
 } process_signals;
 
 enum fd_flags {

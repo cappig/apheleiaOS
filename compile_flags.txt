@@ -12,4 +12,3 @@
 -Ilibs
 -Ikernel
 -DEXTEND_LIBC
--D_KERNEL

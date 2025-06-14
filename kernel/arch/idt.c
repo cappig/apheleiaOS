@@ -1,6 +1,5 @@
 #include "idt.h"
 
-#include <aos/signals.h>
 #include <base/attributes.h>
 #include <base/macros.h>
 #include <base/types.h>

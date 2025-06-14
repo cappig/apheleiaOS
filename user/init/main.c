@@ -1,41 +1,32 @@
-#include <aos/signals.h>
-#include <aos/syscalls.h>
-#include <libc_usr/stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <signal.h>
+#include <stdio.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 void child(int signum) {
     for (;;) {
         int status = 0;
-        pid_t pid = sys_wait(-1, &status, WNOHANG);
+        pid_t pid = waitpid(-1, &status, WNOHANG);
 
         if (pid <= 0)
             break;
 
-        char emsg[] = "child exited with code: ";
-        sys_write(STDOUT_FD, emsg, strlen(emsg));
-
-        char ecode[] = "      \n";
-        itoa(status, ecode, 10);
-        sys_write(STDOUT_FD, ecode, strlen(ecode));
+        printf("child %zd exited with code: %d\n", pid, status);
     }
 }
 
 
 // int main(int argc, char* argv[], char* envp[]) {
 int main(void) {
-    printf("TESTING 123");
-    fflush(stdout);
+    signal(SIGCHLD, child);
 
+    printf("TESTING 123\n");
 
-    // TEST: remove this shit
-    pid_t pid = sys_fork();
+    pid_t pid = fork();
 
-    if (!pid) {
-        printf("\nHello from child!\n");
+    if (!pid)
+        execve("/sbin/sh.elf", NULL, NULL);
 
-        sys_execve("/sbin/sh.elf", NULL, NULL);
-    }
 
     for (;;) {} // init should never ever exit
 

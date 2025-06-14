@@ -1,17 +1,21 @@
 #include "syscall.h"
 
-#include <aos/signals.h>
-#include <aos/syscalls.h>
 #include <base/addr.h>
 #include <base/types.h>
 #include <data/list.h>
 #include <data/tree.h>
 #include <data/vector.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <log/log.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <x86/paging.h>
+#include <x86/sys.h>
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
@@ -22,7 +26,6 @@
 #include "sched/signal.h"
 #include "sys/cpu.h"
 #include "vfs/fs.h"
-#include "x86/asm.h"
 
 
 static void _exit(u64 status) {
@@ -86,7 +89,7 @@ static isize __write(u64 fd, u64 buf_ptr, u64 len, u64 offset, bool use_fd_offse
     if (!validate_fd(fd))
         return -EBADF;
 
-    if (!validate_ptr(buf, len, true))
+    if (!validate_ptr(buf, len, false))
         return -EFAULT;
 
     file_desc* fdesc = get_fd(fd);
@@ -144,15 +147,15 @@ static isize _seek(int fd, off_t offset, int whence) {
     isize new_off;
 
     switch (whence) {
-    case SYS_SEEK_SET:
+    case SEEK_SET:
         new_off = offset;
         break;
 
-    case SYS_SEEK_CUR:
+    case SEEK_CUR:
         new_off = fdesc->offset + offset;
         break;
 
-    case SYS_SEEK_END:
+    case SEEK_END:
         new_off = fdesc->node->size + offset;
         break;
 
@@ -246,7 +249,7 @@ static u64 _mkdir(u64 path_ptr, u64 mode) {
 }
 
 static u64 _ioctl(u64 fd, u64 request, u64 argp_ptr) {
-    ioctl_argp_t* argp = (ioctl_argp_t*)argp_ptr;
+    ioctl_t* argp = (ioctl_t*)argp_ptr;
 
     file_desc* fdesc = get_fd(fd);
 
@@ -268,7 +271,7 @@ static u64 _ioctl(u64 fd, u64 request, u64 argp_ptr) {
     usize arg_len = 0;
 
     if (argp) {
-        if (!validate_ptr(argp, sizeof(ioctl_argp_t), false))
+        if (!validate_ptr(argp, sizeof(ioctl_t), false))
             return -EINVAL;
 
         if (!validate_ptr(argp->args, argp->len * sizeof(unsigned long long), false))
@@ -284,7 +287,7 @@ static u64 _ioctl(u64 fd, u64 request, u64 argp_ptr) {
 }
 
 static u64 _signal(u64 signum, u64 handler_ptr) {
-    sighandler_fn handler = (sighandler_fn)handler_ptr;
+    sighandler_t handler = (sighandler_t)handler_ptr;
 
     if (handler != SIG_IGN && handler != SIG_DFL)
         if (!validate_ptr(handler, 1, false))
@@ -577,7 +580,11 @@ static u64 _mmap(u64 addr, size_t len, int prot, int flags, int fd, off_t offset
 
 static void _syscall_handler(int_state* s) {
 #ifdef SYSCALL_DEBUG
-    log_debug("[SYSCALL_DEBUG] handling syscall %lu", s->g_regs.rax);
+    log_debug(
+        "[SYSCALL_DEBUG] handling syscall %lu (PID: %zd)",
+        s->g_regs.rax,
+        cpu->scheduler.current->proc->pid
+    );
 #endif
 
     u64 arg1 = s->g_regs.rdi;
@@ -691,7 +698,7 @@ static void _syscall_handler(int_state* s) {
     }
 
 #ifdef SYSCALL_DEBUG
-    log_debug("[SYSCALL_DEBUG] syscall %lu returning with %ld", s->g_regs.rax, ret);
+    log_debug("[SYSCALL_DEBUG] syscall %lu returning with %d", s->g_regs.rax, ret);
 #endif
 
     // FIXME: the biggest problem in the kernel right now is its shameless reliannce on x86

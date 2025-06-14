@@ -135,6 +135,25 @@ char* strrchr(const char* str, int ch) {
     return (char*)ptr;
 }
 
+size_t strcspn(const char* dest, const char* src) {
+    const char* d = dest;
+
+    while (*d) {
+        const char* s = src;
+
+        while (*s) {
+            if (*d == *s)
+                return (size_t)(d - dest);
+
+            s++;
+        }
+
+        d++;
+    }
+
+    return (size_t)(d - dest);
+}
+
 
 void* memset(void* dest, int val, size_t len) {
     unsigned char* ptr = (unsigned char*)dest;

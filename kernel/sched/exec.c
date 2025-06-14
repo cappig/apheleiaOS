@@ -1,6 +1,5 @@
 #include "exec.h"
 
-#include <aos/syscalls.h>
 #include <base/addr.h>
 #include <base/macros.h>
 #include <base/types.h>

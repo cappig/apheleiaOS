@@ -2,11 +2,11 @@
 
 #include "stddef.h"
 
-
 // #include_next <string.h> //TODO: why the fuck is this broken [clangd?]
 #ifdef EXTEND_LIBC
 #include <libc_ext/string.h>
 #endif
+
 
 void* memcpy(void* restrict dest, const void* restrict src, size_t len);
 void* memmove(void* dest, const void* src, size_t len);
@@ -23,6 +23,7 @@ int strncmp(const char* s1, const char* s2, size_t n);
 
 char* strchr(const char* str, int ch);
 char* strrchr(const char* str, int ch);
+size_t strcspn(const char* dest, const char* src);
 // TODO: Some stuff missing here too
 
 void* memset(void* dest, int val, size_t len);

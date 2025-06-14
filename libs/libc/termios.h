@@ -1,12 +1,10 @@
 #pragma once
 
-// Why is this here??
-
 // Defines strures related to the termios POSIX interface
 // https://pubs.opengroup.org/onlinepubs/7908799/xsh/termios.h.html
 // https://www.man7.org/linux/man-pages/man3/termios.3.html
 
-#define NCCS 20
+#define NCCS 32
 
 typedef unsigned char cc_t;
 typedef unsigned int speed_t;
@@ -23,8 +21,6 @@ struct termios {
     speed_t c_ospeed;
 };
 
-typedef struct termios termios_t;
-
 struct winsize {
     unsigned short ws_row;
     unsigned short ws_col;
@@ -32,7 +28,10 @@ struct winsize {
     unsigned short ws_ypixel;
 };
 
+#ifdef EXTEND_LIBC
+typedef struct termios termios_t;
 typedef struct winsize winsize_t;
+#endif
 
 // https://www.gnu.org/software/libc/manual/html_node/Editing-Characters.html
 enum termios_cc {
@@ -157,7 +156,8 @@ enum termios_baud {
 
 
 // Some sane defaults for termios to use
-inline termios_t* termios_default_init(termios_t* tos) {
+#ifdef EXTEND_LIBC
+inline termios_t* __termios_default_init(termios_t* tos) {
     if (!tos)
         return tos;
 
@@ -186,3 +186,4 @@ inline termios_t* termios_default_init(termios_t* tos) {
 
     return tos;
 }
+#endif

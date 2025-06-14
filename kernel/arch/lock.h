@@ -1,9 +1,11 @@
 #pragma once
 
 #include <base/types.h>
-#include <stdatomic.h>
 
-typedef volatile atomic_bool lock;
+#define SPINLOCK_UNLOCKED 0
+#define SPINLOCK_LOCKED   1
+
+typedef volatile int lock;
 
 
 void spin_lock(lock* l);

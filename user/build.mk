@@ -16,7 +16,8 @@ ULIB_SRC := \
 	$(wildcard libs/libc/*.c) \
 	$(wildcard libs/libc_ext/*.c) \
 	$(wildcard libs/libc_usr/*.c) \
-	$(wildcard libs/libc_usr/*.asm)
+	$(wildcard libs/libc_usr/*.asm) \
+	$(wildcard libs/sys/*.c)
 
 
 bin/user/%.c.o: user/%.c

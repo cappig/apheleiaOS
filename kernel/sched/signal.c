@@ -1,7 +1,7 @@
 #include "signal.h"
 
-#include <aos/signals.h>
 #include <base/types.h>
+#include <signal.h>
 #include <string.h>
 
 #include "arch/gdt.h"
@@ -9,7 +9,7 @@
 #include "sched/process.h"
 
 // TODO: core dumps
-static sighandler_fn default_actions[SIGNAL_COUNT + 1] = {
+static sighandler_t default_actions[NSIG + 1] = {
     [0] = SIG_DFL,
 
     [SIGCHLD] = SIG_IGN,
@@ -45,14 +45,14 @@ static inline void _unmark_signal(sched_process* proc, usize signum) {
 }
 
 // Here SIG_DFL return value will always mean 'terminate the process'
-static sighandler_fn _get_handler(sched_process* proc, usize signum) {
+static sighandler_t _get_handler(sched_process* proc, usize signum) {
     if (!proc->memory.trampoline)
         return SIG_DFL;
 
     if (signum == SIGKILL) // TODO: SIGSTOP
         return SIG_DFL;
 
-    sighandler_fn handler = proc->signals.handlers[signum];
+    sighandler_t handler = proc->signals.handlers[signum];
 
     if (handler == SIG_DFL)
         return default_actions[signum];
@@ -88,7 +88,7 @@ void thread_signal_switch(sched_thread* thread, usize signum) {
     sched_process* proc = thread->proc;
 
     int_state* current = (int_state*)thread->kstack.ptr;
-    sighandler_fn handler = proc->signals.handlers[signum];
+    sighandler_t handler = proc->signals.handlers[signum];
 
     // TODO: separate signal handler stacks
     u64 old_rsp = current->s_regs.rsp - 128; // Assume that we have a 128 byte red zone
@@ -209,7 +209,7 @@ isize signal_send(sched_process* proc, tid_t tid, usize signum) {
 
     // Signal dispostions are set per process not per thread.
     // This means that all threads handle all signals in the same way
-    sighandler_fn handler = _get_handler(proc, signum);
+    sighandler_t handler = _get_handler(proc, signum);
 
     if (handler == SIG_DFL) {
         proc_terminate(proc, EXIT_SIGNAL_BASE + signum);
@@ -239,8 +239,8 @@ isize signal_send(sched_process* proc, tid_t tid, usize signum) {
 }
 
 
-bool proc_signal_set_handler(sched_process* proc, usize signum, sighandler_fn handler) {
-    if (signum >= SIGNAL_COUNT || !signum)
+bool proc_signal_set_handler(sched_process* proc, usize signum, sighandler_t handler) {
+    if (signum >= NSIG || !signum)
         return false;
 
     if (signum == SIGKILL)

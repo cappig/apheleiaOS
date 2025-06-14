@@ -1,7 +1,5 @@
 #include "pty.h"
 
-#include <aos/signals.h>
-#include <aos/syscalls.h>
 #include <base/attributes.h>
 #include <base/types.h>
 #include <ctype.h>
@@ -9,15 +7,58 @@
 #include <data/vector.h>
 #include <errno.h>
 #include <input/kbd.h>
+#include <signal.h>
 #include <string.h>
-#include <term/termios.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 
+#include "arch/lock.h"
 #include "mem/heap.h"
 #include "sched/scheduler.h"
-#include "sched/signal.h"
 #include "sched/syscall.h"
+#include "sched/wait.h"
 #include "sys/cpu.h"
 #include "vfs/fs.h"
+
+
+// FIXME: this is still not ideal, use atomic operations
+static bool _pty_wait_for_line(pseudo_tty* pty, bool block) {
+    wait_list* sem = pty->waiters;
+
+    spin_lock(&sem->spinlock);
+
+    if (!ring_buffer_is_empty(pty->input_buffer)) {
+        sem->passable = true;
+        spin_unlock(&sem->spinlock);
+
+        return true;
+    }
+
+    sem->passable = false;
+
+    if (!block)
+        return false;
+
+    wait_list_append(sem, cpu->scheduler.current);
+    spin_unlock(&sem->spinlock);
+
+    while (!sem->passable) {
+        // asm volatile("pause");
+    }
+
+    return true;
+}
+
+static void _pty_signal_line(pseudo_tty* pty) {
+    wait_list* sem = pty->waiters;
+
+    spin_lock(&sem->spinlock);
+
+    sem->passable = true;
+    wait_list_wake_up(pty->waiters);
+
+    spin_unlock(&sem->spinlock);
+}
 
 
 static inline void _send_out(pseudo_tty* pty, u8 ch) {
@@ -26,7 +67,6 @@ static inline void _send_out(pseudo_tty* pty, u8 ch) {
     if (pty->out_hook)
         pty->out_hook(pty, ch);
 }
-
 
 static bool _process_output(vfs_node* node, u8 ch) {
     pseudo_tty* pty = node->private;
@@ -63,6 +103,7 @@ static bool _process_output(vfs_node* node, u8 ch) {
     return true;
 }
 
+
 static isize slave_write(vfs_node* node, void* buf, usize offset, usize len, u32 flags) {
     pseudo_tty* pty = node->private;
 
@@ -88,12 +129,8 @@ static isize slave_read(vfs_node* node, void* buf, UNUSED usize offset, usize le
         return -1;
 
     // Possibly block the calling process until new data becomes available
-    if (ring_buffer_is_empty(pty->input_buffer)) {
-        if (flags & VFS_NONBLOCK)
-            return -EAGAIN;
-        else
-            wait_list_append(pty->waiters, cpu->scheduler.current);
-    }
+    if (!_pty_wait_for_line(pty, !(flags & VFS_NONBLOCK)))
+        return -EAGAIN;
 
     return ring_buffer_pop_array(pty->input_buffer, buf, len);
 }
@@ -161,13 +198,13 @@ static i8 _canonical_input(vfs_node* node, u8 ch, u32 flags) {
         return !(tos->c_lflag & ECHOE);
     }
 
+    vec_push(pty->line_buffer, &ch);
+
     // Flush the line buffer
     if (ch == '\n' || ch == tos->c_cc[VEOL] || ch == tos->c_cc[VEOF]) {
         _flush_line_buffer(pty);
         return -1;
     }
-
-    vec_push(pty->line_buffer, &ch);
 
     return 1;
 }
@@ -291,7 +328,7 @@ static isize master_write(vfs_node* node, void* buf, UNUSED usize offset, usize 
     }
 
     if (has_data)
-        wait_list_wake_up(pty->waiters);
+        _pty_signal_line(pty);
 
     // TODO: implement VMIN and VTIME
 
@@ -380,7 +417,7 @@ pseudo_tty* pty_create(winsize_t* win, usize buffer_size) {
     }
 
     // Configure termios
-    termios_default_init(&pty->termios);
+    __termios_default_init(&pty->termios);
 
     pty->line_buffer = vec_create_sized(pty->winsize.ws_col, sizeof(char));
 
