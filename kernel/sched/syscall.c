@@ -248,9 +248,7 @@ static u64 _mkdir(u64 path_ptr, u64 mode) {
     return 0;
 }
 
-static u64 _ioctl(u64 fd, u64 request, u64 argp_ptr) {
-    ioctl_t* argp = (ioctl_t*)argp_ptr;
-
+static u64 _ioctl(u64 fd, u64 request, u64 arg) {
     file_desc* fdesc = get_fd(fd);
 
     if (!fdesc)
@@ -267,21 +265,7 @@ static u64 _ioctl(u64 fd, u64 request, u64 argp_ptr) {
     if (!node->interface || !node->interface->ioctl)
         return -ENOTTY;
 
-    u64* args = NULL;
-    usize arg_len = 0;
-
-    if (argp) {
-        if (!validate_ptr(argp, sizeof(ioctl_t), false))
-            return -EINVAL;
-
-        if (!validate_ptr(argp->args, argp->len * sizeof(unsigned long long), false))
-            return -EFAULT;
-
-        args = (u64*)argp->args;
-        arg_len = argp->len;
-    }
-
-    node->interface->ioctl(node, request, arg_len, args);
+    node->interface->ioctl(node, request, (void*)arg);
 
     return 0;
 }

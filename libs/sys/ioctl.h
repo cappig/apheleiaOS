@@ -2,20 +2,14 @@
 
 #include <sys/types.h>
 
-#define TCGETS  1
-#define TCSETS  2
-#define TCSETSW 3
-#define TCSETSF 4
-
+#define TCGETS     1
+#define TCSETS     2
+#define TCSETSW    3
+#define TCSETSF    4
 #define TIOCGWINSZ 5
 #define TIOCSWINSZ 6
-
-struct ioctl {
-    size_t len;
-    void* args;
-};
-
-typedef struct ioctl ioctl_t;
+#define TIOCSPGRP  7
+#define TIOCGPGRP  8
 
 
-int ioctl(int fd, unsigned long request, struct ioctl* data);
+int ioctl(int fd, unsigned long request, ...);

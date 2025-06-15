@@ -1,8 +1,13 @@
+#include "stdlib.h"
+
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 #include <sys/mman.h>
+
+#include "signal.h"
+#include "unistd.h"
 
 #define ALIGNMENT        sizeof(void*)
 #define ALIGN_SIZE(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
@@ -153,21 +158,6 @@ void* malloc(size_t size) {
     return (void*)((char*)block + sizeof(block_header));
 }
 
-void free(void* ptr) {
-    if (!ptr)
-        return;
-
-    block_header* block = _get_header(ptr);
-
-    if (block->is_free)
-        return;
-
-    block->is_free = true;
-
-    _add_to_free_list(block);
-    _coalesce_block(block);
-}
-
 void* calloc(size_t num, size_t size) {
     if (!num || !size)
         return NULL;
@@ -210,4 +200,27 @@ void* realloc(void* ptr, size_t size) {
     free(ptr);
 
     return new_ptr;
+}
+
+void free(void* ptr) {
+    if (!ptr)
+        return;
+
+    block_header* block = _get_header(ptr);
+
+    if (block->is_free)
+        return;
+
+    block->is_free = true;
+
+    _add_to_free_list(block);
+    _coalesce_block(block);
+}
+
+[[noreturn]]
+void abort(void) {
+    raise(SIGABRT);
+
+    _exit(1);
+    __builtin_unreachable();
 }

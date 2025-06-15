@@ -6,7 +6,9 @@
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
+#include "log/log.h"
 #include "sched/process.h"
+#include "sched/scheduler.h"
 
 // TODO: core dumps
 static sighandler_t default_actions[NSIG + 1] = {
@@ -202,7 +204,6 @@ usize thread_signal_get_pending(sched_thread* thread) {
 // thread in the process, otherwise the signal gets directed to the specified thread
 // Returns -1 if the process got killed right away, 0 if the signal got ignored
 // or 1 if it got delivered
-// FIXME: signals should wake up sleepers
 isize signal_send(sched_process* proc, tid_t tid, usize signum) {
     if (!signum)
         return 0;
@@ -211,13 +212,17 @@ isize signal_send(sched_process* proc, tid_t tid, usize signum) {
     // This means that all threads handle all signals in the same way
     sighandler_t handler = _get_handler(proc, signum);
 
+    if (handler == SIG_IGN)
+        return 0;
+
+    // init can only receive signals for which it has explicitly installed handlers
+    if (proc->pid == INIT_PID && !handler)
+        return 0;
+
     if (handler == SIG_DFL) {
         proc_terminate(proc, EXIT_SIGNAL_BASE + signum);
         return -1;
     }
-
-    if (handler == SIG_IGN)
-        return 0;
 
     // If the signal is directed attempt to prepare the thread
     if (tid >= 0) {

@@ -2,10 +2,11 @@
 
 #include <data/ring.h>
 #include <data/vector.h>
+#include <sys/types.h>
 #include <termios.h>
 
 #include "fs.h"
-#include "sched/wait.h"
+#include "sched/semaphore.h"
 
 typedef struct pseudo_tty pseudo_tty;
 
@@ -24,6 +25,8 @@ typedef struct pseudo_tty {
     termios_t termios;
     winsize_t winsize;
 
+    pid_t foreground;
+
     bool next_literal; // the next input character should not be interpreted as a control character
     vector* line_buffer; // Used by canonical mode
 
@@ -31,7 +34,7 @@ typedef struct pseudo_tty {
     pty_hook_fn out_hook; // There is new data in the output_buffer, the master can read
     pty_hook_fn in_hook; // There is new data in the input_buffer, the slave can read
 
-    wait_list* waiters;
+    semaphore* wait_sem;
 
     void* private;
 } pseudo_tty;

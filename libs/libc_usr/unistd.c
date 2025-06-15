@@ -1,6 +1,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "x86/sys.h"
+
 
 int execve(const char* path, char* const argv[], char* const envp[]) {
     return syscall3(SYS_EXECVE, (u64)path, (u64)argv, (u64)envp);
@@ -37,6 +39,15 @@ off_t lseek(int fd, off_t offset, int whence) {
 
 int close(int fd) {
     return syscall1(SYS_CLOSE, fd);
+}
+
+
+pid_t getpid(void) {
+    return syscall0(SYS_GETPID);
+}
+
+pid_t getppid(void) {
+    return syscall0(SYS_GETPPID);
 }
 
 

@@ -9,6 +9,8 @@
 
 #define SCHED_SLICE 1
 
+#define INIT_PID 1
+
 typedef struct {
     bool running;
 

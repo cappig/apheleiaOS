@@ -18,4 +18,7 @@ off_t lseek(int fd, off_t offset, int whence);
 
 int close(int fd);
 
+pid_t getpid(void);
+pid_t getppid(void);
+
 void _exit(int status);

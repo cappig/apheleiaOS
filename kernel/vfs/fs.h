@@ -46,7 +46,7 @@ typedef struct file_system_instance file_system_instance;
 typedef isize (*vfs_read_fn)(vfs_node* node, void* buf, usize offset, usize len, u32 flags);
 typedef isize (*vfs_write_fn)(vfs_node* node, void* buf, usize offset, usize len, u32 flags);
 typedef isize (*vfs_mmap_fn)(vfs_node* node, void* buf, usize offset, usize len, u32 flags);
-typedef isize (*vfs_ioctl_fn)(vfs_node* node, u64 request, usize arg_len, u64* args);
+typedef isize (*vfs_ioctl_fn)(vfs_node* node, u64 request, void* args);
 typedef isize (*vfs_create_fn)(vfs_node* node, vfs_node* child);
 typedef isize (*vfs_remove_fn)(vfs_node* node, char* name);
 

@@ -56,6 +56,23 @@ static int _read_byte(FILE* stream) {
         return EOF;
     }
 
+    if (stream->buf_mode == _IONBF) {
+        unsigned char c;
+        ssize_t r = read(stream->fd, &c, 1);
+
+        if (r < 0) {
+            stream->flags |= FLAG_ERROR;
+            return EOF;
+        }
+
+        if (!r) {
+            stream->flags |= FLAG_EOF;
+            return EOF;
+        }
+
+        return c;
+    }
+
     // the buffer is empty, read more data
     if (stream->pos >= stream->len) {
         // if in write mode, flush the buffer first
@@ -103,6 +120,17 @@ static int _write_byte(char c, FILE* stream) {
 
         if (fseek(stream, pos, SEEK_SET))
             return EOF;
+    }
+
+    if (stream->buf_mode == _IONBF) {
+        ssize_t w = write(stream->fd, &c, 1);
+
+        if (w < 0) {
+            stream->flags |= FLAG_ERROR;
+            return EOF;
+        }
+
+        return c;
     }
 
     // buffer is full, flush
@@ -251,6 +279,9 @@ int fflush(FILE* file) {
     if (!file)
         return EOF;
 
+    if (file->buf_mode == _IONBF)
+        return 0;
+
     if (file->mode & MODE_WRITE) {
         if (file->pos > 0) {
             ssize_t w = write(file->fd, file->buf, file->pos);
@@ -339,20 +370,36 @@ size_t fread(void* restrict ptr, size_t size, size_t nmemb, FILE* restrict file)
         return 0;
 
     size_t total = size * nmemb;
-    size_t read = 0;
+    size_t read_count = 0;
     unsigned char* dest = (unsigned char*)ptr;
 
-    while (read < total) {
+    if (file->buf_mode == _IONBF) {
+        ssize_t r = read(file->fd, dest, total);
+
+        if (r < 0) {
+            file->flags |= FLAG_ERROR;
+            return 0;
+        }
+
+        if (!r) {
+            file->flags |= FLAG_EOF;
+            return 0;
+        }
+
+        return r / size;
+    }
+
+    while (read_count < total) {
         int c = _read_byte(file);
 
         // EOF or error
         if (c < 0)
             break;
 
-        dest[read++] = (unsigned char)c;
+        dest[read_count++] = (unsigned char)c;
     }
 
-    return read / size;
+    return read_count / size;
 }
 
 size_t fwrite(const void* restrict ptr, size_t size, size_t nmemb, FILE* restrict file) {
@@ -367,6 +414,17 @@ size_t fwrite(const void* restrict ptr, size_t size, size_t nmemb, FILE* restric
     size_t total = size * nmemb;
     size_t written = 0;
     const unsigned char* src = (const unsigned char*)ptr;
+
+    if (file->buf_mode == _IONBF) {
+        ssize_t w = write(file->fd, src, total);
+
+        if (w < 0) {
+            file->flags |= FLAG_ERROR;
+            return 0;
+        }
+
+        return w / size;
+    }
 
     while (written < total) {
         int result = _write_byte(src[written], file);
@@ -424,12 +482,25 @@ int fputs(const char* restrict s, FILE* restrict stream) {
         return EOF;
     }
 
+    size_t len = strlen(s);
+
+    if (stream->buf_mode == _IONBF) {
+        ssize_t w = write(stream->fd, s, len);
+
+        if (w < 0) {
+            stream->flags |= FLAG_ERROR;
+            return EOF;
+        }
+
+        return len;
+    }
+
     size_t written = 0;
 
     while (*s) {
-        int write = _write_byte(*s, stream);
+        int write_result = _write_byte(*s, stream);
 
-        if (write == EOF)
+        if (write_result == EOF)
             return EOF;
 
         written++;

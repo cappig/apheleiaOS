@@ -12,52 +12,31 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 
-#include "arch/lock.h"
 #include "mem/heap.h"
 #include "sched/scheduler.h"
+#include "sched/signal.h"
 #include "sched/syscall.h"
-#include "sched/wait.h"
-#include "sys/cpu.h"
+#include "sys/types.h"
 #include "vfs/fs.h"
 
 
-// FIXME: this is still not ideal, use atomic operations
 static bool _pty_wait_for_line(pseudo_tty* pty, bool block) {
-    wait_list* sem = pty->waiters;
-
-    spin_lock(&sem->spinlock);
-
-    if (!ring_buffer_is_empty(pty->input_buffer)) {
-        sem->passable = true;
-        spin_unlock(&sem->spinlock);
-
+    if (!ring_buffer_is_empty(pty->input_buffer))
         return true;
-    }
 
-    sem->passable = false;
+    sem_reset(pty->wait_sem);
 
     if (!block)
         return false;
 
-    wait_list_append(sem, cpu->scheduler.current);
-    spin_unlock(&sem->spinlock);
-
-    while (!sem->passable) {
-        // asm volatile("pause");
-    }
+    sem_wait(pty->wait_sem, true);
 
     return true;
 }
 
 static void _pty_signal_line(pseudo_tty* pty) {
-    wait_list* sem = pty->waiters;
-
-    spin_lock(&sem->spinlock);
-
-    sem->passable = true;
-    wait_list_wake_up(pty->waiters);
-
-    spin_unlock(&sem->spinlock);
+    sem_signal(pty->wait_sem);
+    /* sem_reset(pty->wait_sem); */
 }
 
 
@@ -239,8 +218,9 @@ static i16 _process_input(vfs_node* node, u8 ch) {
             signal = SIGTSTP;
 
         if (signal) {
-            //  TODO: job control, we want to send the signal to the fg process
-            // signal_send(cpu->scheduler.current, -1, signal);
+            if (pty->foreground)
+                signal_send(sched_get_proc(pty->foreground), -1, signal);
+
             return ch;
         }
     }
@@ -345,13 +325,13 @@ static isize master_read(vfs_node* node, void* buf, UNUSED usize offset, usize l
 }
 
 
-static isize pty_ioctl(vfs_node* node, u64 request, usize arg_len, u64* args) {
+static isize pty_ioctl(vfs_node* node, u64 request, void* args) {
     pseudo_tty* pty = node->private;
 
     if (!pty)
         return -ENOTTY;
 
-    if (!args || !arg_len)
+    if (!args)
         return -EINVAL;
 
     switch (request) {
@@ -396,6 +376,21 @@ static isize pty_ioctl(vfs_node* node, u64 request, usize arg_len, u64* args) {
         memcpy(&pty->termios, args, sizeof(termios_t));
         return 0;
 
+    // set/get the foreground PID
+    case TIOCSPGRP:
+        if (!validate_ptr(args, sizeof(pid_t), false))
+            return -EINVAL;
+
+        pty->foreground = *(pid_t*)args;
+        return 0;
+
+    case TIOCGPGRP:
+        if (!validate_ptr(args, sizeof(pid_t), false))
+            return -EINVAL;
+
+        *(pid_t*)args = pty->foreground;
+        return 0;
+
     default:
         return -EINVAL;
     }
@@ -435,7 +430,7 @@ pseudo_tty* pty_create(winsize_t* win, usize buffer_size) {
     pty->slave->interface->ioctl = pty_ioctl;
     pty->slave->private = pty;
 
-    pty->waiters = wait_list_create();
+    pty->wait_sem = sem_create(SEM_NOT_PASSABLE);
 
     pty->next_literal = false;
 
@@ -450,6 +445,8 @@ void pty_destroy(pseudo_tty* pty) {
 
     vfs_destroy_node(pty->master);
     vfs_destroy_node(pty->slave);
+
+    sem_destroy(pty->wait_sem);
 
     kfree(pty);
 }
