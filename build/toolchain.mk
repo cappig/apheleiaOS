@@ -59,7 +59,7 @@ CC_DEBUG_EXTRA := \
 	-DSYSCALL_DEBUG
 
 # scan-build is a nice clang alternative
-GCC_ANALYZER ?= true
+GCC_ANALYZER ?= false
 
 ifeq ($(TOOLCHAIN), gnu)
 ifeq ($(GCC_ANALYZER), true)

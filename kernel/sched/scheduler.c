@@ -28,9 +28,9 @@ static void _spin(void) {
 }
 
 static sched_process* idle = NULL;
-
-static tree* proc_tree = NULL;
 static linked_list* sleep_queue = NULL;
+
+tree* proc_tree = NULL;
 
 
 // A simple sort of round robbin scheduler
@@ -140,7 +140,7 @@ bool sched_dequeue_proc(sched_process* proc) {
 }
 
 
-static bool _proc_comp(const void* data, const void* private) {
+static bool _proc_comp(const void* data, void* private) {
     sched_process* proc = (sched_process*)data;
     pid_t pid = (pid_t) private;
 

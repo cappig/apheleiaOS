@@ -24,6 +24,7 @@ typedef struct {
 // defined in switch.asm
 extern void context_switch(u64 kernel_stack) NORETURN;
 
+extern tree* proc_tree;
 
 void sched_enqueue(sched_thread* thread);
 bool sched_dequeue(sched_thread* thread, bool and_current);

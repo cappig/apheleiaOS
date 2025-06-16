@@ -219,7 +219,7 @@ static i16 _process_input(vfs_node* node, u8 ch) {
 
         if (signal) {
             if (pty->foreground)
-                signal_send(sched_get_proc(pty->foreground), -1, signal);
+                signal_send_group(pty->foreground, signal);
 
             return ch;
         }
@@ -376,7 +376,7 @@ static isize pty_ioctl(vfs_node* node, u64 request, void* args) {
         memcpy(&pty->termios, args, sizeof(termios_t));
         return 0;
 
-    // set/get the foreground PID
+    // set/get the foreground PGID
     case TIOCSPGRP:
         if (!validate_ptr(args, sizeof(pid_t), false))
             return -EINVAL;

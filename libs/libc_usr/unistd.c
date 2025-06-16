@@ -51,6 +51,14 @@ pid_t getppid(void) {
 }
 
 
+int setpgid(pid_t pid, pid_t pgrp) {
+    return syscall2(SYS_SETPGID, pid, pgrp);
+}
+
+pid_t getpgid(pid_t pid) {
+    return syscall1(SYS_GETPGID, pid);
+}
+
 void _exit(int status) {
     syscall1(SYS_EXIT, status);
 }

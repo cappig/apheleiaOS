@@ -15,7 +15,9 @@ void sigint_handler(int sig) {
 int main() {
     signal(SIGINT, sigint_handler);
 
-    pid_t pid = getpid();
+    setpgid(0, 0);
+
+    pid_t pid = getpgid(0);
     ioctl(STDOUT_FILENO, TIOCSPGRP, &pid);
 
     char input[MAX_INPUT];

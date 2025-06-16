@@ -3,12 +3,18 @@
 #include <base/types.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/types.h>
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
 #include "log/log.h"
 #include "sched/process.h"
 #include "sched/scheduler.h"
+
+typedef struct {
+    pid_t group;
+    int signum;
+} sig_group_data;
 
 // TODO: core dumps
 static sighandler_t default_actions[NSIG + 1] = {
@@ -202,11 +208,11 @@ usize thread_signal_get_pending(sched_thread* thread) {
 
 // Send a signal to a process, if tid is -1 than the signal can be delivered to any
 // thread in the process, otherwise the signal gets directed to the specified thread
-// Returns -1 if the process got killed right away, 0 if the signal got ignored
-// or 1 if it got delivered
-isize signal_send(sched_process* proc, tid_t tid, usize signum) {
+// Retruns -1 on error, 0 if the signal got ignored, 1 if the process got killed
+// right away or 2 if it got marked as pending
+int signal_send(sched_process* proc, tid_t tid, usize signum) {
     if (!signum)
-        return 0;
+        return -1;
 
     // Signal dispostions are set per process not per thread.
     // This means that all threads handle all signals in the same way
@@ -221,7 +227,7 @@ isize signal_send(sched_process* proc, tid_t tid, usize signum) {
 
     if (handler == SIG_DFL) {
         proc_terminate(proc, EXIT_SIGNAL_BASE + signum);
-        return -1;
+        return 1;
     }
 
     // If the signal is directed attempt to prepare the thread
@@ -230,7 +236,7 @@ isize signal_send(sched_process* proc, tid_t tid, usize signum) {
 
         // Note that this means that the user can just mask/ignore fatal signals like SIGSEGV,
         // this will put the thread into an infinite loop of attempting to rerun the offendig
-        // instruction ans segfaulting we would have to send SIGKILL to stop this
+        // instruction and SEGFAULTing. We would have to send SIGKILL to stop this
         if (_is_masked(thread, signum))
             return 0;
 
@@ -240,7 +246,38 @@ isize signal_send(sched_process* proc, tid_t tid, usize signum) {
         _mark_signal(proc, signum);
     }
 
-    return 1;
+    return 2;
+}
+
+int signal_send_pid(pid_t pid, tid_t tid, usize signum) {
+    sched_process* proc = sched_get_proc(pid);
+
+    if (!proc)
+        return -1;
+
+    return signal_send(proc, tid, signum);
+}
+
+
+static bool _send_group(const void* data, void* private) {
+    sched_process* proc = (sched_process*)data;
+    sig_group_data* gdata = private;
+
+    if (proc->group == gdata->group)
+        signal_send(proc, -1, gdata->signum);
+
+    return 0;
+}
+
+int signal_send_group(pid_t group, usize signum) {
+    if (!group)
+        return -1;
+
+    sig_group_data data = {group, signum};
+
+    tree_foreach(proc_tree, _send_group, &data);
+
+    return 2;
 }
 
 

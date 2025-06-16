@@ -86,7 +86,6 @@ bool tree_remove_child(tree_node* parent, tree_node* child) {
     return removed;
 }
 
-
 static tree_node* _findc(tree_node* root, tree_comp_fn comp, void* private) {
     foreach (node, root->children) {
         tree_node* child = node->data;
@@ -95,6 +94,7 @@ static tree_node* _findc(tree_node* root, tree_comp_fn comp, void* private) {
             return child;
 
         tree_node* res = _findc(child, comp, private);
+
         if (res)
             return res;
     }
@@ -107,13 +107,14 @@ tree_node* tree_find_comp(tree* root, tree_comp_fn comp, void* private) {
         return NULL;
 
     tree_node* rnode = root->root;
+
     if (comp(rnode->data, private))
         return rnode;
 
     return _findc(root->root, comp, private);
 }
 
-static bool _find_comp(const void* data, const void* private) {
+static bool _find_comp(const void* data, void* private) {
     return (data == private);
 }
 
@@ -122,4 +123,31 @@ tree_node* tree_find(tree* root, void* data) {
         return NULL;
 
     return tree_find_comp(root, _find_comp, data);
+}
+
+
+// depth first iteration over all nodes in the three, if the callback returns 1 the itteration stops
+int tree_foreach_node(tree_node* node, tree_foreach_fn callback, void* private) {
+    if (!node || !callback)
+        return -1;
+
+    // callback requested early termination
+    if (callback(node->data, private))
+        return 1;
+
+    foreach (lnode, node->children) {
+        tree_node* child = lnode->data;
+
+        if (tree_foreach_node(child, callback, private))
+            return 1; // early termination from child
+    }
+
+    return 0;
+}
+
+int tree_foreach(tree* root, tree_foreach_fn callback, void* data) {
+    if (!root || !root->root)
+        return -1;
+
+    return tree_foreach_node(root->root, callback, data);
 }

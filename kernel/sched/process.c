@@ -51,7 +51,6 @@ sched_process* proc_create(const char* name, process_type type) {
 // NOTE: this _does not_ kill threads
 void proc_free(sched_process* proc) {
     vec_destroy(proc->file_descriptors);
-
     free_table(proc->memory.table);
 }
 
@@ -108,6 +107,8 @@ sched_process* spawn_uproc(const char* name) {
     proc_init_signal_handlers(NULL, proc);
 
     proc->tnode = tree_create_node(proc);
+
+    proc->group = proc->pid;
 
     return proc;
 }
@@ -414,6 +415,9 @@ sched_process* proc_fork(sched_process* parent, tid_t tid) {
     sched_thread* child_thread = proc_get_thread(child, 0);
 
     child->tnode = tree_create_node(child);
+
+    child->group = parent->group;
+    // TODO: environment variables
 
     tree_insert_child(parent->tnode, child->tnode);
 
@@ -737,6 +741,27 @@ bool proc_validate_ptr(sched_process* proc, const void* ptr, usize len, bool wri
     }
 
     return true;
+}
+
+bool proc_is_descendant(sched_process* proc, sched_process* target) {
+    if (!proc || !target)
+        return false;
+
+    tree_node* node = proc->tnode;
+
+    while (node) {
+        sched_process* cur = node->data;
+
+        if (!cur)
+            break;
+
+        if (cur == target)
+            return true;
+
+        node = node->parent;
+    }
+
+    return false;
 }
 
 

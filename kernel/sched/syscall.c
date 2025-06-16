@@ -26,6 +26,7 @@
 #include "sched/signal.h"
 #include "sys/cpu.h"
 #include "vfs/fs.h"
+#include "x86/asm.h"
 
 
 static void _exit(u64 status) {
@@ -299,21 +300,41 @@ static u64 _sigreturn(void) {
     return 0;
 }
 
-static u64 _kill(u64 pid, u64 signum) {
-    if (!validate_signum(signum))
-        return -EINVAL;
+static u64 _kill(u64 pid, int signum) {
+    int ret = -1;
 
-    sched_process* proc = sched_get_proc(pid);
+    // signal a specific process
+    if (signum > 0) {
+        sched_process* proc = sched_get_proc(pid);
 
-    if (!proc || proc->pid != (pid_t)pid)
-        return -ESRCH;
+        if (!proc)
+            return -ESRCH;
 
-    // TODO: check perms
+        if (!has_perms(proc->identity.uid))
+            return -EPERM;
 
-    if (signum != 0)
-        signal_send(proc, -1, signum);
+        ret = signal_send(proc, -1, signum);
+    }
+    // signal all processes in the senders process group
+    else if (signum == 0) {
+        sched_process* current = cpu_current_proc();
 
-    return 0;
+        if (!current->group)
+            return -ESRCH;
+
+        ret = signal_send_group(current->group, signum);
+
+    }
+    // signal all processes the sender is allowed to signal
+    else if (signum == -1) {
+        // TODO: implement this
+    }
+    // signal a specific process group
+    else if (signum < -1) {
+        ret = signal_send_group(-signum, signum);
+    }
+
+    return (ret < 0) ? -1 : 0;
 }
 
 static u64 _wait(pid_t pid, u64 status_ptr, u64 options) {
@@ -401,6 +422,42 @@ static u64 _getppid(void) {
 
     sched_process* parent = parent_node->data;
     return parent->pid;
+}
+
+u64 _setpgid(u64 pid, u64 pgid) {
+    sched_process* current = cpu_current_proc();
+
+    if (!pid)
+        pid = current->pid;
+
+    if (!pgid)
+        pgid = pid;
+
+    sched_process* target = sched_get_proc(pid);
+
+    if (!target)
+        return -ESRCH;
+
+    if (!proc_is_descendant(target, current))
+        return -EACCES;
+
+    target->group = pgid;
+
+    return 0;
+}
+
+u64 _getpgid(u64 pid) {
+    sched_process* current = cpu_current_proc();
+
+    if (!pid)
+        pid = current->pid;
+
+    sched_process* target = sched_get_proc(pid);
+
+    if (!target)
+        return -ESRCH;
+
+    return target->group;
 }
 
 
@@ -644,6 +701,14 @@ static void _syscall_handler(int_state* s) {
 
     case SYS_GETPPID:
         ret = _getppid();
+        break;
+
+    case SYS_SETPGID:
+        ret = _setpgid(arg1, arg2);
+        break;
+
+    case SYS_GETPGID:
+        ret = _getpgid(arg1);
         break;
 
 

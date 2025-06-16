@@ -19,12 +19,14 @@
 #define SYS_WAIT      13
 #define SYS_GETPID    14
 #define SYS_GETPPID   15
-#define SYS_FORK      16
-#define SYS_EXECVE    17
-#define SYS_SLEEP     18
-#define SYS_MOUNT     19
-#define SYS_UNMOUNT   20
-#define SYS_MMAP      21
+#define SYS_SETPGID   16
+#define SYS_GETPGID   17
+#define SYS_FORK      18
+#define SYS_EXECVE    19
+#define SYS_SLEEP     20
+#define SYS_MOUNT     21
+#define SYS_UNMOUNT   22
+#define SYS_MMAP      23
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1

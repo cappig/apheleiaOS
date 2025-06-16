@@ -21,4 +21,7 @@ int close(int fd);
 pid_t getpid(void);
 pid_t getppid(void);
 
+int setpgid(pid_t pid, pid_t pgrp);
+pid_t getpgid(pid_t pid);
+
 void _exit(int status);

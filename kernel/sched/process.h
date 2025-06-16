@@ -97,7 +97,9 @@ typedef enum {
 
 typedef struct {
     char* name;
+
     pid_t pid;
+    pid_t group;
 
     process_type type;
     process_identity identity;
@@ -231,5 +233,7 @@ bool proc_handle_page_fault(sched_process* proc, int_state* state);
 bool proc_insert_mem_region(sched_process* proc, memory_region* region);
 
 bool proc_validate_ptr(sched_process* proc, const void* ptr, usize len, bool write);
+
+bool proc_is_descendant(sched_process* proc, sched_process* target);
 
 void proc_dump_regions(sched_process* proc);

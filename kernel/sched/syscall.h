@@ -24,16 +24,6 @@ static inline bool validate_ptr(const void* ptr, usize len, bool write) {
     return proc_validate_ptr(cpu->scheduler.current->proc, ptr, len, write);
 }
 
-static inline bool validate_signum(usize signum) {
-    if (!signum)
-        return false;
-
-    if (signum >= NSIG)
-        return false;
-
-    return true;
-}
-
 static inline bool has_perms(usize user) {
     sched_thread* thread = cpu->scheduler.current;
     usize current_uid = thread->proc->identity.euid;
