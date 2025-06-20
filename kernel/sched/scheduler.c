@@ -251,9 +251,10 @@ static void _spawn_init(void) {
     if (!file)
         panic("init.elf not found!");
 
-    bool exec = exec_elf(thread, file, NULL, NULL);
+    char* envp[] = {"PATH=/sbin:/bin", NULL};
+    int exec = exec_elf(thread, file, NULL, envp);
 
-    if (!exec)
+    if (exec < 0)
         panic("Failed to start init");
 
     virtual_tty* tty0 = get_tty(0);

@@ -3,12 +3,14 @@
 #include <base/addr.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <errno.h>
 #include <parse/elf.h>
 #include <string.h>
 #include <x86/paging.h>
 
 #include "arch/gdt.h"
 #include "arch/idt.h"
+#include "data/vector.h"
 #include "mem/heap.h"
 #include "mem/physical.h"
 #include "mem/virtual.h"
@@ -53,6 +55,8 @@ _load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* header, usi
 
     elf_prog_header* p_header = kmalloc(header->phent_size);
 
+    bool success = true;
+
     for (usize i = 0; i < header->ph_num; i++) {
         usize header_offset = header->phoff + i * header->phent_size;
 
@@ -67,11 +71,14 @@ _load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* header, usi
 
         memory_region region = {0};
 
-        usize pages = DIV_ROUND_UP(p_header->mem_size, PAGE_4KIB);
         region.base = p_header->vaddr + load_offset;
-        region.size = pages * PAGE_4KIB;
 
         u64 vbase = ALIGN_DOWN(region.base, PAGE_4KIB);
+        u64 vend = ALIGN(region.base + p_header->mem_size, PAGE_4KIB);
+
+        region.size = vend - vbase;
+        usize pages = region.size / PAGE_4KIB;
+
         u64 pbase = (u64)alloc_frames(pages);
         void* base = (void*)ID_MAPPED_VADDR(pbase);
 
@@ -79,24 +86,26 @@ _load_elf_sections(sched_thread* thread, vfs_node* file, elf_header* header, usi
         region.file = file;
 
         u64 page_flags = elf_to_page_flags(p_header->flags) | PT_USER;
+
         region.flags = MAP_PRIVATE | MAP_FIXED;
         region.prot = page_flags_to_prot(page_flags);
 
         map_region(proc->memory.table, pages, vbase, pbase, page_flags);
 
-        if (vfs_read(file, base + region.offset, p_header->offset, p_header->file_size, 0) < 0)
-            return false;
+        if (vfs_read(file, base + region.offset, p_header->offset, p_header->file_size, 0) < 0) {
+            success = false;
+            break;
+        }
 
-        // Zero out any additional space
         usize zero_len = p_header->mem_size - p_header->file_size;
-        memset(base + p_header->file_size, 0, zero_len);
+        memset(base + region.offset + p_header->file_size, 0, zero_len);
 
         proc_insert_mem_region(proc, &region);
     }
 
     kfree(p_header);
 
-    return true;
+    return success;
 }
 
 static void _map_vdso(sched_thread* thread) {
@@ -231,33 +240,32 @@ static u64 _alloc_args(sched_thread* thread, char** argv, char** envp) {
     return rsp;
 }
 
-bool exec_elf(sched_thread* thread, vfs_node* file, char** argv, char** envp) {
+int exec_elf(sched_thread* thread, vfs_node* file, char** argv, char** envp) {
     if (!file || !thread)
-        return false;
+        return -EINVAL;
 
     sched_process* proc = thread->proc;
 
     assert(proc->type == PROC_USER);
 
-    // elf_header* header = kmalloc(sizeof(elf_header));
-    elf_header header[sizeof(elf_header)] = {0}; // FIXME: what the fuck???
+    vec_clear(proc->memory.regions);
+
+    elf_header header[sizeof(elf_header)] = {0};
 
     isize read = vfs_read(file, header, 0, sizeof(elf_header), 0);
 
     if (read < 0)
-        return false;
+        return -EFAULT;
 
     if (elf_verify(header) != VALID_ELF)
-        return false;
+        return -EINVAL;
 
     // TODO: handle ET_DYN
     if (!elf_is_executable(header))
-        return false;
+        return -EINVAL;
 
-    _load_elf_sections(thread, file, header, 0);
-
-    // Map the null page with no permissions so that we can detect nullptr dereference
-    // map_page(proc->memory.table, PAGE_4KIB, 0, 0, PT_PRESENT);
+    if (!_load_elf_sections(thread, file, header, 0))
+        return -EFAULT;
 
     // TODO: don't just map to a fixed address
     _init_ustack(thread, PROC_USTACK_BASE, SCHED_USTACK_PAGES);
@@ -277,5 +285,5 @@ bool exec_elf(sched_thread* thread, vfs_node* file, char** argv, char** envp) {
 
     _map_vdso(thread);
 
-    return true;
+    return 0;
 }

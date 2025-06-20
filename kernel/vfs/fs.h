@@ -5,6 +5,7 @@
 #include <data/tree.h>
 
 #include "sys/disk.h"
+#include "sys/types.h"
 
 #define VFS_EOF (-1)
 
@@ -38,8 +39,6 @@ enum vfs_flags {
     // Flags 16...32 may be used for device specific flags
 };
 
-typedef u16 vfs_mode;
-
 typedef struct vfs_node vfs_node;
 typedef struct file_system_instance file_system_instance;
 
@@ -69,9 +68,9 @@ typedef struct vfs_node {
 
     vfs_timestamp time;
 
-    vfs_mode permissions;
-    usize uid;
-    usize gid;
+    mode_t mode;
+    uid_t uid;
+    gid_t gid;
 
     u64 size;
     u64 inode;
@@ -104,10 +103,12 @@ bool vfs_validate_name(const char* name);
 vfs_node* vfs_lookup_from(vfs_node* from, const char* path);
 vfs_node* vfs_lookup(const char* path);
 vfs_node* vfs_lookup_relative(const char* root, const char* path);
-vfs_node* vfs_open(const char* path, vfs_node_type type, bool create, vfs_mode mode);
+vfs_node* vfs_open(const char* path, vfs_node_type type, bool create, mode_t mode);
+
+bool vfs_access(vfs_node* vnode, uid_t uid, gid_t gid, int mode);
 
 bool vfs_insert_child(vfs_node* parent, vfs_node* child);
-vfs_node* vfs_create(vfs_node* parent, char* name, vfs_node_type type, vfs_mode mode);
+vfs_node* vfs_create(vfs_node* parent, char* name, vfs_node_type type, mode_t mode);
 
 bool vfs_mount(file_system_instance* fs, vfs_node* mount);
 bool vfs_unmount(vfs_node* mount, bool destroy_tree);

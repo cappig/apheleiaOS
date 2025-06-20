@@ -36,3 +36,5 @@ char* strtok(char* restrict str, const char* restrict delim);
 
 char* strdup(const char* src);
 char* strndup(const char* str, size_t size);
+
+char* strerror(int errnum);

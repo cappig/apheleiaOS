@@ -85,7 +85,10 @@
 #define ETXTBSY         78
 #define EXDEV           79
 
+#define __SYSCALL_ERRNO(ret)                   \
+    ({                                         \
+        long _ret = (ret);                     \
+        _ret < 0 ? (errno = -_ret, -1) : _ret; \
+    })
 
-#define errno (*(_errno_impl()))
-
-extern int* _errno_impl(void);
+extern int errno;

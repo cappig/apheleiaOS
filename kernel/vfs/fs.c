@@ -10,6 +10,9 @@
 #include "mem/heap.h"
 #include "sys/disk.h"
 #include "sys/panic.h"
+#include "sys/stat.h"
+#include "sys/types.h"
+#include "unistd.h"
 
 // Our kernel has one single virtual file system
 virtual_fs* vfs = NULL;
@@ -175,7 +178,7 @@ vfs_node* vfs_lookup_relative(const char* root, const char* path) {
 }
 
 // 'mode' is only relevant if the node gets created
-vfs_node* vfs_open(const char* path, vfs_node_type type, bool create, vfs_mode mode) {
+vfs_node* vfs_open(const char* path, vfs_node_type type, bool create, mode_t mode) {
     vfs_node* file = vfs_lookup(path);
 
     if (file)
@@ -198,6 +201,35 @@ vfs_node* vfs_open(const char* path, vfs_node_type type, bool create, vfs_mode m
     kfree(base_cpy);
 
     return child;
+}
+
+bool vfs_access(vfs_node* vnode, uid_t uid, gid_t gid, int mode) {
+    int perm = 0;
+
+    if (uid == vnode->uid) {
+        if (mode & R_OK)
+            perm |= (vnode->mode & S_IRUSR) ? R_OK : 0;
+        if (mode & W_OK)
+            perm |= (vnode->mode & S_IWUSR) ? W_OK : 0;
+        if (mode & X_OK)
+            perm |= (vnode->mode & S_IXUSR) ? X_OK : 0;
+    } else if (gid == vnode->gid) {
+        if (mode & R_OK)
+            perm |= (vnode->mode & S_IRGRP) ? R_OK : 0;
+        if (mode & W_OK)
+            perm |= (vnode->mode & S_IWGRP) ? W_OK : 0;
+        if (mode & X_OK)
+            perm |= (vnode->mode & S_IXGRP) ? X_OK : 0;
+    } else {
+        if (mode & R_OK)
+            perm |= (vnode->mode & S_IROTH) ? R_OK : 0;
+        if (mode & W_OK)
+            perm |= (vnode->mode & S_IWOTH) ? W_OK : 0;
+        if (mode & X_OK)
+            perm |= (vnode->mode & S_IXOTH) ? X_OK : 0;
+    }
+
+    return (perm & mode) == mode;
 }
 
 
@@ -250,7 +282,7 @@ bool vfs_insert_child(vfs_node* parent, vfs_node* child) {
     return true;
 }
 
-vfs_node* vfs_create(vfs_node* parent, char* name, vfs_node_type type, vfs_mode mode) {
+vfs_node* vfs_create(vfs_node* parent, char* name, vfs_node_type type, mode_t mode) {
     assert(vfs);
 
     if (!parent)

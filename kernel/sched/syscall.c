@@ -249,6 +249,23 @@ static u64 _mkdir(u64 path_ptr, u64 mode) {
     return 0;
 }
 
+static u64 _access(u64 path_ptr, u64 mode) {
+    const char* path = (const char*)path_ptr;
+
+    if (!validate_ptr(path, 1, false))
+        return -EFAULT;
+
+    vfs_node* vnode = vfs_lookup(path);
+    if (!vnode)
+        return -errno;
+
+    sched_process* current = cpu_current_proc();
+
+    bool ret = vfs_access(vnode, current->identity.uid, current->identity.gid, mode);
+
+    return ret ? 0 : -EACCES;
+}
+
 static u64 _ioctl(u64 fd, u64 request, u64 arg) {
     file_desc* fdesc = get_fd(fd);
 
@@ -396,13 +413,14 @@ static u64 _wait(pid_t pid, u64 status_ptr, u64 options) {
     if (options & WNOHANG)
         return 0;
 
-    // Not done and we do want to hang (a lot of unfortunate nomenclature in this one)
+    // Not done and we do want to hang
     // This hangs only the calling thread
-    thread->state = T_SLEEPING;
+    sched_dequeue(thread, true);
+
     thread->waiting.proc = pid;
     thread->waiting.code_ptr = status;
 
-    cpu->scheduler.needs_resched = true;
+    /* cpu->scheduler.needs_resched = true; */
 
     return 0;
 }
@@ -438,8 +456,11 @@ u64 _setpgid(u64 pid, u64 pgid) {
     if (!target)
         return -ESRCH;
 
+    if (target->session != current->session)
+        return -EPERM;
+
     if (!proc_is_descendant(target, current))
-        return -EACCES;
+        return -EPERM;
 
     target->group = pgid;
 
@@ -458,6 +479,18 @@ u64 _getpgid(u64 pid) {
         return -ESRCH;
 
     return target->group;
+}
+
+u64 _setsid(void) {
+    sched_process* current = cpu_current_proc();
+
+    if (current->pid == current->group)
+        return -EPERM;
+
+    current->group = current->pid;
+    current->session = current->group;
+
+    return current->group;
 }
 
 
@@ -502,12 +535,8 @@ static u64 _execve(u64 path_ptr, u64 argv_ptr, u64 envp_ptr) {
         return -EFAULT;
 
     sched_thread* thread = cpu_current_thread();
-    bool exec = exec_elf(thread, file, argv, envp);
 
-    if (!exec)
-        return -EFAULT;
-
-    return 0;
+    return exec_elf(thread, file, argv, envp);
 }
 
 static u64 _sleep(u64 milis) {
@@ -672,6 +701,10 @@ static void _syscall_handler(int_state* s) {
         ret = _mkdir(arg1, arg2);
         break;
 
+    case SYS_ACCESS:
+        ret = _access(arg1, arg2);
+        break;
+
     case SYS_IOCTL:
         ret = _ioctl(arg1, arg2, arg3);
         break;
@@ -709,6 +742,10 @@ static void _syscall_handler(int_state* s) {
 
     case SYS_GETPGID:
         ret = _getpgid(arg1);
+        break;
+
+    case SYS_SETSID:
+        ret = _setsid();
         break;
 
 

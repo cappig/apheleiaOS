@@ -1,5 +1,6 @@
 #include "stdio.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -652,4 +653,9 @@ int printf(const char* format, ...) {
 
     va_end(args);
     return result;
+}
+
+
+void perror(const char* string) {
+    fprintf(stderr, "%s: %s\n", string, strerror(errno));
 }

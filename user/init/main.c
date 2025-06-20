@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <signal.h>
 #include <stdio.h>
 #include <sys/wait.h>
@@ -21,13 +20,14 @@ void child(int signum) {
 int main(void) {
     signal(SIGCHLD, child);
 
-    printf("TESTING 123\n");
+    printf("hello init, PATH=%s\n", getenv("PATH"));
 
     pid_t pid = fork();
 
-    if (!pid)
-        execve("/sbin/sh.elf", NULL, NULL);
-
+    if (!pid) {
+        setsid();
+        execvp("/sbin/sh.elf", NULL);
+    }
 
     for (;;) {} // init should never ever exit
 

@@ -99,7 +99,8 @@ typedef struct {
     char* name;
 
     pid_t pid;
-    pid_t group;
+    pid_t group; // if equal to pid that this process is the group leader
+    pid_t session;
 
     process_type type;
     process_identity identity;

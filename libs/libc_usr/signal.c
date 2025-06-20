@@ -2,6 +2,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "errno.h"
 #include "unistd.h"
 
 
@@ -11,7 +12,7 @@ sighandler_t signal(int signum, sighandler_t handler) {
 
 
 int kill(pid_t pid, int signum) {
-    return syscall2(SYS_KILL, pid, signum);
+    return __SYSCALL_ERRNO(syscall2(SYS_KILL, pid, signum));
 }
 
 int raise(int sig) {

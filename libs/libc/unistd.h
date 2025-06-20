@@ -12,25 +12,31 @@
 #define SYS_OPEN      6
 #define SYS_CLOSE     7
 #define SYS_MKDIR     8
-#define SYS_IOCTL     9
-#define SYS_SIGNAL    10
-#define SYS_SIGRETURN 11
-#define SYS_KILL      12
-#define SYS_WAIT      13
-#define SYS_GETPID    14
-#define SYS_GETPPID   15
-#define SYS_SETPGID   16
-#define SYS_GETPGID   17
-#define SYS_FORK      18
-#define SYS_EXECVE    19
-#define SYS_SLEEP     20
-#define SYS_MOUNT     21
-#define SYS_UNMOUNT   22
-#define SYS_MMAP      23
+#define SYS_ACCESS    9
+#define SYS_IOCTL     10
+#define SYS_SIGNAL    11
+#define SYS_SIGRETURN 12
+#define SYS_KILL      13
+#define SYS_WAIT      14
+#define SYS_GETPID    15
+#define SYS_GETPPID   16
+#define SYS_SETPGID   17
+#define SYS_GETPGID   18
+#define SYS_SETSID    19
+#define SYS_FORK      20
+#define SYS_EXECVE    21
+#define SYS_SLEEP     22
+#define SYS_MOUNT     23
+#define SYS_UNMOUNT   24
+#define SYS_MMAP      25
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
+
+#define R_OK 4
+#define W_OK 2
+#define X_OK 1
 
 #ifndef _KERNEL
 #include <libc_usr/unistd.h>

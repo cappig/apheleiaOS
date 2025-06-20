@@ -68,3 +68,5 @@ int fprintf(FILE* restrict stream, const char* restrict format, ...)
     __attribute__((format(printf, 2, 3)));
 
 int printf(const char* restrict format, ...) __attribute__((format(printf, 1, 2)));
+
+void perror(const char* string);

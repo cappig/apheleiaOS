@@ -7,7 +7,7 @@
 #include "data/list.h"
 #include "process.h"
 
-#define SCHED_SLICE 1
+#define SCHED_SLICE 5
 
 #define INIT_PID 1
 
@@ -37,6 +37,8 @@ sched_process* sched_get_proc(pid_t pid);
 
 void sched_switch(void) NORETURN;
 void sched_save(int_state* s);
+
+void sched_yield();
 
 void scheduler_init(void);
 void scheduler_start(void) NORETURN;

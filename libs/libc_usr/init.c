@@ -1,6 +1,10 @@
-
 extern void __init_stdio_buffers(void);
 
-void __libc_init(void) {
+char** environ;
+
+
+void __libc_init(int argc, char** argv, char** envp) {
+    environ = envp;
+
     __init_stdio_buffers();
 }

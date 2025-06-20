@@ -3,6 +3,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "errno.h"
+
 
 int open(const char* path, int flags, ...) {
     mode_t mode = 0;
@@ -14,5 +16,5 @@ int open(const char* path, int flags, ...) {
         va_end(args);
     }
 
-    return syscall3(SYS_OPEN, (u64)path, flags, mode);
+    return __SYSCALL_ERRNO(syscall3(SYS_OPEN, (u64)path, flags, mode));
 }

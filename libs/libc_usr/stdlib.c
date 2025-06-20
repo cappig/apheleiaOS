@@ -217,10 +217,44 @@ void free(void* ptr) {
     _coalesce_block(block);
 }
 
+
 [[noreturn]]
 void abort(void) {
     raise(SIGABRT);
 
     _exit(1);
     __builtin_unreachable();
+}
+
+
+static void (*__atexit_funcs[ATEXIT_MAX])(void) = {NULL};
+static int __atexit_count = 0;
+
+void __handle_atexit(void) {
+    while (__atexit_count > 0)
+        __atexit_funcs[--__atexit_count]();
+}
+
+int atexit(void (*func)(void)) {
+    if (__atexit_count >= ATEXIT_MAX || !func)
+        return -1;
+
+    __atexit_funcs[__atexit_count++] = func;
+
+    return 0;
+}
+
+
+char* getenv(const char* name) {
+    size_t len = strlen(name);
+
+    if (!len)
+        return NULL;
+
+    for (char** env = environ; *env; env++) {
+        if (!strncmp(*env, name, len) && (*env)[len] == '=')
+            return *env + len + 1;
+    }
+
+    return NULL;
 }
