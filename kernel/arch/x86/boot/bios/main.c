@@ -1,0 +1,29 @@
+#include <base/attributes.h>
+#include <base/types.h>
+#include <x86/lib/asm.h>
+#include <x86/lib/boot.h>
+#include <x86/lib/regs.h>
+#include <x86/lib/serial.h>
+
+#include "tty.h"
+#include "x86/boot/bios/memory.h"
+
+ALIGNED(8)
+static boot_info info = {};
+
+
+NORETURN
+void _load_entry(u16 boot_disk) {
+    init_serial(SERIAL_COM1, SERAIL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
+
+    printf("Booting apheleiaOS...\n\r");
+
+    get_e820(&info.memory_map);
+
+    get_rsdp(&info.acpi_root_ptr);
+
+    puts("Jumping to kernel...\n\r");
+
+    halt();
+    __builtin_unreachable();
+}

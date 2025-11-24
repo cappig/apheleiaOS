@@ -1,0 +1,35 @@
+MBR_DIR  := $(MAKE_DIR)/mbr
+BIOS_DIR := $(MAKE_DIR)/bios
+LIB_DIR  := $(ARCH_DIR)/lib
+
+SRC_DIRS := $(BIOS_DIR) $(LIB_DIR) $(LIBC_DIRS)
+
+MBR_SRC  := $(wildcard $(MBR_DIR)/*.asm)
+BIOS_SRC := $(foreach dir, $(SRC_DIRS), $(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))
+
+MBR_OBJ  := $(patsubst %, bin/boot/%.o, $(MBR_SRC))
+BIOS_OBJ := $(patsubst %, bin/boot/%.o, $(BIOS_SRC))
+
+AS_BOOT := -f elf32
+CC_BOOT := \
+	-m32 \
+	-fdata-sections \
+	-ffunction-sections
+
+bin/boot/%.asm.o: %.asm
+	@mkdir -p $(@D)
+	$(call as, $(AS_BOOT), $@, $<)
+
+bin/boot/%.c.o: %.c
+	@mkdir -p $(@D)
+	$(call cc, $(CC_BOOT), $@, $<)
+
+
+bin/boot/mbr.bin: $(MBR_OBJ)
+	@mkdir -p $(@D)
+	$(call ld, --oformat=binary -T$(MBR_DIR)/linker.ld, $@, $^)
+
+bin/image/boot/bios.bin: $(BIOS_OBJ)
+	@mkdir -p $(@D)
+	$(call ld, $(LD_BOOT) -T$(BIOS_DIR)/linker.ld, bin/boot/boot.elf, $^)
+	$(call oc, -O binary, bin/boot/boot.elf, $@)

@@ -9,6 +9,7 @@
 -ffreestanding
 -nostdinc
 -Ilibs/libc
+-Ilibs/libc_ext
+-Ikernel/arch
 -Ilibs
 -Ikernel
--DEXTEND_LIBC
