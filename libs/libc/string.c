@@ -1,14 +1,8 @@
 #include "string.h"
 
-#include "errno.h"
-
-#ifdef _KERNEL
-#include <alloc/global.h>
-#define malloc(size) gmalloc(size)
-#else
 #include <stdlib.h>
-#endif
 
+#include "errno.h"
 #include "stddef.h"
 
 

@@ -2,7 +2,7 @@ MBR_DIR  := $(MAKE_DIR)/mbr
 BIOS_DIR := $(MAKE_DIR)/bios
 LIB_DIR  := $(ARCH_DIR)/lib
 
-SRC_DIRS := $(BIOS_DIR) $(LIB_DIR) $(LIBC_DIRS) libs/alloc
+SRC_DIRS := $(BIOS_DIR) $(LIB_DIR) $(LIBC_DIRS) libs/alloc libs/data
 
 MBR_SRC  := $(wildcard $(MBR_DIR)/*.asm)
 BIOS_SRC := $(foreach dir, $(SRC_DIRS), $(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))
@@ -30,7 +30,7 @@ bin/boot/mbr.bin: $(MBR_OBJ)
 	@mkdir -p $(@D)
 	$(call ld, --oformat=binary -T$(MBR_DIR)/linker.ld, $@, $^)
 
-bin/image/boot/bios.bin: $(BIOS_OBJ)
+bin/image/boot/bios.bin: $(BIOS_OBJ) $(call LIBGCC, $(CC_BOOT))
 	@mkdir -p $(@D)
 	$(call ld, $(LD_BOOT) -T$(BIOS_DIR)/linker.ld, bin/boot/boot.elf, $^)
 	$(call oc, -O binary, bin/boot/boot.elf, $@)

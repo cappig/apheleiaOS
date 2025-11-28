@@ -44,6 +44,8 @@ define nm
 	@echo "NM $(2)"
 endef
 
+LIBGCC = $(shell $(CC) $(CC_BASE) $(1) -print-libgcc-file-name)
+
 LIBC_DIRS := libs/libc libs/libc_ext
 
 CC_BASE += \

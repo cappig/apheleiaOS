@@ -33,7 +33,6 @@ AS_BASE := \
 	-w-label-orphan
 
 LD_BASE := \
-	-nostdlib \
 	-z noexecstack
 
 
