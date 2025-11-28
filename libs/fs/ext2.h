@@ -74,7 +74,7 @@ typedef struct PACKED {
 
     // some other stuff might be here ...
     u8 _reserved1[788];
-} ext2_superblock;
+} ext2_superblock_t;
 
 enum ext2_fs_state {
     EXT2_FS_CLEAN = 1,
@@ -122,7 +122,7 @@ typedef struct PACKED {
     u32 directory_count;
 
     u8 _padding0[14];
-} ext2_group_descriptor;
+} ext2_group_descriptor_t;
 
 
 typedef struct PACKED {
@@ -155,7 +155,7 @@ typedef struct PACKED {
     u32 fragment_offset;
 
     u8 os_specific1[12];
-} ext2_inode;
+} ext2_inode_t;
 
 #define EXT2_IT_MASK 0xf000
 
@@ -213,7 +213,7 @@ typedef struct PACKED {
     u8 name_size;
     u8 type;
     char name[];
-} ext2_directory;
+} ext2_directory_t;
 
 enum ext2_directory_type {
     EXT2_DIR_UNKNOWN = 0,

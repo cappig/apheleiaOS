@@ -38,14 +38,14 @@ typedef struct PACKED {
     u8 chs_last[3];
     u32 lba_first;
     u32 sector_count;
-} mbr_partition;
+} mbr_partition_t;
 
 typedef struct {
-    mbr_partition partitions[4];
-} mbr_table;
+    mbr_partition_t partitions[4];
+} mbr_table_t;
 
 typedef struct PACKED {
     u8 bootstrap[446];
-    mbr_table table;
+    mbr_table_t table;
     u16 signature;
-} master_boot_record;
+} mbr_t;

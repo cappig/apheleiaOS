@@ -5,11 +5,11 @@
 #include <x86/lib/regs.h>
 #include <x86/lib/serial.h>
 
+#include "memory.h"
 #include "tty.h"
-#include "x86/boot/bios/memory.h"
 
 ALIGNED(8)
-static boot_info info = {};
+static boot_info_t info = {};
 
 
 NORETURN
@@ -26,4 +26,7 @@ void _load_entry(u16 boot_disk) {
 
     halt();
     __builtin_unreachable();
+}
+
+void hook_libc_alloc() {
 }

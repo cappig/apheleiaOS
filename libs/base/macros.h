@@ -1,9 +1,9 @@
 #pragma once
 
-// #define KiB (1024)
-// #define MiB (KiB * 1024)
-// #define GiB (MiB * 1024)
-// #define TiB (GiB * 1024)
+#define KIB (1024)
+#define MIB (KIB * 1024)
+#define GIB (MIB * 1024)
+#define TIB (GIB * 1024)
 
 #define DIV_ROUND_UP(a, b) (((a) + (b) - 1) / (b))
 

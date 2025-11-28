@@ -2,7 +2,7 @@ MBR_DIR  := $(MAKE_DIR)/mbr
 BIOS_DIR := $(MAKE_DIR)/bios
 LIB_DIR  := $(ARCH_DIR)/lib
 
-SRC_DIRS := $(BIOS_DIR) $(LIB_DIR) $(LIBC_DIRS)
+SRC_DIRS := $(BIOS_DIR) $(LIB_DIR) $(LIBC_DIRS) libs/alloc
 
 MBR_SRC  := $(wildcard $(MBR_DIR)/*.asm)
 BIOS_SRC := $(foreach dir, $(SRC_DIRS), $(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))
@@ -14,6 +14,7 @@ AS_BOOT := -f elf32
 CC_BOOT := \
 	-m32 \
 	-fdata-sections \
+	-DEXTERNAL_ALLOC \
 	-ffunction-sections
 
 bin/boot/%.asm.o: %.asm

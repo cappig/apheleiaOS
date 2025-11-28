@@ -37,10 +37,10 @@ typedef struct PACKED {
 
     // This struct has to take 512 bytes
     u8 _padding[12];
-} ustar_header;
+} ustar_header_t;
 
 typedef struct PACKED {
-    ustar_header header;
+    ustar_header_t header;
     u8 data[];
 } ustar_file;
 
@@ -57,8 +57,8 @@ enum ustar_type {
 };
 
 
-u32 ustar_to_num(char* str, int size);
-
-ustar_file* ustar_find(void* addr, usize size, const char* file);
-
-isize ustar_read(ustar_header* head, void* buf, usize offset, usize len);
+// u32 ustar_to_num(char* str, int size);
+//
+// ustar_file* ustar_find(void* addr, size_t size, const char* file);
+//
+// int ustar_read(ustar_header_t* head, void* buf, size_t offset, size_t len);

@@ -13,3 +13,4 @@
 -Ikernel/arch
 -Ilibs
 -Ikernel
+-DEXTERNAL_ALLOC

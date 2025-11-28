@@ -1,5 +1,8 @@
 #include "stdlib.h"
 
+#include <stddef.h>
+#include <string.h>
+
 #include "ctype.h"
 #include "errno.h"
 #include "limits.h"
@@ -111,3 +114,32 @@ long labs(long n) {
 int abs(int n) {
     return llabs(n);
 }
+
+
+#ifdef EXTERNAL_ALLOC
+void* malloc(size_t size) {
+    if (!size)
+        return NULL;
+
+    return _external_alloc->malloc(size);
+}
+
+void* calloc(size_t num, size_t size) {
+    if (!num)
+        return NULL;
+
+    void* ret = malloc(size * num);
+
+    if (ret)
+        memset(ret, 0, size * num);
+
+    return ret;
+}
+
+void free(void* ptr) {
+    if (!ptr)
+        return;
+
+    _external_alloc->free(ptr);
+}
+#endif

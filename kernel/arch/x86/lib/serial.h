@@ -34,11 +34,11 @@ enum serial_registers {
 };
 
 
-void init_serial(usize port, u8 line, u32 baud);
-bool test_serial(usize port);
+void init_serial(size_t port, u8 line, u32 baud);
+bool test_serial(size_t port);
 
-void send_serial(usize port, char c);
-char receive_serial(usize port);
+void send_serial(size_t port, char c);
+char receive_serial(size_t port);
 
-void send_serial_string(usize port, const char* s);
-void send_serial_sized_string(usize port, const char* s, usize len);
+void send_serial_string(size_t port, const char* s);
+void send_serial_sized_string(size_t port, const char* s, size_t len);

@@ -12,7 +12,7 @@ typedef struct PACKED {
     u64 sectors_count;
     u16 bytes_per_sector;
     u32 edd; // optional
-} disk_parameters;
+} disk_params_t;
 
 typedef struct PACKED {
     u8 size;
@@ -20,7 +20,7 @@ typedef struct PACKED {
     u16 sectors;
     u32 destination;
     u64 lba;
-} disk_address_packet;
+} dap_t;
 
 
-isize read_disk(void* dest, usize offset, usize bytes);
+int read_disk(void* dest, size_t offset, size_t bytes);

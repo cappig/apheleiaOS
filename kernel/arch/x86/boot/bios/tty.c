@@ -12,12 +12,12 @@
 
 
 void puts(const char* str) {
-    regs r = {.ah = 0x0e};
+    regs32_t regs = {.ah = 0x0e};
 
     while (*str) {
-        r.al = *str;
+        regs.al = *str;
         send_serial(SERIAL_COM1, *str);
-        bios_call(0x10, &r, &r);
+        bios_call(0x10, &regs, &regs);
         str++;
     }
 }

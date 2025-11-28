@@ -23,7 +23,7 @@ typedef struct PACKED {
     u16 height;
 
     u32 framebuffer;
-} video_info;
+} video_info_t;
 
 typedef struct PACKED {
     u16 manufacturer_id;
@@ -31,14 +31,14 @@ typedef struct PACKED {
 
     u16 monitor_width;
     u16 monitor_height;
-} edid_info;
+} edid_info_t;
 
 
 typedef struct PACKED {
     u64 acpi_root_ptr;
 
-    video_info video;
-    edid_info edid;
+    video_info_t video;
+    edid_info_t edid;
 
-    e820_map memory_map;
-} boot_info;
+    e820_map_t memory_map;
+} boot_info_t;

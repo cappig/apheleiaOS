@@ -4,4 +4,4 @@
 #include <x86/lib/regs.h>
 
 
-void bios_call(u8 number, regs* in_regs, regs* out_regs);
+void bios_call(u8 number, regs32_t* in_regs, regs32_t* out_regs);

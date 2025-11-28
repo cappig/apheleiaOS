@@ -14,12 +14,11 @@ typedef union {
         u32 edi;
         u32 esi;
         u32 ebp;
-        u32 _esp; // esp gets discarded
+        u32 _esp;
         u32 ebx;
         u32 edx;
         u32 ecx;
         u32 eax;
-
         u32 eflags;
     };
     struct {
@@ -31,9 +30,7 @@ typedef union {
         u16 dx, hdx;
         u16 cx, hcx;
         u16 ax, hax;
-
         u16 flags, hflags;
-
         u16 gs;
         u16 fs;
         u16 es;
@@ -49,16 +46,17 @@ typedef union {
         u8 cl, ch, hc1, hc2;
         u8 al, ah, ha1, ha2;
     };
-} regs;
+} regs32_t;
 
 typedef struct PACKED {
     u16 gs;
     u16 fs;
     u16 es;
     u16 ds;
-} seg_regs;
+} seg_regs_t;
 
-// General purpose registers present in long mode
+#if defined(__x86_64__)
+
 typedef struct PACKED {
     u64 r15;
     u64 r14;
@@ -75,13 +73,34 @@ typedef struct PACKED {
     u64 rcx;
     u64 rbx;
     u64 rax;
-} gen_regs;
+} gen_regs_t;
 
-// Specialized registers present in long mode
 typedef struct PACKED {
     u64 rip;
     u64 cs;
     u64 rflags;
     u64 rsp;
     u64 ss;
-} spec_regs;
+} spec_regs_t;
+
+#else
+
+typedef struct PACKED {
+    u32 ebp;
+    u32 edi;
+    u32 esi;
+    u32 edx;
+    u32 ecx;
+    u32 ebx;
+    u32 eax;
+} gen_regs_t;
+
+typedef struct PACKED {
+    u32 eip;
+    u32 cs;
+    u32 eflags;
+    u32 esp;
+    u32 ss;
+} spec_regs_t;
+
+#endif

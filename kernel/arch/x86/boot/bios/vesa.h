@@ -22,12 +22,12 @@ typedef struct PACKED {
 
     u8 _unused0[222];
     u8 _oem_data[256];
-} vesa_info;
+} vesa_info_t;
 
 typedef struct PACKED {
     u8 position;
     u8 mask;
-} vesa_color;
+} vesa_color_t;
 
 typedef struct PACKED {
     u16 attributes;
@@ -54,10 +54,10 @@ typedef struct PACKED {
     u8 image_pages;
     u8 _unused0;
 
-    vesa_color red;
-    vesa_color green;
-    vesa_color blue;
-    vesa_color reserved;
+    vesa_color_t red;
+    vesa_color_t green;
+    vesa_color_t blue;
+    vesa_color_t reserved;
     u8 color_attributes;
 
     u32 framebuffer;
@@ -65,7 +65,7 @@ typedef struct PACKED {
     u16 offscreen_size;
 
     u8 _unused1[206];
-} vesa_mode;
+} vesa_mode_t;
 
 // https://wiki.osdev.org/EDID
 // https://en.wikipedia.org/wiki/Extended_Display_Identification_Data
@@ -105,7 +105,7 @@ typedef struct PACKED {
     u8 _unused2;
 
     u8 checksum;
-} edid_info;
+} edid_info_t;
 
 
 // void init_graphics(graphics_state* gfx, u8 mode, u16 width, u16 height, u16 bpp);
