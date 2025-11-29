@@ -5,7 +5,9 @@
 // #include <log/log.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
+#include "alloc/bitmap.h"
 #include "x86/lib/paging.h"
 
 
@@ -187,3 +189,75 @@ char* mem_map_type_string(e820_type_t type) {
 //         );
 //     }
 // }
+
+bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t block_size) {
+    u32 mem_base = (u32)-1;
+    u32 mem_top = 0;
+
+    for (size_t i = 0; i < mmap->count; i++) {
+        e820_entry_t* current = &mmap->entries[i];
+
+        if (current->type != E820_AVAILABLE)
+            continue;
+
+        u32 top = current->address + current->size;
+        u32 base = current->address;
+
+        if (mem_base > base)
+            mem_base = base;
+
+        if (mem_top < top)
+            mem_top = top;
+    }
+
+    u32 mem_size = mem_top - mem_base;
+
+    // Shift the base up so that the addresses end up aligned to the size of the block
+    mem_base = ALIGN(mem_base, block_size);
+
+    alloc->chuck_start = (void*)(uintptr_t)mem_base;
+    alloc->chunk_size = mem_size;
+
+    alloc->block_size = block_size;
+    alloc->block_count = mem_size / block_size;
+    alloc->word_count = alloc->block_count / BITMAP_WORD_SIZE;
+
+    size_t bitmap_bytes = alloc->block_count / CHAR_BIT;
+
+    if (mem_size <= bitmap_bytes)
+        return false;
+
+    // Find some space for the bitmap
+    void* bitmap_addr = mmap_alloc_inner(mmap, bitmap_bytes, E820_ALLOC, 1, 0);
+    if (!bitmap_addr)
+        return false;
+
+    alloc->bitmap = (bitmap_word_t*)(bitmap_addr + LINEAR_MAP_OFFSET);
+
+    // Mark the whole bitmap as used
+    memset(alloc->bitmap, (unsigned int)-1, bitmap_bytes);
+    alloc->free_blocks = 0;
+
+    for (size_t i = 0; i < mmap->count; i++) {
+        e820_entry_t* current = &mmap->entries[i];
+
+        u32 top = current->address + current->size;
+        u32 base = current->address;
+
+        if (top > mem_top || base < mem_base)
+            continue;
+
+        size_t blocks = current->size / block_size;
+        size_t start_block = bitmap_alloc_to_block(alloc, (void*)current->address);
+
+        if (current->type == E820_AVAILABLE) {
+            alloc->free_blocks += blocks;
+            bitmap_clear_region(alloc->bitmap, start_block, blocks);
+        } else {
+            // Do we need this?
+            bitmap_set_region(alloc->bitmap, start_block, blocks);
+        }
+    }
+
+    return true;
+}

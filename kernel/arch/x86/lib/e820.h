@@ -1,5 +1,6 @@
 #pragma once
 
+#include <alloc/bitmap.h>
 #include <base/attributes.h>
 #include <base/types.h>
 
@@ -35,6 +36,8 @@ void mmap_remove_entry(e820_map_t* map, size_t index);
 void mmap_add_entry(e820_map_t* map, u64 address, u64 size, u32 type);
 
 void clean_mmap(e820_map_t* map);
+
+bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t block_size);
 
 void* mmap_alloc_inner(e820_map_t* mmap, size_t bytes, u32 type, u32 alignment, u64 top);
 bool mmap_free_inner(e820_map_t* map, void* ptr);

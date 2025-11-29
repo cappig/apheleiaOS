@@ -6,3 +6,7 @@
 void get_e820(e820_map_t* mmap);
 
 void get_rsdp(u64* rsdp);
+
+void* mmap_alloc(size_t size, int type, size_t alignment);
+
+void init_malloc(void);

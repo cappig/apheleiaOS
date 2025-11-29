@@ -37,15 +37,15 @@ relocated:
     ; Read the ext2 superblock
     mov word [dap_lba], 2
     mov byte [dap_sectors], 2
-    mov word [dap_buf], 0x700
+    mov word [dap_buf], 0x1000
     call read
 
     ; Verify the ext2 magic number
-    cmp word [0x700 + 56], 0xef53
+    cmp word [0x1000 + 56], 0xef53
     jne error
 
     ; Calculate block size: 1024 << log_block_size
-    mov cl, [0x700 + 24]
+    mov cl, [0x1000 + 24]
     mov ax, 1024
     shl ax, cl
     mov [block_size], ax
@@ -55,14 +55,14 @@ relocated:
     mov [sectors_per_block], al
 
     ; Calculate block group: (inode - 1) / inodes_per_group
-    mov ebx, dword [0x700 + 40]
+    mov ebx, dword [0x1000 + 40]
     mov eax, [inode_num]
     dec eax
     xor edx, edx
     div ebx                             ; EAX = group, EDX = inode index
 
     ; EAX = inode * inode_size
-    movzx ebx, word [0x700 + 88]        ; This assumes major ver > 1
+    movzx ebx, word [0x1000 + 88]        ; This assumes major ver > 1
     mov eax, edx
     mul ebx
 
@@ -78,26 +78,26 @@ relocated:
     mov ax, [block_size]
     cmp ax, 1024
     mov eax, 1
-    ja .read_bgd
+    ja read_bgd
     inc eax
 
-.read_bgd:
-    ; Read the BGD to 0x700
-    mov word [dap_buf], 0x700
+read_bgd:
+    ; Read the BGD to 0x1000
+    mov word [dap_buf], 0x1000
     call block_to_lba
 
     ; Get the first inode block
-    mov eax, [0x700 + 8]
+    mov eax, [0x1000 + 8]
     movzx ebx, word [inode_group_index]
     add eax, ebx                        ; Add inode offset
 
-    ; Read inode block to 0x700
-    mov word [dap_buf], 0x700
+    ; Read inode block to 0x1000
+    mov word [dap_buf], 0x1000
     call block_to_lba
 
     ; Point to inode structure
     movzx esi, word [inode_group_offset]
-    add si, 0x700
+    add si, 0x1000
 
     ; Calculate file size / block count from the inode directly
     mov eax, dword [si + 4]             ; EAX = file size
@@ -120,58 +120,61 @@ relocated:
     xor bx, bx
 
     ; We can load the 12 direct blocks and any blocks on the first indirect block
-.load_direct:
+load_direct:
     cmp bx, 12
-    jae .load_indirect
+    jae load_indirect
 
     cmp bx, cx
-    jae .boot
+    jae boot
 
     lodsd                               ; [si] -> eax; si += 4
 
     test eax, eax
-    jz .next_direct
+    jz next_direct
 
     call load_block
 
-.next_direct:
+next_direct:
     inc bx
-    jmp .load_direct
+    jmp load_direct
 
-.load_indirect:
+load_indirect:
     cmp bx, cx
-    jae .boot
+    jae boot
+
+    hlt
 
     lodsd
 
-    mov word [dap_buf], 0x700
+    mov word [dap_buf], 0x1000
     call block_to_lba
 
     ; Process indirect entries
-    mov si, 0x700
+    mov si, 0x1000
 
-.indirect_loop:
+indirect_loop:
     cmp bx, cx
-    jae .boot
+    jae boot
 
     lodsd
 
     test eax, eax
-    jz .next_indirect
+    jz next_indirect
 
     call load_block
 
-.next_indirect:
+next_indirect:
     inc bx
 
     mov ax, [block_size]
-    add ax, 0x700
+    add ax, 0x1000
 
     cmp si, ax
-    jb .indirect_loop
+    jb indirect_loop
 
-.boot:
+boot:
     mov dl, [drive]
+    hlt
     jmp 0:0x7c00
 
 ; Load block (eax) to di, advance di
@@ -192,39 +195,43 @@ load_block:
 ; Convert ext2 block index to disk LBA and read it
 block_to_lba:
     movzx ebx, byte [sectors_per_block]
+    mov [dap_sectors], bl
     mul ebx
-
-    mov word [dap_lba], ax
-    mov word [dap_lba+2], dx
-    mov al, [sectors_per_block]
-    mov [dap_sectors], al
-
-    call read
-    ret
+    mov dword [dap_lba], eax
+    jmp read
 
 read:
+    push di
+    movzx ecx, byte [dap_sectors]
+    mov di, [dap_buf]
+.loop:
+    mov word [dap_buf], di
     mov dl, [drive]
+    mov byte [dap_sectors], 1
     mov ah, 0x42
     mov si, dap
-
     int 0x13
     jc error
-
+    
+    add di, 512
+    inc dword [dap_lba]
+    loop .loop
+    pop di
     ret
 
 error:
-    mov si, err_msg
-.loop:
-    lodsb
-    test al, al
-    jz .halt
-    mov ah, 0x0e
-    xor bh, bh
-    int 0x10
-    jmp .loop
-.halt:
+;     mov si, err_msg
+; .l:
+;     lodsb
+;     test al, al
+;     jz .h
+;     mov ah, 0x0e
+;     xor bh, bh
+;     int 0x10
+;     jmp .l
+.h:
     hlt
-    jmp .halt
+    jmp .h
 
 err_msg: db 'ERR', 0
 

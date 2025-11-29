@@ -30,7 +30,7 @@ typedef struct {
 #ifdef EXTERNAL_ALLOC
 typedef void* (*malloc_fn)(size_t size);
 typedef void* (*realloc_fn)(void* ptr, size_t size);
-typedef void* (*free_fn)(void* ptr);
+typedef void (*free_fn)(void* ptr);
 
 // This structure is kept in global memory
 struct _external_alloc {

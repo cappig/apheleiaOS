@@ -6,6 +6,7 @@
 #include <x86/lib/serial.h>
 
 #include "memory.h"
+#include "stdlib.h"
 #include "tty.h"
 
 ALIGNED(8)
@@ -17,8 +18,10 @@ void _load_entry(u16 boot_disk) {
     init_serial(SERIAL_COM1, SERAIL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
 
     printf("Booting apheleiaOS...\n\r");
+    halt();
 
     get_e820(&info.memory_map);
+    init_malloc();
 
     get_rsdp(&info.acpi_root_ptr);
 
@@ -26,7 +29,4 @@ void _load_entry(u16 boot_disk) {
 
     halt();
     __builtin_unreachable();
-}
-
-void hook_libc_alloc() {
 }
