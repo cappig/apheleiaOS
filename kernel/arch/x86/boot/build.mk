@@ -30,7 +30,7 @@ bin/boot/mbr.bin: $(MBR_OBJ)
 	@mkdir -p $(@D)
 	$(call ld, --oformat=binary -T$(MBR_DIR)/linker.ld, $@, $^)
 
-bin/image/boot/bios.bin: $(BIOS_OBJ) $(call LIBGCC, $(CC_BOOT))
+bin/boot/bios.bin: $(BIOS_OBJ) $(call LIBGCC, $(CC_BOOT))
 	@mkdir -p $(@D)
 	$(call ld, $(LD_BOOT) -T$(BIOS_DIR)/linker.ld, bin/boot/boot.elf, $^)
 	$(call oc, -O binary, bin/boot/boot.elf, $@)

@@ -20,7 +20,6 @@ main:
     mov gs, ax
 
     mov sp, 0x7c00
-    jmp halt
 
     ; Enable the A20 line via the fast method
     ; TODO: this is not ideal

@@ -3,6 +3,8 @@ VERSION := pre-alpha
 
 ARCH := x86
 
+IMG_NAME := $(NAME)_$(VERSION)_$(ARCH).img
+
 TOOLCHAIN ?= gnu
 PROFILE ?= fast
 
@@ -36,8 +38,8 @@ LD_BASE := \
 	-z noexecstack
 
 
-include build/toolchain.mk
-include build/$(ARCH).mk
+include utils/toolchain.mk
+include kernel/arch/$(ARCH)/build.mk
 
 # include boot/build.mk
 # include kernel/build.mk
@@ -51,7 +53,7 @@ include utils/qemu.mk
 
 .DEFAULT_GOAL := all
 .PHONY: all
-all: $(ARCH)
+all: bin/$(IMG_NAME)
 	@echo "Build completed successfully!"
 
 .PHONY: clean
