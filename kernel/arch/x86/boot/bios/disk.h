@@ -24,3 +24,7 @@ typedef struct PACKED {
 
 
 int read_disk(void* dest, size_t offset, size_t bytes);
+
+void disk_init(u16 disk);
+
+void* read_rootfs(const char* path);

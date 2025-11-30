@@ -40,6 +40,19 @@ size_t strnlen(const char* str, size_t max) {
 }
 
 
+size_t strnlend(const char* str, char delim, size_t max) {
+    size_t len = 0;
+
+    while (len < max && str[len] && str[len] != delim)
+        len++;
+
+    return len;
+}
+
+size_t strlend(const char* str, char delim) {
+    return strnlend(str, delim, (size_t)-1);
+}
+
 int strcasecmp(const char* s1, const char* s2) {
     while (*s1 && (tolower(*s1) == tolower(*s2))) {
         s1++;

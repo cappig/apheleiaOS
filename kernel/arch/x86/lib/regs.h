@@ -7,9 +7,15 @@
 #define FLAG_CF 0x0001
 #define FLAG_ZF 0x0040
 
-// 32 bit registers in the order of popping
+// Real mode (bios calls) require segmentation
+#define REAL_SEG(addr) (u16)(((int)(uintptr_t)(addr) & 0xffff0) >> 4)
+#define REAL_OFF(addr) (u16)((int)(uintptr_t)(addr) & 0x0000f)
+
+#define REAL_FLATTEN(seg, off) (((u32)(seg) << 4) + (u32)(off))
+
+// 32 bit registers in the order of popping -- used for bios calls
 // https://faydoc.tripod.com/cpu/popa.htm
-typedef union {
+typedef union PACKED {
     struct {
         u32 edi;
         u32 esi;

@@ -32,7 +32,8 @@ void get_e820(e820_map_t* mmap) {
     while (mmap->count < E820_MAX) {
         e820_entry_t entry = {0};
 
-        in_regs.edi = (u32)(uintptr_t)&entry;
+        in_regs.edi = REAL_OFF(&entry);
+    in_regs.es = REAL_SEG(&entry);
 
         bios_call(0x15, &in_regs, &out_regs);
 
@@ -69,7 +70,7 @@ void get_rsdp(u64* rsdp) {
         if (addr == ebda + 1024)
             addr = 0xe0000;
 
-        if (!strncmp((char*)addr, "RSD PTR ", 8)) {
+        if (!strncmp((char*)(uintptr_t)addr, "RSD PTR ", 8)) {
             printf("RSDP is at %#p\n\r", addr);
             *rsdp = addr;
 

@@ -1,4 +1,5 @@
 #include "ctype.h"
+#include "limits.h"
 #include "stdarg.h"
 #include "stdbool.h"
 #include "stddef.h"
@@ -53,7 +54,7 @@ static int _get_width(const char* format, size_t* index, va_list vlist) {
 
     if (isdigit(format[*index])) {
         char* end;
-        width = strtol(&format[*index], &end, 10);
+        width = (int)strtoll(&format[*index], &end, 10);
 
         *index += (size_t)(end - &format[*index]);
     } else if (format[*index] == '*') {
@@ -75,7 +76,7 @@ static int _get_precision(const char* format, size_t* index, va_list vlist) {
 
     if (isdigit(format[*index])) {
         char* end;
-        precision = strtol(&format[*index], &end, 10);
+        precision = (int)strtoll(&format[*index], &end, 10);
 
         *index += (size_t)(end - &format[*index]);
     } else if (format[*index] == '*') {
@@ -140,12 +141,12 @@ static uintmax_t _get_var_number(int size, va_list vlist) {
     case SIZE_LLONG:
         return va_arg(vlist, unsigned long long);
     case -SIZE_LLONG:
-        return va_arg(vlist, long long);
+        return (uintmax_t)va_arg(vlist, long long);
 
     case SIZE_LONG:
         return va_arg(vlist, unsigned long);
     case -SIZE_LONG:
-        return va_arg(vlist, long);
+        return (uintmax_t)va_arg(vlist, long);
 
     default:
     case SIZE_INT:
@@ -156,20 +157,20 @@ static uintmax_t _get_var_number(int size, va_list vlist) {
     case -SIZE_INT:
     case -SIZE_SHORT:
     case -SIZE_CHAR:
-        return va_arg(vlist, int);
+        return (uintmax_t)va_arg(vlist, int);
 
     case SIZE_SIZE:
     case -SIZE_SIZE:
-        return va_arg(vlist, size_t);
+        return (uintmax_t)va_arg(vlist, size_t);
 
     case SIZE_PTRDIFF:
     case -SIZE_PTRDIFF:
-        return va_arg(vlist, ptrdiff_t);
+        return (uintmax_t)va_arg(vlist, ptrdiff_t);
 
     case SIZE_INTMAX:
         return va_arg(vlist, uintmax_t);
     case -SIZE_INTMAX:
-        return va_arg(vlist, intmax_t);
+        return (uintmax_t)va_arg(vlist, intmax_t);
 
     case SIZE_PTR:
     case -SIZE_PTR:
@@ -184,7 +185,7 @@ static size_t _string_to_buffer(char* buffer, char* string, int flags, int preci
         while ((*padding)-- > 0)
             *buffer++ = ' ';
 
-    size_t len = precision < 0 ? -1 : precision;
+    size_t len = (precision < 0) ? SIZE_MAX : (size_t)precision;
 
     for (size_t i = 0; i < len && *string; i++)
         *buffer++ = *string++;
@@ -196,7 +197,8 @@ static size_t _string_to_buffer(char* buffer, char* string, int flags, int preci
     return (size_t)(buffer - buf_start);
 }
 
-static size_t _append_num_prefix(char* buffer, uintmax_t number, int flags, int base, int size, int* padding) {
+static size_t
+_append_num_prefix(char* buffer, uintmax_t number, int flags, int base, int size, int* padding) {
     const char* buf_start = buffer;
 
     if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO))
@@ -285,7 +287,7 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
 
     int printed = 0;
 
-    for (size_t i = 0; format[i] && (size_t)printed < max_size; i++) {
+    for (size_t i = 0; format[i] && (size_t)printed < max_size - 1; i++) {
         if (format[i] != '%') {
             buffer[printed++] = format[i];
             continue;
@@ -324,14 +326,12 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
 
                 if (!string)
                     string = "(null)";
-            }
-            // A tiny hack that allows us to reuse the code bellow :^)
-            else {
+            } else {
                 char_holder[0] = (char)va_arg(vlist, int);
                 string = char_holder;
             }
 
-            int len = strlen(string);
+            int len = (int)strlen(string);
             int padding = (width > len) ? width - len : 0;
 
             printed += _string_to_buffer(&buffer[printed], string, flags, precision, &padding);
@@ -345,7 +345,8 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
             }
 
             char num_buffer[66] = {0};
-            int len = ulltoa(negative ? -number : number, num_buffer, base);
+            uintmax_t absval = negative ? (uintmax_t)(-(intmax_t)number) : number;
+            int len = (int)ulltoa(absval, num_buffer, base);
 
             int padding = (width > len) ? width - len : 0;
 

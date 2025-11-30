@@ -56,6 +56,7 @@ bits 16
     mov edi, esp                            ; Destination address
 
     mov ecx, REGS_B/4                       ; repeat cx times
+    cld
     rep movsd
 
     ; *Pop* the in_regs form the stack
@@ -105,6 +106,7 @@ bits 32
     mov edi, dword [esp+REGS_B+SREGS_B+12]  ; Destination address
 
     mov ecx, REGS_B/4                       ; repeat cx times
+    cld
     rep movsd
 
     add esp, REGS_B                         ; Move the stack back

@@ -49,3 +49,35 @@ typedef struct PACKED {
     mbr_table_t table;
     u16 signature;
 } mbr_t;
+
+
+inline char* mbr_type_string(enum mbr_partition_type type) {
+    switch (type) {
+    case MBR_EMPTY:
+        return "empty";
+    case MBR_FAT12:
+        return "FAT 12";
+    case MBR_FAT16_SMALL:
+        return "FAT 16 (small)";
+    case MBR_FAT16_LARGE:
+        return "FAT 16 (large)";
+    case MBR_NTFS:
+        return "NTFS";
+    case MBR_FAT32_CHS:
+        return "FAT 32 (CHS)";
+    case MBR_FAT32_LBA:
+        return "FAT 32 (LBA)";
+    case MBR_FAT16_LBA:
+        return "FAT 16 (LBA)";
+    case MBR_LINUX:
+        return "linux native";
+    case MBR_LINUX_SWAP:
+        return "linux swap";
+    case MBR_ISO:
+        return "ISO 9660";
+    case MBR_GPT:
+        return "protective GPT";
+    default:
+        return "unknown";
+    }
+}

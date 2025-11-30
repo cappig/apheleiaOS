@@ -42,4 +42,4 @@ dd if="$TMP_EXT2" of="$IMG" bs=$SECTOR_SIZE seek=$EXT2_START conv=notrunc status
 
 rm "$TMP_EXT2"
 
-echo "Image $IMG created successfully"
+# echo "Image $IMG created successfully"

@@ -9,6 +9,9 @@ char* strrev(char* str);
 
 size_t strnlen(const char* str, size_t max);
 
+size_t strlend(const char* str, char delim);
+size_t strnlend(const char* str, char delim, size_t max);
+
 int strcasecmp(const char* s1, const char* s2);
 int strncasecmp(const char* s1, const char* s2, size_t n);
 

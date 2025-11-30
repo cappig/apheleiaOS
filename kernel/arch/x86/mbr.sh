@@ -16,5 +16,6 @@ if [ "$MBR_SIZE" -gt 446 ]; then
 fi
 
 # Overwrite first 446 bytes of disk image
-dd if="$MBR_BIN" of="$DISK_IMG" bs=1 count="$MBR_SIZE" conv=notrunc
-echo "MBR stub written"
+dd if="$MBR_BIN" of="$DISK_IMG" bs=1 count="$MBR_SIZE" conv=notrunc status=none
+
+# echo "MBR stub written"

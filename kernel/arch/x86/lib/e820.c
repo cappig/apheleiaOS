@@ -4,6 +4,7 @@
 #include <base/types.h>
 // #include <log/log.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -133,7 +134,7 @@ void* mmap_alloc_inner(e820_map_t* mmap, size_t bytes, u32 type, u32 alignment, 
 
         clean_mmap(mmap);
 
-        return (void*)base;
+        return (void*)(uintptr_t)base;
     }
 
     return NULL;
@@ -143,7 +144,7 @@ bool mmap_free_inner(e820_map_t* mmap, void* ptr) {
     for (size_t i = 0; i < mmap->count; i++) {
         e820_entry_t* current = &mmap->entries[i];
 
-        if (current->address == (u64)ptr) {
+        if (current->address == (u64)(uintptr_t)ptr) {
             mmap_remove_entry(mmap, i);
             clean_mmap(mmap);
 
@@ -248,7 +249,7 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
             continue;
 
         size_t blocks = current->size / block_size;
-        size_t start_block = bitmap_alloc_to_block(alloc, (void*)current->address);
+        size_t start_block = bitmap_alloc_to_block(alloc, (void*)(uintptr_t)current->address);
 
         if (current->type == E820_AVAILABLE) {
             alloc->free_blocks += blocks;
