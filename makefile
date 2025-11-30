@@ -16,6 +16,7 @@ CC_BASE := \
 	-std=gnu2x \
 	-Ilibs \
 	-Ilibs/libc \
+	-Ikernel \
 	-Ikernel/arch \
 	-ffreestanding \
 	-fno-stack-protector \

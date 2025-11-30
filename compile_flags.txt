@@ -10,6 +10,7 @@
 -nostdinc
 -Ilibs/libc
 -Ilibs/libc_ext
+-Ikernel
 -Ikernel/arch
 -Ilibs
 -Ikernel

@@ -8,10 +8,12 @@
 #include "memory.h"
 #include "stdlib.h"
 #include "tty.h"
+#include "vesa.h"
+#include "x86/boot/bios/config.h"
 #include "x86/boot/bios/disk.h"
 
 ALIGNED(8)
-static boot_info_t info = {};
+static boot_info_t info = {0};
 
 
 NORETURN
@@ -27,8 +29,9 @@ void _load_entry(u16 boot_disk) {
 
     disk_init(boot_disk);
 
-    // void* t = read_rootfs("/kernel.elf");
-    // printf("___> %x\n\r", t);
+    parse_config(&info.args);
+
+    init_graphics(&info);
 
     puts("Jumping to kernel...\n\r");
 

@@ -1,13 +1,10 @@
+#pragma once
+
 #include <base/attributes.h>
 #include <base/types.h>
+#include <lib/boot.h>
 
 #include "e820.h"
-
-enum video_mode {
-    VIDEO_NONE = 0,
-    VIDEO_VGA = 1,
-    VIDEO_VESA = 2,
-};
 
 typedef struct PACKED {
     u8 mode;
@@ -35,6 +32,8 @@ typedef struct PACKED {
 
 
 typedef struct PACKED {
+    kernel_args_t args;
+
     u64 acpi_root_ptr;
 
     video_info_t video;
