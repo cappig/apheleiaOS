@@ -5,12 +5,13 @@
 #include <x86/lib/regs.h>
 #include <x86/lib/serial.h>
 
+#include "config.h"
+#include "disk.h"
+#include "elf.h"
 #include "memory.h"
 #include "stdlib.h"
 #include "tty.h"
 #include "vesa.h"
-#include "x86/boot/bios/config.h"
-#include "x86/boot/bios/disk.h"
 
 ALIGNED(8)
 static boot_info_t info = {0};
@@ -31,9 +32,11 @@ void _load_entry(u16 boot_disk) {
 
     parse_config(&info.args);
 
-    init_graphics(&info);
+    // init_graphics(&info);
 
     puts("Jumping to kernel...\n\r");
+
+    load_kerenel(&info);
 
     halt();
     __builtin_unreachable();

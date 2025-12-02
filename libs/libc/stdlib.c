@@ -117,6 +117,8 @@ int abs(int n) {
 
 
 #ifdef EXTERNAL_ALLOC
+extern struct _external_alloc* _external_alloc;
+
 void* malloc(size_t size) {
     if (!size)
         return NULL;

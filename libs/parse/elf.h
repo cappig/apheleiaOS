@@ -42,8 +42,8 @@ typedef struct PACKED {
 } elf_header_t;
 
 enum elf_arch {
-    EARCH_X32 = 1,
-    EARCH_X64 = 2,
+    EARCH_32 = 1,
+    EARCH_64 = 2,
 };
 
 enum elf_endianness {
@@ -66,7 +66,7 @@ enum elf_type {
 };
 
 // Only the important ones
-enum ELF_machine {
+enum elf_machine {
     EM_NONE = 0x00,
     EM_X86 = 0x03,
     EM_X86_64 = 0x3E,
@@ -183,10 +183,9 @@ enum elf_symbol_type {
 };
 
 typedef enum {
-    VALID_ELF = 1,
-    INVALID_ELF = -1,
-    INVALID_ELF64 = -2,
-    WRONG_ENDIAN_ELF = -3,
+    VALID_ELF = 0,
+    INVALID_ELF = 1,
+    WRONG_ENDIAN_ELF = 2,
 } elf_validity_t;
 
 typedef struct {

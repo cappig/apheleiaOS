@@ -20,8 +20,8 @@ elf_validity_t elf_verify(elf_header_t* header) {
     if (header->version != ELF_VERSION)
         return INVALID_ELF;
 
-    if (header->arch != EARCH_X64)
-        return INVALID_ELF64;
+    // if (header->arch != EARCH_X64)
+    //     return INVALID_ELF64;
 
     if (header->endianness != EEND_LITTLE)
         return WRONG_ENDIAN_ELF;
@@ -29,19 +29,6 @@ elf_validity_t elf_verify(elf_header_t* header) {
     return VALID_ELF;
 }
 
-
-// Convert elf segment flags to page flags
-// u64 elf_to_page_flags(u32 elf_flags) {
-//     u64 flags = PT_PRESENT;
-//
-//     if (!(elf_flags & PF_X))
-//         flags |= PT_NO_EXECUTE;
-//
-//     if (elf_flags & PF_W)
-//         flags |= PT_WRITE;
-//
-//     return flags;
-// }
 
 u64 elf_to_mmap_prot(u32 elf_flags) {
     u64 prot = 0;

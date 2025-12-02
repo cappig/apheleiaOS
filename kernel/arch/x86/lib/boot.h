@@ -6,6 +6,13 @@
 
 #include "e820.h"
 
+#define LINEAR_MAP_OFFSET_64 0xffff888000000000ULL
+#define LINEAR_MAP_OFFSET_32 0xc0000000UL
+
+#define PROTECTED_MODE_TOP 0x100000000UL
+
+#define KERNEL_STACK_SIZE (16 * 0x1000)
+
 typedef struct PACKED {
     u8 mode;
 

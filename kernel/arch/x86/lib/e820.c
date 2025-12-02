@@ -9,7 +9,6 @@
 #include <string.h>
 
 #include "alloc/bitmap.h"
-#include "x86/lib/paging.h"
 
 
 void mmap_remove_entry(e820_map_t* map, size_t index) {
@@ -98,7 +97,7 @@ void* mmap_alloc_inner(e820_map_t* mmap, size_t bytes, u32 type, u32 alignment, 
 
     // Protected mode can't handle addresses larger than 4 Gib
 #if defined(__i386__)
-    top = min(top, PROTECTED_MODE_TOP);
+    top = min(top, 0x100000000UL);
 #endif
 
     for (size_t i = 0; i < mmap->count; i++) {
@@ -233,7 +232,8 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
     if (!bitmap_addr)
         return false;
 
-    alloc->bitmap = (bitmap_word_t*)(bitmap_addr + LINEAR_MAP_OFFSET);
+    alloc->bitmap = (bitmap_word_t*)(bitmap_addr);
+    // alloc->bitmap = (bitmap_word_t*)(bitmap_addr + LINEAR_MAP_OFFSET);
 
     // Mark the whole bitmap as used
     memset(alloc->bitmap, (unsigned int)-1, bitmap_bytes);

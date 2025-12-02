@@ -1,9 +1,10 @@
 NAME := apheleia
 VERSION := pre-alpha
 
-ARCH := x86
+ARCH := x86_64
 
-IMG_NAME := $(NAME)_$(VERSION)_$(ARCH).img
+BUILD_NAME := $(NAME)_$(VERSION)
+IMG_NAME := $(BUILD_NAME)_$(ARCH).img
 
 TOOLCHAIN ?= gnu
 PROFILE ?= fast
@@ -40,16 +41,7 @@ LD_BASE := \
 
 
 include utils/toolchain.mk
-include kernel/arch/$(ARCH)/build.mk
-
-# include boot/build.mk
-# include kernel/build.mk
-# include user/build.mk
-#
-# include utils/docker.mk
 include utils/qemu.mk
-# include utils/font.mk
-# include utils/check.mk
 
 
 .DEFAULT_GOAL := all

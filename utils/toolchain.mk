@@ -44,6 +44,7 @@ define nm
 	@echo "NM $(2)"
 endef
 
+# Link aginst libgcc for common built in functions, may brake ig ommited
 LIBGCC = $(shell $(CC) $(CC_BASE) $(1) -print-libgcc-file-name)
 
 LIBC_DIRS := libs/libc libs/libc_ext
@@ -64,6 +65,13 @@ CC_DEBUG_EXTRA := \
 	-DSCHED_DEBUG \
 	-DINT_DEBUG \
 	-DSYSCALL_DEBUG
+
+# In the arch string we treat everything after the first '_' like a 'variant' of the base arch
+# eg. x86_64 is built from the x86 tree but using the 64 bit variant; a bit hacky but should work
+ARCH_TREE := $(word 1, $(subst _, ,$(ARCH)))
+ARCH_VARIANT := $(word 2, $(subst _, ,$(ARCH)))
+
+include kernel/arch/$(ARCH_TREE)/build.mk
 
 # scan-build is a nice clang alternative
 GCC_ANALYZER ?= false

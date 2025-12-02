@@ -1,6 +1,6 @@
-ifeq ($(ARCH), x86)
+ifeq ($(ARCH), x86_64)
 	QEMU := qemu-system-x86_64
-else ifeq ($(ARCH), riscv)
+else ifeq ($(ARCH), riscv_64)
 	QEMU := qemu-system-riscv64
 endif
 

@@ -56,8 +56,6 @@ static void _config_cmp(char* key, char* value, void* data) {
 
 
 void parse_config(kernel_args_t* args) {
-    // memset(args, 0, sizeof(kernel_args_t));
-
     args->debug = BOOT_DEFAULT_DEBUG;
     args->video = BOOT_DEFAULT_VIDEO;
     args->vesa_width = BOOT_DEFAULT_VESA_WIDTH;

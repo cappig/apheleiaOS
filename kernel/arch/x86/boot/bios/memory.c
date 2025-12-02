@@ -13,7 +13,6 @@
 #include "stdlib.h"
 #include "tty.h"
 #include "x86/lib/e820.h"
-#include "x86/lib/paging.h"
 
 
 #define SMAP 0x534d4150
@@ -33,7 +32,7 @@ void get_e820(e820_map_t* mmap) {
         e820_entry_t entry = {0};
 
         in_regs.edi = REAL_OFF(&entry);
-    in_regs.es = REAL_SEG(&entry);
+        in_regs.es = REAL_SEG(&entry);
 
         bios_call(0x15, &in_regs, &out_regs);
 

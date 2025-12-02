@@ -40,8 +40,6 @@ struct _external_alloc {
     free_fn free;
 };
 
-extern struct _external_alloc* _external_alloc;
-
 void* malloc(size_t size);
 void* calloc(size_t num, size_t size);
 

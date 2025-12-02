@@ -16,7 +16,7 @@ BIOS_SRC := $(foreach dir, $(SRC_DIRS), $(wildcard $(dir)/*.c) $(wildcard $(dir)
 MBR_OBJ  := $(patsubst %, bin/boot/%.o, $(MBR_SRC))
 BIOS_OBJ := $(patsubst %, bin/boot/%.o, $(BIOS_SRC))
 
-AS_BOOT := -f elf32
+AS_BOOT := -felf32
 CC_BOOT := \
 	-m32 \
 	-fdata-sections \
