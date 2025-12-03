@@ -33,30 +33,22 @@ void* memmove(void* dest, const void* src, size_t len) {
     return dest;
 }
 
-char* strcpy(char* restrict dest, const char* restrict src) {
-    for (size_t i = 0; src[i] != 0; i++)
-        dest[i] = src[i];
-
-    return dest;
-}
-
 char* strncpy(char* restrict dest, const char* restrict src, size_t len) {
-    for (size_t i = 0; src[i] != 0 && i < len; i++)
+    size_t i = 0;
+
+    for (; i < len && src[i]; i++)
         dest[i] = src[i];
+
+    for (; i < len; i++)
+        dest[i] = '\0';
 
     return dest;
 }
 
-
-char* strcat(char* dest, const char* src) {
-    char* end = dest;
-    dest += strlen(dest);
-
-    while (*src)
-        *dest++ = *src++;
-
-    return end;
+char* strcpy(char* restrict dest, const char* restrict src) {
+    return strncpy(dest, src, (size_t)-1);
 }
+
 
 char* strncat(char* dest, const char* src, size_t len) {
     char* end = dest;
@@ -65,7 +57,13 @@ char* strncat(char* dest, const char* src, size_t len) {
     for (size_t i = 0; *src && i < len; i++)
         *dest++ = *src++;
 
+    *dest = '\0';
+
     return end;
+}
+
+char* strcat(char* dest, const char* src) {
+    return strncat(dest, src, (size_t)-1);
 }
 
 
@@ -75,7 +73,7 @@ int memcmp(const void* s1, const void* s2, size_t n) {
 
     for (size_t i = 0; i < n; i++) {
         if (p1[i] != p2[i])
-            return *(const unsigned char*)p1 - *(const unsigned char*)p2;
+            return (unsigned char)p1[i] - (unsigned char)p2[i];
     }
 
     return 0;
@@ -87,7 +85,7 @@ int strcmp(const char* s1, const char* s2) {
         s2++;
     }
 
-    return *(const unsigned char*)s1 - *(const unsigned char*)s2;
+    return (unsigned char)*s1 - (unsigned char)*s2;
 }
 
 int strncmp(const char* s1, const char* s2, size_t n) {
@@ -150,6 +148,17 @@ size_t strcspn(const char* dest, const char* src) {
     return (size_t)(d - dest);
 }
 
+char* strpbrk(const char* str, const char* delim) {
+    while (*str) {
+        if (strchr(delim, *str))
+            return (char*)str;
+
+        str++;
+    }
+
+    return NULL;
+}
+
 
 void* memset(void* dest, int val, size_t len) {
     unsigned char* ptr = (unsigned char*)dest;
@@ -160,7 +169,7 @@ void* memset(void* dest, int val, size_t len) {
     return dest;
 }
 
-int strlen(const char* str) {
+size_t strlen(const char* str) {
     if (!str)
         return 0;
 
@@ -178,7 +187,7 @@ void* memchr(const void* ptr, int ch, size_t len) {
     const char* str = (const char*)ptr;
 
     for (size_t i = 0; i < len; i++)
-        if (str[i] == ch)
+        if ((unsigned char)str[i] == (unsigned char)ch)
             return (void*)&str[i];
 
     return NULL;

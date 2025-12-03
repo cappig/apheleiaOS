@@ -1,6 +1,11 @@
 #pragma once
 
-typedef void (*cfg_comp_fn)(char* key, char* value, void* data);
+typedef void (*cfg_handler_fn)(char* value, void* data);
+
+typedef struct {
+    const char* key;
+    cfg_handler_fn handler;
+} cfg_entry_t;
 
 
-void parse_cfg(char* text, cfg_comp_fn comp, void* data);
+void parse_cfg(char* text, const cfg_entry_t* table, void* data);

@@ -5,54 +5,71 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "disk.h"
 #include "tty.h"
-#include "x86/boot/bios/disk.h"
 
-static void _config_cmp(char* key, char* value, void* data) {
+static void handle_debug(char* value, void* data) {
     kernel_args_t* args = data;
 
-    if (!strcasecmp(key, "debug")) {
-        if (!strcasecmp(value, "all"))
-            args->debug = DEBUG_ALL;
-        else if (!strcasecmp(value, "minimal"))
-            args->debug = DEBUG_MINIMAL;
-        else if (!strcasecmp(value, "none"))
-            args->debug = DEBUG_NONE;
-    }
-
-    else if (!strcasecmp(key, "video")) {
-        if (!strcasecmp(value, "graphics"))
-            args->video = VIDEO_GRAPHICS;
-        else if (!strcasecmp(value, "text"))
-            args->video = VIDEO_TEXT;
-        else if (!strcasecmp(value, "none"))
-            args->video = VIDEO_NONE;
-    }
-
-    else if (!strcasecmp(key, "vesa.width")) {
-        i32 width = atoll(value);
-        if (width < 0)
-            return;
-
-        args->vesa_width = width;
-    }
-
-    else if (!strcasecmp(key, "vesa.height")) {
-        i32 height = atoll(value);
-        if (height < 0)
-            return;
-
-        args->vesa_height = height;
-    }
-
-    else if (!strcasecmp(key, "vesa.bpp")) {
-        i32 bpp = atoll(value);
-        if (bpp < 32)
-            return;
-
-        args->vesa_bpp = bpp;
-    }
+    if (!strcasecmp(value, "all"))
+        args->debug = DEBUG_ALL;
+    else if (!strcasecmp(value, "minimal"))
+        args->debug = DEBUG_MINIMAL;
+    else if (!strcasecmp(value, "none"))
+        args->debug = DEBUG_NONE;
 }
+
+static void handle_video(char* value, void* data) {
+    kernel_args_t* args = data;
+
+    if (!strcasecmp(value, "graphics"))
+        args->video = VIDEO_GRAPHICS;
+    else if (!strcasecmp(value, "text"))
+        args->video = VIDEO_TEXT;
+    else if (!strcasecmp(value, "none"))
+        args->video = VIDEO_NONE;
+}
+
+static void handle_vesa_width(char* value, void* data) {
+    kernel_args_t* args = data;
+
+    i32 width = atoll(value);
+    if (width < 0)
+        return;
+
+    args->vesa_width = width;
+}
+
+static void handle_vesa_height(char* value, void* data) {
+    kernel_args_t* args = data;
+
+    i32 height = atoll(value);
+    if (height < 0)
+        return;
+
+    args->vesa_height = height;
+}
+
+static void handle_vesa_bpp(char* value, void* data) {
+    kernel_args_t* args = data;
+    args->vesa_bpp = atol(value);
+}
+
+static void handle_console(char* value, void* data) {
+    kernel_args_t* args = data;
+    strncpy(args->console, value, 128);
+}
+
+
+static const cfg_entry_t cfg_table[] = {
+    {"debug", handle_debug},
+    {"video", handle_video},
+    {"graphics.width", handle_vesa_width},
+    {"graphics.height", handle_vesa_height},
+    {"graphics.bpp", handle_vesa_bpp},
+    {"console", handle_console},
+    {NULL, NULL}
+};
 
 
 void parse_config(kernel_args_t* args) {
@@ -69,7 +86,7 @@ void parse_config(kernel_args_t* args) {
         return;
     }
 
-    parse_cfg(config, _config_cmp, args);
+    parse_cfg(config, cfg_table, args);
 
     free(config);
 }

@@ -8,7 +8,7 @@ _start:
     cli
     mov rdi, rax
     xor rbp, rbp
-    ; call _kern_entry
+    ; call _kern_entry_x86_64
     mov rax, 0x6969696
 
 halt:

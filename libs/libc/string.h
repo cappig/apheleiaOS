@@ -24,10 +24,11 @@ int strncmp(const char* s1, const char* s2, size_t n);
 char* strchr(const char* str, int ch);
 char* strrchr(const char* str, int ch);
 size_t strcspn(const char* dest, const char* src);
+char* strpbrk(const char* str, const char* delim);
 // TODO: Some stuff missing here too
 
 void* memset(void* dest, int val, size_t len);
-int strlen(const char* str);
+size_t strlen(const char* str);
 
 void* memchr(const void* ptr, int ch, size_t len);
 

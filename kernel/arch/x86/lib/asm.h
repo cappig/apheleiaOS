@@ -125,9 +125,9 @@ inline void write_cr4(u32 value) {
 
 typedef struct {
     u32 eax, ebx, ecx, edx;
-} cpuid_regs;
+} cpuid_regs_t;
 
-inline void cpuid(u32 leaf, cpuid_regs* r) {
+inline void cpuid(u32 leaf, cpuid_regs_t* r) {
     asm volatile( // ecx holds the subleaf number
         "cpuid"
         : "=a"(r->eax), "=b"(r->ebx), "=c"(r->ecx), "=d"(r->edx)
@@ -154,6 +154,17 @@ inline void write_msr(u32 msr, u64 value) {
     asm volatile("wrmsr" : : "a"(eax), "d"(edx), "c"(msr));
 }
 
+// https://wiki.osdev.org/SWAPGS
+#define FS_BASE        0xC0000100
+#define GS_BASE        0xC0000101
+#define KERNEL_GS_BASE 0xC0000102
+
+inline void set_gs_base(u64 base) {
+    write_msr(KERNEL_GS_BASE, base);
+    write_msr(GS_BASE, base);
+
+    swapgs();
+}
 
 inline u64 read_tsc(void) {
     u32 edx = 0, eax = 0;

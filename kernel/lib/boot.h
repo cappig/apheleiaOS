@@ -30,4 +30,6 @@ typedef struct PACKED {
     u16 vesa_width;
     u16 vesa_height;
     u16 vesa_bpp;
+
+    char console[128];
 } kernel_args_t;
