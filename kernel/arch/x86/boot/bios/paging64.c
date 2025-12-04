@@ -8,8 +8,8 @@
 
 #include "memory.h"
 #include "parse/elf.h"
-#include "x86/lib/asm.h"
-#include "x86/lib/paging64.h"
+#include "x86/asm.h"
+#include "x86/paging64.h"
 
 static page_t* lvl4;
 

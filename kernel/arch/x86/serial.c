@@ -1,6 +1,6 @@
 #include "serial.h"
 
-#include <x86/lib/asm.h>
+#include <x86/asm.h>
 
 
 void init_serial(size_t port, u8 line, u32 baud) {

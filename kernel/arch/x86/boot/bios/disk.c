@@ -9,11 +9,9 @@
 #include <string.h>
 
 #include "bios.h"
-#include "libc_ext/stdlib.h"
-#include "libc_ext/string.h"
 #include "tty.h"
-#include "x86/lib/mbr.h"
-#include "x86/lib/regs.h"
+#include "x86/mbr.h"
+#include "x86/regs.h"
 
 // FIXME: THIS IS DOGSHITTTT
 #define SECTOR_SIZE 512

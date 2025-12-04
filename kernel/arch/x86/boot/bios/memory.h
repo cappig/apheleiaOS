@@ -1,6 +1,6 @@
 #pragma once
 
-#include <x86/lib/e820.h>
+#include <x86/e820.h>
 
 
 void get_e820(e820_map_t* mmap);

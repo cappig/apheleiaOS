@@ -4,7 +4,7 @@
 #include <base/types.h>
 #include <lib/boot.h>
 
-#include "x86/lib/boot.h"
+#include "x86/boot.h"
 
 // Implementations of VESA data structures
 // https://pdos.csail.mit.edu/6.828/2018/readings/hardware/vbe3.pdf

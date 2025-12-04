@@ -3,9 +3,9 @@
 #include <base/attributes.h>
 #include <base/types.h>
 #include <stdio.h>
-#include <x86/lib/asm.h>
-#include <x86/lib/regs.h>
-#include <x86/lib/serial.h>
+#include <x86/asm.h>
+#include <x86/regs.h>
+#include <x86/serial.h>
 
 #include "bios.h"
 #include "stdarg.h"

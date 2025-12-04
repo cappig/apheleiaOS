@@ -12,7 +12,7 @@
 
 #include "stdlib.h"
 #include "tty.h"
-#include "x86/lib/e820.h"
+#include "x86/e820.h"
 
 
 #define SMAP 0x534d4150

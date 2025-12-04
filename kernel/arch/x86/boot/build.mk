@@ -1,6 +1,6 @@
 MBR_DIR  := $(MAKE_DIR)/mbr
 BIOS_DIR := $(MAKE_DIR)/bios
-LIB_DIRS  := $(ARCH_DIR)/lib kernel/lib
+LIB_DIRS  := $(ARCH_DIR) kernel/lib
 
 SRC_DIRS := \
 	$(BIOS_DIR) \

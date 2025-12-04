@@ -8,7 +8,8 @@ CC_KERNEL32 := \
 	-mcmodel=kernel \
 	-m32
 LD_KERNEL32 := \
-	--gc-sections
+	--gc-sections \
+	-T$(ARCH_DIR)/build/linker32.ld
 
 bin/kernel32/%.asm.o: %.asm
 	@mkdir -p $(@D)
@@ -21,5 +22,5 @@ bin/kernel32/%.c.o: %.c
 
 bin/image/boot/kernel32.elf: $(KERNEL32_OBJ) $(call LIBGCC, $(CC_KERNEL))
 	@mkdir -p $(@D)
-	$(call ld, $(LD_KERNEL32) -T$(ARCH_DIR)/linker32.ld, $@, $^)
+	$(call ld, $(LD_KERNEL32), $@, $^)
 

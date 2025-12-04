@@ -43,7 +43,6 @@ main:
 
 bits 32
 protected_mode:
-
     mov ax, 0x20
     mov ds, ax
     mov es, ax

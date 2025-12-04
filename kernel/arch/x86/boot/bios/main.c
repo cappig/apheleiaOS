@@ -1,9 +1,9 @@
 #include <base/attributes.h>
 #include <base/types.h>
-#include <x86/lib/asm.h>
-#include <x86/lib/boot.h>
-#include <x86/lib/regs.h>
-#include <x86/lib/serial.h>
+#include <x86/asm.h>
+#include <x86/boot.h>
+#include <x86/regs.h>
+#include <x86/serial.h>
 
 #include "config.h"
 #include "disk.h"
@@ -34,7 +34,7 @@ void _load_entry(u16 boot_disk) {
 
     // init_graphics(&info);
 
-    puts("Jumping to kernel...\n\r");
+    printf("Jumping to kernel...\n\r");
 
     load_kerenel(&info);
 

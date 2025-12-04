@@ -9,7 +9,8 @@ CC_KERNEL64 := \
 	-mcmodel=kernel \
 	-m64
 LD_KERNEL64 := \
-	--gc-sections
+	--gc-sections \
+	-T$(ARCH_DIR)/build/linker64.ld
 
 bin/kernel64/%.asm.o: %.asm
 	@mkdir -p $(@D)
@@ -22,4 +23,4 @@ bin/kernel64/%.c.o: %.c
 
 bin/image/boot/kernel64.elf: $(KERNEL64_OBJ) $(call LIBGCC, $(CC_KERNEL))
 	@mkdir -p $(@D)
-	$(call ld, $(LD_KERNEL64) -T$(ARCH_DIR)/linker64.ld, $@, $^)
+	$(call ld, $(LD_KERNEL64), $@, $^)

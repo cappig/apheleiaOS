@@ -8,9 +8,9 @@
 #include "bios.h"
 #include "lib/boot.h"
 #include "tty.h"
-#include "x86/lib/boot.h"
-#include "x86/lib/regs.h"
-#include "x86/lib/vga.h"
+#include "x86/boot.h"
+#include "x86/regs.h"
+#include "x86/vga.h"
 
 
 static bool _fetch_vbe_info(vesa_info_t* buffer) {

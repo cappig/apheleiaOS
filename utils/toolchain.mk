@@ -71,7 +71,7 @@ CC_DEBUG_EXTRA := \
 ARCH_TREE := $(word 1, $(subst _, ,$(ARCH)))
 ARCH_VARIANT := $(word 2, $(subst _, ,$(ARCH)))
 
-include kernel/arch/$(ARCH_TREE)/build.mk
+include kernel/arch/$(ARCH_TREE)/build/build.mk
 
 # scan-build is a nice clang alternative
 GCC_ANALYZER ?= false

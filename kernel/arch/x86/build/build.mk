@@ -18,8 +18,8 @@ KERNEL_SRC += $(filter-out %32.c %64.c %32.asm %64.asm, $(KERNEL_ALL_SRC))
 
 include kernel/arch/x86/boot/build.mk
 
-include kernel/arch/x86/build64.mk
-# include kernel/arch/x86/build32.mk
+include kernel/arch/x86/build/build64.mk
+# include kernel/arch/x86/build/build32.mk
 
 
 bin/$(BUILD_NAME)_x86_64.img: bin/boot/bios.bin bin/boot/mbr.bin bin/image/boot/kernel64.elf
@@ -27,4 +27,4 @@ bin/$(BUILD_NAME)_x86_64.img: bin/boot/bios.bin bin/boot/mbr.bin bin/image/boot/
 	@mv bin/image/boot/kernel$(ARCH_VARIANT).elf bin/image/boot/kernel.elf
 	@cp -r root/* bin/image
 	@kernel/image.sh $@ $< bin/image
-	@kernel/arch/x86/mbr.sh bin/boot/mbr.bin $@
+	@kernel/arch/x86/build/mbr.sh bin/boot/mbr.bin $@

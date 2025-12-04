@@ -6,7 +6,7 @@
 #include <parse/elf.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <x86/lib/boot.h>
+#include <x86/boot.h>
 
 #include "disk.h"
 #include "memory.h"
