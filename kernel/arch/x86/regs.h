@@ -62,7 +62,6 @@ typedef struct PACKED {
 } seg_regs_t;
 
 #if defined(__x86_64__)
-
 typedef struct PACKED {
     u64 r15;
     u64 r14;
@@ -88,9 +87,7 @@ typedef struct PACKED {
     u64 rsp;
     u64 ss;
 } spec_regs_t;
-
 #else
-
 typedef struct PACKED {
     u32 ebp;
     u32 edi;
@@ -108,5 +105,4 @@ typedef struct PACKED {
     u32 esp;
     u32 ss;
 } spec_regs_t;
-
 #endif
