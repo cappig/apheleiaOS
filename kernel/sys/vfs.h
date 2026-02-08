@@ -43,13 +43,6 @@ typedef struct vfs vfs_t;
 typedef struct vfs_node vfs_node_t;
 typedef struct vfs_interface vfs_interface_t;
 
-// typedef ssize_t (*vfs_read_fn)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32
-// flags); typedef ssize_t (*vfs_write_fn)(vfs_node_t* node, void* buf, size_t offset, size_t len,
-// u32 flags); typedef ssize_t (*vfs_mmap_fn)(vfs_node_t* node, void* buf, size_t offset, size_t
-// len, u32 flags); typedef ssize_t (*vfs_ioctl_fn)(vfs_node_t* node, u64 request, void* args);
-// typedef ssize_t (*vfs_create_fn)(vfs_node_t* node, vfs_node_t* child);
-// typedef ssize_t (*vfs_remove_fn)(vfs_node_t* node, char* name);
-
 struct vfs_interface {
     u32 refcount;
 
@@ -91,3 +84,36 @@ struct vfs_node {
 struct vfs {
     tree_t* tree;
 };
+
+
+vfs_t* vfs_init(void);
+
+vfs_node_t* vfs_create_node(char* name, u32 type);
+void vfs_destroy_node(vfs_node_t* node);
+
+vfs_interface_t* vfs_create_interface(
+    ssize_t (*read)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags),
+    ssize_t (*write)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags)
+);
+void vfs_destroy_interface(vfs_interface_t* interface);
+
+bool vfs_validate_name(const char* name);
+
+vfs_node_t* vfs_lookup_from(vfs_node_t* from, const char* path);
+vfs_node_t* vfs_lookup(const char* path);
+vfs_node_t* vfs_lookup_relative(const char* root, const char* path);
+vfs_node_t* vfs_open(const char* path, u32 type, bool create, mode_t mode);
+
+bool vfs_access(vfs_node_t* vnode, uid_t uid, gid_t gid, int mode);
+
+bool vfs_insert_child(vfs_node_t* parent, vfs_node_t* child);
+vfs_node_t* vfs_create(vfs_node_t* parent, char* name, u32 type, mode_t mode);
+
+bool vfs_mount(fs_instance_t* fs, vfs_node_t* mount);
+bool vfs_unmount(vfs_node_t* mount, bool destroy_tree);
+
+ssize_t vfs_read(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
+ssize_t vfs_write(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
+ssize_t vfs_mmap(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
+
+void dump_vfs(void);

@@ -60,7 +60,7 @@ void reclaim_boot_map(e820_map_t* mmap) {
     for (size_t i = 0; i < mmap->count; i++) {
         e820_entry_t* current = &mmap->entries[i];
 
-        if (current->type == E820_PAGE_TABLE || current->type == E820_ALLOC)
+        if (current->type == E820_ALLOC)
             current->type = E820_AVAILABLE;
     }
 

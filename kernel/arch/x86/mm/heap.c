@@ -43,7 +43,8 @@ void heap_init() {
 #if defined(__x86_64__)
     uintptr_t heap_offset = LINEAR_MAP_OFFSET_64;
 #else
-    uintptr_t heap_offset = LINEAR_MAP_OFFSET_32;
+    // 32-bit currently runs without a full linear map, so keep heap identity-mapped for now.
+    uintptr_t heap_offset = 0;
 #endif
 
     void* heap_start = (void*)((uintptr_t)paddr + heap_offset);

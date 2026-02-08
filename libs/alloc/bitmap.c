@@ -19,9 +19,9 @@ bool bitmap_alloc_init(
 
     alloc->block_size = block_size;
     alloc->block_count = chunk_size / block_size;
-    alloc->word_count = alloc->block_count / BITMAP_WORD_SIZE;
+    alloc->word_count = DIV_ROUND_UP(alloc->block_count, BITMAP_WORD_SIZE);
 
-    size_t bitmap_bytes = alloc->block_count / CHAR_BIT;
+    size_t bitmap_bytes = DIV_ROUND_UP(alloc->block_count, CHAR_BIT);
     size_t bitmap_blocks = DIV_ROUND_UP(bitmap_bytes, block_size);
 
     if (chunk_size <= bitmap_bytes)

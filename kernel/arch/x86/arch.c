@@ -1,8 +1,11 @@
 #include <log/log.h>
+#include <sys/panic.h>
 #include <x86/asm.h>
 #include <x86/boot.h>
 #include <x86/gdt.h>
 #include <x86/idt.h>
+#include <x86/mm/heap.h>
+#include <x86/mm/physical.h>
 #include <x86/pic.h>
 #include <x86/serial.h>
 
@@ -42,11 +45,16 @@ static uintptr_t _read_stack_ptr(void) {
 }
 
 void arch_init(void* boot_info) {
-    const boot_info_t* info = boot_info;
+    boot_info_t* info = boot_info;
 
     init_serial(SERIAL_COM1, SERAIL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
-    log_init(_serial_puts);
-    _select_log_level(info);
+    log_init(serial_puts);
+    asm volatile("cld");
+
+    if (!info)
+        panic("boot info missing");
+
+    select_log_level(info);
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booting");
@@ -62,6 +70,16 @@ void arch_init(void* boot_info) {
     pic_init();
     log_debug("initializing IDT");
     idt_init();
+    log_debug("initializing physical memory");
+    log_debug("initializing PMM");
+    pmm_init(&info->memory_map);
+    log_debug("PMM ready");
+    log_debug("initializing heap");
+    heap_init();
+    log_debug("heap ready");
+    log_debug("initializing malloc");
+    init_malloc();
+    log_debug("malloc ready");
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booted");

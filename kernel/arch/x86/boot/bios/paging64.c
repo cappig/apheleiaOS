@@ -90,6 +90,7 @@ void identity_map_64(u64 top_address, u64 offset, bool is_kernel) {
 void setup_paging_64(void) {
     // Allocate the root table
     lvl4 = (page_t*)mmap_alloc(PAGE_4KIB, E820_KERNEL, PAGE_4KIB);
+    memset(lvl4, 0, PAGE_4KIB);
     write_cr3((u32)(uintptr_t)lvl4);
 
     // Enable the NX bit
