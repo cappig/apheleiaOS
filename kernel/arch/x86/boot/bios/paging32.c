@@ -12,38 +12,86 @@
 #include "x86/asm.h"
 #include "x86/paging32.h"
 
-static page_t* pdir;
+static page_t* pdpt;
 
-static page_t* _walk_table_once_32(page_t* table, size_t index, bool is_kernel) {
-    page_t* next_table;
+static page_t* _walk_pdpt_once(size_t index, bool is_kernel) {
+    page_t* pd;
 
-    if (table[index] & PT_PRESENT) {
+    if (pdpt[index] & PT_PRESENT) {
         /* stored paddr -> convert to pointer */
-        next_table = (page_t*)(uintptr_t)page_get_paddr(&table[index]);
+        pd = (page_t*)(uintptr_t)page_get_paddr(&pdpt[index]);
     } else {
         u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
-        next_table = (page_t*)mmap_alloc(PAGE_4KIB, type, PAGE_4KIB);
+        pd = (page_t*)mmap_alloc_top(PAGE_4KIB, type, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
+        memset(pd, 0, PAGE_4KIB);
 
-        /* record physical address into directory entry */
-        page_set_paddr(&table[index], (page_t)(uintptr_t)next_table);
-
-        table[index] |= PT_PRESENT;
-        table[index] |= PT_WRITE;
+        /* record physical address into PDPT entry */
+        page_set_paddr(&pdpt[index], (page_t)(uintptr_t)pd);
+        pdpt[index] |= PT_PRESENT;
     }
 
-    return next_table;
+    return pd;
 }
 
-/* size must be either PAGE_4KIB or PAGE_4MIB (PAGE_4MIB is "huge" 4 MiB page on 32-bit) */
-void map_page_32(size_t size, u32 vaddr, u32 paddr, u32 flags, bool is_kernel) {
+static page_t* _walk_pd_once(page_t* pd, size_t index, bool is_kernel) {
+    page_t* pt;
+
+    if (pd[index] & PT_PRESENT) {
+        pt = (page_t*)(uintptr_t)page_get_paddr(&pd[index]);
+    } else {
+        u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
+        pt = (page_t*)mmap_alloc_top(PAGE_4KIB, type, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
+        memset(pt, 0, PAGE_4KIB);
+
+        page_set_paddr(&pd[index], (page_t)(uintptr_t)pt);
+        pd[index] |= PT_PRESENT;
+        pd[index] |= PT_WRITE;
+    }
+
+    return pt;
+}
+
+static void reserve_phys_window_32(void) {
+    u32 base = PHYS_WINDOW_BASE_32;
+    u32 size = PHYS_WINDOW_SIZE_32;
+
+    for (u32 offset = 0; offset < size; offset += PAGE_2MIB) {
+        u32 vaddr = base + offset;
+        size_t pdpt_index = GET_LVL3_INDEX(vaddr);
+        size_t pd_index = GET_LVL2_INDEX(vaddr);
+
+        page_t* pd = _walk_pdpt_once(pdpt_index, false);
+
+        if (pd[pd_index] & PT_PRESENT)
+            continue;
+
+        page_t* pt = (page_t*)mmap_alloc_top(
+            PAGE_4KIB,
+            E820_PAGE_TABLE,
+            PAGE_4KIB,
+            LINEAR_MAP_OFFSET_32
+        );
+        memset(pt, 0, PAGE_4KIB);
+
+        page_set_paddr(&pd[pd_index], (page_t)(uintptr_t)pt);
+        pd[pd_index] |= PT_PRESENT;
+        pd[pd_index] |= PT_WRITE;
+    }
+}
+
+/* size must be either PAGE_4KIB or PAGE_2MIB (PAE huge page is 2 MiB) */
+void map_page_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel) {
+    size_t lvl3_index = GET_LVL3_INDEX(vaddr);
     size_t lvl2_index = GET_LVL2_INDEX(vaddr);
     size_t lvl1_index = GET_LVL1_INDEX(vaddr);
 
-    /* if mapping a 4 MiB page -> set directory entry with PT_HUGE */
-    if (size == PAGE_4MIB) {
-        page_t* dir_entry = &pdir[lvl2_index];
+    page_t* pd = _walk_pdpt_once(lvl3_index, is_kernel);
 
-        paddr = ALIGN_DOWN(paddr, PAGE_4MIB);
+    /* if mapping a 2 MiB page -> set directory entry with PT_HUGE */
+    if (size == PAGE_2MIB) {
+        page_t* dir_entry = &pd[lvl2_index];
+
+        paddr = ALIGN_DOWN(paddr, PAGE_2MIB);
         page_set_paddr(dir_entry, (page_t)paddr);
 
         flags |= PT_HUGE;
@@ -53,7 +101,7 @@ void map_page_32(size_t size, u32 vaddr, u32 paddr, u32 flags, bool is_kernel) {
     }
 
     /* otherwise, ensure page table exists and set 4 KiB page entry */
-    page_t* pt = _walk_table_once_32(pdir, lvl2_index, is_kernel);
+    page_t* pt = _walk_pd_once(pd, lvl2_index, is_kernel);
 
     page_t* entry = &pt[lvl1_index];
 
@@ -64,35 +112,42 @@ void map_page_32(size_t size, u32 vaddr, u32 paddr, u32 flags, bool is_kernel) {
 }
 
 /* Map region by breaking into 4 KiB pages */
-void map_region_32(size_t size, u32 vaddr, u32 paddr, u32 flags, bool is_kernel) {
+void map_region_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     for (size_t i = 0; i < DIV_ROUND_UP(size, PAGE_4KIB); i++) {
         u32 page_vaddr = vaddr + (u32)(i * PAGE_4KIB);
-        u32 page_paddr = paddr + (u32)(i * PAGE_4KIB);
+        u64 page_paddr = paddr + (u64)(i * PAGE_4KIB);
 
         map_page_32(PAGE_4KIB, page_vaddr, page_paddr, flags, is_kernel);
     }
 }
 
-/* Identity-map physical memory up to top_address. Use 4 MiB pages where possible. */
+/* Identity-map physical memory up to top_address. Use 2 MiB pages where possible. */
 void identity_map_32(u32 top_address, u32 offset, bool is_kernel) {
-    for (u32 i = 0; i < top_address; i += PAGE_4KIB) {
-        map_page_32(PAGE_4KIB, i + offset, i, PT_WRITE, is_kernel);
-    }
+    u32 map_top = top_address;
+
+    if (map_top > LINEAR_MAP_OFFSET_32)
+        map_top = LINEAR_MAP_OFFSET_32;
+
+    for (u32 i = 0; i < map_top; i += PAGE_2MIB)
+        map_page_32(PAGE_2MIB, i + offset, (u64)i, PT_WRITE, is_kernel);
 }
 
 void setup_paging_32(void) {
-    /* Allocate the page directory (root) */
-    pdir = (page_t*)mmap_alloc(PAGE_4KIB, E820_KERNEL, PAGE_4KIB);
-    memset(pdir, 0, PAGE_4KIB);
+    /* Allocate the PDPT (root) */
+    pdpt = (page_t*)mmap_alloc_top(PAGE_4KIB, E820_KERNEL, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
+    memset(pdpt, 0, PAGE_4KIB);
 
     /* write physical base into CR3 */
-    write_cr3((u32)(uintptr_t)pdir);
+    write_cr3((u32)(uintptr_t)pdpt);
 
-    /* Note: no NX config here (non-PAE 32-bit typically doesn't support NX).
-       If you need NX on 32-bit, you must enable PAE and use appropriate MSRs. */
+    reserve_phys_window_32();
 }
 
 void init_paging_32(void) {
+    /* Enable PAE */
+    u32 cr4 = read_cr4();
+    write_cr4(cr4 | CR4_PAE | CR4_PSE);
+
     /* Enable paging by setting CR0.PG */
     u32 cr0 = read_cr0();
     write_cr0(cr0 | CR0_PG);
@@ -164,9 +219,9 @@ u32 load_elf_sections_32(void* elf_file) {
 
         u32 size = ALIGN(p_header->mem_size, PAGE_4KIB);
 
-        u32 flags = _elf_to_page_flags(p_header->flags);
+        u64 flags = _elf_to_page_flags(p_header->flags);
 
-        u32 pbase = (u32)(uintptr_t)mmap_alloc(size, E820_KERNEL, p_header->align);
+        u64 pbase = (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, p_header->align);
         u32 vbase = p_header->vaddr;
 
         // Map the segment

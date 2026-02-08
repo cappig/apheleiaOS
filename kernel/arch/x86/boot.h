@@ -1,6 +1,7 @@
 #pragma once
 
 #include <base/attributes.h>
+#include <base/macros.h>
 #include <base/types.h>
 #include <lib/boot.h>
 
@@ -8,6 +9,9 @@
 
 #define LINEAR_MAP_OFFSET_64 0xffff888000000000ULL
 #define LINEAR_MAP_OFFSET_32 0xc0000000UL
+
+#define PHYS_WINDOW_BASE_32 0xff000000UL
+#define PHYS_WINDOW_SIZE_32 (16 * MIB)
 
 #define PROTECTED_MODE_TOP 0x100000000ULL
 

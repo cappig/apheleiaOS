@@ -14,17 +14,18 @@
 #include <base/types.h>
 #include <stddef.h>
 
-typedef u32 page_t;
+typedef u64 page_t;
 
-#define FLAGS_MASK    0x00000fffUL
-#define ADDR_MASK     0xfffff000UL
-#define PHYSICAL_MASK (1ULL << 32)
+#define FLAGS_MASK    0x8000000000000fffULL
+#define ADDR_MASK     0x000ffffffffff000ULL
+#define PHYSICAL_MASK (1ULL << 36)
 
-#define GET_LVL2_INDEX(addr) (((addr) >> 22) & 0x3ff)
-#define GET_LVL1_INDEX(addr) (((addr) >> 12) & 0x3ff)
+#define GET_LVL3_INDEX(addr) (((addr) >> 30) & 0x3)
+#define GET_LVL2_INDEX(addr) (((addr) >> 21) & 0x1ff)
+#define GET_LVL1_INDEX(addr) (((addr) >> 12) & 0x1ff)
 
 #define PAGE_4KIB (4 * KIB)
-#define PAGE_4MIB (4 * MIB)
+#define PAGE_2MIB (2 * MIB)
 
 #define PT_PRESENT       (1 << 0)
 #define PT_WRITE         (1 << 1)
@@ -35,26 +36,27 @@ typedef u32 page_t;
 #define PT_DIRTY         (1 << 6)
 #define PT_HUGE          (1 << 7)
 #define PT_GLOBAL        (1 << 8)
+#define PT_NO_EXECUTE    (1ULL << 63)
 
 inline page_t page_get_paddr(page_t* page) {
-    page_t ret = *page & ADDR_MASK;
-    return ret % PHYSICAL_MASK;
+    return *page & ADDR_MASK;
 }
 
 inline void* page_get_vaddr(page_t* page) {
     page_t paddr = page_get_paddr(page);
-    return (void*)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_32);
+    return (void*)(uintptr_t)paddr;
 }
 
 inline void page_set_paddr(page_t* page, page_t addr) {
     addr = ALIGN_DOWN(addr, PAGE_4KIB);
-    addr %= PHYSICAL_MASK;
+    addr &= ADDR_MASK;
     *page = addr;
 }
 
-inline page_t construct_vaddr(size_t lvl2, size_t lvl1) {
+inline page_t construct_vaddr(size_t lvl3, size_t lvl2, size_t lvl1) {
     page_t addr = 0;
-    addr |= ((page_t)(lvl1 & 0x3ff) << 12);
-    addr |= ((page_t)(lvl2 & 0x3ff) << 22);
+    addr |= ((page_t)(lvl1 & 0x1ff) << 12);
+    addr |= ((page_t)(lvl2 & 0x1ff) << 21);
+    addr |= ((page_t)(lvl3 & 0x3) << 30);
     return addr;
 }

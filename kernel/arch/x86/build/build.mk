@@ -34,7 +34,8 @@ endif
 
 bin/$(IMG_NAME): bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF)
 	@mkdir -p $(@D)
-	@cp $(KERNEL_ELF) bin/image/boot/kernel.elf
+	@if [ "$(ARCH_VARIANT)" = "64" ]; then rm -f bin/image/boot/kernel32.elf; fi
+	@if [ "$(ARCH_VARIANT)" = "32" ]; then rm -f bin/image/boot/kernel64.elf; fi
 	@cp -r root/* bin/image
 	@kernel/image.sh $@ $< bin/image
 	@kernel/arch/x86/build/mbr.sh bin/boot/mbr.bin $@

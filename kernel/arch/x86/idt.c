@@ -2,6 +2,7 @@
 
 #include <base/attributes.h>
 #include <base/types.h>
+#include <log/log.h>
 #include <stddef.h>
 #include <x86/asm.h>
 #include <x86/gdt.h>
@@ -45,6 +46,7 @@ void configure_int(size_t int_num, u16 selector, u8 ist, u8 attribs) {
 }
 
 void idt_init(void) {
+    log_debug("initializing IDT");
     for (size_t entry = 0; entry < ISR_COUNT; entry++) {
         idt_entry_t* descriptor = &idt_entries[entry];
 

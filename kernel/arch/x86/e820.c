@@ -220,10 +220,15 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
     if (mem_base == (u64)-1 || mem_top <= mem_base)
         return false;
 
-    u64 mem_size = mem_top - mem_base;
+    if (mem_base < MIB)
+        mem_base = MIB;
+
+    if (mem_top <= mem_base)
+        return false;
 
     // Shift the base up so that the addresses end up aligned to the size of the block
     mem_base = ALIGN(mem_base, block_size);
+    u64 mem_size = mem_top - mem_base;
 
     alloc->chuck_start = (void*)(uintptr_t)mem_base;
     alloc->chunk_size = (size_t)mem_size;
@@ -302,11 +307,14 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
         if (top > max_addr)
             top = max_addr;
 
-        if (top <= mem_base || base < mem_base)
+        if (top <= mem_base || base >= mem_top)
             continue;
 
-        if (base >= mem_top)
-            continue;
+        if (base < mem_base)
+            base = mem_base;
+
+        if (top > mem_top)
+            top = mem_top;
 
         size_t blocks = (size_t)((top - base) / block_size);
         if (!blocks)

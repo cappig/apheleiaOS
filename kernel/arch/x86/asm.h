@@ -57,9 +57,15 @@ inline u32 inl(u16 port) {
 }
 
 
+#if defined(__x86_64__)
 inline void tlb_flush(u64 addr) {
     asm volatile("invlpg (%0)" : : "r"(addr) : "memory");
 }
+#else
+inline void tlb_flush(u32 addr) {
+    asm volatile("invlpg (%0)" : : "r"(addr) : "memory");
+}
+#endif
 
 
 #define CR0_WP (1ULL << 16)

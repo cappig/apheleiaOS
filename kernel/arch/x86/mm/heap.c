@@ -26,6 +26,7 @@ static bitmap_allocator_t heap = {0};
 
 
 void heap_init() {
+    log_debug("initializing heap");
     size_t free_pages = pmm_free_mem() / PAGE_4KIB;
 
     // Aim to take ~10% of the memory for the kernel heap with some reasonable limits
@@ -43,7 +44,7 @@ void heap_init() {
 #if defined(__x86_64__)
     uintptr_t heap_offset = LINEAR_MAP_OFFSET_64;
 #else
-    // 32-bit currently runs without a full linear map, so keep heap identity-mapped for now.
+    // 32-bit uses a limited phys window, so keep heap identity-mapped for now.
     uintptr_t heap_offset = 0;
 #endif
 
@@ -53,6 +54,7 @@ void heap_init() {
 
     // if (!bitmap_alloc_init(&heap, heap_start, heap_size, KERNEL_HEAP_BLOCK_SIZE))
     //     panic("Failed to initialize kernel heap!");
+    log_debug("heap ready");
 }
 
 
@@ -117,8 +119,10 @@ static struct _external_alloc external_alloc = {0};
 struct _external_alloc* _external_alloc = NULL;
 
 void init_malloc() {
+    log_debug("initializing malloc");
     _external_alloc = &external_alloc;
 
-    _external_alloc->malloc = _kmalloc;
-    _external_alloc->free = _kfree;
+    _external_alloc->malloc = kmalloc;
+    _external_alloc->free = kfree;
+    log_debug("malloc ready");
 }

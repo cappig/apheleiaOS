@@ -1,5 +1,6 @@
 #include "pic.h"
 
+#include <log/log.h>
 #include <x86/asm.h>
 #include <x86/idt.h>
 
@@ -18,7 +19,8 @@ static void _remap_pic(size_t offset1, size_t offset2) {
 }
 
 void pic_init(void) {
-    _remap_pic(IRQ_OFFSET, IRQ_OFFSET + 8);
+    log_debug("initializing PIC");
+    remap_pic(IRQ_OFFSET, IRQ_OFFSET + 8);
     pic_mask_all();
 }
 

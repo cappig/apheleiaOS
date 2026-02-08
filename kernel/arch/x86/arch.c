@@ -62,24 +62,13 @@ void arch_init(void* boot_info) {
     log_info("apheleiaOS kernel (x86_32) booting");
 #endif
 
-    log_debug("initializing GDT");
     gdt_init();
-    log_debug("initializing TSS");
-    tss_init(_read_stack_ptr());
-    log_debug("initializing PIC");
+    tss_init(read_stack_ptr());
     pic_init();
-    log_debug("initializing IDT");
     idt_init();
-    log_debug("initializing physical memory");
-    log_debug("initializing PMM");
     pmm_init(&info->memory_map);
-    log_debug("PMM ready");
-    log_debug("initializing heap");
     heap_init();
-    log_debug("heap ready");
-    log_debug("initializing malloc");
     init_malloc();
-    log_debug("malloc ready");
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booted");

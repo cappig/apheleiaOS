@@ -19,8 +19,12 @@ static bitmap_allocator_t frame_alloc = {0};
 
 
 void pmm_init(e820_map_t* mmap) {
+    log_debug("initializing PMM");
+
     if (!bitmap_alloc_init_mmap(&frame_alloc, mmap, PAGE_4KIB))
         panic("Failed to initialize the page frame allocator!");
+
+    log_debug("PMM ready");
 }
 
 size_t pmm_total_mem(void) {

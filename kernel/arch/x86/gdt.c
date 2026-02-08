@@ -2,6 +2,7 @@
 
 #include <base/attributes.h>
 #include <base/types.h>
+#include <log/log.h>
 #include <stddef.h>
 
 static tss_entry_t tss = {0};
@@ -32,6 +33,7 @@ static void _set_gdt_high_entry(size_t index, u64 base) {
 #endif
 
 void gdt_init(void) {
+    log_debug("initializing GDT");
     gdtd.size = sizeof(gdt_entry_t) * GDT_ENTRY_COUNT - 1;
 #if defined(__x86_64__)
     gdtd.gdt_ptr = (u64)(uintptr_t)gdt_entries;
@@ -49,6 +51,7 @@ void gdt_init(void) {
 }
 
 void tss_init(uintptr_t kernel_stack_top) {
+    log_debug("initializing TSS");
     u64 tss_addr = (u64)(uintptr_t)&tss;
 
     _set_gdt_entry(5, tss_addr, sizeof(tss_entry_t) - 1, 0x89, 0);
