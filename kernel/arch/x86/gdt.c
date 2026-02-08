@@ -1,0 +1,71 @@
+#include "gdt.h"
+
+#include <base/attributes.h>
+#include <base/types.h>
+#include <stddef.h>
+
+static tss_entry_t tss = {0};
+static gdt_desc_t gdtd = {0};
+
+ALIGNED(0x10)
+static gdt_entry_t gdt_entries[GDT_ENTRY_COUNT] = {0};
+
+
+static void _set_gdt_entry(size_t index, u64 base, u32 limit, u8 access, u8 flags) {
+    gdt_entries[index].limit_low = (limit & 0xffff);
+    gdt_entries[index].flags = (limit >> 16) & 0xf;
+
+    gdt_entries[index].base_low = (base & 0xffff);
+    gdt_entries[index].base_middle = (base >> 16) & 0xff;
+    gdt_entries[index].base_high = (base >> 24) & 0xff;
+
+    gdt_entries[index].access = access;
+
+    gdt_entries[index].flags |= (flags << 4);
+}
+
+#if defined(__x86_64__)
+static void _set_gdt_high_entry(size_t index, u64 base) {
+    gdt_entry_high_t* high = (gdt_entry_high_t*)&gdt_entries[index + 1];
+    high->base_higher = (base >> 32) & 0xffffffff;
+}
+#endif
+
+void gdt_init(void) {
+    gdtd.size = sizeof(gdt_entry_t) * GDT_ENTRY_COUNT - 1;
+#if defined(__x86_64__)
+    gdtd.gdt_ptr = (u64)(uintptr_t)gdt_entries;
+#else
+    gdtd.gdt_ptr = (u32)(uintptr_t)gdt_entries;
+#endif
+
+    _set_gdt_entry(0, 0, 0, 0, 0); // Null segment
+    _set_gdt_entry(1, 0, 0, 0x9a, 0x02); // Kernel code segment
+    _set_gdt_entry(2, 0, 0, 0x92, 0x00); // Kernel data segment
+    _set_gdt_entry(3, 0, 0, 0xfa, 0x02); // User code segment
+    _set_gdt_entry(4, 0, 0, 0xf2, 0x00); // User data segment
+
+    asm volatile("lgdt %0" : : "m"(gdtd) : "memory");
+}
+
+void tss_init(uintptr_t kernel_stack_top) {
+    u64 tss_addr = (u64)(uintptr_t)&tss;
+
+    _set_gdt_entry(5, tss_addr, sizeof(tss_entry_t) - 1, 0x89, 0);
+#if defined(__x86_64__)
+    _set_gdt_high_entry(5, tss_addr);
+#endif
+
+    set_tss_stack(kernel_stack_top);
+
+    asm volatile("ltr %0" : : "r"(GDT_OFFSET(5)) : "memory");
+}
+
+void set_tss_stack(uintptr_t stack) {
+#if defined(__x86_64__)
+    tss.rsp[0] = (u64)stack;
+#else
+    tss.esp0 = (u32)stack;
+    tss.ss0 = GDT_KERNEL_DATA;
+#endif
+}

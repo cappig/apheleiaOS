@@ -1,12 +1,19 @@
+#include "physical.h"
+
 #include <alloc/bitmap.h>
 #include <base/macros.h>
+#include <log/log.h>
 #include <string.h>
 
 #include "sys/panic.h"
 #include "x86/asm.h"
 #include "x86/boot.h"
 #include "x86/e820.h"
+#if defined(__x86_64__)
 #include "x86/paging64.h"
+#else
+#include "x86/paging32.h"
+#endif
 
 static bitmap_allocator_t frame_alloc = {0};
 
@@ -16,11 +23,11 @@ void pmm_init(e820_map_t* mmap) {
         panic("Failed to initialize the page frame allocator!");
 }
 
-size_t pmm_total_mem() {
+size_t pmm_total_mem(void) {
     return frame_alloc.block_count * frame_alloc.block_size;
 }
 
-size_t pmm_free_mem() {
+size_t pmm_free_mem(void) {
     return frame_alloc.free_blocks * frame_alloc.block_size;
 }
 
@@ -58,19 +65,15 @@ void reclaim_boot_map(e820_map_t* mmap) {
     }
 
     clean_mmap(mmap);
-    return;
 
-
+#if defined(__x86_64__)
     u64 root = read_cr3();
+    page_t* root_vaddr = (page_t*)(root + LINEAR_MAP_OFFSET_64);
 
     // The higher half contains kernel mappings
-    memset((page_t*)(root + LINEAR_MAP_OFFSET_64), 0, 256 * sizeof(page_t));
+    memset(root_vaddr, 0, 256 * sizeof(page_t));
 
-    // This will flush the TLB
+    // Flush the TLB
     write_cr3(root);
+#endif
 }
-
-// void dump_mem() {
-//     log_info("System has %zu MiB of usable RAM", get_total_mem() / MiB);
-//     log_info("%zu MiB are free for allocation", get_free_mem() / MiB);
-// }

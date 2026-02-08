@@ -3,8 +3,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-static const char* lvl_strings[5] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
-static const char* lvl_colors[5] = {"36", "32", "33", "31", "41;97"};
+static const char* lvl_strings[6] = {"NONE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
+static const char* lvl_colors[6] = {"37", "36", "32", "33", "31", "41;97"};
 
 static int min_log_lvl = LOG_DEBUG;
 

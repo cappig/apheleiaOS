@@ -19,6 +19,6 @@ bin/kernel32/%.c.o: %.c
 	$(call cc, $(CC_KERNEL32), $@, $<)
 
 
-bin/image/boot/kernel32.elf: $(KERNEL32_OBJ) $(call LIBGCC, $(CC_KERNEL))
+bin/image/boot/kernel32.elf: $(KERNEL32_OBJ) $(call LIBGCC, $(CC_KERNEL32))
 	@mkdir -p $(@D)
 	$(call ld, $(LD_KERNEL32), $@, $^)

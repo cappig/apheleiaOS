@@ -112,30 +112,58 @@ void disk_init(u16 disk) {
 }
 
 
+static size_t _indirect_capacity(u32 entries_per_block, size_t indirection, size_t max) {
+    size_t capacity = 1;
+
+    for (size_t i = 0; i < indirection; i++) {
+        if (capacity > max / entries_per_block)
+            return max;
+        capacity *= entries_per_block;
+    }
+
+    return capacity;
+}
+
+static void _push_zero_blocks(u32* blocks, size_t* n, size_t max, size_t count) {
+    if (*n >= max)
+        return;
+
+    size_t remaining = max - *n;
+    size_t to_add = (count < remaining) ? count : remaining;
+
+    memset(&blocks[*n], 0, to_add * sizeof(u32));
+    *n += to_add;
+}
+
 static void _flatten_blocks(u32* blocks, u32 block_num, size_t indirection, size_t* n, size_t max) {
-    if (!block_num || *n >= max)
+    if (*n >= max)
         return;
 
     u32 block_size = ext2_block_size(&superblock);
     u32 entries_per_block = block_size / sizeof(u32);
 
     if (indirection == 0) {
-        if (*n < max)
-            blocks[(*n)++] = block_num;
-
-    } else {
-        u32* indirect_blocks = (u32*)malloc(block_size);
-
-        if (!indirect_blocks)
-            panic("Failed to allocate memory for indirect blocks!");
-
-        read_disk(indirect_blocks, rootfs_base + (block_num * block_size), block_size);
-
-        for (u32 i = 0; i < entries_per_block && *n < max; i++)
-            _flatten_blocks(blocks, indirect_blocks[i], indirection - 1, n, max);
-
-        free(indirect_blocks);
+        blocks[(*n)++] = block_num;
+        return;
     }
+
+    if (!block_num) {
+        size_t capacity = _indirect_capacity(entries_per_block, indirection, max - *n);
+        _push_zero_blocks(blocks, n, max, capacity);
+        return;
+    }
+
+    u32* indirect_blocks = (u32*)malloc(block_size);
+
+    if (!indirect_blocks)
+        panic("Failed to allocate memory for indirect blocks!");
+
+    read_disk(indirect_blocks, rootfs_base + (block_num * block_size), block_size);
+
+    for (u32 i = 0; i < entries_per_block && *n < max; i++)
+        _flatten_blocks(blocks, indirect_blocks[i], indirection - 1, n, max);
+
+    free(indirect_blocks);
 }
 
 
@@ -189,7 +217,7 @@ static void* _read_inode(ext2_inode_t* inode) {
     _flatten_blocks(blocks, inode->indirect_block_ptr[2], 3, &n, inode_blocks);
 
     if (n != inode_blocks)
-        panic("bleh");
+        panic("Inode block count mismatch!");
 
     void* buffer = malloc(inode_blocks * block_size);
 
@@ -198,7 +226,14 @@ static void* _read_inode(ext2_inode_t* inode) {
 
     for (size_t i = 0; i < inode_blocks; i++) {
         size_t block_offset = blocks[i] * block_size;
-        read_disk(buffer + (i * block_size), rootfs_base + block_offset, block_size);
+        void* out = buffer + (i * block_size);
+
+        if (!blocks[i]) {
+            memset(out, 0, block_size);
+            continue;
+        }
+
+        read_disk(out, rootfs_base + block_offset, block_size);
     }
 
     free(blocks);

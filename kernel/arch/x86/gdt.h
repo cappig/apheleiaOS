@@ -5,6 +5,8 @@
 
 #define GDT_OFFSET(index) ((u16)((index) * sizeof(gdt_entry_t)))
 
+#define GDT_ENTRY_COUNT 7
+
 typedef struct PACKED {
     u16 limit_low;
     u16 base_low;
@@ -87,3 +89,15 @@ typedef struct PACKED {
     u32 gdt_ptr;
 #endif
 } gdt_desc_t;
+
+enum gdt_segments {
+    GDT_KERNEL_CODE = GDT_OFFSET(1),
+    GDT_KERNEL_DATA = GDT_OFFSET(2),
+    GDT_USER_CODE = GDT_OFFSET(3),
+    GDT_USER_DATA = GDT_OFFSET(4),
+};
+
+
+void gdt_init(void);
+void tss_init(uintptr_t kernel_stack_top);
+void set_tss_stack(uintptr_t stack);

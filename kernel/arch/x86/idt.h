@@ -79,8 +79,13 @@ typedef struct PACKED {
     gen_regs_t g_regs;
 
     // Pushed by the isr_stub_xx
+#if defined(__x86_64__)
+    u64 int_num;
+    u64 error_code;
+#else
     u32 int_num;
     u32 error_code;
+#endif
 
     spec_regs_t s_regs;
 } int_state_t;

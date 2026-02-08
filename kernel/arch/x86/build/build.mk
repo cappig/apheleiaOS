@@ -6,6 +6,7 @@ KERNEL_SRC_DIRS := \
 	$(ARCH_DIR) \
 	$(filter-out $(ARCH_DIR)/boot, $(wildcard $(ARCH_DIR)/*)) \
 	$(LIBC_DIRS) \
+	libs/log \
 	libs/alloc \
 	libs/data \
 	libs/parse
