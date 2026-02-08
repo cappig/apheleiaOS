@@ -51,5 +51,5 @@ all: bin/$(IMG_NAME)
 
 .PHONY: clean
 clean:
-	@rm -rf bin
+	@python -c "import shutil; shutil.rmtree('bin', ignore_errors=True)"
 	@echo "Build directories cleaned"

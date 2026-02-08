@@ -5,7 +5,6 @@ CC_KERNEL32 := \
 	-fdata-sections \
 	-DEXTERNAL_ALLOC \
 	-ffunction-sections \
-	-mcmodel=kernel \
 	-m32
 LD_KERNEL32 := \
 	--gc-sections \
@@ -23,4 +22,3 @@ bin/kernel32/%.c.o: %.c
 bin/image/boot/kernel32.elf: $(KERNEL32_OBJ) $(call LIBGCC, $(CC_KERNEL))
 	@mkdir -p $(@D)
 	$(call ld, $(LD_KERNEL32), $@, $^)
-

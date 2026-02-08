@@ -11,7 +11,12 @@ SRC_DIRS := \
 	libs/parse
 
 MBR_SRC  := $(wildcard $(MBR_DIR)/*.asm)
-BIOS_SRC := $(foreach dir, $(SRC_DIRS), $(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))
+ARCH_BOOT_SRC := $(wildcard $(ARCH_DIR)/*.c) $(wildcard $(ARCH_DIR)/*.asm)
+ARCH_BOOT_SRC := $(filter-out %64.c %64.asm, $(ARCH_BOOT_SRC))
+
+BOOT_SRC_DIRS := $(filter-out $(ARCH_DIR), $(SRC_DIRS))
+BIOS_SRC := $(foreach dir, $(BOOT_SRC_DIRS), $(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))
+BIOS_SRC += $(ARCH_BOOT_SRC)
 
 MBR_OBJ  := $(patsubst %, bin/boot/%.o, $(MBR_SRC))
 BIOS_OBJ := $(patsubst %, bin/boot/%.o, $(BIOS_SRC))

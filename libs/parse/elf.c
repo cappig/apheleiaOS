@@ -46,7 +46,7 @@ u64 elf_to_mmap_prot(u32 elf_flags) {
 }
 
 bool elf_parse_header(elf_attributes_t* attribs, elf_header_t* header) {
-    u64 ph_base = (u64)header + header->phoff;
+    uintptr_t ph_base = (uintptr_t)header + (uintptr_t)header->phoff;
 
     attribs->base = (u64)-1;
     attribs->top = 0;
@@ -54,7 +54,8 @@ bool elf_parse_header(elf_attributes_t* attribs, elf_header_t* header) {
 
     bool has_load = false;
     for (size_t i = 0; i < header->ph_num; i++) {
-        elf_prog_header_t* p_header = (elf_prog_header_t*)(ph_base + i * header->phent_size);
+        elf_prog_header_t* p_header =
+            (elf_prog_header_t*)(ph_base + (uintptr_t)i * header->phent_size);
 
         if (p_header->type != PT_LOAD)
             continue;

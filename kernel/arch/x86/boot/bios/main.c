@@ -26,7 +26,9 @@ void _load_entry(u16 boot_disk) {
     get_e820(&info.memory_map);
     init_malloc();
 
-    get_rsdp(&info.acpi_root_ptr);
+    u64 acpi_root_ptr = 0;
+    get_rsdp(&acpi_root_ptr);
+    info.acpi_root_ptr = acpi_root_ptr;
 
     disk_init(boot_disk);
 

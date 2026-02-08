@@ -1,5 +1,6 @@
 #include "paging32.h"
 
+#include <base/attributes.h>
 #include <base/macros.h>
 #include <base/types.h>
 #include <stddef.h>
@@ -74,15 +75,7 @@ void map_region_32(size_t size, u32 vaddr, u32 paddr, u32 flags, bool is_kernel)
 
 /* Identity-map physical memory up to top_address. Use 4 MiB pages where possible. */
 void identity_map_32(u32 top_address, u32 offset, bool is_kernel) {
-    /* prefer 4 MiB steps for speed */
-    u32 i = 0;
-    while (i + PAGE_4MIB <= top_address) {
-        map_page_32(PAGE_4MIB, i + offset, i, PT_WRITE, is_kernel);
-        i += PAGE_4MIB;
-    }
-
-    /* remaining tail with 4 KiB pages */
-    for (; i < top_address; i += PAGE_4KIB) {
+    for (u32 i = 0; i < top_address; i += PAGE_4KIB) {
         map_page_32(PAGE_4KIB, i + offset, i, PT_WRITE, is_kernel);
     }
 }
@@ -90,6 +83,7 @@ void identity_map_32(u32 top_address, u32 offset, bool is_kernel) {
 void setup_paging_32(void) {
     /* Allocate the page directory (root) */
     pdir = (page_t*)mmap_alloc(PAGE_4KIB, E820_KERNEL, PAGE_4KIB);
+    memset(pdir, 0, PAGE_4KIB);
 
     /* write physical base into CR3 */
     write_cr3((u32)(uintptr_t)pdir);
@@ -99,18 +93,52 @@ void setup_paging_32(void) {
 }
 
 void init_paging_32(void) {
-    /* Enable Page Size Extension (PSE) if you want to use 4 MiB pages.
-       CR4_PSE should be defined in your headers (commonly (1 << 4)). */
-    // #ifdef CR4_PSE
-    //     u32 cr4 = read_cr4();
-    //     write_cr4(cr4 | CR4_PSE);
-    // #endif
-
     /* Enable paging by setting CR0.PG */
     u32 cr0 = read_cr0();
     write_cr0(cr0 | CR0_PG);
 }
 
+
+typedef struct PACKED {
+    u32 magic;
+    u8 arch;
+    u8 endianness;
+    u8 id_version;
+    u8 abi;
+    u8 abi_version;
+    u8 _unused0[7];
+
+    u16 type;
+    u16 machine;
+    u32 version;
+
+    u32 entry;
+
+    u32 phoff;
+    u32 shoff;
+
+    u32 flags;
+    u16 hdr_size;
+
+    u16 phent_size;
+    u16 ph_num;
+
+    u16 shdr_size;
+    u16 sh_num;
+
+    u16 shstrndx;
+} elf32_header_t;
+
+typedef struct PACKED {
+    u32 type;
+    u32 offset;
+    u32 vaddr;
+    u32 paddr;
+    u32 file_size;
+    u32 mem_size;
+    u32 flags;
+    u32 align;
+} elf32_prog_header_t;
 
 static page_t _elf_to_page_flags(u32 elf_flags) {
     u64 flags = PT_PRESENT;
@@ -122,10 +150,11 @@ static page_t _elf_to_page_flags(u32 elf_flags) {
 }
 
 u32 load_elf_sections_32(void* elf_file) {
-    elf_header_t* header = elf_file;
+    elf32_header_t* header = elf_file;
 
     for (size_t i = 0; i < header->ph_num; i++) {
-        elf_prog_header_t* p_header = elf_file + header->phoff + i * header->phent_size;
+        elf32_prog_header_t* p_header =
+            (elf32_prog_header_t*)((u8*)elf_file + header->phoff + i * header->phent_size);
 
         if (p_header->type != PT_LOAD)
             continue;
@@ -133,18 +162,18 @@ u32 load_elf_sections_32(void* elf_file) {
         if (!p_header->file_size && !p_header->mem_size)
             continue;
 
-        u64 size = ALIGN(p_header->mem_size, PAGE_4KIB);
+        u32 size = ALIGN(p_header->mem_size, PAGE_4KIB);
 
-        u64 flags = _elf_to_page_flags(p_header->flags);
+        u32 flags = _elf_to_page_flags(p_header->flags);
 
-        u64 pbase = (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, p_header->align);
-        u64 vbase = p_header->vaddr;
+        u32 pbase = (u32)(uintptr_t)mmap_alloc(size, E820_KERNEL, p_header->align);
+        u32 vbase = p_header->vaddr;
 
         // Map the segment
         map_region_32(size, vbase, pbase, flags, true);
 
         // Copy all loadable data from the file
-        memcpy((void*)(uintptr_t)pbase, elf_file + p_header->offset, p_header->file_size);
+        memcpy((void*)(uintptr_t)pbase, (u8*)elf_file + p_header->offset, p_header->file_size);
 
         // Zero out any additional space
         size_t zero_len = p_header->mem_size - p_header->file_size;

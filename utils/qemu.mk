@@ -1,7 +1,11 @@
 ifeq ($(ARCH), x86_64)
 	QEMU := qemu-system-x86_64
+else ifeq ($(ARCH), x86_32)
+	QEMU := qemu-system-i386
 else ifeq ($(ARCH), riscv_64)
 	QEMU := qemu-system-riscv64
+else
+	QEMU := qemu-system-$(ARCH)
 endif
 
 KVM ?= true
@@ -28,4 +32,3 @@ endif
 .PHONY: run
 run:
 	$(QEMU) $(QEMU_ARGS) -drive format=raw,file=bin/$(IMG_NAME)
-

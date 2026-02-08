@@ -61,7 +61,9 @@ void get_e820(e820_map_t* mmap) {
 
 // https://wiki.osdev.org/RSDP#Detecting_the_RSDP
 void get_rsdp(u64* rsdp) {
-    u64 ebda = (u64)(*(u16*)0x40e << 4);
+    u16 ebda_seg = 0;
+    asm volatile("movw 0x40e, %0" : "=r"(ebda_seg));
+    u64 ebda = ((u64)ebda_seg) << 4;
 
     for (u64 addr = ebda; addr <= 0xfffff; addr += 16) {
         // No RSDP found in the EBDA
@@ -86,6 +88,18 @@ void* mmap_alloc(size_t size, int type, size_t alignment) {
         panic("Attempetd to allocate zero bytes!");
 
     void* ret = mmap_alloc_inner(e820_mmap, size, type, alignment, (size_t)-1);
+
+    if (!ret)
+        panic("Out of memory!");
+
+    return ret;
+}
+
+void* mmap_alloc_top(size_t size, int type, size_t alignment, u64 top) {
+    if (!size)
+        panic("Attempetd to allocate zero bytes!");
+
+    void* ret = mmap_alloc_inner(e820_mmap, size, type, alignment, top);
 
     if (!ret)
         panic("Out of memory!");

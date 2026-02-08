@@ -1,9 +1,10 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 
 
-inline void halt(void) {
+NORETURN inline void halt(void) {
     for (;;)
         asm("hlt");
 
@@ -64,6 +65,7 @@ inline void tlb_flush(u64 addr) {
 #define CR0_WP (1ULL << 16)
 #define CR0_PG (1ULL << 31)
 
+#if defined(__x86_64__)
 inline u64 read_cr0(void) {
     u64 value = 0;
     asm volatile("mov %%cr0, %0" : "=r"(value));
@@ -71,7 +73,7 @@ inline u64 read_cr0(void) {
     return value;
 }
 
-inline void write_cr0(u32 value) {
+inline void write_cr0(u64 value) {
     asm volatile("mov %0, %%cr0" : : "r"(value));
 }
 
@@ -81,6 +83,25 @@ inline u64 read_cr2(void) {
 
     return value;
 }
+#else
+inline u32 read_cr0(void) {
+    u32 value = 0;
+    asm volatile("mov %%cr0, %0" : "=r"(value));
+
+    return value;
+}
+
+inline void write_cr0(u32 value) {
+    asm volatile("mov %0, %%cr0" : : "r"(value));
+}
+
+inline u32 read_cr2(void) {
+    u32 value = 0;
+    asm volatile("mov %%cr2, %0" : "=r"(value));
+
+    return value;
+}
+#endif
 
 inline u64 read_cr3(void) {
 #if defined(__x86_64__)
@@ -105,14 +126,24 @@ inline void write_cr3(u32 value) {
 }
 #endif
 
+#define CR4_PSE (1 << 4)
 #define CR4_PAE (1 << 5)
 
+#if defined(__x86_64__)
 inline u64 read_cr4(void) {
     u32 value = 0;
     asm volatile("movl %%cr4, %0" : "=r"(value));
 
     return value;
 }
+#else
+inline u32 read_cr4(void) {
+    u32 value = 0;
+    asm volatile("movl %%cr4, %0" : "=r"(value));
+
+    return value;
+}
+#endif
 
 inline void write_cr4(u32 value) {
     asm volatile("movl %0, %%cr4" : : "r"(value));

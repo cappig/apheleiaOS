@@ -22,8 +22,9 @@ bits 64
     mov gs, ax
 
     mov rbx, qword [esp+4]
-    mov rax, qword [esp+12]
+    mov rdi, qword [esp+12]
     mov rsp, qword [esp+20]
+    and rsp, -16
 
     jmp rbx
 
