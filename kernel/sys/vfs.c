@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "devfs.h"
 #include "panic.h"
 
 
@@ -89,6 +90,7 @@ vfs_t* vfs_init(void) {
     vfs_node_t* root = vfs_create_node(NULL, VFS_DIR);
     vfs->tree = tree_create_rooted(root->tree_entry);
 
+    devfs_init();
     log_info("vfs: initialized");
     return vfs;
 }

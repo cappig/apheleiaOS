@@ -18,14 +18,14 @@ static page_t* _walk_pdpt_once(size_t index, bool is_kernel) {
     page_t* pd;
 
     if (pdpt[index] & PT_PRESENT) {
-        /* stored paddr -> convert to pointer */
+        // stored paddr -> convert to pointer
         pd = (page_t*)(uintptr_t)page_get_paddr(&pdpt[index]);
     } else {
         u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
         pd = (page_t*)mmap_alloc_top(PAGE_4KIB, type, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
         memset(pd, 0, PAGE_4KIB);
 
-        /* record physical address into PDPT entry */
+        // record physical address into PDPT entry
         page_set_paddr(&pdpt[index], (page_t)(uintptr_t)pd);
         pdpt[index] |= PT_PRESENT;
     }
@@ -65,12 +65,8 @@ static void reserve_phys_window_32(void) {
         if (pd[pd_index] & PT_PRESENT)
             continue;
 
-        page_t* pt = (page_t*)mmap_alloc_top(
-            PAGE_4KIB,
-            E820_PAGE_TABLE,
-            PAGE_4KIB,
-            LINEAR_MAP_OFFSET_32
-        );
+        page_t* pt =
+            (page_t*)mmap_alloc_top(PAGE_4KIB, E820_PAGE_TABLE, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
         memset(pt, 0, PAGE_4KIB);
 
         page_set_paddr(&pd[pd_index], (page_t)(uintptr_t)pt);
@@ -79,7 +75,7 @@ static void reserve_phys_window_32(void) {
     }
 }
 
-/* size must be either PAGE_4KIB or PAGE_2MIB (PAE huge page is 2 MiB) */
+// size must be either PAGE_4KIB or PAGE_2MIB (PAE huge page is 2 MiB)
 void map_page_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     size_t lvl3_index = GET_LVL3_INDEX(vaddr);
     size_t lvl2_index = GET_LVL2_INDEX(vaddr);
@@ -87,7 +83,7 @@ void map_page_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel) {
 
     page_t* pd = _walk_pdpt_once(lvl3_index, is_kernel);
 
-    /* if mapping a 2 MiB page -> set directory entry with PT_HUGE */
+    // if mapping a 2 MiB page -> set directory entry with PT_HUGE
     if (size == PAGE_2MIB) {
         page_t* dir_entry = &pd[lvl2_index];
 
@@ -100,7 +96,7 @@ void map_page_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel) {
         return;
     }
 
-    /* otherwise, ensure page table exists and set 4 KiB page entry */
+    // otherwise, ensure page table exists and set 4 KiB page entry
     page_t* pt = _walk_pd_once(pd, lvl2_index, is_kernel);
 
     page_t* entry = &pt[lvl1_index];
@@ -111,7 +107,7 @@ void map_page_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     *entry |= flags & FLAGS_MASK;
 }
 
-/* Map region by breaking into 4 KiB pages */
+// Map region by breaking into 4 KiB pages
 void map_region_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     for (size_t i = 0; i < DIV_ROUND_UP(size, PAGE_4KIB); i++) {
         u32 page_vaddr = vaddr + (u32)(i * PAGE_4KIB);
@@ -121,7 +117,7 @@ void map_region_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel)
     }
 }
 
-/* Identity-map physical memory up to top_address. Use 2 MiB pages where possible. */
+// Identity-map physical memory up to top_address. Use 2 MiB pages where possible.
 void identity_map_32(u32 top_address, u32 offset, bool is_kernel) {
     u32 map_top = top_address;
 
@@ -133,22 +129,22 @@ void identity_map_32(u32 top_address, u32 offset, bool is_kernel) {
 }
 
 void setup_paging_32(void) {
-    /* Allocate the PDPT (root) */
+    // Allocate the PDPT (root)
     pdpt = (page_t*)mmap_alloc_top(PAGE_4KIB, E820_KERNEL, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
     memset(pdpt, 0, PAGE_4KIB);
 
-    /* write physical base into CR3 */
+    // write physical base into CR3
     write_cr3((u32)(uintptr_t)pdpt);
 
     reserve_phys_window_32();
 }
 
 void init_paging_32(void) {
-    /* Enable PAE */
+    // Enable PAE
     u32 cr4 = read_cr4();
     write_cr4(cr4 | CR4_PAE | CR4_PSE);
 
-    /* Enable paging by setting CR0.PG */
+    // Enable paging by setting CR0.PG
     u32 cr0 = read_cr0();
     write_cr0(cr0 | CR0_PG);
 }

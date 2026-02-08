@@ -108,10 +108,7 @@ void load_kerenel(boot_info_t* info) {
         init_paging_32();
 
         u32 stack_paddr = (u32)(uintptr_t)mmap_alloc_top(
-            KERNEL_STACK_SIZE,
-            E820_KERNEL,
-            (size_t)(4 * KIB),
-            phys_top
+            KERNEL_STACK_SIZE, E820_KERNEL, (size_t)(4 * KIB), phys_top
         );
         u32 stack = stack_paddr;
 
