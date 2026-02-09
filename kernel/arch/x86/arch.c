@@ -1,5 +1,7 @@
 #include <log/log.h>
+#include <sys/acpi.h>
 #include <sys/panic.h>
+#include <sys/pci.h>
 #include <x86/asm.h>
 #include <x86/ata.h>
 #include <x86/boot.h>
@@ -70,6 +72,10 @@ void arch_init(void* boot_info) {
     pmm_init(&info->memory_map);
     heap_init();
     init_malloc();
+    acpi_init(info->acpi_root_ptr);
+    pci_init();
+    if (info->args.debug == DEBUG_ALL)
+        dump_pci_devices();
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booted");
@@ -80,4 +86,24 @@ void arch_init(void* boot_info) {
 
 void arch_storage_init(void) {
     ata_disk_init();
+}
+
+u32 arch_pci_read(u8 bus, u8 slot, u8 func, u8 offset, u8 size) {
+    const u16 pci_addr = 0xcf8;
+    const u16 pci_data = 0xcfc;
+
+    u32 addr =
+        0x80000000 | ((u32)bus << 16) | ((u32)slot << 11) | ((u32)func << 8) | ((u32)offset & 0xfc);
+    outl(pci_addr, addr);
+
+    switch (size) {
+    case 4:
+        return inl(pci_data);
+    case 2:
+        return inw((u16)(pci_data + (offset & 2)));
+    case 1:
+        return inb((u16)(pci_data + (offset & 3)));
+    default:
+        return 0xffffffffU;
+    }
 }
