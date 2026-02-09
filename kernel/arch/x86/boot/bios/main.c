@@ -16,9 +16,7 @@
 ALIGNED(8)
 static boot_info_t info = {0};
 
-
-NORETURN
-void _load_entry(u16 boot_disk) {
+NORETURN void _load_entry(u16 boot_disk) {
     init_serial(SERIAL_COM1, SERAIL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
 
     printf("Booting apheleiaOS...\n\r");
@@ -34,7 +32,19 @@ void _load_entry(u16 boot_disk) {
 
     parse_config(&info.args);
 
-    // init_graphics(&info);
+    init_graphics(&info);
+
+    if (info.video.mode == VIDEO_GRAPHICS && info.video.framebuffer) {
+        u64 pitch = info.video.bytes_per_line;
+        if (!pitch)
+            pitch = (u64)info.video.width * info.video.bytes_per_pixel;
+
+        u64 fb_size = pitch * info.video.height;
+        if (fb_size) {
+            mmap_add_entry(&info.memory_map, info.video.framebuffer, fb_size, E820_RESERVED);
+            clean_mmap(&info.memory_map);
+        }
+    }
 
     printf("Jumping to kernel...\n\r");
 

@@ -10,7 +10,6 @@
 #include "bios.h"
 #include "stdarg.h"
 
-
 void puts(const char* str) {
     regs32_t regs = {.ah = 0x0e};
 
@@ -18,6 +17,13 @@ void puts(const char* str) {
         regs.al = *str;
         send_serial(SERIAL_COM1, *str);
         bios_call(0x10, &regs, &regs);
+        str++;
+    }
+}
+
+void serial_puts(const char* str) {
+    while (*str) {
+        send_serial(SERIAL_COM1, *str);
         str++;
     }
 }
@@ -37,6 +43,20 @@ int printf(char* fmt, ...) {
     return ret;
 }
 
+int serial_printf(char* fmt, ...) {
+    char buf[PRINTF_BUF_SIZE];
+
+    va_list args;
+    va_start(args, fmt);
+
+    int ret = vsprintf(buf, fmt, args);
+
+    serial_puts(buf);
+
+    va_end(args);
+
+    return ret;
+}
 
 NORETURN void panic(const char* msg) {
     puts("BOOTLOADER PANIC: ");

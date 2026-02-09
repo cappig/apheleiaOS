@@ -1,10 +1,13 @@
+#include <arch/arch.h>
 #include <log/log.h>
+#include <string.h>
 #include <sys/acpi.h>
 #include <sys/panic.h>
 #include <sys/pci.h>
 #include <x86/asm.h>
 #include <x86/ata.h>
 #include <x86/boot.h>
+#include <x86/console.h>
 #include <x86/gdt.h>
 #include <x86/idt.h>
 #include <x86/mm/heap.h>
@@ -14,6 +17,13 @@
 
 static void _serial_puts(const char* s) {
     send_serial_string(SERIAL_COM1, s);
+}
+
+static void _console_puts(const char* s) {
+    if (!s)
+        return;
+
+    arch_console_write(s, strlen(s));
 }
 
 static void _select_log_level(const boot_info_t* info) {
@@ -57,7 +67,7 @@ void arch_init(void* boot_info) {
     if (!info)
         panic("boot info missing");
 
-    select_log_level(info);
+    _select_log_level(info);
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booting");
@@ -76,6 +86,8 @@ void arch_init(void* boot_info) {
     pci_init();
     if (info->args.debug == DEBUG_ALL)
         dump_pci_devices();
+    console_init(info);
+    log_init(_console_puts);
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booted");

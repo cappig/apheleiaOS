@@ -114,7 +114,7 @@ void load_kerenel(boot_info_t* info) {
 
         u32 boot_info = (u32)(uintptr_t)info;
 
-        printf("Jumping to kernel at %#x\n\r", entry);
+        serial_printf("Jumping to kernel at %#x\n\r", entry);
 
         jump_to_kernel_32(entry, boot_info, stack);
     } else {
@@ -134,7 +134,7 @@ void load_kerenel(boot_info_t* info) {
 
         u64 boot_info = (uintptr_t)info + LINEAR_MAP_OFFSET_64;
 
-        printf("Jumping to kernel at %#llx\n\r", entry);
+        serial_printf("Jumping to kernel at %#llx\n\r", entry);
 
         jump_to_kernel_64(entry, boot_info, stack);
     }
