@@ -58,7 +58,7 @@ static int _get_width(const char* format, size_t* index, va_list* vlist) {
 
         *index += (size_t)(end - &format[*index]);
     } else if (format[*index] == '*') {
-        width = abs(va_arg(*vlist, int));
+        width = va_arg(*vlist, int);
 
         *index += 1;
     }
@@ -197,8 +197,15 @@ static size_t _string_to_buffer(char* buffer, char* string, int flags, int preci
     return (size_t)(buffer - buf_start);
 }
 
-static size_t
-_append_num_prefix(char* buffer, uintmax_t number, int flags, int base, int size, int* padding) {
+static size_t _append_num_prefix(
+    char* buffer,
+    uintmax_t number,
+    int flags,
+    int base,
+    int size,
+    int* padding,
+    bool uppercase
+) {
     const char* buf_start = buffer;
 
     if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO))
@@ -224,10 +231,12 @@ _append_num_prefix(char* buffer, uintmax_t number, int flags, int base, int size
     else if (base == 8)
         prefix = "0";
     else if (base == 16)
-        prefix = "0x";
+        prefix = uppercase ? "0X" : "0x";
 
-    while (*prefix && (flags & FLAGS_HASH))
+    while (*prefix && (flags & FLAGS_HASH)) {
         *buffer++ = *prefix++;
+        (*padding)--;
+    }
 
     if (flags & FLAGS_ZERO)
         while ((*padding)-- > 0)
@@ -285,6 +294,9 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
     if (!buffer)
         return 0;
 
+    if (!max_size)
+        return 0;
+
     va_list args;
     va_copy(args, vlist);
 
@@ -304,11 +316,20 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
         int size = _get_size(format, &i);
 
         int base = _get_base(format[i]);
+        bool uppercase = (format[i] == 'X');
 
         if (base == BASE_UNKNOWN) {
             buffer[printed++] = format[i];
             continue;
         }
+
+        if (width < 0) {
+            flags |= FLAGS_MINUS;
+            width = -width;
+        }
+
+        if (precision < 0)
+            precision = -1;
 
         if (base == BASE_SDEC) {
             size = -size;
@@ -318,11 +339,13 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
         if (base == BASE_PTR) {
             size = SIZE_PTR;
             base = -base;
+            flags |= FLAGS_HASH;
         }
 
         if (base < 0) {
             char char_holder[2] = {0};
             char* string;
+            flags &= ~FLAGS_ZERO;
 
             if (base == BASE_STRING) {
                 string = va_arg(args, char*);
@@ -353,11 +376,22 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
 
             int padding = (width > len) ? width - len : 0;
 
-            printed += _append_num_prefix(&buffer[printed], number, flags, base, size, &padding);
+            printed +=
+                _append_num_prefix(&buffer[printed], number, flags, base, size, &padding, uppercase);
+
+            if (uppercase) {
+                for (int j = 0; j < len; j++)
+                    num_buffer[j] = (char)toupper(num_buffer[j]);
+            }
 
             printed += _string_to_buffer(&buffer[printed], num_buffer, flags, precision, &padding);
         }
     }
+
+    if ((size_t)printed >= max_size)
+        printed = (int)max_size - 1;
+
+    buffer[printed] = '\0';
 
     va_end(args);
 
