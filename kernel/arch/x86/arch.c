@@ -1,6 +1,7 @@
 #include <log/log.h>
 #include <sys/panic.h>
 #include <x86/asm.h>
+#include <x86/ata.h>
 #include <x86/boot.h>
 #include <x86/gdt.h>
 #include <x86/idt.h>
@@ -75,4 +76,8 @@ void arch_init(void* boot_info) {
 #else
     log_info("apheleiaOS kernel (x86_32) booted");
 #endif
+}
+
+void arch_storage_init(void) {
+    ata_disk_init();
 }

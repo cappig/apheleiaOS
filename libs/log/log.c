@@ -25,9 +25,26 @@ void vslog(char* restrict buf, int lvl, char* file, int line, char* fmt, va_list
         line
     );
 
-    int printed = vsprintf(&buf[prefix], fmt, args);
+    if (prefix < 0)
+        return;
 
-    buf[prefix + printed] = '\n';
+    if (prefix >= LOG_BUF_SIZE) {
+        buf[LOG_BUF_SIZE - 1] = '\0';
+        return;
+    }
+
+    size_t avail = LOG_BUF_SIZE - (size_t)prefix;
+    if (!avail)
+        return;
+
+    int printed = vsnprintf(&buf[prefix], avail, fmt, args);
+    size_t end = (printed < 0) ? (size_t)prefix : (size_t)prefix + (size_t)printed;
+
+    if (end >= LOG_BUF_SIZE - 1)
+        end = LOG_BUF_SIZE - 2;
+
+    buf[end++] = '\n';
+    buf[end] = '\0';
 }
 
 void slog(char* restrict buf, int lvl, char* file, int line, char* fmt, ...) {

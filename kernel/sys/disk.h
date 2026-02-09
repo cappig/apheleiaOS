@@ -5,7 +5,6 @@
 #include <data/vector.h>
 
 #include "sys/types.h"
-#include "vfs.h"
 
 
 // files and directories created by the kernel have these permissions
@@ -34,6 +33,7 @@ typedef struct disk_partition disk_partition_t;
 struct disk_partition {
     char* name;
     size_t type;
+    u8 status;
     size_t size;
     size_t offset;
 
@@ -94,3 +94,14 @@ struct fs_instance {
 
     void* private;
 };
+
+bool disk_register(disk_dev_t* dev);
+disk_dev_t* disk_lookup(size_t dev_id);
+
+bool file_system_register(fs_t* fs);
+fs_t* file_system_lookup(const char* name);
+
+bool mount_rootfs(disk_dev_t* dev);
+bool disk_publish_devices(void);
+
+void dump_partitions(disk_dev_t* dev);

@@ -49,7 +49,7 @@ static int _get_flags(const char* format, size_t* index) {
     return flags;
 }
 
-static int _get_width(const char* format, size_t* index, va_list vlist) {
+static int _get_width(const char* format, size_t* index, va_list* vlist) {
     int width = 0;
 
     if (isdigit(format[*index])) {
@@ -58,7 +58,7 @@ static int _get_width(const char* format, size_t* index, va_list vlist) {
 
         *index += (size_t)(end - &format[*index]);
     } else if (format[*index] == '*') {
-        width = abs(va_arg(vlist, int));
+        width = abs(va_arg(*vlist, int));
 
         *index += 1;
     }
@@ -66,7 +66,7 @@ static int _get_width(const char* format, size_t* index, va_list vlist) {
     return width;
 }
 
-static int _get_precision(const char* format, size_t* index, va_list vlist) {
+static int _get_precision(const char* format, size_t* index, va_list* vlist) {
     if (format[*index] != '.')
         return -1;
 
@@ -80,7 +80,7 @@ static int _get_precision(const char* format, size_t* index, va_list vlist) {
 
         *index += (size_t)(end - &format[*index]);
     } else if (format[*index] == '*') {
-        precision = va_arg(vlist, int);
+        precision = va_arg(*vlist, int);
 
         *index += 1;
     }
@@ -136,45 +136,45 @@ static int _get_size(const char* format, size_t* index) {
     return size;
 }
 
-static uintmax_t _get_var_number(int size, va_list vlist) {
+static uintmax_t _get_var_number(int size, va_list* vlist) {
     switch (size) {
     case SIZE_LLONG:
-        return va_arg(vlist, unsigned long long);
+        return va_arg(*vlist, unsigned long long);
     case -SIZE_LLONG:
-        return (uintmax_t)va_arg(vlist, long long);
+        return (uintmax_t)va_arg(*vlist, long long);
 
     case SIZE_LONG:
-        return va_arg(vlist, unsigned long);
+        return va_arg(*vlist, unsigned long);
     case -SIZE_LONG:
-        return (uintmax_t)va_arg(vlist, long);
+        return (uintmax_t)va_arg(*vlist, long);
 
     default:
     case SIZE_INT:
     case SIZE_SHORT:
     case SIZE_CHAR:
-        return va_arg(vlist, unsigned int);
+        return va_arg(*vlist, unsigned int);
 
     case -SIZE_INT:
     case -SIZE_SHORT:
     case -SIZE_CHAR:
-        return (uintmax_t)va_arg(vlist, int);
+        return (uintmax_t)va_arg(*vlist, int);
 
     case SIZE_SIZE:
     case -SIZE_SIZE:
-        return (uintmax_t)va_arg(vlist, size_t);
+        return (uintmax_t)va_arg(*vlist, size_t);
 
     case SIZE_PTRDIFF:
     case -SIZE_PTRDIFF:
-        return (uintmax_t)va_arg(vlist, ptrdiff_t);
+        return (uintmax_t)va_arg(*vlist, ptrdiff_t);
 
     case SIZE_INTMAX:
-        return va_arg(vlist, uintmax_t);
+        return va_arg(*vlist, uintmax_t);
     case -SIZE_INTMAX:
-        return (uintmax_t)va_arg(vlist, intmax_t);
+        return (uintmax_t)va_arg(*vlist, intmax_t);
 
     case SIZE_PTR:
     case -SIZE_PTR:
-        return (uintptr_t)va_arg(vlist, void*);
+        return (uintptr_t)va_arg(*vlist, void*);
     }
 }
 
@@ -285,6 +285,9 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
     if (!buffer)
         return 0;
 
+    va_list args;
+    va_copy(args, vlist);
+
     int printed = 0;
 
     for (size_t i = 0; format[i] && (size_t)printed < max_size - 1; i++) {
@@ -296,8 +299,8 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
         i++;
 
         int flags = _get_flags(format, &i);
-        int width = _get_width(format, &i, vlist);
-        int precision = _get_precision(format, &i, vlist);
+        int width = _get_width(format, &i, &args);
+        int precision = _get_precision(format, &i, &args);
         int size = _get_size(format, &i);
 
         int base = _get_base(format[i]);
@@ -322,12 +325,12 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
             char* string;
 
             if (base == BASE_STRING) {
-                string = va_arg(vlist, char*);
+                string = va_arg(args, char*);
 
                 if (!string)
                     string = "(null)";
             } else {
-                char_holder[0] = (char)va_arg(vlist, int);
+                char_holder[0] = (char)va_arg(args, int);
                 string = char_holder;
             }
 
@@ -336,7 +339,7 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
 
             printed += _string_to_buffer(&buffer[printed], string, flags, precision, &padding);
         } else {
-            uintmax_t number = _get_var_number(size, vlist);
+            uintmax_t number = _get_var_number(size, &args);
             bool negative = (size < 0 && (intmax_t)number < 0);
 
             if (precision > 0) {
@@ -355,6 +358,8 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
             printed += _string_to_buffer(&buffer[printed], num_buffer, flags, precision, &padding);
         }
     }
+
+    va_end(args);
 
     return printed;
 }

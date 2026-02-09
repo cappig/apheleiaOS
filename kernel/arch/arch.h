@@ -5,6 +5,7 @@
 #include <sys/types.h>
 
 void arch_init(void* boot_info);
+void arch_storage_init(void);
 
 void* arch_phys_map(u64 paddr, size_t size);
 void arch_phys_unmap(void* vaddr, size_t size);
