@@ -178,27 +178,46 @@ static uintmax_t _get_var_number(int size, va_list* vlist) {
     }
 }
 
-static size_t _string_to_buffer(char* buffer, char* string, int flags, int precision, int* padding) {
-    const char* buf_start = buffer;
+static void _buf_putc(char* buffer, size_t* written, size_t max_size, char value) {
+    if (!buffer || !written || max_size == 0)
+        return;
 
-    if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO))
+    if (*written + 1 >= max_size)
+        return;
+
+    buffer[*written] = value;
+    (*written)++;
+}
+
+static void _string_to_buffer(
+    char* buffer,
+    size_t max_size,
+    size_t* written,
+    char* string,
+    int flags,
+    int precision,
+    int* padding
+) {
+    if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO)) {
         while ((*padding)-- > 0)
-            *buffer++ = ' ';
+            _buf_putc(buffer, written, max_size, ' ');
+    }
 
     size_t len = (precision < 0) ? SIZE_MAX : (size_t)precision;
 
     for (size_t i = 0; i < len && *string; i++)
-        *buffer++ = *string++;
+        _buf_putc(buffer, written, max_size, *string++);
 
-    if ((flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO))
+    if ((flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO)) {
         while ((*padding)-- > 0)
-            *buffer++ = ' ';
-
-    return (size_t)(buffer - buf_start);
+            _buf_putc(buffer, written, max_size, ' ');
+    }
 }
 
-static size_t _append_num_prefix(
+static void _append_num_prefix(
     char* buffer,
+    size_t max_size,
+    size_t* written,
     uintmax_t number,
     int flags,
     int base,
@@ -206,11 +225,10 @@ static size_t _append_num_prefix(
     int* padding,
     bool uppercase
 ) {
-    const char* buf_start = buffer;
-
-    if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO))
+    if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO)) {
         while ((*padding)-- > 0)
-            *buffer++ = ' ';
+            _buf_putc(buffer, written, max_size, ' ');
+    }
 
     char sign = 0;
     if (size < 0 && (intmax_t)number < 0)
@@ -221,7 +239,7 @@ static size_t _append_num_prefix(
         sign = ' ';
 
     if (sign) {
-        *buffer++ = sign;
+        _buf_putc(buffer, written, max_size, sign);
         (*padding)--;
     }
 
@@ -234,15 +252,13 @@ static size_t _append_num_prefix(
         prefix = uppercase ? "0X" : "0x";
 
     while (*prefix && (flags & FLAGS_HASH)) {
-        *buffer++ = *prefix++;
+        _buf_putc(buffer, written, max_size, *prefix++);
         (*padding)--;
     }
 
     if (flags & FLAGS_ZERO)
         while ((*padding)-- > 0)
-            *buffer++ = '0';
-
-    return (size_t)(buffer - buf_start);
+            _buf_putc(buffer, written, max_size, '0');
 }
 
 // String and char are special
@@ -291,35 +307,39 @@ static int _get_base(char type) {
 
 // FIXME: check index bounds inside the loop!
 int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict format, va_list vlist) {
-    if (!buffer)
-        return 0;
-
-    if (!max_size)
+    if (!buffer || !format || !max_size)
         return 0;
 
     va_list args;
     va_copy(args, vlist);
 
-    int printed = 0;
+    size_t written = 0;
 
-    for (size_t i = 0; format[i] && (size_t)printed < max_size - 1; i++) {
+    for (size_t i = 0; format[i] && written + 1 < max_size; i++) {
         if (format[i] != '%') {
-            buffer[printed++] = format[i];
+            _buf_putc(buffer, &written, max_size, format[i]);
             continue;
         }
 
         i++;
+        if (!format[i]) {
+            _buf_putc(buffer, &written, max_size, '%');
+            break;
+        }
 
         int flags = _get_flags(format, &i);
         int width = _get_width(format, &i, &args);
         int precision = _get_precision(format, &i, &args);
         int size = _get_size(format, &i);
 
+        if (!format[i])
+            break;
+
         int base = _get_base(format[i]);
         bool uppercase = (format[i] == 'X');
 
         if (base == BASE_UNKNOWN) {
-            buffer[printed++] = format[i];
+            _buf_putc(buffer, &written, max_size, format[i]);
             continue;
         }
 
@@ -360,7 +380,7 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
             int len = (int)strlen(string);
             int padding = (width > len) ? width - len : 0;
 
-            printed += _string_to_buffer(&buffer[printed], string, flags, precision, &padding);
+            _string_to_buffer(buffer, max_size, &written, string, flags, precision, &padding);
         } else {
             uintmax_t number = _get_var_number(size, &args);
             bool negative = (size < 0 && (intmax_t)number < 0);
@@ -376,24 +396,25 @@ int vsnprintf(char* restrict buffer, size_t max_size, const char* restrict forma
 
             int padding = (width > len) ? width - len : 0;
 
-            printed +=
-                _append_num_prefix(&buffer[printed], number, flags, base, size, &padding, uppercase);
+            _append_num_prefix(
+                buffer, max_size, &written, number, flags, base, size, &padding, uppercase
+            );
 
             if (uppercase) {
                 for (int j = 0; j < len; j++)
                     num_buffer[j] = (char)toupper(num_buffer[j]);
             }
 
-            printed += _string_to_buffer(&buffer[printed], num_buffer, flags, precision, &padding);
+            _string_to_buffer(buffer, max_size, &written, num_buffer, flags, precision, &padding);
         }
     }
 
-    if ((size_t)printed >= max_size)
-        printed = (int)max_size - 1;
+    if (written >= max_size)
+        written = max_size - 1;
 
-    buffer[printed] = '\0';
+    buffer[written] = '\0';
 
     va_end(args);
 
-    return printed;
+    return (int)written;
 }

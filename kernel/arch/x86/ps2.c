@@ -8,8 +8,7 @@
 #include <sys/keyboard.h>
 #include <sys/mouse.h>
 #include <x86/asm.h>
-#include <x86/idt.h>
-#include <x86/pic.h>
+#include <x86/irq.h>
 
 #define PS2_RELEASE_OFFSET 0x80
 #define PS2_EXTENDED       0xe0
@@ -193,15 +192,6 @@ static const u8 ps2_codes_extended[128] = {
 static bool has_port1 = false;
 static bool has_port2 = false;
 
-#if defined(__i386__)
-static u8 _legacy_vector(u8 irq) {
-    if (irq < 8)
-        return (u8)(0x08 + irq);
-
-    return (u8)(0x70 + (irq - 8));
-}
-#endif
-
 static bool _wait_input_clear(void) {
     for (size_t timeout = PS2_WAIT_LIMIT; timeout > 0; timeout--) {
         u8 status = inb(PS2_REG_STATUS);
@@ -382,7 +372,7 @@ static void _kbd_irq(UNUSED int_state_t* s) {
         kbd_extended = false;
 
 done:
-    pic_end_int(IRQ_PS2_KEYBOARD);
+    irq_ack(IRQ_PS2_KEYBOARD);
 }
 
 static u8 mouse_index = 0;
@@ -438,7 +428,7 @@ static void _mouse_irq(UNUSED int_state_t* s) {
     }
 
 done:
-    pic_end_int(IRQ_PS2_MOUSE);
+    irq_ack(IRQ_PS2_MOUSE);
 }
 
 void ps2_init(void) {
@@ -457,12 +447,7 @@ void ps2_init(void) {
         _kbd_command(2);
         _kbd_command(PS2_KBD_COM_ENABLE_SCAN);
 
-        set_int_handler(IRQ_INT(IRQ_PS2_KEYBOARD), _kbd_irq);
-#if defined(__i386__)
-        // Fallback for systems where the PIC is still at the legacy offset.
-        set_int_handler(_legacy_vector(IRQ_PS2_KEYBOARD), _kbd_irq);
-#endif
-        pic_clear_mask(IRQ_PS2_KEYBOARD);
+        irq_register(IRQ_PS2_KEYBOARD, ps2_kbd_irq);
 
         kbd_index = keyboard_register("PS/2 keyboard", NULL);
     }
@@ -471,16 +456,10 @@ void ps2_init(void) {
         _mouse_command(PS2_MOUSE_COM_DEFAULT);
         _mouse_command(PS2_MOUSE_COM_ENABLE_DATA);
 
-        set_int_handler(IRQ_INT(IRQ_PS2_MOUSE), _mouse_irq);
-#if defined(__i386__)
-        // Fallback for systems where the PIC is still at the legacy offset.
-        set_int_handler(_legacy_vector(IRQ_PS2_MOUSE), _mouse_irq);
-#endif
-        pic_clear_mask(IRQ_PS2_MOUSE);
+        irq_register(IRQ_PS2_MOUSE, ps2_mouse_irq);
 
         mouse_index = mouse_register("PS/2 mouse");
     }
 
-    enable_interrupts();
     log_info("ps2: controller ready");
 }

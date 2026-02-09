@@ -2,6 +2,7 @@
 #include <log/log.h>
 #include <string.h>
 #include <sys/acpi.h>
+#include <sys/cpu.h>
 #include <sys/font.h>
 #include <sys/framebuffer.h>
 #include <sys/panic.h>
@@ -12,11 +13,13 @@
 #include <x86/console.h>
 #include <x86/gdt.h>
 #include <x86/idt.h>
+#include <x86/irq.h>
 #include <x86/mm/heap.h>
 #include <x86/mm/physical.h>
 #include <x86/pic.h>
 #include <x86/ps2.h>
 #include <x86/serial.h>
+#include <x86/tsc.h>
 
 static void _serial_puts(const char* s) {
     send_serial_string(SERIAL_COM1, s);
@@ -60,11 +63,6 @@ static uintptr_t _read_stack_ptr(void) {
 #endif
 
     return sp;
-}
-
-static void _irq0_stub(int_state_t* state) {
-    (void)state;
-    pic_end_int(0);
 }
 
 static void _disable_apic_if_needed(void) {
@@ -185,15 +183,14 @@ void arch_init(void* boot_info) {
     _disable_apic_if_needed();
     gdt_init();
     tss_init(read_stack_ptr());
+    cpu_init_boot();
     pic_init();
     idt_init();
-    set_int_handler(IRQ_INT(0), _irq0_stub);
-#if defined(__i386__)
-    set_int_handler(0x08, _irq0_stub);
-#endif
     pmm_init(&info->memory_map);
     heap_init();
     init_malloc();
+    tsc_init();
+    irq_init();
     ps2_init();
     acpi_init(info->acpi_root_ptr);
     pci_init();
@@ -202,6 +199,7 @@ void arch_init(void* boot_info) {
     console_init(info);
     _publish_framebuffer(info);
     log_init(console_puts);
+    enable_interrupts();
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booted");
