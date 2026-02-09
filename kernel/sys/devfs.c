@@ -8,6 +8,8 @@
 #include <sys/framebuffer.h>
 #include <sys/stat.h>
 
+#include "keyboard.h"
+#include "mouse.h"
 #include "tty.h"
 #include "vfs.h"
 
@@ -199,7 +201,25 @@ void devfs_init(void) {
 
     _create_ttys(dev_dir, tty_if);
 
-    vfs_interface_t* null_if = vfs_create_interface(_dev_null_read, _dev_null_write);
+    if (!keyboard_init())
+        log_warn("devfs: keyboard init failed");
+    vfs_interface_t* kbd_if = vfs_create_interface(keyboard_read, NULL);
+    if (!kbd_if) {
+        log_warn("devfs: failed to allocate keyboard interface");
+    } else if (!devfs_create_node(dev_dir, "kbd", VFS_CHARDEV, 0666, kbd_if, NULL)) {
+        log_warn("devfs: failed to create /dev/kbd");
+    }
+
+    if (!mouse_init())
+        log_warn("devfs: mouse init failed");
+    vfs_interface_t* mouse_if = vfs_create_interface(mouse_read, NULL);
+    if (!mouse_if) {
+        log_warn("devfs: failed to allocate mouse interface");
+    } else if (!devfs_create_node(dev_dir, "mouse", VFS_CHARDEV, 0666, mouse_if, NULL)) {
+        log_warn("devfs: failed to create /dev/mouse");
+    }
+
+    vfs_interface_t* null_if = vfs_create_interface(dev_null_read, dev_null_write);
     if (!null_if) {
         log_warn("devfs: failed to allocate null interface");
     } else if (!_create_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {

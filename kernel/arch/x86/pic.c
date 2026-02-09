@@ -4,23 +4,36 @@
 #include <x86/asm.h>
 #include <x86/idt.h>
 
+static inline void _wait(void) {
+    // Port 0x80 is unused and commonly used for IO wait.
+    outb(0x80, 0);
+}
+
 static void _remap_pic(size_t offset1, size_t offset2) {
     outb(PIC1_COMMAND, ICW1_INIT | ICW1_ICW4);
+    _wait();
     outb(PIC2_COMMAND, ICW1_INIT | ICW1_ICW4);
+    _wait();
 
     outb(PIC1_DATA, (u8)offset1);
+    _wait();
     outb(PIC2_DATA, (u8)offset2);
+    _wait();
 
     outb(PIC1_DATA, 4);
+    _wait();
     outb(PIC2_DATA, 2);
+    _wait();
 
     outb(PIC1_DATA, ICW4_8086);
+    _wait();
     outb(PIC2_DATA, ICW4_8086);
+    _wait();
 }
 
 void pic_init(void) {
     log_debug("initializing PIC");
-    remap_pic(IRQ_OFFSET, IRQ_OFFSET + 8);
+    _remap_pic(IRQ_OFFSET, IRQ_OFFSET + 8);
     pic_mask_all();
 }
 

@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <x86/asm.h>
 #include <x86/gdt.h>
+#include <x86/pic.h>
 
 static idt_register_t idtr = {0};
 
@@ -15,8 +16,46 @@ static int_handler_t int_handlers[ISR_COUNT] = {0};
 ALIGNED(0x10)
 static idt_entry_t idt_entries[ISR_COUNT] = {0};
 
+#if defined(__i386__)
+static bool _pic_irq_in_service(u8 irq) {
+    if (irq < 8) {
+        outb(PIC1_COMMAND, 0x0b);
+        return (inb(PIC1_COMMAND) & (1u << irq)) != 0;
+    }
+
+    outb(PIC2_COMMAND, 0x0b);
+    return (inb(PIC2_COMMAND) & (1u << (irq - 8))) != 0;
+}
+#endif
+
 static void _default_int_handler(int_state_t* state) {
-    (void)state;
+    if (state) {
+        u32 int_num = state->int_num;
+
+        if (int_num >= IRQ_OFFSET && int_num < IRQ_OFFSET + 16) {
+            pic_end_int(int_num - IRQ_OFFSET);
+            return;
+        }
+
+#if defined(__i386__)
+        if (int_num >= 0x08 && int_num < 0x10) {
+            u8 irq = (u8)(int_num - 0x08);
+            if (_pic_irq_in_service(irq))
+                pic_end_int(irq);
+
+            return;
+        }
+
+        if (int_num >= 0x70 && int_num < 0x78) {
+            u8 irq = (u8)(int_num - 0x70 + 8);
+            if (_pic_irq_in_service(irq))
+                pic_end_int(irq);
+
+            return;
+        }
+#endif
+    }
+
     disable_interrupts();
     halt();
 }

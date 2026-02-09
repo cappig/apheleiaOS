@@ -41,13 +41,40 @@ void gdt_init(void) {
     gdtd.gdt_ptr = (u32)(uintptr_t)gdt_entries;
 #endif
 
-    _set_gdt_entry(0, 0, 0, 0, 0); // Null segment
-    _set_gdt_entry(1, 0, 0, 0x9a, 0x02); // Kernel code segment
-    _set_gdt_entry(2, 0, 0, 0x92, 0x00); // Kernel data segment
-    _set_gdt_entry(3, 0, 0, 0xfa, 0x02); // User code segment
-    _set_gdt_entry(4, 0, 0, 0xf2, 0x00); // User data segment
+    u32 limit = 0;
+    u8 code_flags = 0;
+    u8 data_flags = 0;
+
+#if defined(__x86_64__)
+    limit = 0;
+    code_flags = 0x02;
+    data_flags = 0x00;
+#else
+    limit = 0xFFFFF;
+    code_flags = 0x0C;
+    data_flags = 0x0C;
+#endif
+
+    set_gdt_entry(0, 0, 0, 0, 0); // Null segment
+    set_gdt_entry(1, 0, limit, 0x9a, code_flags); // Kernel code segment
+    set_gdt_entry(2, 0, limit, 0x92, data_flags); // Kernel data segment
+    set_gdt_entry(3, 0, limit, 0xfa, code_flags); // User code segment
+    set_gdt_entry(4, 0, limit, 0xf2, data_flags); // User data segment
 
     asm volatile("lgdt %0" : : "m"(gdtd) : "memory");
+
+#if defined(__i386__)
+    asm volatile("ljmp %0, $1f\n"
+                 "1:\n"
+                 "mov %1, %%ds\n"
+                 "mov %1, %%es\n"
+                 "mov %1, %%fs\n"
+                 "mov %1, %%gs\n"
+                 "mov %1, %%ss\n"
+                 :
+                 : "i"(GDT_KERNEL_CODE), "r"(GDT_KERNEL_DATA)
+                 : "memory");
+#endif
 }
 
 void tss_init(uintptr_t kernel_stack_top) {

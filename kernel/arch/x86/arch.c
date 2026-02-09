@@ -15,6 +15,7 @@
 #include <x86/mm/heap.h>
 #include <x86/mm/physical.h>
 #include <x86/pic.h>
+#include <x86/ps2.h>
 #include <x86/serial.h>
 
 static void _serial_puts(const char* s) {
@@ -59,6 +60,60 @@ static uintptr_t _read_stack_ptr(void) {
 #endif
 
     return sp;
+}
+
+static void _irq0_stub(int_state_t* state) {
+    (void)state;
+    pic_end_int(0);
+}
+
+static void _disable_apic_if_needed(void) {
+#if defined(__i386__)
+    u32 eflags = 0;
+    u32 eflags_toggled = 0;
+
+    asm volatile("pushfl\n\t"
+                 "popl %0\n\t"
+                 : "=r"(eflags));
+
+    eflags_toggled = eflags ^ (1u << 21);
+
+    asm volatile("pushl %0\n\t"
+                 "popfl\n\t"
+                 :
+                 : "r"(eflags_toggled));
+
+    asm volatile("pushfl\n\t"
+                 "popl %0\n\t"
+                 : "=r"(eflags_toggled));
+
+    bool has_cpuid = ((eflags ^ eflags_toggled) & (1u << 21)) != 0;
+
+    if (has_cpuid) {
+        cpuid_regs_t regs = {0};
+        cpuid(1, &regs);
+
+        bool has_msr = (regs.edx & (1u << 5)) != 0;
+        bool has_apic = (regs.edx & (1u << 9)) != 0;
+
+        log_debug("apic: cpuid=%u msr=%u apic=%u", (u32)has_cpuid, (u32)has_msr, (u32)has_apic);
+
+        if (has_msr && has_apic) {
+            u64 apic_base = read_msr(0x1B);
+            if (apic_base & (1ULL << 11)) {
+                log_debug("apic: disabling local apic");
+                write_msr(0x1B, apic_base & ~(1ULL << 11));
+            } else {
+                log_debug("apic: local apic already disabled");
+            }
+        }
+    }
+
+    // Route external interrupts through the PIC (IMCR).
+    outb(0x22, 0x70);
+    u8 imcr = inb(0x23);
+    outb(0x23, (u8)(imcr | 0x01));
+#endif
 }
 
 static void _cache_font(const boot_info_t* info) {
@@ -127,13 +182,19 @@ void arch_init(void* boot_info) {
     log_info("apheleiaOS kernel (x86_32) booting");
 #endif
 
+    _disable_apic_if_needed();
     gdt_init();
     tss_init(read_stack_ptr());
     pic_init();
     idt_init();
+    set_int_handler(IRQ_INT(0), _irq0_stub);
+#if defined(__i386__)
+    set_int_handler(0x08, _irq0_stub);
+#endif
     pmm_init(&info->memory_map);
     heap_init();
     init_malloc();
+    ps2_init();
     acpi_init(info->acpi_root_ptr);
     pci_init();
     if (info->args.debug == DEBUG_ALL)
