@@ -1,11 +1,17 @@
 #include "devfs.h"
 
+#include <arch/arch.h>
+#include <base/macros.h>
 #include <log/log.h>
 #include <stddef.h>
+#include <string.h>
+#include <sys/framebuffer.h>
 #include <sys/stat.h>
 
 #include "tty.h"
 #include "vfs.h"
+
+#define FB_MAP_CHUNK (4 * MIB)
 
 static tty_handle_t tty_handles[TTY_COUNT];
 static tty_handle_t tty_current = {.kind = TTY_HANDLE_CURRENT, .index = 0};
@@ -23,6 +29,104 @@ static ssize_t _dev_tty_write(vfs_node_t* node, void* buf, size_t offset, size_t
     (void)flags;
 
     return tty_write_handle(node ? node->private : NULL, buf, len);
+}
+
+static ssize_t _dev_null_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)node;
+    (void)buf;
+    (void)offset;
+    (void)len;
+    (void)flags;
+
+    return VFS_EOF;
+}
+
+static ssize_t _dev_null_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)node;
+    (void)buf;
+    (void)offset;
+    (void)flags;
+
+    return (ssize_t)len;
+}
+
+static ssize_t _dev_zero_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)node;
+    (void)offset;
+    (void)flags;
+
+    if (!buf)
+        return -1;
+
+    memset(buf, 0, len);
+    return (ssize_t)len;
+}
+
+static ssize_t _dev_zero_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)node;
+    (void)buf;
+    (void)offset;
+    (void)flags;
+
+    return (ssize_t)len;
+}
+
+static ssize_t
+_dev_fb_transfer(const framebuffer_info_t* fb, void* buf, size_t offset, size_t len, bool write) {
+    if (!fb || !fb->available || !buf)
+        return -1;
+
+    u64 fb_size = fb->size;
+    u64 off = offset;
+
+    if (off >= fb_size)
+        return VFS_EOF;
+
+    u64 max_len = fb_size - off;
+    u64 req = len;
+    if (req > max_len)
+        req = max_len;
+
+    size_t remaining = (size_t)req;
+
+    size_t done = 0;
+    while (remaining) {
+        size_t chunk = remaining;
+        if (chunk > FB_MAP_CHUNK)
+            chunk = FB_MAP_CHUNK;
+
+        void* map = arch_phys_map(fb->paddr + off + done, chunk);
+        if (!map)
+            break;
+
+        if (write)
+            memcpy(map, (u8*)buf + done, chunk);
+        else
+            memcpy((u8*)buf + done, map, chunk);
+
+        arch_phys_unmap(map, chunk);
+        done += chunk;
+        remaining -= chunk;
+    }
+
+    if (!done)
+        return -1;
+
+    return (ssize_t)done;
+}
+
+static ssize_t _dev_fb_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    return _dev_fb_transfer(framebuffer_get_info(), buf, offset, len, false);
+}
+
+static ssize_t _dev_fb_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    return _dev_fb_transfer(framebuffer_get_info(), buf, offset, len, true);
 }
 
 static bool _create_node(
@@ -95,5 +199,29 @@ void devfs_init(void) {
 
     _create_ttys(dev_dir, tty_if);
 
-    log_info("devfs: ttys ready");
+    vfs_interface_t* null_if = vfs_create_interface(_dev_null_read, _dev_null_write);
+    if (!null_if) {
+        log_warn("devfs: failed to allocate null interface");
+    } else if (!_create_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {
+        log_warn("devfs: failed to create /dev/null");
+    }
+
+    vfs_interface_t* zero_if = vfs_create_interface(_dev_zero_read, _dev_zero_write);
+    if (!zero_if) {
+        log_warn("devfs: failed to allocate zero interface");
+    } else if (!_create_node(dev_dir, "zero", VFS_CHARDEV, 0666, zero_if, NULL)) {
+        log_warn("devfs: failed to create /dev/zero");
+    }
+
+    const framebuffer_info_t* fb = framebuffer_get_info();
+    if (fb) {
+        vfs_interface_t* fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write);
+        if (!fb_if) {
+            log_warn("devfs: failed to allocate framebuffer interface");
+        } else if (!_create_node(dev_dir, "fb", VFS_CHARDEV, 0660, fb_if, NULL)) {
+            log_warn("devfs: failed to create /dev/fb");
+        }
+    }
+
+    log_info("devfs: devices ready");
 }
