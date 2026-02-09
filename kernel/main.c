@@ -2,14 +2,17 @@
 #include <base/attributes.h>
 #include <fs/ext2fs.h>
 #include <log/log.h>
+#include <sched/scheduler.h>
 #include <sys/devfs.h>
 #include <sys/disk.h>
+#include <sys/init.h>
 #include <sys/psf.h>
 #include <sys/symbols.h>
 #include <sys/vfs.h>
 
 NORETURN void kernel_main(void* boot_info) {
     arch_init(boot_info);
+    scheduler_init();
     vfs_init();
     ext2fs_init();
 
@@ -31,6 +34,8 @@ NORETURN void kernel_main(void* boot_info) {
     disk_publish_devices();
     devfs_init();
     dump_vfs();
+    init_spawn();
+    scheduler_start();
 
     for (;;)
         ;

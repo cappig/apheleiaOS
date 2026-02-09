@@ -20,5 +20,7 @@ void arch_set_font(const font_t* font);
 
 ssize_t arch_console_read(void* buf, size_t len);
 ssize_t arch_console_write(const void* buf, size_t len);
+ssize_t arch_console_write_screen(size_t screen, const void* buf, size_t len);
+bool arch_console_set_active(size_t screen);
 ssize_t arch_tty_read(void* buf, size_t len);
 ssize_t arch_tty_write(const void* buf, size_t len);

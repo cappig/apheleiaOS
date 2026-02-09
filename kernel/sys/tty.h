@@ -5,9 +5,14 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-#define TTY_COUNT   4
-#define TTY_CONSOLE (TTY_COUNT - 1)
-#define TTY_NONE    (-1)
+#define TTY_COUNT        4
+#define TTY_SCREEN_COUNT (TTY_COUNT + 1)
+#define TTY_CONSOLE      0
+#define TTY_FIRST_USER   1
+#define TTY_NONE         (-1)
+
+#define TTY_USER_TO_SCREEN(index) ((index) + TTY_FIRST_USER)
+#define TTY_SCREEN_TO_USER(index) ((index) - TTY_FIRST_USER)
 
 typedef enum {
     TTY_HANDLE_CURRENT,

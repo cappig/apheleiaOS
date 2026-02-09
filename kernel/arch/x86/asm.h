@@ -25,6 +25,50 @@ inline void disable_interrupts(void) {
     asm volatile("cli" ::: "memory");
 }
 
+#if defined(__x86_64__)
+inline u64 irq_save(void) {
+    u64 flags = 0;
+
+    asm volatile("pushfq\n\t"
+                 "popq %0\n\t"
+                 "cli"
+                 : "=r"(flags)
+                 :
+                 : "memory", "cc");
+
+    return flags;
+}
+
+inline void irq_restore(u64 flags) {
+    asm volatile("pushq %0\n\t"
+                 "popfq"
+                 :
+                 : "r"(flags)
+                 : "memory", "cc");
+}
+#else
+inline u32 irq_save(void) {
+    u32 flags = 0;
+
+    asm volatile("pushf\n\t"
+                 "pop %0\n\t"
+                 "cli"
+                 : "=r"(flags)
+                 :
+                 : "memory", "cc");
+
+    return flags;
+}
+
+inline void irq_restore(u32 flags) {
+    asm volatile("push %0\n\t"
+                 "popf"
+                 :
+                 : "r"(flags)
+                 : "memory", "cc");
+}
+#endif
+
 
 inline void outb(u16 port, u8 data) {
     asm volatile("outb %0, %1" : : "a"(data), "Nd"(port));

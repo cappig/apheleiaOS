@@ -157,11 +157,11 @@ static void _seed_tty_handles(void) {
 }
 
 static void _create_ttys(vfs_node_t* dev_dir, vfs_interface_t* tty_if) {
-    char name[] = "ttyC0";
+    char name[] = "tty0";
 
     for (size_t i = 0; i < TTY_COUNT; i++) {
-        name[4] = (char)('0' + i);
-        _create_node(dev_dir, name, VFS_CHARDEV, 0666, tty_if, &tty_handles[i]);
+        name[3] = (char)('0' + i);
+        devfs_create_node(dev_dir, name, VFS_CHARDEV, 0666, tty_if, &tty_handles[i]);
     }
 }
 

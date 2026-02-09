@@ -34,7 +34,7 @@ int printf(char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
 
-    int ret = vsprintf(buf, fmt, args);
+    int ret = vsnprintf(buf, sizeof(buf), fmt, args);
 
     puts(buf);
 
@@ -49,7 +49,7 @@ int serial_printf(char* fmt, ...) {
     va_list args;
     va_start(args, fmt);
 
-    int ret = vsprintf(buf, fmt, args);
+    int ret = vsnprintf(buf, sizeof(buf), fmt, args);
 
     serial_puts(buf);
 

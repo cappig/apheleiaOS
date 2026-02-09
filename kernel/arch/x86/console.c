@@ -4,8 +4,10 @@
 #include <base/macros.h>
 #include <base/types.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/font.h>
+#include <sys/tty.h>
 #include <x86/serial.h>
 #include <x86/vga.h>
 
@@ -14,6 +16,23 @@ typedef enum {
     CONSOLE_VGA = 1,
     CONSOLE_VESA = 2,
 } console_mode_t;
+
+typedef struct {
+    size_t cursor_x;
+    size_t cursor_y;
+    u8 vga_attr;
+    u8 fg_vga;
+    u8 bg_vga;
+    u32 fg_rgb;
+    u32 bg_rgb;
+    bool bright;
+} console_screen_t;
+
+typedef struct {
+    u32 codepoint;
+    u8 fg;
+    u8 bg;
+} console_cell_t;
 
 typedef struct {
     console_mode_t mode;
@@ -26,26 +45,21 @@ typedef struct {
     u8 bytes_per_pixel;
     size_t cols;
     size_t rows;
-    size_t cursor_x;
-    size_t cursor_y;
-    u8 vga_attr;
-    u8 fg_vga;
-    u8 bg_vga;
-    u32 fg_rgb;
-    u32 bg_rgb;
     const font_t* font;
     u32 font_width;
     u32 font_height;
     u32 font_row_bytes;
     u32 font_glyph_bytes;
-    bool bright;
     bool use_phys_window;
     bool ready;
+    size_t screen_count;
+    size_t active_screen;
+    console_screen_t* screens;
+    console_cell_t* cells;
+    console_screen_t fallback_screen;
 } console_state_t;
 
 static console_state_t console_state = {0};
-
-static void _clear_vesa(void);
 
 static const u32 ansi_rgb[16] = {
     0x000000,
@@ -66,87 +80,209 @@ static const u32 ansi_rgb[16] = {
     0xffffff,
 };
 
-static void _update_vga_attr(void) {
-    console_state.vga_attr = (u8)((console_state.bg_vga << 4) | (console_state.fg_vga & 0x0f));
+static void _init_screens(size_t active_screen);
+static void _free_screens(void);
+static void _redraw_screen(size_t index);
+static void _write_screen(size_t screen_index, const char* buf, size_t len);
+static bool _set_active(size_t index);
+static void _clear_vga(const console_screen_t* screen);
+static void _clear_vesa(const console_screen_t* screen);
+static void _draw_char_vesa(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32 bg_rgb);
+static void _draw_char_vga(u32 codepoint, size_t col, size_t row, u8 attr);
+
+static void _screen_update_vga_attr(console_screen_t* screen) {
+    if (!screen)
+        return;
+
+    screen->vga_attr = (u8)((screen->bg_vga << 4) | (screen->fg_vga & 0x0f));
 }
 
-static void _reset_colors(void) {
-    console_state.bright = false;
-    console_state.fg_vga = VGA_GREY;
-    console_state.bg_vga = VGA_BLACK;
-    console_state.fg_rgb = ansi_rgb[console_state.fg_vga];
-    console_state.bg_rgb = ansi_rgb[console_state.bg_vga];
+static void _screen_reset_colors(console_screen_t* screen) {
+    if (!screen)
+        return;
 
-    _update_vga_attr();
+    screen->bright = false;
+    screen->fg_vga = VGA_GREY;
+    screen->bg_vga = VGA_BLACK;
+    screen->fg_rgb = ansi_rgb[screen->fg_vga];
+    screen->bg_rgb = ansi_rgb[screen->bg_vga];
+
+    _screen_update_vga_attr(screen);
 }
 
-static void _set_fg(u8 base, bool force_bright) {
+static void _screen_reset(console_screen_t* screen) {
+    if (!screen)
+        return;
+
+    _screen_reset_colors(screen);
+    screen->cursor_x = 0;
+    screen->cursor_y = 0;
+}
+
+static size_t _cell_count(void) {
+    return console_state.cols * console_state.rows;
+}
+
+static console_screen_t* _get_screen(size_t index) {
+    if (index >= console_state.screen_count)
+        return NULL;
+
+    if (!console_state.screens)
+        return NULL;
+
+    return &console_state.screens[index];
+}
+
+static console_cell_t* _screen_cells(size_t index) {
+    if (!console_state.cells)
+        return NULL;
+
+    size_t count = _cell_count();
+    return console_state.cells + index * count;
+}
+
+static void _clear_screen_buffer(size_t index) {
+    console_screen_t* screen = _get_screen(index);
+    console_cell_t* cells = _screen_cells(index);
+
+    if (!screen || !cells)
+        return;
+
+    size_t count = _cell_count();
+
+    for (size_t i = 0; i < count; i++) {
+        cells[i].codepoint = ' ';
+        cells[i].fg = screen->fg_vga;
+        cells[i].bg = screen->bg_vga;
+    }
+}
+
+static void _redraw_screen(size_t index) {
+    console_screen_t* screen = _get_screen(index);
+    console_cell_t* cells = _screen_cells(index);
+
+    if (!screen || !console_state.ready)
+        return;
+
+    if (console_state.mode == CONSOLE_VGA)
+        _clear_vga(screen);
+    else if (console_state.mode == CONSOLE_VESA)
+        _clear_vesa(screen);
+
+    if (!cells)
+        return;
+
+    size_t cols = console_state.cols;
+    size_t rows = console_state.rows;
+
+    for (size_t row = 0; row < rows; row++) {
+        for (size_t col = 0; col < cols; col++) {
+            console_cell_t* cell = &cells[row * cols + col];
+            u32 codepoint = cell->codepoint ? cell->codepoint : ' ';
+
+            if (console_state.mode == CONSOLE_VGA) {
+                u8 attr = (u8)((cell->bg << 4) | (cell->fg & 0x0f));
+                _draw_char_vga(codepoint, col, row, attr);
+            } else if (console_state.mode == CONSOLE_VESA) {
+                u32 fg = ansi_rgb[cell->fg & 0x0f];
+                u32 bg = ansi_rgb[cell->bg & 0x0f];
+                _draw_char_vesa(codepoint, col, row, fg, bg);
+            }
+        }
+    }
+}
+
+static bool _set_active(size_t index) {
+    if (!console_state.ready)
+        return false;
+
+    if (index >= console_state.screen_count)
+        return false;
+
+    if (console_state.active_screen == index)
+        return true;
+
+    console_state.active_screen = index;
+    _redraw_screen(index);
+    return true;
+}
+
+static void _set_fg(console_screen_t* screen, u8 base, bool force_bright) {
+    if (!screen)
+        return;
+
     u8 idx = base & 0x7;
-    if (force_bright || console_state.bright)
+    if (force_bright || screen->bright)
         idx = (u8)(idx + 8);
 
-    console_state.fg_vga = idx;
-    console_state.fg_rgb = ansi_rgb[idx];
+    screen->fg_vga = idx;
+    screen->fg_rgb = ansi_rgb[idx];
 
-    _update_vga_attr();
+    _screen_update_vga_attr(screen);
 }
 
-static void _set_bg(u8 base, bool bright) {
+static void _set_bg(console_screen_t* screen, u8 base, bool bright) {
+    if (!screen)
+        return;
+
     u8 idx = base & 0x7;
     if (bright)
         idx = (u8)(idx + 8);
 
-    console_state.bg_vga = idx;
-    console_state.bg_rgb = ansi_rgb[idx];
+    screen->bg_vga = idx;
+    screen->bg_rgb = ansi_rgb[idx];
 
-    _update_vga_attr();
+    _screen_update_vga_attr(screen);
 }
 
-static void _apply_sgr(int code) {
+static void _apply_sgr(console_screen_t* screen, int code) {
+    if (!screen)
+        return;
+
     if (code == 0) {
-        _reset_colors();
+        _screen_reset_colors(screen);
         return;
     }
 
     if (code == 1) {
-        console_state.bright = true;
-        _set_fg(console_state.fg_vga & 0x7, true);
+        screen->bright = true;
+        _set_fg(screen, screen->fg_vga & 0x7, true);
         return;
     }
 
     if (code == 2 || code == 22) {
-        console_state.bright = false;
-        _set_fg(console_state.fg_vga & 0x7, false);
+        screen->bright = false;
+        _set_fg(screen, screen->fg_vga & 0x7, false);
         return;
     }
 
     if (code == 39) {
-        _set_fg(VGA_GREY, false);
+        _set_fg(screen, VGA_GREY, false);
         return;
     }
 
     if (code == 49) {
-        _set_bg(VGA_BLACK, false);
+        _set_bg(screen, VGA_BLACK, false);
         return;
     }
 
     if (code >= 30 && code <= 37) {
-        _set_fg((u8)(code - 30), false);
+        _set_fg(screen, (u8)(code - 30), false);
         return;
     }
 
     if (code >= 90 && code <= 97) {
-        _set_fg((u8)(code - 90), true);
+        _set_fg(screen, (u8)(code - 90), true);
         return;
     }
 
     if (code >= 40 && code <= 47) {
-        _set_bg((u8)(code - 40), false);
+        _set_bg(screen, (u8)(code - 40), false);
         return;
     }
 
     if (code >= 100 && code <= 107)
-        _set_bg((u8)(code - 100), true);
+        _set_bg(screen, (u8)(code - 100), true);
 }
 
 static void _use_font(const font_t* font) {
@@ -199,9 +335,10 @@ void console_set_font(const font_t* font) {
         console_state.rows = console_state.height / console_state.font_height;
     }
 
-    console_state.cursor_x = 0;
-    console_state.cursor_y = 0;
-    _clear_vesa();
+    size_t active = console_state.active_screen;
+    _free_screens();
+    _init_screens(active);
+    _redraw_screen(console_state.active_screen);
 }
 
 static u8* _map_range(size_t offset, size_t size) {
@@ -229,60 +366,6 @@ static void _unmap_range(void* ptr, size_t size) {
 #endif
 }
 
-static void _clear_vga(void) {
-    if (!console_state.fb)
-        return;
-
-    u16* vga = (u16*)console_state.fb;
-    u16 entry = ((u16)console_state.vga_attr << 8) | ' ';
-
-    for (size_t i = 0; i < console_state.cols * console_state.rows; i++)
-        vga[i] = entry;
-}
-
-static void _clear_vesa(void) {
-    if (!console_state.fb_size)
-        return;
-
-    u8* fb = _map_range(0, console_state.fb_size);
-    if (!fb)
-        return;
-
-    memset(fb, 0, console_state.fb_size);
-    _unmap_range(fb, console_state.fb_size);
-}
-
-static void _scroll_vga(void) {
-    if (!console_state.fb)
-        return;
-
-    u16* vga = (u16*)console_state.fb;
-    size_t row_len = console_state.cols;
-    size_t rows = console_state.rows;
-
-    memmove(vga, vga + row_len, (rows - 1) * row_len * sizeof(u16));
-
-    u16 entry = ((u16)console_state.vga_attr << 8) | ' ';
-    for (size_t i = (rows - 1) * row_len; i < rows * row_len; i++)
-        vga[i] = entry;
-}
-
-static void _scroll_vesa(void) {
-    if (!console_state.fb_size || !console_state.font_height)
-        return;
-
-    size_t line_bytes = console_state.pitch * console_state.font_height;
-    size_t move_bytes = console_state.pitch * (console_state.height - console_state.font_height);
-
-    u8* fb = _map_range(0, console_state.fb_size);
-    if (!fb)
-        return;
-
-    memmove(fb, fb + line_bytes, move_bytes);
-    memset(fb + move_bytes, 0, line_bytes);
-    _unmap_range(fb, console_state.fb_size);
-}
-
 static void _write_pixel(u8* dst, u32 color) {
     switch (console_state.bytes_per_pixel) {
     case 4:
@@ -306,7 +389,85 @@ static void _write_pixel(u8* dst, u32 color) {
     }
 }
 
-static void _draw_char_vesa(u32 codepoint, size_t col, size_t row) {
+static void _fill_rect(size_t x, size_t y, size_t width, size_t height, u32 color) {
+    if (!console_state.fb_size || !width || !height)
+        return;
+
+    size_t width_bytes = width * console_state.bytes_per_pixel;
+    size_t map_size = (height - 1) * console_state.pitch + width_bytes;
+    size_t offset = y * console_state.pitch + x * console_state.bytes_per_pixel;
+
+    u8* base = console_map_range(offset, map_size);
+    if (!base)
+        return;
+
+    for (size_t row = 0; row < height; row++) {
+        u8* row_base = base + row * console_state.pitch;
+        for (size_t col = 0; col < width; col++) {
+            _write_pixel(row_base + col * console_state.bytes_per_pixel, color);
+        }
+    }
+
+    console_unmap_range(base, map_size);
+}
+
+static void _clear_vga(const console_screen_t* screen) {
+    if (!console_state.fb || !screen)
+        return;
+
+    u16* vga = (u16*)console_state.fb;
+    u16 entry = ((u16)screen->vga_attr << 8) | ' ';
+
+    for (size_t i = 0; i < console_state.cols * console_state.rows; i++)
+        vga[i] = entry;
+}
+
+static void _clear_vesa(const console_screen_t* screen) {
+    if (!screen)
+        return;
+
+    _fill_rect(0, 0, console_state.width, console_state.height, screen->bg_rgb);
+}
+
+static void _scroll_vga(const console_screen_t* screen) {
+    if (!console_state.fb || !screen)
+        return;
+
+    u16* vga = (u16*)console_state.fb;
+    size_t row_len = console_state.cols;
+    size_t rows = console_state.rows;
+
+    memmove(vga, vga + row_len, (rows - 1) * row_len * sizeof(u16));
+
+    u16 entry = ((u16)screen->vga_attr << 8) | ' ';
+    for (size_t i = (rows - 1) * row_len; i < rows * row_len; i++)
+        vga[i] = entry;
+}
+
+static void _scroll_vesa(const console_screen_t* screen) {
+    if (!screen || !console_state.fb_size || !console_state.font_height)
+        return;
+
+    size_t line_bytes = console_state.pitch * console_state.font_height;
+    size_t move_bytes = console_state.pitch * (console_state.height - console_state.font_height);
+
+    u8* fb = console_map_range(0, console_state.fb_size);
+    if (!fb)
+        return;
+
+    memmove(fb, fb + line_bytes, move_bytes);
+    console_unmap_range(fb, console_state.fb_size);
+
+    _fill_rect(
+        0,
+        console_state.height - console_state.font_height,
+        console_state.width,
+        console_state.font_height,
+        screen->bg_rgb
+    );
+}
+
+static void _draw_char_vesa(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32 bg_rgb) {
     if (!console_state.fb_size || !console_state.font || !console_state.font_width ||
         !console_state.font_height)
         return;
@@ -331,70 +492,108 @@ static void _draw_char_vesa(u32 codepoint, size_t col, size_t row) {
         for (size_t gx = 0; gx < console_state.font_width; gx++) {
             u8 mask = (u8)(0x80 >> (gx & 7));
             u8 bits = row_ptr[gx / 8];
-            u32 color = (bits & mask) ? console_state.fg_rgb : console_state.bg_rgb;
-            console_write_pixel(row_base + gx * console_state.bytes_per_pixel, color);
+            u32 color = (bits & mask) ? fg_rgb : bg_rgb;
+            _write_pixel(row_base + gx * console_state.bytes_per_pixel, color);
         }
     }
 
     _unmap_range(base, map_size);
 }
 
-static void _draw_char_vga(u32 codepoint, size_t col, size_t row) {
+static void _draw_char_vga(u32 codepoint, size_t col, size_t row, u8 attr) {
     if (!console_state.fb)
         return;
 
     u16* vga = (u16*)console_state.fb;
     size_t index = row * console_state.cols + col;
     u8 ch = (codepoint > 0xff) ? (u8)'?' : (u8)codepoint;
-    u16 entry = ((u16)console_state.vga_attr << 8) | ch;
+    u16 entry = ((u16)attr << 8) | ch;
     vga[index] = entry;
 }
 
-static void _newline(void) {
-    console_state.cursor_x = 0;
-    console_state.cursor_y++;
-
-    if (console_state.cursor_y < console_state.rows)
+static void _scroll_screen(console_screen_t* screen, size_t screen_index) {
+    if (!screen)
         return;
 
-    console_state.cursor_y = console_state.rows - 1;
+    console_cell_t* cells = _screen_cells(screen_index);
+    size_t cols = console_state.cols;
+    size_t rows = console_state.rows;
+
+    if (cells && cols && rows) {
+        memmove(cells, cells + cols, (rows - 1) * cols * sizeof(*cells));
+
+        console_cell_t* last = cells + (rows - 1) * cols;
+        for (size_t i = 0; i < cols; i++) {
+            last[i].codepoint = ' ';
+            last[i].fg = screen->fg_vga;
+            last[i].bg = screen->bg_vga;
+        }
+    }
+
+    if (screen_index != console_state.active_screen)
+        return;
 
     if (console_state.mode == CONSOLE_VGA)
-        _scroll_vga();
+        _scroll_vga(screen);
     else if (console_state.mode == CONSOLE_VESA)
-        _scroll_vesa();
+        _scroll_vesa(screen);
 }
 
-static void _putc(u32 ch) {
-    if (!console_state.ready || console_state.mode == CONSOLE_DISABLED)
+static void _newline(console_screen_t* screen, size_t screen_index) {
+    screen->cursor_x = 0;
+    screen->cursor_y++;
+
+    if (screen->cursor_y < console_state.rows)
+        return;
+
+    screen->cursor_y = console_state.rows - 1;
+    _scroll_screen(screen, screen_index);
+}
+
+static void _putc(console_screen_t* screen, size_t screen_index, u32 ch) {
+    if (!screen || !console_state.ready || console_state.mode == CONSOLE_DISABLED)
         return;
 
     if (ch == '\n') {
-        _newline();
+        _newline(screen, screen_index);
         return;
     }
 
     if (ch == '\r') {
-        console_state.cursor_x = 0;
+        screen->cursor_x = 0;
         return;
     }
 
     if (ch == '\t') {
-        size_t next = (console_state.cursor_x + 4) & ~3ULL;
-        while (console_state.cursor_x < next)
-            _putc(' ');
+        size_t next = (screen->cursor_x + 4) & ~3ULL;
+        while (screen->cursor_x < next)
+            _putc(screen, screen_index, ' ');
 
         return;
     }
 
     if (ch == '\b') {
-        if (console_state.cursor_x > 0) {
-            console_state.cursor_x--;
+        if (screen->cursor_x > 0) {
+            screen->cursor_x--;
+            size_t col = screen->cursor_x;
+            size_t row = screen->cursor_y;
 
-            if (console_state.mode == CONSOLE_VGA)
-                _draw_char_vga(' ', console_state.cursor_x, console_state.cursor_y);
-            else if (console_state.mode == CONSOLE_VESA)
-                _draw_char_vesa(' ', console_state.cursor_x, console_state.cursor_y);
+            console_cell_t* cells = _screen_cells(screen_index);
+            if (cells) {
+                console_cell_t* cell = &cells[row * console_state.cols + col];
+                cell->codepoint = ' ';
+                cell->fg = screen->fg_vga;
+                cell->bg = screen->bg_vga;
+            }
+
+            if (screen_index == console_state.active_screen) {
+                if (console_state.mode == CONSOLE_VGA) {
+                    u8 attr = screen->vga_attr;
+                    _draw_char_vga(' ', col, row, attr);
+                } else if (console_state.mode == CONSOLE_VESA) {
+                    _draw_char_vesa(' ', col, row, screen->fg_rgb, screen->bg_rgb);
+                }
+            }
         }
 
         return;
@@ -403,15 +602,30 @@ static void _putc(u32 ch) {
     if (ch < 0x20)
         return;
 
-    if (console_state.cursor_x >= console_state.cols)
-        _newline();
+    if (screen->cursor_x >= console_state.cols)
+        _newline(screen, screen_index);
 
-    if (console_state.mode == CONSOLE_VGA)
-        _draw_char_vga(ch, console_state.cursor_x, console_state.cursor_y);
-    else if (console_state.mode == CONSOLE_VESA)
-        _draw_char_vesa(ch, console_state.cursor_x, console_state.cursor_y);
+    size_t col = screen->cursor_x;
+    size_t row = screen->cursor_y;
 
-    console_state.cursor_x++;
+    console_cell_t* cells = _screen_cells(screen_index);
+    if (cells) {
+        console_cell_t* cell = &cells[row * console_state.cols + col];
+        cell->codepoint = ch;
+        cell->fg = screen->fg_vga;
+        cell->bg = screen->bg_vga;
+    }
+
+    if (screen_index == console_state.active_screen) {
+        if (console_state.mode == CONSOLE_VGA) {
+            u8 attr = screen->vga_attr;
+            _draw_char_vga(ch, col, row, attr);
+        } else if (console_state.mode == CONSOLE_VESA) {
+            _draw_char_vesa(ch, col, row, screen->fg_rgb, screen->bg_rgb);
+        }
+    }
+
+    screen->cursor_x++;
 }
 
 static size_t _utf8_decode(const u8* data, size_t len, u32* out) {
@@ -465,8 +679,12 @@ static size_t _utf8_decode(const u8* data, size_t len, u32* out) {
     return 0;
 }
 
-static void _write(const char* buf, size_t len) {
-    if (!buf || !console_state.ready || console_state.mode == CONSOLE_DISABLED)
+static void _write_screen(size_t screen_index, const char* buf, size_t len) {
+    if (!buf || !len || !console_state.ready || console_state.mode == CONSOLE_DISABLED)
+        return;
+
+    console_screen_t* screen = _get_screen(screen_index);
+    if (!screen)
         return;
 
     bool esc = false;
@@ -486,23 +704,23 @@ static void _write(const char* buf, size_t len) {
             }
 
             if (ch < 0x20 || ch == 0x7f) {
-                _putc(ch);
+                _putc(screen, screen_index, ch);
                 continue;
             }
 
             if (ch < 0x80) {
-                _putc(ch);
+                _putc(screen, screen_index, ch);
                 continue;
             }
 
             u32 codepoint = 0;
             size_t consumed = _utf8_decode((const u8*)&buf[i], len - i, &codepoint);
             if (!consumed) {
-                _putc('?');
+                _putc(screen, screen_index, '?');
                 continue;
             }
 
-            _putc(codepoint);
+            _putc(screen, screen_index, codepoint);
             i += consumed - 1;
             continue;
         }
@@ -544,7 +762,7 @@ static void _write(const char* buf, size_t len) {
             }
 
             for (size_t p = 0; p < param_count; p++)
-                _apply_sgr(params[p]);
+                _apply_sgr(screen, params[p]);
 
             esc = false;
             csi = false;
@@ -559,13 +777,57 @@ static void _write(const char* buf, size_t len) {
     }
 }
 
+static void _free_screens(void) {
+    if (console_state.screens && console_state.screens != &console_state.fallback_screen)
+        free(console_state.screens);
+
+    if (console_state.cells)
+        free(console_state.cells);
+
+    console_state.screens = NULL;
+    console_state.cells = NULL;
+}
+
+static void _init_screens(size_t active_screen) {
+    console_state.screen_count = TTY_SCREEN_COUNT;
+    if (!console_state.screen_count)
+        console_state.screen_count = 1;
+
+    if (active_screen >= console_state.screen_count)
+        active_screen = TTY_CONSOLE;
+
+    size_t count = _cell_count();
+    console_state.screens = calloc(console_state.screen_count, sizeof(console_screen_t));
+    console_state.cells = calloc(console_state.screen_count * count, sizeof(console_cell_t));
+
+    if (!console_state.screens || !console_state.cells) {
+        if (console_state.screens)
+            free(console_state.screens);
+        if (console_state.cells)
+            free(console_state.cells);
+
+        console_state.screen_count = 1;
+        console_state.screens = &console_state.fallback_screen;
+        console_state.cells = NULL;
+        console_state.active_screen = 0;
+        _screen_reset(&console_state.fallback_screen);
+        return;
+    }
+
+    console_state.active_screen = active_screen;
+
+    for (size_t i = 0; i < console_state.screen_count; i++) {
+        _screen_reset(&console_state.screens[i]);
+        _clear_screen_buffer(i);
+    }
+}
+
 void console_init(const boot_info_t* info) {
     if (!info)
         return;
 
     memset(&console_state, 0, sizeof(console_state));
-    console_reset_colors();
-    _use_font(&default_font);
+    console_use_font(&default_font);
 
     if (info->video.mode == VIDEO_GRAPHICS && info->video.framebuffer && info->video.width &&
         info->video.height && info->video.bytes_per_pixel) {
@@ -596,7 +858,8 @@ void console_init(const boot_info_t* info) {
             console_state.use_phys_window = true;
             console_state.ready = true;
 
-            _clear_vesa();
+            _init_screens(TTY_CONSOLE);
+            _redraw_screen(console_state.active_screen);
             return;
         }
 #else
@@ -621,7 +884,8 @@ void console_init(const boot_info_t* info) {
             console_state.mode = CONSOLE_VESA;
             console_state.ready = true;
 
-            _clear_vesa();
+            _init_screens(TTY_CONSOLE);
+            _redraw_screen(console_state.active_screen);
             return;
         }
 #endif
@@ -650,7 +914,8 @@ fallback_vga:
     console_state.mode = CONSOLE_VGA;
     console_state.ready = true;
 
-    _clear_vga();
+    _init_screens(TTY_CONSOLE);
+    _redraw_screen(console_state.active_screen);
 }
 
 ssize_t arch_console_read(void* buf, size_t len) {
@@ -665,13 +930,26 @@ ssize_t arch_console_read(void* buf, size_t len) {
     return (ssize_t)len;
 }
 
-ssize_t arch_console_write(const void* buf, size_t len) {
+ssize_t arch_console_write_screen(size_t screen, const void* buf, size_t len) {
     if (!buf)
         return -1;
 
-    send_serial_sized_string(SERIAL_COM1, buf, len);
-    _write(buf, len);
+    if (len == 0)
+        return 0;
+
+    if (screen == TTY_CONSOLE)
+        send_serial_sized_string(SERIAL_COM1, buf, len);
+
+    _write_screen(screen, buf, len);
     return (ssize_t)len;
+}
+
+ssize_t arch_console_write(const void* buf, size_t len) {
+    return arch_console_write_screen(TTY_CONSOLE, buf, len);
+}
+
+bool arch_console_set_active(size_t screen) {
+    return _set_active(screen);
 }
 
 ssize_t arch_tty_read(void* buf, size_t len) {
@@ -679,5 +957,5 @@ ssize_t arch_tty_read(void* buf, size_t len) {
 }
 
 ssize_t arch_tty_write(const void* buf, size_t len) {
-    return arch_console_write(buf, len);
+    return arch_console_write_screen(console_state.active_screen, buf, len);
 }

@@ -17,11 +17,15 @@ void list_destroy(linked_list_t* list, bool free_data) {
     if (!list)
         return;
 
-    ll_foreach(node, list) {
-        free(node);
+    list_node_t* node = list->head;
+    while (node) {
+        list_node_t* next = node->next;
 
-        if (free_data)
+        if (free_data && node->data)
             free(node->data);
+
+        free(node);
+        node = next;
     }
 
     free(list);

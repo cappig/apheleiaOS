@@ -2,6 +2,7 @@
 
 #include <base/attributes.h>
 #include <log/log.h>
+#include <sched/scheduler.h>
 #include <x86/asm.h>
 #include <x86/pic.h>
 #include <x86/pit.h>
@@ -20,9 +21,10 @@ static void _register_legacy(size_t irq, int_handler_t handler) {
 #endif
 }
 
-static void _timer_handler(UNUSED int_state_t* state) {
+static void _timer_handler(int_state_t* state) {
     irq_tick_count++;
     irq_ack(IRQ_SYSTEM_TIMER);
+    sched_tick(state);
 }
 
 bool irq_init(void) {

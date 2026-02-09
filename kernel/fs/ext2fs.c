@@ -256,13 +256,28 @@ static bool _ext2_build_dir(fs_instance_t* instance, vfs_node_t* parent, const e
         size_t dir_off = (size_t)i * block_size;
 
         while (pos < block_size && dir_off + pos < dir_size) {
+            if (block_size - pos < sizeof(ext2_directory_t))
+                break;
+
             ext2_directory_t* entry = (ext2_directory_t*)(block + pos);
 
-            if (entry->size < 8)
+            size_t entry_size = entry->size;
+            if (entry_size < 8)
+                break;
+
+            if (entry_size > block_size - pos)
+                break;
+
+            u64 entry_end = (u64)dir_off + (u64)pos + entry_size;
+            if (entry_end > dir_size)
                 break;
 
             if (entry->inode && entry->name_size) {
                 size_t name_len = entry->name_size;
+                if (name_len > entry_size - 8) {
+                    pos += entry_size;
+                    continue;
+                }
                 if (name_len >= 256)
                     name_len = 255;
 
@@ -295,7 +310,7 @@ static bool _ext2_build_dir(fs_instance_t* instance, vfs_node_t* parent, const e
                 }
             }
 
-            pos += entry->size;
+            pos += entry_size;
         }
     }
 
