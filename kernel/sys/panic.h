@@ -5,11 +5,13 @@
 
 extern void panic_prepare(void);
 extern void panic_halt(void);
+void panic_trace(void);
 
 #define panic(...)                              \
     ({                                          \
         panic_prepare();                        \
         log_fatal("Kernel panic: "__VA_ARGS__); \
+        panic_trace();                          \
         panic_halt();                           \
     })
 

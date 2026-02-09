@@ -12,6 +12,8 @@ void arch_phys_unmap(void* vaddr, size_t size);
 
 u32 arch_pci_read(u8 bus, u8 slot, u8 func, u8 offset, u8 size);
 
+void arch_dump_stack_trace(void);
+
 ssize_t arch_console_read(void* buf, size_t len);
 ssize_t arch_console_write(const void* buf, size_t len);
 ssize_t arch_tty_read(void* buf, size_t len);

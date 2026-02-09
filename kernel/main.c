@@ -4,6 +4,7 @@
 #include <log/log.h>
 #include <sys/devfs.h>
 #include <sys/disk.h>
+#include <sys/symbols.h>
 #include <sys/vfs.h>
 
 NORETURN void kernel_main(void* boot_info) {
@@ -14,8 +15,11 @@ NORETURN void kernel_main(void* boot_info) {
     arch_storage_init();
 
     disk_dev_t* boot_disk = disk_lookup(1);
-    if (!boot_disk || !mount_rootfs(boot_disk))
+    if (!boot_disk || !mount_rootfs(boot_disk)) {
         log_warn("kernel: failed to mount rootfs");
+    } else {
+        load_symbols();
+    }
 
     disk_publish_devices();
     devfs_init();

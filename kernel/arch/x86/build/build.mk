@@ -31,8 +31,19 @@ else
 $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
 endif
 
+SYMBOL_MAP := bin/image/boot/sym.map
 
-bin/$(IMG_NAME): bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF)
+$(SYMBOL_MAP): $(KERNEL_ELF)
+	@mkdir -p $(@D)
+	@if [ "$(TRACEABLE_KERNEL)" = "true" ]; then \
+		$(NM) -n $< > $@; \
+		echo "NM $@"; \
+	else \
+		rm -f $@; \
+		touch $@; \
+	fi
+
+bin/$(IMG_NAME): bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF) $(SYMBOL_MAP)
 	@mkdir -p $(@D)
 	@if [ "$(ARCH_VARIANT)" = "64" ]; then rm -f bin/image/boot/kernel32.elf; fi
 	@if [ "$(ARCH_VARIANT)" = "32" ]; then rm -f bin/image/boot/kernel64.elf; fi
