@@ -60,6 +60,12 @@ static void handle_console(char* value, void* data) {
     strncpy(args->console, value, 128);
 }
 
+static void handle_font(char* value, void* data) {
+    kernel_args_t* args = data;
+    strncpy(args->font, value, sizeof(args->font) - 1);
+    args->font[sizeof(args->font) - 1] = '\0';
+}
+
 
 static const cfg_entry_t cfg_table[] = {
     {"debug", handle_debug},
@@ -68,6 +74,9 @@ static const cfg_entry_t cfg_table[] = {
     {"graphics.height", handle_vesa_height},
     {"graphics.bpp", handle_vesa_bpp},
     {"console", handle_console},
+    {"font", handle_font},
+    {"console.font", handle_font},
+    {"text.font", handle_font},
     {NULL, NULL}
 };
 
@@ -78,6 +87,9 @@ void parse_config(kernel_args_t* args) {
     args->vesa_width = BOOT_DEFAULT_VESA_WIDTH;
     args->vesa_height = BOOT_DEFAULT_VESA_HEIGHT;
     args->vesa_bpp = BOOT_DEFAULT_VESA_BPP;
+    args->console[0] = '\0';
+    strncpy(args->font, BOOT_DEFAULT_FONT, sizeof(args->font) - 1);
+    args->font[sizeof(args->font) - 1] = '\0';
 
     void* config = read_rootfs("/etc/loader.conf");
 

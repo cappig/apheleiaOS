@@ -2,6 +2,8 @@
 #include <log/log.h>
 #include <string.h>
 #include <sys/acpi.h>
+#include <sys/font.h>
+#include <sys/framebuffer.h>
 #include <sys/panic.h>
 #include <sys/pci.h>
 #include <x86/asm.h>
@@ -25,6 +27,8 @@ static void _console_puts(const char* s) {
 
     arch_console_write(s, strlen(s));
 }
+
+static char font_path[128] = {0};
 
 static void _select_log_level(const boot_info_t* info) {
     if (!info)
@@ -57,6 +61,53 @@ static uintptr_t _read_stack_ptr(void) {
     return sp;
 }
 
+static void _cache_font(const boot_info_t* info) {
+    if (!info) {
+        font_path[0] = '\0';
+        return;
+    }
+
+    strncpy(font_path, info->args.font, sizeof(font_path) - 1);
+    font_path[sizeof(font_path) - 1] = '\0';
+}
+
+static void _publish_framebuffer(const boot_info_t* info) {
+    framebuffer_info_t fb = {0};
+
+    if (!info || info->video.mode != VIDEO_GRAPHICS || !info->video.framebuffer) {
+        framebuffer_set_info(NULL);
+        return;
+    }
+
+    u32 pitch = info->video.bytes_per_line;
+    if (!pitch)
+        pitch = info->video.width * info->video.bytes_per_pixel;
+
+    fb.paddr = info->video.framebuffer;
+    fb.width = info->video.width;
+    fb.height = info->video.height;
+    fb.pitch = pitch;
+    fb.bpp = (u8)(info->video.bytes_per_pixel * 8);
+    fb.red_mask = info->video.red_mask;
+    fb.green_mask = info->video.green_mask;
+    fb.blue_mask = info->video.blue_mask;
+    fb.size = (u64)pitch * (u64)info->video.height;
+    fb.available = fb.size != 0;
+
+    framebuffer_set_info(&fb);
+}
+
+const char* arch_font_path(void) {
+    if (!font_path[0])
+        return NULL;
+
+    return font_path;
+}
+
+void arch_set_font(const font_t* font) {
+    console_set_font(font);
+}
+
 void arch_init(void* boot_info) {
     boot_info_t* info = boot_info;
 
@@ -68,6 +119,7 @@ void arch_init(void* boot_info) {
         panic("boot info missing");
 
     _select_log_level(info);
+    _cache_font(info);
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booting");
@@ -87,7 +139,8 @@ void arch_init(void* boot_info) {
     if (info->args.debug == DEBUG_ALL)
         dump_pci_devices();
     console_init(info);
-    log_init(_console_puts);
+    _publish_framebuffer(info);
+    log_init(console_puts);
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booted");

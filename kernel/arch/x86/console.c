@@ -5,7 +5,7 @@
 #include <base/types.h>
 #include <stddef.h>
 #include <string.h>
-#include <sys/console_font.h>
+#include <sys/font.h>
 #include <x86/serial.h>
 #include <x86/vga.h>
 
@@ -33,7 +33,7 @@ typedef struct {
     u8 bg_vga;
     u32 fg_rgb;
     u32 bg_rgb;
-    const console_font_t* font;
+    const font_t* font;
     u32 font_width;
     u32 font_height;
     u32 font_row_bytes;
@@ -149,18 +149,40 @@ static void _apply_sgr(int code) {
         _set_bg((u8)(code - 100), true);
 }
 
-static void _use_font(const console_font_t* font) {
+static void _use_font(const font_t* font) {
     if (!font || !font->glyphs || !font->glyph_width || !font->glyph_height)
         return;
 
     console_state.font = font;
     console_state.font_width = font->glyph_width;
     console_state.font_height = font->glyph_height;
-    console_state.font_row_bytes = console_font_row_bytes(font);
-    console_state.font_glyph_bytes = console_font_glyph_bytes(font);
+    console_state.font_row_bytes = font_row_bytes(font);
+    console_state.font_glyph_bytes = font_glyph_bytes(font);
 }
 
-void console_set_font(const console_font_t* font) {
+static u32 _font_index(u32 codepoint) {
+    const font_t* font = console_state.font;
+    if (!font)
+        return 0;
+
+    if (font->map && font->map_count) {
+        for (u32 i = 0; i < font->map_count; i++) {
+            if (font->map[i].codepoint == codepoint)
+                return font->map[i].glyph;
+        }
+    }
+
+    if (codepoint < font->first_char)
+        return 0;
+
+    u32 idx = codepoint - font->first_char;
+    if (idx >= font->glyph_count)
+        return 0;
+
+    return idx;
+}
+
+void console_set_font(const font_t* font) {
     if (!font)
         return;
 
@@ -172,7 +194,7 @@ void console_set_font(const console_font_t* font) {
     console_state.cols = console_state.width / console_state.font_width;
     console_state.rows = console_state.height / console_state.font_height;
     if (!console_state.cols || !console_state.rows) {
-        _use_font(&console_default_font);
+        _use_font(&default_font);
         console_state.cols = console_state.width / console_state.font_width;
         console_state.rows = console_state.height / console_state.font_height;
     }
@@ -284,7 +306,7 @@ static void _write_pixel(u8* dst, u32 color) {
     }
 }
 
-static void _draw_char_vesa(char ch, size_t col, size_t row) {
+static void _draw_char_vesa(u32 codepoint, size_t col, size_t row) {
     if (!console_state.fb_size || !console_state.font || !console_state.font_width ||
         !console_state.font_height)
         return;
@@ -294,9 +316,7 @@ static void _draw_char_vesa(char ch, size_t col, size_t row) {
     size_t width_bytes = console_state.font_width * console_state.bytes_per_pixel;
     size_t map_size = (console_state.font_height - 1) * console_state.pitch + width_bytes;
 
-    u32 first = console_state.font->first_char;
-    u32 last = console_state.font->first_char + console_state.font->glyph_count - 1;
-    u32 index = (ch < (char)first || (u32)ch > last) ? 0 : (u32)ch - first;
+    u32 index = _font_index(codepoint);
     const u8* glyph = console_state.font->glyphs + index * console_state.font_glyph_bytes;
 
     size_t offset = y * console_state.pitch + x * console_state.bytes_per_pixel;
@@ -319,13 +339,14 @@ static void _draw_char_vesa(char ch, size_t col, size_t row) {
     _unmap_range(base, map_size);
 }
 
-static void _draw_char_vga(char ch, size_t col, size_t row) {
+static void _draw_char_vga(u32 codepoint, size_t col, size_t row) {
     if (!console_state.fb)
         return;
 
     u16* vga = (u16*)console_state.fb;
     size_t index = row * console_state.cols + col;
-    u16 entry = ((u16)console_state.vga_attr << 8) | (u8)ch;
+    u8 ch = (codepoint > 0xff) ? (u8)'?' : (u8)codepoint;
+    u16 entry = ((u16)console_state.vga_attr << 8) | ch;
     vga[index] = entry;
 }
 
@@ -344,7 +365,7 @@ static void _newline(void) {
         _scroll_vesa();
 }
 
-static void _putc(char ch) {
+static void _putc(u32 ch) {
     if (!console_state.ready || console_state.mode == CONSOLE_DISABLED)
         return;
 
@@ -379,6 +400,9 @@ static void _putc(char ch) {
         return;
     }
 
+    if (ch < 0x20)
+        return;
+
     if (console_state.cursor_x >= console_state.cols)
         _newline();
 
@@ -388,6 +412,57 @@ static void _putc(char ch) {
         _draw_char_vesa(ch, console_state.cursor_x, console_state.cursor_y);
 
     console_state.cursor_x++;
+}
+
+static size_t _utf8_decode(const u8* data, size_t len, u32* out) {
+    if (!data || !len || !out)
+        return 0;
+
+    u8 b0 = data[0];
+    if (b0 < 0x80) {
+        *out = b0;
+        return 1;
+    }
+
+    if ((b0 & 0xe0) == 0xc0) {
+        if (len < 2 || (data[1] & 0xc0) != 0x80)
+            return 0;
+
+        u32 cp = ((u32)(b0 & 0x1f) << 6) | (u32)(data[1] & 0x3f);
+        if (cp < 0x80)
+            return 0;
+
+        *out = cp;
+        return 2;
+    }
+
+    if ((b0 & 0xf0) == 0xe0) {
+        if (len < 3 || (data[1] & 0xc0) != 0x80 || (data[2] & 0xc0) != 0x80)
+            return 0;
+
+        u32 cp = ((u32)(b0 & 0x0f) << 12) | ((u32)(data[1] & 0x3f) << 6) | (u32)(data[2] & 0x3f);
+        if (cp < 0x800 || (cp >= 0xd800 && cp <= 0xdfff))
+            return 0;
+
+        *out = cp;
+        return 3;
+    }
+
+    if ((b0 & 0xf8) == 0xf0) {
+        if (len < 4 || (data[1] & 0xc0) != 0x80 || (data[2] & 0xc0) != 0x80 ||
+            (data[3] & 0xc0) != 0x80)
+            return 0;
+
+        u32 cp = ((u32)(b0 & 0x07) << 18) | ((u32)(data[1] & 0x3f) << 12) |
+                 ((u32)(data[2] & 0x3f) << 6) | (u32)(data[3] & 0x3f);
+        if (cp < 0x10000 || cp > 0x10ffff)
+            return 0;
+
+        *out = cp;
+        return 4;
+    }
+
+    return 0;
 }
 
 static void _write(const char* buf, size_t len) {
@@ -401,7 +476,7 @@ static void _write(const char* buf, size_t len) {
     int current = -1;
 
     for (size_t i = 0; i < len; i++) {
-        char ch = buf[i];
+        u8 ch = (u8)buf[i];
 
         if (!esc) {
             if (ch == '\x1b') {
@@ -410,7 +485,25 @@ static void _write(const char* buf, size_t len) {
                 continue;
             }
 
-            _putc(ch);
+            if (ch < 0x20 || ch == 0x7f) {
+                _putc(ch);
+                continue;
+            }
+
+            if (ch < 0x80) {
+                _putc(ch);
+                continue;
+            }
+
+            u32 codepoint = 0;
+            size_t consumed = _utf8_decode((const u8*)&buf[i], len - i, &codepoint);
+            if (!consumed) {
+                _putc('?');
+                continue;
+            }
+
+            _putc(codepoint);
+            i += consumed - 1;
             continue;
         }
 
@@ -472,7 +565,7 @@ void console_init(const boot_info_t* info) {
 
     memset(&console_state, 0, sizeof(console_state));
     console_reset_colors();
-    _use_font(&console_default_font);
+    _use_font(&default_font);
 
     if (info->video.mode == VIDEO_GRAPHICS && info->video.framebuffer && info->video.width &&
         info->video.height && info->video.bytes_per_pixel) {

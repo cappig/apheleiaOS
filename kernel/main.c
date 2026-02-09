@@ -4,6 +4,7 @@
 #include <log/log.h>
 #include <sys/devfs.h>
 #include <sys/disk.h>
+#include <sys/psf.h>
 #include <sys/symbols.h>
 #include <sys/vfs.h>
 
@@ -19,6 +20,12 @@ NORETURN void kernel_main(void* boot_info) {
         log_warn("kernel: failed to mount rootfs");
     } else {
         load_symbols();
+    }
+
+    const char* font_path = arch_font_path();
+    if (font_path && font_path[0]) {
+        if (!psf_load(font_path))
+            log_warn("kernel: failed to load console font '%s'", font_path);
     }
 
     disk_publish_devices();
