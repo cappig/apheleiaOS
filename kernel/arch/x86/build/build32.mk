@@ -3,6 +3,7 @@ KERNEL32_OBJ := $(patsubst %, bin/kernel32/%.o, $(KERNEL_SRC))
 AS_KERNEL32 := -felf32
 CC_KERNEL32 := \
 	-fdata-sections \
+	-D_KERNEL \
 	-DEXTERNAL_ALLOC \
 	-ffunction-sections \
 	-m32

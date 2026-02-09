@@ -15,4 +15,14 @@ arch_context_switch:
     pop eax
 
     add esp, 8
+    test dword [esp + 4], 0x3
+    jz .no_user
+    push eax
+    mov ax, 0x23
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    pop eax
+.no_user:
     iret

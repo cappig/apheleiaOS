@@ -20,6 +20,16 @@ void arch_phys_unmap(void* vaddr, size_t size) {
 #include <x86/paging32.h>
 
 static size_t window_pages_mapped = 0;
+static u64 window_paddr_base = 0;
+
+#define PHYS_WINDOW_STACK_MAX 8
+typedef struct {
+    u64 paddr_base;
+    size_t pages;
+} window_map_t;
+
+static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
+static size_t window_stack_depth = 0;
 
 static page_t* _get_pdpt(void) {
     u64 cr3 = read_cr3();
@@ -83,10 +93,18 @@ void* arch_phys_map(u64 paddr, size_t size) {
         panic("phys window map too large");
 
     // Single sliding window: new mappings invalidate any previous one.
-    if (window_pages_mapped)
-        _clear_window_range(window_pages_mapped);
+    if (window_pages_mapped) {
+        if (window_stack_depth >= PHYS_WINDOW_STACK_MAX)
+            panic("phys window map stack overflow");
+
+        window_stack[window_stack_depth++] =
+            (window_map_t){.paddr_base = window_paddr_base, .pages = window_pages_mapped};
+
+        clear_window_range(window_pages_mapped);
+    }
 
     window_pages_mapped = pages;
+    window_paddr_base = start;
 
     u32 vaddr = PHYS_WINDOW_BASE_32;
     for (size_t i = 0; i < pages; i++) {
@@ -105,5 +123,18 @@ void arch_phys_unmap(void* vaddr, size_t size) {
 
     _clear_window_range(window_pages_mapped);
     window_pages_mapped = 0;
+    window_paddr_base = 0;
+
+    if (window_stack_depth == 0)
+        return;
+
+    window_map_t prev = window_stack[--window_stack_depth];
+    window_pages_mapped = prev.pages;
+    window_paddr_base = prev.paddr_base;
+
+    u32 map_base = PHYS_WINDOW_BASE_32;
+    for (size_t i = 0; i < prev.pages; i++) {
+        map_window_page(map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, PT_WRITE);
+    }
 }
 #endif

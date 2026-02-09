@@ -68,6 +68,48 @@ static int _first_fit(bitmap_allocator_t* alloc, size_t blocks) {
     return -1;
 }
 
+static int _last_fit(bitmap_allocator_t* alloc, size_t blocks) {
+    if (!alloc || !blocks)
+        return -1;
+
+    size_t region_size = 0;
+    size_t region_top = alloc->block_count;
+
+    for (size_t word = alloc->word_count; word > 0; word--) {
+        size_t word_index = word - 1;
+
+        if (alloc->bitmap[word_index] == (bitmap_word_t)-1) {
+            region_size = 0;
+            region_top = word_index * BITMAP_WORD_SIZE;
+            continue;
+        }
+
+        for (size_t bit = BITMAP_WORD_SIZE; bit > 0; bit--) {
+            size_t bit_index = bit - 1;
+            size_t block = word_index * BITMAP_WORD_SIZE + bit_index;
+
+            if (block >= alloc->block_count) {
+                region_size = 0;
+                region_top = block;
+                continue;
+            }
+
+            if (alloc->bitmap[word_index] & (1 << bit_index)) {
+                region_size = 0;
+                region_top = block;
+                continue;
+            }
+
+            region_size++;
+
+            if (region_size == blocks)
+                return (int)(region_top - blocks);
+        }
+    }
+
+    return -1;
+}
+
 void* bitmap_alloc_reserve(bitmap_allocator_t* alloc, size_t blocks) {
     if (!blocks || blocks > alloc->free_blocks)
         return NULL;
@@ -82,6 +124,22 @@ void* bitmap_alloc_reserve(bitmap_allocator_t* alloc, size_t blocks) {
     alloc->free_blocks -= blocks;
 
     return bitmap_alloc_to_ptr(alloc, first_block);
+}
+
+void* bitmap_alloc_reserve_high(bitmap_allocator_t* alloc, size_t blocks) {
+    if (!blocks || blocks > alloc->free_blocks)
+        return NULL;
+
+    int first_block = _last_fit(alloc, blocks);
+
+    if (first_block == -1)
+        return NULL;
+
+    bitmap_set_region(alloc->bitmap, (size_t)first_block, blocks);
+
+    alloc->free_blocks -= blocks;
+
+    return bitmap_alloc_to_ptr(alloc, (size_t)first_block);
 }
 
 bool bitmap_alloc_free(bitmap_allocator_t* alloc, void* ptr, size_t blocks) {

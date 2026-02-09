@@ -38,6 +38,6 @@
 #define W_OK 2
 #define X_OK 1
 
-// #ifndef _KERNEL
-// #include <libc_usr/unistd.h>
-// #endif
+#ifndef _KERNEL
+#include <libc_usr/unistd.h>
+#endif

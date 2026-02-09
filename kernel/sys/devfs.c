@@ -33,6 +33,10 @@ static ssize_t _dev_tty_write(vfs_node_t* node, void* buf, size_t offset, size_t
     return tty_write_handle(node ? node->private : NULL, buf, len);
 }
 
+static ssize_t _dev_tty_ioctl(vfs_node_t* node, u64 request, void* args) {
+    return tty_ioctl_handle(node ? node->private : NULL, request, args);
+}
+
 static ssize_t _dev_null_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)buf;
@@ -193,7 +197,9 @@ void devfs_init(void) {
         return;
     }
 
-    if (!_create_node(dev_dir, "tty", VFS_CHARDEV, 0666, tty_if, &tty_current))
+    tty_if->ioctl = _dev_tty_ioctl;
+
+    if (!devfs_create_node(dev_dir, "tty", VFS_CHARDEV, 0666, tty_if, &tty_current))
         log_warn("devfs: failed to create /dev/tty");
 
     if (!_create_node(dev_dir, "console", VFS_CHARDEV, 0666, tty_if, &tty_console))
@@ -219,7 +225,7 @@ void devfs_init(void) {
         log_warn("devfs: failed to create /dev/mouse");
     }
 
-    vfs_interface_t* null_if = vfs_create_interface(dev_null_read, dev_null_write);
+    vfs_interface_t* null_if = vfs_create_interface(_dev_null_read, dev_null_write);
     if (!null_if) {
         log_warn("devfs: failed to allocate null interface");
     } else if (!_create_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {

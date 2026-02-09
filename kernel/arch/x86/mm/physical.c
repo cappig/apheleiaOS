@@ -51,6 +51,29 @@ void* alloc_frames(size_t count) {
     return ret;
 }
 
+void* alloc_frames_high(size_t count) {
+    assert(count);
+
+    void* ret = bitmap_alloc_reserve_high(&frame_alloc, count);
+
+    if (UNLIKELY(!ret))
+        panic("Out of physical memory!");
+
+#ifdef MMU_DEBUG
+    log_debug("[MMU DEBUG] allocated %zu new frames (high): paddr = %#lx", count, (u64)ret);
+#endif
+
+    return ret;
+}
+
+void* alloc_frames_user(size_t count) {
+#if defined(__i386__)
+    return alloc_frames_high(count);
+#else
+    return alloc_frames(count);
+#endif
+}
+
 void free_frames(void* ptr, size_t size) {
     bitmap_alloc_free(&frame_alloc, ptr, size);
 

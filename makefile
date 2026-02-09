@@ -42,6 +42,7 @@ LD_BASE := \
 
 include utils/toolchain.mk
 include utils/qemu.mk
+include user/build.mk
 
 
 .DEFAULT_GOAL := all

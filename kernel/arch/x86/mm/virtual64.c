@@ -18,12 +18,13 @@ static page_t* _walk_table_once(page_t* table, size_t index, u64 flags) {
         next_table = (page_t*)(uintptr_t)page_get_paddr(&table[index]);
     } else {
         next_table = alloc_frames(1);
+        memset((void*)((uintptr_t)next_table + LINEAR_MAP_OFFSET_64), 0, PAGE_4KIB);
 
         page_set_paddr(&table[index], (u64)(uintptr_t)next_table);
-
-        // table[index] |= PT_PRESENT;
-        table[index] |= flags & FLAGS_MASK;
+        table[index] |= PT_PRESENT;
     }
+
+    table[index] |= flags & FLAGS_MASK;
 
     // If we ever map a writable child all the parents must have the write flag set
     table[index] |= PT_WRITE;

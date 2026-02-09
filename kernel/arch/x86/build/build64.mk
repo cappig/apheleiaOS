@@ -3,6 +3,7 @@ KERNEL64_OBJ := $(patsubst %, bin/kernel64/%.o, $(KERNEL_SRC))
 AS_KERNEL64 := -felf64
 CC_KERNEL64 := \
 	-fdata-sections \
+	-D_KERNEL \
 	-DEXTERNAL_ALLOC \
 	-ffunction-sections \
 	-march=x86-64 \

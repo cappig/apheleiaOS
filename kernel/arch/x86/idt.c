@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <x86/asm.h>
 #include <x86/gdt.h>
+#include <x86/irq.h>
 #include <x86/pic.h>
 
 static idt_register_t idtr = {0};
@@ -33,23 +34,23 @@ static void _default_int_handler(int_state_t* state) {
         u32 int_num = state->int_num;
 
         if (int_num >= IRQ_OFFSET && int_num < IRQ_OFFSET + 16) {
-            pic_end_int(int_num - IRQ_OFFSET);
+            irq_ack(int_num - IRQ_OFFSET);
             return;
         }
 
 #if defined(__i386__)
         if (int_num >= 0x08 && int_num < 0x10) {
             u8 irq = (u8)(int_num - 0x08);
-            if (_pic_irq_in_service(irq))
-                pic_end_int(irq);
+            if (!irq_using_ioapic() && pic_irq_in_service(irq))
+                irq_ack(irq);
 
             return;
         }
 
         if (int_num >= 0x70 && int_num < 0x78) {
             u8 irq = (u8)(int_num - 0x70 + 8);
-            if (_pic_irq_in_service(irq))
-                pic_end_int(irq);
+            if (!irq_using_ioapic() && pic_irq_in_service(irq))
+                irq_ack(irq);
 
             return;
         }

@@ -35,4 +35,5 @@ bool bitmap_alloc_init(
 );
 
 void* bitmap_alloc_reserve(bitmap_allocator_t* alloc, size_t blocks);
+void* bitmap_alloc_reserve_high(bitmap_allocator_t* alloc, size_t blocks);
 bool bitmap_alloc_free(bitmap_allocator_t* alloc, void* ptr, size_t blocks);

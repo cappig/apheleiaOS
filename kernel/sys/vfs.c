@@ -512,3 +512,16 @@ ssize_t vfs_mmap(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t 
 
     return node->interface->mmap(node, buf, offset, len, flags);
 }
+
+ssize_t vfs_ioctl(vfs_node_t* node, u64 request, void* args) {
+    if (!node)
+        return -1;
+
+    if (!VFS_IS_DEVICE(node->type))
+        return -1;
+
+    if (!node->interface || !node->interface->ioctl)
+        return -1;
+
+    return node->interface->ioctl(node, request, args);
+}

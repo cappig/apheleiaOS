@@ -2,37 +2,20 @@
 
 #include <log/log.h>
 #include <sched/scheduler.h>
-
-#include "shell.h"
-
-static void _rr_thread(void* arg) {
-    (void)arg;
-    size_t ticks = 0;
-
-    for (;;) {
-        if ((ticks++ % 2048) == 0)
-            log_info("sched: rr tick %zu", ticks / 2048);
-
-        for (volatile size_t spin = 0; spin < 2000000; spin++)
-            ;
-
-        sched_yield();
-    }
-}
-
-static void _thread(void* arg) {
-    (void)arg;
-    log_info("init: starting shell");
-    shell_main();
-
-    for (;;)
-        sched_yield();
-}
+#include <sys/exec.h>
+#include <sys/tty.h>
 
 void init_spawn(void) {
-    if (!sched_create_kernel_thread("init", _thread, NULL))
-        log_warn("init: failed to spawn init thread");
+    log_info("init: spawning /sbin/init.elf");
+    sched_thread_t* init = user_spawn("/sbin/init.elf");
 
-    if (!sched_create_kernel_thread("rr", _rr_thread, NULL))
-        log_warn("init: failed to spawn rr thread");
+    if (!init) {
+        log_warn("init: failed to spawn /sbin/init.elf");
+        return;
+    }
+
+    log_info("init: spawned pid %ld", (long)init->pid);
+    tty_set_current(TTY_USER_TO_SCREEN(0));
+    sched_make_runnable(init);
+    log_debug("init: marked pid %ld runnable", (long)init->pid);
 }

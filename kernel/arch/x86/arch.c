@@ -65,53 +65,10 @@ static uintptr_t _read_stack_ptr(void) {
     return sp;
 }
 
-static void _disable_apic_if_needed(void) {
-#if defined(__i386__)
-    u32 eflags = 0;
-    u32 eflags_toggled = 0;
-
-    asm volatile("pushfl\n\t"
-                 "popl %0\n\t"
-                 : "=r"(eflags));
-
-    eflags_toggled = eflags ^ (1u << 21);
-
-    asm volatile("pushl %0\n\t"
-                 "popfl\n\t"
-                 :
-                 : "r"(eflags_toggled));
-
-    asm volatile("pushfl\n\t"
-                 "popl %0\n\t"
-                 : "=r"(eflags_toggled));
-
-    bool has_cpuid = ((eflags ^ eflags_toggled) & (1u << 21)) != 0;
-
-    if (has_cpuid) {
-        cpuid_regs_t regs = {0};
-        cpuid(1, &regs);
-
-        bool has_msr = (regs.edx & (1u << 5)) != 0;
-        bool has_apic = (regs.edx & (1u << 9)) != 0;
-
-        log_debug("apic: cpuid=%u msr=%u apic=%u", (u32)has_cpuid, (u32)has_msr, (u32)has_apic);
-
-        if (has_msr && has_apic) {
-            u64 apic_base = read_msr(0x1B);
-            if (apic_base & (1ULL << 11)) {
-                log_debug("apic: disabling local apic");
-                write_msr(0x1B, apic_base & ~(1ULL << 11));
-            } else {
-                log_debug("apic: local apic already disabled");
-            }
-        }
-    }
-
-    // Route external interrupts through the PIC (IMCR).
+static void _route_irqs_to_pic(void) {
     outb(0x22, 0x70);
     u8 imcr = inb(0x23);
-    outb(0x23, (u8)(imcr | 0x01));
-#endif
+    outb(0x23, (u8)(imcr & ~0x01));
 }
 
 static void _cache_font(const boot_info_t* info) {
@@ -122,6 +79,85 @@ static void _cache_font(const boot_info_t* info) {
 
     strncpy(font_path, info->args.font, sizeof(font_path) - 1);
     font_path[sizeof(font_path) - 1] = '\0';
+}
+
+static void _page_fault_handler(int_state_t* state) {
+    u64 addr = read_cr2();
+    u64 code = state ? (u64)state->error_code : 0;
+    u64 cr3 = read_cr3();
+
+#if defined(__x86_64__)
+    if (state) {
+        log_fatal(
+            "page fault: addr=%#llx err=%#llx cr3=%#llx rip=%#llx rsp=%#llx cs=%#llx",
+            (unsigned long long)addr,
+            (unsigned long long)code,
+            (unsigned long long)cr3,
+            (unsigned long long)state->s_regs.rip,
+            (unsigned long long)state->s_regs.rsp,
+            (unsigned long long)state->s_regs.cs
+        );
+    } else {
+        log_fatal(
+            "page fault: addr=%#llx err=%#llx cr3=%#llx",
+            (unsigned long long)addr,
+            (unsigned long long)code,
+            (unsigned long long)cr3
+        );
+    }
+#else
+    if (state) {
+        log_fatal(
+            "page fault: addr=%#llx err=%#llx cr3=%#llx eip=%#llx esp=%#llx cs=%#llx",
+            (unsigned long long)addr,
+            (unsigned long long)code,
+            (unsigned long long)cr3,
+            (unsigned long long)state->s_regs.eip,
+            (unsigned long long)state->s_regs.esp,
+            (unsigned long long)state->s_regs.cs
+        );
+    } else {
+        log_fatal(
+            "page fault: addr=%#llx err=%#llx cr3=%#llx",
+            (unsigned long long)addr,
+            (unsigned long long)code,
+            (unsigned long long)cr3
+        );
+    }
+#endif
+    disable_interrupts();
+    halt();
+}
+
+static void _gp_fault_handler(int_state_t* state) {
+    u64 code = state ? (u64)state->error_code : 0;
+
+#if defined(__x86_64__)
+    if (state) {
+        log_fatal(
+            "general protection fault: err=%#llx rip=%#llx cs=%#llx",
+            (unsigned long long)code,
+            (unsigned long long)state->s_regs.rip,
+            (unsigned long long)state->s_regs.cs
+        );
+    } else {
+        log_fatal("general protection fault: err=%#llx", (unsigned long long)code);
+    }
+#else
+    if (state) {
+        log_fatal(
+            "general protection fault: err=%#llx eip=%#llx cs=%#llx",
+            (unsigned long long)code,
+            (unsigned long long)state->s_regs.eip,
+            (unsigned long long)state->s_regs.cs
+        );
+    } else {
+        log_fatal("general protection fault: err=%#llx", (unsigned long long)code);
+    }
+#endif
+
+    disable_interrupts();
+    halt();
 }
 
 static void _publish_framebuffer(const boot_info_t* info) {
@@ -179,20 +215,21 @@ void arch_init(void* boot_info) {
 #else
     log_info("apheleiaOS kernel (x86_32) booting");
 #endif
-
-    _disable_apic_if_needed();
+    _route_irqs_to_pic();
     gdt_init();
     tss_init(read_stack_ptr());
     cpu_init_boot();
     pic_init();
     idt_init();
+    set_int_handler(INT_PAGE_FAULT, _page_fault_handler);
+    set_int_handler(INT_GENERAL_PROTECTION_FAULT, _gp_fault_handler);
     pmm_init(&info->memory_map);
     heap_init();
     init_malloc();
+    acpi_init(info->acpi_root_ptr);
     tsc_init();
     irq_init();
     ps2_init();
-    acpi_init(info->acpi_root_ptr);
     pci_init();
     if (info->args.debug == DEBUG_ALL)
         dump_pci_devices();

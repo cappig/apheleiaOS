@@ -20,7 +20,7 @@
 extern void jump_to_kernel_32(u32 entry, u32 boot_info, u32 stack);
 extern void jump_to_kernel_64(u64 entry, u64 boot_info, u64 stack);
 
-static bool cpu_has_long_mode(void) {
+static bool _cpu_has_long_mode(void) {
     cpuid_regs_t regs = {0};
     cpuid(0x80000000, &regs);
 
@@ -31,7 +31,7 @@ static bool cpu_has_long_mode(void) {
     return (regs.edx & CPUID_EI_LM) != 0;
 }
 
-static u64 get_usable_top(const e820_map_t* map) {
+static u64 _get_usable_top(const e820_map_t* map) {
     u64 top = 0;
 
     for (size_t i = 0; i < map->count; i++) {
@@ -48,7 +48,7 @@ static u64 get_usable_top(const e820_map_t* map) {
     return top;
 }
 
-static elf_header_t* load_kernel_image(bool want_64, bool* is_64) {
+static elf_header_t* _load_kernel_image(bool want_64, bool* is_64) {
     const char* paths64[] = {"/boot/kernel64.elf", "/boot/kernel32.elf", "/boot/kernel.elf"};
     const char* paths32[] = {"/boot/kernel32.elf", "/boot/kernel.elf", "/boot/kernel64.elf"};
     const char** paths = want_64 ? paths64 : paths32;
@@ -86,9 +86,9 @@ static elf_header_t* load_kernel_image(bool want_64, bool* is_64) {
 }
 
 void load_kerenel(boot_info_t* info) {
-    bool want_64 = cpu_has_long_mode();
+    bool want_64 = _cpu_has_long_mode();
     bool is_64 = false;
-    elf_header_t* kernel = load_kernel_image(want_64, &is_64);
+    elf_header_t* kernel = _load_kernel_image(want_64, &is_64);
 
     if (!kernel)
         panic("No suitable kernel image found!");
@@ -100,7 +100,7 @@ void load_kerenel(boot_info_t* info) {
 
         u32 entry = load_elf_sections_32(kernel);
 
-        u64 mem_top = get_usable_top(&info->memory_map);
+        u64 mem_top = _get_usable_top(&info->memory_map);
         u32 phys_top = (mem_top > 0xffffffffULL) ? 0xffffffffU : (u32)mem_top;
 
         identity_map_32(phys_top, 0, false);
@@ -110,7 +110,7 @@ void load_kerenel(boot_info_t* info) {
         u32 stack_paddr = (u32)(uintptr_t)mmap_alloc_top(
             KERNEL_STACK_SIZE, E820_KERNEL, (size_t)(4 * KIB), phys_top
         );
-        u32 stack = stack_paddr;
+        u32 stack = stack_paddr + KERNEL_STACK_SIZE;
 
         u32 boot_info = (u32)(uintptr_t)info;
 
@@ -130,7 +130,7 @@ void load_kerenel(boot_info_t* info) {
         init_paging_64();
 
         u64 stack_paddr = (u64)(uintptr_t)mmap_alloc(KERNEL_STACK_SIZE, E820_KERNEL, 0);
-        u64 stack = stack_paddr + LINEAR_MAP_OFFSET_64;
+        u64 stack = stack_paddr + KERNEL_STACK_SIZE + LINEAR_MAP_OFFSET_64;
 
         u64 boot_info = (uintptr_t)info + LINEAR_MAP_OFFSET_64;
 

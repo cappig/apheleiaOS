@@ -238,8 +238,9 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
     alloc->word_count = DIV_ROUND_UP(alloc->block_count, BITMAP_WORD_SIZE);
 
     size_t bitmap_bytes = DIV_ROUND_UP(alloc->block_count, CHAR_BIT);
+    size_t bitmap_size = ALIGN(bitmap_bytes, block_size);
 
-    if (mem_size <= bitmap_bytes)
+    if (mem_size <= bitmap_size)
         return false;
 
     // Find some space for the bitmap (low to avoid clobbering high allocations)
@@ -263,19 +264,19 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
         if (top > max_addr)
             top = max_addr;
 
-        u64 aligned = ALIGN(base, 1);
+        u64 aligned = ALIGN(base, block_size);
 
-        if (aligned + bitmap_bytes > top)
+        if (aligned + bitmap_size > top)
             continue;
 
         bitmap_addr = (void*)(uintptr_t)aligned;
 
         // Shrink the current entry to account for the bitmap allocation
-        u64 used_end = aligned + bitmap_bytes;
+        u64 used_end = aligned + bitmap_size;
         current->address = used_end;
         current->size = top - used_end;
 
-        mmap_add_entry(mmap, aligned, bitmap_bytes, E820_ALLOC);
+        mmap_add_entry(mmap, aligned, bitmap_size, E820_ALLOC);
         clean_mmap(mmap);
         break;
     }
@@ -292,7 +293,7 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
 #endif
 
     // Mark the whole bitmap as used
-    memset(alloc->bitmap, (unsigned int)-1, bitmap_bytes);
+    memset(alloc->bitmap, (unsigned int)-1, bitmap_size);
     alloc->free_blocks = 0;
 
     for (size_t i = 0; i < mmap->count; i++) {

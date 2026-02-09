@@ -115,5 +115,6 @@ bool vfs_unmount(vfs_node_t* mount, bool destroy_tree);
 ssize_t vfs_read(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_write(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_mmap(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
+ssize_t vfs_ioctl(vfs_node_t* node, u64 request, void* args);
 
 void dump_vfs(void);

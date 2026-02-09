@@ -937,7 +937,11 @@ ssize_t arch_console_write_screen(size_t screen, const void* buf, size_t len) {
     if (len == 0)
         return 0;
 
-    if (screen == TTY_CONSOLE)
+    bool mirror = (screen == TTY_CONSOLE);
+    if (!mirror && console_state.ready && screen == console_state.active_screen)
+        mirror = true;
+
+    if (mirror)
         send_serial_sized_string(SERIAL_COM1, buf, len);
 
     _write_screen(screen, buf, len);
@@ -950,6 +954,18 @@ ssize_t arch_console_write(const void* buf, size_t len) {
 
 bool arch_console_set_active(size_t screen) {
     return _set_active(screen);
+}
+
+bool arch_console_get_size(size_t* cols, size_t* rows) {
+    if (!cols || !rows)
+        return false;
+
+    if (!console_state.ready || console_state.mode == CONSOLE_DISABLED)
+        return false;
+
+    *cols = console_state.cols;
+    *rows = console_state.rows;
+    return true;
 }
 
 ssize_t arch_tty_read(void* buf, size_t len) {

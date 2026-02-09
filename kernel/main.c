@@ -8,11 +8,13 @@
 #include <sys/init.h>
 #include <sys/psf.h>
 #include <sys/symbols.h>
+#include <sys/syscall.h>
 #include <sys/vfs.h>
 
 NORETURN void kernel_main(void* boot_info) {
     arch_init(boot_info);
     scheduler_init();
+    syscall_init();
     vfs_init();
     ext2fs_init();
 

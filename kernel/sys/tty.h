@@ -30,3 +30,4 @@ bool tty_set_current(size_t index);
 
 ssize_t tty_read_handle(const tty_handle_t* handle, void* buf, size_t len);
 ssize_t tty_write_handle(const tty_handle_t* handle, const void* buf, size_t len);
+ssize_t tty_ioctl_handle(const tty_handle_t* handle, u64 request, void* args);
