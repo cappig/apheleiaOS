@@ -5,10 +5,9 @@
 #include <base/types.h>
 #include <stddef.h>
 #include <string.h>
+#include <sys/console_font.h>
 #include <x86/serial.h>
 #include <x86/vga.h>
-
-#include "font.h"
 
 typedef enum {
     CONSOLE_DISABLED = 0,
@@ -34,12 +33,19 @@ typedef struct {
     u8 bg_vga;
     u32 fg_rgb;
     u32 bg_rgb;
+    const console_font_t* font;
+    u32 font_width;
+    u32 font_height;
+    u32 font_row_bytes;
+    u32 font_glyph_bytes;
     bool bright;
     bool use_phys_window;
     bool ready;
 } console_state_t;
 
 static console_state_t console_state = {0};
+
+static void _clear_vesa(void);
 
 static const u32 ansi_rgb[16] = {
     0x000000,
@@ -143,6 +149,39 @@ static void _apply_sgr(int code) {
         _set_bg((u8)(code - 100), true);
 }
 
+static void _use_font(const console_font_t* font) {
+    if (!font || !font->glyphs || !font->glyph_width || !font->glyph_height)
+        return;
+
+    console_state.font = font;
+    console_state.font_width = font->glyph_width;
+    console_state.font_height = font->glyph_height;
+    console_state.font_row_bytes = console_font_row_bytes(font);
+    console_state.font_glyph_bytes = console_font_glyph_bytes(font);
+}
+
+void console_set_font(const console_font_t* font) {
+    if (!font)
+        return;
+
+    _use_font(font);
+
+    if (!console_state.ready || console_state.mode != CONSOLE_VESA)
+        return;
+
+    console_state.cols = console_state.width / console_state.font_width;
+    console_state.rows = console_state.height / console_state.font_height;
+    if (!console_state.cols || !console_state.rows) {
+        _use_font(&console_default_font);
+        console_state.cols = console_state.width / console_state.font_width;
+        console_state.rows = console_state.height / console_state.font_height;
+    }
+
+    console_state.cursor_x = 0;
+    console_state.cursor_y = 0;
+    _clear_vesa();
+}
+
 static u8* _map_range(size_t offset, size_t size) {
     if (!size)
         return NULL;
@@ -207,11 +246,11 @@ static void _scroll_vga(void) {
 }
 
 static void _scroll_vesa(void) {
-    if (!console_state.fb_size)
+    if (!console_state.fb_size || !console_state.font_height)
         return;
 
-    size_t line_bytes = console_state.pitch * CONSOLE_FONT_HEIGHT;
-    size_t move_bytes = console_state.pitch * (console_state.height - CONSOLE_FONT_HEIGHT);
+    size_t line_bytes = console_state.pitch * console_state.font_height;
+    size_t move_bytes = console_state.pitch * (console_state.height - console_state.font_height);
 
     u8* fb = _map_range(0, console_state.fb_size);
     if (!fb)
@@ -246,30 +285,34 @@ static void _write_pixel(u8* dst, u32 color) {
 }
 
 static void _draw_char_vesa(char ch, size_t col, size_t row) {
-    if (!console_state.fb_size)
+    if (!console_state.fb_size || !console_state.font || !console_state.font_width ||
+        !console_state.font_height)
         return;
 
-    size_t x = col * CONSOLE_FONT_WIDTH;
-    size_t y = row * CONSOLE_FONT_HEIGHT;
-    size_t width_bytes = CONSOLE_FONT_WIDTH * console_state.bytes_per_pixel;
-    size_t map_size = (CONSOLE_FONT_HEIGHT - 1) * console_state.pitch + width_bytes;
+    size_t x = col * console_state.font_width;
+    size_t y = row * console_state.font_height;
+    size_t width_bytes = console_state.font_width * console_state.bytes_per_pixel;
+    size_t map_size = (console_state.font_height - 1) * console_state.pitch + width_bytes;
 
-    u8 index = (ch < 32 || ch > 126) ? 0 : (u8)(ch - 32);
-    const u8* glyph = console_font_bitmap[index];
+    u32 first = console_state.font->first_char;
+    u32 last = console_state.font->first_char + console_state.font->glyph_count - 1;
+    u32 index = (ch < (char)first || (u32)ch > last) ? 0 : (u32)ch - first;
+    const u8* glyph = console_state.font->glyphs + index * console_state.font_glyph_bytes;
 
     size_t offset = y * console_state.pitch + x * console_state.bytes_per_pixel;
     u8* base = _map_range(offset, map_size);
     if (!base)
         return;
 
-    for (size_t gy = 0; gy < CONSOLE_FONT_HEIGHT; gy++) {
-        u8 bits = glyph[gy];
-        u8* row_ptr = base + gy * console_state.pitch;
+    for (size_t gy = 0; gy < console_state.font_height; gy++) {
+        const u8* row_ptr = glyph + gy * console_state.font_row_bytes;
+        u8* row_base = base + gy * console_state.pitch;
 
-        for (size_t gx = 0; gx < CONSOLE_FONT_WIDTH; gx++) {
-            u8 mask = (u8)(1 << (7 - gx));
+        for (size_t gx = 0; gx < console_state.font_width; gx++) {
+            u8 mask = (u8)(0x80 >> (gx & 7));
+            u8 bits = row_ptr[gx / 8];
             u32 color = (bits & mask) ? console_state.fg_rgb : console_state.bg_rgb;
-            _write_pixel(row_ptr + gx * console_state.bytes_per_pixel, color);
+            console_write_pixel(row_base + gx * console_state.bytes_per_pixel, color);
         }
     }
 
@@ -428,7 +471,8 @@ void console_init(const boot_info_t* info) {
         return;
 
     memset(&console_state, 0, sizeof(console_state));
-    _reset_colors();
+    console_reset_colors();
+    _use_font(&console_default_font);
 
     if (info->video.mode == VIDEO_GRAPHICS && info->video.framebuffer && info->video.width &&
         info->video.height && info->video.bytes_per_pixel) {
@@ -448,8 +492,8 @@ void console_init(const boot_info_t* info) {
             console_state.pitch = pitch;
             console_state.bytes_per_pixel = (u8)info->video.bytes_per_pixel;
 
-            console_state.cols = console_state.width / CONSOLE_FONT_WIDTH;
-            console_state.rows = console_state.height / CONSOLE_FONT_HEIGHT;
+            console_state.cols = console_state.width / console_state.font_width;
+            console_state.rows = console_state.height / console_state.font_height;
             if (!console_state.cols || !console_state.rows) {
                 memset(&console_state, 0, sizeof(console_state));
                 goto fallback_vga;
@@ -473,8 +517,8 @@ void console_init(const boot_info_t* info) {
             console_state.pitch = pitch;
             console_state.bytes_per_pixel = (u8)info->video.bytes_per_pixel;
 
-            console_state.cols = console_state.width / CONSOLE_FONT_WIDTH;
-            console_state.rows = console_state.height / CONSOLE_FONT_HEIGHT;
+            console_state.cols = console_state.width / console_state.font_width;
+            console_state.rows = console_state.height / console_state.font_height;
             if (!console_state.cols || !console_state.rows) {
                 arch_phys_unmap(console_state.fb, size);
                 memset(&console_state, 0, sizeof(console_state));
