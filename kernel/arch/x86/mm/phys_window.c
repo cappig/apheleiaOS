@@ -2,6 +2,7 @@
 #include <base/macros.h>
 #include <base/types.h>
 #include <stddef.h>
+#include <string.h>
 #include <sys/panic.h>
 #include <x86/asm.h>
 #include <x86/boot.h>
@@ -15,6 +16,22 @@ void* arch_phys_map(u64 paddr, size_t size) {
 void arch_phys_unmap(void* vaddr, size_t size) {
     (void)vaddr;
     (void)size;
+}
+
+bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
+    if (!size)
+        return true;
+
+    void* dst = arch_phys_map(dst_paddr, size);
+    void* src = arch_phys_map(src_paddr, size);
+
+    if (!dst || !src)
+        return false;
+
+    memcpy(dst, src, size);
+    arch_phys_unmap(src, size);
+    arch_phys_unmap(dst, size);
+    return true;
 }
 #else
 #include <sched/scheduler.h>
@@ -137,5 +154,38 @@ void arch_phys_unmap(void* vaddr, size_t size) {
     for (size_t i = 0; i < prev.pages; i++) {
         map_window_page(map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, PT_WRITE);
     }
+}
+
+bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
+    if (!size)
+        return true;
+
+    static const size_t kChunk = 256;
+    u8 bounce[kChunk];
+
+    size_t offset = 0;
+    while (offset < size) {
+        size_t chunk = size - offset;
+        if (chunk > kChunk)
+            chunk = kChunk;
+
+        void* src = arch_phys_map(src_paddr + offset, chunk);
+        if (!src)
+            return false;
+
+        memcpy(bounce, src, chunk);
+        arch_phys_unmap(src, chunk);
+
+        void* dst = arch_phys_map(dst_paddr + offset, chunk);
+        if (!dst)
+            return false;
+
+        memcpy(dst, bounce, chunk);
+        arch_phys_unmap(dst, chunk);
+
+        offset += chunk;
+    }
+
+    return true;
 }
 #endif

@@ -1,0 +1,4 @@
+# apheleiaOS rc
+
+echo rc: booting system
+uname

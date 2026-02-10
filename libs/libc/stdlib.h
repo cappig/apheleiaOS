@@ -22,9 +22,9 @@ typedef struct {
 #include <libc_ext/stdlib.h>
 #endif
 
-// #ifndef _KERNEL
-// #include <libc_usr/stdlib.h>
-// #endif
+#ifndef _KERNEL
+#include <libc_usr/stdlib.h>
+#endif
 
 // We can hook external allocators here. We use this in the kernel/bootloader
 #ifdef EXTERNAL_ALLOC

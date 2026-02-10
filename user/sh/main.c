@@ -1,3 +1,9 @@
+#include <ctype.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -155,7 +161,7 @@ static void strip_newline(char* buf) {
         buf[len - 1] = '\0';
 }
 
-static int read_line(char* buf, size_t len) {
+static int read_line_fd(int fd, char* buf, size_t len, bool interactive) {
     if (!buf || !len)
         return -1;
 
@@ -163,10 +169,18 @@ static int read_line(char* buf, size_t len) {
     bool cr_seen = false;
 
     while (pos + 1 < len) {
-        char ch = 0;
-        ssize_t read_count = read(STDIN_FILENO, &ch, 1);
+        if (interactive && got_sigint) {
+            got_sigint = 0;
+            return -1;
+        }
 
-        if (read_count <= 0)
+        char ch = 0;
+        ssize_t read_count = read(fd, &ch, 1);
+
+        if (read_count == 0)
+            break;
+
+        if (read_count < 0)
             continue;
 
         if (ch == '\r') {
@@ -185,12 +199,249 @@ static int read_line(char* buf, size_t len) {
             break;
     }
 
+    if (pos == 0 && !interactive)
+        return -1;
+
     buf[pos] = '\0';
     return 0;
 }
 
-int main(void) {
+static int split_line(char* line, char** argv, int max) {
+    if (!line || !argv || max <= 0)
+        return 0;
+
+    int argc = 0;
+    char* cursor = line;
+
+    while (*cursor && argc < max - 1) {
+        while (*cursor && isspace((unsigned char)*cursor))
+            cursor++;
+
+        if (!*cursor)
+            break;
+
+        argv[argc++] = cursor;
+
+        while (*cursor && !isspace((unsigned char)*cursor))
+            cursor++;
+
+        if (*cursor)
+            *cursor++ = '\0';
+    }
+
+    argv[argc] = NULL;
+    return argc;
+}
+
+static const char* sh_env_path(void) {
+    const char* value = sh_env_get("PATH");
+    if (value && value[0])
+        return value;
+
+    return "/sbin";
+}
+
+static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
+    if (!cmd || !cmd[0])
+        return false;
+
+    if (strchr(cmd, '/')) {
+        execve(cmd, argv, NULL);
+        return false;
+    }
+
+    const char* path = sh_env_path();
+    const char* cursor = path;
+    char full[128];
+
+    while (*cursor) {
+        const char* next = strchr(cursor, ':');
+        size_t len = next ? (size_t)(next - cursor) : strlen(cursor);
+        if (len > 0) {
+            if (len >= sizeof(full))
+                len = sizeof(full) - 1;
+            memcpy(full, cursor, len);
+            full[len] = '\0';
+
+            if (full[len - 1] == '/')
+                snprintf(full + len - 1, sizeof(full) - (len - 1), "/%s", cmd);
+            else
+                snprintf(full + len, sizeof(full) - len, "/%s", cmd);
+
+            execve(full, argv, NULL);
+        }
+
+        if (!next)
+            break;
+        cursor = next + 1;
+    }
+
+    return false;
+}
+
+static int handle_builtin(int argc, char** argv) {
+    if (argc <= 0)
+        return 0;
+
+    if (!strcmp(argv[0], "exit")) {
+        _exit(0);
+    }
+
+    if (!strcmp(argv[0], "help")) {
+        write_str("builtins: help, echo, exit, set, unset, env, cd\n");
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "env")) {
+        sh_env_print();
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "set")) {
+        if (argc == 1) {
+            sh_env_print();
+            return 1;
+        }
+
+        char* eq = strchr(argv[1], '=');
+        if (eq) {
+            *eq = '\0';
+            sh_env_set(argv[1], eq + 1);
+            return 1;
+        }
+
+        if (argc >= 3) {
+            sh_env_set(argv[1], argv[2]);
+            return 1;
+        }
+
+        write_str("set: usage: set NAME=VALUE\n");
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "unset")) {
+        if (argc < 2) {
+            write_str("unset: usage: unset NAME\n");
+            return 1;
+        }
+
+        sh_env_unset(argv[1]);
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "echo")) {
+        for (int i = 1; i < argc; i++) {
+            char expanded[SH_EXPAND_MAX] = {0};
+            sh_expand_arg(argv[i], expanded, sizeof(expanded));
+            write_str(expanded);
+            if (i + 1 < argc)
+                write_str(" ");
+        }
+        write_str("\n");
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "cd")) {
+        const char* target = "/";
+        if (argc >= 2 && argv[1] && argv[1][0])
+            target = argv[1];
+
+        if (chdir(target) < 0) {
+            write_str("cd: failed\n");
+            return 1;
+        }
+
+        sh_update_pwd();
+        return 1;
+    }
+
+    return 0;
+}
+
+static int run_command(char* line, char** args, char expanded[][SH_EXPAND_MAX], char** exec_args) {
+    strip_newline(line);
+
+    if (!line[0])
+        return 0;
+
+    int cmd_argc = split_line(line, args, SH_MAX_ARGS);
+    if (!cmd_argc)
+        return 0;
+
+    if (handle_builtin(cmd_argc, args))
+        return 0;
+
+    for (int i = 0; i < cmd_argc; i++) {
+        sh_expand_arg(args[i], expanded[i], sizeof(expanded[i]));
+        exec_args[i] = expanded[i];
+    }
+    exec_args[cmd_argc] = NULL;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        sh_exec_in_path(exec_args[0], exec_args);
+        write_str("sh: exec failed\n");
+        _exit(1);
+    }
+
+    if (pid < 0) {
+        write_str("sh: fork failed\n");
+        return -1;
+    }
+
+    tty_set_pgrp(pid);
+    int status = 0;
+    wait(pid, &status);
+    tty_set_pgrp(getpid());
+    return 0;
+}
+
+static int run_script(const char* path) {
+    if (!path || !path[0])
+        return -1;
+
+    int fd = open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        write_str("sh: failed to open script\n");
+        return -1;
+    }
+
     char line[256];
+    char* args[SH_MAX_ARGS];
+    char expanded[SH_MAX_ARGS][SH_EXPAND_MAX];
+    char* exec_args[SH_MAX_ARGS];
+
+    while (read_line_fd(fd, line, sizeof(line), false) == 0) {
+        char* cursor = line;
+        while (*cursor && isspace((unsigned char)*cursor))
+            cursor++;
+
+        if (!*cursor || *cursor == '#')
+            continue;
+
+        run_command(cursor, args, expanded, exec_args);
+    }
+
+    close(fd);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    char line[256];
+
+    signal(SIGINT, sigint_handler);
+    sh_env_set("PATH", "/sbin");
+    sh_env_set("PWD", "/");
+    sh_update_pwd();
+
+    if (argc > 2 && !strcmp(argv[1], "-c")) {
+        char cmdline[256];
+        snprintf(cmdline, sizeof(cmdline), "%s", argv[2]);
+        return run_command(cmdline, args, expanded, exec_args);
+    }
+
+    if (argc > 1)
+        return run_script(argv[1]);
 
     write_str("apheleiaOS sh\n");
     tty_set_pgrp(getpid());
@@ -198,42 +449,12 @@ int main(void) {
     for (;;) {
         print_prompt();
 
-        if (read_line(line, sizeof(line)) < 0)
-            continue;
-
-        strip_newline(line);
-
-        if (!line[0])
-            continue;
-
-        if (!strcmp(line, "exit")) {
-            _exit(0);
-        } else if (!strcmp(line, "help")) {
-            write_str("builtins: help, echo, exit\n");
-        } else if (!strncmp(line, "echo ", 5)) {
-            write_str(line + 5);
+        if (read_line_fd(STDIN_FILENO, line, sizeof(line), true) < 0) {
             write_str("\n");
-        } else {
-            write_str("unknown command\n");
-        }
-        exec_args[cmd_argc] = NULL;
-
-        pid_t pid = fork();
-        if (pid == 0) {
-            sh_exec_in_path(exec_args[0], exec_args);
-            write_str("sh: exec failed\n");
-            _exit(1);
-        }
-
-        if (pid < 0) {
-            write_str("sh: fork failed\n");
             continue;
         }
 
-        tty_set_pgrp(pid);
-        int status = 0;
-        wait(pid, &status);
-        tty_set_pgrp(getpid());
+        run_command(line, args, expanded, exec_args);
     }
 
     return 0;

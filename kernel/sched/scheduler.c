@@ -30,7 +30,10 @@ static pid_t next_pid = 1;
 static bool sched_running = false;
 static size_t ticks_left = SCHED_SLICE;
 
+static void _enqueue_thread(sched_thread_t* thread);
 static void _sched_reap(void);
+static void _sched_wake_sleepers(u64 now);
+static void _wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread);
 
 static void _add_all_thread(sched_thread_t* thread) {
     if (!thread || !all_list || thread->in_all_list)
@@ -72,7 +75,7 @@ static NORETURN void _thread_trampoline(void) {
 
 static void _idle_entry(UNUSED void* arg) {
     for (;;) {
-        sched_reap();
+        _sched_reap();
         arch_cpu_wait();
     }
 }
@@ -274,20 +277,8 @@ bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write) 
 
     if (refs > 1) {
         uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(1);
-        void* src = arch_phys_map(old_paddr, PAGE_4KIB);
-        void* dst = arch_phys_map(new_paddr, PAGE_4KIB);
-
-        if (!src || !dst) {
-            if (src)
-                arch_phys_unmap(src, PAGE_4KIB);
-            if (dst)
-                arch_phys_unmap(dst, PAGE_4KIB);
+        if (!arch_phys_copy(new_paddr, old_paddr, PAGE_4KIB))
             return false;
-        }
-
-        memcpy(dst, src, PAGE_4KIB);
-        arch_phys_unmap(src, PAGE_4KIB);
-        arch_phys_unmap(dst, PAGE_4KIB);
 
         *entry = 0;
         arch_page_set_paddr(entry, new_paddr);
@@ -669,9 +660,12 @@ pid_t sched_wait(pid_t pid, int* status) {
 
     for (;;) {
         sched_thread_t* found = NULL;
+        unsigned long flags = arch_irq_save();
 
-        if (!zombie_list)
+        if (!zombie_list) {
+            arch_irq_restore(flags);
             return -1;
+        }
 
         ll_foreach(node, zombie_list) {
             sched_thread_t* thread = node->data;
@@ -695,15 +689,33 @@ pid_t sched_wait(pid_t pid, int* status) {
             list_remove(zombie_list, &found->zombie_node);
             found->in_zombie_list = false;
 
+            arch_irq_restore(flags);
+
             pid_t ret = found->pid;
             _destroy_thread(found);
             return ret;
         }
 
-        if (!sched_running)
+        if (!sched_running) {
+            arch_irq_restore(flags);
             return -1;
+        }
 
-        sched_block(&current->wait_queue);
+        if (current->in_run_queue && run_queue) {
+            list_remove(run_queue, &current->run_node);
+            current->in_run_queue = false;
+        }
+
+        current->wake_tick = 0;
+        current->state = THREAD_SLEEPING;
+        _wait_queue_append(&current->wait_queue, current);
+
+        arch_irq_restore(flags);
+
+        while (current->state == THREAD_SLEEPING) {
+            sched_yield();
+            arch_cpu_wait();
+        }
     }
 }
 
@@ -817,7 +829,7 @@ void sched_tick(arch_int_state_t* state) {
     if (!sched_running || !state || !current)
         return;
 
-    sched_reap();
+    _sched_reap();
     _sched_wake_sleepers(arch_timer_ticks());
 
     current->context = (uintptr_t)state;
