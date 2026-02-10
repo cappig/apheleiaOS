@@ -16,9 +16,21 @@ BOOT_SIZE_SECTORS=$(((BOOT_SIZE_BYTES + SECTOR_SIZE - 1) / SECTOR_SIZE))
 
 # Create ext2 rootfs
 TMP_EXT2=$(mktemp)
+TMP_ROOT=$(mktemp -d)
 truncate -s 16M "$TMP_EXT2"
 
-mkfs.ext2 -q -b 1024 -d "$ROOTFS" "$TMP_EXT2"
+cp -a "$ROOTFS"/. "$TMP_ROOT"/
+
+if command -v fakeroot >/dev/null 2>&1; then
+    fakeroot sh -c "
+        chown 0:0 \"$TMP_ROOT/etc/passwd\" \"$TMP_ROOT/etc/group\" \"$TMP_ROOT/etc/loader.conf\" \"$TMP_ROOT/etc/shadow\" 2>/dev/null || true
+        chmod 0644 \"$TMP_ROOT/etc/passwd\" \"$TMP_ROOT/etc/group\" \"$TMP_ROOT/etc/loader.conf\" 2>/dev/null || true
+        chmod 0600 \"$TMP_ROOT/etc/shadow\" 2>/dev/null || true
+        mkfs.ext2 -q -b 1024 -d \"$TMP_ROOT\" \"$TMP_EXT2\"
+    "
+else
+    mkfs.ext2 -q -b 1024 -d "$TMP_ROOT" "$TMP_EXT2"
+fi
 
 resize2fs -M "$TMP_EXT2" >/dev/null 2>&1
 
@@ -41,5 +53,6 @@ dd if="$BOOT_BIN" of="$IMG" bs=$SECTOR_SIZE seek=$BOOT_START conv=notrunc status
 dd if="$TMP_EXT2" of="$IMG" bs=$SECTOR_SIZE seek=$EXT2_START conv=notrunc status=none
 
 rm "$TMP_EXT2"
+rm -rf "$TMP_ROOT"
 
 # echo "Image $IMG created successfully"

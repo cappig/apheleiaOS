@@ -12,12 +12,32 @@ ssize_t write(int fd, const void* buf, size_t count) {
     return (ssize_t)syscall3(SYS_WRITE, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count);
 }
 
+ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
+    return (ssize_t)syscall4(
+        SYS_PREAD, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset
+    );
+}
+
+ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
+    return (ssize_t)syscall4(
+        SYS_PWRITE, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset
+    );
+}
+
 int open(const char* path, int flags, mode_t mode) {
     return (int)syscall3(SYS_OPEN, (uintptr_t)path, (uintptr_t)flags, (uintptr_t)mode);
 }
 
 int close(int fd) {
     return (int)syscall1(SYS_CLOSE, (uintptr_t)fd);
+}
+
+int mkdir(const char* path, mode_t mode) {
+    return (int)syscall2(SYS_MKDIR, (uintptr_t)path, (uintptr_t)mode);
+}
+
+int access(const char* path, int mode) {
+    return (int)syscall2(SYS_ACCESS, (uintptr_t)path, (uintptr_t)mode);
 }
 
 off_t lseek(int fd, off_t offset, int whence) {
@@ -71,6 +91,18 @@ pid_t getpid(void) {
 
 pid_t getppid(void) {
     return (pid_t)syscall0(SYS_GETPPID);
+}
+
+pid_t getpgid(pid_t pid) {
+    return (pid_t)syscall1(SYS_GETPGID, (uintptr_t)pid);
+}
+
+int setpgid(pid_t pid, pid_t pgid) {
+    return (int)syscall2(SYS_SETPGID, (uintptr_t)pid, (uintptr_t)pgid);
+}
+
+pid_t setsid(void) {
+    return (pid_t)syscall0(SYS_SETSID);
 }
 
 uid_t getuid(void) {

@@ -64,6 +64,8 @@ typedef struct sched_thread {
     bool user_thread;
     pid_t pid;
     pid_t ppid;
+    pid_t pgid;
+    pid_t sid;
     uid_t uid;
     gid_t gid;
     int exit_code;

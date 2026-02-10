@@ -3,7 +3,9 @@
 #include <shadow.h>
 #include <stdbool.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/types.h>
+#include <termios.h>
 #include <unistd.h>
 
 static ssize_t write_str(const char* str) {
@@ -54,6 +56,19 @@ static int read_line(char* buf, size_t len) {
     return 0;
 }
 
+static bool tty_set_echo(bool enable) {
+    termios_t tos;
+    if (ioctl(STDIN_FILENO, TCGETS, &tos) < 0)
+        return false;
+
+    if (enable)
+        tos.c_lflag |= ECHO;
+    else
+        tos.c_lflag &= ~ECHO;
+
+    return ioctl(STDIN_FILENO, TCSETS, &tos) == 0;
+}
+
 int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
@@ -61,6 +76,8 @@ int main(int argc, char** argv) {
     for (;;) {
         char name[32] = {0};
         char pass[64] = {0};
+        pid_t pid = getpid();
+        ioctl(STDIN_FILENO, TIOCSPGRP, &pid);
 
         write_str("login: ");
         if (read_line(name, sizeof(name)) < 0)
@@ -84,8 +101,14 @@ int main(int argc, char** argv) {
         }
 
         write_str("Password: ");
-        if (read_line(pass, sizeof(pass)) < 0)
+        tty_set_echo(false);
+        if (read_line(pass, sizeof(pass)) < 0) {
+            tty_set_echo(true);
+            write_str("\n");
             continue;
+        }
+        tty_set_echo(true);
+        write_str("\n");
 
         strip_newline(pass);
 

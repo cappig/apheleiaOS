@@ -374,7 +374,10 @@ bool vfs_access(vfs_node_t* vnode, uid_t uid, gid_t gid, int mode) {
     if (!vnode)
         return false;
 
-    vnode = _resolve_link(vnode);
+    if (uid == 0)
+        return true;
+
+    vnode = vfs_resolve_link(vnode);
     if (!vnode)
         return false;
 

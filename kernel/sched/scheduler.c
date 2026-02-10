@@ -489,6 +489,13 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     thread->user_thread = user_thread;
     thread->pid = next_pid++;
     thread->ppid = 0;
+    if (current && current->pid != 0) {
+        thread->pgid = current->pgid;
+        thread->sid = current->sid;
+    } else {
+        thread->pgid = thread->pid;
+        thread->sid = thread->pid;
+    }
     thread->uid = current ? current->uid : 0;
     thread->gid = current ? current->gid : 0;
     thread->stack_size = SCHED_STACK_SIZE;
@@ -550,6 +557,8 @@ void scheduler_init(void) {
     current->is_bootstrap = true;
     current->pid = 0;
     current->ppid = 0;
+    current->pgid = 0;
+    current->sid = 0;
     current->uid = 0;
     current->gid = 0;
     current->vm_space = kernel_vm;
@@ -589,6 +598,8 @@ pid_t sched_fork(arch_int_state_t* state) {
         return -1;
 
     child->ppid = current->pid;
+    child->pgid = current->pgid;
+    child->sid = current->sid;
     child->user_stack_base = current->user_stack_base;
     child->user_stack_size = current->user_stack_size;
 

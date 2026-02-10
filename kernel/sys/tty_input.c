@@ -20,6 +20,18 @@ static bool tty_termios_ready[TTY_SCREEN_COUNT] = {0};
 static bool tty_literal_next[TTY_SCREEN_COUNT] = {0};
 static bool tty_cr_pending[TTY_SCREEN_COUNT] = {0};
 
+static void _tty_signal_flush(size_t screen, ring_buffer_t* buffer, const termios_t* tos) {
+    if (!tos || (tos->c_lflag & NOFLSH))
+        return;
+
+    if (buffer)
+        ring_buffer_clear(buffer);
+
+    tty_line_len[screen] = 0;
+    tty_literal_next[screen] = false;
+    tty_cr_pending[screen] = false;
+}
+
 static void _tty_init_screen_state(size_t screen) {
     if (screen >= TTY_SCREEN_COUNT || tty_termios_ready[screen])
         return;
@@ -128,7 +140,34 @@ static void _tty_echo_char(size_t screen, const termios_t* tos, char ch, bool fo
     arch_console_write_screen(screen, &ch, 1);
 }
 
-static void _tty_flush_line(size_t screen, ring_buffer_t* buffer, bool add_newline, bool echo_newline) {
+static void _tty_erase_chars(size_t screen, const termios_t* tos, size_t count) {
+    if (!tos || count == 0)
+        return;
+
+    if (!(tos->c_lflag & ECHO))
+        return;
+
+    for (size_t i = 0; i < count; i++) {
+        if (tos->c_lflag & ECHOE)
+            tty_echo_backspace(screen);
+        else
+            tty_echo_char(screen, tos, (char)tos->c_cc[VERASE], false);
+    }
+}
+
+static void _tty_reprint_line(size_t screen, const termios_t* tos) {
+    if (!tos || !(tos->c_lflag & ECHO))
+        return;
+
+    char nl = '\n';
+    arch_console_write_screen(screen, &nl, 1);
+
+    for (size_t i = 0; i < tty_line_len[screen]; i++)
+        tty_echo_char(screen, tos, tty_line_buf[screen][i], false);
+}
+
+static void
+_tty_flush_line(size_t screen, ring_buffer_t* buffer, bool add_newline, bool echo_newline) {
     if (!buffer || screen >= TTY_SCREEN_COUNT)
         return;
 
@@ -149,6 +188,81 @@ static void _tty_flush_line(size_t screen, ring_buffer_t* buffer, bool add_newli
     }
 
     sched_wake_one(&tty_wait[screen]);
+}
+
+static ssize_t
+_read_raw(size_t screen, ring_buffer_t* buffer, void* buf, size_t len, const termios_t* tos) {
+    if (!buffer || !buf || !tos || len == 0)
+        return 0;
+
+    size_t vmin = tos->c_cc[VMIN];
+    size_t vtime = tos->c_cc[VTIME];
+
+    if (vmin > len)
+        vmin = len;
+
+    if (vmin == 0 && vtime == 0) {
+        unsigned long flags = arch_irq_save();
+        size_t popped = ring_buffer_pop_array(buffer, buf, len);
+        arch_irq_restore(flags);
+        return (ssize_t)popped;
+    }
+
+    size_t total = 0;
+    bool timer_started = false;
+    u64 timer_start = 0;
+    u64 timeout_ticks = 0;
+
+    if (vtime) {
+        u32 hz = arch_timer_hz();
+        timeout_ticks = ((u64)vtime * (u64)hz + 9) / 10;
+        if (timeout_ticks == 0)
+            timeout_ticks = 1;
+    }
+
+    for (;;) {
+        unsigned long flags = arch_irq_save();
+        size_t popped = ring_buffer_pop_array(buffer, (u8*)buf + total, len - total);
+        arch_irq_restore(flags);
+
+        if (popped) {
+            total += popped;
+
+            if (!timer_started && timeout_ticks) {
+                timer_started = true;
+                timer_start = arch_timer_ticks();
+            }
+
+            if (vmin == 0)
+                return (ssize_t)total;
+
+            if (total >= vmin)
+                return (ssize_t)total;
+        }
+
+        if (timer_started && timeout_ticks) {
+            u64 now = arch_timer_ticks();
+            if (now - timer_start >= timeout_ticks)
+                return (ssize_t)total;
+        } else if (vmin == 0 && timeout_ticks) {
+            timer_started = true;
+            timer_start = arch_timer_ticks();
+        }
+
+        if (!sched_is_running())
+            continue;
+
+        sched_thread_t* current = sched_current();
+        if (current && sched_signal_has_pending(current))
+            return -1;
+
+        if (timer_started && timeout_ticks) {
+            sched_sleep(1);
+            continue;
+        }
+
+        sched_block(&tty_wait[screen]);
+    }
 }
 
 void tty_input_init(void) {
@@ -205,6 +319,41 @@ void tty_input_push(char ch) {
     if (literal)
         tty_literal_next[screen] = false;
 
+    if ((tos->c_lflag & ISIG) && !literal) {
+        int sig = 0;
+        if (ch == (char)tos->c_cc[VINTR])
+            sig = SIGINT;
+        else if (ch == (char)tos->c_cc[VQUIT])
+            sig = SIGQUIT;
+        else if (ch == (char)tos->c_cc[VSUSP])
+            sig = SIGTSTP;
+
+        if (sig) {
+            pid_t pgrp = tty_get_pgrp(screen);
+            if (!pgrp) {
+                sched_thread_t* current = sched_current();
+                if (current)
+                    pgrp = current->pid;
+            }
+
+            if (pgrp)
+                sched_signal_send_pid(pgrp, sig);
+
+            if (canon) {
+                if (tos->c_lflag & ECHOCTL)
+                    tty_echo_control(screen, ch);
+                if (tos->c_lflag & ECHO) {
+                    char nl = '\n';
+                    arch_console_write_screen(screen, &nl, 1);
+                }
+                tty_line_len[screen] = 0;
+            }
+
+            _tty_signal_flush(screen, buffer, tos);
+            return;
+        }
+    }
+
     if (canon && !literal) {
         if (ch == (char)tos->c_cc[VERASE]) {
             size_t* line_len = &tty_line_len[screen];
@@ -241,6 +390,33 @@ void tty_input_push(char ch) {
             }
 
             *line_len = 0;
+            return;
+        }
+
+        if (ch == (char)tos->c_cc[VWERASE]) {
+            size_t* line_len = &tty_line_len[screen];
+            if (*line_len) {
+                size_t erase = 0;
+
+                while (*line_len && isspace((unsigned char)tty_line_buf[screen][*line_len - 1])) {
+                    (*line_len)--;
+                    erase++;
+                }
+
+                while (*line_len && !isspace((unsigned char)tty_line_buf[screen][*line_len - 1])) {
+                    (*line_len)--;
+                    erase++;
+                }
+
+                _tty_erase_chars(screen, tos, erase);
+            }
+            return;
+        }
+
+        if (ch == (char)tos->c_cc[VREPRINT]) {
+            if (tos->c_lflag & ECHOCTL)
+                tty_echo_control(screen, ch);
+            _tty_reprint_line(screen, tos);
             return;
         }
 
@@ -289,6 +465,11 @@ ssize_t tty_input_read(size_t screen, void* buf, size_t len) {
         return -1;
 
     u8* out = buf;
+    termios_t tos;
+    bool have_termios = tty_input_get_termios(screen, &tos);
+
+    if (have_termios && !(tos.c_lflag & ICANON))
+        return _read_raw(screen, buffer, buf, len, &tos);
 
     for (;;) {
         unsigned long flags = arch_irq_save();

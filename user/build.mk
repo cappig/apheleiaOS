@@ -59,11 +59,10 @@ $(USER_BIN_DIR)/%: $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_OBJ_DIR)/user/%/main.
 	@mkdir -p $(@D)
 	$(call ld, $(USER_LD), $@, $^)
 
-$(USER_ROOT_DIR)/%: $(USER_BIN_DIR)/% FORCE
+$(USER_ROOT_DIR)/%: $(USER_BIN_DIR)/%
 	@mkdir -p $(@D)
 	@cp $< $@
 
 bin/$(IMG_NAME): $(USER_BINARIES)
 
-.PHONY: FORCE
-FORCE:
+.SECONDARY:
