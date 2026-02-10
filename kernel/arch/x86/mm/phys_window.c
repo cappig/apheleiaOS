@@ -17,6 +17,7 @@ void arch_phys_unmap(void* vaddr, size_t size) {
     (void)size;
 }
 #else
+#include <sched/scheduler.h>
 #include <x86/paging32.h>
 
 static size_t window_pages_mapped = 0;

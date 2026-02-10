@@ -28,6 +28,17 @@
 #define SYS_MOUNT     23
 #define SYS_UNMOUNT   24
 #define SYS_MMAP      25
+#define SYS_GETDENTS  26
+#define SYS_CHDIR     27
+#define SYS_GETCWD    28
+#define SYS_STAT      29
+#define SYS_LSTAT     30
+#define SYS_FSTAT     31
+#define SYS_CHMOD     32
+#define SYS_CHOWN     33
+#define SYS_LINK      34
+#define SYS_UNLINK    35
+#define SYS_RENAME    36
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1

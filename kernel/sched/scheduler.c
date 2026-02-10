@@ -757,7 +757,6 @@ void sched_block(sched_wait_queue_t* queue) {
         sched_yield();
         arch_cpu_wait();
     }
-
 }
 
 void sched_block(sched_wait_queue_t* queue) {

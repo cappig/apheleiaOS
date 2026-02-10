@@ -5,6 +5,8 @@
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <sys/exec.h>
+#include <sys/path.h>
+#include <sys/stat.h>
 #include <sys/tty.h>
 #include <unistd.h>
 
@@ -31,8 +33,16 @@ static ssize_t _read(int fd, void* buf, size_t len) {
     if (fd != STDIN_FILENO)
         return -1;
 
-    tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
-    return tty_read_handle(&handle, buf, len);
+    size_t vfs_flags = 0;
+    if (entry->flags & O_NONBLOCK)
+        vfs_flags |= VFS_NONBLOCK;
+
+    ssize_t ret = vfs_read(entry->node, buf, entry->offset, len, vfs_flags);
+    if (ret == VFS_EOF)
+        return 0;
+    if (ret > 0)
+        entry->offset += (size_t)ret;
+    return ret;
 }
 
 static ssize_t _write(int fd, const void* buf, size_t len) {
@@ -45,8 +55,18 @@ static ssize_t _write(int fd, const void* buf, size_t len) {
     if (fd != STDOUT_FILENO && fd != STDERR_FILENO && fd != STDIN_FILENO)
         return -1;
 
-    tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
-    return tty_write_handle(&handle, buf, len);
+    size_t vfs_flags = 0;
+    if (entry->flags & O_NONBLOCK)
+        vfs_flags |= VFS_NONBLOCK;
+
+    size_t offset = entry->offset;
+    if (entry->flags & O_APPEND)
+        offset = (size_t)entry->node->size;
+
+    ssize_t ret = vfs_write(entry->node, (void*)buf, offset, len, vfs_flags);
+    if (ret > 0)
+        entry->offset = offset + (size_t)ret;
+    return ret;
 }
 
 static ssize_t _ioctl(int fd, u64 request, void* args) {
@@ -156,6 +176,145 @@ static int _sys_getcwd(char* buf, size_t size) {
 
     memcpy(buf, thread->cwd, len + 1);
     return 0;
+}
+
+static int _sys_stat_path(const char* path, stat_t* st, bool follow_links) {
+    if (!path || !st)
+        return -1;
+
+    if (!_valid_user_ptr(path, 1) || !_valid_user_ptr(st, sizeof(stat_t)))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    char resolved[PATH_MAX];
+    if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
+        return -1;
+
+    vfs_node_t* node = vfs_lookup(resolved);
+    if (!node)
+        return -1;
+
+    return vfs_stat_node(node, st, follow_links) ? 0 : -1;
+}
+
+static int _sys_fstat(int fd, stat_t* st) {
+    if (!st || !_valid_user_ptr(st, sizeof(stat_t)))
+        return -1;
+
+    if (fd < 3)
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+        return -1;
+
+    sched_fd_t* entry = &thread->fds[fd];
+    if (!entry->node)
+        return -1;
+
+    return vfs_stat_node(entry->node, st, true) ? 0 : -1;
+}
+
+static int _sys_chmod(const char* path, mode_t mode) {
+    if (!path || !_valid_user_ptr(path, 1))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    char resolved[PATH_MAX];
+    if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
+        return -1;
+
+    vfs_node_t* node = vfs_lookup(resolved);
+    if (!node)
+        return -1;
+
+    return vfs_chmod(node, mode) ? 0 : -1;
+}
+
+static int _sys_chown(const char* path, uid_t uid, gid_t gid) {
+    if (!path || !_valid_user_ptr(path, 1))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    char resolved[PATH_MAX];
+    if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
+        return -1;
+
+    vfs_node_t* node = vfs_lookup(resolved);
+    if (!node)
+        return -1;
+
+    return vfs_chown(node, uid, gid) ? 0 : -1;
+}
+
+static int _sys_link(const char* oldpath, const char* newpath) {
+    if (!oldpath || !newpath)
+        return -1;
+
+    if (!_valid_user_ptr(oldpath, 1) || !_valid_user_ptr(newpath, 1))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    char resolved_old[PATH_MAX];
+    char resolved_new[PATH_MAX];
+
+    if (!path_resolve(thread->cwd, oldpath, resolved_old, sizeof(resolved_old)))
+        return -1;
+
+    if (!path_resolve(thread->cwd, newpath, resolved_new, sizeof(resolved_new)))
+        return -1;
+
+    return vfs_link(resolved_old, resolved_new) ? 0 : -1;
+}
+
+static int _sys_unlink(const char* path) {
+    if (!path || !_valid_user_ptr(path, 1))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    char resolved[PATH_MAX];
+    if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
+        return -1;
+
+    return vfs_unlink(resolved) ? 0 : -1;
+}
+
+static int _sys_rename(const char* oldpath, const char* newpath) {
+    if (!oldpath || !newpath)
+        return -1;
+
+    if (!_valid_user_ptr(oldpath, 1) || !_valid_user_ptr(newpath, 1))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    char resolved_old[PATH_MAX];
+    char resolved_new[PATH_MAX];
+
+    if (!path_resolve(thread->cwd, oldpath, resolved_old, sizeof(resolved_old)))
+        return -1;
+
+    if (!path_resolve(thread->cwd, newpath, resolved_new, sizeof(resolved_new)))
+        return -1;
+
+    return vfs_rename(resolved_old, resolved_new) ? 0 : -1;
 }
 
 static off_t _sys_seek(int fd, off_t offset, int whence) {
@@ -289,6 +448,58 @@ static u64 _dispatch(arch_int_state_t* state) {
             (void*)arch_syscall_arg2(state),
             (size_t)arch_syscall_arg3(state)
         );
+    case SYS_OPEN:
+        return (u64)sys_open(
+            (const char*)arch_syscall_arg1(state),
+            (int)arch_syscall_arg2(state),
+            (mode_t)arch_syscall_arg3(state)
+        );
+    case SYS_CLOSE:
+        return (u64)sys_close((int)arch_syscall_arg1(state));
+    case SYS_SEEK:
+        return (u64)_sys_seek(
+            (int)arch_syscall_arg1(state),
+            (off_t)arch_syscall_arg2(state),
+            (int)arch_syscall_arg3(state)
+        );
+    case SYS_GETDENTS:
+        return (u64)sys_getdents((int)arch_syscall_arg1(state), (dirent_t*)arch_syscall_arg2(state));
+    case SYS_CHDIR:
+        return (u64)sys_chdir((const char*)arch_syscall_arg1(state));
+    case SYS_GETCWD:
+        return (u64)sys_getcwd((char*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
+    case SYS_STAT:
+        return (u64)_sys_stat_path(
+            (const char*)arch_syscall_arg1(state), (stat_t*)arch_syscall_arg2(state), true
+        );
+    case SYS_LSTAT:
+        return (u64)_sys_stat_path(
+            (const char*)arch_syscall_arg1(state), (stat_t*)arch_syscall_arg2(state), false
+        );
+    case SYS_FSTAT:
+        return (u64)_sys_fstat((int)arch_syscall_arg1(state), (stat_t*)arch_syscall_arg2(state));
+    case SYS_CHMOD:
+        return (u64)_sys_chmod(
+            (const char*)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state)
+        );
+    case SYS_CHOWN:
+        return (u64)_sys_chown(
+            (const char*)arch_syscall_arg1(state),
+            (uid_t)arch_syscall_arg2(state),
+            (gid_t)arch_syscall_arg3(state)
+        );
+    case SYS_LINK:
+        return (u64)_sys_link(
+            (const char*)arch_syscall_arg1(state), (const char*)arch_syscall_arg2(state)
+        );
+    case SYS_UNLINK:
+        return (u64)_sys_unlink((const char*)arch_syscall_arg1(state));
+    case SYS_RENAME:
+        return (u64)_sys_rename(
+            (const char*)arch_syscall_arg1(state), (const char*)arch_syscall_arg2(state)
+        );
+    case SYS_SLEEP:
+        return (u64)sys_sleep((unsigned int)arch_syscall_arg1(state));
     case SYS_IOCTL:
         return (u64)_ioctl(
             (int)arch_syscall_arg1(state),

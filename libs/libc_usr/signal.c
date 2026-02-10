@@ -1,4 +1,4 @@
-#include <arch/x86/sys.h>
+#include <arch/sys.h>
 #include <libc_usr/signal.h>
 #include <unistd.h>
 

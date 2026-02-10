@@ -1,4 +1,4 @@
-#include <arch/x86/sys.h>
+#include <arch/sys.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <sys/ioctl.h>

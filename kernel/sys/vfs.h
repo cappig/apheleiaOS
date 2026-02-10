@@ -3,6 +3,7 @@
 #include <base/types.h>
 #include <data/list.h>
 #include <data/tree.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
 
@@ -105,6 +106,12 @@ vfs_node_t* vfs_lookup_relative(const char* root, const char* path);
 vfs_node_t* vfs_open(const char* path, u32 type, bool create, mode_t mode);
 
 bool vfs_access(vfs_node_t* vnode, uid_t uid, gid_t gid, int mode);
+bool vfs_stat_node(vfs_node_t* node, stat_t* out, bool follow_links);
+bool vfs_chmod(vfs_node_t* node, mode_t mode);
+bool vfs_chown(vfs_node_t* node, uid_t uid, gid_t gid);
+bool vfs_link(const char* target, const char* link_path);
+bool vfs_unlink(const char* path);
+bool vfs_rename(const char* old_path, const char* new_path);
 
 bool vfs_insert_child(vfs_node_t* parent, vfs_node_t* child);
 vfs_node_t* vfs_create(vfs_node_t* parent, char* name, u32 type, mode_t mode);
