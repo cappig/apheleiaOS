@@ -8,18 +8,17 @@
 #include <sched/scheduler.h>
 #include <string.h>
 #include <sys/tty.h>
-#include <x86/asm.h>
 
 static ring_buffer_t* tty_buffers[TTY_SCREEN_COUNT] = {0};
 static sched_wait_queue_t tty_wait[TTY_SCREEN_COUNT] = {0};
 static bool tty_ready[TTY_SCREEN_COUNT] = {0};
-static size_t tty_current_screen = TTY_CONSOLE;
 static char tty_line_buf[TTY_SCREEN_COUNT][TTY_INPUT_BUFFER_SIZE] = {{0}};
 static size_t tty_line_len[TTY_SCREEN_COUNT] = {0};
 static termios_t tty_termios[TTY_SCREEN_COUNT];
 static winsize_t tty_winsize[TTY_SCREEN_COUNT];
 static bool tty_termios_ready[TTY_SCREEN_COUNT] = {0};
 static bool tty_literal_next[TTY_SCREEN_COUNT] = {0};
+static bool tty_cr_pending[TTY_SCREEN_COUNT] = {0};
 
 static void _tty_init_screen_state(size_t screen) {
     if (screen >= TTY_SCREEN_COUNT || tty_termios_ready[screen])
@@ -42,6 +41,7 @@ static void _tty_init_screen_state(size_t screen) {
 
     tty_line_len[screen] = 0;
     tty_literal_next[screen] = false;
+    tty_cr_pending[screen] = false;
     tty_termios_ready[screen] = true;
 }
 
@@ -160,17 +160,17 @@ void tty_input_set_current(size_t screen) {
     if (screen >= TTY_SCREEN_COUNT)
         return;
 
-    tty_current_screen = screen;
-    _buffer(screen);
+    tty_input_buffer(screen);
 }
 
 void tty_input_push(char ch) {
-    size_t screen = tty_current_screen;
+    size_t screen = tty_current_screen();
     ring_buffer_t* buffer = tty_input_buffer(screen);
 
     if (!buffer || ch == '\0')
         return;
 
+    char raw = ch;
     termios_t* tos = &tty_termios[screen];
 
     if (!_tty_apply_iflags(tos, &ch))
@@ -178,6 +178,22 @@ void tty_input_push(char ch) {
 
     bool canon = (tos->c_lflag & ICANON) != 0;
     bool iexten = (tos->c_lflag & IEXTEN) != 0;
+
+    if (canon) {
+        bool raw_cr = raw == '\r';
+        bool raw_lf = raw == '\n';
+        bool cooked_cr = ch == '\r';
+
+        if (raw_cr || cooked_cr) {
+            ch = '\n';
+            tty_cr_pending[screen] = raw_cr;
+        } else if (raw_lf && tty_cr_pending[screen]) {
+            tty_cr_pending[screen] = false;
+            return;
+        } else {
+            tty_cr_pending[screen] = false;
+        }
+    }
 
     if (iexten && !tty_literal_next[screen] && ch == (char)tos->c_cc[VLNEXT]) {
         tty_literal_next[screen] = true;
@@ -275,8 +291,9 @@ ssize_t tty_input_read(size_t screen, void* buf, size_t len) {
     u8* out = buf;
 
     for (;;) {
-        unsigned long flags = irq_save();
+        unsigned long flags = arch_irq_save();
         size_t popped = ring_buffer_pop_array(buffer, out, len);
+        arch_irq_restore(flags);
 
         if (popped) {
             if (popped == 1 && out[0] == 0)
@@ -310,6 +327,7 @@ bool tty_input_set_termios(size_t screen, const termios_t* in, bool flush) {
     _tty_init_screen_state(screen);
     memcpy(&tty_termios[screen], in, sizeof(*in));
     tty_literal_next[screen] = false;
+    tty_cr_pending[screen] = false;
 
     if (flush)
         tty_input_flush(screen);
@@ -345,5 +363,6 @@ void tty_input_flush(size_t screen) {
 
     tty_line_len[screen] = 0;
     tty_literal_next[screen] = false;
+    tty_cr_pending[screen] = false;
     tty_ready[screen] = true;
 }

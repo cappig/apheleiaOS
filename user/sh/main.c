@@ -27,6 +27,7 @@ static int read_line(char* buf, size_t len) {
         return -1;
 
     size_t pos = 0;
+    bool cr_seen = false;
 
     while (pos + 1 < len) {
         char ch = 0;
@@ -35,8 +36,15 @@ static int read_line(char* buf, size_t len) {
         if (read_count <= 0)
             continue;
 
-        if (ch == '\r')
+        if (ch == '\r') {
+            ch = '\n';
+            cr_seen = true;
+        } else if (ch == '\n' && cr_seen) {
+            cr_seen = false;
             continue;
+        } else {
+            cr_seen = false;
+        }
 
         buf[pos++] = ch;
 

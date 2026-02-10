@@ -27,6 +27,8 @@ typedef struct {
 
 void tty_init(void);
 bool tty_set_current(size_t index);
+pid_t tty_get_pgrp(size_t index);
+size_t tty_current_screen(void);
 
 ssize_t tty_read_handle(const tty_handle_t* handle, void* buf, size_t len);
 ssize_t tty_write_handle(const tty_handle_t* handle, const void* buf, size_t len);

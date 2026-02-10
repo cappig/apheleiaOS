@@ -54,6 +54,20 @@ bool tty_set_current(size_t index) {
     return true;
 }
 
+pid_t tty_get_pgrp(size_t index) {
+    if (index >= TTY_SCREEN_COUNT)
+        return 0;
+
+    return tty_pgrp[index];
+}
+
+size_t tty_current_screen(void) {
+    if (current_tty == TTY_NONE)
+        return TTY_CONSOLE;
+
+    return (size_t)current_tty;
+}
+
 static ssize_t _read_screen(size_t index, void* buf, size_t len) {
     if (index >= TTY_SCREEN_COUNT)
         return -1;

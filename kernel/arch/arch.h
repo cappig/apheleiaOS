@@ -1,11 +1,13 @@
 #pragma once
 
+#include <arch/context.h>
 #include <base/types.h>
 #include <stddef.h>
 #include <sys/font.h>
 #include <sys/types.h>
 
 typedef struct arch_vm_space arch_vm_space_t;
+typedef void (*arch_syscall_handler_t)(arch_int_state_t* state);
 
 void arch_init(void* boot_info);
 void arch_storage_init(void);
@@ -33,3 +35,17 @@ arch_vm_space_t* arch_vm_create_user(void);
 void arch_vm_destroy(arch_vm_space_t* space);
 void arch_vm_switch(arch_vm_space_t* space);
 void* arch_vm_root(arch_vm_space_t* space);
+
+void arch_tlb_flush(uintptr_t addr);
+bool arch_pci_ecam_addr_ok(u64 addr);
+void arch_cpu_set_local(void* ptr);
+
+unsigned long arch_irq_save(void);
+void arch_irq_restore(unsigned long flags);
+void arch_cpu_halt(void);
+void arch_cpu_wait(void);
+void arch_irq_disable(void);
+u64 arch_timer_ticks(void);
+u32 arch_timer_hz(void);
+void arch_syscall_install(int vector, arch_syscall_handler_t handler);
+void arch_set_kernel_stack(uintptr_t sp);

@@ -7,8 +7,6 @@
 #include <sys/exec.h>
 #include <sys/tty.h>
 #include <unistd.h>
-#include <x86/gdt.h>
-#include <x86/idt.h>
 
 #define SYSCALL_INT 0x80
 
@@ -62,7 +60,212 @@ static ssize_t _ioctl(int fd, u64 request, void* args) {
     return tty_ioctl_handle(&handle, request, args);
 }
 
-static u64 _dispatch(int_state_t* state) {
+static int _sys_open(const char* path, int flags, mode_t mode) {
+    if (!path || !_valid_user_ptr(path, 1))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    char resolved[PATH_MAX];
+    if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
+        return -1;
+
+    vfs_node_t* node = NULL;
+    if (flags & O_CREAT)
+        node = vfs_open(resolved, VFS_FILE, true, mode);
+    else
+        node = vfs_lookup(resolved);
+
+    if (!node)
+        return -1;
+
+    for (int fd = 3; fd < SCHED_FD_MAX; fd++) {
+        if (!thread->fd_used[fd]) {
+            thread->fd_used[fd] = true;
+            thread->fds[fd].node = node;
+            thread->fds[fd].offset = 0;
+            thread->fds[fd].flags = (u32)flags;
+            return fd;
+        }
+    }
+
+    return -1;
+}
+
+static int _sys_close(int fd) {
+    if (fd < 0)
+        return -1;
+
+    if (fd < 3)
+        return 0;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+        return -1;
+
+    thread->fd_used[fd] = false;
+    thread->fds[fd].node = NULL;
+    thread->fds[fd].offset = 0;
+    thread->fds[fd].flags = 0;
+    return 0;
+}
+
+static int _sys_chdir(const char* path) {
+    if (!path || !_valid_user_ptr(path, 1))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    char resolved[PATH_MAX];
+    if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
+        return -1;
+
+    vfs_node_t* node = vfs_lookup(resolved);
+    if (!node)
+        return -1;
+
+    if (VFS_IS_LINK(node->type) && node->link)
+        node = node->link;
+
+    if (!node || node->type != VFS_DIR)
+        return -1;
+
+    strncpy(thread->cwd, resolved, sizeof(thread->cwd) - 1);
+    thread->cwd[sizeof(thread->cwd) - 1] = '\0';
+    return 0;
+}
+
+static int _sys_getcwd(char* buf, size_t size) {
+    if (!buf || !size)
+        return -1;
+
+    if (!_valid_user_ptr(buf, size))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    size_t len = strnlen(thread->cwd, sizeof(thread->cwd));
+    if (len + 1 > size)
+        return -1;
+
+    memcpy(buf, thread->cwd, len + 1);
+    return 0;
+}
+
+static off_t _sys_seek(int fd, off_t offset, int whence) {
+    sched_thread_t* thread = sched_current();
+    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+        return -1;
+
+    sched_fd_t* entry = &thread->fds[fd];
+    if (!entry->node)
+        return -1;
+
+    off_t base = 0;
+    switch (whence) {
+    case SEEK_SET:
+        base = 0;
+        break;
+    case SEEK_CUR:
+        base = (off_t)entry->offset;
+        break;
+    case SEEK_END:
+        base = (off_t)entry->node->size;
+        break;
+    default:
+        return -1;
+    }
+
+    off_t next = base + offset;
+    if (next < 0)
+        return -1;
+
+    entry->offset = (size_t)next;
+    return next;
+}
+
+static int _sys_getdents(int fd, dirent_t* out) {
+    if (!out || !_valid_user_ptr(out, sizeof(dirent_t)))
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+        return -1;
+
+    sched_fd_t* entry = &thread->fds[fd];
+    vfs_node_t* node = entry->node;
+
+    if (node && VFS_IS_LINK(node->type) && node->link)
+        node = node->link;
+
+    if (!node || node->type != VFS_DIR || !node->tree_entry)
+        return -1;
+
+    size_t index = entry->offset;
+    size_t current = 0;
+
+    ll_foreach(child, node->tree_entry->children) {
+        if (current++ != index)
+            continue;
+
+        tree_node_t* tnode = child->data;
+        if (!tnode)
+            return -1;
+
+        vfs_node_t* vnode = tnode->data;
+        if (!vnode)
+            return -1;
+
+        out->d_ino = (u32)vnode->inode;
+        out->d_type = (u32)vnode->type;
+        memset(out->d_name, 0, sizeof(out->d_name));
+        if (vnode->name)
+            strncpy(out->d_name, vnode->name, sizeof(out->d_name) - 1);
+
+        entry->offset++;
+        return 1;
+    }
+
+    return 0;
+}
+
+static int _sys_sleep(unsigned int seconds) {
+    u32 hz = arch_timer_hz();
+    if (hz == 0)
+        return -1;
+
+    u64 ticks = (u64)seconds * (u64)hz;
+    sched_sleep(ticks);
+    return 0;
+}
+
+static uintptr_t _sys_signal(int signum, sighandler_t handler, uintptr_t trampoline) {
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return (uintptr_t)SIG_ERR;
+
+    return (uintptr_t)sched_signal_set_handler(thread, signum, handler, trampoline);
+}
+
+static u64 _sys_sigreturn(arch_int_state_t* state) {
+    sched_thread_t* thread = sched_current();
+    if (!thread || !state)
+        return (u64)-1;
+
+    return sched_signal_sigreturn(thread, state) ? 0 : (u64)-1;
+}
+
+static u64 _sys_kill(pid_t pid, int signum) {
+    return (u64)sched_signal_send_pid(pid, signum);
+}
+
+static u64 _dispatch(arch_int_state_t* state) {
     u64 num = (u64)arch_syscall_num(state);
 
     switch (num) {
@@ -122,7 +325,7 @@ static u64 _dispatch(int_state_t* state) {
     }
 }
 
-static void _handler(int_state_t* state) {
+static void _handler(arch_int_state_t* state) {
     if (!state)
         return;
 
@@ -132,7 +335,6 @@ static void _handler(int_state_t* state) {
 }
 
 void syscall_init(void) {
-    set_int_handler(SYSCALL_INT, _handler);
-    configure_int(SYSCALL_INT, GDT_KERNEL_CODE, 0, IDT_TRP);
+    arch_syscall_install(SYSCALL_INT, _handler);
     log_debug("syscall: interface initialized");
 }

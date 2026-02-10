@@ -2,7 +2,9 @@
 
 #include <alloc/bitmap.h>
 #include <base/macros.h>
+#include <limits.h>
 #include <log/log.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sys/panic.h"
@@ -16,6 +18,25 @@
 #endif
 
 static bitmap_allocator_t frame_alloc = {0};
+static u16* frame_refs = NULL;
+static size_t frame_refs_count = 0;
+static bool frame_refs_ready = false;
+
+static size_t _pmm_block_index(void* ptr) {
+    return bitmap_alloc_to_block(&frame_alloc, ptr);
+}
+
+static void _pmm_ref_set_range(void* ptr, size_t blocks, u16 value) {
+    if (!frame_refs_ready || !ptr || !blocks)
+        return;
+
+    size_t start = _pmm_block_index(ptr);
+    for (size_t i = 0; i < blocks; i++) {
+        size_t index = start + i;
+        if (index < frame_refs_count)
+            frame_refs[index] = value;
+    }
+}
 
 
 void pmm_init(e820_map_t* mmap) {
@@ -25,6 +46,34 @@ void pmm_init(e820_map_t* mmap) {
         panic("Failed to initialize the page frame allocator!");
 
     log_debug("PMM ready");
+}
+
+void pmm_ref_init(void) {
+    if (frame_refs_ready)
+        return;
+
+    if (!frame_alloc.block_count || !frame_alloc.bitmap)
+        return;
+
+    frame_refs = calloc(frame_alloc.block_count, sizeof(*frame_refs));
+    if (!frame_refs) {
+        log_warn("PMM: failed to allocate refcount table");
+        return;
+    }
+
+    frame_refs_count = frame_alloc.block_count;
+
+    for (size_t i = 0; i < frame_alloc.block_count; i++) {
+        if (bitmap_get(frame_alloc.bitmap, i))
+            frame_refs[i] = 1;
+    }
+
+    frame_refs_ready = true;
+    log_debug("PMM: refcount table ready");
+}
+
+bool pmm_ref_ready(void) {
+    return frame_refs_ready;
 }
 
 size_t pmm_total_mem(void) {
@@ -48,6 +97,7 @@ void* alloc_frames(size_t count) {
     log_debug("[MMU DEBUG] allocated %zu new frames: paddr = %#lx", count, (u64)ret);
 #endif
 
+    _pmm_ref_set_range(ret, count, 1);
     return ret;
 }
 
@@ -63,6 +113,7 @@ void* alloc_frames_high(size_t count) {
     log_debug("[MMU DEBUG] allocated %zu new frames (high): paddr = %#lx", count, (u64)ret);
 #endif
 
+    _pmm_ref_set_range(ret, count, 1);
     return ret;
 }
 
@@ -75,11 +126,54 @@ void* alloc_frames_user(size_t count) {
 }
 
 void free_frames(void* ptr, size_t size) {
-    bitmap_alloc_free(&frame_alloc, ptr, size);
+    if (!frame_refs_ready) {
+        bitmap_alloc_free(&frame_alloc, ptr, size);
+        return;
+    }
+
+    if (!ptr || !size)
+        return;
+
+    size_t start = _pmm_block_index(ptr);
+
+    for (size_t i = 0; i < size; i++) {
+        size_t index = start + i;
+        if (index >= frame_refs_count)
+            continue;
+
+        if (frame_refs[index] > 0)
+            frame_refs[index]--;
+
+        if (frame_refs[index] == 0)
+            bitmap_alloc_free(&frame_alloc, bitmap_alloc_to_ptr(&frame_alloc, index), 1);
+    }
 
 #ifdef MMU_DEBUG
     log_debug("[MMU DEBUG] freed %zu frames: paddr = %#lx", size, (u64)ptr);
 #endif
+}
+
+void pmm_ref_hold(void* ptr, size_t blocks) {
+    if (!frame_refs_ready || !ptr || !blocks)
+        return;
+
+    size_t start = _pmm_block_index(ptr);
+    for (size_t i = 0; i < blocks; i++) {
+        size_t index = start + i;
+        if (index < frame_refs_count && frame_refs[index] < UINT16_MAX)
+            frame_refs[index]++;
+    }
+}
+
+u16 pmm_refcount(void* ptr) {
+    if (!frame_refs_ready || !ptr)
+        return 1;
+
+    size_t index = _pmm_block_index(ptr);
+    if (index >= frame_refs_count)
+        return 1;
+
+    return frame_refs[index];
 }
 
 

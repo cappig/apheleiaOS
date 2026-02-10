@@ -9,6 +9,17 @@
 
 typedef void (*thread_entry_t)(void* arg);
 
+typedef struct vfs_node vfs_node_t;
+
+#define SCHED_FD_MAX     32
+#define SCHED_REGION_COW (1ULL << 62)
+
+typedef struct sched_fd {
+    vfs_node_t* node;
+    size_t offset;
+    u32 flags;
+} sched_fd_t;
+
 typedef enum {
     THREAD_READY,
     THREAD_RUNNING,
@@ -102,3 +113,5 @@ void sched_wake_all(sched_wait_queue_t* queue);
 void sched_tick(arch_int_state_t* state);
 void sched_yield(void);
 void sched_exit(void) NORETURN;
+
+bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write);

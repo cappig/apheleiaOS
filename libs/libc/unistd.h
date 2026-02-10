@@ -1,7 +1,6 @@
 #pragma once
 
 // FIXME: this should be arch generic
-// #include <x86/sys.h>
 
 #define SYS_EXIT      0
 #define SYS_READ      1

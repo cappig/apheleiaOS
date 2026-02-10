@@ -1,8 +1,8 @@
+#include <arch/x86/sys.h>
 #include <libc_usr/unistd.h>
 
 #include <stdint.h>
 #include <unistd.h>
-#include <x86/sys.h>
 
 ssize_t read(int fd, void* buf, size_t count) {
     return (ssize_t)syscall3(SYS_READ, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count);

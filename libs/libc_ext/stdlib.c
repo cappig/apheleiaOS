@@ -65,21 +65,8 @@ size_t itoa(int value, char* buf, int base) {
 lldiv_t ulldiv(unsigned long long num, unsigned long den) {
     lldiv_t ret = {0};
 
-    // #if defined(__x86_64__)
     ret.rem = num % den;
     ret.quot = num / den;
-    // #else
-    //     unsigned long high = num >> 32;
-    //     unsigned long low = num & 0xffffffff;
-    //
-    //     unsigned long n_high = high / den;
-    //     high %= den;
-    //
-    //     asm volatile("divl %2" : "+a"(low), "+d"(high) : "r"(den));
-    //
-    //     ret.rem = high;
-    //     ret.quot = ((long long)n_high << 32 | low);
-    // #endif
 
     return ret;
 }

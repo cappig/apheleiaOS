@@ -1,5 +1,6 @@
 #include "keyboard.h"
 
+#include <arch/arch.h>
 #include <data/ring.h>
 #include <data/vector.h>
 #include <log/log.h>
@@ -8,7 +9,6 @@
 #include <string.h>
 #include <sys/tty.h>
 #include <sys/tty_input.h>
-#include <x86/asm.h>
 
 static vector_t* kbds = NULL;
 static ring_buffer_t* buffer = NULL;
@@ -63,9 +63,9 @@ ssize_t keyboard_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u3
         return -1;
 
     for (;;) {
-        unsigned long irq_flags = irq_save();
+        unsigned long irq_flags = arch_irq_save();
         size_t popped = ring_buffer_pop_array(buffer, buf, len);
-        irq_restore(irq_flags);
+        arch_irq_restore(irq_flags);
 
         if (popped)
             return (ssize_t)popped;

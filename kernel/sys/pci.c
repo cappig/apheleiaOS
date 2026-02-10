@@ -121,12 +121,10 @@ static void _init_express(mcfg_t* table) {
         if (!entry->base_addr)
             continue;
 
-#if defined(__i386__)
-        if (entry->base_addr >= 0x100000000ULL) {
+        if (!arch_pci_ecam_addr_ok(entry->base_addr)) {
             log_warn("pci: skipping MCFG entry above 4GiB");
             continue;
         }
-#endif
 
         for (u16 bus = entry->start_bus; bus <= entry->end_bus; bus++) {
             for (u8 slot = 0; slot < 32; slot++)

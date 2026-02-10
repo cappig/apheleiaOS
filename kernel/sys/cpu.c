@@ -1,8 +1,8 @@
 #include "cpu.h"
 
+#include <arch/arch.h>
 #include <string.h>
 #include <sys/panic.h>
-#include <x86/asm.h>
 
 size_t core_count = 1;
 cpu_core_t cores_local[MAX_CORES] = {0};
@@ -16,10 +16,8 @@ cpu_core_t* cpu_current(void) {
 void cpu_set_current(cpu_core_t* core) {
     cpu_local = core;
 
-#if defined(__x86_64__)
     if (core)
-        set_gs_base((u64)(uintptr_t)core);
-#endif
+        arch_cpu_set_local(core);
 }
 
 void cpu_init_core(size_t id) {

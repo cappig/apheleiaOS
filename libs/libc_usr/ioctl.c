@@ -1,8 +1,8 @@
+#include <arch/x86/sys.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
-#include <x86/sys.h>
 
 int ioctl(int fd, unsigned long request, ...) {
     va_list args;

@@ -1,6 +1,8 @@
 #include "scheduler.h"
 
 #include <arch/arch.h>
+#include <arch/mm.h>
+#include <arch/paging.h>
 #include <arch/thread.h>
 #include <base/attributes.h>
 #include <base/macros.h>
@@ -10,15 +12,6 @@
 #include <string.h>
 #include <sys/cpu.h>
 #include <sys/panic.h>
-#include <x86/asm.h>
-#include <x86/gdt.h>
-#include <x86/mm/physical.h>
-#include <x86/mm/virtual.h>
-#if defined(__x86_64__)
-#include <x86/paging64.h>
-#else
-#include <x86/paging32.h>
-#endif
 
 #define SCHED_STACK_SIZE (16 * KIB)
 #define SCHED_SLICE      5
@@ -79,8 +72,8 @@ static NORETURN void _thread_trampoline(void) {
 
 static void _idle_entry(UNUSED void* arg) {
     for (;;) {
-        _sched_reap();
-        halt();
+        sched_reap();
+        arch_cpu_wait();
     }
 }
 
@@ -118,13 +111,207 @@ void sched_clear_user_regions(sched_thread_t* thread) {
         sched_user_region_t* next = region->next;
 
         if (region->paddr && region->pages)
-            free_frames((void*)region->paddr, region->pages);
+            arch_free_frames((void*)region->paddr, region->pages);
 
         free(region);
         region = next;
     }
 
     thread->regions = NULL;
+}
+
+static sched_user_region_t* _find_user_region(sched_thread_t* thread, uintptr_t addr) {
+    if (!thread)
+        return NULL;
+
+    sched_user_region_t* region = thread->regions;
+    while (region) {
+        uintptr_t start = region->vaddr;
+        uintptr_t end = start + region->pages * PAGE_4KIB;
+        if (addr >= start && addr < end)
+            return region;
+        region = region->next;
+    }
+
+    return NULL;
+}
+
+static void _mark_cow_range(sched_thread_t* thread, sched_user_region_t* region) {
+    if (!thread || !region || !region->pages)
+        return;
+
+    page_t* root = arch_vm_root(thread->vm_space);
+    if (!root)
+        return;
+
+    for (size_t i = 0; i < region->pages; i++) {
+        uintptr_t vaddr = region->vaddr + i * PAGE_4KIB;
+        page_t* entry = NULL;
+        size_t size = arch_get_page(root, vaddr, &entry);
+        if (!entry || size != PAGE_4KIB)
+            continue;
+
+        if (*entry & PT_WRITE) {
+            *entry &= ~PT_WRITE;
+            arch_tlb_flush(vaddr);
+        }
+    }
+}
+
+static bool _split_region_for_page(
+    sched_user_region_t* region,
+    size_t page_index,
+    uintptr_t new_page_paddr,
+    u64 new_flags
+) {
+    if (!region || !region->pages || page_index >= region->pages)
+        return false;
+
+    size_t before = page_index;
+    size_t after = region->pages - page_index - 1;
+    uintptr_t page_vaddr = region->vaddr + page_index * PAGE_4KIB;
+    uintptr_t old_page_paddr = region->paddr + page_index * PAGE_4KIB;
+    sched_user_region_t* next = region->next;
+
+    if (before == 0 && after == 0) {
+        region->vaddr = page_vaddr;
+        region->paddr = new_page_paddr;
+        region->pages = 1;
+        region->flags = new_flags;
+        return true;
+    }
+
+    if (before == 0) {
+        sched_user_region_t* after_region = NULL;
+        if (after > 0) {
+            after_region = calloc(1, sizeof(*after_region));
+            if (!after_region)
+                return false;
+
+            after_region->vaddr = page_vaddr + PAGE_4KIB;
+            after_region->paddr = old_page_paddr + PAGE_4KIB;
+            after_region->pages = after;
+            after_region->flags = region->flags;
+            after_region->next = next;
+        }
+
+        region->vaddr = page_vaddr;
+        region->paddr = new_page_paddr;
+        region->pages = 1;
+        region->flags = new_flags;
+        region->next = after_region ? after_region : next;
+        return true;
+    }
+
+    if (before > 0) {
+        region->pages = before;
+
+        sched_user_region_t* page_region = calloc(1, sizeof(*page_region));
+        if (!page_region)
+            return false;
+
+        page_region->vaddr = page_vaddr;
+        page_region->paddr = new_page_paddr;
+        page_region->pages = 1;
+        page_region->flags = new_flags;
+
+        if (after == 0) {
+            page_region->next = next;
+            region->next = page_region;
+            return true;
+        }
+
+        sched_user_region_t* after_region = calloc(1, sizeof(*after_region));
+        if (!after_region) {
+            free(page_region);
+            return false;
+        }
+
+        after_region->vaddr = page_vaddr + PAGE_4KIB;
+        after_region->paddr = old_page_paddr + PAGE_4KIB;
+        after_region->pages = after;
+        after_region->flags = region->flags;
+        after_region->next = next;
+
+        region->next = page_region;
+        page_region->next = after_region;
+        return true;
+    }
+
+    return false;
+}
+
+bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write) {
+    if (!thread || !thread->user_thread || !write)
+        return false;
+
+    uintptr_t page_addr = ALIGN_DOWN(addr, PAGE_4KIB);
+    sched_user_region_t* region = _find_user_region(thread, page_addr);
+    if (!region)
+        return false;
+
+    if (!(region->flags & SCHED_REGION_COW))
+        return false;
+
+    page_t* root = arch_vm_root(thread->vm_space);
+    if (!root)
+        return false;
+
+    page_t* entry = NULL;
+    size_t size = arch_get_page(root, page_addr, &entry);
+    if (!entry || size != PAGE_4KIB)
+        return false;
+
+    if (*entry & PT_WRITE)
+        return false;
+
+    u64 old_paddr = arch_page_get_paddr(entry);
+    u16 refs = pmm_refcount((void*)(uintptr_t)old_paddr);
+    u64 new_flags = (region->flags & ~SCHED_REGION_COW) | PT_WRITE;
+
+    if (!pmm_ref_ready())
+        refs = 2;
+
+    if (refs > 1) {
+        uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(1);
+        void* src = arch_phys_map(old_paddr, PAGE_4KIB);
+        void* dst = arch_phys_map(new_paddr, PAGE_4KIB);
+
+        if (!src || !dst) {
+            if (src)
+                arch_phys_unmap(src, PAGE_4KIB);
+            if (dst)
+                arch_phys_unmap(dst, PAGE_4KIB);
+            return false;
+        }
+
+        memcpy(dst, src, PAGE_4KIB);
+        arch_phys_unmap(src, PAGE_4KIB);
+        arch_phys_unmap(dst, PAGE_4KIB);
+
+        *entry = 0;
+        arch_page_set_paddr(entry, new_paddr);
+        *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
+
+        if (!_split_region_for_page(
+                region, (page_addr - region->vaddr) / PAGE_4KIB, new_paddr, new_flags
+            ))
+            return false;
+
+        arch_free_frames((void*)(uintptr_t)old_paddr, 1);
+    } else {
+        *entry = 0;
+        arch_page_set_paddr(entry, old_paddr);
+        *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
+
+        if (!_split_region_for_page(
+                region, (page_addr - region->vaddr) / PAGE_4KIB, (uintptr_t)old_paddr, new_flags
+            ))
+            return false;
+    }
+
+    arch_tlb_flush(page_addr);
+    return true;
 }
 
 static void _destroy_thread(sched_thread_t* thread) {
@@ -160,7 +347,7 @@ static void _sched_reap(void) {
     if (!zombie_list)
         return;
 
-    unsigned long flags = irq_save();
+    unsigned long flags = arch_irq_save();
     list_node_t* node = zombie_list->head;
 
     while (node) {
@@ -181,85 +368,32 @@ static void _sched_reap(void) {
         node = next;
     }
 
-    irq_restore(flags);
+    arch_irq_restore(flags);
+}
+
+static void _sched_wake_sleepers(u64 now) {
+    if (!all_list)
+        return;
+
+    ll_foreach(node, all_list) {
+        sched_thread_t* thread = node->data;
+        if (!thread || thread->state != THREAD_SLEEPING)
+            continue;
+
+        if (thread->wake_tick == 0)
+            continue;
+
+        if (thread->wake_tick > now)
+            continue;
+
+        thread->wake_tick = 0;
+        thread->state = THREAD_READY;
+        _enqueue_thread(thread);
+    }
 }
 
 static uintptr_t _build_initial_stack(sched_thread_t* thread) {
-    uintptr_t sp = (uintptr_t)thread->stack + thread->stack_size;
-    sp = ALIGN_DOWN(sp, 16);
-
-#if defined(__x86_64__)
-    // Hardware frame for iretq plus padding to keep ABI alignment.
-    uintptr_t stack_top = sp;
-    uintptr_t entry_rsp = stack_top - 24;
-
-    sp -= sizeof(u64);
-    *(u64*)sp = 0; // padding
-    // Provide a valid ring0 RSP/SS if iretq consumes them.
-    sp -= sizeof(u64);
-    *(u64*)sp = GDT_KERNEL_DATA; // ss
-    sp -= sizeof(u64);
-    *(u64*)sp = (u64)entry_rsp; // rsp
-    sp -= sizeof(u64);
-    *(u64*)sp = 0x202; // RFLAGS with IF set
-    sp -= sizeof(u64);
-    *(u64*)sp = GDT_KERNEL_CODE;
-    sp -= sizeof(u64);
-    *(u64*)sp = (u64)(uintptr_t)_thread_trampoline;
-
-    // Error code and vector.
-    sp -= sizeof(u64);
-    *(u64*)sp = 0;
-    sp -= sizeof(u64);
-    *(u64*)sp = 0;
-
-    // General registers in push order (matches isr stubs).
-    u64 regs[15] = {0};
-
-    for (size_t i = 0; i < ARRAY_LEN(regs); i++) {
-        sp -= sizeof(u64);
-        *(u64*)sp = regs[i];
-    }
-#else
-    // Stack after iret: return address, entry, arg.
-    sp -= sizeof(u32);
-    *(u32*)sp = (u32)(uintptr_t)thread->arg;
-    sp -= sizeof(u32);
-    *(u32*)sp = (u32)(uintptr_t)thread->entry;
-    sp -= sizeof(u32);
-    *(u32*)sp = (u32)(uintptr_t)sched_exit;
-
-    // Hardware frame for iret.
-    sp -= sizeof(u32);
-    *(u32*)sp = 0x202; // EFLAGS with IF set
-    sp -= sizeof(u32);
-    *(u32*)sp = GDT_KERNEL_CODE;
-    sp -= sizeof(u32);
-    *(u32*)sp = (u32)(uintptr_t)_thread_trampoline;
-
-    // Error code and vector.
-    sp -= sizeof(u32);
-    *(u32*)sp = 0;
-    sp -= sizeof(u32);
-    *(u32*)sp = 0;
-
-    // General registers in push order (matches isr stubs).
-    u32 regs[7] = {
-        0, // eax
-        0, // ebx
-        0, // ecx
-        0, // edx
-        0, // esi
-        0, // edi
-        0, // ebp
-    };
-    for (size_t i = 0; i < ARRAY_LEN(regs); i++) {
-        sp -= sizeof(u32);
-        *(u32*)sp = regs[i];
-    }
-#endif
-
-    return sp;
+    return arch_build_kernel_stack(thread, (uintptr_t)thread_trampoline);
 }
 
 static uintptr_t
@@ -302,7 +436,10 @@ void sched_prepare_user_thread(sched_thread_t* thread, uintptr_t entry, uintptr_
 }
 
 static void _enqueue_thread(sched_thread_t* thread) {
-    if (!thread || thread->in_run_queue || thread == idle_thread)
+    if (!thread || thread == idle_thread)
+        return;
+
+    if (thread->in_run_queue)
         return;
 
     thread->run_node.data = thread;
@@ -361,7 +498,7 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     }
 
     if (!user_thread)
-        thread->context = build_initial_stack(thread);
+        thread->context = _build_initial_stack(thread);
 
     if (user_thread) {
         thread->vm_space = arch_vm_create_user();
@@ -451,29 +588,56 @@ pid_t sched_fork(arch_int_state_t* state) {
     child->user_stack_base = current->user_stack_base;
     child->user_stack_size = current->user_stack_size;
 
+    bool cow_enabled = pmm_ref_ready();
+
     sched_user_region_t* region = current->regions;
     while (region) {
         size_t pages = region->pages;
-        size_t size = pages * PAGE_4KIB;
-        uintptr_t new_paddr = (uintptr_t)alloc_frames_user(pages);
-
         void* root = arch_vm_root(child->vm_space);
         if (!root) {
             sched_discard_thread(child);
             return -1;
         }
 
-        map_region(root, pages, region->vaddr, new_paddr, region->flags);
-        sched_add_user_region(child, region->vaddr, new_paddr, pages, region->flags);
+        if (!cow_enabled) {
+            size_t size = pages * PAGE_4KIB;
+            uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(pages);
 
-        void* dst = arch_phys_map(new_paddr, size);
-        if (!dst) {
-            sched_discard_thread(child);
-            return -1;
+            arch_map_region(root, pages, region->vaddr, new_paddr, region->flags);
+            sched_add_user_region(child, region->vaddr, new_paddr, pages, region->flags);
+
+            void* dst = arch_phys_map(new_paddr, size);
+            if (!dst) {
+                sched_discard_thread(child);
+                return -1;
+            }
+
+            memcpy(dst, (void*)region->vaddr, size);
+            arch_phys_unmap(dst, size);
+
+            region = region->next;
+            continue;
         }
 
-        memcpy(dst, (void*)region->vaddr, size);
-        arch_phys_unmap(dst, size);
+        u64 region_flags = region->flags;
+        bool writable = (region_flags & PT_WRITE) != 0;
+
+        if (writable)
+            region_flags |= SCHED_REGION_COW;
+
+        region->flags = region_flags;
+
+        u64 map_flags = region_flags;
+        if (writable)
+            map_flags &= ~PT_WRITE;
+
+        arch_map_region(root, pages, region->vaddr, region->paddr, map_flags);
+        sched_add_user_region(child, region->vaddr, region->paddr, pages, region_flags);
+
+        pmm_ref_hold((void*)(uintptr_t)region->paddr, pages);
+
+        if (writable)
+            _mark_cow_range(current, region);
 
         region = region->next;
     }
@@ -571,21 +735,29 @@ static sched_thread_t* _wait_queue_pop(sched_wait_queue_t* queue) {
     return thread;
 }
 
-void sched_block_locked(sched_wait_queue_t* queue, unsigned long flags) {
+void sched_block(sched_wait_queue_t* queue) {
     if (!sched_running || !queue || !queue->list || !current) {
-        irq_restore(flags);
         return;
     }
 
+    unsigned long flags = arch_irq_save();
+
+    if (current->in_run_queue && run_queue) {
+        list_remove(run_queue, &current->run_node);
+        current->in_run_queue = false;
+    }
+
+    current->wake_tick = 0;
     current->state = THREAD_SLEEPING;
     _wait_queue_append(queue, current);
 
-    irq_restore(flags);
+    arch_irq_restore(flags);
 
     while (current->state == THREAD_SLEEPING) {
         sched_yield();
-        asm volatile("hlt");
+        arch_cpu_wait();
     }
+
 }
 
 void sched_block(sched_wait_queue_t* queue) {
@@ -597,22 +769,22 @@ void sched_wake_one(sched_wait_queue_t* queue) {
     if (!queue || !queue->list)
         return;
 
-    unsigned long flags = irq_save();
-    sched_thread_t* thread = _wait_queue_pop(queue);
+    unsigned long flags = arch_irq_save();
+    sched_thread_t* thread = wait_queue_pop(queue);
 
     if (thread) {
         thread->state = THREAD_READY;
         _enqueue_thread(thread);
     }
 
-    irq_restore(flags);
+    arch_irq_restore(flags);
 }
 
 void sched_wake_all(sched_wait_queue_t* queue) {
     if (!queue || !queue->list)
         return;
 
-    unsigned long flags = irq_save();
+    unsigned long flags = arch_irq_save();
 
     for (;;) {
         sched_thread_t* thread = _wait_queue_pop(queue);
@@ -623,7 +795,7 @@ void sched_wake_all(sched_wait_queue_t* queue) {
         _enqueue_thread(thread);
     }
 
-    irq_restore(flags);
+    arch_irq_restore(flags);
 }
 
 void sched_tick(arch_int_state_t* state) {
@@ -631,7 +803,8 @@ void sched_tick(arch_int_state_t* state) {
     if (!sched_running || !state || !current)
         return;
 
-    _sched_reap();
+    sched_reap();
+    _sched_wake_sleepers(arch_timer_ticks());
 
     current->context = (uintptr_t)state;
 
@@ -667,7 +840,7 @@ void sched_tick(arch_int_state_t* state) {
     next->state = THREAD_RUNNING;
     current = next;
 
-    set_tss_stack((uintptr_t)next->stack + next->stack_size);
+    arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);
     arch_context_switch(next->context);
 }
@@ -680,8 +853,27 @@ void sched_yield(void) {
     ticks_left = 0;
 }
 
+void sched_sleep(u64 ticks) {
+    if (!current || ticks == 0)
+        return;
+
+    if (!sched_running) {
+        u64 start = arch_timer_ticks();
+        while ((arch_timer_ticks() - start) < ticks)
+            arch_cpu_wait();
+        return;
+    }
+
+    current->wake_tick = arch_timer_ticks() + ticks;
+    current->state = THREAD_SLEEPING;
+    sched_yield();
+
+    while (current->state == THREAD_SLEEPING)
+        arch_cpu_wait();
+}
+
 void sched_exit(void) {
-    disable_interrupts();
+    arch_irq_disable();
 
     if (current) {
         current->state = THREAD_ZOMBIE;
@@ -701,12 +893,12 @@ void sched_exit(void) {
     sched_thread_t* next = _pick_next_thread();
     if (!next) {
         for (;;)
-            halt();
+            arch_cpu_halt();
     }
 
     current = next;
     next->state = THREAD_RUNNING;
-    set_tss_stack((uintptr_t)next->stack + next->stack_size);
+    arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);
     arch_context_switch(next->context);
 }

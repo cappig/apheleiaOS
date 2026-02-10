@@ -81,10 +81,46 @@ static void _cache_font(const boot_info_t* info) {
     font_path[sizeof(font_path) - 1] = '\0';
 }
 
+static bool _handle_user_signal(int signum, int_state_t* state) {
+    if (!state)
+        return false;
+
+    if ((state->s_regs.cs & 0x3) != 3)
+        return false;
+
+    if (!sched_is_running())
+        return false;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread || !thread->user_thread)
+        return false;
+
+    sched_signal_send_thread(thread, signum);
+    sched_signal_deliver_current(state);
+    return true;
+}
+
+#define PF_ERR_PRESENT (1U << 0)
+#define PF_ERR_WRITE   (1U << 1)
+#define PF_ERR_USER    (1U << 2)
+
 static void _page_fault_handler(int_state_t* state) {
     u64 addr = read_cr2();
     u64 code = state ? (u64)state->error_code : 0;
     u64 cr3 = read_cr3();
+
+    bool present = (code & PF_ERR_PRESENT) != 0;
+    bool write = (code & PF_ERR_WRITE) != 0;
+    bool user = (code & PF_ERR_USER) != 0;
+
+    if (present && write && user) {
+        sched_thread_t* thread = sched_current();
+        if (thread && sched_handle_cow_fault(thread, (uintptr_t)addr, true))
+            return;
+    }
+
+    if (_handle_user_signal(SIGSEGV, state))
+        return;
 
 #if defined(__x86_64__)
     if (state) {
@@ -226,6 +262,12 @@ void arch_init(void* boot_info) {
     pmm_init(&info->memory_map);
     heap_init();
     init_malloc();
+    pmm_ref_init();
+
+    console_init(info);
+    arch_publish_framebuffer(info);
+    log_init(console_puts);
+
     acpi_init(info->acpi_root_ptr);
     tsc_init();
     irq_init();
@@ -267,4 +309,66 @@ u32 arch_pci_read(u8 bus, u8 slot, u8 func, u8 offset, u8 size) {
     default:
         return 0xffffffffU;
     }
+}
+
+void arch_tlb_flush(uintptr_t addr) {
+#if defined(__x86_64__)
+    tlb_flush((u64)addr);
+#else
+    tlb_flush((u32)addr);
+#endif
+}
+
+bool arch_pci_ecam_addr_ok(u64 addr) {
+#if defined(__i386__)
+    return addr < 0x100000000ULL;
+#else
+    return true;
+#endif
+}
+
+void arch_cpu_set_local(void* ptr) {
+#if defined(__x86_64__)
+    if (ptr)
+        set_gs_base((u64)(uintptr_t)ptr);
+#else
+    (void)ptr;
+#endif
+}
+
+unsigned long arch_irq_save(void) {
+    return irq_save();
+}
+
+void arch_irq_restore(unsigned long flags) {
+    irq_restore(flags);
+}
+
+void arch_cpu_halt(void) {
+    halt();
+}
+
+void arch_cpu_wait(void) {
+    asm volatile("hlt");
+}
+
+void arch_irq_disable(void) {
+    disable_interrupts();
+}
+
+u64 arch_timer_ticks(void) {
+    return irq_ticks();
+}
+
+u32 arch_timer_hz(void) {
+    return irq_timer_hz();
+}
+
+void arch_syscall_install(int vector, arch_syscall_handler_t handler) {
+    set_int_handler(vector, handler);
+    configure_int(vector, GDT_KERNEL_CODE, 0, IDT_TRP);
+}
+
+void arch_set_kernel_stack(uintptr_t sp) {
+    set_tss_stack(sp);
 }

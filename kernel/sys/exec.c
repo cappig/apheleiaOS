@@ -1,6 +1,8 @@
 #include "exec.h"
 
 #include <arch/arch.h>
+#include <arch/mm.h>
+#include <arch/paging.h>
 #include <arch/thread.h>
 #include <base/attributes.h>
 #include <base/macros.h>
@@ -9,18 +11,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/vfs.h>
-#include <x86/mm/physical.h>
-#include <x86/mm/virtual.h>
-
-#if defined(__x86_64__)
-#include <x86/paging64.h>
-#else
-#include <x86/paging32.h>
-#endif
 
 #define USER_STACK_PAGES 16
 
-static uintptr_t next_stack_top = (uintptr_t)ARCH_USER_STACK_TOP;
+static uintptr_t next_stack_top;
 
 typedef struct PACKED {
     u32 magic;
@@ -69,12 +63,8 @@ static u64 _elf_flags_to_page_flags(u32 elf_flags) {
     if (elf_flags & PF_W)
         flags |= PT_WRITE;
 
-#if defined(__x86_64__)
-    if (!(elf_flags & PF_X))
+    if (arch_supports_nx() && !(elf_flags & PF_X))
         flags |= PT_NO_EXECUTE;
-#else
-    (void)elf_flags;
-#endif
 
     return flags;
 }
@@ -88,11 +78,10 @@ _map_user_region(sched_thread_t* thread, uintptr_t vaddr, uintptr_t paddr, size_
     if (!root)
         return false;
 
-    map_region(root, pages, vaddr, paddr, flags);
+    arch_map_region(root, pages, vaddr, paddr, flags);
     return sched_add_user_region(thread, vaddr, paddr, pages, flags);
 }
 
-#if defined(__x86_64__)
 static bool _load_segments_64(sched_thread_t* thread, const u8* image, size_t size, u64* entry_out) {
     if (size < sizeof(elf_header_t))
         return false;
@@ -125,7 +114,7 @@ static bool _load_segments_64(sched_thread_t* thread, const u8* image, size_t si
         // Allow loading into read-only segments during early bring-up.
         flags |= PT_WRITE;
 
-        uintptr_t paddr = (uintptr_t)alloc_frames_user(pages);
+        uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
 
         if (!_map_user_region(thread, map_base, paddr, pages, flags))
             return false;
@@ -150,9 +139,7 @@ static bool _load_segments_64(sched_thread_t* thread, const u8* image, size_t si
 
     return true;
 }
-#endif
 
-#if defined(__i386__)
 static bool _load_segments_32(sched_thread_t* thread, const u8* image, size_t size, u32* entry_out) {
     if (size < sizeof(elf32_header_t))
         return false;
@@ -183,7 +170,7 @@ static bool _load_segments_32(sched_thread_t* thread, const u8* image, size_t si
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
 
-        uintptr_t paddr = (uintptr_t)alloc_frames_user(pages);
+        uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
 
         if (!_map_user_region(thread, map_base, paddr, pages, flags))
             return false;
@@ -208,34 +195,44 @@ static bool _load_segments_32(sched_thread_t* thread, const u8* image, size_t si
 
     return true;
 }
-#endif
 
 static bool
 _load_user_segments(sched_thread_t* thread, const u8* image, size_t size, arch_word_t* entry_out) {
-#if defined(__x86_64__)
-    u64 entry = 0;
-    bool ok = _load_segments_64(thread, image, size, &entry);
-    if (ok && entry_out)
-        *entry_out = (arch_word_t)entry;
-    return ok;
-#elif defined(__i386__)
-    u32 entry = 0;
-    bool ok = _load_segments_32(thread, image, size, &entry);
-    if (ok && entry_out)
-        *entry_out = (arch_word_t)entry;
-    return ok;
-#else
-    (void)thread;
-    (void)image;
-    (void)size;
-    if (entry_out)
-        *entry_out = 0;
+    if (!thread || !image || size < 16)
+        return false;
+
+    u8 arch = ((const elf_header_t*)image)->arch;
+
+    if (arch == EARCH_64) {
+        if (!arch_is_64bit())
+            return false;
+
+        u64 entry = 0;
+        bool ok = _load_segments_64(thread, image, size, &entry);
+        if (ok && entry_out)
+            *entry_out = (arch_word_t)entry;
+        return ok;
+    }
+
+    if (arch == EARCH_32) {
+        if (arch_is_64bit())
+            return false;
+
+        u32 entry = 0;
+        bool ok = _load_segments_32(thread, image, size, &entry);
+        if (ok && entry_out)
+            *entry_out = (arch_word_t)entry;
+        return ok;
+    }
+
     return false;
-#endif
 }
 
 static uintptr_t _alloc_stack_base(size_t size) {
     size = ALIGN(size, PAGE_4KIB);
+
+    if (!next_stack_top)
+        next_stack_top = (uintptr_t)arch_user_stack_top();
 
     if (next_stack_top <= size)
         return 0;
@@ -258,13 +255,10 @@ static bool _map_user_stack(sched_thread_t* thread, uintptr_t* stack_top_out) {
     if (!base)
         return false;
 
-    uintptr_t paddr = (uintptr_t)alloc_frames_user(pages);
+    uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
 
-    u64 flags = PT_USER | PT_WRITE;
-#if defined(__x86_64__)
-    flags |= PT_NO_EXECUTE;
-#endif
-    if (!_map_user_region(thread, base, paddr, pages, flags))
+    u64 flags = arch_user_stack_flags();
+    if (!map_user_region(thread, base, paddr, pages, flags))
         return false;
 
     thread->user_stack_base = base;
@@ -301,7 +295,7 @@ static void _free_regions_list(sched_user_region_t* region) {
         sched_user_region_t* next = region->next;
 
         if (region->paddr && region->pages)
-            free_frames((void*)region->paddr, region->pages);
+            arch_free_frames((void*)region->paddr, region->pages);
 
         free(region);
         region = next;
