@@ -1,10 +1,22 @@
 #include "syscall.h"
 
 #include <arch/arch.h>
+#include <arch/mm.h>
+#include <arch/paging.h>
 #include <arch/syscall.h>
+#include <arch/thread.h>
+#include <base/macros.h>
+#include <data/list.h>
+#include <dirent.h>
+#include <fcntl.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
+#include <sched/signal.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/exec.h>
+#include <sys/mman.h>
 #include <sys/path.h>
 #include <sys/stat.h>
 #include <sys/tty.h>
@@ -14,6 +26,91 @@
 
 static bool
 _split_parent_path(const char* path, char* parent, size_t parent_len, char* base, size_t base_len);
+
+static bool _region_overlaps(const sched_user_region_t* region, uintptr_t start, uintptr_t end) {
+    if (!region || start >= end)
+        return false;
+
+    uintptr_t region_start = region->vaddr;
+    uintptr_t region_end = region->vaddr + region->pages * PAGE_4KIB;
+    return start < region_end && end > region_start;
+}
+
+static uintptr_t _pick_mmap_base(sched_thread_t* thread, size_t size) {
+    if (!thread)
+        return 0;
+
+    uintptr_t base = 0x00400000;
+    uintptr_t stack_base = thread->user_stack_base;
+    if (!stack_base)
+        stack_base = (uintptr_t)arch_user_stack_top();
+
+    for (sched_user_region_t* region = thread->regions; region; region = region->next) {
+        if (region->vaddr == thread->user_stack_base &&
+            region->pages == thread->user_stack_size / PAGE_4KIB) {
+            continue;
+        }
+
+        uintptr_t end = region->vaddr + region->pages * PAGE_4KIB;
+        if (end > base)
+            base = end;
+    }
+
+    base = ALIGN(base, PAGE_4KIB);
+
+    uintptr_t addr = base;
+    bool advanced = true;
+    while (advanced) {
+        advanced = false;
+        for (sched_user_region_t* region = thread->regions; region; region = region->next) {
+            uintptr_t end = addr + size;
+            if (!_region_overlaps(region, addr, end))
+                continue;
+            addr = ALIGN(region->vaddr + region->pages * PAGE_4KIB, PAGE_4KIB);
+            advanced = true;
+            break;
+        }
+    }
+
+    if (addr + size > stack_base)
+        return 0;
+
+    return addr;
+}
+
+static sched_user_region_t* _find_region_exact(
+    sched_thread_t* thread,
+    uintptr_t addr,
+    size_t pages,
+    sched_user_region_t** prev_out
+) {
+    if (!thread)
+        return NULL;
+
+    sched_user_region_t* prev = NULL;
+    for (sched_user_region_t* region = thread->regions; region; region = region->next) {
+        if (region->vaddr == addr && region->pages == pages) {
+            if (prev_out)
+                *prev_out = prev;
+            return region;
+        }
+        prev = region;
+    }
+
+    return NULL;
+}
+
+static u64 _mmap_prot_flags(int prot) {
+    u64 flags = PT_USER;
+
+    if (prot & PROT_WRITE)
+        flags |= PT_WRITE;
+
+    if (arch_supports_nx() && !(prot & PROT_EXEC))
+        flags |= PT_NO_EXECUTE;
+
+    return flags;
+}
 
 static ssize_t _sys_read(int fd, void* buf, size_t len) {
     if (!buf || !len)
@@ -362,6 +459,217 @@ static int _sys_access(const char* path, int mode) {
         return 0;
 
     return vfs_access(node, thread->uid, thread->gid, mode) ? 0 : -1;
+}
+
+static uintptr_t _sys_mmap(const mmap_args_t* args) {
+    if (!args)
+        return (uintptr_t)-1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread || !thread->vm_space)
+        return (uintptr_t)-1;
+
+    size_t size = args->len;
+    if (size == 0)
+        return (uintptr_t)-1;
+
+    size = ALIGN(size, PAGE_4KIB);
+    size_t pages = size / PAGE_4KIB;
+
+    if (args->offset < 0)
+        return (uintptr_t)-1;
+
+    if ((args->offset % PAGE_4KIB) != 0)
+        return (uintptr_t)-1;
+
+    int prot = args->prot;
+    if (prot == PROT_NONE)
+        return (uintptr_t)-1;
+
+    uintptr_t addr = (uintptr_t)args->addr;
+    if (addr && (addr % PAGE_4KIB))
+        return (uintptr_t)-1;
+
+    bool fixed = (args->flags & MAP_FIXED) != 0;
+    if (!addr && fixed)
+        return (uintptr_t)-1;
+
+    if (!addr)
+        addr = _pick_mmap_base(thread, size);
+
+    if (!addr)
+        return (uintptr_t)-1;
+
+    uintptr_t end = addr + size;
+    if (end < addr)
+        return (uintptr_t)-1;
+
+    uintptr_t stack_top = thread->user_stack_base;
+    if (!stack_top)
+        stack_top = (uintptr_t)arch_user_stack_top();
+
+    if (end > stack_top)
+        return (uintptr_t)-1;
+
+    if (fixed) {
+        for (sched_user_region_t* region = thread->regions; region; region = region->next) {
+            if (_region_overlaps(region, addr, end))
+                return (uintptr_t)-1;
+        }
+    } else {
+        for (sched_user_region_t* region = thread->regions; region; region = region->next) {
+            if (!_region_overlaps(region, addr, end))
+                continue;
+            addr = _pick_mmap_base(thread, size);
+            end = addr + size;
+            break;
+        }
+    }
+
+    if (!addr || end > stack_top)
+        return (uintptr_t)-1;
+
+    vfs_node_t* file = NULL;
+    if (!(args->flags & MAP_ANON)) {
+        int fd = args->fd;
+        if (fd < 0)
+            return (uintptr_t)-1;
+
+        if (fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+            return (uintptr_t)-1;
+
+        sched_fd_t* entry = &thread->fds[fd];
+        file = entry->node;
+        if (!file)
+            return (uintptr_t)-1;
+
+        if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
+            return (uintptr_t)-1;
+
+        int need = R_OK;
+        if (prot & PROT_WRITE)
+            need |= W_OK;
+
+        if (!vfs_access(file, thread->uid, thread->gid, need))
+            return (uintptr_t)-1;
+    }
+
+    uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
+    if (!paddr)
+        return (uintptr_t)-1;
+
+    void* root = arch_vm_root(thread->vm_space);
+    if (!root) {
+        arch_free_frames((void*)paddr, pages);
+        return (uintptr_t)-1;
+    }
+
+    u64 page_flags = _mmap_prot_flags(prot);
+    arch_map_region(root, pages, addr, paddr, page_flags);
+
+    if (!sched_add_user_region(thread, addr, paddr, pages, page_flags)) {
+        for (size_t i = 0; i < pages; i++) {
+            unmap_page((page_t*)root, addr + i * PAGE_4KIB);
+            arch_tlb_flush(addr + i * PAGE_4KIB);
+        }
+        arch_free_frames((void*)paddr, pages);
+        return (uintptr_t)-1;
+    }
+
+    void* dst = arch_phys_map(paddr, pages * PAGE_4KIB);
+    if (!dst) {
+        sched_user_region_t* prev = NULL;
+        sched_user_region_t* region = _find_region_exact(thread, addr, pages, &prev);
+        if (region) {
+            if (prev)
+                prev->next = region->next;
+            else
+                thread->regions = region->next;
+            free(region);
+        }
+
+        for (size_t i = 0; i < pages; i++) {
+            uintptr_t vaddr = addr + i * PAGE_4KIB;
+            unmap_page((page_t*)root, vaddr);
+            arch_tlb_flush(vaddr);
+        }
+
+        arch_free_frames((void*)paddr, pages);
+        return (uintptr_t)-1;
+    }
+
+    memset(dst, 0, pages * PAGE_4KIB);
+
+    if (file) {
+        ssize_t read_len = vfs_read(file, dst, (size_t)args->offset, size, 0);
+        if (read_len < 0) {
+            arch_phys_unmap(dst, pages * PAGE_4KIB);
+
+            sched_user_region_t* prev = NULL;
+            sched_user_region_t* region = _find_region_exact(thread, addr, pages, &prev);
+            if (region) {
+                if (prev)
+                    prev->next = region->next;
+                else
+                    thread->regions = region->next;
+                free(region);
+            }
+
+            for (size_t i = 0; i < pages; i++) {
+                uintptr_t vaddr = addr + i * PAGE_4KIB;
+                unmap_page((page_t*)root, vaddr);
+                arch_tlb_flush(vaddr);
+            }
+
+            arch_free_frames((void*)paddr, pages);
+            return (uintptr_t)-1;
+        }
+    }
+
+    arch_phys_unmap(dst, pages * PAGE_4KIB);
+    return addr;
+}
+
+static int _sys_munmap(void* addr, size_t len) {
+    if (!addr || !len)
+        return -1;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread || !thread->vm_space)
+        return -1;
+
+    uintptr_t base = (uintptr_t)addr;
+    if (base % PAGE_4KIB)
+        return -1;
+
+    size_t size = ALIGN(len, PAGE_4KIB);
+    size_t pages = size / PAGE_4KIB;
+
+    sched_user_region_t* prev = NULL;
+    sched_user_region_t* region = _find_region_exact(thread, base, pages, &prev);
+    if (!region)
+        return -1;
+
+    void* root = arch_vm_root(thread->vm_space);
+    if (!root)
+        return -1;
+
+    for (size_t i = 0; i < pages; i++) {
+        uintptr_t vaddr = base + i * PAGE_4KIB;
+        unmap_page((page_t*)root, vaddr);
+        arch_tlb_flush(vaddr);
+    }
+
+    if (prev)
+        prev->next = region->next;
+    else
+        thread->regions = region->next;
+
+    if (region->paddr)
+        arch_free_frames((void*)(uintptr_t)region->paddr, pages);
+
+    free(region);
+    return 0;
 }
 
 static uid_t _sys_getuid(void) {
@@ -785,25 +1093,11 @@ static u64 _dispatch(arch_int_state_t* state) {
             (void*)arch_syscall_arg2(state),
             (size_t)arch_syscall_arg3(state)
         );
-    case SYS_PREAD:
-        return (u64)_sys_pread(
-            (int)arch_syscall_arg1(state),
-            (void*)arch_syscall_arg2(state),
-            (size_t)arch_syscall_arg3(state),
-            (off_t)arch_syscall_arg4(state)
-        );
     case SYS_WRITE:
         return (u64)_write(
             (int)arch_syscall_arg1(state),
             (void*)arch_syscall_arg2(state),
             (size_t)arch_syscall_arg3(state)
-        );
-    case SYS_PWRITE:
-        return (u64)_sys_pwrite(
-            (int)arch_syscall_arg1(state),
-            (void*)arch_syscall_arg2(state),
-            (size_t)arch_syscall_arg3(state),
-            (off_t)arch_syscall_arg4(state)
         );
     case SYS_OPEN:
         return (u64)sys_open(
@@ -812,39 +1106,49 @@ static u64 _dispatch(arch_int_state_t* state) {
             (mode_t)arch_syscall_arg3(state)
         );
     case SYS_CLOSE:
-        return (u64)_sys_close((int)arch_syscall_arg1(state));
+        return (u64)sys_close((int)arch_syscall_arg1(state));
+    case SYS_PREAD:
+        return (u64)sys_pread(
+            (int)arch_syscall_arg1(state),
+            (void*)arch_syscall_arg2(state),
+            (size_t)arch_syscall_arg3(state),
+            (off_t)arch_syscall_arg4(state)
+        );
+    case SYS_PWRITE:
+        return (u64)sys_pwrite(
+            (int)arch_syscall_arg1(state),
+            (void*)arch_syscall_arg2(state),
+            (size_t)arch_syscall_arg3(state),
+            (off_t)arch_syscall_arg4(state)
+        );
     case SYS_SEEK:
         return (u64)_sys_seek(
             (int)arch_syscall_arg1(state),
             (off_t)arch_syscall_arg2(state),
             (int)arch_syscall_arg3(state)
         );
+    case SYS_MMAP:
+        return (u64)_sys_mmap((const mmap_args_t*)arch_syscall_arg1(state));
+    case SYS_MUNMAP:
+        return (u64)_sys_munmap((void*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
+    case SYS_IOCTL:
+        return (u64)sys_ioctl(
+            (int)arch_syscall_arg1(state),
+            (u64)arch_syscall_arg2(state),
+            (void*)arch_syscall_arg3(state)
+        );
     case SYS_GETDENTS:
         return (u64)sys_getdents((int)arch_syscall_arg1(state), (dirent_t*)arch_syscall_arg2(state));
+    case SYS_CHDIR:
+        return (u64)sys_chdir((const char*)arch_syscall_arg1(state));
+    case SYS_GETCWD:
+        return (u64)sys_getcwd((char*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_MKDIR:
         return (u64)_sys_mkdir(
             (const char*)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state)
         );
     case SYS_ACCESS:
-        return (u64)_sys_access((const char*)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
-    case SYS_CHDIR:
-        return (u64)_sys_chdir((const char*)arch_syscall_arg1(state));
-    case SYS_GETCWD:
-        return (u64)sys_getcwd((char*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
-    case SYS_GETUID:
-        return (u64)_sys_getuid();
-    case SYS_GETGID:
-        return (u64)_sys_getgid();
-    case SYS_SETUID:
-        return (u64)_sys_setuid((uid_t)arch_syscall_arg1(state));
-    case SYS_SETGID:
-        return (u64)sys_setgid((gid_t)arch_syscall_arg1(state));
-    case SYS_SETPGID:
-        return (u64)_sys_setpgid((pid_t)arch_syscall_arg1(state), (pid_t)arch_syscall_arg2(state));
-    case SYS_GETPGID:
-        return (u64)_sys_getpgid((pid_t)arch_syscall_arg1(state));
-    case SYS_SETSID:
-        return (u64)_sys_setsid();
+        return (u64)sys_access((const char*)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_STAT:
         return (u64)_sys_stat_path(
             (const char*)arch_syscall_arg1(state), (stat_t*)arch_syscall_arg2(state), true
@@ -875,14 +1179,6 @@ static u64 _dispatch(arch_int_state_t* state) {
         return (u64)_sys_rename(
             (const char*)arch_syscall_arg1(state), (const char*)arch_syscall_arg2(state)
         );
-    case SYS_SLEEP:
-        return (u64)sys_sleep((unsigned int)arch_syscall_arg1(state));
-    case SYS_IOCTL:
-        return (u64)_ioctl(
-            (int)arch_syscall_arg1(state),
-            (u64)arch_syscall_arg2(state),
-            (void*)arch_syscall_arg3(state)
-        );
     case SYS_FORK:
         return (u64)sched_fork(state);
     case SYS_EXECVE: {
@@ -908,6 +1204,32 @@ static u64 _dispatch(arch_int_state_t* state) {
         sched_thread_t* thread = sched_current();
         return thread ? (u64)thread->ppid : (u64)-1;
     }
+    case SYS_GETUID:
+        return (u64)_sys_getuid();
+    case SYS_GETGID:
+        return (u64)sys_getgid();
+    case SYS_SETUID:
+        return (u64)sys_setuid((uid_t)arch_syscall_arg1(state));
+    case SYS_SETGID:
+        return (u64)sys_setgid((gid_t)arch_syscall_arg1(state));
+    case SYS_SETPGID:
+        return (u64)sys_setpgid((pid_t)arch_syscall_arg1(state), (pid_t)arch_syscall_arg2(state));
+    case SYS_GETPGID:
+        return (u64)sys_getpgid((pid_t)arch_syscall_arg1(state));
+    case SYS_SETSID:
+        return (u64)sys_setsid();
+    case SYS_SLEEP:
+        return (u64)sys_sleep((unsigned int)arch_syscall_arg1(state));
+    case SYS_SIGNAL:
+        return (u64)sys_signal(
+            (int)arch_syscall_arg1(state),
+            (sighandler_t)arch_syscall_arg2(state),
+            (uintptr_t)arch_syscall_arg3(state)
+        );
+    case SYS_SIGRETURN:
+        return sys_sigreturn(state);
+    case SYS_KILL:
+        return sys_kill((pid_t)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     default:
         return (u64)-1;
     }
