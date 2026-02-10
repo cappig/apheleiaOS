@@ -73,6 +73,22 @@ pid_t getppid(void) {
     return (pid_t)syscall0(SYS_GETPPID);
 }
 
+uid_t getuid(void) {
+    return (uid_t)syscall0(SYS_GETUID);
+}
+
+gid_t getgid(void) {
+    return (gid_t)syscall0(SYS_GETGID);
+}
+
+int setuid(uid_t uid) {
+    return (int)syscall1(SYS_SETUID, (uintptr_t)uid);
+}
+
+int setgid(gid_t gid) {
+    return (int)syscall1(SYS_SETGID, (uintptr_t)gid);
+}
+
 void _exit(int status) {
     syscall1(SYS_EXIT, (uintptr_t)status);
 

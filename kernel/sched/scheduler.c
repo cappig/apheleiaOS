@@ -489,6 +489,8 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     thread->user_thread = user_thread;
     thread->pid = next_pid++;
     thread->ppid = 0;
+    thread->uid = current ? current->uid : 0;
+    thread->gid = current ? current->gid : 0;
     thread->stack_size = SCHED_STACK_SIZE;
     thread->stack = malloc(thread->stack_size);
 
@@ -548,6 +550,8 @@ void scheduler_init(void) {
     current->is_bootstrap = true;
     current->pid = 0;
     current->ppid = 0;
+    current->uid = 0;
+    current->gid = 0;
     current->vm_space = kernel_vm;
     sched_wait_queue_init(&current->wait_queue);
     _add_all_thread(current);

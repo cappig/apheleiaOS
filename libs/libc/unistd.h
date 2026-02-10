@@ -39,6 +39,10 @@
 #define SYS_LINK      34
 #define SYS_UNLINK    35
 #define SYS_RENAME    36
+#define SYS_GETUID    37
+#define SYS_GETGID    38
+#define SYS_SETUID    39
+#define SYS_SETGID    40
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1

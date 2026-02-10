@@ -21,5 +21,9 @@ int execve(const char* path, char* const argv[], char* const envp[]);
 
 pid_t getpid(void);
 pid_t getppid(void);
+uid_t getuid(void);
+gid_t getgid(void);
+int setuid(uid_t uid);
+int setgid(gid_t gid);
 
 void _exit(int status);

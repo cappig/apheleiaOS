@@ -178,6 +178,46 @@ static int _sys_getcwd(char* buf, size_t size) {
     return 0;
 }
 
+static uid_t _sys_getuid(void) {
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return (uid_t)-1;
+
+    return thread->uid;
+}
+
+static gid_t _sys_getgid(void) {
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return (gid_t)-1;
+
+    return thread->gid;
+}
+
+static int _sys_setuid(uid_t uid) {
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    if (thread->uid != 0 && uid != thread->uid)
+        return -1;
+
+    thread->uid = uid;
+    return 0;
+}
+
+static int _sys_setgid(gid_t gid) {
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -1;
+
+    if (thread->uid != 0 && gid != thread->gid)
+        return -1;
+
+    thread->gid = gid;
+    return 0;
+}
+
 static int _sys_stat_path(const char* path, stat_t* st, bool follow_links) {
     if (!path || !st)
         return -1;
@@ -468,6 +508,14 @@ static u64 _dispatch(arch_int_state_t* state) {
         return (u64)sys_chdir((const char*)arch_syscall_arg1(state));
     case SYS_GETCWD:
         return (u64)sys_getcwd((char*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
+    case SYS_GETUID:
+        return (u64)_sys_getuid();
+    case SYS_GETGID:
+        return (u64)_sys_getgid();
+    case SYS_SETUID:
+        return (u64)_sys_setuid((uid_t)arch_syscall_arg1(state));
+    case SYS_SETGID:
+        return (u64)_sys_setgid((gid_t)arch_syscall_arg1(state));
     case SYS_STAT:
         return (u64)_sys_stat_path(
             (const char*)arch_syscall_arg1(state), (stat_t*)arch_syscall_arg2(state), true

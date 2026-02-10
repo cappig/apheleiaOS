@@ -9,14 +9,18 @@ static void write_str(const char* str) {
     write(STDOUT_FILENO, str, strlen(str));
 }
 
-int main(void) {
-    write_str("init: starting /sbin/sh.elf\n");
+int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+
+    write_str("init: starting /sbin/login\n");
 
     for (;;) {
         pid_t pid = fork();
 
         if (pid == 0) {
-            if (execve("/sbin/sh.elf", NULL, NULL) < 0) {
+            char* args[] = {"login", NULL};
+            if (execve("/sbin/login", args, NULL) < 0) {
                 write_str("init: exec failed\n");
                 _exit(1);
             }
