@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
@@ -389,6 +390,54 @@ static void strip_newline(char* buf) {
         buf[len - 1] = '\0';
 }
 
+typedef struct {
+    bool quote_open;
+    bool trailing_escape;
+} sh_cont_state_t;
+
+static sh_cont_state_t sh_continuation_state(const char* line) {
+    sh_cont_state_t state = {0};
+
+    if (!line)
+        return state;
+
+    bool in_single = false;
+    bool in_double = false;
+    bool escape = false;
+
+    size_t len = strlen(line);
+    if (len > 0 && line[len - 1] == '\n')
+        len--;
+
+    for (size_t i = 0; i < len; i++) {
+        char ch = line[i];
+
+        if (escape) {
+            escape = false;
+            continue;
+        }
+
+        if (!in_single && ch == '\\') {
+            escape = true;
+            continue;
+        }
+
+        if (!in_double && ch == '\'') {
+            in_single = !in_single;
+            continue;
+        }
+
+        if (!in_single && ch == '"') {
+            in_double = !in_double;
+            continue;
+        }
+    }
+
+    state.quote_open = in_single || in_double;
+    state.trailing_escape = escape;
+    return state;
+}
+
 static int read_line_fd(int fd, char* buf, size_t len, bool interactive) {
     if (!buf || !len)
         return -1;
@@ -439,22 +488,54 @@ static int split_line(char* line, char** argv, int max) {
         return 0;
 
     int argc = 0;
-    char* cursor = line;
+    char* src = line;
+    char* dst = line;
 
-    while (*cursor && argc < max - 1) {
-        while (*cursor && isspace((unsigned char)*cursor))
-            cursor++;
+    while (*src && argc < max - 1) {
+        while (*src && isspace((unsigned char)*src))
+            src++;
 
-        if (!*cursor)
+        if (!*src)
             break;
 
-        argv[argc++] = cursor;
+        argv[argc++] = dst;
 
-        while (*cursor && !isspace((unsigned char)*cursor))
-            cursor++;
+        bool in_single = false;
+        bool in_double = false;
 
-        if (*cursor)
-            *cursor++ = '\0';
+        while (*src) {
+            char ch = *src;
+
+            if (!in_single && ch == '"') {
+                in_double = !in_double;
+                src++;
+                continue;
+            }
+
+            if (!in_double && ch == '\'') {
+                in_single = !in_single;
+                src++;
+                continue;
+            }
+
+            if (ch == '\\' && !in_single) {
+                src++;
+                if (!*src)
+                    break;
+                *dst++ = *src++;
+                continue;
+            }
+
+            if (!in_single && !in_double && isspace((unsigned char)ch)) {
+                src++;
+                break;
+            }
+
+            *dst++ = ch;
+            src++;
+        }
+
+        *dst++ = '\0';
     }
 
     argv[argc] = NULL;
@@ -469,12 +550,30 @@ static const char* sh_env_path(void) {
     return "/sbin";
 }
 
+static void sh_exec_script(const char* script, char* const argv[]) {
+    char* sh_args[SH_MAX_ARGS];
+    int argc = 0;
+
+    sh_args[argc++] = "sh";
+    sh_args[argc++] = (char*)script;
+
+    if (argv) {
+        for (int i = 1; argv[i] && argc < SH_MAX_ARGS - 1; i++)
+            sh_args[argc++] = argv[i];
+    }
+
+    sh_args[argc] = NULL;
+    execve("/sbin/sh", sh_args, NULL);
+}
+
 static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
     if (!cmd || !cmd[0])
         return false;
 
     if (strchr(cmd, '/')) {
         execve(cmd, argv, NULL);
+        if (errno == ENOEXEC)
+            sh_exec_script(cmd, argv);
         return false;
     }
 
@@ -497,6 +596,10 @@ static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
                 snprintf(full + len, sizeof(full) - len, "/%s", cmd);
 
             execve(full, argv, NULL);
+            if (errno == ENOEXEC) {
+                sh_exec_script(full, argv);
+                return false;
+            }
         }
 
         if (!next)
@@ -739,6 +842,37 @@ int main(int argc, char** argv) {
             write_str("\n");
             continue;
         }
+
+        while (1) {
+            sh_cont_state_t cont = sh_continuation_state(line);
+            if (!cont.quote_open && !cont.trailing_escape)
+                break;
+
+            size_t len = strlen(line);
+
+            if (cont.trailing_escape) {
+                if (len > 0 && line[len - 1] == '\n')
+                    line[--len] = '\0';
+                if (len > 0 && line[len - 1] == '\\')
+                    line[--len] = '\0';
+            }
+
+            if (len + 2 >= sizeof(line)) {
+                write_str("sh: line too long\n");
+                break;
+            }
+
+            write_str("> ");
+
+            if (read_line_fd(STDIN_FILENO, line + len, sizeof(line) - len, true) < 0) {
+                write_str("\n");
+                line[0] = '\0';
+                break;
+            }
+        }
+
+        if (!line[0])
+            continue;
 
         run_command(line, args, expanded, exec_args);
     }

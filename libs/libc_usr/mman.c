@@ -1,4 +1,5 @@
 #include <arch/sys.h>
+#include <errno.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -12,9 +13,14 @@ void* mmap(void* addr, size_t len, int prot, int flags, int fd, off_t offset) {
         .offset = offset,
     };
 
-    return (void*)syscall1(SYS_MMAP, (uintptr_t)&args);
+    long ret = syscall1(SYS_MMAP, (uintptr_t)&args);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return MAP_FAILED;
+    }
+    return (void*)ret;
 }
 
 int munmap(void* addr, size_t len) {
-    return (int)syscall2(SYS_MUNMAP, (uintptr_t)addr, (uintptr_t)len);
+    return (int)__SYSCALL_ERRNO(syscall2(SYS_MUNMAP, (uintptr_t)addr, (uintptr_t)len));
 }

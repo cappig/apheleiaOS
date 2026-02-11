@@ -8,6 +8,7 @@
 #include <base/macros.h>
 #include <data/list.h>
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
@@ -114,7 +115,10 @@ static u64 _mmap_prot_flags(int prot) {
 }
 
 static ssize_t _sys_read(int fd, void* buf, size_t len) {
-    if (!buf || !len)
+    if (!buf)
+        return -EFAULT;
+
+    if (!len)
         return 0;
 
     if (fd == STDIN_FILENO) {
@@ -127,13 +131,14 @@ static ssize_t _sys_read(int fd, void* buf, size_t len) {
 
     sched_thread_t* thread = sched_current();
     if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -1;
+        return -EBADF;
 
-    if (fd != STDIN_FILENO)
-        return -1;
+    sched_fd_t* entry = &thread->fds[fd];
+    if (!entry->node)
+        return -EBADF;
 
     if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
-        return -1;
+        return -EBADF;
 
     size_t vfs_flags = 0;
     if (entry->flags & O_NONBLOCK)
@@ -148,25 +153,28 @@ static ssize_t _sys_read(int fd, void* buf, size_t len) {
 }
 
 static ssize_t _sys_pread(int fd, void* buf, size_t len, off_t offset) {
-    if (!buf || !len)
+    if (!buf)
+        return -EFAULT;
+
+    if (!len)
         return 0;
 
     if (fd < 3)
-        return -1;
+        return -EBADF;
 
     if (offset < 0)
-        return -1;
+        return -EINVAL;
 
     sched_thread_t* thread = sched_current();
     if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -1;
+        return -EBADF;
 
     sched_fd_t* entry = &thread->fds[fd];
     if (!entry->node)
-        return -1;
+        return -EBADF;
 
     if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
-        return -1;
+        return -EBADF;
 
     size_t vfs_flags = 0;
     if (entry->flags & O_NONBLOCK)
@@ -179,7 +187,10 @@ static ssize_t _sys_pread(int fd, void* buf, size_t len, off_t offset) {
 }
 
 static ssize_t _sys_write(int fd, const void* buf, size_t len) {
-    if (!buf || !len)
+    if (!buf)
+        return -EFAULT;
+
+    if (!len)
         return 0;
 
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO || fd == STDIN_FILENO) {
@@ -192,13 +203,14 @@ static ssize_t _sys_write(int fd, const void* buf, size_t len) {
 
     sched_thread_t* thread = sched_current();
     if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -1;
+        return -EBADF;
 
-    if (fd != STDOUT_FILENO && fd != STDERR_FILENO && fd != STDIN_FILENO)
-        return -1;
+    sched_fd_t* entry = &thread->fds[fd];
+    if (!entry->node)
+        return -EBADF;
 
     if (!((entry->flags & O_WRONLY) || (entry->flags & O_RDWR)))
-        return -1;
+        return -EBADF;
 
     size_t vfs_flags = 0;
     if (entry->flags & O_NONBLOCK)
@@ -215,25 +227,28 @@ static ssize_t _sys_write(int fd, const void* buf, size_t len) {
 }
 
 static ssize_t _sys_pwrite(int fd, const void* buf, size_t len, off_t offset) {
-    if (!buf || !len)
+    if (!buf)
+        return -EFAULT;
+
+    if (!len)
         return 0;
 
     if (fd < 3)
-        return -1;
+        return -EBADF;
 
     if (offset < 0)
-        return -1;
+        return -EINVAL;
 
     sched_thread_t* thread = sched_current();
     if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -1;
+        return -EBADF;
 
     sched_fd_t* entry = &thread->fds[fd];
     if (!entry->node)
-        return -1;
+        return -EBADF;
 
     if (!((entry->flags & O_WRONLY) || (entry->flags & O_RDWR)))
-        return -1;
+        return -EBADF;
 
     size_t vfs_flags = 0;
     if (entry->flags & O_NONBLOCK)
@@ -244,7 +259,7 @@ static ssize_t _sys_pwrite(int fd, const void* buf, size_t len, off_t offset) {
 
 static ssize_t _sys_ioctl(int fd, u64 request, void* args) {
     if (fd != STDIN_FILENO && fd != STDOUT_FILENO && fd != STDERR_FILENO)
-        return -1;
+        return -ENOTTY;
 
     sched_thread_t* thread = sched_current();
     if (thread)
@@ -254,16 +269,16 @@ static ssize_t _sys_ioctl(int fd, u64 request, void* args) {
 }
 
 static int _sys_open(const char* path, int flags, mode_t mode) {
-    if (!path || !_valid_user_ptr(path, 1))
-        return -1;
+    if (!path)
+        return -EFAULT;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved[PATH_MAX];
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
-        return -1;
+        return -ENOENT;
 
     if (strncmp(resolved, "/dev/", 5) == 0) {
         const char* dev = resolved + 5;
@@ -291,33 +306,33 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
     vfs_node_t* node = vfs_lookup(resolved);
     if (node) {
         if ((flags & O_EXCL) && (flags & O_CREAT))
-            return -1;
+            return -EEXIST;
     } else if (flags & O_CREAT) {
         char parent_path[PATH_MAX];
         char base[PATH_MAX];
-        if (!_split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
-            return -1;
+        if (!split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
+            return -EINVAL;
 
         vfs_node_t* parent = vfs_lookup(parent_path);
         if (parent && VFS_IS_LINK(parent->type))
             parent = parent->link;
 
         if (!parent || parent->type != VFS_DIR)
-            return -1;
+            return -ENOTDIR;
 
         if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
-            return -1;
+            return -EACCES;
 
         node = vfs_create(parent, base, VFS_FILE, mode);
         if (!node)
-            return -1;
+            return -EIO;
 
         node->uid = thread->uid;
         node->gid = thread->gid;
     }
 
     if (!node)
-        return -1;
+        return -ENOENT;
 
     int need = 0;
     if (flags & O_RDWR)
@@ -328,7 +343,7 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
         need |= R_OK;
 
     if (need && !vfs_access(node, thread->uid, thread->gid, need))
-        return -1;
+        return -EACCES;
 
     for (int fd = 3; fd < SCHED_FD_MAX; fd++) {
         if (!thread->fd_used[fd]) {
@@ -340,7 +355,7 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
         }
     }
 
-    return -1;
+    return -EMFILE;
 }
 
 static bool
@@ -380,14 +395,14 @@ _split_parent_path(const char* path, char* parent, size_t parent_len, char* base
 
 static int _sys_close(int fd) {
     if (fd < 0)
-        return -1;
+        return -EBADF;
 
     if (fd < 3)
         return 0;
 
     sched_thread_t* thread = sched_current();
     if (!thread || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -1;
+        return -EBADF;
 
     thread->fd_used[fd] = false;
     thread->fds[fd].node = NULL;
@@ -398,37 +413,37 @@ static int _sys_close(int fd) {
 
 static int _sys_mkdir(const char* path, mode_t mode) {
     if (!path)
-        return -1;
+        return -EFAULT;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved[PATH_MAX];
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
-        return -1;
+        return -ENOENT;
 
     if (vfs_lookup(resolved))
-        return -1;
+        return -EEXIST;
 
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
-    if (!_split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
-        return -1;
+    if (!split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
+        return -EINVAL;
 
     vfs_node_t* parent = vfs_lookup(parent_path);
     if (parent && VFS_IS_LINK(parent->type))
         parent = parent->link;
 
     if (!parent || parent->type != VFS_DIR)
-        return -1;
+        return -ENOTDIR;
 
     if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
-        return -1;
+        return -EACCES;
 
     vfs_node_t* node = vfs_create(parent, base, VFS_DIR, mode);
     if (!node)
-        return -1;
+        return -EIO;
 
     node->uid = thread->uid;
     node->gid = thread->gid;
@@ -437,25 +452,25 @@ static int _sys_mkdir(const char* path, mode_t mode) {
 
 static int _sys_chdir(const char* path) {
     if (!path)
-        return -1;
+        return -EFAULT;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved[PATH_MAX];
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
-        return -1;
+        return -ENOENT;
 
     vfs_node_t* node = vfs_lookup(resolved);
     if (!node)
-        return -1;
+        return -ENOENT;
 
     if (VFS_IS_LINK(node->type) && node->link)
         node = node->link;
 
     if (!node || node->type != VFS_DIR)
-        return -1;
+        return -ENOTDIR;
 
     strncpy(thread->cwd, resolved, sizeof(thread->cwd) - 1);
     thread->cwd[sizeof(thread->cwd) - 1] = '\0';
@@ -463,19 +478,21 @@ static int _sys_chdir(const char* path) {
 }
 
 static int _sys_getcwd(char* buf, size_t size) {
-    if (!buf || !size)
-        return -1;
+    if (!buf)
+        return -EFAULT;
+    if (!size)
+        return -EINVAL;
 
     if (!_valid_user_ptr(buf, size))
         return -1;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     size_t len = strnlen(thread->cwd, sizeof(thread->cwd));
     if (len + 1 > size)
-        return -1;
+        return -ERANGE;
 
     memcpy(buf, thread->cwd, len + 1);
     return 0;
@@ -483,80 +500,80 @@ static int _sys_getcwd(char* buf, size_t size) {
 
 static int _sys_access(const char* path, int mode) {
     if (!path)
-        return -1;
+        return -EFAULT;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved[PATH_MAX];
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
-        return -1;
+        return -ENOENT;
 
     vfs_node_t* node = vfs_lookup(resolved);
     if (!node)
-        return -1;
+        return -ENOENT;
 
     if (mode == 0)
         return 0;
 
-    return vfs_access(node, thread->uid, thread->gid, mode) ? 0 : -1;
+    return vfs_access(node, thread->uid, thread->gid, mode) ? 0 : -EACCES;
 }
 
 static uintptr_t _sys_mmap(const mmap_args_t* args) {
     if (!args)
-        return (uintptr_t)-1;
+        return (uintptr_t)-EFAULT;
 
     sched_thread_t* thread = sched_current();
     if (!thread || !thread->vm_space)
-        return (uintptr_t)-1;
+        return (uintptr_t)-EINVAL;
 
     size_t size = args->len;
     if (size == 0)
-        return (uintptr_t)-1;
+        return (uintptr_t)-EINVAL;
 
     size = ALIGN(size, PAGE_4KIB);
     size_t pages = size / PAGE_4KIB;
 
     if (args->offset < 0)
-        return (uintptr_t)-1;
+        return (uintptr_t)-EINVAL;
 
     if ((args->offset % PAGE_4KIB) != 0)
-        return (uintptr_t)-1;
+        return (uintptr_t)-EINVAL;
 
     int prot = args->prot;
     if (prot == PROT_NONE)
-        return (uintptr_t)-1;
+        return (uintptr_t)-EINVAL;
 
     uintptr_t addr = (uintptr_t)args->addr;
     if (addr && (addr % PAGE_4KIB))
-        return (uintptr_t)-1;
+        return (uintptr_t)-EINVAL;
 
     bool fixed = (args->flags & MAP_FIXED) != 0;
     if (!addr && fixed)
-        return (uintptr_t)-1;
+        return (uintptr_t)-EINVAL;
 
     if (!addr)
         addr = _pick_mmap_base(thread, size);
 
     if (!addr)
-        return (uintptr_t)-1;
+        return (uintptr_t)-ENOMEM;
 
     uintptr_t end = addr + size;
     if (end < addr)
-        return (uintptr_t)-1;
+        return (uintptr_t)-EINVAL;
 
     uintptr_t stack_top = thread->user_stack_base;
     if (!stack_top)
         stack_top = (uintptr_t)arch_user_stack_top();
 
     if (end > stack_top)
-        return (uintptr_t)-1;
+        return (uintptr_t)-ENOMEM;
 
     if (fixed) {
         for (sched_user_region_t* region = thread->regions; region; region = region->next) {
-            if (_region_overlaps(region, addr, end))
-                return (uintptr_t)-1;
+            if (region_overlaps(region, addr, end))
+                return (uintptr_t)-ENOMEM;
         }
     } else {
         for (sched_user_region_t* region = thread->regions; region; region = region->next) {
@@ -569,41 +586,41 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
     }
 
     if (!addr || end > stack_top)
-        return (uintptr_t)-1;
+        return (uintptr_t)-ENOMEM;
 
     vfs_node_t* file = NULL;
     if (!(args->flags & MAP_ANON)) {
         int fd = args->fd;
         if (fd < 0)
-            return (uintptr_t)-1;
+            return (uintptr_t)-EBADF;
 
         if (fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-            return (uintptr_t)-1;
+            return (uintptr_t)-EBADF;
 
         sched_fd_t* entry = &thread->fds[fd];
         file = entry->node;
         if (!file)
-            return (uintptr_t)-1;
+            return (uintptr_t)-EBADF;
 
         if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
-            return (uintptr_t)-1;
+            return (uintptr_t)-EACCES;
 
         int need = R_OK;
         if (prot & PROT_WRITE)
             need |= W_OK;
 
         if (!vfs_access(file, thread->uid, thread->gid, need))
-            return (uintptr_t)-1;
+            return (uintptr_t)-EACCES;
     }
 
     uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
     if (!paddr)
-        return (uintptr_t)-1;
+        return (uintptr_t)-ENOMEM;
 
     void* root = arch_vm_root(thread->vm_space);
     if (!root) {
         arch_free_frames((void*)paddr, pages);
-        return (uintptr_t)-1;
+        return (uintptr_t)-ENOMEM;
     }
 
     u64 page_flags = _mmap_prot_flags(prot);
@@ -615,7 +632,7 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
             arch_tlb_flush(addr + i * PAGE_4KIB);
         }
         arch_free_frames((void*)paddr, pages);
-        return (uintptr_t)-1;
+        return (uintptr_t)-ENOMEM;
     }
 
     void* dst = arch_phys_map(paddr, pages * PAGE_4KIB);
@@ -637,7 +654,7 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
         }
 
         arch_free_frames((void*)paddr, pages);
-        return (uintptr_t)-1;
+        return (uintptr_t)-ENOMEM;
     }
 
     memset(dst, 0, pages * PAGE_4KIB);
@@ -664,7 +681,7 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
             }
 
             arch_free_frames((void*)paddr, pages);
-            return (uintptr_t)-1;
+            return (uintptr_t)-EIO;
         }
     }
 
@@ -674,15 +691,15 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
 
 static int _sys_munmap(void* addr, size_t len) {
     if (!addr || !len)
-        return -1;
+        return -EINVAL;
 
     sched_thread_t* thread = sched_current();
     if (!thread || !thread->vm_space)
-        return -1;
+        return -EINVAL;
 
     uintptr_t base = (uintptr_t)addr;
     if (base % PAGE_4KIB)
-        return -1;
+        return -EINVAL;
 
     size_t size = ALIGN(len, PAGE_4KIB);
     size_t pages = size / PAGE_4KIB;
@@ -690,11 +707,11 @@ static int _sys_munmap(void* addr, size_t len) {
     sched_user_region_t* prev = NULL;
     sched_user_region_t* region = _find_region_exact(thread, base, pages, &prev);
     if (!region)
-        return -1;
+        return -EINVAL;
 
     void* root = arch_vm_root(thread->vm_space);
     if (!root)
-        return -1;
+        return -EINVAL;
 
     for (size_t i = 0; i < pages; i++) {
         uintptr_t vaddr = base + i * PAGE_4KIB;
@@ -714,18 +731,18 @@ static int _sys_munmap(void* addr, size_t len) {
     return 0;
 }
 
-static uid_t _sys_getuid(void) {
+static long _sys_getuid(void) {
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return (uid_t)-1;
+        return -EINVAL;
 
     return thread->uid;
 }
 
-static gid_t _sys_getgid(void) {
+static long _sys_getgid(void) {
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return (gid_t)-1;
+        return -EINVAL;
 
     return thread->gid;
 }
@@ -733,10 +750,10 @@ static gid_t _sys_getgid(void) {
 static int _sys_setuid(uid_t uid) {
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     if (thread->uid != 0 && uid != thread->uid)
-        return -1;
+        return -EPERM;
 
     thread->uid = uid;
     return 0;
@@ -745,10 +762,10 @@ static int _sys_setuid(uid_t uid) {
 static int _sys_setgid(gid_t gid) {
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     if (thread->uid != 0 && gid != thread->gid)
-        return -1;
+        return -EPERM;
 
     thread->gid = gid;
     return 0;
@@ -757,14 +774,14 @@ static int _sys_setgid(gid_t gid) {
 static pid_t _sys_getpgid(pid_t pid) {
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     if (pid == 0)
         return thread->pgid;
 
     sched_thread_t* target = sched_find_thread(pid);
     if (!target)
-        return -1;
+        return -ESRCH;
 
     return target->pgid;
 }
@@ -772,17 +789,17 @@ static pid_t _sys_getpgid(pid_t pid) {
 static int _sys_setpgid(pid_t pid, pid_t pgid) {
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     sched_thread_t* target = thread;
     if (pid != 0) {
         target = sched_find_thread(pid);
         if (!target)
-            return -1;
+            return -ESRCH;
     }
 
     if (target->sid != thread->sid)
-        return -1;
+        return -EPERM;
 
     if (pgid == 0)
         pgid = target->pid;
@@ -794,10 +811,10 @@ static int _sys_setpgid(pid_t pid, pid_t pgid) {
 static pid_t _sys_setsid(void) {
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     if (thread->pid == thread->pgid)
-        return -1;
+        return -EPERM;
 
     thread->sid = thread->pid;
     thread->pgid = thread->pid;
@@ -810,189 +827,189 @@ static pid_t _sys_waitpid(pid_t pid, int* status, int options) {
 
 static int _sys_stat_path(const char* path, stat_t* st, bool follow_links) {
     if (!path || !st)
-        return -1;
+        return -EFAULT;
 
     if (!_valid_user_ptr(path, 1) || !_valid_user_ptr(st, sizeof(stat_t)))
         return -1;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved[PATH_MAX];
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
-        return -1;
+        return -ENOENT;
 
     vfs_node_t* node = vfs_lookup(resolved);
     if (!node)
-        return -1;
+        return -ENOENT;
 
-    return vfs_stat_node(node, st, follow_links) ? 0 : -1;
+    return vfs_stat_node(node, st, follow_links) ? 0 : -EIO;
 }
 
 static int _sys_fstat(int fd, stat_t* st) {
-    if (!st || !_valid_user_ptr(st, sizeof(stat_t)))
-        return -1;
+    if (!st)
+        return -EFAULT;
 
     if (fd < 3)
-        return -1;
+        return -EBADF;
 
     sched_thread_t* thread = sched_current();
     if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -1;
+        return -EBADF;
 
     sched_fd_t* entry = &thread->fds[fd];
     if (!entry->node)
-        return -1;
+        return -EBADF;
 
-    return vfs_stat_node(entry->node, st, true) ? 0 : -1;
+    return vfs_stat_node(entry->node, st, true) ? 0 : -EIO;
 }
 
 static int _sys_chmod(const char* path, mode_t mode) {
-    if (!path || !_valid_user_ptr(path, 1))
-        return -1;
+    if (!path)
+        return -EFAULT;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved[PATH_MAX];
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
-        return -1;
+        return -ENOENT;
 
     vfs_node_t* node = vfs_lookup(resolved);
     if (!node)
-        return -1;
+        return -ENOENT;
 
     if (thread->uid != 0 && node->uid != thread->uid)
-        return -1;
+        return -EPERM;
 
-    return vfs_chmod(node, mode) ? 0 : -1;
+    return vfs_chmod(node, mode) ? 0 : -EIO;
 }
 
 static int _sys_chown(const char* path, uid_t uid, gid_t gid) {
-    if (!path || !_valid_user_ptr(path, 1))
-        return -1;
+    if (!path)
+        return -EFAULT;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved[PATH_MAX];
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
-        return -1;
+        return -ENOENT;
 
     vfs_node_t* node = vfs_lookup(resolved);
     if (!node)
-        return -1;
+        return -ENOENT;
 
     if (thread->uid != 0)
-        return -1;
+        return -EPERM;
 
-    return vfs_chown(node, uid, gid) ? 0 : -1;
+    return vfs_chown(node, uid, gid) ? 0 : -EIO;
 }
 
 static int _sys_link(const char* oldpath, const char* newpath) {
     if (!oldpath || !newpath)
-        return -1;
+        return -EFAULT;
 
     if (!_valid_user_ptr(oldpath, 1) || !_valid_user_ptr(newpath, 1))
         return -1;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved_old[PATH_MAX];
     char resolved_new[PATH_MAX];
 
     if (!path_resolve(thread->cwd, oldpath, resolved_old, sizeof(resolved_old)))
-        return -1;
+        return -ENOENT;
 
     if (!path_resolve(thread->cwd, newpath, resolved_new, sizeof(resolved_new)))
-        return -1;
+        return -ENOENT;
 
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
-    if (!_split_parent_path(resolved_new, parent_path, sizeof(parent_path), base, sizeof(base)))
-        return -1;
+    if (!split_parent_path(resolved_new, parent_path, sizeof(parent_path), base, sizeof(base)))
+        return -EINVAL;
 
     vfs_node_t* parent = vfs_lookup(parent_path);
     if (parent && VFS_IS_LINK(parent->type))
         parent = parent->link;
 
     if (!parent || parent->type != VFS_DIR)
-        return -1;
+        return -ENOTDIR;
 
     if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
-        return -1;
+        return -EACCES;
 
-    return vfs_link(resolved_old, resolved_new) ? 0 : -1;
+    return vfs_link(resolved_old, resolved_new) ? 0 : -EIO;
 }
 
 static int _sys_unlink(const char* path) {
-    if (!path || !_valid_user_ptr(path, 1))
-        return -1;
+    if (!path)
+        return -EFAULT;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved[PATH_MAX];
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
-        return -1;
+        return -ENOENT;
 
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
-    if (!_split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
-        return -1;
+    if (!split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
+        return -EINVAL;
 
     vfs_node_t* parent = vfs_lookup(parent_path);
     if (parent && VFS_IS_LINK(parent->type))
         parent = parent->link;
 
     if (!parent || parent->type != VFS_DIR)
-        return -1;
+        return -ENOTDIR;
 
     if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
-        return -1;
+        return -EACCES;
 
-    return vfs_unlink(resolved) ? 0 : -1;
+    return vfs_unlink(resolved) ? 0 : -EIO;
 }
 
 static int _sys_rename(const char* oldpath, const char* newpath) {
     if (!oldpath || !newpath)
-        return -1;
+        return -EFAULT;
 
     if (!_valid_user_ptr(oldpath, 1) || !_valid_user_ptr(newpath, 1))
         return -1;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return -1;
+        return -EINVAL;
 
     char resolved_old[PATH_MAX];
     char resolved_new[PATH_MAX];
 
     if (!path_resolve(thread->cwd, oldpath, resolved_old, sizeof(resolved_old)))
-        return -1;
+        return -ENOENT;
 
     if (!path_resolve(thread->cwd, newpath, resolved_new, sizeof(resolved_new)))
-        return -1;
+        return -ENOENT;
 
     char old_parent_path[PATH_MAX];
     char old_base[PATH_MAX];
     if (!_split_parent_path(
             resolved_old, old_parent_path, sizeof(old_parent_path), old_base, sizeof(old_base)
         ))
-        return -1;
+        return -EINVAL;
 
     char new_parent_path[PATH_MAX];
     char new_base[PATH_MAX];
     if (!_split_parent_path(
             resolved_new, new_parent_path, sizeof(new_parent_path), new_base, sizeof(new_base)
         ))
-        return -1;
+        return -EINVAL;
 
     vfs_node_t* old_parent = vfs_lookup(old_parent_path);
     if (old_parent && VFS_IS_LINK(old_parent->type))
@@ -1003,25 +1020,25 @@ static int _sys_rename(const char* oldpath, const char* newpath) {
         new_parent = new_parent->link;
 
     if (!old_parent || !new_parent || old_parent->type != VFS_DIR || new_parent->type != VFS_DIR)
-        return -1;
+        return -ENOTDIR;
 
     if (!vfs_access(old_parent, thread->uid, thread->gid, W_OK | X_OK))
-        return -1;
+        return -EACCES;
 
     if (!vfs_access(new_parent, thread->uid, thread->gid, W_OK | X_OK))
-        return -1;
+        return -EACCES;
 
-    return vfs_rename(resolved_old, resolved_new) ? 0 : -1;
+    return vfs_rename(resolved_old, resolved_new) ? 0 : -EIO;
 }
 
 static off_t _sys_seek(int fd, off_t offset, int whence) {
     sched_thread_t* thread = sched_current();
     if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -1;
+        return -EBADF;
 
     sched_fd_t* entry = &thread->fds[fd];
     if (!entry->node)
-        return -1;
+        return -EBADF;
 
     off_t base = 0;
     switch (whence) {
@@ -1035,24 +1052,24 @@ static off_t _sys_seek(int fd, off_t offset, int whence) {
         base = (off_t)entry->node->size;
         break;
     default:
-        return -1;
+        return -EINVAL;
     }
 
     off_t next = base + offset;
     if (next < 0)
-        return -1;
+        return -EINVAL;
 
     entry->offset = (size_t)next;
     return next;
 }
 
 static int _sys_getdents(int fd, dirent_t* out) {
-    if (!out || !_valid_user_ptr(out, sizeof(dirent_t)))
-        return -1;
+    if (!out)
+        return -EFAULT;
 
     sched_thread_t* thread = sched_current();
     if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -1;
+        return -EBADF;
 
     sched_fd_t* entry = &thread->fds[fd];
     vfs_node_t* node = entry->node;
@@ -1061,7 +1078,7 @@ static int _sys_getdents(int fd, dirent_t* out) {
         node = node->link;
 
     if (!node || node->type != VFS_DIR || !node->tree_entry)
-        return -1;
+        return -ENOTDIR;
 
     size_t index = entry->offset;
     size_t current = 0;
@@ -1072,11 +1089,11 @@ static int _sys_getdents(int fd, dirent_t* out) {
 
         tree_node_t* tnode = child->data;
         if (!tnode)
-            return -1;
+            return -EIO;
 
         vfs_node_t* vnode = tnode->data;
         if (!vnode)
-            return -1;
+            return -EIO;
 
         out->d_ino = (u32)vnode->inode;
         out->d_type = (u32)vnode->type;
@@ -1094,7 +1111,7 @@ static int _sys_getdents(int fd, dirent_t* out) {
 static int _sys_sleep(unsigned int seconds) {
     u32 hz = arch_timer_hz();
     if (hz == 0)
-        return -1;
+        return -EINVAL;
 
     u64 ticks = (u64)seconds * (u64)hz;
     sched_sleep(ticks);
@@ -1104,34 +1121,45 @@ static int _sys_sleep(unsigned int seconds) {
 static uintptr_t _sys_signal(int signum, sighandler_t handler, uintptr_t trampoline) {
     sched_thread_t* thread = sched_current();
     if (!thread)
-        return (uintptr_t)SIG_ERR;
+        return (uintptr_t)-EINVAL;
 
-    return (uintptr_t)sched_signal_set_handler(thread, signum, handler, trampoline);
+    sighandler_t prev = sched_signal_set_handler(thread, signum, handler, trampoline);
+    if (prev == SIG_ERR)
+        return (uintptr_t)-EINVAL;
+
+    return (uintptr_t)prev;
 }
 
 static u64 _sys_sigreturn(arch_int_state_t* state) {
     sched_thread_t* thread = sched_current();
     if (!thread || !state)
-        return (u64)-1;
+        return (u64)-EINVAL;
 
-    return sched_signal_sigreturn(thread, state) ? 0 : (u64)-1;
+    return sched_signal_sigreturn(thread, state) ? 0 : (u64)-EINVAL;
 }
 
 static u64 _sys_kill(pid_t pid, int signum) {
-    if (pid < 0)
-        return (u64)sched_signal_send_pgrp(-pid, signum);
+    if (pid < 0) {
+        int ret = sched_signal_send_pgrp(-pid, signum);
+        return ret < 0 ? (u64)-ESRCH : (u64)ret;
+    }
 
     if (pid == 0) {
         sched_thread_t* thread = sched_current();
         if (!thread || thread->pgid == 0)
-            return (u64)-1;
-        return (u64)sched_signal_send_pgrp(thread->pgid, signum);
+            return (u64)-ESRCH;
+        int ret = sched_signal_send_pgrp(thread->pgid, signum);
+        return ret < 0 ? (u64)-ESRCH : (u64)ret;
     }
 
-    return (u64)sched_signal_send_pid(pid, signum);
+    int ret = sched_signal_send_pid(pid, signum);
+    return ret < 0 ? (u64)-ESRCH : (u64)ret;
 }
 
 static ssize_t _sys_getprocs(proc_info_t* out, size_t capacity) {
+    if (!out || capacity == 0)
+        return -EINVAL;
+
     return (ssize_t)sched_list_procs(out, capacity);
 }
 
@@ -1160,7 +1188,7 @@ static u64 _dispatch(arch_int_state_t* state) {
             (size_t)arch_syscall_arg3(state)
         );
     case SYS_OPEN:
-        return (u64)sys_open(
+        return (u64)_sys_open(
             (const char*)arch_syscall_arg1(state),
             (int)arch_syscall_arg2(state),
             (mode_t)arch_syscall_arg3(state)
@@ -1168,14 +1196,14 @@ static u64 _dispatch(arch_int_state_t* state) {
     case SYS_CLOSE:
         return (u64)sys_close((int)arch_syscall_arg1(state));
     case SYS_PREAD:
-        return (u64)sys_pread(
+        return (u64)_sys_pread(
             (int)arch_syscall_arg1(state),
             (void*)arch_syscall_arg2(state),
             (size_t)arch_syscall_arg3(state),
             (off_t)arch_syscall_arg4(state)
         );
     case SYS_PWRITE:
-        return (u64)sys_pwrite(
+        return (u64)_sys_pwrite(
             (int)arch_syscall_arg1(state),
             (void*)arch_syscall_arg2(state),
             (size_t)arch_syscall_arg3(state),
@@ -1198,11 +1226,11 @@ static u64 _dispatch(arch_int_state_t* state) {
             (void*)arch_syscall_arg3(state)
         );
     case SYS_GETDENTS:
-        return (u64)sys_getdents((int)arch_syscall_arg1(state), (dirent_t*)arch_syscall_arg2(state));
+        return (u64)_sys_getdents((int)arch_syscall_arg1(state), (dirent_t*)arch_syscall_arg2(state));
     case SYS_CHDIR:
         return (u64)sys_chdir((const char*)arch_syscall_arg1(state));
     case SYS_GETCWD:
-        return (u64)sys_getcwd((char*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
+        return (u64)_sys_getcwd((char*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_MKDIR:
         return (u64)_sys_mkdir(
             (const char*)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state)
@@ -1265,16 +1293,16 @@ static u64 _dispatch(arch_int_state_t* state) {
         );
     case SYS_GETPID: {
         sched_thread_t* thread = sched_current();
-        return thread ? (u64)thread->pid : (u64)-1;
+        return thread ? (u64)thread->pid : (u64)-ESRCH;
     }
     case SYS_GETPPID: {
         sched_thread_t* thread = sched_current();
-        return thread ? (u64)thread->ppid : (u64)-1;
+        return thread ? (u64)thread->ppid : (u64)-ESRCH;
     }
     case SYS_GETUID:
         return (u64)_sys_getuid();
     case SYS_GETGID:
-        return (u64)sys_getgid();
+        return (u64)_sys_getgid();
     case SYS_SETUID:
         return (u64)sys_setuid((uid_t)arch_syscall_arg1(state));
     case SYS_SETGID:
@@ -1303,7 +1331,7 @@ static u64 _dispatch(arch_int_state_t* state) {
             (size_t)arch_syscall_arg2(state)
         );
     default:
-        return (u64)-1;
+        return (u64)-ENOSYS;
     }
 }
 
