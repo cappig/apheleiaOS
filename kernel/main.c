@@ -35,7 +35,7 @@ NORETURN void kernel_main(void* boot_info) {
 
     disk_publish_devices();
     devfs_init();
-    dump_vfs();
+    // dump_vfs();
     init_spawn();
     scheduler_start();
 

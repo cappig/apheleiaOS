@@ -302,6 +302,14 @@ static void _free_regions_list(sched_user_region_t* region) {
     }
 }
 
+static const char* _basename(const char* path) {
+    if (!path)
+        return "";
+
+    const char* slash = strrchr(path, '/');
+    return slash ? slash + 1 : path;
+}
+
 static bool _load_user_image(sched_thread_t* thread, const char* path, uintptr_t* entry_out) {
     if (!thread || !path)
         return false;
@@ -373,6 +381,7 @@ sched_thread_t* user_spawn(const char* path) {
 
     sched_prepare_user_thread(thread, entry, stack_top);
     thread->ppid = 0;
+    sched_set_thread_name(thread, _basename(path));
 
     thread->state = THREAD_READY;
     return thread;
@@ -427,5 +436,12 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
         arch_state_set_user_entry(state, entry_point, stack_top);
         arch_state_set_return(state, 0);
     }
+
+    if (args.argv[0])
+        sched_set_thread_name(thread, _basename(args.argv[0]));
+    else
+        sched_set_thread_name(thread, _basename(path));
+
+    exec_free_args(&args);
     return 0;
 }

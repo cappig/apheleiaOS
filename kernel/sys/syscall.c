@@ -17,6 +17,7 @@
 #include <string.h>
 #include <sys/exec.h>
 #include <sys/mman.h>
+#include <sys/proc.h>
 #include <sys/path.h>
 #include <sys/stat.h>
 #include <sys/tty.h>
@@ -116,7 +117,16 @@ static ssize_t _sys_read(int fd, void* buf, size_t len) {
     if (!buf || !len)
         return 0;
 
-    if (!_valid_user_ptr(buf, len))
+    if (fd == STDIN_FILENO) {
+        sched_thread_t* thread = sched_current();
+        if (thread)
+            thread->tty_index = (int)tty_current_screen();
+        tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+        return tty_read_handle(&handle, buf, len);
+    }
+
+    sched_thread_t* thread = sched_current();
+    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
         return -1;
 
     if (fd != STDIN_FILENO)
@@ -172,7 +182,16 @@ static ssize_t _sys_write(int fd, const void* buf, size_t len) {
     if (!buf || !len)
         return 0;
 
-    if (!_valid_user_ptr(buf, len))
+    if (fd == STDOUT_FILENO || fd == STDERR_FILENO || fd == STDIN_FILENO) {
+        sched_thread_t* thread = sched_current();
+        if (thread)
+            thread->tty_index = (int)tty_current_screen();
+        tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+        return tty_write_handle(&handle, buf, len);
+    }
+
+    sched_thread_t* thread = sched_current();
+    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
         return -1;
 
     if (fd != STDOUT_FILENO && fd != STDERR_FILENO && fd != STDIN_FILENO)
@@ -227,9 +246,9 @@ static ssize_t _sys_ioctl(int fd, u64 request, void* args) {
     if (fd != STDIN_FILENO && fd != STDOUT_FILENO && fd != STDERR_FILENO)
         return -1;
 
-    if (args && !_valid_user_ptr(args, 1))
-        return -1;
-
+    sched_thread_t* thread = sched_current();
+    if (thread)
+        thread->tty_index = (int)tty_current_screen();
     tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
     return tty_ioctl_handle(&handle, request, args);
 }
@@ -245,6 +264,29 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
     char resolved[PATH_MAX];
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
         return -1;
+
+    if (strncmp(resolved, "/dev/", 5) == 0) {
+        const char* dev = resolved + 5;
+        if (strcmp(dev, "tty") == 0) {
+            thread->tty_index = (int)tty_current_screen();
+        } else if (strcmp(dev, "console") == 0) {
+            thread->tty_index = TTY_CONSOLE;
+        } else if (strncmp(dev, "tty", 3) == 0) {
+            const char* num = dev + 3;
+            int idx = 0;
+            bool ok = num[0] != '\0';
+            for (const char* p = num; *p; p++) {
+                if (*p < '0' || *p > '9') {
+                    ok = false;
+                    break;
+                }
+                idx = idx * 10 + (*p - '0');
+            }
+
+            if (ok && idx >= 0 && idx < (int)TTY_COUNT)
+                thread->tty_index = (int)TTY_USER_TO_SCREEN(idx);
+        }
+    }
 
     vfs_node_t* node = vfs_lookup(resolved);
     if (node) {
@@ -762,6 +804,10 @@ static pid_t _sys_setsid(void) {
     return thread->sid;
 }
 
+static pid_t _sys_waitpid(pid_t pid, int* status, int options) {
+    return sched_waitpid(pid, status, options);
+}
+
 static int _sys_stat_path(const char* path, stat_t* st, bool follow_links) {
     if (!path || !st)
         return -1;
@@ -1072,7 +1118,21 @@ static u64 _sys_sigreturn(arch_int_state_t* state) {
 }
 
 static u64 _sys_kill(pid_t pid, int signum) {
+    if (pid < 0)
+        return (u64)sched_signal_send_pgrp(-pid, signum);
+
+    if (pid == 0) {
+        sched_thread_t* thread = sched_current();
+        if (!thread || thread->pgid == 0)
+            return (u64)-1;
+        return (u64)sched_signal_send_pgrp(thread->pgid, signum);
+    }
+
     return (u64)sched_signal_send_pid(pid, signum);
+}
+
+static ssize_t _sys_getprocs(proc_info_t* out, size_t capacity) {
+    return (ssize_t)sched_list_procs(out, capacity);
 }
 
 static u64 _dispatch(arch_int_state_t* state) {
@@ -1195,7 +1255,14 @@ static u64 _dispatch(arch_int_state_t* state) {
             (pid_t)arch_syscall_arg1(state),
             status
         );
-    }
+    case SYS_WAIT:
+        return (u64)sched_wait((pid_t)arch_syscall_arg1(state), (int*)arch_syscall_arg2(state));
+    case SYS_WAITPID:
+        return (u64)_sys_waitpid(
+            (pid_t)arch_syscall_arg1(state),
+            (int*)arch_syscall_arg2(state),
+            (int)arch_syscall_arg3(state)
+        );
     case SYS_GETPID: {
         sched_thread_t* thread = sched_current();
         return thread ? (u64)thread->pid : (u64)-1;
@@ -1229,7 +1296,12 @@ static u64 _dispatch(arch_int_state_t* state) {
     case SYS_SIGRETURN:
         return sys_sigreturn(state);
     case SYS_KILL:
-        return sys_kill((pid_t)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
+        return _sys_kill((pid_t)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
+    case SYS_GETPROCS:
+        return (u64)_sys_getprocs(
+            (proc_info_t*)arch_syscall_arg1(state),
+            (size_t)arch_syscall_arg2(state)
+        );
     default:
         return (u64)-1;
     }

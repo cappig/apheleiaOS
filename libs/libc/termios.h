@@ -177,7 +177,7 @@ inline termios_t* __termios_default_init(termios_t* tos) {
     tos->c_cc[VMIN] = 1;
 
     tos->c_iflag = BRKINT | ICRNL;
-    tos->c_oflag = OPOST;
+    tos->c_oflag = OPOST | ONLCR;
     tos->c_cflag = CS8 | CREAD | HUPCL;
     tos->c_lflag = ECHO | ECHOE | ECHOK | ECHOCTL | ICANON | IEXTEN | ISIG;
 

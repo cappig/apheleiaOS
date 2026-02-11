@@ -1,6 +1,7 @@
 #include <arch/arch.h>
 #include <log/log.h>
 #include <string.h>
+#include <arch/thread.h>
 #include <sys/acpi.h>
 #include <sys/cpu.h>
 #include <sys/font.h>
@@ -113,10 +114,15 @@ static void _page_fault_handler(int_state_t* state) {
     bool write = (code & PF_ERR_WRITE) != 0;
     bool user = (code & PF_ERR_USER) != 0;
 
-    if (present && write && user) {
+    if (present && write) {
         sched_thread_t* thread = sched_current();
-        if (thread && sched_handle_cow_fault(thread, (uintptr_t)addr, true))
-            return;
+        if (thread && thread->user_thread) {
+            arch_word_t user_top = arch_user_stack_top();
+            if (user || (user_top && addr < (u64)user_top)) {
+                if (sched_handle_cow_fault(thread, (uintptr_t)addr, true))
+                    return;
+            }
+        }
     }
 
     if (_handle_user_signal(SIGSEGV, state))

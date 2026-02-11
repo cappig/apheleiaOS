@@ -12,6 +12,9 @@
 #include <string.h>
 #include <sys/cpu.h>
 #include <sys/panic.h>
+#include <sys/proc.h>
+#include <sys/tty.h>
+#include <sys/wait.h>
 
 #define SCHED_STACK_SIZE (16 * KIB)
 #define SCHED_SLICE      5
@@ -34,6 +37,26 @@ static void _enqueue_thread(sched_thread_t* thread);
 static void _sched_reap(void);
 static void _sched_wake_sleepers(u64 now);
 static void _wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread);
+static void _wait_queue_remove(sched_thread_t* thread);
+static void _run_queue_remove(sched_thread_t* thread);
+static void _sched_init_thread_name(sched_thread_t* thread, const char* name);
+
+static proc_state_t _sched_state_to_proc(thread_state_t state) {
+    switch (state) {
+    case THREAD_READY:
+        return PROC_STATE_READY;
+    case THREAD_RUNNING:
+        return PROC_STATE_RUNNING;
+    case THREAD_SLEEPING:
+        return PROC_STATE_SLEEPING;
+    case THREAD_STOPPED:
+        return PROC_STATE_STOPPED;
+    case THREAD_ZOMBIE:
+        return PROC_STATE_ZOMBIE;
+    default:
+        return PROC_STATE_READY;
+    }
+}
 
 static void _add_all_thread(sched_thread_t* thread) {
     if (!thread || !all_list || thread->in_all_list)
@@ -42,6 +65,18 @@ static void _add_all_thread(sched_thread_t* thread) {
     thread->all_node.data = thread;
     list_append(all_list, &thread->all_node);
     thread->in_all_list = true;
+}
+
+static void _sched_init_thread_name(sched_thread_t* thread, const char* name) {
+    if (!thread) {
+        return;
+    }
+
+    const char* src = name ? name : "thread";
+    memset(thread->name, 0, sizeof(thread->name));
+    size_t len = strnlen(src, sizeof(thread->name) - 1);
+    memcpy(thread->name, src, len);
+    thread->name[len] = '\0';
 }
 
 static void _remove_all_thread(sched_thread_t* thread) {
@@ -345,7 +380,7 @@ static void _sched_reap(void) {
         list_node_t* next = node->next;
         sched_thread_t* thread = node->data;
 
-        if (thread && thread != current && thread != idle_thread && !thread->is_bootstrap) {
+        if (thread && thread != current && thread != idle_thread) {
             if (thread->user_thread) {
                 node = next;
                 continue;
@@ -438,12 +473,69 @@ static void _enqueue_thread(sched_thread_t* thread) {
     thread->in_run_queue = true;
 }
 
+static void _run_queue_remove(sched_thread_t* thread) {
+    if (!thread || !thread->in_run_queue || !run_queue)
+        return;
+
+    list_remove(run_queue, &thread->run_node);
+    thread->in_run_queue = false;
+}
+
+static void _wait_queue_remove(sched_thread_t* thread) {
+    if (!thread || !thread->in_wait_queue || !thread->blocked_on || !thread->blocked_on->list)
+        return;
+
+    list_remove(thread->blocked_on->list, &thread->wait_node);
+    thread->in_wait_queue = false;
+    thread->blocked_on = NULL;
+}
+
 void sched_make_runnable(sched_thread_t* thread) {
     if (!thread)
         return;
 
     thread->state = THREAD_READY;
     _enqueue_thread(thread);
+}
+
+void sched_stop_thread(sched_thread_t* thread, int signum) {
+    if (!thread || thread->state == THREAD_ZOMBIE || thread->state == THREAD_STOPPED)
+        return;
+
+    unsigned long flags = arch_irq_save();
+
+    _run_queue_remove(thread);
+    _wait_queue_remove(thread);
+
+    thread->wake_tick = 0;
+    thread->state = THREAD_STOPPED;
+    thread->stop_signal = signum;
+    thread->stop_reported = false;
+
+    if (thread->user_thread) {
+        sched_thread_t* parent = find_thread_by_pid(thread->ppid);
+        if (parent) {
+            sched_wake_one(&parent->wait_queue);
+            sched_signal_send_thread(parent, SIGCHLD);
+        }
+    }
+
+    arch_irq_restore(flags);
+
+    if (thread == current && sched_running)
+        sched_yield();
+}
+
+void sched_continue_thread(sched_thread_t* thread) {
+    if (!thread || thread->state != THREAD_STOPPED)
+        return;
+
+    unsigned long flags = arch_irq_save();
+    thread->state = THREAD_READY;
+    thread->stop_signal = 0;
+    thread->stop_reported = false;
+    _enqueue_thread(thread);
+    arch_irq_restore(flags);
 }
 
 static sched_thread_t* _dequeue_thread(void) {
@@ -473,7 +565,7 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     if (!thread)
         return NULL;
 
-    thread->name = name ? name : "thread";
+    _sched_init_thread_name(thread, name);
     thread->entry = entry;
     thread->arg = arg;
     thread->state = THREAD_READY;
@@ -491,14 +583,19 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     thread->gid = current ? current->gid : 0;
     thread->stack_size = SCHED_STACK_SIZE;
     thread->stack = malloc(thread->stack_size);
+    thread->tty_index = current ? current->tty_index : -1;
 
     if (!thread->stack) {
         free(thread);
         return NULL;
     }
 
-    if (!user_thread)
-        thread->context = _build_initial_stack(thread);
+    thread->cwd[0] = '/';
+    thread->cwd[1] = '\0';
+
+    if (!user_thread) {
+        thread->context = build_initial_stack(thread);
+    }
 
     if (user_thread) {
         thread->vm_space = arch_vm_create_user();
@@ -540,24 +637,12 @@ void scheduler_init(void) {
     kernel_vm = arch_vm_kernel();
     assert(kernel_vm);
 
-    current = calloc(1, sizeof(*current));
-    assert(current);
-
-    current->name = "bootstrap";
-    current->state = THREAD_RUNNING;
-    current->is_bootstrap = true;
-    current->pid = 0;
-    current->ppid = 0;
-    current->pgid = 0;
-    current->sid = 0;
-    current->uid = 0;
-    current->gid = 0;
-    current->vm_space = kernel_vm;
-    sched_wait_queue_init(&current->wait_queue);
-    _add_all_thread(current);
-
-    idle_thread = _create_thread("idle", idle_entry, NULL, false, false);
+    next_pid = 0;
+    idle_thread = create_thread("idle", idle_entry, NULL, false, false);
     assert(idle_thread);
+    idle_thread->state = THREAD_RUNNING;
+    idle_thread->tty_index = TTY_NONE;
+    current = idle_thread;
 
     ticks_left = SCHED_SLICE;
     sched_running = false;
@@ -593,6 +678,16 @@ pid_t sched_fork(arch_int_state_t* state) {
     child->sid = current->sid;
     child->user_stack_base = current->user_stack_base;
     child->user_stack_size = current->user_stack_size;
+    memcpy(child->fds, current->fds, sizeof(current->fds));
+    memcpy(child->fd_used, current->fd_used, sizeof(current->fd_used));
+    memcpy(child->cwd, current->cwd, sizeof(current->cwd));
+    memcpy(child->signal_handlers, current->signal_handlers, sizeof(child->signal_handlers));
+    child->signal_mask = current->signal_mask;
+    child->signal_trampoline = current->signal_trampoline;
+    child->signal_pending = 0;
+    child->signal_saved_valid = false;
+    child->current_signal = 0;
+    child->tty_index = current->tty_index;
 
     bool cow_enabled = pmm_ref_ready();
 
@@ -655,11 +750,16 @@ pid_t sched_fork(arch_int_state_t* state) {
 }
 
 pid_t sched_wait(pid_t pid, int* status) {
+    return sched_waitpid(pid, status, 0);
+}
+
+pid_t sched_waitpid(pid_t pid, int* status, int options) {
     if (!current || !current->user_thread)
         return -1;
 
     for (;;) {
         sched_thread_t* found = NULL;
+        sched_thread_t* stopped = NULL;
         unsigned long flags = arch_irq_save();
 
         if (!zombie_list) {
@@ -696,15 +796,45 @@ pid_t sched_wait(pid_t pid, int* status) {
             return ret;
         }
 
+        if (options & WUNTRACED) {
+            ll_foreach(node, all_list) {
+                sched_thread_t* thread = node->data;
+                if (!thread || !thread->user_thread)
+                    continue;
+
+                if (thread->ppid != current->pid)
+                    continue;
+
+                if (pid > 0 && thread->pid != pid)
+                    continue;
+
+                if (thread->state != THREAD_STOPPED || thread->stop_reported)
+                    continue;
+
+                stopped = thread;
+                break;
+            }
+
+            if (stopped) {
+                stopped->stop_reported = true;
+                if (status)
+                    *status = 0x7f | ((stopped->stop_signal & 0xff) << 8);
+                arch_irq_restore(flags);
+                return stopped->pid;
+            }
+        }
+
+        if (options & WNOHANG) {
+            arch_irq_restore(flags);
+            return 0;
+        }
+
         if (!sched_running) {
             arch_irq_restore(flags);
             return -1;
         }
 
-        if (current->in_run_queue && run_queue) {
-            list_remove(run_queue, &current->run_node);
-            current->in_run_queue = false;
-        }
+        _run_queue_remove(current);
 
         current->wake_tick = 0;
         current->state = THREAD_SLEEPING;
@@ -735,6 +865,10 @@ void sched_wait_queue_destroy(sched_wait_queue_t* queue) {
 
     list_destroy(queue->list, false);
     queue->list = NULL;
+}
+
+void sched_set_thread_name(sched_thread_t* thread, const char* name) {
+    _sched_init_thread_name(thread, name);
 }
 
 static void _wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread) {
@@ -769,10 +903,7 @@ void sched_block(sched_wait_queue_t* queue) {
 
     unsigned long flags = arch_irq_save();
 
-    if (current->in_run_queue && run_queue) {
-        list_remove(run_queue, &current->run_node);
-        current->in_run_queue = false;
-    }
+    _run_queue_remove(current);
 
     current->wake_tick = 0;
     current->state = THREAD_SLEEPING;
@@ -842,8 +973,7 @@ void sched_tick(arch_int_state_t* state) {
 
     ticks_left = SCHED_SLICE;
 
-    if (current && current->state == THREAD_RUNNING && current != idle_thread &&
-        !current->is_bootstrap) {
+    if (current && current->state == THREAD_RUNNING && current != idle_thread) {
         current->state = THREAD_READY;
         _enqueue_thread(current);
     }
@@ -857,7 +987,7 @@ void sched_tick(arch_int_state_t* state) {
     if (!logged_first_switch) {
         log_info(
             "scheduler: switching to %s (pid=%ld)",
-            next->name ? next->name : "thread",
+            next->name[0] ? next->name : "thread",
             (long)next->pid
         );
         logged_first_switch = true;
@@ -903,7 +1033,7 @@ void sched_exit(void) {
 
     if (current) {
         current->state = THREAD_ZOMBIE;
-        if (current != idle_thread && !current->is_bootstrap && !current->in_zombie_list) {
+        if (current != idle_thread && !current->in_zombie_list) {
             current->zombie_node.data = current;
             list_append(zombie_list, &current->zombie_node);
             current->in_zombie_list = true;
@@ -927,4 +1057,69 @@ void sched_exit(void) {
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);
     arch_context_switch(next->context);
+}
+
+void sched_preempt_disable(void) {
+    preempt_depth++;
+}
+
+void sched_preempt_enable(void) {
+    if (preempt_depth > 0)
+        preempt_depth--;
+}
+
+bool sched_preempt_disabled(void) {
+    return preempt_depth != 0;
+}
+
+size_t sched_list_procs(proc_info_t* out, size_t capacity) {
+    if (!out || capacity == 0 || !all_list)
+        return 0;
+
+    unsigned long flags = arch_irq_save();
+    size_t count = 0;
+
+    ll_foreach(node, all_list) {
+        if (count >= capacity)
+            break;
+
+        sched_thread_t* thread = node->data;
+        if (!thread)
+            continue;
+
+        proc_info_t* info = &out[count++];
+        info->pid = thread->pid;
+        info->ppid = thread->ppid;
+        info->pgid = thread->pgid;
+        info->sid = thread->sid;
+        info->uid = thread->uid;
+        info->gid = thread->gid;
+        info->state = _sched_state_to_proc(thread->state);
+        info->tty_index = thread->tty_index;
+        memset(info->name, 0, sizeof(info->name));
+        strncpy(info->name, thread->name, sizeof(info->name) - 1);
+    }
+
+    arch_irq_restore(flags);
+    return count;
+}
+
+int sched_signal_send_pgrp(pid_t pgid, int signum) {
+    if (!all_list || pgid <= 0)
+        return -1;
+
+    int count = 0;
+    unsigned long flags = arch_irq_save();
+
+    ll_foreach(node, all_list) {
+        sched_thread_t* thread = node->data;
+        if (!thread || thread->pgid != pgid)
+            continue;
+
+        if (sched_signal_send_thread(thread, signum) >= 0)
+            count++;
+    }
+
+    arch_irq_restore(flags);
+    return count ? count : -1;
 }

@@ -42,6 +42,8 @@
 #define SYS_SIGNAL    37
 #define SYS_SIGRETURN 38
 #define SYS_KILL      39
+#define SYS_GETPROCS  40
+#define SYS_WAITPID   41
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1

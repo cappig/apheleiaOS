@@ -6,6 +6,7 @@
 #include <base/types.h>
 #include <data/list.h>
 #include <sys/types.h>
+#include <sys/proc.h>
 
 typedef void (*thread_entry_t)(void* arg);
 
@@ -24,6 +25,7 @@ typedef enum {
     THREAD_READY,
     THREAD_RUNNING,
     THREAD_SLEEPING,
+    THREAD_STOPPED,
     THREAD_ZOMBIE,
 } thread_state_t;
 
@@ -40,7 +42,7 @@ typedef struct sched_wait_queue {
 } sched_wait_queue_t;
 
 typedef struct sched_thread {
-    const char* name;
+    char name[PROC_NAME_MAX];
     thread_state_t state;
 
     list_node_t run_node;
@@ -51,8 +53,6 @@ typedef struct sched_thread {
 
     list_node_t zombie_node;
     bool in_zombie_list;
-
-    bool is_bootstrap;
 
     void* stack;
     size_t stack_size;
@@ -81,6 +81,25 @@ typedef struct sched_thread {
 
     list_node_t all_node;
     bool in_all_list;
+
+    sched_fd_t fds[SCHED_FD_MAX];
+    bool fd_used[SCHED_FD_MAX];
+
+    char cwd[PATH_MAX];
+
+    u64 wake_tick;
+
+    u32 signal_pending;
+    u32 signal_mask;
+    u32 current_signal;
+    int stop_signal;
+    bool stop_reported;
+    bool signal_saved_valid;
+    uintptr_t signal_trampoline;
+    arch_int_state_t signal_saved_state;
+    sighandler_t signal_handlers[NSIG];
+
+    int tty_index;
 } sched_thread_t;
 
 void scheduler_init(void);
@@ -93,9 +112,13 @@ sched_thread_t* sched_create_kernel_thread(const char* name, thread_entry_t entr
 sched_thread_t* sched_create_user_thread(const char* name);
 pid_t sched_fork(arch_int_state_t* state);
 pid_t sched_wait(pid_t pid, int* status);
+pid_t sched_waitpid(pid_t pid, int* status, int options);
 void sched_prepare_user_thread(sched_thread_t* thread, uintptr_t entry, uintptr_t user_stack_top);
 void sched_discard_thread(sched_thread_t* thread);
 void sched_make_runnable(sched_thread_t* thread);
+void sched_stop_thread(sched_thread_t* thread, int signum);
+void sched_continue_thread(sched_thread_t* thread);
+void sched_set_thread_name(sched_thread_t* thread, const char* name);
 
 bool sched_add_user_region(
     sched_thread_t* thread,
@@ -117,5 +140,7 @@ void sched_wake_all(sched_wait_queue_t* queue);
 void sched_tick(arch_int_state_t* state);
 void sched_yield(void);
 void sched_exit(void) NORETURN;
+size_t sched_list_procs(proc_info_t* out, size_t capacity);
+int sched_signal_send_pgrp(pid_t pgid, int signum);
 
 bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write);

@@ -130,6 +130,18 @@ static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len
     return (ssize_t)len;
 }
 
+ssize_t tty_write_screen_output(size_t index, const void* buf, size_t len) {
+    if (!buf || len == 0)
+        return 0;
+
+    if (len == 1 && *(const char*)buf == '\n') {
+        const char crlf[] = {'\r', '\n'};
+        return tty_write_screen(index, crlf, sizeof(crlf));
+    }
+
+    return tty_write_screen_processed(index, buf, len);
+}
+
 ssize_t tty_read_handle(const tty_handle_t* handle, void* buf, size_t len) {
     if (!handle)
         return -1;

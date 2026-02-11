@@ -33,3 +33,4 @@ size_t tty_current_screen(void);
 ssize_t tty_read_handle(const tty_handle_t* handle, void* buf, size_t len);
 ssize_t tty_write_handle(const tty_handle_t* handle, const void* buf, size_t len);
 ssize_t tty_ioctl_handle(const tty_handle_t* handle, u64 request, void* args);
+ssize_t tty_write_screen_output(size_t index, const void* buf, size_t len);

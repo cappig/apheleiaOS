@@ -81,6 +81,10 @@ pid_t wait(pid_t pid, int* status) {
     return (pid_t)syscall2(SYS_WAIT, (uintptr_t)pid, (uintptr_t)status);
 }
 
+pid_t waitpid(pid_t pid, int* status, int options) {
+    return (pid_t)syscall3(SYS_WAITPID, (uintptr_t)pid, (uintptr_t)status, (uintptr_t)options);
+}
+
 int execve(const char* path, char* const argv[], char* const envp[]) {
     return (int)syscall3(SYS_EXECVE, (uintptr_t)path, (uintptr_t)argv, (uintptr_t)envp);
 }
@@ -119,6 +123,10 @@ int setuid(uid_t uid) {
 
 int setgid(gid_t gid) {
     return (int)syscall1(SYS_SETGID, (uintptr_t)gid);
+}
+
+ssize_t getprocs(proc_info_t* out, size_t capacity) {
+    return (ssize_t)syscall2(SYS_GETPROCS, (uintptr_t)out, (uintptr_t)capacity);
 }
 
 void _exit(int status) {

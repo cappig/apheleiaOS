@@ -12,11 +12,19 @@ static bool _valid(int signum) {
     return signum > 0 && signum < NSIG;
 }
 
+static bool _is_stop(int signum) {
+    return signum == SIGTSTP || signum == SIGSTOP || signum == SIGTTIN || signum == SIGTTOU;
+}
+
+static bool _is_continue(int signum) {
+    return signum == SIGCONT;
+}
+
 static sighandler_t _get_handler(sched_thread_t* thread, int signum) {
-    if (!thread || !_valid(signum))
+    if (!thread || !signal_valid(signum))
         return SIG_DFL;
 
-    if (signum == SIGKILL)
+    if (signum == SIGKILL || signum == SIGSTOP)
         return SIG_DFL;
 
     sighandler_t handler = thread->signal_handlers[signum];
@@ -108,7 +116,18 @@ int sched_signal_send_thread(sched_thread_t* thread, int signum) {
     if (handler == SIG_IGN)
         return 0;
 
-    _mark_pending(thread, signum);
+    if (_is_continue(signum) && thread->state == THREAD_STOPPED &&
+        (handler == SIG_DFL || handler == SIG_IGN)) {
+        sched_continue_thread(thread);
+        return 1;
+    }
+
+    if (_is_stop(signum) && handler == SIG_DFL) {
+        sched_stop_thread(thread, signum);
+        return 1;
+    }
+
+    signal_mark_pending(thread, signum);
 
     if (thread->state == THREAD_SLEEPING) {
         if (thread->blocked_on && thread->blocked_on->list && thread->in_wait_queue) {
@@ -148,6 +167,18 @@ void sched_signal_deliver_current(arch_int_state_t* state) {
     sighandler_t handler = _get_handler(thread, signum);
     if (handler == SIG_IGN) {
         _clear_pending(thread, signum);
+        return;
+    }
+
+    if (handler == SIG_DFL && _is_stop(signum)) {
+        signal_clear_pending(thread, signum);
+        sched_stop_thread(thread, signum);
+        return;
+    }
+
+    if (handler == SIG_DFL && _is_continue(signum)) {
+        signal_clear_pending(thread, signum);
+        sched_continue_thread(thread);
         return;
     }
 

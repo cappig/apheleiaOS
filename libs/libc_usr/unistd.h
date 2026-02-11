@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <sys/proc.h>
 #include <sys/types.h>
 
 ssize_t read(int fd, void* buf, size_t count);
@@ -21,6 +22,7 @@ int rename(const char* oldpath, const char* newpath);
 
 pid_t fork(void);
 pid_t wait(pid_t pid, int* status);
+pid_t waitpid(pid_t pid, int* status, int options);
 int execve(const char* path, char* const argv[], char* const envp[]);
 
 pid_t getpid(void);

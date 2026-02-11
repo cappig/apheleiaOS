@@ -19,6 +19,7 @@ static winsize_t tty_winsize[TTY_SCREEN_COUNT];
 static bool tty_termios_ready[TTY_SCREEN_COUNT] = {0};
 static bool tty_literal_next[TTY_SCREEN_COUNT] = {0};
 static bool tty_cr_pending[TTY_SCREEN_COUNT] = {0};
+static size_t tty_pending_newlines[TTY_SCREEN_COUNT] = {0};
 
 static void _tty_signal_flush(size_t screen, ring_buffer_t* buffer, const termios_t* tos) {
     if (!tos || (tos->c_lflag & NOFLSH))
@@ -30,6 +31,7 @@ static void _tty_signal_flush(size_t screen, ring_buffer_t* buffer, const termio
     tty_line_len[screen] = 0;
     tty_literal_next[screen] = false;
     tty_cr_pending[screen] = false;
+    tty_pending_newlines[screen] = 0;
 }
 
 static void _tty_init_screen_state(size_t screen) {
@@ -54,6 +56,7 @@ static void _tty_init_screen_state(size_t screen) {
     tty_line_len[screen] = 0;
     tty_literal_next[screen] = false;
     tty_cr_pending[screen] = false;
+    tty_pending_newlines[screen] = 0;
     tty_termios_ready[screen] = true;
 }
 
@@ -106,7 +109,7 @@ static bool _tty_apply_iflags(const termios_t* tos, char* ch) {
 
 static void _tty_echo_backspace(size_t screen) {
     const char bs_seq[] = "\b \b";
-    arch_console_write_screen(screen, bs_seq, sizeof(bs_seq) - 1);
+    tty_write_screen_output(screen, bs_seq, sizeof(bs_seq) - 1);
 }
 
 static void _tty_echo_control(size_t screen, char ch) {
@@ -115,7 +118,7 @@ static void _tty_echo_control(size_t screen, char ch) {
         return;
 
     char out[2] = {'^', caret};
-    arch_console_write_screen(screen, out, sizeof(out));
+    tty_write_screen_output(screen, out, sizeof(out));
 }
 
 static void _tty_echo_char(size_t screen, const termios_t* tos, char ch, bool force_newline) {
@@ -137,7 +140,7 @@ static void _tty_echo_char(size_t screen, const termios_t* tos, char ch, bool fo
         return;
     }
 
-    arch_console_write_screen(screen, &ch, 1);
+    tty_write_screen_output(screen, &ch, 1);
 }
 
 static void _tty_erase_chars(size_t screen, const termios_t* tos, size_t count) {
@@ -160,7 +163,7 @@ static void _tty_reprint_line(size_t screen, const termios_t* tos) {
         return;
 
     char nl = '\n';
-    arch_console_write_screen(screen, &nl, 1);
+    tty_write_screen_output(screen, &nl, 1);
 
     for (size_t i = 0; i < tty_line_len[screen]; i++)
         tty_echo_char(screen, tos, tty_line_buf[screen][i], false);
@@ -182,10 +185,8 @@ _tty_flush_line(size_t screen, ring_buffer_t* buffer, bool add_newline, bool ech
 
     *line_len = 0;
 
-    if (echo_newline) {
-        char nl = '\n';
-        arch_console_write_screen(screen, &nl, 1);
-    }
+    if (echo_newline)
+        tty_pending_newlines[screen]++;
 
     sched_wake_one(&tty_wait[screen]);
 }
@@ -337,14 +338,14 @@ void tty_input_push(char ch) {
             }
 
             if (pgrp)
-                sched_signal_send_pid(pgrp, sig);
+                sched_signal_send_pgrp(pgrp, sig);
 
             if (canon) {
                 if (tos->c_lflag & ECHOCTL)
                     tty_echo_control(screen, ch);
                 if (tos->c_lflag & ECHO) {
                     char nl = '\n';
-                    arch_console_write_screen(screen, &nl, 1);
+                    tty_write_screen_output(screen, &nl, 1);
                 }
                 tty_line_len[screen] = 0;
             }
@@ -384,7 +385,7 @@ void tty_input_push(char ch) {
 
                     if (tos->c_lflag & ECHOK) {
                         char nl = '\n';
-                        arch_console_write_screen(screen, &nl, 1);
+                        tty_write_screen_output(screen, &nl, 1);
                     }
                 }
             }
@@ -480,6 +481,18 @@ ssize_t tty_input_read(size_t screen, void* buf, size_t len) {
             if (popped == 1 && out[0] == 0)
                 return 0;
 
+            if (tty_pending_newlines[screen]) {
+                for (size_t i = 0; i < popped; i++) {
+                    if (out[i] != '\n')
+                        continue;
+                    if (!tty_pending_newlines[screen])
+                        break;
+                    char nl = '\n';
+                    tty_write_screen_output(screen, &nl, 1);
+                    tty_pending_newlines[screen]--;
+                }
+            }
+
             return (ssize_t)popped;
         }
 
@@ -545,5 +558,6 @@ void tty_input_flush(size_t screen) {
     tty_line_len[screen] = 0;
     tty_literal_next[screen] = false;
     tty_cr_pending[screen] = false;
+    tty_pending_newlines[screen] = 0;
     tty_ready[screen] = true;
 }

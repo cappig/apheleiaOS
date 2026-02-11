@@ -6,8 +6,44 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/proc.h>
+#include <sys/wait.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+static volatile sig_atomic_t got_sigint = 0;
+
+#define SH_ENV_MAX     32
+#define SH_ENV_KEY_MAX 32
+#define SH_ENV_VAL_MAX 128
+#define SH_EXPAND_MAX  256
+#define SH_MAX_ARGS    16
+#define SH_MAX_JOBS    16
+#define SH_CMD_MAX     128
+
+typedef enum {
+    JOB_RUNNING,
+    JOB_STOPPED,
+} job_state_t;
+
+typedef struct {
+    int id;
+    pid_t pid;
+    job_state_t state;
+    char cmd[SH_CMD_MAX];
+} job_t;
+
+typedef struct {
+    char key[SH_ENV_KEY_MAX];
+    char value[SH_ENV_VAL_MAX];
+} sh_env_t;
+
+static sh_env_t sh_env[SH_ENV_MAX];
+static size_t sh_env_count = 0;
+static job_t sh_jobs[SH_MAX_JOBS];
+static size_t sh_job_count = 0;
+static int sh_next_job_id = 1;
+static pid_t sh_pgid = 0;
 
 static ssize_t write_str(const char* str) {
     if (!str)
@@ -17,7 +53,7 @@ static ssize_t write_str(const char* str) {
 }
 
 static void print_prompt(void) {
-    write_str("sh$ ");
+    write_str("\rsh$ ");
 }
 
 static void sigint_handler(int signum) {
@@ -30,6 +66,198 @@ static void tty_set_pgrp(pid_t pid) {
         return;
 
     ioctl(STDIN_FILENO, TIOCSPGRP, &pid);
+}
+
+static job_t* sh_job_find_by_id(int id) {
+    for (size_t i = 0; i < sh_job_count; i++) {
+        if (sh_jobs[i].id == id)
+            return &sh_jobs[i];
+    }
+
+    return NULL;
+}
+
+static job_t* sh_job_find_by_pid(pid_t pid) {
+    for (size_t i = 0; i < sh_job_count; i++) {
+        if (sh_jobs[i].pid == pid)
+            return &sh_jobs[i];
+    }
+
+    return NULL;
+}
+
+static void sh_job_remove_index(size_t index) {
+    if (index >= sh_job_count)
+        return;
+
+    for (size_t i = index; i + 1 < sh_job_count; i++)
+        sh_jobs[i] = sh_jobs[i + 1];
+
+    memset(&sh_jobs[sh_job_count - 1], 0, sizeof(sh_jobs[sh_job_count - 1]));
+    sh_job_count--;
+}
+
+static job_t* sh_job_add(pid_t pid, const char* cmd, job_state_t state) {
+    if (sh_job_count >= SH_MAX_JOBS)
+        return NULL;
+
+    job_t* job = &sh_jobs[sh_job_count++];
+    memset(job, 0, sizeof(*job));
+    job->id = sh_next_job_id++;
+    job->pid = pid;
+    job->state = state;
+    snprintf(job->cmd, sizeof(job->cmd), "%s", cmd ? cmd : "");
+    return job;
+}
+
+static ssize_t sh_get_procs(proc_info_t* out, size_t cap) {
+    return getprocs(out, cap);
+}
+
+static const proc_info_t* sh_find_proc(pid_t pid, const proc_info_t* list, ssize_t count) {
+    if (!list || count <= 0)
+        return NULL;
+
+    for (ssize_t i = 0; i < count; i++) {
+        if (list[i].pid == pid)
+            return &list[i];
+    }
+
+    return NULL;
+}
+
+static void sh_reap_jobs(bool report) {
+    proc_info_t procs[128];
+    ssize_t count = sh_get_procs(procs, sizeof(procs) / sizeof(procs[0]));
+
+    for (size_t i = 0; i < sh_job_count; ) {
+        job_t* job = &sh_jobs[i];
+        const proc_info_t* info = (count > 0) ? sh_find_proc(job->pid, procs, count) : NULL;
+
+        if (!info || info->state == PROC_STATE_ZOMBIE) {
+            int status = 0;
+            waitpid(job->pid, &status, 0);
+            if (report) {
+                char line[SH_CMD_MAX + 32];
+                snprintf(line, sizeof(line), "[%d] Done    %s\n", job->id, job->cmd);
+                write_str(line);
+            }
+            sh_job_remove_index(i);
+            continue;
+        }
+
+        if (info->state == PROC_STATE_STOPPED)
+            job->state = JOB_STOPPED;
+        else
+            job->state = JOB_RUNNING;
+
+        i++;
+    }
+}
+
+static void sh_print_jobs(void) {
+    sh_reap_jobs(false);
+
+    for (size_t i = 0; i < sh_job_count; i++) {
+        job_t* job = &sh_jobs[i];
+        const char* state = job->state == JOB_STOPPED ? "Stopped" : "Running";
+        char line[SH_CMD_MAX + 32];
+        snprintf(line, sizeof(line), "[%d] %s  %s\n", job->id, state, job->cmd);
+        write_str(line);
+    }
+}
+
+static int sh_parse_job_id(const char* arg) {
+    if (!arg || !arg[0])
+        return -1;
+
+    if (arg[0] == '%')
+        arg++;
+
+    int id = 0;
+    while (*arg) {
+        if (!isdigit((unsigned char)*arg))
+            return -1;
+        id = id * 10 + (*arg - '0');
+        arg++;
+    }
+
+    return id > 0 ? id : -1;
+}
+
+static int sh_fg(int argc, char** argv) {
+    if (sh_job_count == 0) {
+        write_str("fg: no jobs\n");
+        return 1;
+    }
+
+    job_t* job = NULL;
+    if (argc < 2) {
+        job = &sh_jobs[sh_job_count - 1];
+    } else {
+        int id = sh_parse_job_id(argv[1]);
+        job = sh_job_find_by_id(id);
+    }
+
+    if (!job) {
+        write_str("fg: no such job\n");
+        return 1;
+    }
+
+    if (job->state == JOB_STOPPED)
+        kill(job->pid, SIGCONT);
+
+    tty_set_pgrp(job->pid);
+
+    int status = 0;
+    pid_t waited = waitpid(job->pid, &status, WUNTRACED);
+
+    tty_set_pgrp(sh_pgid);
+
+    if (waited < 0) {
+        write_str("fg: wait failed\n");
+        return 1;
+    }
+
+    if (WIFSTOPPED(status)) {
+        job->state = JOB_STOPPED;
+        return 1;
+    }
+
+    job_t* found = sh_job_find_by_pid(job->pid);
+    if (found) {
+        size_t index = (size_t)(found - sh_jobs);
+        sh_job_remove_index(index);
+    }
+
+    return 1;
+}
+
+static int sh_bg(int argc, char** argv) {
+    if (sh_job_count == 0) {
+        write_str("bg: no jobs\n");
+        return 1;
+    }
+
+    job_t* job = NULL;
+    if (argc < 2) {
+        job = &sh_jobs[sh_job_count - 1];
+    } else {
+        int id = sh_parse_job_id(argv[1]);
+        job = sh_job_find_by_id(id);
+    }
+
+    if (!job) {
+        write_str("bg: no such job\n");
+        return 1;
+    }
+
+    if (job->state == JOB_STOPPED) {
+        kill(job->pid, SIGCONT);
+        job->state = JOB_RUNNING;
+    }
+
+    return 1;
 }
 
 static int sh_env_find(const char* key) {
@@ -288,7 +516,7 @@ static int handle_builtin(int argc, char** argv) {
     }
 
     if (!strcmp(argv[0], "help")) {
-        write_str("builtins: help, echo, exit, set, unset, env, cd\n");
+        write_str("builtins: help, echo, exit, set, unset, env, cd, jobs, fg, bg\n");
         return 1;
     }
 
@@ -355,6 +583,17 @@ static int handle_builtin(int argc, char** argv) {
         return 1;
     }
 
+    if (!strcmp(argv[0], "jobs")) {
+        sh_print_jobs();
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "fg"))
+        return sh_fg(argc, argv);
+
+    if (!strcmp(argv[0], "bg"))
+        return sh_bg(argc, argv);
+
     return 0;
 }
 
@@ -364,9 +603,21 @@ static int run_command(char* line, char** args, char expanded[][SH_EXPAND_MAX], 
     if (!line[0])
         return 0;
 
+    char cmdline[SH_CMD_MAX];
+    snprintf(cmdline, sizeof(cmdline), "%s", line);
+
     int cmd_argc = split_line(line, args, SH_MAX_ARGS);
     if (!cmd_argc)
         return 0;
+
+    bool background = false;
+    if (cmd_argc > 0 && !strcmp(args[cmd_argc - 1], "&")) {
+        background = true;
+        args[cmd_argc - 1] = NULL;
+        cmd_argc--;
+        if (cmd_argc == 0)
+            return 0;
+    }
 
     if (handle_builtin(cmd_argc, args))
         return 0;
@@ -379,6 +630,12 @@ static int run_command(char* line, char** args, char expanded[][SH_EXPAND_MAX], 
 
     pid_t pid = fork();
     if (pid == 0) {
+        setpgid(0, 0);
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL);
+        signal(SIGQUIT, SIG_DFL);
+        signal(SIGTTIN, SIG_DFL);
+        signal(SIGTTOU, SIG_DFL);
         sh_exec_in_path(exec_args[0], exec_args);
         write_str("sh: exec failed\n");
         _exit(1);
@@ -389,10 +646,31 @@ static int run_command(char* line, char** args, char expanded[][SH_EXPAND_MAX], 
         return -1;
     }
 
+    setpgid(pid, pid);
+
+    if (background) {
+        job_t* job = sh_job_add(pid, cmdline, JOB_RUNNING);
+        if (job) {
+            char line_out[64];
+            snprintf(line_out, sizeof(line_out), "[%d] %d\n", job->id, (int)pid);
+            write_str(line_out);
+        }
+        return 0;
+    }
+
     tty_set_pgrp(pid);
     int status = 0;
-    wait(pid, &status);
-    tty_set_pgrp(getpid());
+    pid_t waited = waitpid(pid, &status, WUNTRACED);
+    tty_set_pgrp(sh_pgid);
+
+    if (waited < 0)
+        return -1;
+
+    if (WIFSTOPPED(status)) {
+        sh_job_add(pid, cmdline, JOB_STOPPED);
+        return 0;
+    }
+
     return 0;
 }
 
@@ -429,7 +707,14 @@ static int run_script(const char* path) {
 int main(int argc, char** argv) {
     char line[256];
 
+    sh_pgid = getpid();
+    setpgid(0, 0);
+    tty_set_pgrp(sh_pgid);
+
     signal(SIGINT, sigint_handler);
+    signal(SIGTSTP, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+    signal(SIGTTOU, SIG_IGN);
     sh_env_set("PATH", "/sbin");
     sh_env_set("PWD", "/");
     sh_update_pwd();
@@ -444,9 +729,10 @@ int main(int argc, char** argv) {
         return run_script(argv[1]);
 
     write_str("apheleiaOS sh\n");
-    tty_set_pgrp(getpid());
+    tty_set_pgrp(sh_pgid);
 
     for (;;) {
+        sh_reap_jobs(true);
         print_prompt();
 
         if (read_line_fd(STDIN_FILENO, line, sizeof(line), true) < 0) {

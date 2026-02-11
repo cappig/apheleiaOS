@@ -8,6 +8,7 @@ IMG_NAME := $(BUILD_NAME)_$(ARCH).img
 
 TOOLCHAIN ?= gnu
 PROFILE ?= fast
+TRACEABLE_KERNEL ?= true
 
 CC_BASE := \
 	-MD \
@@ -47,7 +48,7 @@ include user/build.mk
 
 .DEFAULT_GOAL := all
 .PHONY: all
-all: bin/$(IMG_NAME)
+all: bin/$(IMG_NAME) $(SYMBOL_MAP)
 	@echo "Build completed successfully!"
 
 .PHONY: clean
