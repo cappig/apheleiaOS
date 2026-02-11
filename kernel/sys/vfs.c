@@ -438,6 +438,18 @@ bool vfs_chmod(vfs_node_t* node, mode_t mode) {
     if (!node)
         return false;
 
+    if (node->fs && node->fs->fs) {
+        fs_interface_t* iface = NULL;
+
+        if (node->fs->fs->node_interface && node->fs->fs->node_interface->chmod)
+            iface = node->fs->fs->node_interface;
+        else if (node->fs->fs->fs_interface && node->fs->fs->fs_interface->chmod)
+            iface = node->fs->fs->fs_interface;
+
+        if (iface && !iface->chmod(node->fs, node, mode))
+            return false;
+    }
+
     node->mode = mode;
     return true;
 }
@@ -449,6 +461,18 @@ bool vfs_chown(vfs_node_t* node, uid_t uid, gid_t gid) {
     node = _resolve_link(node);
     if (!node)
         return false;
+
+    if (node->fs && node->fs->fs) {
+        fs_interface_t* iface = NULL;
+
+        if (node->fs->fs->node_interface && node->fs->fs->node_interface->chown)
+            iface = node->fs->fs->node_interface;
+        else if (node->fs->fs->fs_interface && node->fs->fs->fs_interface->chown)
+            iface = node->fs->fs->fs_interface;
+
+        if (iface && !iface->chown(node->fs, node, uid, gid))
+            return false;
+    }
 
     node->uid = uid;
     node->gid = gid;

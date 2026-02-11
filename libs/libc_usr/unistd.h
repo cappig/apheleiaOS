@@ -10,6 +10,8 @@ ssize_t pread(int fd, void* buf, size_t count, off_t offset);
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset);
 int open(const char* path, int flags, mode_t mode);
 int close(int fd);
+int pipe(int pipefd[2]);
+int dup2(int oldfd, int newfd);
 int mkdir(const char* path, mode_t mode);
 int access(const char* path, int mode);
 off_t lseek(int fd, off_t offset, int whence);

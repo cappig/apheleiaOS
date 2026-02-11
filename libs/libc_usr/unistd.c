@@ -8,9 +8,7 @@
 #define SYSCALL_RET(type, expr) ((type)__SYSCALL_ERRNO(expr))
 
 ssize_t read(int fd, void* buf, size_t count) {
-    return SYSCALL_RET(
-        ssize_t, syscall3(SYS_READ, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count)
-    );
+    return SYSCALL_RET(ssize_t, syscall3(SYS_READ, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count));
 }
 
 ssize_t write(int fd, const void* buf, size_t count) {
@@ -22,29 +20,31 @@ ssize_t write(int fd, const void* buf, size_t count) {
 ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
     return SYSCALL_RET(
         ssize_t,
-        syscall4(
-            SYS_PREAD, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset
-        )
+        syscall4(SYS_PREAD, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset)
     );
 }
 
 ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
     return SYSCALL_RET(
         ssize_t,
-        syscall4(
-            SYS_PWRITE, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset
-        )
+        syscall4(SYS_PWRITE, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset)
     );
 }
 
 int open(const char* path, int flags, mode_t mode) {
-    return SYSCALL_RET(
-        int, syscall3(SYS_OPEN, (uintptr_t)path, (uintptr_t)flags, (uintptr_t)mode)
-    );
+    return SYSCALL_RET(int, syscall3(SYS_OPEN, (uintptr_t)path, (uintptr_t)flags, (uintptr_t)mode));
 }
 
 int close(int fd) {
     return SYSCALL_RET(int, syscall1(SYS_CLOSE, (uintptr_t)fd));
+}
+
+int pipe(int pipefd[2]) {
+    return SYSCALL_RET(int, syscall1(SYS_PIPE, (uintptr_t)pipefd));
+}
+
+int dup2(int oldfd, int newfd) {
+    return SYSCALL_RET(int, syscall2(SYS_DUP2, (uintptr_t)oldfd, (uintptr_t)newfd));
 }
 
 int mkdir(const char* path, mode_t mode) {
@@ -109,9 +109,7 @@ pid_t waitpid(pid_t pid, int* status, int options) {
 }
 
 int execve(const char* path, char* const argv[], char* const envp[]) {
-    return SYSCALL_RET(
-        int, syscall3(SYS_EXECVE, (uintptr_t)path, (uintptr_t)argv, (uintptr_t)envp)
-    );
+    return SYSCALL_RET(int, syscall3(SYS_EXECVE, (uintptr_t)path, (uintptr_t)argv, (uintptr_t)envp));
 }
 
 pid_t getpid(void) {

@@ -24,6 +24,7 @@ enum disk_dev_type {
 typedef struct fs fs_t;
 typedef struct fs_interface fs_interface_t;
 typedef struct fs_instance fs_instance_t;
+typedef struct vfs_node vfs_node_t;
 
 typedef struct disk_dev disk_dev_t;
 typedef struct disk_interface disk_interface_t;
@@ -68,6 +69,9 @@ struct fs_interface {
 
     bool (*build_tree)(fs_instance_t* instance);
     bool (*destroy_tree)(fs_instance_t* instance);
+
+    bool (*chmod)(fs_instance_t* instance, vfs_node_t* node, mode_t mode);
+    bool (*chown)(fs_instance_t* instance, vfs_node_t* node, uid_t uid, gid_t gid);
 
     // mkdir
     // touch

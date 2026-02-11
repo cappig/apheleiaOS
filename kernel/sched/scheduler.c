@@ -6,6 +6,7 @@
 #include <arch/thread.h>
 #include <base/attributes.h>
 #include <base/macros.h>
+#include <errno.h>
 #include <log/log.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -40,6 +41,10 @@ static void _wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread
 static void _wait_queue_remove(sched_thread_t* thread);
 static void _run_queue_remove(sched_thread_t* thread);
 static void _sched_init_thread_name(sched_thread_t* thread, const char* name);
+static void _sched_fd_reset(sched_fd_t* fd);
+static void _sched_fd_retain(const sched_fd_t* fd);
+static void _sched_fd_release_value(sched_fd_t* fd);
+static void _sched_pipe_try_destroy(sched_pipe_t* pipe);
 
 static proc_state_t _sched_state_to_proc(thread_state_t state) {
     switch (state) {
@@ -65,6 +70,230 @@ static void _add_all_thread(sched_thread_t* thread) {
     thread->all_node.data = thread;
     list_append(all_list, &thread->all_node);
     thread->in_all_list = true;
+}
+
+static void _sched_fd_reset(sched_fd_t* fd) {
+    if (!fd)
+        return;
+
+    fd->kind = SCHED_FD_NONE;
+    fd->node = NULL;
+    fd->pipe = NULL;
+    fd->offset = 0;
+    fd->flags = 0;
+}
+
+sched_pipe_t* sched_pipe_create(size_t capacity) {
+    if (capacity == 0)
+        capacity = SCHED_PIPE_CAPACITY;
+
+    sched_pipe_t* pipe = calloc(1, sizeof(*pipe));
+    if (!pipe)
+        return NULL;
+
+    pipe->data = calloc(capacity, sizeof(u8));
+    pipe->read_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
+    pipe->write_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
+    if (!pipe->data || !pipe->read_wait_queue || !pipe->write_wait_queue) {
+        free(pipe->data);
+        free(pipe->read_wait_queue);
+        free(pipe->write_wait_queue);
+        free(pipe);
+        return NULL;
+    }
+
+    pipe->capacity = capacity;
+    pipe->read_wait_owned = true;
+    pipe->write_wait_owned = true;
+    sched_wait_queue_init(pipe->read_wait_queue);
+    sched_wait_queue_init(pipe->write_wait_queue);
+
+    return pipe;
+}
+
+static void _sched_pipe_try_destroy(sched_pipe_t* pipe) {
+    if (!pipe)
+        return;
+
+    if (pipe->readers || pipe->writers)
+        return;
+
+    if (pipe->read_wait_owned && pipe->read_wait_queue)
+        sched_wait_queue_destroy(pipe->read_wait_queue);
+    if (pipe->write_wait_owned && pipe->write_wait_queue)
+        sched_wait_queue_destroy(pipe->write_wait_queue);
+
+    free(pipe->read_wait_queue);
+    free(pipe->write_wait_queue);
+    free(pipe->data);
+    free(pipe);
+}
+
+void sched_pipe_acquire_reader(sched_pipe_t* pipe) {
+    if (!pipe)
+        return;
+
+    unsigned long flags = arch_irq_save();
+    pipe->readers++;
+    arch_irq_restore(flags);
+}
+
+void sched_pipe_acquire_writer(sched_pipe_t* pipe) {
+    if (!pipe)
+        return;
+
+    unsigned long flags = arch_irq_save();
+    pipe->writers++;
+    arch_irq_restore(flags);
+}
+
+void sched_pipe_release_reader(sched_pipe_t* pipe) {
+    if (!pipe)
+        return;
+
+    bool destroy = false;
+    unsigned long flags = arch_irq_save();
+    if (pipe->readers > 0)
+        pipe->readers--;
+    destroy = pipe->readers == 0 && pipe->writers == 0;
+    arch_irq_restore(flags);
+
+    if (pipe->write_wait_queue)
+        sched_wake_all(pipe->write_wait_queue);
+    if (pipe->read_wait_queue)
+        sched_wake_all(pipe->read_wait_queue);
+
+    if (destroy)
+        _sched_pipe_try_destroy(pipe);
+}
+
+void sched_pipe_release_writer(sched_pipe_t* pipe) {
+    if (!pipe)
+        return;
+
+    bool destroy = false;
+    unsigned long flags = arch_irq_save();
+    if (pipe->writers > 0)
+        pipe->writers--;
+    destroy = pipe->readers == 0 && pipe->writers == 0;
+    arch_irq_restore(flags);
+
+    if (pipe->read_wait_queue)
+        sched_wake_all(pipe->read_wait_queue);
+    if (pipe->write_wait_queue)
+        sched_wake_all(pipe->write_wait_queue);
+
+    if (destroy)
+        _sched_pipe_try_destroy(pipe);
+}
+
+static void _sched_fd_retain(const sched_fd_t* fd) {
+    if (!fd)
+        return;
+
+    if (fd->kind == SCHED_FD_PIPE_READ)
+        sched_pipe_acquire_reader(fd->pipe);
+    else if (fd->kind == SCHED_FD_PIPE_WRITE)
+        sched_pipe_acquire_writer(fd->pipe);
+}
+
+static void _sched_fd_release_value(sched_fd_t* fd) {
+    if (!fd)
+        return;
+
+    if (fd->kind == SCHED_FD_PIPE_READ)
+        sched_pipe_release_reader(fd->pipe);
+    else if (fd->kind == SCHED_FD_PIPE_WRITE)
+        sched_pipe_release_writer(fd->pipe);
+
+    _sched_fd_reset(fd);
+}
+
+int sched_fd_alloc(sched_thread_t* thread, const sched_fd_t* fd, int min_fd) {
+    if (!thread || !fd || fd->kind == SCHED_FD_NONE)
+        return -EINVAL;
+
+    int start = min_fd < 0 ? 0 : min_fd;
+    if (start >= SCHED_FD_MAX)
+        return -EMFILE;
+
+    for (int slot = start; slot < SCHED_FD_MAX; slot++) {
+        if (thread->fd_used[slot])
+            continue;
+
+        thread->fd_used[slot] = true;
+        thread->fds[slot] = *fd;
+        _sched_fd_retain(&thread->fds[slot]);
+        return slot;
+    }
+
+    return -EMFILE;
+}
+
+int sched_fd_close(sched_thread_t* thread, int fd) {
+    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+        return -EBADF;
+
+    sched_fd_t old = thread->fds[fd];
+    thread->fd_used[fd] = false;
+    _sched_fd_reset(&thread->fds[fd]);
+    _sched_fd_release_value(&old);
+    return 0;
+}
+
+int sched_fd_install(sched_thread_t* thread, int target_fd, const sched_fd_t* fd) {
+    if (!thread || !fd || fd->kind == SCHED_FD_NONE)
+        return -EINVAL;
+
+    if (target_fd < 0 || target_fd >= SCHED_FD_MAX)
+        return -EBADF;
+
+    if (thread->fd_used[target_fd])
+        sched_fd_close(thread, target_fd);
+
+    thread->fd_used[target_fd] = true;
+    thread->fds[target_fd] = *fd;
+    _sched_fd_retain(&thread->fds[target_fd]);
+    return target_fd;
+}
+
+int sched_fd_dup2(sched_thread_t* thread, int oldfd, int newfd) {
+    if (!thread || oldfd < 0 || oldfd >= SCHED_FD_MAX || !thread->fd_used[oldfd])
+        return -EBADF;
+    if (newfd < 0 || newfd >= SCHED_FD_MAX)
+        return -EBADF;
+    if (oldfd == newfd)
+        return newfd;
+
+    sched_fd_t source = thread->fds[oldfd];
+    return sched_fd_install(thread, newfd, &source);
+}
+
+bool sched_fd_clone_table(sched_thread_t* dst, const sched_thread_t* src) {
+    if (!dst || !src)
+        return false;
+
+    for (int fd = 0; fd < SCHED_FD_MAX; fd++) {
+        if (!src->fd_used[fd])
+            continue;
+
+        dst->fd_used[fd] = true;
+        dst->fds[fd] = src->fds[fd];
+        _sched_fd_retain(&dst->fds[fd]);
+    }
+
+    return true;
+}
+
+void sched_fd_close_all(sched_thread_t* thread) {
+    if (!thread)
+        return;
+
+    for (int fd = 0; fd < SCHED_FD_MAX; fd++) {
+        if (!thread->fd_used[fd])
+            continue;
+        sched_fd_close(thread, fd);
+    }
 }
 
 static void _sched_init_thread_name(sched_thread_t* thread, const char* name) {
@@ -343,6 +572,8 @@ bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write) 
 static void _destroy_thread(sched_thread_t* thread) {
     if (!thread)
         return;
+
+    sched_fd_close_all(thread);
 
     if (thread->vm_space && thread->vm_space != kernel_vm)
         arch_vm_destroy(thread->vm_space);
@@ -678,8 +909,10 @@ pid_t sched_fork(arch_int_state_t* state) {
     child->sid = current->sid;
     child->user_stack_base = current->user_stack_base;
     child->user_stack_size = current->user_stack_size;
-    memcpy(child->fds, current->fds, sizeof(current->fds));
-    memcpy(child->fd_used, current->fd_used, sizeof(current->fd_used));
+    if (!sched_fd_clone_table(child, current)) {
+        sched_discard_thread(child);
+        return -1;
+    }
     memcpy(child->cwd, current->cwd, sizeof(current->cwd));
     memcpy(child->signal_handlers, current->signal_handlers, sizeof(child->signal_handlers));
     child->signal_mask = current->signal_mask;

@@ -22,6 +22,6 @@ bin/kernel64/%.c.o: %.c
 	$(call cc, $(CC_KERNEL64), $@, $<)
 
 
-bin/image/boot/kernel64.elf: $(KERNEL64_OBJ) $(call LIBGCC, $(CC_KERNEL64))
+$(KERNEL_ELF): $(KERNEL64_OBJ) $(call LIBGCC, $(CC_KERNEL64))
 	@mkdir -p $(@D)
 	$(call ld, $(LD_KERNEL64), $@, $^)

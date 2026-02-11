@@ -8,8 +8,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/proc.h>
-#include <sys/wait.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t got_sigint = 0;
@@ -19,6 +19,8 @@ static volatile sig_atomic_t got_sigint = 0;
 #define SH_ENV_VAL_MAX 128
 #define SH_EXPAND_MAX  256
 #define SH_MAX_ARGS    16
+#define SH_MAX_TOKENS  64
+#define SH_MAX_STAGES  8
 #define SH_MAX_JOBS    16
 #define SH_CMD_MAX     128
 
@@ -38,6 +40,14 @@ typedef struct {
     char key[SH_ENV_KEY_MAX];
     char value[SH_ENV_VAL_MAX];
 } sh_env_t;
+
+typedef struct {
+    char* argv[SH_MAX_ARGS];
+    int argc;
+    char* in_path;
+    char* out_path;
+    bool out_append;
+} sh_stage_t;
 
 static sh_env_t sh_env[SH_ENV_MAX];
 static size_t sh_env_count = 0;
@@ -78,15 +88,6 @@ static job_t* sh_job_find_by_id(int id) {
     return NULL;
 }
 
-static job_t* sh_job_find_by_pid(pid_t pid) {
-    for (size_t i = 0; i < sh_job_count; i++) {
-        if (sh_jobs[i].pid == pid)
-            return &sh_jobs[i];
-    }
-
-    return NULL;
-}
-
 static void sh_job_remove_index(size_t index) {
     if (index >= sh_job_count)
         return;
@@ -115,42 +116,64 @@ static ssize_t sh_get_procs(proc_info_t* out, size_t cap) {
     return getprocs(out, cap);
 }
 
-static const proc_info_t* sh_find_proc(pid_t pid, const proc_info_t* list, ssize_t count) {
-    if (!list || count <= 0)
-        return NULL;
+static bool sh_pgrp_state(pid_t pgid, const proc_info_t* list, ssize_t count, bool* stopped_out) {
+    if (stopped_out)
+        *stopped_out = false;
+
+    if (!list || count <= 0 || pgid <= 0)
+        return false;
+
+    bool any_alive = false;
+    bool any_running = false;
+    bool any_stopped = false;
 
     for (ssize_t i = 0; i < count; i++) {
-        if (list[i].pid == pid)
-            return &list[i];
+        if (list[i].pgid != pgid)
+            continue;
+
+        if (list[i].state == PROC_STATE_ZOMBIE)
+            continue;
+
+        any_alive = true;
+
+        if (list[i].state == PROC_STATE_STOPPED)
+            any_stopped = true;
+        else
+            any_running = true;
     }
 
-    return NULL;
+    if (stopped_out && any_alive && any_stopped && !any_running)
+        *stopped_out = true;
+
+    return any_alive;
 }
 
 static void sh_reap_jobs(bool report) {
     proc_info_t procs[128];
     ssize_t count = sh_get_procs(procs, sizeof(procs) / sizeof(procs[0]));
 
-    for (size_t i = 0; i < sh_job_count; ) {
+    for (size_t i = 0; i < sh_job_count;) {
         job_t* job = &sh_jobs[i];
-        const proc_info_t* info = (count > 0) ? sh_find_proc(job->pid, procs, count) : NULL;
+        bool stopped = false;
+        bool alive = sh_pgrp_state(job->pid, procs, count, &stopped);
 
-        if (!info || info->state == PROC_STATE_ZOMBIE) {
+        if (!alive) {
             int status = 0;
-            waitpid(job->pid, &status, 0);
+
+            while (waitpid(-job->pid, &status, WNOHANG) > 0)
+                ;
+
             if (report) {
                 char line[SH_CMD_MAX + 32];
                 snprintf(line, sizeof(line), "[%d] Done    %s\n", job->id, job->cmd);
                 write_str(line);
             }
+
             sh_job_remove_index(i);
             continue;
         }
 
-        if (info->state == PROC_STATE_STOPPED)
-            job->state = JOB_STOPPED;
-        else
-            job->state = JOB_RUNNING;
+        job->state = stopped ? JOB_STOPPED : JOB_RUNNING;
 
         i++;
     }
@@ -206,30 +229,17 @@ static int sh_fg(int argc, char** argv) {
     }
 
     if (job->state == JOB_STOPPED)
-        kill(job->pid, SIGCONT);
+        kill(-job->pid, SIGCONT);
 
     tty_set_pgrp(job->pid);
-
     int status = 0;
-    pid_t waited = waitpid(job->pid, &status, WUNTRACED);
-
+    waitpid(job->pid, &status, WUNTRACED);
     tty_set_pgrp(sh_pgid);
 
-    if (waited < 0) {
-        write_str("fg: wait failed\n");
-        return 1;
-    }
-
-    if (WIFSTOPPED(status)) {
+    if (WIFSTOPPED(status))
         job->state = JOB_STOPPED;
-        return 1;
-    }
 
-    job_t* found = sh_job_find_by_pid(job->pid);
-    if (found) {
-        size_t index = (size_t)(found - sh_jobs);
-        sh_job_remove_index(index);
-    }
+    sh_reap_jobs(false);
 
     return 1;
 }
@@ -254,7 +264,7 @@ static int sh_bg(int argc, char** argv) {
     }
 
     if (job->state == JOB_STOPPED) {
-        kill(job->pid, SIGCONT);
+        kill(-job->pid, SIGCONT);
         job->state = JOB_RUNNING;
     }
 
@@ -483,26 +493,57 @@ static int read_line_fd(int fd, char* buf, size_t len, bool interactive) {
     return 0;
 }
 
-static int split_line(char* line, char** argv, int max) {
-    if (!line || !argv || max <= 0)
+static bool sh_is_operator(const char* token) {
+    if (!token || !token[0])
+        return false;
+
+    return !strcmp(token, "|") || !strcmp(token, "<") || !strcmp(token, ">") ||
+           !strcmp(token, ">>") || !strcmp(token, "&");
+}
+
+static int
+sh_tokenize(const char* line, char* storage, size_t storage_len, char** tokens, int max_tokens) {
+    if (!line || !storage || storage_len == 0 || !tokens || max_tokens <= 1)
         return 0;
 
-    int argc = 0;
-    char* src = line;
-    char* dst = line;
+    int count = 0;
+    const char* src = line;
+    char* dst = storage;
+    char* end = storage + storage_len - 1;
 
-    while (*src && argc < max - 1) {
+    while (*src && count < max_tokens - 1) {
         while (*src && isspace((unsigned char)*src))
             src++;
 
         if (!*src)
             break;
 
-        argv[argc++] = dst;
+        if (*src == '|' || *src == '<' || *src == '>' || *src == '&') {
+            if (dst >= end)
+                break;
+
+            tokens[count++] = dst;
+
+            if (*src == '>' && src[1] == '>') {
+                if (dst + 2 > end)
+                    break;
+                *dst++ = '>';
+                *dst++ = '>';
+                src += 2;
+            } else {
+                *dst++ = *src++;
+            }
+
+            *dst++ = '\0';
+            continue;
+        }
+
+        if (dst >= end)
+            break;
+        tokens[count++] = dst;
 
         bool in_single = false;
         bool in_double = false;
-
         while (*src) {
             char ch = *src;
 
@@ -522,24 +563,118 @@ static int split_line(char* line, char** argv, int max) {
                 src++;
                 if (!*src)
                     break;
+                if (dst >= end)
+                    break;
+
                 *dst++ = *src++;
                 continue;
             }
 
-            if (!in_single && !in_double && isspace((unsigned char)ch)) {
-                src++;
-                break;
+            if (!in_single && !in_double) {
+                if (isspace((unsigned char)ch)) {
+                    src++;
+                    break;
+                }
+
+                if (ch == '|' || ch == '<' || ch == '>' || ch == '&')
+                    break;
             }
 
+            if (dst >= end)
+                break;
             *dst++ = ch;
             src++;
         }
 
+        if (dst >= end)
+            break;
         *dst++ = '\0';
     }
 
-    argv[argc] = NULL;
-    return argc;
+    *dst = '\0';
+    tokens[count] = NULL;
+    return count;
+}
+
+static int
+sh_parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* background_out) {
+    if (!line || !stages || !stage_count_out || !background_out)
+        return -1;
+
+    char token_store[256];
+    char* tokens[SH_MAX_TOKENS];
+
+    int token_count = sh_tokenize(line, token_store, sizeof(token_store), tokens, SH_MAX_TOKENS);
+    if (token_count <= 0)
+        return 0;
+
+    memset(stages, 0, sizeof(sh_stage_t) * SH_MAX_STAGES);
+
+    int stage = 0;
+    bool background = false;
+
+    for (int i = 0; i < token_count; i++) {
+        const char* token = tokens[i];
+
+        if (!strcmp(token, "&")) {
+            if (i != token_count - 1) {
+                write_str("sh: syntax error near '&'\n");
+                return -1;
+            }
+
+            background = true;
+            continue;
+        }
+
+        if (!strcmp(token, "|")) {
+            if (stages[stage].argc == 0 || stage + 1 >= SH_MAX_STAGES) {
+                write_str("sh: invalid pipeline\n");
+                return -1;
+            }
+            stage++;
+            continue;
+        }
+
+        if (!strcmp(token, "<")) {
+            if (i + 1 >= token_count || sh_is_operator(tokens[i + 1])) {
+                write_str("sh: invalid input redirection\n");
+                return -1;
+            }
+
+            stages[stage].in_path = tokens[++i];
+            continue;
+        }
+
+        if (!strcmp(token, ">") || !strcmp(token, ">>")) {
+            if (i + 1 >= token_count || sh_is_operator(tokens[i + 1])) {
+                write_str("sh: invalid output redirection\n");
+                return -1;
+            }
+
+            stages[stage].out_path = tokens[++i];
+            stages[stage].out_append = !strcmp(token, ">>");
+            continue;
+        }
+
+        if (stages[stage].argc >= SH_MAX_ARGS - 1) {
+            write_str("sh: too many arguments\n");
+            return -1;
+        }
+
+        stages[stage].argv[stages[stage].argc++] = tokens[i];
+    }
+
+    if (stages[stage].argc == 0) {
+        write_str("sh: empty command\n");
+        return -1;
+    }
+
+    for (int i = 0; i <= stage; i++)
+        stages[i].argv[stages[i].argc] = NULL;
+
+    *stage_count_out = stage + 1;
+    *background_out = background;
+    return 1;
 }
 
 static const char* sh_env_path(void) {
@@ -700,7 +835,172 @@ static int handle_builtin(int argc, char** argv) {
     return 0;
 }
 
-static int run_command(char* line, char** args, char expanded[][SH_EXPAND_MAX], char** exec_args) {
+static void sh_close_pipe_fds(int pipes[][2], int count) {
+    for (int i = 0; i < count; i++) {
+        if (pipes[i][0] >= 0)
+            close(pipes[i][0]);
+
+        if (pipes[i][1] >= 0)
+            close(pipes[i][1]);
+    }
+}
+
+static int sh_open_redirection(const sh_stage_t* stage) {
+    if (!stage)
+        return 0;
+
+    if (stage->in_path && stage->in_path[0]) {
+        int fd = open(stage->in_path, O_RDONLY, 0);
+        if (fd < 0) {
+            write_str("sh: failed to open input\n");
+            return -1;
+        }
+
+        if (dup2(fd, STDIN_FILENO) < 0) {
+            close(fd);
+            write_str("sh: dup2 failed\n");
+            return -1;
+        }
+
+        close(fd);
+    }
+
+    if (stage->out_path && stage->out_path[0]) {
+        int flags = O_WRONLY | O_CREAT;
+
+        if (stage->out_append)
+            flags |= O_APPEND;
+        else
+            flags |= O_TRUNC;
+
+        int fd = open(stage->out_path, flags, 0644);
+        if (fd < 0) {
+            write_str("sh: failed to open output\n");
+            return -1;
+        }
+
+        if (dup2(fd, STDOUT_FILENO) < 0) {
+            close(fd);
+            write_str("sh: dup2 failed\n");
+            return -1;
+        }
+
+        close(fd);
+    }
+
+    return 0;
+}
+
+static int
+sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char* cmdline) {
+    int pipes[SH_MAX_STAGES - 1][2];
+
+    for (int i = 0; i < SH_MAX_STAGES - 1; i++) {
+        pipes[i][0] = -1;
+        pipes[i][1] = -1;
+    }
+
+    for (int i = 0; i + 1 < stage_count; i++) {
+        if (pipe(pipes[i]) < 0) {
+            write_str("sh: pipe failed\n");
+            sh_close_pipe_fds(pipes, stage_count - 1);
+            return -1;
+        }
+    }
+
+    pid_t pgid = 0;
+    pid_t child_pids[SH_MAX_STAGES];
+
+    for (int i = 0; i < SH_MAX_STAGES; i++)
+        child_pids[i] = -1;
+
+    for (int i = 0; i < stage_count; i++) {
+        pid_t pid = fork();
+
+        if (pid == 0) {
+            pid_t target_pgid = (pgid == 0) ? getpid() : pgid;
+            setpgid(0, target_pgid);
+
+            signal(SIGINT, SIG_DFL);
+            signal(SIGTSTP, SIG_DFL);
+            signal(SIGQUIT, SIG_DFL);
+            signal(SIGTTIN, SIG_DFL);
+            signal(SIGTTOU, SIG_DFL);
+
+            if (i > 0) {
+                if (dup2(pipes[i - 1][0], STDIN_FILENO) < 0)
+                    _exit(1);
+            }
+
+            if (i + 1 < stage_count) {
+                if (dup2(pipes[i][1], STDOUT_FILENO) < 0)
+                    _exit(1);
+            }
+
+            sh_close_pipe_fds(pipes, stage_count - 1);
+
+            if (sh_open_redirection(&stages[i]) < 0)
+                _exit(1);
+
+            if (handle_builtin(stages[i].argc, stages[i].argv))
+                _exit(0);
+
+            sh_exec_in_path(stages[i].argv[0], stages[i].argv);
+            write_str("sh: exec failed\n");
+            _exit(1);
+        }
+
+        if (pid < 0) {
+            write_str("sh: fork failed\n");
+            sh_close_pipe_fds(pipes, stage_count - 1);
+            return -1;
+        }
+
+        if (pgid == 0)
+            pgid = pid;
+
+        setpgid(pid, pgid);
+        child_pids[i] = pid;
+    }
+
+    sh_close_pipe_fds(pipes, stage_count - 1);
+
+    if (background) {
+        job_t* job = sh_job_add(pgid, cmdline, JOB_RUNNING);
+
+        if (job) {
+            char line_out[64];
+            snprintf(line_out, sizeof(line_out), "[%d] %d\n", job->id, (int)pgid);
+            write_str(line_out);
+        }
+        return 0;
+    }
+
+    tty_set_pgrp(pgid);
+
+    bool stopped = false;
+    for (int i = 0; i < stage_count; i++) {
+        if (child_pids[i] <= 0)
+            continue;
+
+        int status = 0;
+        pid_t waited = waitpid(child_pids[i], &status, WUNTRACED);
+
+        if (waited > 0 && WIFSTOPPED(status)) {
+            stopped = true;
+            break;
+        }
+    }
+
+    tty_set_pgrp(sh_pgid);
+
+    if (stopped)
+        sh_job_add(pgid, cmdline, JOB_STOPPED);
+
+    return 0;
+}
+
+static int run_command(char* line) {
     strip_newline(line);
 
     if (!line[0])
@@ -709,72 +1009,45 @@ static int run_command(char* line, char** args, char expanded[][SH_EXPAND_MAX], 
     char cmdline[SH_CMD_MAX];
     snprintf(cmdline, sizeof(cmdline), "%s", line);
 
-    int cmd_argc = split_line(line, args, SH_MAX_ARGS);
-    if (!cmd_argc)
-        return 0;
-
+    sh_stage_t stages[SH_MAX_STAGES];
+    int stage_count = 0;
     bool background = false;
-    if (cmd_argc > 0 && !strcmp(args[cmd_argc - 1], "&")) {
-        background = true;
-        args[cmd_argc - 1] = NULL;
-        cmd_argc--;
-        if (cmd_argc == 0)
-            return 0;
-    }
 
-    if (handle_builtin(cmd_argc, args))
+    int parse_ret = sh_parse_pipeline(line, stages, &stage_count, &background);
+    if (parse_ret <= 0)
         return 0;
 
-    for (int i = 0; i < cmd_argc; i++) {
-        sh_expand_arg(args[i], expanded[i], sizeof(expanded[i]));
-        exec_args[i] = expanded[i];
-    }
-    exec_args[cmd_argc] = NULL;
+    char expanded[SH_MAX_STAGES][SH_MAX_ARGS][SH_EXPAND_MAX];
+    char in_paths[SH_MAX_STAGES][SH_EXPAND_MAX];
+    char out_paths[SH_MAX_STAGES][SH_EXPAND_MAX];
 
-    pid_t pid = fork();
-    if (pid == 0) {
-        setpgid(0, 0);
-        signal(SIGINT, SIG_DFL);
-        signal(SIGTSTP, SIG_DFL);
-        signal(SIGQUIT, SIG_DFL);
-        signal(SIGTTIN, SIG_DFL);
-        signal(SIGTTOU, SIG_DFL);
-        sh_exec_in_path(exec_args[0], exec_args);
-        write_str("sh: exec failed\n");
-        _exit(1);
-    }
-
-    if (pid < 0) {
-        write_str("sh: fork failed\n");
-        return -1;
-    }
-
-    setpgid(pid, pid);
-
-    if (background) {
-        job_t* job = sh_job_add(pid, cmdline, JOB_RUNNING);
-        if (job) {
-            char line_out[64];
-            snprintf(line_out, sizeof(line_out), "[%d] %d\n", job->id, (int)pid);
-            write_str(line_out);
+    for (int i = 0; i < stage_count; i++) {
+        for (int a = 0; a < stages[i].argc; a++) {
+            sh_expand_arg(stages[i].argv[a], expanded[i][a], sizeof(expanded[i][a]));
+            stages[i].argv[a] = expanded[i][a];
         }
+
+        stages[i].argv[stages[i].argc] = NULL;
+
+        if (stages[i].in_path && stages[i].in_path[0]) {
+            sh_expand_arg(stages[i].in_path, in_paths[i], sizeof(in_paths[i]));
+            stages[i].in_path = in_paths[i];
+        }
+
+        if (stages[i].out_path && stages[i].out_path[0]) {
+            sh_expand_arg(stages[i].out_path, out_paths[i], sizeof(out_paths[i]));
+            stages[i].out_path = out_paths[i];
+        }
+    }
+
+    bool simple_builtin = stage_count == 1 && !background && !stages[0].in_path &&
+                          !stages[0].out_path;
+
+    if (simple_builtin && handle_builtin(stages[0].argc, stages[0].argv)) {
         return 0;
     }
 
-    tty_set_pgrp(pid);
-    int status = 0;
-    pid_t waited = waitpid(pid, &status, WUNTRACED);
-    tty_set_pgrp(sh_pgid);
-
-    if (waited < 0)
-        return -1;
-
-    if (WIFSTOPPED(status)) {
-        sh_job_add(pid, cmdline, JOB_STOPPED);
-        return 0;
-    }
-
-    return 0;
+    return sh_run_pipeline(stages, stage_count, background, cmdline);
 }
 
 static int run_script(const char* path) {
@@ -788,9 +1061,6 @@ static int run_script(const char* path) {
     }
 
     char line[256];
-    char* args[SH_MAX_ARGS];
-    char expanded[SH_MAX_ARGS][SH_EXPAND_MAX];
-    char* exec_args[SH_MAX_ARGS];
 
     while (read_line_fd(fd, line, sizeof(line), false) == 0) {
         char* cursor = line;
@@ -800,7 +1070,7 @@ static int run_script(const char* path) {
         if (!*cursor || *cursor == '#')
             continue;
 
-        run_command(cursor, args, expanded, exec_args);
+        run_command(cursor);
     }
 
     close(fd);
@@ -825,7 +1095,7 @@ int main(int argc, char** argv) {
     if (argc > 2 && !strcmp(argv[1], "-c")) {
         char cmdline[256];
         snprintf(cmdline, sizeof(cmdline), "%s", argv[2]);
-        return run_command(cmdline, args, expanded, exec_args);
+        return run_command(cmdline);
     }
 
     if (argc > 1)
@@ -874,7 +1144,7 @@ int main(int argc, char** argv) {
         if (!line[0])
             continue;
 
-        run_command(line, args, expanded, exec_args);
+        run_command(line);
     }
 
     return 0;

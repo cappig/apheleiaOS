@@ -5,8 +5,10 @@
 #include <base/attributes.h>
 #include <base/types.h>
 #include <data/list.h>
-#include <sys/types.h>
+#include <limits.h>
+#include <signal.h>
 #include <sys/proc.h>
+#include <sys/types.h>
 
 typedef void (*thread_entry_t)(void* arg);
 
@@ -15,8 +17,33 @@ typedef struct vfs_node vfs_node_t;
 #define SCHED_FD_MAX     32
 #define SCHED_REGION_COW (1ULL << 62)
 
+#define SCHED_PIPE_CAPACITY 4096
+
+typedef enum {
+    SCHED_FD_NONE = 0,
+    SCHED_FD_VFS,
+    SCHED_FD_PIPE_READ,
+    SCHED_FD_PIPE_WRITE,
+} sched_fd_kind_t;
+
+typedef struct sched_pipe {
+    u8* data;
+    size_t capacity;
+    size_t read_pos;
+    size_t write_pos;
+    size_t size;
+    size_t readers;
+    size_t writers;
+    struct sched_wait_queue* read_wait_queue;
+    struct sched_wait_queue* write_wait_queue;
+    bool read_wait_owned;
+    bool write_wait_owned;
+} sched_pipe_t;
+
 typedef struct sched_fd {
+    sched_fd_kind_t kind;
     vfs_node_t* node;
+    sched_pipe_t* pipe;
     size_t offset;
     u32 flags;
 } sched_fd_t;
@@ -144,3 +171,16 @@ size_t sched_list_procs(proc_info_t* out, size_t capacity);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
 
 bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write);
+
+int sched_fd_alloc(sched_thread_t* thread, const sched_fd_t* fd, int min_fd);
+int sched_fd_install(sched_thread_t* thread, int target_fd, const sched_fd_t* fd);
+int sched_fd_close(sched_thread_t* thread, int fd);
+int sched_fd_dup2(sched_thread_t* thread, int oldfd, int newfd);
+bool sched_fd_clone_table(sched_thread_t* dst, const sched_thread_t* src);
+void sched_fd_close_all(sched_thread_t* thread);
+
+sched_pipe_t* sched_pipe_create(size_t capacity);
+void sched_pipe_acquire_reader(sched_pipe_t* pipe);
+void sched_pipe_acquire_writer(sched_pipe_t* pipe);
+void sched_pipe_release_reader(sched_pipe_t* pipe);
+void sched_pipe_release_writer(sched_pipe_t* pipe);

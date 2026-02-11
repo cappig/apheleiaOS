@@ -18,8 +18,8 @@
 #include <string.h>
 #include <sys/exec.h>
 #include <sys/mman.h>
-#include <sys/proc.h>
 #include <sys/path.h>
+#include <sys/proc.h>
 #include <sys/stat.h>
 #include <sys/tty.h>
 #include <unistd.h>
@@ -28,6 +28,145 @@
 
 static bool
 _split_parent_path(const char* path, char* parent, size_t parent_len, char* base, size_t base_len);
+
+static bool _fd_lookup(sched_thread_t* thread, int fd, sched_fd_t** entry_out) {
+    if (!thread || !entry_out)
+        return false;
+
+    if (fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+        return false;
+
+    *entry_out = &thread->fds[fd];
+    return true;
+}
+
+static ssize_t _pipe_read_internal(sched_pipe_t* pipe, void* buf, size_t len, bool nonblock) {
+    if (!pipe || !buf)
+        return -EINVAL;
+    if (len == 0)
+        return 0;
+
+    u8* out = buf;
+    size_t total = 0;
+
+    for (;;) {
+        bool eof = false;
+        bool can_block = false;
+
+        unsigned long flags = arch_irq_save();
+        if (pipe->size > 0) {
+            size_t chunk = len - total;
+            if (chunk > pipe->size)
+                chunk = pipe->size;
+
+            size_t first = chunk;
+            if (first > pipe->capacity - pipe->read_pos)
+                first = pipe->capacity - pipe->read_pos;
+
+            memcpy(out + total, pipe->data + pipe->read_pos, first);
+            if (chunk > first)
+                memcpy(out + total + first, pipe->data, chunk - first);
+
+            pipe->read_pos = (pipe->read_pos + chunk) % pipe->capacity;
+            pipe->size -= chunk;
+            total += chunk;
+        }
+
+        eof = pipe->writers == 0;
+        can_block = pipe->writers > 0;
+        arch_irq_restore(flags);
+
+        if (total > 0) {
+            if (pipe->write_wait_queue)
+                sched_wake_one(pipe->write_wait_queue);
+            return (ssize_t)total;
+        }
+
+        if (eof)
+            return 0;
+
+        if (nonblock)
+            return -EAGAIN;
+
+        sched_thread_t* current = sched_current();
+        if (current && sched_signal_has_pending(current))
+            return -EINTR;
+
+        if (!sched_is_running() || !can_block)
+            continue;
+
+        if (pipe->read_wait_queue)
+            sched_block(pipe->read_wait_queue);
+    }
+}
+
+static ssize_t _pipe_write_internal(sched_pipe_t* pipe, const void* buf, size_t len, bool nonblock) {
+    if (!pipe || !buf)
+        return -EINVAL;
+    if (len == 0)
+        return 0;
+
+    const u8* in = buf;
+    size_t total = 0;
+
+    for (;;) {
+        bool no_readers = false;
+        bool can_block = false;
+
+        unsigned long flags = arch_irq_save();
+
+        if (pipe->readers == 0) {
+            arch_irq_restore(flags);
+            return total > 0 ? (ssize_t)total : -EPIPE;
+        }
+
+        size_t free_space = pipe->capacity - pipe->size;
+        if (free_space > 0) {
+            size_t chunk = len - total;
+            if (chunk > free_space)
+                chunk = free_space;
+
+            size_t first = chunk;
+            if (first > pipe->capacity - pipe->write_pos)
+                first = pipe->capacity - pipe->write_pos;
+
+            memcpy(pipe->data + pipe->write_pos, in + total, first);
+            if (chunk > first)
+                memcpy(pipe->data, in + total + first, chunk - first);
+
+            pipe->write_pos = (pipe->write_pos + chunk) % pipe->capacity;
+            pipe->size += chunk;
+            total += chunk;
+        }
+
+        no_readers = pipe->readers == 0;
+        can_block = pipe->readers > 0;
+        arch_irq_restore(flags);
+
+        if (total > 0) {
+            if (pipe->read_wait_queue)
+                sched_wake_one(pipe->read_wait_queue);
+            if (total == len)
+                return (ssize_t)total;
+        }
+
+        if (no_readers)
+            return total > 0 ? (ssize_t)total : -EPIPE;
+
+        if (nonblock)
+            return total > 0 ? (ssize_t)total : -EAGAIN;
+
+        sched_thread_t* current = sched_current();
+        if (current && sched_signal_has_pending(current))
+            return total > 0 ? (ssize_t)total : -EINTR;
+
+        if (!sched_is_running() || !can_block)
+            continue;
+
+        if (pipe->write_wait_queue)
+            sched_block(pipe->write_wait_queue);
+    }
+}
 
 static bool _region_overlaps(const sched_user_region_t* region, uintptr_t start, uintptr_t end) {
     if (!region || start >= end)
@@ -121,35 +260,40 @@ static ssize_t _sys_read(int fd, void* buf, size_t len) {
     if (!len)
         return 0;
 
+    sched_thread_t* thread = sched_current();
+    sched_fd_t* entry = NULL;
+    if (thread && _fd_lookup(thread, fd, &entry)) {
+        if (entry->kind == SCHED_FD_PIPE_READ) {
+            bool nonblock = (entry->flags & O_NONBLOCK) != 0;
+            return _pipe_read_internal(entry->pipe, buf, len, nonblock);
+        }
+
+        if (entry->kind != SCHED_FD_VFS || !entry->node)
+            return -EBADF;
+
+        if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
+            return -EBADF;
+
+        size_t vfs_flags = 0;
+        if (entry->flags & O_NONBLOCK)
+            vfs_flags |= VFS_NONBLOCK;
+
+        ssize_t ret = vfs_read(entry->node, buf, entry->offset, len, vfs_flags);
+        if (ret == VFS_EOF)
+            return 0;
+        if (ret > 0)
+            entry->offset += (size_t)ret;
+        return ret;
+    }
+
     if (fd == STDIN_FILENO) {
-        sched_thread_t* thread = sched_current();
         if (thread)
             thread->tty_index = (int)tty_current_screen();
         tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
         return tty_read_handle(&handle, buf, len);
     }
 
-    sched_thread_t* thread = sched_current();
-    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -EBADF;
-
-    sched_fd_t* entry = &thread->fds[fd];
-    if (!entry->node)
-        return -EBADF;
-
-    if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
-        return -EBADF;
-
-    size_t vfs_flags = 0;
-    if (entry->flags & O_NONBLOCK)
-        vfs_flags |= VFS_NONBLOCK;
-
-    ssize_t ret = vfs_read(entry->node, buf, entry->offset, len, vfs_flags);
-    if (ret == VFS_EOF)
-        return 0;
-    if (ret > 0)
-        entry->offset += (size_t)ret;
-    return ret;
+    return -EBADF;
 }
 
 static ssize_t _sys_pread(int fd, void* buf, size_t len, off_t offset) {
@@ -159,19 +303,16 @@ static ssize_t _sys_pread(int fd, void* buf, size_t len, off_t offset) {
     if (!len)
         return 0;
 
-    if (fd < 3)
-        return -EBADF;
-
     if (offset < 0)
         return -EINVAL;
 
     sched_thread_t* thread = sched_current();
-    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+    sched_fd_t* entry = NULL;
+    if (!_fd_lookup(thread, fd, &entry))
         return -EBADF;
 
-    sched_fd_t* entry = &thread->fds[fd];
-    if (!entry->node)
-        return -EBADF;
+    if (entry->kind != SCHED_FD_VFS || !entry->node)
+        return -ESPIPE;
 
     if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
         return -EBADF;
@@ -193,37 +334,42 @@ static ssize_t _sys_write(int fd, const void* buf, size_t len) {
     if (!len)
         return 0;
 
+    sched_thread_t* thread = sched_current();
+    sched_fd_t* entry = NULL;
+    if (thread && _fd_lookup(thread, fd, &entry)) {
+        if (entry->kind == SCHED_FD_PIPE_WRITE) {
+            bool nonblock = (entry->flags & O_NONBLOCK) != 0;
+            return _pipe_write_internal(entry->pipe, buf, len, nonblock);
+        }
+
+        if (entry->kind != SCHED_FD_VFS || !entry->node)
+            return -EBADF;
+
+        if (!((entry->flags & O_WRONLY) || (entry->flags & O_RDWR)))
+            return -EBADF;
+
+        size_t vfs_flags = 0;
+        if (entry->flags & O_NONBLOCK)
+            vfs_flags |= VFS_NONBLOCK;
+
+        size_t offset = entry->offset;
+        if (entry->flags & O_APPEND)
+            offset = (size_t)entry->node->size;
+
+        ssize_t ret = vfs_write(entry->node, (void*)buf, offset, len, vfs_flags);
+        if (ret > 0)
+            entry->offset = offset + (size_t)ret;
+        return ret;
+    }
+
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO || fd == STDIN_FILENO) {
-        sched_thread_t* thread = sched_current();
         if (thread)
             thread->tty_index = (int)tty_current_screen();
         tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
         return tty_write_handle(&handle, buf, len);
     }
 
-    sched_thread_t* thread = sched_current();
-    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
-        return -EBADF;
-
-    sched_fd_t* entry = &thread->fds[fd];
-    if (!entry->node)
-        return -EBADF;
-
-    if (!((entry->flags & O_WRONLY) || (entry->flags & O_RDWR)))
-        return -EBADF;
-
-    size_t vfs_flags = 0;
-    if (entry->flags & O_NONBLOCK)
-        vfs_flags |= VFS_NONBLOCK;
-
-    size_t offset = entry->offset;
-    if (entry->flags & O_APPEND)
-        offset = (size_t)entry->node->size;
-
-    ssize_t ret = vfs_write(entry->node, (void*)buf, offset, len, vfs_flags);
-    if (ret > 0)
-        entry->offset = offset + (size_t)ret;
-    return ret;
+    return -EBADF;
 }
 
 static ssize_t _sys_pwrite(int fd, const void* buf, size_t len, off_t offset) {
@@ -233,19 +379,16 @@ static ssize_t _sys_pwrite(int fd, const void* buf, size_t len, off_t offset) {
     if (!len)
         return 0;
 
-    if (fd < 3)
-        return -EBADF;
-
     if (offset < 0)
         return -EINVAL;
 
     sched_thread_t* thread = sched_current();
-    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+    sched_fd_t* entry = NULL;
+    if (!_fd_lookup(thread, fd, &entry))
         return -EBADF;
 
-    sched_fd_t* entry = &thread->fds[fd];
-    if (!entry->node)
-        return -EBADF;
+    if (entry->kind != SCHED_FD_VFS || !entry->node)
+        return -ESPIPE;
 
     if (!((entry->flags & O_WRONLY) || (entry->flags & O_RDWR)))
         return -EBADF;
@@ -258,10 +401,14 @@ static ssize_t _sys_pwrite(int fd, const void* buf, size_t len, off_t offset) {
 }
 
 static ssize_t _sys_ioctl(int fd, u64 request, void* args) {
-    if (fd != STDIN_FILENO && fd != STDOUT_FILENO && fd != STDERR_FILENO)
+    sched_thread_t* thread = sched_current();
+    sched_fd_t* entry = NULL;
+    if (thread && _fd_lookup(thread, fd, &entry))
         return -ENOTTY;
 
-    sched_thread_t* thread = sched_current();
+    if (fd != STDIN_FILENO && fd != STDOUT_FILENO && fd != STDERR_FILENO)
+        return -EBADF;
+
     if (thread)
         thread->tty_index = (int)tty_current_screen();
     tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
@@ -345,17 +492,14 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
     if (need && !vfs_access(node, thread->uid, thread->gid, need))
         return -EACCES;
 
-    for (int fd = 3; fd < SCHED_FD_MAX; fd++) {
-        if (!thread->fd_used[fd]) {
-            thread->fd_used[fd] = true;
-            thread->fds[fd].node = node;
-            thread->fds[fd].offset = 0;
-            thread->fds[fd].flags = (u32)flags;
-            return fd;
-        }
-    }
-
-    return -EMFILE;
+    sched_fd_t fd = {
+        .kind = SCHED_FD_VFS,
+        .node = node,
+        .pipe = NULL,
+        .offset = 0,
+        .flags = (u32)flags,
+    };
+    return sched_fd_alloc(thread, &fd, 3);
 }
 
 static bool
@@ -397,18 +541,70 @@ static int _sys_close(int fd) {
     if (fd < 0)
         return -EBADF;
 
-    if (fd < 3)
-        return 0;
-
     sched_thread_t* thread = sched_current();
-    if (!thread || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+    if (!thread)
+        return -EINVAL;
+
+    if (fd >= SCHED_FD_MAX)
         return -EBADF;
 
-    thread->fd_used[fd] = false;
-    thread->fds[fd].node = NULL;
-    thread->fds[fd].offset = 0;
-    thread->fds[fd].flags = 0;
+    if (!thread->fd_used[fd] && fd < 3)
+        return 0;
+
+    return sched_fd_close(thread, fd);
+}
+
+static int _sys_pipe(int* fds) {
+    if (!fds)
+        return -EFAULT;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -EINVAL;
+
+    sched_pipe_t* pipe = sched_pipe_create(SCHED_PIPE_CAPACITY);
+    if (!pipe)
+        return -ENOMEM;
+
+    sched_fd_t read_end = {
+        .kind = SCHED_FD_PIPE_READ,
+        .node = NULL,
+        .pipe = pipe,
+        .offset = 0,
+        .flags = O_RDONLY,
+    };
+
+    sched_fd_t write_end = {
+        .kind = SCHED_FD_PIPE_WRITE,
+        .node = NULL,
+        .pipe = pipe,
+        .offset = 0,
+        .flags = O_WRONLY,
+    };
+
+    int read_fd = sched_fd_alloc(thread, &read_end, 3);
+    if (read_fd < 0) {
+        sched_pipe_release_reader(pipe);
+        return read_fd;
+    }
+
+    int write_fd = sched_fd_alloc(thread, &write_end, 3);
+    if (write_fd < 0) {
+        sched_fd_close(thread, read_fd);
+        return write_fd;
+    }
+
+    fds[0] = read_fd;
+    fds[1] = write_fd;
     return 0;
+}
+
+static int _sys_dup2(int oldfd, int newfd) {
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -EINVAL;
+
+    return sched_fd_dup2(thread, oldfd, newfd);
 }
 
 static int _sys_mkdir(const char* path, mode_t mode) {
@@ -572,7 +768,7 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
 
     if (fixed) {
         for (sched_user_region_t* region = thread->regions; region; region = region->next) {
-            if (region_overlaps(region, addr, end))
+            if (_region_overlaps(region, addr, end))
                 return (uintptr_t)-ENOMEM;
         }
     } else {
@@ -594,13 +790,14 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
         if (fd < 0)
             return (uintptr_t)-EBADF;
 
-        if (fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+        sched_fd_t* entry = NULL;
+        if (!_fd_lookup(thread, fd, &entry))
             return (uintptr_t)-EBADF;
 
-        sched_fd_t* entry = &thread->fds[fd];
-        file = entry->node;
-        if (!file)
+        if (entry->kind != SCHED_FD_VFS || !entry->node)
             return (uintptr_t)-EBADF;
+
+        file = entry->node;
 
         if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
             return (uintptr_t)-EACCES;
@@ -851,15 +1048,19 @@ static int _sys_fstat(int fd, stat_t* st) {
     if (!st)
         return -EFAULT;
 
-    if (fd < 3)
-        return -EBADF;
-
     sched_thread_t* thread = sched_current();
-    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+    sched_fd_t* entry = NULL;
+    if (!_fd_lookup(thread, fd, &entry))
         return -EBADF;
 
-    sched_fd_t* entry = &thread->fds[fd];
-    if (!entry->node)
+    if (entry->kind == SCHED_FD_PIPE_READ || entry->kind == SCHED_FD_PIPE_WRITE) {
+        memset(st, 0, sizeof(*st));
+        st->st_mode = S_IFIFO | 0666;
+        st->st_nlink = 1;
+        return 0;
+    }
+
+    if (entry->kind != SCHED_FD_VFS || !entry->node)
         return -EBADF;
 
     return vfs_stat_node(entry->node, st, true) ? 0 : -EIO;
@@ -1033,12 +1234,12 @@ static int _sys_rename(const char* oldpath, const char* newpath) {
 
 static off_t _sys_seek(int fd, off_t offset, int whence) {
     sched_thread_t* thread = sched_current();
-    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+    sched_fd_t* entry = NULL;
+    if (!_fd_lookup(thread, fd, &entry))
         return -EBADF;
 
-    sched_fd_t* entry = &thread->fds[fd];
-    if (!entry->node)
-        return -EBADF;
+    if (entry->kind != SCHED_FD_VFS || !entry->node)
+        return -ESPIPE;
 
     off_t base = 0;
     switch (whence) {
@@ -1068,10 +1269,13 @@ static int _sys_getdents(int fd, dirent_t* out) {
         return -EFAULT;
 
     sched_thread_t* thread = sched_current();
-    if (!thread || fd < 0 || fd >= SCHED_FD_MAX || !thread->fd_used[fd])
+    sched_fd_t* entry = NULL;
+    if (!_fd_lookup(thread, fd, &entry))
         return -EBADF;
 
-    sched_fd_t* entry = &thread->fds[fd];
+    if (entry->kind != SCHED_FD_VFS)
+        return -ENOTDIR;
+
     vfs_node_t* node = entry->node;
 
     if (node && VFS_IS_LINK(node->type) && node->link)
@@ -1195,6 +1399,10 @@ static u64 _dispatch(arch_int_state_t* state) {
         );
     case SYS_CLOSE:
         return (u64)sys_close((int)arch_syscall_arg1(state));
+    case SYS_PIPE:
+        return (u64)_sys_pipe((int*)arch_syscall_arg1(state));
+    case SYS_DUP2:
+        return (u64)_sys_dup2((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_PREAD:
         return (u64)_sys_pread(
             (int)arch_syscall_arg1(state),
@@ -1220,7 +1428,7 @@ static u64 _dispatch(arch_int_state_t* state) {
     case SYS_MUNMAP:
         return (u64)_sys_munmap((void*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_IOCTL:
-        return (u64)sys_ioctl(
+        return (u64)_sys_ioctl(
             (int)arch_syscall_arg1(state),
             (u64)arch_syscall_arg2(state),
             (void*)arch_syscall_arg3(state)
@@ -1326,9 +1534,8 @@ static u64 _dispatch(arch_int_state_t* state) {
     case SYS_KILL:
         return _sys_kill((pid_t)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_GETPROCS:
-        return (u64)_sys_getprocs(
-            (proc_info_t*)arch_syscall_arg1(state),
-            (size_t)arch_syscall_arg2(state)
+        return (u64)sys_getprocs(
+            (proc_info_t*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state)
         );
     default:
         return (u64)-ENOSYS;

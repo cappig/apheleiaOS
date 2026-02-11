@@ -7,7 +7,7 @@ USER_LIBC_SRC := \
 	$(wildcard libs/libc_ext/*.c) \
 	$(wildcard libs/libc_usr/*.c)
 
-USER_UTILS := ls cat echo pwd clear uname sleep head kill true false whoami id groups login ps
+USER_UTILS := ls cat echo pwd clear uname sleep head kill true false whoami id groups login ps chmod stat
 USER_PROGS := init sh $(USER_UTILS)
 
 USER_CRT_SRC :=

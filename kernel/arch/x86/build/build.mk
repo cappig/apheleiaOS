@@ -22,17 +22,17 @@ include kernel/arch/x86/boot/build.mk
 
 ifeq ($(ARCH_VARIANT), 64)
 KERNEL_SRC := $(KERNEL_SRC_64)
-KERNEL_ELF := bin/image/boot/kernel64.elf
+KERNEL_ELF := bin/kernel64/boot/kernel64.elf
 include kernel/arch/x86/build/build64.mk
 else ifeq ($(ARCH_VARIANT), 32)
 KERNEL_SRC := $(KERNEL_SRC_32)
-KERNEL_ELF := bin/image/boot/kernel32.elf
+KERNEL_ELF := bin/kernel32/boot/kernel32.elf
 include kernel/arch/x86/build/build32.mk
 else
 $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
 endif
 
-SYMBOL_MAP := bin/image/boot/sym.map
+SYMBOL_MAP := $(dir $(KERNEL_ELF))sym.map
 
 $(SYMBOL_MAP): $(KERNEL_ELF)
 	@mkdir -p $(@D)
@@ -46,8 +46,10 @@ $(SYMBOL_MAP): $(KERNEL_ELF)
 
 bin/$(IMG_NAME): bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF) $(SYMBOL_MAP)
 	@mkdir -p $(@D)
-	@if [ "$(ARCH_VARIANT)" = "64" ]; then rm -f bin/image/boot/kernel32.elf; fi
-	@if [ "$(ARCH_VARIANT)" = "32" ]; then rm -f bin/image/boot/kernel64.elf; fi
+	@rm -rf bin/image
+	@mkdir -p bin/image/boot
+	@cp -f $(KERNEL_ELF) bin/image/boot/
+	@cp -f $(SYMBOL_MAP) bin/image/boot/sym.map
 	@cp -r root/* bin/image
 	@kernel/image.sh $@ $< bin/image
 	@kernel/arch/x86/build/mbr.sh bin/boot/mbr.bin $@
