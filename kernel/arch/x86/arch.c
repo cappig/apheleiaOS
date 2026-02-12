@@ -9,6 +9,7 @@
 #include <sys/panic.h>
 #include <sys/pci.h>
 #include <x86/asm.h>
+#include <x86/ahci.h>
 #include <x86/ata.h>
 #include <x86/boot.h>
 #include <x86/console.h>
@@ -295,6 +296,7 @@ void arch_init(void* boot_info) {
 
 void arch_storage_init(void) {
     ata_disk_init();
+    ahci_disk_init();
 }
 
 u32 arch_pci_read(u8 bus, u8 slot, u8 func, u8 offset, u8 size) {

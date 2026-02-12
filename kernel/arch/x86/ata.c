@@ -66,10 +66,6 @@ static void _delay(ata_device_t* dev) {
         inb(dev->ctrl_base);
 }
 
-static inline void _relax(void) {
-    asm volatile("pause");
-}
-
 static void _lock(ata_device_t* dev) {
     if (!dev)
         return;
@@ -218,7 +214,7 @@ static bool _poll(ata_device_t* dev) {
         if (!(status & ATA_SR_BUSY) && (status & ATA_SR_DRQ))
             return true;
 
-        _relax();
+        cpu_pause();
     }
 
     return false;
@@ -242,7 +238,7 @@ static bool _wait_ready(ata_device_t* dev) {
         if (!(status & ATA_SR_BUSY) && (status & ATA_SR_READY))
             return true;
 
-        _relax();
+        cpu_pause();
     }
 
     return false;
@@ -509,21 +505,6 @@ done_empty:
     goto done;
 }
 
-static char* _strdup(const char* src) {
-    if (!src)
-        return NULL;
-
-    size_t len = strlen(src);
-    char* out = malloc(len + 1);
-
-    if (!out)
-        return NULL;
-
-    memcpy(out, src, len);
-    out[len] = '\0';
-    return out;
-}
-
 bool ata_disk_init(void) {
     ata_device_t* ata = calloc(1, sizeof(ata_device_t));
     if (!ata)
@@ -583,7 +564,7 @@ bool ata_disk_init(void) {
         return false;
     }
 
-    disk->name = _strdup("hda");
+    disk->name = strdup("hda");
     disk->type = DISK_HARD;
     disk->interface = &ata_interface;
     disk->sector_size = ata->sector_size;

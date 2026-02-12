@@ -3,6 +3,7 @@
 #include <base/attributes.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <base/units.h>
 #include <parse/elf.h>
 #include <stdint.h>
 #include <stdio.h>

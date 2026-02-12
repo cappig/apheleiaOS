@@ -12,6 +12,7 @@
 
 #include <base/macros.h>
 #include <base/types.h>
+#include <base/units.h>
 #include <stddef.h>
 
 typedef u64 page_t;

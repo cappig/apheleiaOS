@@ -6,6 +6,7 @@
 #include <arch/thread.h>
 #include <base/attributes.h>
 #include <base/macros.h>
+#include <base/units.h>
 #include <errno.h>
 #include <log/log.h>
 #include <stdbool.h>

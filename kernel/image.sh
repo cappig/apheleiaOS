@@ -17,9 +17,13 @@ BOOT_SIZE_SECTORS=$(((BOOT_SIZE_BYTES + SECTOR_SIZE - 1) / SECTOR_SIZE))
 # Create ext2 rootfs
 TMP_EXT2=$(mktemp)
 TMP_ROOT=$(mktemp -d)
-truncate -s 16M "$TMP_EXT2"
 
 cp -a "$ROOTFS"/. "$TMP_ROOT"/
+
+ROOT_SIZE_BYTES=$(du -sb "$TMP_ROOT" | cut -f1)
+EXT2_TARGET_BYTES=$((ROOT_SIZE_BYTES + ROOT_SIZE_BYTES / 2))
+
+truncate -s "$EXT2_TARGET_BYTES" "$TMP_EXT2"
 
 if command -v fakeroot >/dev/null 2>&1; then
     fakeroot sh -c "
@@ -29,10 +33,10 @@ if command -v fakeroot >/dev/null 2>&1; then
         chmod 0644 \"$TMP_ROOT/etc/passwd\" \"$TMP_ROOT/etc/group\" \"$TMP_ROOT/etc/loader.conf\" 2>/dev/null || true
         chmod 0600 \"$TMP_ROOT/etc/shadow\" 2>/dev/null || true
         chmod 0755 \"$TMP_ROOT/home\" \"$TMP_ROOT/home/user\" 2>/dev/null || true
-        mkfs.ext2 -q -b 1024 -d \"$TMP_ROOT\" \"$TMP_EXT2\"
+        mkfs.ext2 -q -m 0 -b 1024 -d \"$TMP_ROOT\" \"$TMP_EXT2\"
     "
 else
-    mkfs.ext2 -q -b 1024 -d "$TMP_ROOT" "$TMP_EXT2"
+    mkfs.ext2 -q -m 0 -b 1024 -d "$TMP_ROOT" "$TMP_EXT2"
 fi
 
 EXT2_SIZE_BYTES=$(stat -c%s "$TMP_EXT2")

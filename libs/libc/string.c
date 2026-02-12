@@ -248,24 +248,27 @@ char* strtok(char* restrict str, const char* restrict delim) {
 }
 
 
-// char* strndup(const char* str, size_t size) {
-//     if (!size || !str)
-//         return NULL;
-//
-//     char* dest = malloc(size + 1);
-//
-//     if (dest) {
-//         strncpy(dest, str, size);
-//         dest[size] = '\0';
-//     }
-//
-//     return dest;
-// }
+#ifdef EXTERNAL_ALLOC
+char* strndup(const char* str, size_t size) {
+    if (!str)
+        return NULL;
 
-// NOTE:  This function triggers a false positive in gcc's static analyser
-// char* strdup(const char* str) {
-//     return strndup(str, strlen(str));
-// }
+    char* dest = malloc(size + 1);
+    if (!dest)
+        return NULL;
+
+    strncpy(dest, str, size);
+    dest[size] = '\0';
+    return dest;
+}
+
+char* strdup(const char* str) {
+    if (!str)
+        return NULL;
+
+    return strndup(str, strlen(str));
+}
+#endif
 
 
 static char* error_strings[] = {

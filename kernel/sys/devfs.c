@@ -2,6 +2,7 @@
 
 #include <arch/arch.h>
 #include <base/macros.h>
+#include <base/units.h>
 #include <log/log.h>
 #include <stddef.h>
 #include <string.h>

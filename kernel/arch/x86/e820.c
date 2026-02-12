@@ -2,6 +2,7 @@
 
 #include <base/macros.h>
 #include <base/types.h>
+#include <base/units.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>

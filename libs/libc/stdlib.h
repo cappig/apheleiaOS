@@ -36,15 +36,13 @@ typedef void (*free_fn)(void* ptr);
 struct _external_alloc {
     malloc_fn malloc;
     // realloc_fn realloc;
-
     free_fn free;
 };
+#endif
 
 void* malloc(size_t size);
 void* calloc(size_t num, size_t size);
-
 void free(void* ptr);
-#endif
 
 long long strtoll(char const* restrict str, char** restrict endptr, int base);
 long strtol(char const* restrict str, char** restrict endptr, int base);

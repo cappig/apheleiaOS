@@ -25,6 +25,10 @@ static inline void disable_interrupts(void) {
     asm volatile("cli" ::: "memory");
 }
 
+static inline void cpu_pause(void) {
+    asm volatile("pause");
+}
+
 #if defined(__x86_64__)
 static inline u64 irq_save(void) {
     u64 flags = 0;

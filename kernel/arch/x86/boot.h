@@ -1,8 +1,8 @@
 #pragma once
 
 #include <base/attributes.h>
-#include <base/macros.h>
 #include <base/types.h>
+#include <base/units.h>
 #include <lib/boot.h>
 
 #include "e820.h"
