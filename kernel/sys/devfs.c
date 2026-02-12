@@ -143,11 +143,16 @@ static bool _create_node(
     vfs_interface_t* interface,
     void* priv
 ) {
-    vfs_node_t* node = vfs_create(parent, (char*)name, type, mode);
+    vfs_node_t* node = vfs_lookup_from(parent, name);
+
+    if (!node)
+        node = vfs_create(parent, (char*)name, type, mode);
 
     if (!node)
         return false;
 
+    node->type = type;
+    node->mode = mode;
     node->interface = interface;
     node->private = priv;
     return true;
@@ -190,7 +195,7 @@ void devfs_init(void) {
         return;
     }
 
-    vfs_interface_t* tty_if = vfs_create_interface(_dev_tty_read, _dev_tty_write);
+    vfs_interface_t* tty_if = vfs_create_interface(dev_tty_read, dev_tty_write, NULL);
 
     if (!tty_if) {
         log_warn("devfs: failed to allocate tty interface");
@@ -209,7 +214,7 @@ void devfs_init(void) {
 
     if (!keyboard_init())
         log_warn("devfs: keyboard init failed");
-    vfs_interface_t* kbd_if = vfs_create_interface(keyboard_read, NULL);
+    vfs_interface_t* kbd_if = vfs_create_interface(keyboard_read, NULL, NULL);
     if (!kbd_if) {
         log_warn("devfs: failed to allocate keyboard interface");
     } else if (!devfs_create_node(dev_dir, "kbd", VFS_CHARDEV, 0666, kbd_if, NULL)) {
@@ -218,21 +223,21 @@ void devfs_init(void) {
 
     if (!mouse_init())
         log_warn("devfs: mouse init failed");
-    vfs_interface_t* mouse_if = vfs_create_interface(mouse_read, NULL);
+    vfs_interface_t* mouse_if = vfs_create_interface(mouse_read, NULL, NULL);
     if (!mouse_if) {
         log_warn("devfs: failed to allocate mouse interface");
     } else if (!devfs_create_node(dev_dir, "mouse", VFS_CHARDEV, 0666, mouse_if, NULL)) {
         log_warn("devfs: failed to create /dev/mouse");
     }
 
-    vfs_interface_t* null_if = vfs_create_interface(_dev_null_read, dev_null_write);
+    vfs_interface_t* null_if = vfs_create_interface(dev_null_read, dev_null_write, NULL);
     if (!null_if) {
         log_warn("devfs: failed to allocate null interface");
     } else if (!_create_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {
         log_warn("devfs: failed to create /dev/null");
     }
 
-    vfs_interface_t* zero_if = vfs_create_interface(_dev_zero_read, _dev_zero_write);
+    vfs_interface_t* zero_if = vfs_create_interface(dev_zero_read, dev_zero_write, NULL);
     if (!zero_if) {
         log_warn("devfs: failed to allocate zero interface");
     } else if (!_create_node(dev_dir, "zero", VFS_CHARDEV, 0666, zero_if, NULL)) {
@@ -241,7 +246,7 @@ void devfs_init(void) {
 
     const framebuffer_info_t* fb = framebuffer_get_info();
     if (fb) {
-        vfs_interface_t* fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write);
+        vfs_interface_t* fb_if = vfs_create_interface(dev_fb_read, dev_fb_write, NULL);
         if (!fb_if) {
             log_warn("devfs: failed to allocate framebuffer interface");
         } else if (!_create_node(dev_dir, "fb", VFS_CHARDEV, 0660, fb_if, NULL)) {

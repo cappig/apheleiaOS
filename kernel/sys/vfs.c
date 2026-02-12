@@ -1,5 +1,6 @@
 #include "vfs.h"
 
+#include <arch/arch.h>
 #include <data/list.h>
 #include <errno.h>
 #include <log/log.h>
@@ -12,6 +13,13 @@
 
 
 static vfs_t* vfs = NULL;
+
+static time_t _time_now(void) {
+    u32 hz = arch_timer_hz();
+    if (!hz)
+        return 0;
+    return (time_t)(arch_timer_ticks() / hz);
+}
 
 static vfs_node_t* _resolve_link(vfs_node_t* node) {
     if (!node)
@@ -189,6 +197,9 @@ vfs_node_t* vfs_create_node(char* name, u32 type) {
 
     node->type = type;
     node->tree_entry = tree_create_node(node);
+    node->time.created = _time_now();
+    node->time.modified = node->time.created;
+    node->time.accessed = node->time.created;
 
     if (name)
         node->name = _strdup(name);
@@ -215,7 +226,8 @@ void vfs_destroy_node(vfs_node_t* node) {
 
 vfs_interface_t* vfs_create_interface(
     ssize_t (*read)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags),
-    ssize_t (*write)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags)
+    ssize_t (*write)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags),
+    ssize_t (*truncate)(vfs_node_t* node, size_t len)
 ) {
     vfs_interface_t* interface = calloc(1, sizeof(vfs_interface_t));
 
@@ -224,6 +236,7 @@ vfs_interface_t* vfs_create_interface(
 
     interface->read = read;
     interface->write = write;
+    interface->truncate = truncate;
 
     return interface;
 }
@@ -377,7 +390,7 @@ bool vfs_access(vfs_node_t* vnode, uid_t uid, gid_t gid, int mode) {
     if (uid == 0)
         return true;
 
-    vnode = vfs_resolve_link(vnode);
+    vnode = _resolve_link(vnode);
     if (!vnode)
         return false;
 
@@ -438,19 +451,23 @@ bool vfs_chmod(vfs_node_t* node, mode_t mode) {
     if (!node)
         return false;
 
-    if (node->fs && node->fs->fs) {
+    fs_t* filesystem = node->fs ? node->fs->filesystem : NULL;
+
+    if (filesystem) {
         fs_interface_t* iface = NULL;
 
-        if (node->fs->fs->node_interface && node->fs->fs->node_interface->chmod)
-            iface = node->fs->fs->node_interface;
-        else if (node->fs->fs->fs_interface && node->fs->fs->fs_interface->chmod)
-            iface = node->fs->fs->fs_interface;
+        if (filesystem->node_interface && filesystem->node_interface->chmod)
+            iface = filesystem->node_interface;
+        else if (filesystem->fs_interface && filesystem->fs_interface->chmod)
+            iface = filesystem->fs_interface;
 
         if (iface && !iface->chmod(node->fs, node, mode))
             return false;
     }
 
     node->mode = mode;
+    if (!node->fs)
+        node->time.created = _time_now();
     return true;
 }
 
@@ -462,13 +479,15 @@ bool vfs_chown(vfs_node_t* node, uid_t uid, gid_t gid) {
     if (!node)
         return false;
 
-    if (node->fs && node->fs->fs) {
+    fs_t* filesystem = node->fs ? node->fs->filesystem : NULL;
+
+    if (filesystem) {
         fs_interface_t* iface = NULL;
 
-        if (node->fs->fs->node_interface && node->fs->fs->node_interface->chown)
-            iface = node->fs->fs->node_interface;
-        else if (node->fs->fs->fs_interface && node->fs->fs->fs_interface->chown)
-            iface = node->fs->fs->fs_interface;
+        if (filesystem->node_interface && filesystem->node_interface->chown)
+            iface = filesystem->node_interface;
+        else if (filesystem->fs_interface && filesystem->fs_interface->chown)
+            iface = filesystem->fs_interface;
 
         if (iface && !iface->chown(node->fs, node, uid, gid))
             return false;
@@ -476,6 +495,8 @@ bool vfs_chown(vfs_node_t* node, uid_t uid, gid_t gid) {
 
     node->uid = uid;
     node->gid = gid;
+    if (!node->fs)
+        node->time.created = _time_now();
     return true;
 }
 
@@ -568,6 +589,48 @@ bool vfs_unlink(const char* path) {
     }
 
     return _remove_child(parent, child);
+}
+
+bool vfs_rmdir(const char* path) {
+    if (!path)
+        return false;
+
+    char* dir_name = NULL;
+    char* base_name = NULL;
+
+    if (!vfs_split_path(path, &dir_name, &base_name))
+        return false;
+
+    vfs_node_t* parent = vfs_lookup(dir_name);
+    if (parent && VFS_IS_LINK(parent->type))
+        parent = parent->link;
+
+    free(dir_name);
+
+    if (!parent || parent->type != VFS_DIR) {
+        free(base_name);
+        return false;
+    }
+
+    tree_node_t* child_tnode = NULL;
+    vfs_node_t* child = vfs_find_child(parent, base_name, &child_tnode);
+    free(base_name);
+
+    if (!child || !child_tnode)
+        return false;
+
+    if (child->type != VFS_DIR)
+        return false;
+
+    if (!child->tree_entry || (child->tree_entry->children && child->tree_entry->children->length))
+        return false;
+
+    if (parent->interface && parent->interface->remove) {
+        if (parent->interface->remove(parent, child->name) < 0)
+            return false;
+    }
+
+    return vfs_remove_child(parent, child);
 }
 
 bool vfs_rename(const char* old_path, const char* new_path) {
@@ -681,8 +744,13 @@ bool vfs_insert_child(vfs_node_t* parent, vfs_node_t* child) {
 
     vfs_interface_t* interface = parent->interface;
 
-    if (interface && interface->create)
-        interface->create(parent, child);
+    if (interface && interface->create) {
+        if (interface->create(parent, child) < 0) {
+            tree_remove_child(parent_tnode, child->tree_entry);
+            errno = EIO;
+            return false;
+        }
+    }
 
     return true;
 }
@@ -719,10 +787,10 @@ bool vfs_mount(fs_instance_t* instance, vfs_node_t* mount) {
         return false;
 
     if (!instance->has_tree) {
-        if (!instance->fs)
+        if (!instance->filesystem)
             return false;
 
-        fs_interface_t* interface = instance->fs->fs_interface;
+        fs_interface_t* interface = instance->filesystem->fs_interface;
 
         if (!interface || !interface->build_tree)
             return false;
@@ -764,8 +832,8 @@ bool vfs_unmount(vfs_node_t* mount, bool destroy_tree) {
 
     instance->refcount--;
 
-    if (!instance->refcount && destroy_tree && instance->fs) {
-        fs_interface_t* interface = instance->fs->fs_interface;
+    if (!instance->refcount && destroy_tree && instance->filesystem) {
+        fs_interface_t* interface = instance->filesystem->fs_interface;
 
         if (interface && interface->destroy_tree)
             interface->destroy_tree(instance);
@@ -811,7 +879,10 @@ ssize_t vfs_read(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t 
     if (!node->interface || !node->interface->read)
         return -1;
 
-    return node->interface->read(node, buf, offset, len, flags);
+    ssize_t rc = node->interface->read(node, buf, offset, len, flags);
+    if (rc >= 0 && !node->fs)
+        node->time.accessed = _time_now();
+    return rc;
 }
 
 ssize_t vfs_write(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags) {
@@ -822,7 +893,31 @@ ssize_t vfs_write(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t
     if (!node->interface || !node->interface->write)
         return -1;
 
-    return node->interface->write(node, buf, offset, len, flags);
+    ssize_t rc = node->interface->write(node, buf, offset, len, flags);
+    if (rc >= 0 && !node->fs) {
+        time_t now = _time_now();
+        node->time.accessed = now;
+        node->time.modified = now;
+        node->time.created = now;
+    }
+    return rc;
+}
+
+ssize_t vfs_truncate(vfs_node_t* node, size_t len) {
+    node = _resolve_link(node);
+    if (!node)
+        return -1;
+
+    if (!node->interface || !node->interface->truncate)
+        return -1;
+
+    ssize_t rc = node->interface->truncate(node, len);
+    if (rc >= 0 && !node->fs) {
+        time_t now = _time_now();
+        node->time.modified = now;
+        node->time.created = now;
+    }
+    return rc;
 }
 
 ssize_t vfs_mmap(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags) {

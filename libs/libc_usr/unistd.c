@@ -51,6 +51,10 @@ int mkdir(const char* path, mode_t mode) {
     return SYSCALL_RET(int, syscall2(SYS_MKDIR, (uintptr_t)path, (uintptr_t)mode));
 }
 
+int rmdir(const char* path) {
+    return SYSCALL_RET(int, syscall1(SYS_RMDIR, (uintptr_t)path));
+}
+
 int access(const char* path, int mode) {
     return SYSCALL_RET(int, syscall2(SYS_ACCESS, (uintptr_t)path, (uintptr_t)mode));
 }
@@ -59,6 +63,10 @@ off_t lseek(int fd, off_t offset, int whence) {
     return SYSCALL_RET(
         off_t, syscall3(SYS_SEEK, (uintptr_t)fd, (uintptr_t)offset, (uintptr_t)whence)
     );
+}
+
+mode_t umask(mode_t mask) {
+    return SYSCALL_RET(mode_t, syscall1(SYS_UMASK, (uintptr_t)mask));
 }
 
 unsigned int sleep(unsigned int seconds) {

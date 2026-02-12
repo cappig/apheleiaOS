@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Usage: ./image.sh.sh <image.bin> <boot.bin> <rootfs>
+# Usage: ./image.sh <image.bin> <boot.bin> <rootfs>
 
 IMG="$1"
 BOOT_BIN="$2"
@@ -24,15 +24,16 @@ cp -a "$ROOTFS"/. "$TMP_ROOT"/
 if command -v fakeroot >/dev/null 2>&1; then
     fakeroot sh -c "
         chown 0:0 \"$TMP_ROOT/etc/passwd\" \"$TMP_ROOT/etc/group\" \"$TMP_ROOT/etc/loader.conf\" \"$TMP_ROOT/etc/shadow\" 2>/dev/null || true
+        chown 0:0 \"$TMP_ROOT/home\" 2>/dev/null || true
+        chown 1000:1000 \"$TMP_ROOT/home/user\" 2>/dev/null || true
         chmod 0644 \"$TMP_ROOT/etc/passwd\" \"$TMP_ROOT/etc/group\" \"$TMP_ROOT/etc/loader.conf\" 2>/dev/null || true
         chmod 0600 \"$TMP_ROOT/etc/shadow\" 2>/dev/null || true
+        chmod 0755 \"$TMP_ROOT/home\" \"$TMP_ROOT/home/user\" 2>/dev/null || true
         mkfs.ext2 -q -b 1024 -d \"$TMP_ROOT\" \"$TMP_EXT2\"
     "
 else
     mkfs.ext2 -q -b 1024 -d "$TMP_ROOT" "$TMP_EXT2"
 fi
-
-resize2fs -M "$TMP_EXT2" >/dev/null 2>&1
 
 EXT2_SIZE_BYTES=$(stat -c%s "$TMP_EXT2")
 EXT2_SECTORS=$(((EXT2_SIZE_BYTES + SECTOR_SIZE - 1) / SECTOR_SIZE))

@@ -29,6 +29,12 @@
 static bool
 _split_parent_path(const char* path, char* parent, size_t parent_len, char* base, size_t base_len);
 
+static mode_t _apply_umask(mode_t mode, mode_t mask) {
+    mode_t special = mode & 07000;
+    mode_t perms = (mode & 0777) & ~(mask & 0777);
+    return special | perms;
+}
+
 static bool _fd_lookup(sched_thread_t* thread, int fd, sched_fd_t** entry_out) {
     if (!thread || !entry_out)
         return false;
@@ -470,12 +476,12 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
         if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
             return -EACCES;
 
-        node = vfs_create(parent, base, VFS_FILE, mode);
+        node = vfs_create(parent, base, VFS_FILE, _apply_umask(mode, thread->umask));
         if (!node)
             return -EIO;
 
-        node->uid = thread->uid;
-        node->gid = thread->gid;
+        if (!vfs_chown(node, thread->uid, thread->gid))
+            return -EIO;
     }
 
     if (!node)
@@ -491,6 +497,17 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
 
     if (need && !vfs_access(node, thread->uid, thread->gid, need))
         return -EACCES;
+
+    if ((flags & O_TRUNC) && ((flags & O_WRONLY) || (flags & O_RDWR))) {
+        if (VFS_IS_LINK(node->type) && node->link)
+            node = node->link;
+
+        if (!node || node->type != VFS_FILE)
+            return -EINVAL;
+
+        if (vfs_truncate(node, 0) < 0)
+            return -EIO;
+    }
 
     sched_fd_t fd = {
         .kind = SCHED_FD_VFS,
@@ -637,13 +654,73 @@ static int _sys_mkdir(const char* path, mode_t mode) {
     if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
         return -EACCES;
 
-    vfs_node_t* node = vfs_create(parent, base, VFS_DIR, mode);
+    vfs_node_t* node = vfs_create(parent, base, VFS_DIR, _apply_umask(mode, thread->umask));
     if (!node)
         return -EIO;
 
-    node->uid = thread->uid;
-    node->gid = thread->gid;
+    if (!vfs_chown(node, thread->uid, thread->gid))
+        return -EIO;
+
     return 0;
+}
+
+static mode_t _sys_umask(mode_t mask) {
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return (mode_t)-EINVAL;
+
+    mode_t old = thread->umask & 0777;
+    thread->umask = mask & 0777;
+    return old;
+}
+
+static int _sys_rmdir(const char* path) {
+    if (!path)
+        return -EFAULT;
+
+    sched_thread_t* thread = sched_current();
+    if (!thread)
+        return -EINVAL;
+
+    char resolved[PATH_MAX];
+    if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
+        return -ENOENT;
+
+    if (!strcmp(resolved, "/"))
+        return -EBUSY;
+
+    vfs_node_t* node = vfs_lookup(resolved);
+    if (!node)
+        return -ENOENT;
+
+    if (VFS_IS_LINK(node->type) && node->link)
+        return -ENOTDIR;
+
+    if (node->type != VFS_DIR)
+        return -ENOTDIR;
+
+    if (!node->tree_entry)
+        return -EIO;
+
+    if (node->tree_entry->children && node->tree_entry->children->length)
+        return -ENOTEMPTY;
+
+    char parent_path[PATH_MAX];
+    char base[PATH_MAX];
+    if (!split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
+        return -EINVAL;
+
+    vfs_node_t* parent = vfs_lookup(parent_path);
+    if (parent && VFS_IS_LINK(parent->type))
+        parent = parent->link;
+
+    if (!parent || parent->type != VFS_DIR)
+        return -ENOTDIR;
+
+    if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
+        return -EACCES;
+
+    return vfs_rmdir(resolved) ? 0 : -EIO;
 }
 
 static int _sys_chdir(const char* path) {
@@ -1436,13 +1513,17 @@ static u64 _dispatch(arch_int_state_t* state) {
     case SYS_GETDENTS:
         return (u64)_sys_getdents((int)arch_syscall_arg1(state), (dirent_t*)arch_syscall_arg2(state));
     case SYS_CHDIR:
-        return (u64)sys_chdir((const char*)arch_syscall_arg1(state));
+        return (u64)_sys_chdir((const char*)arch_syscall_arg1(state));
     case SYS_GETCWD:
         return (u64)_sys_getcwd((char*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_MKDIR:
         return (u64)_sys_mkdir(
             (const char*)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state)
         );
+    case SYS_UMASK:
+        return (u64)_sys_umask((mode_t)arch_syscall_arg1(state));
+    case SYS_RMDIR:
+        return (u64)_sys_rmdir((const char*)arch_syscall_arg1(state));
     case SYS_ACCESS:
         return (u64)sys_access((const char*)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_STAT:

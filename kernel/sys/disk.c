@@ -175,7 +175,7 @@ static fs_instance_t* _probe_partition(disk_partition_t* part) {
         if (instance) {
             part->fs_instance = instance;
             instance->partition = part;
-            instance->fs = fs;
+            instance->filesystem = fs;
             instance->refcount = 0;
             return instance;
         }
@@ -282,7 +282,7 @@ static void _publish_partition_nodes(disk_dev_t* dev) {
 
         node->fs = part->fs_instance ? part->fs_instance : _probe_partition(part);
         node->private = part;
-        node->interface = vfs_create_interface(_vfs_read, _vfs_write);
+        node->interface = vfs_create_interface(disk_vfs_read, disk_vfs_write, NULL);
     }
 }
 

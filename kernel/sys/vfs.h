@@ -50,6 +50,7 @@ struct vfs_interface {
     // Operations on the node itself
     ssize_t (*read)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags);
     ssize_t (*write)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags);
+    ssize_t (*truncate)(vfs_node_t* node, size_t len);
 
     ssize_t (*mmap)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags);
     ssize_t (*ioctl)(vfs_node_t* node, u64 request, void* args);
@@ -94,7 +95,8 @@ void vfs_destroy_node(vfs_node_t* node);
 
 vfs_interface_t* vfs_create_interface(
     ssize_t (*read)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags),
-    ssize_t (*write)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags)
+    ssize_t (*write)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags),
+    ssize_t (*truncate)(vfs_node_t* node, size_t len)
 );
 void vfs_destroy_interface(vfs_interface_t* interface);
 
@@ -111,6 +113,7 @@ bool vfs_chmod(vfs_node_t* node, mode_t mode);
 bool vfs_chown(vfs_node_t* node, uid_t uid, gid_t gid);
 bool vfs_link(const char* target, const char* link_path);
 bool vfs_unlink(const char* path);
+bool vfs_rmdir(const char* path);
 bool vfs_rename(const char* old_path, const char* new_path);
 
 bool vfs_insert_child(vfs_node_t* parent, vfs_node_t* child);
@@ -121,6 +124,7 @@ bool vfs_unmount(vfs_node_t* mount, bool destroy_tree);
 
 ssize_t vfs_read(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_write(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
+ssize_t vfs_truncate(vfs_node_t* node, size_t len);
 ssize_t vfs_mmap(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_ioctl(vfs_node_t* node, u64 request, void* args);
 

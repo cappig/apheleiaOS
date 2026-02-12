@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <pwd.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -151,6 +152,8 @@ static bool sh_pgrp_state(pid_t pgid, const proc_info_t* list, ssize_t count, bo
 static void sh_reap_jobs(bool report) {
     proc_info_t procs[128];
     ssize_t count = sh_get_procs(procs, sizeof(procs) / sizeof(procs[0]));
+    if (count < 0)
+        return;
 
     for (size_t i = 0; i < sh_job_count;) {
         job_t* job = &sh_jobs[i];
@@ -209,6 +212,31 @@ static int sh_parse_job_id(const char* arg) {
     return id > 0 ? id : -1;
 }
 
+static bool sh_wait_foreground_pgrp(pid_t pgid) {
+    if (pgid <= 0)
+        return false;
+
+    for (;;) {
+        int status = 0;
+        pid_t waited = waitpid(-pgid, &status, WUNTRACED);
+
+        if (waited > 0) {
+            if (WIFSTOPPED(status))
+                return true;
+
+            continue;
+        }
+
+        if (waited == 0)
+            continue;
+
+        if (errno == EINTR)
+            continue;
+
+        return false;
+    }
+}
+
 static int sh_fg(int argc, char** argv) {
     if (sh_job_count == 0) {
         write_str("fg: no jobs\n");
@@ -228,18 +256,27 @@ static int sh_fg(int argc, char** argv) {
         return 1;
     }
 
-    if (job->state == JOB_STOPPED)
-        kill(-job->pid, SIGCONT);
+    size_t index = (size_t)(job - sh_jobs);
+
+    if (job->state == JOB_STOPPED) {
+        if (kill(-job->pid, SIGCONT) < 0) {
+            write_str("fg: failed to continue job\n");
+            sh_job_remove_index(index);
+            return 1;
+        }
+
+        job->state = JOB_RUNNING;
+    }
 
     tty_set_pgrp(job->pid);
-    int status = 0;
-    waitpid(job->pid, &status, WUNTRACED);
+    bool stopped = sh_wait_foreground_pgrp(job->pid);
     tty_set_pgrp(sh_pgid);
 
-    if (WIFSTOPPED(status))
+    if (stopped) {
         job->state = JOB_STOPPED;
-
-    sh_reap_jobs(false);
+    } else if (index < sh_job_count) {
+        sh_job_remove_index(index);
+    }
 
     return 1;
 }
@@ -263,8 +300,18 @@ static int sh_bg(int argc, char** argv) {
         return 1;
     }
 
+    size_t index = (size_t)(job - sh_jobs);
+
     if (job->state == JOB_STOPPED) {
-        kill(-job->pid, SIGCONT);
+        if (kill(-job->pid, SIGCONT) < 0) {
+            write_str("bg: failed to continue job\n");
+
+            if (index < sh_job_count)
+                sh_job_remove_index(index);
+
+            return 1;
+        }
+
         job->state = JOB_RUNNING;
     }
 
@@ -342,7 +389,21 @@ static void sh_expand_arg(const char* in, char* out, size_t out_len) {
         return;
 
     size_t o = 0;
-    for (size_t i = 0; in[i] && o + 1 < out_len; i++) {
+    size_t i = 0;
+
+    if (in[0] == '~' && (in[1] == '\0' || in[1] == '/')) {
+        const char* home = sh_env_get("HOME");
+        if (home && home[0]) {
+            size_t home_len = strlen(home);
+            if (o + home_len >= out_len)
+                home_len = out_len - o - 1;
+            memcpy(out + o, home, home_len);
+            o += home_len;
+            i = 1;
+        }
+    }
+
+    for (; in[i] && o + 1 < out_len; i++) {
         if (in[i] != '$') {
             out[o++] = in[i];
             continue;
@@ -745,6 +806,25 @@ static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
     return false;
 }
 
+static bool sh_parse_umask(const char* text, mode_t* out) {
+    if (!text || !text[0] || !out)
+        return false;
+
+    mode_t value = 0;
+    const char* cursor = text;
+
+    while (*cursor) {
+        if (*cursor < '0' || *cursor > '7')
+            return false;
+
+        value = (mode_t)((value << 3) + (mode_t)(*cursor - '0'));
+        cursor++;
+    }
+
+    *out = value & 0777;
+    return true;
+}
+
 static int handle_builtin(int argc, char** argv) {
     if (argc <= 0)
         return 0;
@@ -754,7 +834,7 @@ static int handle_builtin(int argc, char** argv) {
     }
 
     if (!strcmp(argv[0], "help")) {
-        write_str("builtins: help, echo, exit, set, unset, env, cd, jobs, fg, bg\n");
+        write_str("builtins: help, echo, exit, set, unset, env, cd, umask, jobs, fg, bg\n");
         return 1;
     }
 
@@ -818,6 +898,32 @@ static int handle_builtin(int argc, char** argv) {
         }
 
         sh_update_pwd();
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "umask")) {
+        if (argc == 1) {
+            mode_t old = umask(0);
+            umask(old);
+
+            char line[16];
+            snprintf(line, sizeof(line), "%03o\n", (unsigned int)(old & 0777));
+            write_str(line);
+            return 1;
+        }
+
+        if (argc == 2) {
+            mode_t mask = 0;
+            if (!sh_parse_umask(argv[1], &mask)) {
+                write_str("umask: usage: umask [ooo]\n");
+                return 1;
+            }
+
+            umask(mask);
+            return 1;
+        }
+
+        write_str("umask: usage: umask [ooo]\n");
         return 1;
     }
 
@@ -909,11 +1015,6 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
     }
 
     pid_t pgid = 0;
-    pid_t child_pids[SH_MAX_STAGES];
-
-    for (int i = 0; i < SH_MAX_STAGES; i++)
-        child_pids[i] = -1;
-
     for (int i = 0; i < stage_count; i++) {
         pid_t pid = fork();
 
@@ -960,7 +1061,6 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
             pgid = pid;
 
         setpgid(pid, pgid);
-        child_pids[i] = pid;
     }
 
     sh_close_pipe_fds(pipes, stage_count - 1);
@@ -978,19 +1078,7 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
 
     tty_set_pgrp(pgid);
 
-    bool stopped = false;
-    for (int i = 0; i < stage_count; i++) {
-        if (child_pids[i] <= 0)
-            continue;
-
-        int status = 0;
-        pid_t waited = waitpid(child_pids[i], &status, WUNTRACED);
-
-        if (waited > 0 && WIFSTOPPED(status)) {
-            stopped = true;
-            break;
-        }
-    }
+    bool stopped = sh_wait_foreground_pgrp(pgid);
 
     tty_set_pgrp(sh_pgid);
 
@@ -1040,8 +1128,8 @@ static int run_command(char* line) {
         }
     }
 
-    bool simple_builtin = stage_count == 1 && !background && !stages[0].in_path &&
-                          !stages[0].out_path;
+    bool simple_builtin =
+        stage_count == 1 && !background && !stages[0].in_path && !stages[0].out_path;
 
     if (simple_builtin && handle_builtin(stages[0].argc, stages[0].argv)) {
         return 0;
@@ -1089,6 +1177,10 @@ int main(int argc, char** argv) {
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
     sh_env_set("PATH", "/sbin");
+    sh_env_set("HOME", "/");
+    passwd_t pwd = {0};
+    if (getpwuid(getuid(), &pwd) == 0 && pwd.pw_dir[0])
+        sh_env_set("HOME", pwd.pw_dir);
     sh_env_set("PWD", "/");
     sh_update_pwd();
 

@@ -1,13 +1,13 @@
 USER_BIN_DIR := bin/user/$(ARCH_VARIANT)/bin
 USER_OBJ_DIR := bin/user/$(ARCH_VARIANT)
-USER_ROOT_DIR := root/sbin
+USER_STAGE_DIR := bin/user/$(ARCH_VARIANT)/root/sbin
 
 USER_LIBC_SRC := \
 	$(wildcard libs/libc/*.c) \
 	$(wildcard libs/libc_ext/*.c) \
 	$(wildcard libs/libc_usr/*.c)
 
-USER_UTILS := ls cat echo pwd clear uname sleep head kill true false whoami id groups login ps chmod stat
+USER_UTILS := ls cat echo ln mkdir mv pwd rm rmdir clear uname sleep head kill true false whoami id groups login ps chmod stat touch
 USER_PROGS := init sh $(USER_UTILS)
 
 USER_CRT_SRC :=
@@ -43,7 +43,7 @@ endif
 USER_LIBC_OBJ := $(patsubst %.c, $(USER_OBJ_DIR)/%.c.o, $(USER_LIBC_SRC))
 USER_CRT_OBJ := $(patsubst %.asm, $(USER_OBJ_DIR)/%.asm.o, $(USER_CRT_SRC))
 
-USER_PROGS_ROOT := $(foreach prog, $(USER_PROGS), $(USER_ROOT_DIR)/$(prog))
+USER_PROGS_ROOT := $(foreach prog, $(USER_PROGS), $(USER_STAGE_DIR)/$(prog))
 
 USER_BINARIES := $(USER_PROGS_ROOT)
 
@@ -59,7 +59,7 @@ $(USER_BIN_DIR)/%: $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_OBJ_DIR)/user/%/main.
 	@mkdir -p $(@D)
 	$(call ld, $(USER_LD), $@, $^)
 
-$(USER_ROOT_DIR)/%: $(USER_BIN_DIR)/%
+$(USER_STAGE_DIR)/%: $(USER_BIN_DIR)/%
 	@mkdir -p $(@D)
 	@cp $< $@
 

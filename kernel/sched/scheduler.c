@@ -812,6 +812,7 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     }
     thread->uid = current ? current->uid : 0;
     thread->gid = current ? current->gid : 0;
+    thread->umask = current ? current->umask : 0022;
     thread->stack_size = SCHED_STACK_SIZE;
     thread->stack = malloc(thread->stack_size);
     thread->tty_index = current ? current->tty_index : -1;
@@ -907,6 +908,7 @@ pid_t sched_fork(arch_int_state_t* state) {
     child->ppid = current->pid;
     child->pgid = current->pgid;
     child->sid = current->sid;
+    child->umask = current->umask;
     child->user_stack_base = current->user_stack_base;
     child->user_stack_size = current->user_stack_size;
     if (!sched_fd_clone_table(child, current)) {
@@ -986,29 +988,44 @@ pid_t sched_wait(pid_t pid, int* status) {
     return sched_waitpid(pid, status, 0);
 }
 
+static bool
+_waitpid_target_matches(const sched_thread_t* parent, const sched_thread_t* child, pid_t pid) {
+    if (!parent || !child || !child->user_thread)
+        return false;
+
+    if (child->ppid != parent->pid)
+        return false;
+
+    if (pid > 0)
+        return child->pid == pid;
+
+    if (pid == 0)
+        return child->pgid == parent->pgid;
+
+    if (pid == -1)
+        return true;
+
+    return child->pgid == -pid;
+}
+
 pid_t sched_waitpid(pid_t pid, int* status, int options) {
     if (!current || !current->user_thread)
-        return -1;
+        return -ECHILD;
 
     for (;;) {
         sched_thread_t* found = NULL;
         sched_thread_t* stopped = NULL;
+        bool has_matching_child = false;
         unsigned long flags = arch_irq_save();
 
-        if (!zombie_list) {
+        if (!zombie_list || !all_list) {
             arch_irq_restore(flags);
-            return -1;
+            return -ECHILD;
         }
 
         ll_foreach(node, zombie_list) {
             sched_thread_t* thread = node->data;
-            if (!thread || !thread->user_thread)
-                continue;
-
-            if (thread->ppid != current->pid)
-                continue;
-
-            if (pid > 0 && thread->pid != pid)
+            if (!_waitpid_target_matches(current, thread, pid))
                 continue;
 
             found = thread;
@@ -1032,14 +1049,10 @@ pid_t sched_waitpid(pid_t pid, int* status, int options) {
         if (options & WUNTRACED) {
             ll_foreach(node, all_list) {
                 sched_thread_t* thread = node->data;
-                if (!thread || !thread->user_thread)
+                if (!_waitpid_target_matches(current, thread, pid))
                     continue;
 
-                if (thread->ppid != current->pid)
-                    continue;
-
-                if (pid > 0 && thread->pid != pid)
-                    continue;
+                has_matching_child = true;
 
                 if (thread->state != THREAD_STOPPED || thread->stop_reported)
                     continue;
@@ -1055,6 +1068,19 @@ pid_t sched_waitpid(pid_t pid, int* status, int options) {
                 arch_irq_restore(flags);
                 return stopped->pid;
             }
+        } else {
+            ll_foreach(node, all_list) {
+                sched_thread_t* thread = node->data;
+                if (_waitpid_target_matches(current, thread, pid)) {
+                    has_matching_child = true;
+                    break;
+                }
+            }
+        }
+
+        if (!has_matching_child) {
+            arch_irq_restore(flags);
+            return -ECHILD;
         }
 
         if (options & WNOHANG) {
@@ -1064,7 +1090,7 @@ pid_t sched_waitpid(pid_t pid, int* status, int options) {
 
         if (!sched_running) {
             arch_irq_restore(flags);
-            return -1;
+            return -ECHILD;
         }
 
         _run_queue_remove(current);
@@ -1253,12 +1279,27 @@ void sched_sleep(u64 ticks) {
         return;
     }
 
-    current->wake_tick = arch_timer_ticks() + ticks;
-    current->state = THREAD_SLEEPING;
-    sched_yield();
+    u64 deadline = arch_timer_ticks() + ticks;
+    current->wake_tick = deadline;
 
-    while (current->state == THREAD_SLEEPING)
-        arch_cpu_wait();
+    for (;;) {
+        current->state = THREAD_SLEEPING;
+        sched_yield();
+
+        while (current->state == THREAD_SLEEPING)
+            arch_cpu_wait();
+
+        if (arch_timer_ticks() >= deadline)
+            break;
+
+        if (current->state == THREAD_ZOMBIE)
+            break;
+
+        if (sched_signal_has_pending(current))
+            break;
+    }
+
+    current->wake_tick = 0;
 }
 
 void sched_exit(void) {

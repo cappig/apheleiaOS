@@ -88,7 +88,7 @@ struct fs {
 };
 
 struct fs_instance {
-    fs_t* fs;
+    fs_t* filesystem;
     disk_partition_t* partition;
 
     bool has_tree;

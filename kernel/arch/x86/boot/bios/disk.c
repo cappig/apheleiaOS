@@ -15,47 +15,59 @@
 
 // FIXME: THIS IS DOGSHITTTT
 #define SECTOR_SIZE 512
+// BIOS EDD packet supports multi-sector reads; keep this conservative.
+#define MAX_BIOS_SECTORS_PER_CALL 64
+#define BOUNCE_SECTORS            16
 
 static u16 disk_code = 0;
 static size_t rootfs_base = 0;
 static ext2_superblock_t superblock = {0};
 
+static bool _bios_read_lba(void* dest, size_t lba, u16 sectors) {
+    if (!dest || !sectors)
+        return false;
+
+    dap_t dap = {
+        .size = sizeof(dap_t),
+        .sectors = sectors,
+        .destination = (u32)(uintptr_t)dest,
+        .lba = lba,
+    };
+
+    regs32_t r = {0};
+    r.ah = 0x42;
+    r.dl = disk_code;
+    r.esi = (uintptr_t)&dap;
+
+    bios_call(0x13, &r, &r);
+    return !(r.flags & FLAG_CF);
+}
+
 int read_disk(void* dest, size_t offset, size_t bytes) {
     size_t lba = offset / SECTOR_SIZE;
     size_t sector_off = offset % SECTOR_SIZE;
 
-    dap_t dap = {.size = sizeof(dap_t), .sectors = 1};
-
-    uint8_t bounce[SECTOR_SIZE];
+    uint8_t bounce[SECTOR_SIZE * BOUNCE_SECTORS];
     uint8_t* out = dest;
 
     while (bytes > 0) {
-        // Read 1 sector into bounce buffer
-        dap.destination = (uint32_t)(uintptr_t)bounce;
-        dap.lba = lba;
+        size_t bytes_window = bytes + sector_off;
+        size_t sectors_window = DIV_ROUND_UP(bytes_window, SECTOR_SIZE);
+        size_t sectors_cap = min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)BOUNCE_SECTORS);
+        u16 sectors = (u16)min(sectors_window, sectors_cap);
 
-        regs32_t r = {0};
-        r.ah = 0x42;
-        r.dl = disk_code;
-        r.esi = (uintptr_t)&dap;
-
-        bios_call(0x13, &r, &r);
-
-        if (r.flags & FLAG_CF)
+        if (!_bios_read_lba(bounce, lba, sectors))
             panic("Disk read error!");
 
-        // How many bytes do we copy from this sector?
-        size_t available = SECTOR_SIZE - sector_off;
-        size_t to_copy = (bytes < available) ? bytes : available;
+        size_t available = (size_t)sectors * SECTOR_SIZE - sector_off;
+        size_t to_copy = min(bytes, available);
 
         memcpy(out, bounce + sector_off, to_copy);
 
-        // Advance
         out += to_copy;
         bytes -= to_copy;
-
-        sector_off = 0; // only the first iteration has an offset
-        lba++;
+        lba += sectors;
+        sector_off = 0; // offset is only relevant for the first chunk
     }
 
     return 0;

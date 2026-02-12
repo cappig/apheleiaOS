@@ -51,5 +51,7 @@ bin/$(IMG_NAME): bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF) $(SYMBOL_MAP)
 	@cp -f $(KERNEL_ELF) bin/image/boot/
 	@cp -f $(SYMBOL_MAP) bin/image/boot/sym.map
 	@cp -r root/* bin/image
+	@mkdir -p bin/image/sbin
+	@cp -f bin/user/$(ARCH_VARIANT)/root/sbin/* bin/image/sbin/
 	@kernel/image.sh $@ $< bin/image
 	@kernel/arch/x86/build/mbr.sh bin/boot/mbr.bin $@
