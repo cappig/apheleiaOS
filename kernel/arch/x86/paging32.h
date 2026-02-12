@@ -38,22 +38,22 @@ typedef u64 page_t;
 #define PT_GLOBAL        (1 << 8)
 #define PT_NO_EXECUTE    (1ULL << 63)
 
-inline page_t page_get_paddr(page_t* page) {
+static inline page_t page_get_paddr(page_t* page) {
     return *page & ADDR_MASK;
 }
 
-inline void* page_get_vaddr(page_t* page) {
+static inline void* page_get_vaddr(page_t* page) {
     page_t paddr = page_get_paddr(page);
     return (void*)(uintptr_t)paddr;
 }
 
-inline void page_set_paddr(page_t* page, page_t addr) {
+static inline void page_set_paddr(page_t* page, page_t addr) {
     addr = ALIGN_DOWN(addr, PAGE_4KIB);
     addr &= ADDR_MASK;
     *page = addr;
 }
 
-inline page_t construct_vaddr(size_t lvl3, size_t lvl2, size_t lvl1) {
+static inline page_t construct_vaddr(size_t lvl3, size_t lvl2, size_t lvl1) {
     page_t addr = 0;
     addr |= ((page_t)(lvl1 & 0x1ff) << 12);
     addr |= ((page_t)(lvl2 & 0x1ff) << 21);

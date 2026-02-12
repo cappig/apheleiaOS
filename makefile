@@ -10,6 +10,7 @@ TOOLCHAIN ?= gnu
 PROFILE ?= fast
 TRACEABLE_KERNEL ?= true
 
+# Shared C compiler flags
 CC_BASE := \
 	-MD \
 	-Wall \
@@ -31,20 +32,20 @@ CC_BASE := \
 	-fno-pic \
 	-fno-pie
 
+# Shared assembler flags
 AS_BASE := \
 	-Wall \
 	-w-reloc-abs \
 	-w-reloc-rel-dword \
 	-w-label-orphan
 
+# Shared linker flags
 LD_BASE := \
 	-z noexecstack
-
 
 include utils/toolchain.mk
 include utils/qemu.mk
 include user/build.mk
-
 
 .DEFAULT_GOAL := all
 .PHONY: all
@@ -53,5 +54,5 @@ all: bin/$(IMG_NAME) $(SYMBOL_MAP)
 
 .PHONY: clean
 clean:
-	@python -c "import shutil; shutil.rmtree('bin', ignore_errors=True)"
+	@rm -rf bin
 	@echo "Build directories cleaned"

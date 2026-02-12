@@ -64,16 +64,35 @@ void gdt_init(void) {
     asm volatile("lgdt %0" : : "m"(gdtd) : "memory");
 
 #if defined(__i386__)
-    asm volatile("ljmp %0, $1f\n"
-                 "1:\n"
-                 "mov %1, %%ds\n"
-                 "mov %1, %%es\n"
-                 "mov %1, %%fs\n"
-                 "mov %1, %%gs\n"
-                 "mov %1, %%ss\n"
-                 :
-                 : "i"(GDT_KERNEL_CODE), "r"(GDT_KERNEL_DATA)
-                 : "memory");
+    asm volatile(
+        "ljmp %0, $1f\n"
+        "1:\n"
+        "mov %1, %%ds\n"
+        "mov %1, %%es\n"
+        "mov %1, %%fs\n"
+        "mov %1, %%gs\n"
+        "mov %1, %%ss\n"
+        :
+        : "i"(GDT_KERNEL_CODE), "r"(GDT_KERNEL_DATA)
+        : "memory"
+    );
+#else
+    asm volatile(
+        "pushq %0\n"
+        "lea 1f(%%rip), %%rax\n"
+        "pushq %%rax\n"
+        "lretq\n"
+        "1:\n"
+        "movw %1, %%ax\n"
+        "movw %%ax, %%ds\n"
+        "movw %%ax, %%es\n"
+        "movw %%ax, %%fs\n"
+        "movw %%ax, %%gs\n"
+        "movw %%ax, %%ss\n"
+        :
+        : "i"((u64)GDT_KERNEL_CODE), "i"(GDT_KERNEL_DATA)
+        : "rax", "memory"
+    );
 #endif
 }
 

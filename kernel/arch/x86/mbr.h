@@ -51,7 +51,7 @@ typedef struct PACKED {
 } mbr_t;
 
 
-inline char* mbr_type_string(enum mbr_partition_type type) {
+static inline char* mbr_type_string(enum mbr_partition_type type) {
     switch (type) {
     case MBR_EMPTY:
         return "empty";
