@@ -22,7 +22,7 @@ NORETURN void _load_entry(u16 boot_disk) {
     printf("Booting apheleiaOS...\n\r");
 
     get_e820(&info.memory_map);
-    init_malloc();
+    arch_init_alloc();
 
     u64 acpi_root_ptr = 0;
     get_rsdp(&acpi_root_ptr);

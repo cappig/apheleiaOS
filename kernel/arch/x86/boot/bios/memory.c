@@ -117,12 +117,10 @@ static void _bfree(void* ptr) {
 }
 
 
-static struct _external_alloc external_alloc = {0};
-struct _external_alloc* _external_alloc = NULL;
-
-void init_malloc() {
-    _external_alloc = &external_alloc;
-
-    _external_alloc->malloc = _balloc;
-    _external_alloc->free = _bfree;
+void arch_init_alloc() {
+    libc_alloc_ops_t ops = {
+        .malloc_fn = _balloc,
+        .free_fn = _bfree,
+    };
+    __libc_init_alloc(&ops);
 }

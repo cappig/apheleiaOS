@@ -26,18 +26,16 @@ typedef struct {
 #include <libc_usr/stdlib.h>
 #endif
 
-// We can hook external allocators here. We use this in the kernel/bootloader
 #ifdef EXTERNAL_ALLOC
-typedef void* (*malloc_fn)(size_t size);
-typedef void* (*realloc_fn)(void* ptr, size_t size);
-typedef void (*free_fn)(void* ptr);
+typedef void* (*libc_malloc_fn_t)(size_t size);
+typedef void (*libc_free_fn_t)(void* ptr);
 
-// This structure is kept in global memory
-struct _external_alloc {
-    malloc_fn malloc;
-    // realloc_fn realloc;
-    free_fn free;
-};
+typedef struct {
+    libc_malloc_fn_t malloc_fn;
+    libc_free_fn_t free_fn;
+} libc_alloc_ops_t;
+
+void __libc_init_alloc(const libc_alloc_ops_t* ops);
 #endif
 
 void* malloc(size_t size);

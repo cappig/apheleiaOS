@@ -115,14 +115,12 @@ static void _kfree(void* ptr) {
 }
 
 
-static struct _external_alloc external_alloc = {0};
-struct _external_alloc* _external_alloc = NULL;
-
-void init_malloc() {
+void arch_init_alloc() {
     log_debug("initializing malloc");
-    _external_alloc = &external_alloc;
-
-    _external_alloc->malloc = kmalloc;
-    _external_alloc->free = kfree;
+    libc_alloc_ops_t ops = {
+        .malloc_fn = kmalloc,
+        .free_fn = kfree,
+    };
+    __libc_init_alloc(&ops);
     log_debug("malloc ready");
 }

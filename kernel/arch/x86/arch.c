@@ -268,7 +268,7 @@ void arch_init(void* boot_info) {
     set_int_handler(INT_GENERAL_PROTECTION_FAULT, _gp_fault_handler);
     pmm_init(&info->memory_map);
     heap_init();
-    init_malloc();
+    arch_init_alloc();
     pmm_ref_init();
 
     console_init(info);

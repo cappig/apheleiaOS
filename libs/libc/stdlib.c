@@ -117,13 +117,26 @@ int abs(int n) {
 
 
 #ifdef EXTERNAL_ALLOC
-extern struct _external_alloc* _external_alloc;
+static libc_alloc_ops_t alloc_ops = {0};
+
+void __libc_init_alloc(const libc_alloc_ops_t* ops) {
+    if (!ops) {
+        alloc_ops.malloc_fn = NULL;
+        alloc_ops.free_fn = NULL;
+        return;
+    }
+
+    alloc_ops = *ops;
+}
 
 void* malloc(size_t size) {
     if (!size)
         return NULL;
 
-    return _external_alloc->malloc(size);
+    if (!alloc_ops.malloc_fn)
+        return NULL;
+
+    return alloc_ops.malloc_fn(size);
 }
 
 void* calloc(size_t num, size_t size) {
@@ -142,6 +155,9 @@ void free(void* ptr) {
     if (!ptr)
         return;
 
-    _external_alloc->free(ptr);
+    if (!alloc_ops.free_fn)
+        return;
+
+    alloc_ops.free_fn(ptr);
 }
 #endif

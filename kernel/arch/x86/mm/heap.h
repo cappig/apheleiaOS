@@ -16,4 +16,4 @@ typedef struct PACKED {
 
 void heap_init(void);
 
-void init_malloc(void);
+void arch_init_alloc(void);
