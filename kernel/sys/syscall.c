@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/cpu.h>
 #include <sys/exec.h>
 #include <sys/mman.h>
@@ -586,11 +587,15 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
         if (VFS_IS_LINK(node->type) && node->link)
             node = node->link;
 
-        if (!node || node->type != VFS_FILE)
+        if (!node)
             return -EINVAL;
 
-        if (vfs_truncate(node, 0) < 0)
-            return -EIO;
+        if (node->type == VFS_FILE) {
+            if (vfs_truncate(node, 0) < 0)
+                return -EIO;
+        } else if (node->type == VFS_DIR) {
+            return -EISDIR;
+        }
     }
 
     sched_fd_t fd = {
@@ -1485,6 +1490,15 @@ static int _sys_sleep(unsigned int seconds) {
     return 0;
 }
 
+static time_t _sys_time(time_t* out) {
+    time_t now = (time_t)arch_wallclock_seconds();
+
+    if (out)
+        *out = now;
+
+    return now;
+}
+
 static uintptr_t _sys_signal(int signum, sighandler_t handler, uintptr_t trampoline) {
     sched_thread_t* thread = sched_current();
 
@@ -1792,8 +1806,10 @@ static u64 _dispatch(arch_int_state_t* state) {
         return (u64)sys_setsid();
     case SYS_SLEEP:
         return (u64)sys_sleep((unsigned int)arch_syscall_arg1(state));
+    case SYS_TIME:
+        return (u64)_sys_time((time_t*)arch_syscall_arg1(state));
     case SYS_SIGNAL:
-        return (u64)sys_signal(
+        return (u64)_sys_signal(
             (int)arch_syscall_arg1(state),
             (sighandler_t)arch_syscall_arg2(state),
             (uintptr_t)arch_syscall_arg3(state)

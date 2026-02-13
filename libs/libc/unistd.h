@@ -49,6 +49,7 @@
 #define SYS_RMDIR     44
 #define SYS_UMASK     45
 #define SYS_SYSCTL    46
+#define SYS_TIME      47
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1

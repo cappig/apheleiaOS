@@ -50,6 +50,7 @@ void arch_irq_disable(void);
 
 u64 arch_timer_ticks(void);
 u32 arch_timer_hz(void);
+u64 arch_wallclock_seconds(void);
 
 const char* arch_name(void);
 const char* arch_cpu_name(void);

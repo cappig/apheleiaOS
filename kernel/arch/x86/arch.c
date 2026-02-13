@@ -22,6 +22,7 @@
 #include <x86/mm/physical.h>
 #include <x86/pic.h>
 #include <x86/ps2.h>
+#include <x86/rtc.h>
 #include <x86/serial.h>
 #include <x86/tsc.h>
 
@@ -439,6 +440,19 @@ u64 arch_timer_ticks(void) {
 
 u32 arch_timer_hz(void) {
     return irq_timer_hz();
+}
+
+u64 arch_wallclock_seconds(void) {
+    u64 seconds = x86_rtc_unix_seconds();
+
+    if (seconds)
+        return seconds;
+
+    u64 hz = irq_timer_hz();
+    if (!hz)
+        return 0;
+
+    return irq_ticks() / hz;
 }
 
 const char* arch_name(void) {

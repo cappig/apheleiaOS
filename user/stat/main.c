@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 static ssize_t write_str(const char* str) {
@@ -58,72 +59,14 @@ static void format_mode(mode_t mode, char out[11]) {
     out[10] = '\0';
 }
 
-static bool is_leap(int year) {
-    return ((!(year % 4) && year % 100) || !(year % 400));
-}
-
-static int days_in_month(int month, int year) {
-    switch (month) {
-    case 1:
-        return is_leap(year) ? 29 : 28;
-    case 3:
-    case 5:
-    case 8:
-    case 10:
-        return 30;
-    default:
-        return 31;
-    }
-}
-
 static void format_time(time_t t, char* out, size_t out_len) {
-    static const char* months[] = {
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
-    };
-
     if (!out || !out_len)
         return;
 
-    if (t < 0)
-        t = 0;
+    struct tm tm_val;
 
-    unsigned long long seconds = (unsigned long long)t;
-    unsigned long long days = seconds / 86400;
-    unsigned long long rem = seconds % 86400;
-    int hour = (int)(rem / 3600);
-    int min = (int)((rem % 3600) / 60);
-
-    int year = 1970;
-    for (;;) {
-        int year_days = is_leap(year) ? 366 : 365;
-        if (days < (unsigned long long)year_days)
-            break;
-        days -= (unsigned long long)year_days;
-        year++;
-    }
-
-    int month = 0;
-    while (month < 12) {
-        int dim = days_in_month(month, year);
-        if (days < (unsigned long long)dim)
-            break;
-        days -= (unsigned long long)dim;
-        month++;
-    }
-
-    int mday = (int)days + 1;
-    snprintf(out, out_len, "%s %2d %02d:%02d", months[month], mday, hour, min);
+    if (!gmtime_r(&t, &tm_val) || !strftime(out, out_len, "%b %e %H:%M", &tm_val))
+        snprintf(out, out_len, "??? ?? ??:??");
 }
 
 static const char* uid_name(uid_t uid, char* buf, size_t len) {
@@ -131,6 +74,7 @@ static const char* uid_name(uid_t uid, char* buf, size_t len) {
         return "";
 
     passwd_t pwd = {0};
+
     if (!getpwuid(uid, &pwd) && pwd.pw_name[0]) {
         snprintf(buf, len, "%s", pwd.pw_name);
         return buf;
@@ -156,6 +100,7 @@ static const char* gid_name(gid_t gid, char* buf, size_t len) {
 
 static int print_one(const char* path) {
     stat_t st;
+
     if (lstat(path, &st) < 0) {
         char line[256];
         snprintf(line, sizeof(line), "stat: cannot stat '%s'\n", path);
