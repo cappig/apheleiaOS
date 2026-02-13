@@ -1,4 +1,5 @@
 #include "input.h"
+#include "complete.h"
 
 #include <io.h>
 #include <stdio.h>
@@ -341,6 +342,9 @@ int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_hi
         .prompt_cells = display_cells(prompt, strlen(prompt)),
     };
     int history_cursor = -1;
+    bool tab_erase_valid = false;
+    size_t tab_erase_start = 0;
+    size_t tab_erase_end = 0;
     char scratch[SH_INPUT_LINE_MAX] = {0};
     buf[0] = '\0';
 
@@ -365,7 +369,42 @@ int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_hi
             return 0;
         }
 
+        if (ch == '\t') {
+            sh_complete_result_t complete = {0};
+            complete_line(buf, len, &pos, &cursor, &complete);
+
+            if (complete.changed) {
+                history_cursor = -1;
+                tab_erase_valid = complete.erase_valid;
+                tab_erase_start = complete.erase_start;
+                tab_erase_end = complete.erase_end;
+                redraw_line(prompt, &layout, buf, pos, cursor, &render);
+            } else if (complete.listed) {
+                tab_erase_valid = false;
+                redraw_line(prompt, &layout, buf, pos, cursor, &render);
+            }
+
+            continue;
+        }
+
         if (ch == '\b' || (unsigned char)ch == 0x7f) {
+            if (tab_erase_valid && cursor == pos && cursor == tab_erase_end &&
+                tab_erase_end > tab_erase_start) {
+                memmove(
+                    buf + tab_erase_start,
+                    buf + tab_erase_end,
+                    pos - tab_erase_end + 1
+                );
+                pos -= tab_erase_end - tab_erase_start;
+                cursor = tab_erase_start;
+                history_cursor = -1;
+                tab_erase_valid = false;
+                redraw_line(prompt, &layout, buf, pos, cursor, &render);
+                continue;
+            }
+
+            tab_erase_valid = false;
+
             if (cursor > 0) {
                 size_t old_cursor = cursor;
                 size_t start = prev_char(buf, old_cursor);
@@ -404,6 +443,8 @@ int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_hi
         }
 
         if (ch == '\x1b') {
+            tab_erase_valid = false;
+
             char seq1 = 0;
             char seq2 = 0;
 
@@ -484,13 +525,14 @@ int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_hi
             continue;
         }
 
-        if ((unsigned char)ch < 0x20 && ch != '\t')
+        if ((unsigned char)ch < 0x20)
             continue;
 
         if (pos + 1 >= len)
             continue;
 
         history_cursor = -1;
+        tab_erase_valid = false;
 
         if (cursor == pos) {
             buf[pos++] = ch;
