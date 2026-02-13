@@ -22,6 +22,7 @@
 #include <sys/exec.h>
 #include <sys/mman.h>
 #include <sys/path.h>
+#include <sys/pty.h>
 #include <sys/proc.h>
 #include <sys/stat.h>
 #include <sys/tty.h>
@@ -485,8 +486,12 @@ static ssize_t _sys_ioctl(int fd, u64 request, void* args) {
     sched_thread_t* thread = sched_current();
     sched_fd_t* entry = NULL;
 
-    if (thread && fd_lookup(thread, fd, &entry))
+    if (thread && fd_lookup(thread, fd, &entry)) {
+        if (entry->kind == SCHED_FD_VFS && entry->node)
+            return vfs_ioctl(entry->node, request, args);
+
         return -ENOTTY;
+    }
 
     if (fd != STDIN_FILENO && fd != STDOUT_FILENO && fd != STDERR_FILENO)
         return -EBADF;
@@ -512,8 +517,22 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
     if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved)))
         return -ENOENT;
 
+    bool ptmx_open = false;
+    size_t ptmx_index = 0;
+
     if (!strncmp(resolved, "/dev/", 5)) {
         const char* dev = resolved + 5;
+
+        if (!strcmp(dev, "ptmx")) {
+            if (!pty_reserve(&ptmx_index))
+                return -EAGAIN;
+
+            char master_path[PATH_MAX];
+            snprintf(master_path, sizeof(master_path), "/dev/pty%zu", ptmx_index);
+            snprintf(resolved, sizeof(resolved), "%s", master_path);
+            ptmx_open = true;
+            dev = resolved + 5;
+        }
 
         if (!strcmp(dev, "tty")) {
             thread->tty_index = (int)tty_current_screen();
@@ -540,36 +559,64 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
 
     vfs_node_t* node = vfs_lookup(resolved);
     if (node) {
-        if ((flags & O_EXCL) && (flags & O_CREAT))
+        if ((flags & O_EXCL) && (flags & O_CREAT)) {
+            if (ptmx_open)
+                pty_unreserve(ptmx_index);
+
             return -EEXIST;
+        }
     } else if (flags & O_CREAT) {
         char parent_path[PATH_MAX];
         char base[PATH_MAX];
 
-        if (!_split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
+        if (!split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base))) {
+            if (ptmx_open)
+                pty_unreserve(ptmx_index);
+
             return -EINVAL;
+        }
 
         vfs_node_t* parent = vfs_lookup(parent_path);
 
         if (parent && VFS_IS_LINK(parent->type))
             parent = parent->link;
 
-        if (!parent || parent->type != VFS_DIR)
+        if (!parent || parent->type != VFS_DIR) {
+            if (ptmx_open)
+                pty_unreserve(ptmx_index);
+
             return -ENOTDIR;
+        }
 
-        if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
+        if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK)) {
+            if (ptmx_open)
+                pty_unreserve(ptmx_index);
+
             return -EACCES;
+        }
 
-        node = vfs_create(parent, base, VFS_FILE, _apply_umask(mode, thread->umask));
-        if (!node)
-            return -EIO;
+        node = vfs_create(parent, base, VFS_FILE, apply_umask(mode, thread->umask));
+        if (!node) {
+            if (ptmx_open)
+                pty_unreserve(ptmx_index);
 
-        if (!vfs_chown(node, thread->uid, thread->gid))
             return -EIO;
+        }
+
+        if (!vfs_chown(node, thread->uid, thread->gid)) {
+            if (ptmx_open)
+                pty_unreserve(ptmx_index);
+
+            return -EIO;
+        }
     }
 
-    if (!node)
+    if (!node) {
+        if (ptmx_open)
+            pty_unreserve(ptmx_index);
+
         return -ENOENT;
+    }
 
     int need = 0;
 
@@ -580,20 +627,35 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
     else if (flags & O_RDONLY)
         need |= R_OK;
 
-    if (need && !vfs_access(node, thread->uid, thread->gid, need))
+    if (need && !vfs_access(node, thread->uid, thread->gid, need)) {
+        if (ptmx_open)
+            pty_unreserve(ptmx_index);
+
         return -EACCES;
+    }
 
     if ((flags & O_TRUNC) && ((flags & O_WRONLY) || (flags & O_RDWR))) {
         if (VFS_IS_LINK(node->type) && node->link)
             node = node->link;
 
-        if (!node)
+        if (!node) {
+            if (ptmx_open)
+                pty_unreserve(ptmx_index);
+
             return -EINVAL;
+        }
 
         if (node->type == VFS_FILE) {
-            if (vfs_truncate(node, 0) < 0)
+            if (vfs_truncate(node, 0) < 0) {
+                if (ptmx_open)
+                    pty_unreserve(ptmx_index);
+
                 return -EIO;
+            }
         } else if (node->type == VFS_DIR) {
+            if (ptmx_open)
+                pty_unreserve(ptmx_index);
+
             return -EISDIR;
         }
     }
@@ -603,10 +665,15 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
         .node = node,
         .pipe = NULL,
         .offset = 0,
+        .pty_index = ptmx_open ? (int)ptmx_index : -1,
         .flags = (u32)flags,
     };
+    int ret = sched_fd_alloc(thread, &fd, 3);
 
-    return sched_fd_alloc(thread, &fd, 3);
+    if (ret < 0 && ptmx_open)
+        pty_unreserve(ptmx_index);
+
+    return ret;
 }
 
 static int _sys_close(int fd) {
@@ -643,6 +710,7 @@ static int _sys_pipe(int* fds) {
         .node = NULL,
         .pipe = pipe,
         .offset = 0,
+        .pty_index = -1,
         .flags = O_RDONLY,
     };
 
@@ -651,6 +719,7 @@ static int _sys_pipe(int* fds) {
         .node = NULL,
         .pipe = pipe,
         .offset = 0,
+        .pty_index = -1,
         .flags = O_WRONLY,
     };
 

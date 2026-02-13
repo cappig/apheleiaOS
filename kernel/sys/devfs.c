@@ -14,6 +14,7 @@
 
 #include "keyboard.h"
 #include "mouse.h"
+#include "pty.h"
 #include "tty.h"
 #include "vfs.h"
 
@@ -31,6 +32,9 @@
 static tty_handle_t tty_handles[TTY_COUNT];
 static tty_handle_t tty_current = {.kind = TTY_HANDLE_CURRENT, .index = 0};
 static tty_handle_t tty_console = {.kind = TTY_HANDLE_CONSOLE, .index = TTY_CONSOLE};
+static pty_handle_t pty_master_handles[PTY_COUNT];
+static pty_handle_t pty_slave_handles[PTY_COUNT];
+static pty_handle_t pty_master_default = {.index = 0, .is_master = true};
 static u64 boot_seconds = 0;
 
 static u64 _boot_seconds(void) {
@@ -89,6 +93,22 @@ static ssize_t _dev_tty_write(vfs_node_t* node, void* buf, size_t offset, size_t
 
 static ssize_t _dev_tty_ioctl(vfs_node_t* node, u64 request, void* args) {
     return tty_ioctl_handle(node ? node->private : NULL, request, args);
+}
+
+static ssize_t _dev_pty_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)offset;
+
+    return pty_read_handle(node ? node->private : NULL, buf, len, flags);
+}
+
+static ssize_t _dev_pty_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)offset;
+
+    return pty_write_handle(node ? node->private : NULL, buf, len, flags);
+}
+
+static ssize_t _dev_pty_ioctl(vfs_node_t* node, u64 request, void* args) {
+    return pty_ioctl_handle(node ? node->private : NULL, request, args);
 }
 
 static ssize_t _dev_null_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
@@ -306,6 +326,15 @@ static void _seed_tty_handles(void) {
     }
 }
 
+static void _seed_pty_handles(void) {
+    for (size_t i = 0; i < PTY_COUNT; i++) {
+        pty_master_handles[i].index = i;
+        pty_master_handles[i].is_master = true;
+        pty_slave_handles[i].index = i;
+        pty_slave_handles[i].is_master = false;
+    }
+}
+
 static void _create_ttys(vfs_node_t* dev_dir, vfs_interface_t* tty_if) {
     char name[] = "tty0";
 
@@ -315,10 +344,25 @@ static void _create_ttys(vfs_node_t* dev_dir, vfs_interface_t* tty_if) {
     }
 }
 
+static void _create_ptys(vfs_node_t* dev_dir, vfs_interface_t* pty_if) {
+    char pty_name[] = "pty0";
+    char pts_name[] = "pts0";
+
+    for (size_t i = 0; i < PTY_COUNT; i++) {
+        pty_name[3] = (char)('0' + i);
+        pts_name[3] = (char)('0' + i);
+
+        devfs_create_node(dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, &pty_master_handles[i]);
+        devfs_create_node(dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, &pty_slave_handles[i]);
+    }
+}
+
 void devfs_init(void) {
     tty_init();
+    pty_init();
     devfs_seed_tty_handles();
-    _boot_seconds();
+    _seed_pty_handles();
+    devfs_boot_seconds();
 
     vfs_node_t* root = vfs_lookup("/");
 
@@ -354,6 +398,18 @@ void devfs_init(void) {
 
     _create_ttys(dev_dir, tty_if);
 
+    vfs_interface_t* pty_if = vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
+    if (!pty_if) {
+        log_warn("devfs: failed to allocate pty interface");
+    } else {
+        pty_if->ioctl = _dev_pty_ioctl;
+
+        if (!devfs_create_node(dev_dir, "ptmx", VFS_CHARDEV, 0666, pty_if, &pty_master_default))
+            log_warn("devfs: failed to create /dev/ptmx");
+
+        _create_ptys(dev_dir, pty_if);
+    }
+
     if (!keyboard_init())
         log_warn("devfs: keyboard init failed");
     vfs_interface_t* kbd_if = vfs_create_interface(keyboard_read, NULL, NULL);
@@ -372,7 +428,7 @@ void devfs_init(void) {
         log_warn("devfs: failed to create /dev/mouse");
     }
 
-    vfs_interface_t* null_if = vfs_create_interface(dev_null_read, dev_null_write, NULL);
+    vfs_interface_t* null_if = vfs_create_interface(_dev_null_read, dev_null_write, NULL);
     if (!null_if) {
         log_warn("devfs: failed to allocate null interface");
     } else if (!_create_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {

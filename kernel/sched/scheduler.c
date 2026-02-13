@@ -14,6 +14,7 @@
 #include <string.h>
 #include <sys/cpu.h>
 #include <sys/panic.h>
+#include <sys/pty.h>
 #include <sys/proc.h>
 #include <sys/tty.h>
 #include <sys/wait.h>
@@ -182,6 +183,7 @@ static void _sched_fd_reset(sched_fd_t* fd) {
     fd->node = NULL;
     fd->pipe = NULL;
     fd->offset = 0;
+    fd->pty_index = -1;
     fd->flags = 0;
 }
 
@@ -299,6 +301,9 @@ static void _sched_fd_retain(const sched_fd_t* fd) {
     if (!fd)
         return;
 
+    if (fd->pty_index >= 0)
+        pty_hold((size_t)fd->pty_index);
+
     if (fd->kind == SCHED_FD_PIPE_READ)
         sched_pipe_acquire_reader(fd->pipe);
     else if (fd->kind == SCHED_FD_PIPE_WRITE)
@@ -308,6 +313,9 @@ static void _sched_fd_retain(const sched_fd_t* fd) {
 static void _sched_fd_release_value(sched_fd_t* fd) {
     if (!fd)
         return;
+
+    if (fd->pty_index >= 0)
+        pty_put((size_t)fd->pty_index);
 
     if (fd->kind == SCHED_FD_PIPE_READ)
         sched_pipe_release_reader(fd->pipe);
@@ -1555,6 +1563,48 @@ void sched_sleep(u64 ticks) {
     self->wake_tick = 0;
 }
 
+static void _sched_reparent_children(sched_thread_t* parent) {
+    if (!parent || !all_list)
+        return;
+
+    sched_thread_t* reaper = NULL;
+
+    ll_foreach(node, all_list) {
+        sched_thread_t* thread = node->data;
+
+        if (!thread || thread == parent)
+            continue;
+
+        if (thread->pid == 1) {
+            reaper = thread;
+            break;
+        }
+    }
+
+    pid_t reaper_pid = reaper ? reaper->pid : 0;
+    bool notify_reaper = false;
+
+    ll_foreach(node, all_list) {
+        sched_thread_t* thread = node->data;
+
+        if (!thread || thread == parent)
+            continue;
+
+        if (thread->ppid != parent->pid)
+            continue;
+
+        thread->ppid = reaper_pid;
+
+        if (reaper && thread->state == THREAD_ZOMBIE)
+            notify_reaper = true;
+    }
+
+    if (reaper && notify_reaper) {
+        sched_wake_one(&reaper->wait_queue);
+        sched_signal_send_thread(reaper, SIGCHLD);
+    }
+}
+
 void sched_exit(void) {
     arch_irq_disable();
 
@@ -1563,6 +1613,7 @@ void sched_exit(void) {
     sched_thread_t* self = _sched_local_current();
 
     if (self) {
+        _sched_reparent_children(self);
         self->state = THREAD_ZOMBIE;
 
         if (self != _sched_local_idle() && !self->in_zombie_list) {

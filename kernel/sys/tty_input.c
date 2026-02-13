@@ -28,6 +28,17 @@ typedef struct {
 
 static tty_input_state_t tty_state[TTY_SCREEN_COUNT] = {0};
 
+static size_t _target_screen(bool from_serial) {
+    if (!from_serial)
+        return tty_current_screen();
+
+    size_t serial_screen = TTY_USER_TO_SCREEN(0);
+    if (serial_screen >= TTY_SCREEN_COUNT)
+        return tty_current_screen();
+
+    return serial_screen;
+}
+
 static void _tty_signal_flush(size_t screen, ring_buffer_t* buffer, const termios_t* tos) {
     if (!tos || (tos->c_lflag & NOFLSH))
         return;
@@ -398,7 +409,7 @@ void tty_input_set_current(size_t screen) {
 }
 
 static void _push_impl(char ch, bool from_serial) {
-    size_t screen = tty_current_screen();
+    size_t screen = _target_screen(from_serial);
     ring_buffer_t* buffer = tty_input_buffer(screen);
 
     if (!buffer || ch == '\0')

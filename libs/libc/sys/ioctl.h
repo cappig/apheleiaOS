@@ -10,5 +10,6 @@
 #define TIOCSWINSZ 6
 #define TIOCSPGRP  7
 #define TIOCGPGRP  8
+#define TIOCGPTN   9
 
 int ioctl(int fd, unsigned long request, ...);

@@ -102,6 +102,13 @@ bin/$(IMG_NAME): bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF) $(SYMBOL_MAP)
 	@kernel/image.sh $@ $< $(IMAGE_STAGE_DIR)
 	@kernel/arch/x86/build/mbr.sh bin/boot/mbr.bin $@
 
+bin/$(BUILD_NAME)_$(ARCH).iso: bin/$(IMG_NAME)
+	@mkdir -p $(@D)
+	@cp -f $< $@
+	@rm -f bin/$(BUILD_NAME)_$(ARCH)
+	@rm -f $<
+	@echo "ISO $@"
+
 ifeq ($(BOOT), uefi)
 ifeq ($(ARCH_VARIANT), 64)
 run: bin/uefi/EFI/BOOT/BOOTX64.EFI bin/uefi/boot/kernel64.elf

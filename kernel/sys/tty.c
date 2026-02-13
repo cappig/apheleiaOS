@@ -1,7 +1,11 @@
 #include "tty.h"
 
 #include <arch/arch.h>
+#include <errno.h>
 #include <log/log.h>
+#include <sched/scheduler.h>
+#include <sched/signal.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/tty_input.h>
@@ -9,6 +13,49 @@
 
 static ssize_t current_tty = TTY_NONE;
 static pid_t tty_pgrp[TTY_SCREEN_COUNT] = {0};
+
+static bool _is_controlling_screen(const sched_thread_t* thread, size_t screen) {
+    if (!thread || !thread->user_thread)
+        return false;
+
+    return thread->tty_index == (int)screen;
+}
+
+static bool _is_background_group(const sched_thread_t* thread, size_t screen) {
+    if (!_is_controlling_screen(thread, screen))
+        return false;
+
+    pid_t fg_pgrp = tty_pgrp[screen];
+    if (fg_pgrp <= 0 || thread->pgid <= 0)
+        return false;
+
+    return thread->pgid != fg_pgrp;
+}
+
+static ssize_t _check_foreground_read(size_t screen) {
+    sched_thread_t* current = sched_current();
+    if (!_is_background_group(current, screen))
+        return 0;
+
+    sched_signal_send_pgrp(current->pgid, SIGTTIN);
+    return -EINTR;
+}
+
+static ssize_t _check_foreground_write(size_t screen) {
+    sched_thread_t* current = sched_current();
+    if (!_is_background_group(current, screen))
+        return 0;
+
+    termios_t tos;
+    if (!tty_input_get_termios(screen, &tos))
+        return 0;
+
+    if (!(tos.c_lflag & TOSTOP))
+        return 0;
+
+    sched_signal_send_pgrp(current->pgid, SIGTTOU);
+    return -EINTR;
+}
 
 static bool _resolve_screen(const tty_handle_t* handle, size_t* screen_out) {
     if (!handle || !screen_out)
@@ -78,14 +125,14 @@ size_t tty_current_screen(void) {
 
 static ssize_t _read_screen(size_t index, void* buf, size_t len) {
     if (index >= TTY_SCREEN_COUNT)
-        return -1;
+        return -EINVAL;
 
     return tty_input_read(index, buf, len);
 }
 
 static ssize_t _write_screen(size_t index, const void* buf, size_t len) {
     if (index >= TTY_SCREEN_COUNT)
-        return -1;
+        return -EINVAL;
 
     return arch_console_write_screen(index, buf, len);
 }
@@ -157,93 +204,116 @@ ssize_t tty_write_screen_output(size_t index, const void* buf, size_t len) {
 
 ssize_t tty_read_handle(const tty_handle_t* handle, void* buf, size_t len) {
     if (!handle)
-        return -1;
+        return -EINVAL;
+
+    size_t screen = 0;
+    if (!_resolve_screen(handle, &screen))
+        return -ENXIO;
+
+    ssize_t fg_ret = _check_foreground_read(screen);
+    if (fg_ret < 0)
+        return fg_ret;
 
     switch (handle->kind) {
     case TTY_HANDLE_CURRENT:
         if (current_tty == TTY_NONE)
-            return -1;
+            return -ENXIO;
 
         return tty_read_screen((size_t)current_tty, buf, len);
     case TTY_HANDLE_CONSOLE:
         return tty_input_read(TTY_CONSOLE, buf, len);
     case TTY_HANDLE_NAMED:
         if (handle->index >= TTY_COUNT)
-            return -1;
+            return -EINVAL;
 
         return tty_read_screen(TTY_USER_TO_SCREEN(handle->index), buf, len);
     default:
-        return -1;
+        return -EINVAL;
     }
 }
 
 ssize_t tty_write_handle(const tty_handle_t* handle, const void* buf, size_t len) {
     if (!handle)
-        return -1;
+        return -EINVAL;
+
+    size_t screen = 0;
+    if (!_resolve_screen(handle, &screen))
+        return -ENXIO;
+
+    ssize_t fg_ret = _check_foreground_write(screen);
+    if (fg_ret < 0)
+        return fg_ret;
 
     switch (handle->kind) {
     case TTY_HANDLE_CURRENT:
         if (current_tty == TTY_NONE)
-            return -1;
+            return -ENXIO;
 
         return _write_screen_processed((size_t)current_tty, buf, len);
     case TTY_HANDLE_CONSOLE:
         return _write_screen_processed(TTY_CONSOLE, buf, len);
     case TTY_HANDLE_NAMED:
         if (handle->index >= TTY_COUNT)
-            return -1;
+            return -EINVAL;
 
         return _write_screen_processed(TTY_USER_TO_SCREEN(handle->index), buf, len);
     default:
-        return -1;
+        return -EINVAL;
     }
 }
 
 ssize_t tty_ioctl_handle(const tty_handle_t* handle, u64 request, void* args) {
     size_t screen = 0;
     if (!_resolve_screen(handle, &screen))
-        return -1;
+        return -ENXIO;
 
     switch (request) {
     case TIOCGWINSZ:
         if (!args)
-            return -1;
+            return -EINVAL;
 
-        return tty_input_get_winsize(screen, args) ? 0 : -1;
+        return tty_input_get_winsize(screen, args) ? 0 : -EIO;
     case TIOCSWINSZ:
         if (!args)
-            return -1;
+            return -EINVAL;
 
-        return tty_input_set_winsize(screen, args) ? 0 : -1;
+        return tty_input_set_winsize(screen, args) ? 0 : -EIO;
     case TCGETS:
         if (!args)
-            return -1;
+            return -EINVAL;
 
-        return tty_input_get_termios(screen, args) ? 0 : -1;
+        return tty_input_get_termios(screen, args) ? 0 : -EIO;
     case TCSETS:
         if (!args)
-            return -1;
+            return -EINVAL;
 
-        return tty_input_set_termios(screen, args, false) ? 0 : -1;
+        return tty_input_set_termios(screen, args, false) ? 0 : -EIO;
     case TCSETSW:
     case TCSETSF:
         if (!args)
-            return -1;
+            return -EINVAL;
 
-        return tty_input_set_termios(screen, args, true) ? 0 : -1;
+        return tty_input_set_termios(screen, args, true) ? 0 : -EIO;
     case TIOCSPGRP:
         if (!args)
-            return -1;
+            return -EINVAL;
+
+        if (*(pid_t*)args <= 0)
+            return -EINVAL;
+
+        sched_thread_t* current = sched_current();
+        if (current && current->user_thread && !_is_controlling_screen(current, screen))
+            return -ENOTTY;
 
         tty_pgrp[screen] = *(pid_t*)args;
         return 0;
     case TIOCGPGRP:
         if (!args)
-            return -1;
+            return -EINVAL;
 
         *(pid_t*)args = tty_pgrp[screen];
         return 0;
     default:
-        return -1;
+        return -ENOTTY;
     }
 }

@@ -45,6 +45,7 @@ typedef struct sched_fd {
     vfs_node_t* node;
     sched_pipe_t* pipe;
     size_t offset;
+    int pty_index;
     u32 flags;
 } sched_fd_t;
 

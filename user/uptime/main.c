@@ -54,8 +54,7 @@ int main(void) {
             mins,
             secs
         );
-    }
-    else {
+    } else {
         snprintf(out, sizeof(out), "up %02llu:%02llu:%02llu\n", hrs, mins, secs);
     }
 
