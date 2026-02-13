@@ -16,12 +16,13 @@ static bool _checksum(const void* table, size_t length) {
     for (size_t i = 0; i < length; i++)
         sum += bytes[i];
 
-    return (sum & 0xff) == 0;
+    return !(sum & 0xff);
 }
 
 static sdt_header_t* _copy_table(u64 phys_addr) {
     sdt_header_t header = {0};
     void* header_map = arch_phys_map(phys_addr, sizeof(sdt_header_t));
+
     if (!header_map)
         return NULL;
 
@@ -71,7 +72,8 @@ static void _parse_rsdt(u64 rsdt_phys) {
     size_t entries = (rsdt->header.length - sizeof(sdt_header_t)) / sizeof(rsdt->table_ptrs[0]);
 
     for (size_t i = 0; i < entries; i++) {
-        sdt_header_t* entry = _copy_table(rsdt->table_ptrs[i]);
+        sdt_header_t* entry = acpi_copy_table(rsdt->table_ptrs[i]);
+
         if (!entry) {
             log_warn("acpi: RSDT entry %zu invalid", i);
             continue;
@@ -94,7 +96,8 @@ static void _parse_xsdt(u64 xsdt_phys) {
     size_t entries = (xsdt->header.length - sizeof(sdt_header_t)) / sizeof(xsdt->table_ptrs[0]);
 
     for (size_t i = 0; i < entries; i++) {
-        sdt_header_t* entry = _copy_table(xsdt->table_ptrs[i]);
+        sdt_header_t* entry = acpi_copy_table(xsdt->table_ptrs[i]);
+
         if (!entry) {
             log_warn("acpi: XSDT entry %zu invalid", i);
             continue;
@@ -129,6 +132,7 @@ void acpi_init(u64 rsdp_ptr) {
 
     rsdp_t rsdp = {0};
     void* rsdp_map = arch_phys_map(rsdp_ptr, sizeof(rsdp_t));
+
     if (!rsdp_map)
         return;
 

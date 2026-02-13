@@ -55,9 +55,6 @@ typedef struct {
 
 static ata_device_t* ata_primary = NULL;
 
-static bool _poll(ata_device_t* dev);
-static bool _wait_ready(ata_device_t* dev);
-
 static void _delay(ata_device_t* dev) {
     if (!dev)
         return;
@@ -72,6 +69,7 @@ static void _lock(ata_device_t* dev) {
 
     for (;;) {
         unsigned long flags = arch_irq_save();
+
         if (!dev->io_busy) {
             dev->io_busy = true;
             arch_irq_restore(flags);
@@ -94,7 +92,9 @@ static void _unlock(ata_device_t* dev) {
         return;
 
     unsigned long flags = arch_irq_save();
+
     dev->io_busy = false;
+
     arch_irq_restore(flags);
 
     if (dev->io_wait.list)
@@ -106,9 +106,12 @@ static u64 _irq_snapshot(ata_device_t* dev) {
         return 0;
 
     unsigned long flags = arch_irq_save();
+
     u64 seq = dev->irq_seq;
     dev->irq_error = false;
+
     arch_irq_restore(flags);
+
     return seq;
 }
 
@@ -132,68 +135,9 @@ static bool _wait_irq_event(ata_device_t* dev, u64* seq) {
 
         if (sched_is_running() && sched_current())
             sched_yield();
+
         arch_cpu_wait();
     }
-}
-
-static bool _wait_drq(ata_device_t* dev, u64* seq) {
-    if (!dev)
-        return false;
-
-    if (!dev->irq_enabled)
-        return _poll(dev);
-
-    for (;;) {
-        u8 status = inb(dev->io_base + ATA_REG_STATUS);
-        if (status & ATA_SR_ERR)
-            return false;
-        if (status & ATA_SR_DF)
-            return false;
-        if (!(status & ATA_SR_BUSY) && (status & ATA_SR_DRQ))
-            return true;
-
-        if (!_wait_irq_event(dev, seq))
-            return false;
-    }
-}
-
-static bool _wait_ready_event(ata_device_t* dev, u64* seq) {
-    if (!dev)
-        return false;
-
-    if (!dev->irq_enabled)
-        return _wait_ready(dev);
-
-    for (;;) {
-        u8 status = inb(dev->io_base + ATA_REG_STATUS);
-        if (status & ATA_SR_ERR)
-            return false;
-        if (status & ATA_SR_DF)
-            return false;
-        if (!(status & ATA_SR_BUSY) && (status & ATA_SR_READY))
-            return true;
-
-        if (!_wait_irq_event(dev, seq))
-            return false;
-    }
-}
-
-static void _primary_irq(UNUSED int_state_t* s) {
-    if (!ata_primary) {
-        irq_ack(IRQ_PRIMARY_ATA);
-        return;
-    }
-
-    u8 status = inb(ata_primary->io_base + ATA_REG_STATUS);
-
-    unsigned long flags = arch_irq_save();
-    if (status & (ATA_SR_ERR | ATA_SR_DF))
-        ata_primary->irq_error = true;
-
-    ata_primary->irq_seq++;
-    arch_irq_restore(flags);
-
-    irq_ack(IRQ_PRIMARY_ATA);
 }
 
 static bool _poll(ata_device_t* dev) {
@@ -244,6 +188,73 @@ static bool _wait_ready(ata_device_t* dev) {
     return false;
 }
 
+static bool _wait_drq(ata_device_t* dev, u64* seq) {
+    if (!dev)
+        return false;
+
+    if (!dev->irq_enabled)
+        return _poll(dev);
+
+    for (;;) {
+        u8 status = inb(dev->io_base + ATA_REG_STATUS);
+
+        if (status & ATA_SR_ERR)
+            return false;
+
+        if (status & ATA_SR_DF)
+            return false;
+
+        if (!(status & ATA_SR_BUSY) && (status & ATA_SR_DRQ))
+            return true;
+
+        if (!ata_wait_irq_event(dev, seq))
+            return false;
+    }
+}
+
+static bool _wait_ready_event(ata_device_t* dev, u64* seq) {
+    if (!dev)
+        return false;
+
+    if (!dev->irq_enabled)
+        return ata_wait_ready(dev);
+
+    for (;;) {
+        u8 status = inb(dev->io_base + ATA_REG_STATUS);
+
+        if (status & ATA_SR_ERR)
+            return false;
+
+        if (status & ATA_SR_DF)
+            return false;
+
+        if (!(status & ATA_SR_BUSY) && (status & ATA_SR_READY))
+            return true;
+
+        if (!ata_wait_irq_event(dev, seq))
+            return false;
+    }
+}
+
+static void _primary_irq(UNUSED int_state_t* s) {
+    if (!ata_primary) {
+        irq_ack(IRQ_PRIMARY_ATA);
+        return;
+    }
+
+    u8 status = inb(ata_primary->io_base + ATA_REG_STATUS);
+
+    unsigned long flags = arch_irq_save();
+
+    if (status & (ATA_SR_ERR | ATA_SR_DF))
+        ata_primary->irq_error = true;
+
+    ata_primary->irq_seq++;
+    arch_irq_restore(flags);
+
+    irq_ack(IRQ_PRIMARY_ATA);
+}
+
 static void _select(ata_device_t* dev, u32 lba) {
     u8 head = (u8)((lba >> 24) & 0x0f);
     u8 device = 0xe0 | (dev->master ? 0x00 : 0x10) | head;
@@ -264,7 +275,7 @@ static bool _identify(ata_device_t* dev, u16* data) {
     outb(dev->io_base + ATA_REG_LBA2, 0);
     outb(dev->io_base + ATA_REG_COMMAND, ATA_CMD_IDENTIFY);
 
-    if (inb(dev->io_base + ATA_REG_STATUS) == 0)
+    if (!inb(dev->io_base + ATA_REG_STATUS))
         return false;
 
     if (!_poll(dev))
@@ -276,46 +287,21 @@ static bool _identify(ata_device_t* dev, u16* data) {
     return true;
 }
 
-static bool _read_sector(ata_device_t* dev, u32 lba, u16* buffer) {
-    if (!dev || !buffer)
-        return false;
-
-    if (lba > 0x0fffffff)
-        return false;
-
-    _select(dev, lba);
-
-    outb(dev->io_base + ATA_REG_SECCOUNT, 1);
-    outb(dev->io_base + ATA_REG_LBA0, (u8)(lba & 0xff));
-    outb(dev->io_base + ATA_REG_LBA1, (u8)((lba >> 8) & 0xff));
-    outb(dev->io_base + ATA_REG_LBA2, (u8)((lba >> 16) & 0xff));
-    u64 seq = _irq_snapshot(dev);
-
-    outb(dev->io_base + ATA_REG_COMMAND, ATA_CMD_READ_PIO);
-
-    if (!_wait_drq(dev, &seq))
-        return false;
-
-    for (size_t i = 0; i < ATA_SECTOR_SIZE / 2; i++)
-        buffer[i] = inw(dev->io_base + ATA_REG_DATA);
-
-    return true;
-}
-
 static bool _read_sectors(ata_device_t* dev, u32 lba, u8 count, u16* buffer) {
-    if (!dev || !buffer || count == 0)
+    if (!dev || !buffer || !count)
         return false;
 
     if ((u64)lba + (u64)count - 1 > 0x0fffffffULL)
         return false;
 
-    ata_select(dev, lba);
+    _select(dev, lba);
 
     outb(dev->io_base + ATA_REG_SECCOUNT, count);
     outb(dev->io_base + ATA_REG_LBA0, (u8)(lba & 0xff));
     outb(dev->io_base + ATA_REG_LBA1, (u8)((lba >> 8) & 0xff));
     outb(dev->io_base + ATA_REG_LBA2, (u8)((lba >> 16) & 0xff));
-    u64 seq = _irq_snapshot(dev);
+
+    u64 seq = ata_irq_snapshot(dev);
 
     outb(dev->io_base + ATA_REG_COMMAND, ATA_CMD_READ_PIO);
 
@@ -324,6 +310,7 @@ static bool _read_sectors(ata_device_t* dev, u32 lba, u8 count, u16* buffer) {
             return false;
 
         u16* dst = buffer + sector * (ATA_SECTOR_SIZE / 2);
+
         for (size_t i = 0; i < ATA_SECTOR_SIZE / 2; i++)
             dst[i] = inw(dev->io_base + ATA_REG_DATA);
     }
@@ -331,28 +318,33 @@ static bool _read_sectors(ata_device_t* dev, u32 lba, u8 count, u16* buffer) {
     return true;
 }
 
-static bool _write_sector(ata_device_t* dev, u32 lba, const u16* buffer) {
-    if (!dev || !buffer)
+static bool _write_sectors(ata_device_t* dev, u32 lba, u8 count, const u16* buffer) {
+    if (!dev || !buffer || !count)
         return false;
 
-    if (lba > 0x0fffffff)
+    if ((u64)lba + (u64)count - 1 > 0x0fffffffULL)
         return false;
 
-    ata_select(dev, lba);
+    _select(dev, lba);
 
-    outb(dev->io_base + ATA_REG_SECCOUNT, 1);
+    outb(dev->io_base + ATA_REG_SECCOUNT, count);
     outb(dev->io_base + ATA_REG_LBA0, (u8)(lba & 0xff));
     outb(dev->io_base + ATA_REG_LBA1, (u8)((lba >> 8) & 0xff));
     outb(dev->io_base + ATA_REG_LBA2, (u8)((lba >> 16) & 0xff));
-    u64 seq = _irq_snapshot(dev);
+
+    u64 seq = ata_irq_snapshot(dev);
 
     outb(dev->io_base + ATA_REG_COMMAND, ATA_CMD_WRITE_PIO);
 
-    if (!_wait_drq(dev, &seq))
-        return false;
+    for (u32 sector = 0; sector < count; sector++) {
+        if (!_wait_drq(dev, &seq))
+            return false;
 
-    for (size_t i = 0; i < ATA_SECTOR_SIZE / 2; i++)
-        outw(dev->io_base + ATA_REG_DATA, buffer[i]);
+        const u16* src = buffer + sector * (ATA_SECTOR_SIZE / 2);
+
+        for (size_t i = 0; i < ATA_SECTOR_SIZE / 2; i++)
+            outw(dev->io_base + ATA_REG_DATA, src[i]);
+    }
 
     if (!_wait_ready_event(dev, &seq))
         return false;
@@ -391,14 +383,14 @@ static ssize_t _read(disk_dev_t* dev, void* dest, size_t offset, size_t bytes) {
     size_t remaining = bytes;
 
     if (sector_off) {
-        if (!ata_read_sector(ata, (u32)lba, (u16*)bounce)) {
+        if (!_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
             goto done_free;
-        }
 
         size_t available = ata->sector_size - sector_off;
         size_t chunk = remaining < available ? remaining : available;
 
         memcpy(out, bounce + sector_off, chunk);
+
         out += chunk;
         remaining -= chunk;
         lba++;
@@ -411,30 +403,32 @@ static ssize_t _read(disk_dev_t* dev, void* dest, size_t offset, size_t bytes) {
         if (batch > ATA_MAX_PIO_SECTORS)
             batch = ATA_MAX_PIO_SECTORS;
 
-        if (!_read_sectors(ata, (u32)lba, (u8)batch, (u16*)out)) {
+        if (!_read_sectors(ata, (u32)lba, (u8)batch, (u16*)out))
             goto done_free;
-        }
 
         size_t batch_bytes = batch * ata->sector_size;
+
         out += batch_bytes;
         remaining -= batch_bytes;
         lba += batch;
     }
 
     if (remaining) {
-        if (!ata_read_sector(ata, (u32)lba, (u16*)bounce)) {
+        if (!_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
             goto done_free;
-        }
 
         memcpy(out, bounce, remaining);
     }
 
     ret = (ssize_t)bytes;
+
 done_free:
     free(bounce);
+
 done:
     _unlock(ata);
     return ret;
+
 done_empty:
     ret = 0;
     goto done;
@@ -469,37 +463,59 @@ static ssize_t _write(disk_dev_t* dev, void* src, size_t offset, size_t bytes) {
 
     size_t remaining = bytes;
 
-    while (remaining) {
+    if (sector_off) {
         size_t available = ata->sector_size - sector_off;
         size_t chunk = remaining < available ? remaining : available;
-        bool full_sector = sector_off == 0 && chunk == ata->sector_size;
 
-        if (full_sector) {
-            memcpy(bounce, in, ata->sector_size);
-        } else {
-            if (!ata_read_sector(ata, (u32)lba, (u16*)bounce)) {
-                goto done_free;
-            }
-
-            memcpy(bounce + sector_off, in, chunk);
-        }
-
-        if (!_write_sector(ata, (u32)lba, (const u16*)bounce)) {
+        if (!_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
             goto done_free;
-        }
+
+        memcpy(bounce + sector_off, in, chunk);
+
+        if (!_write_sectors(ata, (u32)lba, 1, (const u16*)bounce))
+            goto done_free;
 
         in += chunk;
         remaining -= chunk;
-        sector_off = 0;
         lba++;
     }
 
+    while (remaining >= ata->sector_size) {
+        size_t full_sectors = remaining / ata->sector_size;
+        size_t batch = full_sectors;
+
+        if (batch > ATA_MAX_PIO_SECTORS)
+            batch = ATA_MAX_PIO_SECTORS;
+
+        if (!_write_sectors(ata, (u32)lba, (u8)batch, (const u16*)in))
+            goto done_free;
+
+        size_t batch_bytes = batch * ata->sector_size;
+
+        in += batch_bytes;
+        remaining -= batch_bytes;
+        lba += batch;
+    }
+
+    if (remaining) {
+        if (!_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
+            goto done_free;
+
+        memcpy(bounce, in, remaining);
+
+        if (!_write_sectors(ata, (u32)lba, 1, (const u16*)bounce))
+            goto done_free;
+    }
+
     ret = (ssize_t)bytes;
+
 done_free:
     free(bounce);
+
 done:
     _unlock(ata);
     return ret;
+
 done_empty:
     ret = 0;
     goto done;

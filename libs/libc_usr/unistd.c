@@ -87,7 +87,7 @@ char* getcwd(char* buf, size_t size) {
         return NULL;
 
     long ret = __SYSCALL_ERRNO(syscall2(SYS_GETCWD, (uintptr_t)buf, (uintptr_t)size));
-    return ret == 0 ? buf : NULL;
+    return !ret ? buf : NULL;
 }
 
 int link(const char* oldpath, const char* newpath) {

@@ -10,10 +10,28 @@
 #define LAPIC_LVT_MASK       (1U << 16)
 #define LAPIC_TIMER_PERIODIC (1U << 17)
 
+enum cpuid_feature_edx_flags {
+    CPUID_FEAT_EDX_MSR = 1U << 5,
+    CPUID_FEAT_EDX_APIC = 1U << 9,
+};
+
 enum apic_base_msr_flags {
     APIC_MSR_IS_BSP = 1U << 8,
     APIC_MSR_X2APIC_ENABLE = 1U << 10,
     APIC_MSR_APIC_ENABLE = 1U << 11,
+};
+
+enum lapic_spurious_flags {
+    LAPIC_SPURIOUS_SW_ENABLE = 1U << 8,
+};
+
+enum lapic_id_register_fields {
+    LAPIC_ID_SHIFT = 24,
+    LAPIC_ID_MASK = 0xffU,
+};
+
+enum madt_lapic_flags {
+    MADT_LAPIC_FLAG_ENABLED = 1U << 0,
 };
 
 enum lapic_registers {

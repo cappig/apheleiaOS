@@ -16,6 +16,7 @@ static void write_str(const char* str) {
 
 static void strip_newline(char* buf) {
     size_t len = strlen(buf);
+
     if (!len)
         return;
 
@@ -33,8 +34,10 @@ static int read_line_fd(int fd, char* buf, size_t len) {
     while (pos + 1 < len) {
         char ch = 0;
         ssize_t count = read(fd, &ch, 1);
-        if (count == 0)
+
+        if (!count)
             break;
+
         if (count < 0)
             continue;
 
@@ -53,7 +56,7 @@ static int read_line_fd(int fd, char* buf, size_t len) {
             break;
     }
 
-    if (pos == 0)
+    if (!pos)
         return -1;
 
     buf[pos] = '\0';
@@ -66,8 +69,10 @@ static void run_rc(const char* path) {
         return;
 
     char line[256];
-    while (read_line_fd(fd, line, sizeof(line)) == 0) {
+
+    while (!read_line_fd(fd, line, sizeof(line))) {
         char* cursor = line;
+
         while (*cursor && isspace((unsigned char)*cursor))
             cursor++;
 
@@ -85,18 +90,17 @@ int main(int argc, char** argv) {
     (void)argc;
     (void)argv;
 
-    if (access("/etc/rc", R_OK) == 0) {
+    if (!access("/etc/rc", R_OK)) {
         write_str("init: running /etc/rc\n");
         run_rc("/etc/rc");
     }
 
-    // write_str("init: starting /sbin/login\n");
-
     for (;;) {
         pid_t pid = fork();
 
-        if (pid == 0) {
+        if (!pid) {
             char* args[] = {"login", NULL};
+
             if (execve("/sbin/login", args, NULL) < 0) {
                 write_str("init: exec failed\n");
                 _exit(1);

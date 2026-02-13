@@ -20,7 +20,7 @@ void* memmove(void* dest, const void* src, size_t len) {
     const char* srcb = (const char*)src;
     char* destb = (char*)dest;
 
-    if (srcb == destb || len == 0)
+    if (srcb == destb || !len)
         return dest;
 
     else if (srcb > destb)
@@ -95,7 +95,7 @@ int strncmp(const char* s1, const char* s2, size_t n) {
         n--;
     }
 
-    if (n == 0)
+    if (!n)
         return 0;
     else
         return *(const unsigned char*)s1 - *(const unsigned char*)s2;

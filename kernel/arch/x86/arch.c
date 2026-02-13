@@ -1,15 +1,17 @@
 #include <arch/arch.h>
+#include <arch/thread.h>
+#include <inttypes.h>
+#include <libc_ext/string.h>
 #include <log/log.h>
 #include <string.h>
-#include <arch/thread.h>
 #include <sys/acpi.h>
 #include <sys/cpu.h>
 #include <sys/font.h>
 #include <sys/framebuffer.h>
 #include <sys/panic.h>
 #include <sys/pci.h>
-#include <x86/asm.h>
 #include <x86/ahci.h>
+#include <x86/asm.h>
 #include <x86/ata.h>
 #include <x86/boot.h>
 #include <x86/console.h>
@@ -41,19 +43,11 @@ static void _trim_cpu_name(char* name) {
     if (!name || !name[0])
         return;
 
-    size_t start = 0;
-    size_t len = strlen(name);
+    char* trimmed = strtrim(name);
+    strtrunc(trimmed);
 
-    while (start < len && name[start] == ' ')
-        start++;
-
-    while (len > start && name[len - 1] == ' ')
-        len--;
-
-    if (start > 0)
-        memmove(name, name + start, len - start);
-
-    name[len - start] = '\0';
+    if (trimmed != name)
+        memmove(name, trimmed, strlen(trimmed) + 1);
 }
 
 static void _detect_cpu_name(void) {
@@ -85,6 +79,7 @@ static void _detect_cpu_name(void) {
         memcpy(cpu_name, brand, sizeof(brand));
         cpu_name[sizeof(cpu_name) - 1] = '\0';
         _trim_cpu_name(cpu_name);
+
         if (cpu_name[0])
             return;
     }
@@ -92,6 +87,7 @@ static void _detect_cpu_name(void) {
     cpuid(0x00000000, &regs);
     u32 vendor[3] = {regs.ebx, regs.edx, regs.ecx};
     memcpy(cpu_name, vendor, sizeof(vendor));
+
     cpu_name[sizeof(vendor)] = '\0';
 }
 
@@ -158,6 +154,7 @@ static bool _handle_user_signal(int signum, int_state_t* state) {
 
     sched_signal_send_thread(thread, signum);
     sched_signal_deliver_current(state);
+
     return true;
 }
 
@@ -165,24 +162,26 @@ static bool _handle_user_signal(int signum, int_state_t* state) {
 #define PF_ERR_WRITE   (1U << 1)
 #define PF_ERR_USER    (1U << 2)
 
+static bool _page_fault_is_user_addr(u64 addr, bool user) {
+    arch_word_t user_top = arch_user_stack_top();
+    return user || (user_top && addr < (u64)user_top);
+}
+
 static void _page_fault_handler(int_state_t* state) {
     u64 addr = read_cr2();
     u64 code = state ? (u64)state->error_code : 0;
     u64 cr3 = read_cr3();
 
-    bool present = (code & PF_ERR_PRESENT) != 0;
-    bool write = (code & PF_ERR_WRITE) != 0;
-    bool user = (code & PF_ERR_USER) != 0;
+    bool present = code & PF_ERR_PRESENT;
+    bool write = code & PF_ERR_WRITE;
+    bool user = code & PF_ERR_USER;
 
     if (present && write) {
         sched_thread_t* thread = sched_current();
-        if (thread && thread->user_thread) {
-            arch_word_t user_top = arch_user_stack_top();
-            if (user || (user_top && addr < (u64)user_top)) {
-                if (sched_handle_cow_fault(thread, (uintptr_t)addr, true))
-                    return;
-            }
-        }
+
+        if (thread && thread->user_thread && _page_fault_is_user_addr(addr, user) &&
+            sched_handle_cow_fault(thread, (uintptr_t)addr, true))
+            return;
     }
 
     if (_handle_user_signal(SIGSEGV, state))
@@ -190,43 +189,44 @@ static void _page_fault_handler(int_state_t* state) {
 
 #if defined(__x86_64__)
     if (state) {
+        u64 rip = state->s_regs.rip;
+        u64 rsp = state->s_regs.rsp;
+        u64 cs = state->s_regs.cs;
+
         log_fatal(
-            "page fault: addr=%#llx err=%#llx cr3=%#llx rip=%#llx rsp=%#llx cs=%#llx",
-            (unsigned long long)addr,
-            (unsigned long long)code,
-            (unsigned long long)cr3,
-            (unsigned long long)state->s_regs.rip,
-            (unsigned long long)state->s_regs.rsp,
-            (unsigned long long)state->s_regs.cs
+            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " rip=%#" PRIx64
+            " rsp=%#" PRIx64 " cs=%#" PRIx64,
+            addr,
+            code,
+            cr3,
+            rip,
+            rsp,
+            cs
         );
     } else {
-        log_fatal(
-            "page fault: addr=%#llx err=%#llx cr3=%#llx",
-            (unsigned long long)addr,
-            (unsigned long long)code,
-            (unsigned long long)cr3
-        );
+        log_fatal("page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
     }
 #else
     if (state) {
+        u64 eip = state->s_regs.eip;
+        u64 esp = state->s_regs.esp;
+        u64 cs = state->s_regs.cs;
+
         log_fatal(
-            "page fault: addr=%#llx err=%#llx cr3=%#llx eip=%#llx esp=%#llx cs=%#llx",
-            (unsigned long long)addr,
-            (unsigned long long)code,
-            (unsigned long long)cr3,
-            (unsigned long long)state->s_regs.eip,
-            (unsigned long long)state->s_regs.esp,
-            (unsigned long long)state->s_regs.cs
+            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " eip=%#" PRIx64
+            " esp=%#" PRIx64 " cs=%#" PRIx64,
+            addr,
+            code,
+            cr3,
+            eip,
+            esp,
+            cs
         );
     } else {
-        log_fatal(
-            "page fault: addr=%#llx err=%#llx cr3=%#llx",
-            (unsigned long long)addr,
-            (unsigned long long)code,
-            (unsigned long long)cr3
-        );
+        log_fatal("page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
     }
 #endif
+
     disable_interrupts();
     halt();
 }
@@ -236,25 +236,58 @@ static void _gp_fault_handler(int_state_t* state) {
 
 #if defined(__x86_64__)
     if (state) {
+        u64 rip = state->s_regs.rip;
+        u64 cs = state->s_regs.cs;
+
         log_fatal(
-            "general protection fault: err=%#llx rip=%#llx cs=%#llx",
-            (unsigned long long)code,
-            (unsigned long long)state->s_regs.rip,
-            (unsigned long long)state->s_regs.cs
+            "general protection fault: err=%#" PRIx64 " rip=%#" PRIx64 " cs=%#" PRIx64, code, rip, cs
         );
     } else {
-        log_fatal("general protection fault: err=%#llx", (unsigned long long)code);
+        log_fatal("general protection fault: err=%#" PRIx64, code);
     }
 #else
     if (state) {
+        u64 eip = state->s_regs.eip;
+        u64 cs = state->s_regs.cs;
+
         log_fatal(
-            "general protection fault: err=%#llx eip=%#llx cs=%#llx",
-            (unsigned long long)code,
-            (unsigned long long)state->s_regs.eip,
-            (unsigned long long)state->s_regs.cs
+            "general protection fault: err=%#" PRIx64 " eip=%#" PRIx64 " cs=%#" PRIx64, code, eip, cs
         );
     } else {
-        log_fatal("general protection fault: err=%#llx", (unsigned long long)code);
+        log_fatal("general protection fault: err=%#" PRIx64, code);
+    }
+#endif
+
+    disable_interrupts();
+    halt();
+}
+
+static void _invalid_opcode_handler(int_state_t* state) {
+#if defined(__x86_64__)
+    if (handle_user_signal(SIGILL, state))
+        return;
+#else
+    if (handle_user_signal(SIGILL, state))
+        return;
+#endif
+
+#if defined(__x86_64__)
+    if (state) {
+        u64 rip = state->s_regs.rip;
+        u64 cs = state->s_regs.cs;
+
+        log_fatal("invalid opcode: rip=%#" PRIx64 " cs=%#" PRIx64, rip, cs);
+    } else {
+        log_fatal("invalid opcode");
+    }
+#else
+    if (state) {
+        u64 eip = state->s_regs.eip;
+        u64 cs = state->s_regs.cs;
+
+        log_fatal("invalid opcode: eip=%#" PRIx64 " cs=%#" PRIx64, eip, cs);
+    } else {
+        log_fatal("invalid opcode");
     }
 #endif
 
@@ -310,7 +343,7 @@ void arch_init(void* boot_info) {
         panic("boot info missing");
 
     select_log_level(info);
-    arch_cache_font(info);
+    _cache_font(info);
     _detect_cpu_name();
 
 #if defined(__x86_64__)
@@ -318,21 +351,25 @@ void arch_init(void* boot_info) {
 #else
     log_info("apheleiaOS kernel (x86_32) booting");
 #endif
+
     _route_irqs_to_pic();
     gdt_init();
     tss_init(read_stack_ptr());
     cpu_init_boot();
     pic_init();
     idt_init();
+
     set_int_handler(INT_PAGE_FAULT, _page_fault_handler);
-    set_int_handler(INT_GENERAL_PROTECTION_FAULT, _gp_fault_handler);
+    set_int_handler(INT_GENERAL_PROTECTION_FAULT, gp_fault_handler);
+    set_int_handler(INT_INVALID_OPCODE, _invalid_opcode_handler);
+
     pmm_init(&info->memory_map);
     heap_init();
     arch_init_alloc();
     pmm_ref_init();
 
     console_init(info);
-    arch_publish_framebuffer(info);
+    _publish_framebuffer(info);
     log_init(console_puts);
 
     acpi_init(info->acpi_root_ptr);
@@ -359,39 +396,11 @@ void arch_storage_init(void) {
     ahci_disk_init();
 }
 
-u32 arch_pci_read(u8 bus, u8 slot, u8 func, u8 offset, u8 size) {
-    const u16 pci_addr = 0xcf8;
-    const u16 pci_data = 0xcfc;
-
-    u32 addr =
-        0x80000000 | ((u32)bus << 16) | ((u32)slot << 11) | ((u32)func << 8) | ((u32)offset & 0xfc);
-    outl(pci_addr, addr);
-
-    switch (size) {
-    case 4:
-        return inl(pci_data);
-    case 2:
-        return inw((u16)(pci_data + (offset & 2)));
-    case 1:
-        return inb((u16)(pci_data + (offset & 3)));
-    default:
-        return 0xffffffffU;
-    }
-}
-
 void arch_tlb_flush(uintptr_t addr) {
 #if defined(__x86_64__)
     tlb_flush((u64)addr);
 #else
     tlb_flush((u32)addr);
-#endif
-}
-
-bool arch_pci_ecam_addr_ok(u64 addr) {
-#if defined(__i386__)
-    return addr < 0x100000000ULL;
-#else
-    return true;
 #endif
 }
 

@@ -1,6 +1,6 @@
 #include <arch/sys.h>
-#include <errno.h>
 #include <dirent.h>
+#include <errno.h>
 #include <stdint.h>
 #include <unistd.h>
 

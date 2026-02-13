@@ -8,7 +8,7 @@
 #define WIFSTOPPED(status) (((status) & 0xff) == 0x7f)
 #define WSTOPSIG(status)   (((status) >> 8) & 0xff)
 
-#define WIFEXITED(status)  (((status) & 0xff) == 0)
+#define WIFEXITED(status)   (!((status) & 0xff))
 #define WEXITSTATUS(status) (((status) >> 8) & 0xff)
 
 #ifndef _KERNEL

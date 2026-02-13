@@ -22,8 +22,8 @@
 
 #define AHCI_PxIS_TFES (1U << 30)
 
-#define AHCI_HBA_IE (1U << 1)
-#define AHCI_HBA_AE (1U << 31)
+#define AHCI_HBA_IE   (1U << 1)
+#define AHCI_HBA_AE   (1U << 31)
 #define AHCI_CAP2_BOH (1U << 0)
 #define AHCI_BOHC_BOS (1U << 0)
 #define AHCI_BOHC_OOS (1U << 1)
@@ -45,8 +45,8 @@
 
 #define AHCI_SECTOR_SIZE 512
 
-#define AHCI_CMD_SLOT 0
-#define AHCI_PRDTL    1
+#define AHCI_CMD_SLOT      0
+#define AHCI_PRDTL         1
 #define AHCI_CMDH_CFL_MASK 0x1fU
 #define AHCI_CMDH_W        (1U << 6)
 #define AHCI_PRDT_DBC_MASK 0x003fffffU

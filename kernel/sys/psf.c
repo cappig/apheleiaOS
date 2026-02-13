@@ -63,6 +63,7 @@ static void _discard(void) {
     loaded_blob_size = 0;
     loaded_map_count = 0;
     loaded_map_capacity = 0;
+
     memset(&loaded_font, 0, sizeof(loaded_font));
 }
 
@@ -71,6 +72,7 @@ static bool _font_map_reserve(font_map_t** map, size_t* count, size_t* capacity,
         return true;
 
     size_t new_cap = *capacity ? *capacity * 2 : 128;
+
     while (new_cap < needed)
         new_cap *= 2;
 
@@ -85,6 +87,7 @@ static bool _font_map_reserve(font_map_t** map, size_t* count, size_t* capacity,
 
     *map = next;
     *capacity = new_cap;
+
     return true;
 }
 
@@ -100,6 +103,7 @@ _font_map_push(font_map_t** map, size_t* count, size_t* capacity, u32 codepoint,
         .codepoint = codepoint,
         .glyph = glyph,
     };
+
     return true;
 }
 
@@ -115,17 +119,21 @@ static bool _parse(
         return false;
 
     const psf2_header_t* psf2 = data;
+
     if (psf2->magic == PSF2_MAGIC) {
         if (psf2->header_size < sizeof(psf2_header_t))
             return false;
-        if (psf2->glyph_count == 0 || psf2->glyph_bytes == 0)
+
+        if (!psf2->glyph_count || !psf2->glyph_bytes)
             return false;
 
         size_t glyphs_size = (size_t)psf2->glyph_count * psf2->glyph_bytes;
+
         if (psf2->header_size + glyphs_size > size)
             return false;
 
         const u8* glyphs = (const u8*)data + psf2->header_size;
+
         out->glyphs = glyphs;
         out->glyph_width = psf2->width;
         out->glyph_height = psf2->height;
@@ -144,7 +152,8 @@ static bool _parse(
                     }
 
                     u32 cp = 0;
-                    size_t consumed = _utf8_decode(table, (size_t)(end - table), &cp);
+                    size_t consumed = utf8_decode(table, (size_t)(end - table), &cp);
+
                     if (!consumed) {
                         table++;
                         continue;
@@ -189,6 +198,7 @@ static bool _parse(
         for (u32 glyph = 0; glyph < glyph_count && table + 1 < end; glyph++) {
             while (table + 1 < end) {
                 u16 code = (u16)(table[0] | (table[1] << 8));
+
                 table += 2;
 
                 if (code == 0xffff)
@@ -222,10 +232,12 @@ bool psf_load(const char* path) {
     }
 
     void* blob = malloc((size_t)node->size);
+
     if (!blob)
         return false;
 
     ssize_t read = vfs_read(node, blob, 0, (size_t)node->size, 0);
+
     if (read < 0 || (size_t)read < (size_t)node->size) {
         free(blob);
         return false;
@@ -235,15 +247,20 @@ bool psf_load(const char* path) {
     font_map_t* map = NULL;
     size_t map_count = 0;
     size_t map_capacity = 0;
-    if (!_parse(blob, (size_t)node->size, &parsed, &map, &map_count, &map_capacity)) {
+
+    if (!psf_parse(blob, (size_t)node->size, &parsed, &map, &map_count, &map_capacity)) {
         free(blob);
+
         if (map)
             free(map);
+
         log_warn("console: failed to parse font '%s'", path);
+
         return false;
     }
 
-    _discard();
+    psf_discard();
+
     loaded_blob = blob;
     loaded_blob_size = (size_t)node->size;
     loaded_font = parsed;
@@ -254,6 +271,7 @@ bool psf_load(const char* path) {
     loaded_font.map_count = (u32)loaded_map_count;
 
     arch_set_font(&loaded_font);
+
     log_info(
         "console: loaded font '%s' (%ux%u, %u glyphs)",
         path,
@@ -261,5 +279,6 @@ bool psf_load(const char* path) {
         loaded_font.glyph_height,
         loaded_font.glyph_count
     );
+
     return true;
 }

@@ -59,7 +59,7 @@ static void format_mode(mode_t mode, char out[11]) {
 }
 
 static bool is_leap(int year) {
-    return ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0));
+    return ((!(year % 4) && year % 100) || !(year % 400));
 }
 
 static int days_in_month(int month, int year) {
@@ -92,7 +92,7 @@ static void format_time(time_t t, char* out, size_t out_len) {
         "Dec",
     };
 
-    if (!out || out_len == 0)
+    if (!out || !out_len)
         return;
 
     if (t < 0)
@@ -127,11 +127,11 @@ static void format_time(time_t t, char* out, size_t out_len) {
 }
 
 static const char* uid_name(uid_t uid, char* buf, size_t len) {
-    if (!buf || len == 0)
+    if (!buf || !len)
         return "";
 
     passwd_t pwd = {0};
-    if (getpwuid(uid, &pwd) == 0 && pwd.pw_name[0]) {
+    if (!getpwuid(uid, &pwd) && pwd.pw_name[0]) {
         snprintf(buf, len, "%s", pwd.pw_name);
         return buf;
     }
@@ -141,11 +141,11 @@ static const char* uid_name(uid_t uid, char* buf, size_t len) {
 }
 
 static const char* gid_name(gid_t gid, char* buf, size_t len) {
-    if (!buf || len == 0)
+    if (!buf || !len)
         return "";
 
     group_t grp = {0};
-    if (getgrgid(gid, &grp) == 0 && grp.gr_name[0]) {
+    if (!getgrgid(gid, &grp) && grp.gr_name[0]) {
         snprintf(buf, len, "%s", grp.gr_name);
         return buf;
     }

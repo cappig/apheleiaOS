@@ -11,5 +11,5 @@
 #define ARRAY_LEN(array) (sizeof(array) / sizeof((array)[0]))
 
 #define EXPECT(x, y) __builtin_expect((x), (y))
-#define UNLIKELY(x) EXPECT((x), false)
-#define LIKELY(x)   EXPECT((x), true)
+#define UNLIKELY(x)  EXPECT((x), false)
+#define LIKELY(x)    EXPECT((x), true)

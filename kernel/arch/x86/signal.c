@@ -5,11 +5,12 @@
 #include <x86/asm.h>
 
 static bool _write_user(sched_thread_t* thread, uintptr_t addr, const void* src, size_t len) {
-    if (!thread || !thread->vm_space || !src || len == 0)
+    if (!thread || !thread->vm_space || !src || !len)
         return false;
 
     uintptr_t base = thread->user_stack_base;
     size_t size = thread->user_stack_size;
+
     if (!base || !size)
         return false;
 
@@ -18,10 +19,13 @@ static bool _write_user(sched_thread_t* thread, uintptr_t addr, const void* src,
 
     unsigned long flags = irq_save();
     sched_preempt_disable();
+
     arch_vm_switch(thread->vm_space);
     memcpy((void*)addr, src, len);
+
     sched_preempt_enable();
     irq_restore(flags);
+
     return true;
 }
 
@@ -43,12 +47,15 @@ bool arch_signal_setup_user_stack(
 
 #if defined(__x86_64__)
     u64 rsp = state->s_regs.rsp;
+
     if (rsp < 128 + sizeof(u64))
         return false;
 
     rsp -= 128;
     rsp -= sizeof(u64);
+
     u64 ret = (u64)thread->signal_trampoline;
+
     if (!_write_user(thread, (uintptr_t)rsp, &ret, sizeof(ret)))
         return false;
 
@@ -63,8 +70,10 @@ bool arch_signal_setup_user_stack(
     esp -= 2 * sizeof(u32);
     u32 ret = (u32)thread->signal_trampoline;
     u32 sig = (u32)signum;
+
     if (!_write_user(thread, (uintptr_t)esp, &ret, sizeof(ret)))
         return false;
+
     if (!_write_user(thread, (uintptr_t)(esp + sizeof(u32)), &sig, sizeof(sig)))
         return false;
 

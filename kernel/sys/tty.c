@@ -18,6 +18,7 @@ static bool _resolve_screen(const tty_handle_t* handle, size_t* screen_out) {
     case TTY_HANDLE_CURRENT:
         if (current_tty == TTY_NONE)
             return false;
+
         *screen_out = (size_t)current_tty;
         return true;
     case TTY_HANDLE_CONSOLE:
@@ -26,6 +27,7 @@ static bool _resolve_screen(const tty_handle_t* handle, size_t* screen_out) {
     case TTY_HANDLE_NAMED:
         if (handle->index >= TTY_COUNT)
             return false;
+
         *screen_out = TTY_USER_TO_SCREEN(handle->index);
         return true;
     default:
@@ -34,12 +36,14 @@ static bool _resolve_screen(const tty_handle_t* handle, size_t* screen_out) {
 }
 
 void tty_init(void) {
-    if (TTY_SCREEN_COUNT == 0)
+    if (!TTY_SCREEN_COUNT)
         return;
 
     current_tty = TTY_CONSOLE;
+
     tty_input_init();
     tty_input_set_current((size_t)current_tty);
+
     if (!arch_console_set_active((size_t)current_tty))
         log_warn("tty: failed to activate console screen %zu", (size_t)current_tty);
 }
@@ -49,9 +53,12 @@ bool tty_set_current(size_t index) {
         return false;
 
     current_tty = (ssize_t)index;
+
     tty_input_set_current(index);
+
     if (!arch_console_set_active(index))
         log_warn("tty: failed to activate console screen %zu", index);
+
     return true;
 }
 
@@ -84,7 +91,7 @@ static ssize_t _write_screen(size_t index, const void* buf, size_t len) {
 }
 
 static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len) {
-    if (index >= TTY_SCREEN_COUNT || !buf || len == 0)
+    if (index >= TTY_SCREEN_COUNT || !buf || !len)
         return 0;
 
     termios_t tos;
@@ -142,10 +149,10 @@ static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len
 }
 
 ssize_t tty_write_screen_output(size_t index, const void* buf, size_t len) {
-    if (!buf || len == 0)
+    if (!buf || !len)
         return 0;
 
-    return tty_write_screen_processed(index, buf, len);
+    return _write_screen_processed(index, buf, len);
 }
 
 ssize_t tty_read_handle(const tty_handle_t* handle, void* buf, size_t len) {
@@ -156,13 +163,15 @@ ssize_t tty_read_handle(const tty_handle_t* handle, void* buf, size_t len) {
     case TTY_HANDLE_CURRENT:
         if (current_tty == TTY_NONE)
             return -1;
-        return _read_screen((size_t)current_tty, buf, len);
+
+        return tty_read_screen((size_t)current_tty, buf, len);
     case TTY_HANDLE_CONSOLE:
         return tty_input_read(TTY_CONSOLE, buf, len);
     case TTY_HANDLE_NAMED:
         if (handle->index >= TTY_COUNT)
             return -1;
-        return _read_screen(TTY_USER_TO_SCREEN(handle->index), buf, len);
+
+        return tty_read_screen(TTY_USER_TO_SCREEN(handle->index), buf, len);
     default:
         return -1;
     }
@@ -176,12 +185,14 @@ ssize_t tty_write_handle(const tty_handle_t* handle, const void* buf, size_t len
     case TTY_HANDLE_CURRENT:
         if (current_tty == TTY_NONE)
             return -1;
+
         return _write_screen_processed((size_t)current_tty, buf, len);
     case TTY_HANDLE_CONSOLE:
         return _write_screen_processed(TTY_CONSOLE, buf, len);
     case TTY_HANDLE_NAMED:
         if (handle->index >= TTY_COUNT)
             return -1;
+
         return _write_screen_processed(TTY_USER_TO_SCREEN(handle->index), buf, len);
     default:
         return -1;
@@ -197,32 +208,39 @@ ssize_t tty_ioctl_handle(const tty_handle_t* handle, u64 request, void* args) {
     case TIOCGWINSZ:
         if (!args)
             return -1;
+
         return tty_input_get_winsize(screen, args) ? 0 : -1;
     case TIOCSWINSZ:
         if (!args)
             return -1;
+
         return tty_input_set_winsize(screen, args) ? 0 : -1;
     case TCGETS:
         if (!args)
             return -1;
+
         return tty_input_get_termios(screen, args) ? 0 : -1;
     case TCSETS:
         if (!args)
             return -1;
+
         return tty_input_set_termios(screen, args, false) ? 0 : -1;
     case TCSETSW:
     case TCSETSF:
         if (!args)
             return -1;
+
         return tty_input_set_termios(screen, args, true) ? 0 : -1;
     case TIOCSPGRP:
         if (!args)
             return -1;
+
         tty_pgrp[screen] = *(pid_t*)args;
         return 0;
     case TIOCGPGRP:
         if (!args)
             return -1;
+
         *(pid_t*)args = tty_pgrp[screen];
         return 0;
     default:

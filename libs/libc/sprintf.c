@@ -54,12 +54,11 @@ static int _get_width(const char* format, size_t* index, va_list* vlist) {
 
     if (isdigit(format[*index])) {
         char* end;
-        width = (int)strtoll(&format[*index], &end, 10);
 
+        width = (int)strtoll(&format[*index], &end, 10);
         *index += (size_t)(end - &format[*index]);
     } else if (format[*index] == '*') {
         width = va_arg(*vlist, int);
-
         *index += 1;
     }
 
@@ -76,12 +75,11 @@ static int _get_precision(const char* format, size_t* index, va_list* vlist) {
 
     if (isdigit(format[*index])) {
         char* end;
-        precision = (int)strtoll(&format[*index], &end, 10);
 
+        precision = (int)strtoll(&format[*index], &end, 10);
         *index += (size_t)(end - &format[*index]);
     } else if (format[*index] == '*') {
         precision = va_arg(*vlist, int);
-
         *index += 1;
     }
 
@@ -179,7 +177,7 @@ static uintmax_t _get_var_number(int size, va_list* vlist) {
 }
 
 static void _buf_putc(char* buffer, size_t* written, size_t max_size, char value) {
-    if (!buffer || !written || max_size == 0)
+    if (!buffer || !written || !max_size)
         return;
 
     if (*written + 1 >= max_size)

@@ -3,6 +3,13 @@
 #include <sys/proc.h>
 #include <unistd.h>
 
+static void write_cstr(const char* text) {
+    if (!text)
+        return;
+
+    write(STDOUT_FILENO, text, strlen(text));
+}
+
 static const char* state_name(proc_state_t state) {
     switch (state) {
     case PROC_STATE_READY:
@@ -20,32 +27,39 @@ static const char* state_name(proc_state_t state) {
     }
 }
 
+static const char* tty_name(const proc_info_t* info, char* buf, size_t buf_len) {
+    if (!info)
+        return "??";
+
+    if (info->tty_index < 0)
+        return "??";
+
+    if (!info->tty_index)
+        return "console";
+
+    snprintf(buf, buf_len, "tty%d", info->tty_index - 1);
+    return buf;
+}
+
 int main(void) {
     proc_info_t procs[128];
     ssize_t count = getprocs(procs, sizeof(procs) / sizeof(procs[0]));
+
     if (count < 0) {
-        const char* msg = "ps: getprocs failed\n";
-        write(STDOUT_FILENO, msg, strlen(msg));
+        write_cstr("ps: getprocs failed\n");
         return 1;
     }
 
-    {
-        const char* header = "PID   TTY     STAT TIME COMMAND\n";
-        write(STDOUT_FILENO, header, strlen(header));
-    }
+    write_cstr("PID   TTY     STAT TIME COMMAND\n");
+
     for (ssize_t i = 0; i < count; i++) {
         proc_info_t* info = &procs[i];
-        const char* name = info->name[0] ? info->name : "thread";
+
+        const char* cmd = info->name[0] ? info->name : "thread";
+
         char tty_buf[8];
-        const char* tty = "??";
-        if (info->tty_index >= 0) {
-            if (info->tty_index == 0) {
-                tty = "console";
-            } else {
-                snprintf(tty_buf, sizeof(tty_buf), "tty%d", info->tty_index - 1);
-                tty = tty_buf;
-            }
-        }
+        const char* tty = tty_name(info, tty_buf, sizeof(tty_buf));
+
         char line[160];
         snprintf(
             line,
@@ -55,9 +69,10 @@ int main(void) {
             tty,
             state_name(info->state),
             "0:00",
-            name
+            cmd
         );
-        write(STDOUT_FILENO, line, strlen(line));
+
+        write_cstr(line);
     }
 
     return 0;

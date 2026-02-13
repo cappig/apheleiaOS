@@ -30,9 +30,11 @@ static void _pmm_ref_set_range(void* ptr, size_t blocks, u16 value) {
     if (!frame_refs_ready || !ptr || !blocks)
         return;
 
-    size_t start = _pmm_block_index(ptr);
+    size_t start = pmm_block_index(ptr);
+
     for (size_t i = 0; i < blocks; i++) {
         size_t index = start + i;
+
         if (index < frame_refs_count)
             frame_refs[index] = value;
     }
@@ -138,13 +140,14 @@ void free_frames(void* ptr, size_t size) {
 
     for (size_t i = 0; i < size; i++) {
         size_t index = start + i;
+
         if (index >= frame_refs_count)
             continue;
 
         if (frame_refs[index] > 0)
             frame_refs[index]--;
 
-        if (frame_refs[index] == 0)
+        if (!frame_refs[index])
             bitmap_alloc_free(&frame_alloc, bitmap_alloc_to_ptr(&frame_alloc, index), 1);
     }
 
@@ -157,9 +160,11 @@ void pmm_ref_hold(void* ptr, size_t blocks) {
     if (!frame_refs_ready || !ptr || !blocks)
         return;
 
-    size_t start = _pmm_block_index(ptr);
+    size_t start = pmm_block_index(ptr);
+
     for (size_t i = 0; i < blocks; i++) {
         size_t index = start + i;
+
         if (index < frame_refs_count && frame_refs[index] < UINT16_MAX)
             frame_refs[index]++;
     }
@@ -169,7 +174,8 @@ u16 pmm_refcount(void* ptr) {
     if (!frame_refs_ready || !ptr)
         return 1;
 
-    size_t index = _pmm_block_index(ptr);
+    size_t index = pmm_block_index(ptr);
+
     if (index >= frame_refs_count)
         return 1;
 
@@ -191,10 +197,10 @@ void reclaim_boot_map(e820_map_t* mmap) {
     u64 root = read_cr3();
     page_t* root_vaddr = (page_t*)(root + LINEAR_MAP_OFFSET_64);
 
-    // The higher half contains kernel mappings
+    // the higher half contains kernel mappings
     memset(root_vaddr, 0, 256 * sizeof(page_t));
 
-    // Flush the TLB
+    // flush the TLB
     write_cr3(root);
 #endif
 }

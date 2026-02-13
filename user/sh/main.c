@@ -79,7 +79,7 @@ static void tty_set_pgrp(pid_t pid) {
     ioctl(STDIN_FILENO, TIOCSPGRP, &pid);
 }
 
-static job_t* sh_job_find_by_id(int id) {
+static job_t* job_find_by_id(int id) {
     for (size_t i = 0; i < sh_job_count; i++) {
         if (sh_jobs[i].id == id)
             return &sh_jobs[i];
@@ -88,7 +88,7 @@ static job_t* sh_job_find_by_id(int id) {
     return NULL;
 }
 
-static void sh_job_remove_index(size_t index) {
+static void job_remove_index(size_t index) {
     if (index >= sh_job_count)
         return;
 
@@ -99,7 +99,7 @@ static void sh_job_remove_index(size_t index) {
     sh_job_count--;
 }
 
-static job_t* sh_job_add(pid_t pid, const char* cmd, job_state_t state) {
+static job_t* job_add(pid_t pid, const char* cmd, job_state_t state) {
     if (sh_job_count >= SH_MAX_JOBS)
         return NULL;
 
@@ -112,11 +112,11 @@ static job_t* sh_job_add(pid_t pid, const char* cmd, job_state_t state) {
     return job;
 }
 
-static ssize_t sh_get_procs(proc_info_t* out, size_t cap) {
+static ssize_t get_procs(proc_info_t* out, size_t cap) {
     return getprocs(out, cap);
 }
 
-static bool sh_pgrp_state(pid_t pgid, const proc_info_t* list, ssize_t count, bool* stopped_out) {
+static bool pgrp_state(pid_t pgid, const proc_info_t* list, ssize_t count, bool* stopped_out) {
     if (stopped_out)
         *stopped_out = false;
 
@@ -148,16 +148,16 @@ static bool sh_pgrp_state(pid_t pgid, const proc_info_t* list, ssize_t count, bo
     return any_alive;
 }
 
-static void sh_reap_jobs(bool report) {
+static void reap_jobs(bool report) {
     proc_info_t procs[128];
-    ssize_t count = sh_get_procs(procs, sizeof(procs) / sizeof(procs[0]));
+    ssize_t count = get_procs(procs, sizeof(procs) / sizeof(procs[0]));
     if (count < 0)
         return;
 
     for (size_t i = 0; i < sh_job_count;) {
         job_t* job = &sh_jobs[i];
         bool stopped = false;
-        bool alive = sh_pgrp_state(job->pid, procs, count, &stopped);
+        bool alive = pgrp_state(job->pid, procs, count, &stopped);
 
         if (!alive) {
             int status = 0;
@@ -171,7 +171,7 @@ static void sh_reap_jobs(bool report) {
                 write_str(line);
             }
 
-            sh_job_remove_index(i);
+            job_remove_index(i);
             continue;
         }
 
@@ -181,8 +181,8 @@ static void sh_reap_jobs(bool report) {
     }
 }
 
-static void sh_print_jobs(void) {
-    sh_reap_jobs(false);
+static void print_jobs(void) {
+    reap_jobs(false);
 
     for (size_t i = 0; i < sh_job_count; i++) {
         job_t* job = &sh_jobs[i];
@@ -193,7 +193,7 @@ static void sh_print_jobs(void) {
     }
 }
 
-static int sh_parse_job_id(const char* arg) {
+static int parse_job_id(const char* arg) {
     if (!arg || !arg[0])
         return -1;
 
@@ -211,7 +211,7 @@ static int sh_parse_job_id(const char* arg) {
     return id > 0 ? id : -1;
 }
 
-static bool sh_wait_foreground_pgrp(pid_t pgid) {
+static bool wait_foreground_pgrp(pid_t pgid) {
     if (pgid <= 0)
         return false;
 
@@ -236,7 +236,7 @@ static bool sh_wait_foreground_pgrp(pid_t pgid) {
     }
 }
 
-static int sh_fg(int argc, char** argv) {
+static int fg(int argc, char** argv) {
     if (!sh_job_count) {
         write_str("fg: no jobs\n");
         return 1;
@@ -246,8 +246,8 @@ static int sh_fg(int argc, char** argv) {
     if (argc < 2) {
         job = &sh_jobs[sh_job_count - 1];
     } else {
-        int id = sh_parse_job_id(argv[1]);
-        job = sh_job_find_by_id(id);
+        int id = parse_job_id(argv[1]);
+        job = job_find_by_id(id);
     }
 
     if (!job) {
@@ -260,7 +260,7 @@ static int sh_fg(int argc, char** argv) {
     if (job->state == JOB_STOPPED) {
         if (kill(-job->pid, SIGCONT) < 0) {
             write_str("fg: failed to continue job\n");
-            sh_job_remove_index(index);
+            job_remove_index(index);
             return 1;
         }
 
@@ -268,19 +268,19 @@ static int sh_fg(int argc, char** argv) {
     }
 
     tty_set_pgrp(job->pid);
-    bool stopped = sh_wait_foreground_pgrp(job->pid);
+    bool stopped = wait_foreground_pgrp(job->pid);
     tty_set_pgrp(sh_pgid);
 
     if (stopped) {
         job->state = JOB_STOPPED;
     } else if (index < sh_job_count) {
-        sh_job_remove_index(index);
+        job_remove_index(index);
     }
 
     return 1;
 }
 
-static int sh_bg(int argc, char** argv) {
+static int bg(int argc, char** argv) {
     if (!sh_job_count) {
         write_str("bg: no jobs\n");
         return 1;
@@ -290,8 +290,8 @@ static int sh_bg(int argc, char** argv) {
     if (argc < 2) {
         job = &sh_jobs[sh_job_count - 1];
     } else {
-        int id = sh_parse_job_id(argv[1]);
-        job = sh_job_find_by_id(id);
+        int id = parse_job_id(argv[1]);
+        job = job_find_by_id(id);
     }
 
     if (!job) {
@@ -306,7 +306,7 @@ static int sh_bg(int argc, char** argv) {
             write_str("bg: failed to continue job\n");
 
             if (index < sh_job_count)
-                sh_job_remove_index(index);
+                job_remove_index(index);
 
             return 1;
         }
@@ -317,7 +317,7 @@ static int sh_bg(int argc, char** argv) {
     return 1;
 }
 
-static int sh_env_find(const char* key) {
+static int env_find(const char* key) {
     if (!key || !key[0])
         return -1;
 
@@ -329,19 +329,19 @@ static int sh_env_find(const char* key) {
     return -1;
 }
 
-static const char* sh_env_get(const char* key) {
-    int index = sh_env_find(key);
+static const char* env_get(const char* key) {
+    int index = env_find(key);
     if (index < 0)
         return "";
 
     return sh_env[index].value;
 }
 
-static bool sh_env_set(const char* key, const char* value) {
+static bool env_set(const char* key, const char* value) {
     if (!key || !key[0] || !value)
         return false;
 
-    int index = sh_env_find(key);
+    int index = env_find(key);
     if (index >= 0) {
         snprintf(sh_env[index].value, sizeof(sh_env[index].value), "%s", value);
         return true;
@@ -356,8 +356,8 @@ static bool sh_env_set(const char* key, const char* value) {
     return true;
 }
 
-static void sh_env_unset(const char* key) {
-    int index = sh_env_find(key);
+static void env_unset(const char* key) {
+    int index = env_find(key);
     if (index < 0)
         return;
 
@@ -368,7 +368,7 @@ static void sh_env_unset(const char* key) {
     sh_env_count--;
 }
 
-static void sh_env_print(void) {
+static void env_print(void) {
     for (size_t i = 0; i < sh_env_count; i++) {
         write_str(sh_env[i].key);
         write_str("=");
@@ -377,13 +377,13 @@ static void sh_env_print(void) {
     }
 }
 
-static void sh_update_pwd(void) {
+static void update_pwd(void) {
     char cwd[PATH_MAX];
     if (getcwd(cwd, sizeof(cwd)))
-        sh_env_set("PWD", cwd);
+        env_set("PWD", cwd);
 }
 
-static void sh_expand_arg(const char* in, char* out, size_t out_len) {
+static void expand_arg(const char* in, char* out, size_t out_len) {
     if (!in || !out || !out_len)
         return;
 
@@ -391,7 +391,7 @@ static void sh_expand_arg(const char* in, char* out, size_t out_len) {
     size_t i = 0;
 
     if (in[0] == '~' && (in[1] == '\0' || in[1] == '/')) {
-        const char* home = sh_env_get("HOME");
+        const char* home = env_get("HOME");
         if (home && home[0]) {
             size_t home_len = strlen(home);
             if (o + home_len >= out_len)
@@ -434,7 +434,7 @@ static void sh_expand_arg(const char* in, char* out, size_t out_len) {
         memcpy(key, in + start, key_len);
         key[key_len] = '\0';
 
-        const char* value = sh_env_get(key);
+        const char* value = env_get(key);
         size_t value_len = strlen(value);
         if (o + value_len >= out_len)
             value_len = out_len - o - 1;
@@ -465,7 +465,7 @@ typedef struct {
     bool trailing_escape;
 } sh_cont_state_t;
 
-static sh_cont_state_t sh_continuation_state(const char* line) {
+static sh_cont_state_t continuation_state(const char* line) {
     sh_cont_state_t state = {0};
 
     if (!line)
@@ -553,7 +553,7 @@ static int read_line_fd(int fd, char* buf, size_t len, bool interactive) {
     return 0;
 }
 
-static bool sh_is_operator(const char* token) {
+static bool is_operator(const char* token) {
     if (!token || !token[0])
         return false;
 
@@ -562,7 +562,7 @@ static bool sh_is_operator(const char* token) {
 }
 
 static int
-sh_tokenize(const char* line, char* storage, size_t storage_len, char** tokens, int max_tokens) {
+tokenize(const char* line, char* storage, size_t storage_len, char** tokens, int max_tokens) {
     if (!line || !storage || !storage_len || !tokens || max_tokens <= 1)
         return 0;
 
@@ -587,6 +587,7 @@ sh_tokenize(const char* line, char* storage, size_t storage_len, char** tokens, 
             if (*src == '>' && src[1] == '>') {
                 if (dst + 2 > end)
                     break;
+
                 *dst++ = '>';
                 *dst++ = '>';
                 src += 2;
@@ -600,10 +601,12 @@ sh_tokenize(const char* line, char* storage, size_t storage_len, char** tokens, 
 
         if (dst >= end)
             break;
+
         tokens[count++] = dst;
 
         bool in_single = false;
         bool in_double = false;
+
         while (*src) {
             char ch = *src;
 
@@ -642,12 +645,14 @@ sh_tokenize(const char* line, char* storage, size_t storage_len, char** tokens, 
 
             if (dst >= end)
                 break;
+
             *dst++ = ch;
             src++;
         }
 
         if (dst >= end)
             break;
+
         *dst++ = '\0';
     }
 
@@ -657,14 +662,14 @@ sh_tokenize(const char* line, char* storage, size_t storage_len, char** tokens, 
 }
 
 static int
-sh_parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* background_out) {
+parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* background_out) {
     if (!line || !stages || !stage_count_out || !background_out)
         return -1;
 
     char token_store[SH_LINE_MAX];
     char* tokens[SH_MAX_TOKENS];
 
-    int token_count = sh_tokenize(line, token_store, sizeof(token_store), tokens, SH_MAX_TOKENS);
+    int token_count = tokenize(line, token_store, sizeof(token_store), tokens, SH_MAX_TOKENS);
     if (token_count <= 0)
         return 0;
 
@@ -696,7 +701,7 @@ sh_parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* ba
         }
 
         if (!strcmp(token, "<")) {
-            if (i + 1 >= token_count || sh_is_operator(tokens[i + 1])) {
+            if (i + 1 >= token_count || is_operator(tokens[i + 1])) {
                 write_str("sh: invalid input redirection\n");
                 return -1;
             }
@@ -706,7 +711,7 @@ sh_parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* ba
         }
 
         if (!strcmp(token, ">") || !strcmp(token, ">>")) {
-            if (i + 1 >= token_count || sh_is_operator(tokens[i + 1])) {
+            if (i + 1 >= token_count || is_operator(tokens[i + 1])) {
                 write_str("sh: invalid output redirection\n");
                 return -1;
             }
@@ -724,7 +729,7 @@ sh_parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* ba
         stages[stage].argv[stages[stage].argc++] = tokens[i];
     }
 
-    if (!(stages[stage].argc)) {
+    if (!stages[stage].argc) {
         write_str("sh: empty command\n");
         return -1;
     }
@@ -737,15 +742,16 @@ sh_parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* ba
     return 1;
 }
 
-static const char* sh_env_path(void) {
-    const char* value = sh_env_get("PATH");
+static const char* env_path(void) {
+    const char* value = env_get("PATH");
+
     if (value && value[0])
         return value;
 
     return "/sbin";
 }
 
-static void sh_exec_script(const char* script, char* const argv[]) {
+static void exec_script(const char* script, char* const argv[]) {
     char* sh_args[SH_MAX_ARGS];
     int argc = 0;
 
@@ -762,7 +768,7 @@ static void sh_exec_script(const char* script, char* const argv[]) {
 }
 
 static bool
-sh_build_exec_path(char* out, size_t out_len, const char* dir, size_t dir_len, const char* cmd) {
+build_exec_path(char* out, size_t out_len, const char* dir, size_t dir_len, const char* cmd) {
     if (!out || !dir || !cmd || !out_len) {
         errno = EINVAL;
         return false;
@@ -781,15 +787,17 @@ sh_build_exec_path(char* out, size_t out_len, const char* dir, size_t dir_len, c
         memcpy(out, dir, dir_len);
 
     size_t pos = dir_len;
+
     if (add_slash)
         out[pos++] = '/';
 
     memcpy(out + pos, cmd, cmd_len);
+
     out[pos + cmd_len] = '\0';
     return true;
 }
 
-static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
+static bool exec_in_path(const char* cmd, char* const argv[]) {
     if (!cmd || !cmd[0])
         return false;
 
@@ -800,12 +808,14 @@ static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
 
     if (strchr(cmd, '/')) {
         execve(cmd, argv, NULL);
+
         if (errno == ENOEXEC)
-            sh_exec_script(cmd, argv);
+            exec_script(cmd, argv);
+
         return false;
     }
 
-    const char* path = sh_env_path();
+    const char* path = env_path();
     const char* cursor = path;
     char full[PATH_MAX];
     int last_error = ENOENT;
@@ -813,13 +823,15 @@ static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
     while (*cursor) {
         const char* next = strchr(cursor, ':');
         size_t len = next ? (size_t)(next - cursor) : strlen(cursor);
-        if (!sh_build_exec_path(full, sizeof(full), cursor, len, cmd)) {
+
+        if (!build_exec_path(full, sizeof(full), cursor, len, cmd)) {
             if (errno != ENOENT)
                 last_error = errno;
         } else {
             execve(full, argv, NULL);
+
             if (errno == ENOEXEC) {
-                sh_exec_script(full, argv);
+                exec_script(full, argv);
                 return false;
             }
 
@@ -829,6 +841,7 @@ static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
 
         if (!next)
             break;
+
         cursor = next + 1;
     }
 
@@ -836,7 +849,7 @@ static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
     return false;
 }
 
-static bool sh_parse_umask(const char* text, mode_t* out) {
+static bool parse_umask(const char* text, mode_t* out) {
     if (!text || !text[0] || !out)
         return false;
 
@@ -869,29 +882,30 @@ static int handle_builtin(int argc, char** argv) {
     }
 
     if (!strcmp(argv[0], "env")) {
-        sh_env_print();
+        env_print();
         return 1;
     }
 
     if (!strcmp(argv[0], "set")) {
         if (argc == 1) {
-            sh_env_print();
+            env_print();
             return 1;
         }
 
         char* eq = strchr(argv[1], '=');
         if (eq) {
             *eq = '\0';
-            sh_env_set(argv[1], eq + 1);
+            env_set(argv[1], eq + 1);
             return 1;
         }
 
         if (argc >= 3) {
-            sh_env_set(argv[1], argv[2]);
+            env_set(argv[1], argv[2]);
             return 1;
         }
 
         write_str("set: usage: set NAME=VALUE\n");
+
         return 1;
     }
 
@@ -901,24 +915,29 @@ static int handle_builtin(int argc, char** argv) {
             return 1;
         }
 
-        sh_env_unset(argv[1]);
+        env_unset(argv[1]);
+
         return 1;
     }
 
     if (!strcmp(argv[0], "echo")) {
         for (int i = 1; i < argc; i++) {
             char expanded[SH_EXPAND_MAX] = {0};
-            sh_expand_arg(argv[i], expanded, sizeof(expanded));
+
+            expand_arg(argv[i], expanded, sizeof(expanded));
             write_str(expanded);
+
             if (i + 1 < argc)
                 write_str(" ");
         }
+
         write_str("\n");
         return 1;
     }
 
     if (!strcmp(argv[0], "cd")) {
         const char* target = "/";
+
         if (argc >= 2 && argv[1] && argv[1][0])
             target = argv[1];
 
@@ -927,7 +946,7 @@ static int handle_builtin(int argc, char** argv) {
             return 1;
         }
 
-        sh_update_pwd();
+        update_pwd();
         return 1;
     }
 
@@ -939,12 +958,14 @@ static int handle_builtin(int argc, char** argv) {
             char line[16];
             snprintf(line, sizeof(line), "%03o\n", (unsigned int)(old & 0777));
             write_str(line);
+
             return 1;
         }
 
         if (argc == 2) {
             mode_t mask = 0;
-            if (!sh_parse_umask(argv[1], &mask)) {
+
+            if (!parse_umask(argv[1], &mask)) {
                 write_str("umask: usage: umask [ooo]\n");
                 return 1;
             }
@@ -958,25 +979,25 @@ static int handle_builtin(int argc, char** argv) {
     }
 
     if (!strcmp(argv[0], "jobs")) {
-        sh_print_jobs();
+        print_jobs();
         return 1;
     }
 
     if (!strcmp(argv[0], "history")) {
-        sh_history_print();
+        history_print();
         return 1;
     }
 
     if (!strcmp(argv[0], "fg"))
-        return sh_fg(argc, argv);
+        return fg(argc, argv);
 
     if (!strcmp(argv[0], "bg"))
-        return sh_bg(argc, argv);
+        return bg(argc, argv);
 
     return 0;
 }
 
-static void sh_close_pipe_fds(int pipes[][2], int count) {
+static void close_pipe_fds(int pipes[][2], int count) {
     for (int i = 0; i < count; i++) {
         if (pipes[i][0] >= 0)
             close(pipes[i][0]);
@@ -986,12 +1007,13 @@ static void sh_close_pipe_fds(int pipes[][2], int count) {
     }
 }
 
-static int sh_open_redirection(const sh_stage_t* stage) {
+static int open_redirection(const sh_stage_t* stage) {
     if (!stage)
         return 0;
 
     if (stage->in_path && stage->in_path[0]) {
         int fd = open(stage->in_path, O_RDONLY, 0);
+
         if (fd < 0) {
             write_str("sh: failed to open input\n");
             return -1;
@@ -1032,8 +1054,7 @@ static int sh_open_redirection(const sh_stage_t* stage) {
     return 0;
 }
 
-static int
-sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char* cmdline) {
+static int run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char* cmdline) {
     int pipes[SH_MAX_STAGES - 1][2];
 
     for (int i = 0; i < SH_MAX_STAGES - 1; i++) {
@@ -1044,7 +1065,7 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
     for (int i = 0; i + 1 < stage_count; i++) {
         if (pipe(pipes[i]) < 0) {
             write_str("sh: pipe failed\n");
-            sh_close_pipe_fds(pipes, stage_count - 1);
+            close_pipe_fds(pipes, stage_count - 1);
             return -1;
         }
     }
@@ -1055,6 +1076,7 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
 
         if (!pid) {
             pid_t target_pgid = (!pgid) ? getpid() : pgid;
+
             setpgid(0, target_pgid);
 
             signal(SIGINT, SIG_DFL);
@@ -1073,25 +1095,27 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
                     _exit(1);
             }
 
-            sh_close_pipe_fds(pipes, stage_count - 1);
+            close_pipe_fds(pipes, stage_count - 1);
 
-            if (sh_open_redirection(&stages[i]) < 0)
+            if (open_redirection(&stages[i]) < 0)
                 _exit(1);
 
             if (handle_builtin(stages[i].argc, stages[i].argv))
                 _exit(0);
 
-            sh_exec_in_path(stages[i].argv[0], stages[i].argv);
+            exec_in_path(stages[i].argv[0], stages[i].argv);
+
             if (errno == ENAMETOOLONG)
                 write_str("sh: command name too long\n");
             else
                 write_str("sh: exec failed\n");
+
             _exit(1);
         }
 
         if (pid < 0) {
             write_str("sh: fork failed\n");
-            sh_close_pipe_fds(pipes, stage_count - 1);
+            close_pipe_fds(pipes, stage_count - 1);
             return -1;
         }
 
@@ -1101,27 +1125,28 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
         setpgid(pid, pgid);
     }
 
-    sh_close_pipe_fds(pipes, stage_count - 1);
+    close_pipe_fds(pipes, stage_count - 1);
 
     if (background) {
-        job_t* job = sh_job_add(pgid, cmdline, JOB_RUNNING);
+        job_t* job = job_add(pgid, cmdline, JOB_RUNNING);
 
         if (job) {
             char line_out[64];
             snprintf(line_out, sizeof(line_out), "[%d] %d\n", job->id, (int)pgid);
             write_str(line_out);
         }
+
         return 0;
     }
 
     tty_set_pgrp(pgid);
 
-    bool stopped = sh_wait_foreground_pgrp(pgid);
+    bool stopped = wait_foreground_pgrp(pgid);
 
     tty_set_pgrp(sh_pgid);
 
     if (stopped)
-        sh_job_add(pgid, cmdline, JOB_STOPPED);
+        job_add(pgid, cmdline, JOB_STOPPED);
 
     return 0;
 }
@@ -1139,7 +1164,8 @@ static int run_command(char* line) {
     int stage_count = 0;
     bool background = false;
 
-    int parse_ret = sh_parse_pipeline(line, stages, &stage_count, &background);
+    int parse_ret = parse_pipeline(line, stages, &stage_count, &background);
+
     if (parse_ret <= 0)
         return 0;
 
@@ -1149,19 +1175,19 @@ static int run_command(char* line) {
 
     for (int i = 0; i < stage_count; i++) {
         for (int a = 0; a < stages[i].argc; a++) {
-            sh_expand_arg(stages[i].argv[a], expanded[i][a], sizeof(expanded[i][a]));
+            expand_arg(stages[i].argv[a], expanded[i][a], sizeof(expanded[i][a]));
             stages[i].argv[a] = expanded[i][a];
         }
 
         stages[i].argv[stages[i].argc] = NULL;
 
         if (stages[i].in_path && stages[i].in_path[0]) {
-            sh_expand_arg(stages[i].in_path, in_paths[i], sizeof(in_paths[i]));
+            expand_arg(stages[i].in_path, in_paths[i], sizeof(in_paths[i]));
             stages[i].in_path = in_paths[i];
         }
 
         if (stages[i].out_path && stages[i].out_path[0]) {
-            sh_expand_arg(stages[i].out_path, out_paths[i], sizeof(out_paths[i]));
+            expand_arg(stages[i].out_path, out_paths[i], sizeof(out_paths[i]));
             stages[i].out_path = out_paths[i];
         }
     }
@@ -1169,11 +1195,10 @@ static int run_command(char* line) {
     bool simple_builtin =
         stage_count == 1 && !background && !stages[0].in_path && !stages[0].out_path;
 
-    if (simple_builtin && handle_builtin(stages[0].argc, stages[0].argv)) {
+    if (simple_builtin && handle_builtin(stages[0].argc, stages[0].argv))
         return 0;
-    }
 
-    return sh_run_pipeline(stages, stage_count, background, cmdline);
+    return run_pipeline(stages, stage_count, background, cmdline);
 }
 
 static int run_script(const char* path) {
@@ -1181,6 +1206,7 @@ static int run_script(const char* path) {
         return -1;
 
     int fd = open(path, O_RDONLY, 0);
+
     if (fd < 0) {
         write_str("sh: failed to open script\n");
         return -1;
@@ -1190,6 +1216,7 @@ static int run_script(const char* path) {
 
     while (!read_line_fd(fd, line, sizeof(line), false)) {
         char* cursor = line;
+
         while (*cursor && isspace((unsigned char)*cursor))
             cursor++;
 
@@ -1215,17 +1242,17 @@ int main(int argc, char** argv) {
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
 
-    sh_input_set_sigint_flag(&got_sigint);
+    input_set_sigint_flag(&got_sigint);
 
-    sh_env_set("PATH", "/sbin");
-    sh_env_set("HOME", "/");
+    env_set("PATH", "/sbin");
+    env_set("HOME", "/");
 
     passwd_t pwd = {0};
     if (!getpwuid(getuid(), &pwd) && pwd.pw_dir[0])
-        sh_env_set("HOME", pwd.pw_dir);
+        env_set("HOME", pwd.pw_dir);
 
-    sh_env_set("PWD", "/");
-    sh_update_pwd();
+    env_set("PWD", "/");
+    update_pwd();
 
     if (argc > 2 && !strcmp(argv[1], "-c")) {
         char cmdline[SH_LINE_MAX];
@@ -1240,14 +1267,16 @@ int main(int argc, char** argv) {
     tty_set_pgrp(sh_pgid);
 
     for (;;) {
-        sh_reap_jobs(true);
-        if (sh_read_line_interactive("sh$ ", line, sizeof(line), true) < 0) {
+        reap_jobs(true);
+
+        if (read_line_interactive("sh$ ", line, sizeof(line), true) < 0) {
             write_str("\n");
             continue;
         }
 
         while (1) {
-            sh_cont_state_t cont = sh_continuation_state(line);
+            sh_cont_state_t cont = continuation_state(line);
+
             if (!cont.quote_open && !cont.trailing_escape)
                 break;
 
@@ -1265,7 +1294,7 @@ int main(int argc, char** argv) {
                 break;
             }
 
-            if (sh_read_line_interactive("> ", line + len, sizeof(line) - len, false) < 0) {
+            if (read_line_interactive("> ", line + len, sizeof(line) - len, false) < 0) {
                 write_str("\n");
                 line[0] = '\0';
                 break;
@@ -1275,7 +1304,7 @@ int main(int argc, char** argv) {
         if (!line[0])
             continue;
 
-        sh_history_add(line);
+        history_add(line);
         run_command(line);
     }
 

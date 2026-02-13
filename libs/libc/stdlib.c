@@ -15,6 +15,7 @@ long long strtoll(char const* restrict str, char** restrict endptr, int base) {
 
     if (base < 0 || base == 1 || base > 36) {
         errno = EINVAL;
+
         if (endptr)
             *endptr = (char*)str;
 
@@ -35,12 +36,12 @@ long long strtoll(char const* restrict str, char** restrict endptr, int base) {
     int a = pos[0];
     int b = tolower(pos[1]);
 
-    if ((base == 0 || base == 16) && (a == '0' && b == 'x') && isxdigit(pos[2])) {
+    if ((!base || base == 16) && (a == '0' && b == 'x') && isxdigit(pos[2])) {
         base = 16;
         pos += 2;
-    } else if (base == 0 && a == '0') {
+    } else if (!base && a == '0') {
         base = 8;
-    } else if (base == 0) {
+    } else if (!base) {
         base = 10;
     }
 

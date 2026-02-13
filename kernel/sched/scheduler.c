@@ -21,8 +21,6 @@
 #define SCHED_STACK_SIZE (16 * KIB)
 #define SCHED_SLICE      5
 
-extern void arch_context_switch(uintptr_t stack_ptr) NORETURN;
-
 static linked_list_t* run_queue = NULL;
 static linked_list_t* zombie_list = NULL;
 static linked_list_t* all_list = NULL;
@@ -34,18 +32,6 @@ static pid_t next_pid = 1;
 
 static bool sched_running = false;
 static size_t ticks_left = SCHED_SLICE;
-
-static void _enqueue_thread(sched_thread_t* thread);
-static void _sched_reap(void);
-static void _sched_wake_sleepers(u64 now);
-static void _wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread);
-static void _wait_queue_remove(sched_thread_t* thread);
-static void _run_queue_remove(sched_thread_t* thread);
-static void _sched_init_thread_name(sched_thread_t* thread, const char* name);
-static void _sched_fd_reset(sched_fd_t* fd);
-static void _sched_fd_retain(const sched_fd_t* fd);
-static void _sched_fd_release_value(sched_fd_t* fd);
-static void _sched_pipe_try_destroy(sched_pipe_t* pipe);
 
 static proc_state_t _sched_state_to_proc(thread_state_t state) {
     switch (state) {
@@ -85,7 +71,7 @@ static void _sched_fd_reset(sched_fd_t* fd) {
 }
 
 sched_pipe_t* sched_pipe_create(size_t capacity) {
-    if (capacity == 0)
+    if (!capacity)
         capacity = SCHED_PIPE_CAPACITY;
 
     sched_pipe_t* pipe = calloc(1, sizeof(*pipe));
@@ -95,11 +81,13 @@ sched_pipe_t* sched_pipe_create(size_t capacity) {
     pipe->data = calloc(capacity, sizeof(u8));
     pipe->read_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
     pipe->write_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
+
     if (!pipe->data || !pipe->read_wait_queue || !pipe->write_wait_queue) {
         free(pipe->data);
         free(pipe->read_wait_queue);
         free(pipe->write_wait_queue);
         free(pipe);
+
         return NULL;
     }
 
@@ -154,9 +142,11 @@ void sched_pipe_release_reader(sched_pipe_t* pipe) {
 
     bool destroy = false;
     unsigned long flags = arch_irq_save();
+
     if (pipe->readers > 0)
         pipe->readers--;
-    destroy = pipe->readers == 0 && pipe->writers == 0;
+
+    destroy = !pipe->readers && !pipe->writers;
     arch_irq_restore(flags);
 
     if (pipe->write_wait_queue)
@@ -174,9 +164,11 @@ void sched_pipe_release_writer(sched_pipe_t* pipe) {
 
     bool destroy = false;
     unsigned long flags = arch_irq_save();
+
     if (pipe->writers > 0)
         pipe->writers--;
-    destroy = pipe->readers == 0 && pipe->writers == 0;
+
+    destroy = !pipe->readers && !pipe->writers;
     arch_irq_restore(flags);
 
     if (pipe->read_wait_queue)
@@ -215,6 +207,7 @@ int sched_fd_alloc(sched_thread_t* thread, const sched_fd_t* fd, int min_fd) {
         return -EINVAL;
 
     int start = min_fd < 0 ? 0 : min_fd;
+
     if (start >= SCHED_FD_MAX)
         return -EMFILE;
 
@@ -237,8 +230,10 @@ int sched_fd_close(sched_thread_t* thread, int fd) {
 
     sched_fd_t old = thread->fds[fd];
     thread->fd_used[fd] = false;
-    _sched_fd_reset(&thread->fds[fd]);
-    _sched_fd_release_value(&old);
+
+    sched_fd_reset(&thread->fds[fd]);
+    sched_fd_release_value(&old);
+
     return 0;
 }
 
@@ -254,15 +249,19 @@ int sched_fd_install(sched_thread_t* thread, int target_fd, const sched_fd_t* fd
 
     thread->fd_used[target_fd] = true;
     thread->fds[target_fd] = *fd;
-    _sched_fd_retain(&thread->fds[target_fd]);
+
+    sched_fd_retain(&thread->fds[target_fd]);
+
     return target_fd;
 }
 
 int sched_fd_dup2(sched_thread_t* thread, int oldfd, int newfd) {
     if (!thread || oldfd < 0 || oldfd >= SCHED_FD_MAX || !thread->fd_used[oldfd])
         return -EBADF;
+
     if (newfd < 0 || newfd >= SCHED_FD_MAX)
         return -EBADF;
+
     if (oldfd == newfd)
         return newfd;
 
@@ -293,6 +292,7 @@ void sched_fd_close_all(sched_thread_t* thread) {
     for (int fd = 0; fd < SCHED_FD_MAX; fd++) {
         if (!thread->fd_used[fd])
             continue;
+
         sched_fd_close(thread, fd);
     }
 }
@@ -304,7 +304,9 @@ static void _sched_init_thread_name(sched_thread_t* thread, const char* name) {
 
     const char* src = name ? name : "thread";
     memset(thread->name, 0, sizeof(thread->name));
+
     size_t len = strnlen(src, sizeof(thread->name) - 1);
+
     memcpy(thread->name, src, len);
     thread->name[len] = '\0';
 }
@@ -323,6 +325,7 @@ static sched_thread_t* _find_thread_by_pid(pid_t pid) {
 
     ll_foreach(node, all_list) {
         sched_thread_t* thread = node->data;
+
         if (thread && thread->pid == pid)
             return thread;
     }
@@ -332,17 +335,12 @@ static sched_thread_t* _find_thread_by_pid(pid_t pid) {
 
 static NORETURN void _thread_trampoline(void) {
     sched_thread_t* thread = sched_current();
+
     if (thread && thread->entry)
         thread->entry(thread->arg);
+
     sched_exit();
     __builtin_unreachable();
-}
-
-static void _idle_entry(UNUSED void* arg) {
-    for (;;) {
-        _sched_reap();
-        arch_cpu_wait();
-    }
 }
 
 bool sched_add_user_region(
@@ -396,8 +394,10 @@ static sched_user_region_t* _find_user_region(sched_thread_t* thread, uintptr_t 
     while (region) {
         uintptr_t start = region->vaddr;
         uintptr_t end = start + region->pages * PAGE_4KIB;
+
         if (addr >= start && addr < end)
             return region;
+
         region = region->next;
     }
 
@@ -415,7 +415,9 @@ static void _mark_cow_range(sched_thread_t* thread, sched_user_region_t* region)
     for (size_t i = 0; i < region->pages; i++) {
         uintptr_t vaddr = region->vaddr + i * PAGE_4KIB;
         page_t* entry = NULL;
+
         size_t size = arch_get_page(root, vaddr, &entry);
+
         if (!entry || size != PAGE_4KIB)
             continue;
 
@@ -441,7 +443,7 @@ static bool _split_region_for_page(
     uintptr_t old_page_paddr = region->paddr + page_index * PAGE_4KIB;
     sched_user_region_t* next = region->next;
 
-    if (before == 0 && after == 0) {
+    if (!before && !after) {
         region->vaddr = page_vaddr;
         region->paddr = new_page_paddr;
         region->pages = 1;
@@ -449,10 +451,11 @@ static bool _split_region_for_page(
         return true;
     }
 
-    if (before == 0) {
+    if (!before) {
         sched_user_region_t* after_region = NULL;
         if (after > 0) {
             after_region = calloc(1, sizeof(*after_region));
+
             if (!after_region)
                 return false;
 
@@ -468,6 +471,7 @@ static bool _split_region_for_page(
         region->pages = 1;
         region->flags = new_flags;
         region->next = after_region ? after_region : next;
+
         return true;
     }
 
@@ -483,13 +487,14 @@ static bool _split_region_for_page(
         page_region->pages = 1;
         page_region->flags = new_flags;
 
-        if (after == 0) {
+        if (!after) {
             page_region->next = next;
             region->next = page_region;
             return true;
         }
 
         sched_user_region_t* after_region = calloc(1, sizeof(*after_region));
+
         if (!after_region) {
             free(page_region);
             return false;
@@ -514,7 +519,8 @@ bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write) 
         return false;
 
     uintptr_t page_addr = ALIGN_DOWN(addr, PAGE_4KIB);
-    sched_user_region_t* region = _find_user_region(thread, page_addr);
+    sched_user_region_t* region = find_user_region(thread, page_addr);
+
     if (!region)
         return false;
 
@@ -527,6 +533,7 @@ bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write) 
 
     page_t* entry = NULL;
     size_t size = arch_get_page(root, page_addr, &entry);
+
     if (!entry || size != PAGE_4KIB)
         return false;
 
@@ -542,6 +549,7 @@ bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write) 
 
     if (refs > 1) {
         uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(1);
+
         if (!arch_phys_copy(new_paddr, old_paddr, PAGE_4KIB))
             return false;
 
@@ -549,9 +557,7 @@ bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write) 
         arch_page_set_paddr(entry, new_paddr);
         *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
 
-        if (!_split_region_for_page(
-                region, (page_addr - region->vaddr) / PAGE_4KIB, new_paddr, new_flags
-            ))
+        if (!split_region_for_page(region, (page_addr - region->vaddr) / PAGE_4KIB, new_paddr, new_flags))
             return false;
 
         arch_free_frames((void*)(uintptr_t)old_paddr, 1);
@@ -560,9 +566,7 @@ bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write) 
         arch_page_set_paddr(entry, old_paddr);
         *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
 
-        if (!_split_region_for_page(
-                region, (page_addr - region->vaddr) / PAGE_4KIB, (uintptr_t)old_paddr, new_flags
-            ))
+        if (!split_region_for_page(region, (page_addr - region->vaddr) / PAGE_4KIB, (uintptr_t)old_paddr, new_flags))
             return false;
     }
 
@@ -617,6 +621,7 @@ static void _sched_reap(void) {
                 node = next;
                 continue;
             }
+
             list_remove(zombie_list, node);
             thread->in_zombie_list = false;
 
@@ -629,24 +634,10 @@ static void _sched_reap(void) {
     arch_irq_restore(flags);
 }
 
-static void _sched_wake_sleepers(u64 now) {
-    if (!all_list)
-        return;
-
-    ll_foreach(node, all_list) {
-        sched_thread_t* thread = node->data;
-        if (!thread || thread->state != THREAD_SLEEPING)
-            continue;
-
-        if (thread->wake_tick == 0)
-            continue;
-
-        if (thread->wake_tick > now)
-            continue;
-
-        thread->wake_tick = 0;
-        thread->state = THREAD_READY;
-        _enqueue_thread(thread);
+static void _idle_entry(UNUSED void* arg) {
+    for (;;) {
+        sched_reap();
+        arch_cpu_wait();
     }
 }
 
@@ -705,6 +696,27 @@ static void _enqueue_thread(sched_thread_t* thread) {
     thread->in_run_queue = true;
 }
 
+static void _sched_wake_sleepers(u64 now) {
+    if (!all_list)
+        return;
+
+    ll_foreach(node, all_list) {
+        sched_thread_t* thread = node->data;
+        if (!thread || thread->state != THREAD_SLEEPING)
+            continue;
+
+        if (!thread->wake_tick)
+            continue;
+
+        if (thread->wake_tick > now)
+            continue;
+
+        thread->wake_tick = 0;
+        thread->state = THREAD_READY;
+        enqueue_thread(thread);
+    }
+}
+
 static void _run_queue_remove(sched_thread_t* thread) {
     if (!thread || !thread->in_run_queue || !run_queue)
         return;
@@ -720,6 +732,16 @@ static void _wait_queue_remove(sched_thread_t* thread) {
     list_remove(thread->blocked_on->list, &thread->wait_node);
     thread->in_wait_queue = false;
     thread->blocked_on = NULL;
+}
+
+static void _wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread) {
+    if (!queue || !queue->list || !thread || thread->in_wait_queue)
+        return;
+
+    thread->wait_node.data = thread;
+    list_append(queue->list, &thread->wait_node);
+    thread->in_wait_queue = true;
+    thread->blocked_on = queue;
 }
 
 void sched_make_runnable(sched_thread_t* thread) {
@@ -746,6 +768,7 @@ void sched_stop_thread(sched_thread_t* thread, int signum) {
 
     if (thread->user_thread) {
         sched_thread_t* parent = find_thread_by_pid(thread->ppid);
+
         if (parent) {
             sched_wake_one(&parent->wait_queue);
             sched_signal_send_thread(parent, SIGCHLD);
@@ -797,13 +820,15 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     if (!thread)
         return NULL;
 
-    _sched_init_thread_name(thread, name);
+    sched_init_thread_name(thread, name);
+
     thread->entry = entry;
     thread->arg = arg;
     thread->state = THREAD_READY;
     thread->user_thread = user_thread;
     thread->pid = next_pid++;
     thread->ppid = 0;
+
     if (current && current->pid != 0) {
         thread->pgid = current->pgid;
         thread->sid = current->sid;
@@ -811,6 +836,7 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
         thread->pgid = thread->pid;
         thread->sid = thread->pid;
     }
+
     thread->uid = current ? current->uid : 0;
     thread->gid = current ? current->gid : 0;
     thread->umask = current ? current->umask : 0022;
@@ -871,7 +897,7 @@ void scheduler_init(void) {
     assert(kernel_vm);
 
     next_pid = 0;
-    idle_thread = create_thread("idle", idle_entry, NULL, false, false);
+    idle_thread = create_thread("idle", _idle_entry, NULL, false, false);
     assert(idle_thread);
     idle_thread->state = THREAD_RUNNING;
     idle_thread->tty_index = TTY_NONE;
@@ -912,12 +938,15 @@ pid_t sched_fork(arch_int_state_t* state) {
     child->umask = current->umask;
     child->user_stack_base = current->user_stack_base;
     child->user_stack_size = current->user_stack_size;
+
     if (!sched_fd_clone_table(child, current)) {
         sched_discard_thread(child);
         return -1;
     }
+
     memcpy(child->cwd, current->cwd, sizeof(current->cwd));
     memcpy(child->signal_handlers, current->signal_handlers, sizeof(child->signal_handlers));
+
     child->signal_mask = current->signal_mask;
     child->signal_trampoline = current->signal_trampoline;
     child->signal_pending = 0;
@@ -931,6 +960,7 @@ pid_t sched_fork(arch_int_state_t* state) {
     while (region) {
         size_t pages = region->pages;
         void* root = arch_vm_root(child->vm_space);
+
         if (!root) {
             sched_discard_thread(child);
             return -1;
@@ -1000,7 +1030,7 @@ _waitpid_target_matches(const sched_thread_t* parent, const sched_thread_t* chil
     if (pid > 0)
         return child->pid == pid;
 
-    if (pid == 0)
+    if (!pid)
         return child->pgid == parent->pgid;
 
     if (pid == -1)
@@ -1050,7 +1080,8 @@ pid_t sched_waitpid(pid_t pid, int* status, int options) {
         if (options & WUNTRACED) {
             ll_foreach(node, all_list) {
                 sched_thread_t* thread = node->data;
-                if (!_waitpid_target_matches(current, thread, pid))
+
+                if (!waitpid_target_matches(current, thread, pid))
                     continue;
 
                 has_matching_child = true;
@@ -1131,15 +1162,6 @@ void sched_set_thread_name(sched_thread_t* thread, const char* name) {
     _sched_init_thread_name(thread, name);
 }
 
-static void _wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread) {
-    if (!queue || !queue->list || !thread || thread->in_wait_queue)
-        return;
-
-    thread->wait_node.data = thread;
-    list_append(queue->list, &thread->wait_node);
-    thread->in_wait_queue = true;
-}
-
 static sched_thread_t* _wait_queue_pop(sched_wait_queue_t* queue) {
     if (!queue || !queue->list)
         return NULL;
@@ -1187,7 +1209,7 @@ void sched_wake_one(sched_wait_queue_t* queue) {
         return;
 
     unsigned long flags = arch_irq_save();
-    sched_thread_t* thread = wait_queue_pop(queue);
+    sched_thread_t* thread = _wait_queue_pop(queue);
 
     if (thread) {
         thread->state = THREAD_READY;
@@ -1270,7 +1292,7 @@ void sched_yield(void) {
 }
 
 void sched_sleep(u64 ticks) {
-    if (!current || ticks == 0)
+    if (!current || !ticks)
         return;
 
     if (!sched_running) {
@@ -1308,6 +1330,7 @@ void sched_exit(void) {
 
     if (current) {
         current->state = THREAD_ZOMBIE;
+
         if (current != idle_thread && !current->in_zombie_list) {
             current->zombie_node.data = current;
             list_append(zombie_list, &current->zombie_node);
@@ -1315,8 +1338,9 @@ void sched_exit(void) {
         }
 
         if (current->user_thread) {
-            sched_thread_t* parent = _find_thread_by_pid(current->ppid);
-            if (parent)
+            sched_thread_t* parent = find_thread_by_pid(current->ppid);
+
+            if (parent) {
                 sched_wake_one(&parent->wait_queue);
         }
     }
@@ -1348,7 +1372,7 @@ bool sched_preempt_disabled(void) {
 }
 
 size_t sched_list_procs(proc_info_t* out, size_t capacity) {
-    if (!out || capacity == 0 || !all_list)
+    if (!out || !capacity || !all_list)
         return 0;
 
     unsigned long flags = arch_irq_save();
@@ -1363,6 +1387,7 @@ size_t sched_list_procs(proc_info_t* out, size_t capacity) {
             continue;
 
         proc_info_t* info = &out[count++];
+
         info->pid = thread->pid;
         info->ppid = thread->ppid;
         info->pgid = thread->pgid;
@@ -1371,6 +1396,7 @@ size_t sched_list_procs(proc_info_t* out, size_t capacity) {
         info->gid = thread->gid;
         info->state = _sched_state_to_proc(thread->state);
         info->tty_index = thread->tty_index;
+
         memset(info->name, 0, sizeof(info->name));
         strncpy(info->name, thread->name, sizeof(info->name) - 1);
     }
@@ -1388,6 +1414,7 @@ int sched_signal_send_pgrp(pid_t pgid, int signum) {
 
     ll_foreach(node, all_list) {
         sched_thread_t* thread = node->data;
+
         if (!thread || thread->pgid != pgid)
             continue;
 

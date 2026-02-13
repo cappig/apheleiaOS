@@ -27,7 +27,7 @@ static int mkdir_parents(const char* path, mode_t mode) {
 
     char tmp[PATH_MAX];
     size_t len = strnlen(path, sizeof(tmp));
-    if (len == 0 || len >= sizeof(tmp)) {
+    if (!len || len >= sizeof(tmp)) {
         errno = ENAMETOOLONG;
         return -1;
     }
@@ -56,8 +56,10 @@ static int mkdir_parents(const char* path, mode_t mode) {
         }
 
         *pos = '\0';
+
         if (mkdir(tmp, mode) < 0 && errno != EEXIST)
             return -1;
+
         *pos = '/';
         pos++;
     }
@@ -96,6 +98,7 @@ int main(int argc, char** argv) {
     int rc = 0;
     for (int i = argi; i < argc; i++) {
         int ret = parents ? mkdir_parents(argv[i], 0777) : mkdir(argv[i], 0777);
+
         if (ret < 0) {
             print_error(argv[i]);
             rc = 1;

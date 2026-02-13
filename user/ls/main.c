@@ -39,7 +39,7 @@ static bool want_name(const char* name, bool opt_all, bool opt_almost) {
 
 static size_t term_width(void) {
     winsize_t ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col)
+    if (!ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) && ws.ws_col)
         return ws.ws_col;
 
     return 80;
@@ -87,7 +87,7 @@ static void format_mode(mode_t mode, char out[11]) {
 }
 
 static bool is_leap(int year) {
-    return ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0));
+    return ((!(year % 4) && year % 100) || !(year % 400));
 }
 
 static int days_in_month(int month, int year) {
@@ -120,7 +120,7 @@ static void format_time(time_t t, char* out, size_t out_len) {
         "Dec",
     };
 
-    if (!out || out_len == 0)
+    if (!out || !out_len)
         return;
 
     if (t < 0)
@@ -135,8 +135,10 @@ static void format_time(time_t t, char* out, size_t out_len) {
     int year = 1970;
     for (;;) {
         int year_days = is_leap(year) ? 366 : 365;
+
         if (days < (unsigned long long)year_days)
             break;
+
         days -= (unsigned long long)year_days;
         year++;
     }
@@ -144,8 +146,10 @@ static void format_time(time_t t, char* out, size_t out_len) {
     int month = 0;
     while (month < 12) {
         int dim = days_in_month(month, year);
+
         if (days < (unsigned long long)dim)
             break;
+
         days -= (unsigned long long)dim;
         month++;
     }
@@ -156,11 +160,11 @@ static void format_time(time_t t, char* out, size_t out_len) {
 }
 
 static const char* uid_name(uid_t uid, char* buf, size_t len) {
-    if (!buf || len == 0)
+    if (!buf || !len)
         return "";
 
     passwd_t pwd = {0};
-    if (getpwuid(uid, &pwd) == 0 && pwd.pw_name[0]) {
+    if (!getpwuid(uid, &pwd) && pwd.pw_name[0]) {
         snprintf(buf, len, "%s", pwd.pw_name);
         return buf;
     }
@@ -170,11 +174,11 @@ static const char* uid_name(uid_t uid, char* buf, size_t len) {
 }
 
 static const char* gid_name(gid_t gid, char* buf, size_t len) {
-    if (!buf || len == 0)
+    if (!buf || !len)
         return "";
 
     group_t grp = {0};
-    if (getgrgid(gid, &grp) == 0 && grp.gr_name[0]) {
+    if (!getgrgid(gid, &grp) && grp.gr_name[0]) {
         snprintf(buf, len, "%s", grp.gr_name);
         return buf;
     }
@@ -184,7 +188,7 @@ static const char* gid_name(gid_t gid, char* buf, size_t len) {
 }
 
 static void join_path(char* out, size_t out_len, const char* dir, const char* name) {
-    if (!out || out_len == 0) {
+    if (!out || !out_len) {
         return;
     }
 
@@ -194,6 +198,7 @@ static void join_path(char* out, size_t out_len, const char* dir, const char* na
     }
 
     size_t dlen = strlen(dir);
+
     if (dlen && dir[dlen - 1] == '/')
         snprintf(out, out_len, "%s%s", dir, name ? name : "");
     else
@@ -203,6 +208,7 @@ static void join_path(char* out, size_t out_len, const char* dir, const char* na
 static int
 list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool opt_single) {
     int fd = open(path, O_RDONLY, 0);
+
     if (fd < 0) {
         write_str("ls: failed to open\n");
         return 1;
@@ -224,13 +230,16 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
             continue;
 
         size_t len = strlen(name);
+
         if (len > max_len)
             max_len = len;
 
         if (opt_long) {
             char full[256];
             stat_t st;
+
             join_path(full, sizeof(full), path, name);
+
             if (stat(full, &st) < 0)
                 memset(&st, 0, sizeof(st));
 
@@ -242,16 +251,20 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
             size_t uname_len = strlen(uname);
             size_t gname_len = strlen(gname);
             if (uname_len > width_uname)
+
                 width_uname = uname_len;
+
             if (gname_len > width_gname)
                 width_gname = gname_len;
 
             char num_buf[32];
             int num_len = snprintf(num_buf, sizeof(num_buf), "%lu", (unsigned long)st.st_nlink);
+
             if (num_len > 0 && (size_t)num_len > width_links)
                 width_links = (size_t)num_len;
 
             num_len = snprintf(num_buf, sizeof(num_buf), "%llu", (unsigned long long)st.st_size);
+
             if (num_len > 0 && (size_t)num_len > width_size)
                 width_size = (size_t)num_len;
         }
@@ -264,9 +277,11 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
 
     size_t cols = 1;
     size_t col_width = max_len + 2;
+
     if (!opt_long && !opt_single && col_width) {
         cols = term_width() / col_width;
-        if (cols == 0)
+
+        if (!cols)
             cols = 1;
     }
 
@@ -282,7 +297,9 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
         if (opt_long) {
             char full[256];
             stat_t st;
+
             join_path(full, sizeof(full), path, name);
+
             if (stat(full, &st) < 0)
                 memset(&st, 0, sizeof(st));
 
@@ -314,17 +331,20 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
                 timebuf,
                 name
             );
+
             if (len < 0)
                 continue;
 
             size_t out = (len < (int)sizeof(line)) ? (size_t)len : sizeof(line) - 1;
             write(STDOUT_FILENO, line, out);
+
             continue;
         }
 
         write_str(name);
 
         size_t name_len = strlen(name);
+
         if (opt_single || cols == 1) {
             write_char('\n');
             col = 0;
@@ -336,6 +356,7 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
             write_char(' ');
 
         col++;
+
         if (col >= cols) {
             write_char('\n');
             col = 0;
@@ -358,8 +379,10 @@ int main(int argc, char** argv) {
     int argi = 1;
     for (; argi < argc; argi++) {
         const char* arg = argv[argi];
+
         if (!arg || arg[0] != '-' || !arg[1])
             break;
+
         if (!strcmp(arg, "--")) {
             argi++;
             break;

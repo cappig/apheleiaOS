@@ -45,11 +45,11 @@ int system(const char* command) {
 
     char* argv[SYSTEM_MAX_ARGS];
     int argc = split_command(cmdline, argv, SYSTEM_MAX_ARGS);
-    if (argc == 0)
+    if (!argc)
         return 0;
 
     pid_t pid = fork();
-    if (pid == 0) {
+    if (!pid) {
         if (strchr(argv[0], '/')) {
             execve(argv[0], argv, NULL);
         } else {

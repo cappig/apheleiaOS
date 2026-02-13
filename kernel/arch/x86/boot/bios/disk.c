@@ -13,9 +13,8 @@
 #include "x86/mbr.h"
 #include "x86/regs.h"
 
-// FIXME: THIS IS DOGSHITTTT
 #define SECTOR_SIZE 512
-// BIOS EDD packet supports multi-sector reads; keep this conservative.
+
 #define MAX_BIOS_SECTORS_PER_CALL 64
 #define BOUNCE_SECTORS            16
 
@@ -130,6 +129,7 @@ static size_t _indirect_capacity(u32 entries_per_block, size_t indirection, size
     for (size_t i = 0; i < indirection; i++) {
         if (capacity > max / entries_per_block)
             return max;
+
         capacity *= entries_per_block;
     }
 
@@ -154,7 +154,7 @@ static void _flatten_blocks(u32* blocks, u32 block_num, size_t indirection, size
     u32 block_size = ext2_block_size(&superblock);
     u32 entries_per_block = block_size / sizeof(u32);
 
-    if (indirection == 0) {
+    if (!indirection) {
         blocks[(*n)++] = block_num;
         return;
     }
@@ -180,9 +180,6 @@ static void _flatten_blocks(u32* blocks, u32 block_num, size_t indirection, size
 
 
 static void _get_inode(u32 num, ext2_inode_t* inode) {
-    // if (!num)
-    //     panic("Invalid inode number!");
-
     u32 block_size = ext2_block_size(&superblock);
     u32 group = (num - 1) / superblock.inodes_in_group;
     u32 index = (num - 1) % superblock.inodes_in_group;

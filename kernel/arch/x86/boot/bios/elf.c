@@ -17,10 +17,6 @@
 #include "paging64.h"
 #include "tty.h"
 
-
-extern void jump_to_kernel_32(u32 entry, u32 boot_info, u32 stack);
-extern void jump_to_kernel_64(u64 entry, u64 boot_info, u64 stack);
-
 static bool _cpu_has_long_mode(void) {
     cpuid_regs_t regs = {0};
     cpuid(0x80000000, &regs);

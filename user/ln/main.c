@@ -52,11 +52,11 @@ int main(int argc, char** argv) {
     const char* target = argv[argi];
     const char* link_path = argv[argi + 1];
 
-    if (link(target, link_path) == 0)
+    if (!link(target, link_path))
         return 0;
 
     if (force && errno == EEXIST) {
-        if (unlink(link_path) == 0 && link(target, link_path) == 0)
+        if (!unlink(link_path) && !link(target, link_path))
             return 0;
     }
 

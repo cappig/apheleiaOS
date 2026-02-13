@@ -1,6 +1,7 @@
 #include "pci.h"
 
 #include <arch/arch.h>
+#include <arch/pci.h>
 #include <data/list.h>
 #include <log/log.h>
 #include <stdlib.h>
@@ -16,7 +17,7 @@ static u64 _ecam_addr(u64 base, u8 bus, u8 slot, u8 func) {
 }
 
 static u32 _read_legacy(u8 bus, u8 slot, u8 func, u8 offset, size_t bytes) {
-    return arch_pci_read(bus, slot, func, offset, bytes);
+    return pci_bus_read(bus, slot, func, offset, bytes);
 }
 
 static bool _ecam_read_header(u64 base, u8 bus, u8 slot, u8 func, pci_header_t* out) {
@@ -25,11 +26,13 @@ static bool _ecam_read_header(u64 base, u8 bus, u8 slot, u8 func, pci_header_t* 
 
     u64 phys = _ecam_addr(base, bus, slot, func);
     void* map = arch_phys_map(phys, sizeof(pci_header_t));
+
     if (!map)
         return false;
 
     memcpy(out, map, sizeof(pci_header_t));
     arch_phys_unmap(map, sizeof(pci_header_t));
+
     return true;
 }
 
@@ -53,6 +56,7 @@ static void _probe_slot_legacy(u8 bus, u8 slot) {
         device->func = (u8)func;
 
         u8* header_bytes = (u8*)&device->header;
+
         for (size_t i = 0; i < sizeof(pci_header_t); i++)
             header_bytes[i] = (u8)_read_legacy(bus, slot, func, (u8)i, 1);
 
@@ -121,7 +125,7 @@ static void _init_express(mcfg_t* table) {
         if (!entry->base_addr)
             continue;
 
-        if (!arch_pci_ecam_addr_ok(entry->base_addr)) {
+        if (!pci_ecam_addr_supported(entry->base_addr)) {
             log_warn("pci: skipping MCFG entry above 4GiB");
             continue;
         }
@@ -182,6 +186,7 @@ pci_device_t* pci_find_device(u8 class, u8 subclass, pci_device_t* from) {
             if (dev->base != (u64)-1) {
                 u64 phys = _ecam_addr(dev->base, dev->bus, dev->slot, dev->func);
                 void* map = arch_phys_map(phys, 256);
+
                 if (!map) {
                     free(ret);
                     return NULL;

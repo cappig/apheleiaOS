@@ -32,7 +32,8 @@ static int remove_with_parents(const char* path, bool parents) {
 
     char buf[PATH_MAX];
     size_t len = strnlen(path, sizeof(buf));
-    if (len == 0 || len >= sizeof(buf))
+
+    if (!len || len >= sizeof(buf))
         return 0;
 
     memcpy(buf, path, len);

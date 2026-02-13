@@ -30,7 +30,7 @@ static const char months_str[12][4] = {
 
 
 static int _is_leap(int year) {
-    return ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0));
+    return ((!(year % 4) && year % 100) || !(year % 400));
 }
 
 static unsigned int _days_in_month(int month, int year) {

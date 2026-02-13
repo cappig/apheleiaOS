@@ -31,6 +31,7 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
     memcpy(dst, src, size);
     arch_phys_unmap(src, size);
     arch_phys_unmap(dst, size);
+
     return true;
 }
 #else
@@ -41,6 +42,7 @@ static size_t window_pages_mapped = 0;
 static u64 window_paddr_base = 0;
 
 #define PHYS_WINDOW_STACK_MAX 8
+
 typedef struct {
     u64 paddr_base;
     size_t pages;
@@ -110,7 +112,7 @@ void* arch_phys_map(u64 paddr, size_t size) {
     if (pages > window_pages)
         panic("phys window map too large");
 
-    // Single sliding window: new mappings invalidate any previous one.
+    // single sliding window -- new mappings invalidate any previous one
     if (window_pages_mapped) {
         if (window_stack_depth >= PHYS_WINDOW_STACK_MAX)
             panic("phys window map stack overflow");
@@ -125,6 +127,7 @@ void* arch_phys_map(u64 paddr, size_t size) {
     window_paddr_base = start;
 
     u32 vaddr = PHYS_WINDOW_BASE_32;
+
     for (size_t i = 0; i < pages; i++) {
         _map_window_page(vaddr + (u32)(i * PAGE_4KIB), start + i * PAGE_4KIB, PT_WRITE);
     }
@@ -143,7 +146,8 @@ void arch_phys_unmap(void* vaddr, size_t size) {
     window_pages_mapped = 0;
     window_paddr_base = 0;
 
-    if (window_stack_depth == 0)
+    if (!window_stack_depth) {
+        sched_preempt_enable();
         return;
 
     window_map_t prev = window_stack[--window_stack_depth];
@@ -151,6 +155,7 @@ void arch_phys_unmap(void* vaddr, size_t size) {
     window_paddr_base = prev.paddr_base;
 
     u32 map_base = PHYS_WINDOW_BASE_32;
+
     for (size_t i = 0; i < prev.pages; i++) {
         map_window_page(map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, PT_WRITE);
     }
@@ -164,8 +169,10 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
     u8 bounce[kChunk];
 
     size_t offset = 0;
+
     while (offset < size) {
         size_t chunk = size - offset;
+
         if (chunk > kChunk)
             chunk = kChunk;
 

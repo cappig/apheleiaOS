@@ -31,11 +31,11 @@ static ssize_t write_str(const char* str) {
     return write(STDOUT_FILENO, str, strlen(str));
 }
 
-static void sh_ansi_clear_to_eos(void) {
+static void ansi_clear_to_eos(void) {
     write_str("\x1b[J");
 }
 
-static void sh_ansi_move_right(size_t count) {
+static void ansi_move_right(size_t count) {
     if (!count)
         return;
 
@@ -44,7 +44,7 @@ static void sh_ansi_move_right(size_t count) {
     write_str(seq);
 }
 
-static void sh_ansi_move_left(size_t count) {
+static void ansi_move_left(size_t count) {
     if (!count)
         return;
 
@@ -53,7 +53,7 @@ static void sh_ansi_move_left(size_t count) {
     write_str(seq);
 }
 
-static void sh_ansi_move_up(size_t count) {
+static void ansi_move_up(size_t count) {
     if (!count)
         return;
 
@@ -62,7 +62,7 @@ static void sh_ansi_move_up(size_t count) {
     write_str(seq);
 }
 
-static size_t sh_term_cols(void) {
+static size_t term_cols(void) {
     winsize_t ws = {0};
     if (!ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) && ws.ws_col > 0)
         return (size_t)ws.ws_col;
@@ -70,11 +70,11 @@ static size_t sh_term_cols(void) {
     return 80;
 }
 
-static size_t sh_normalize_cols(size_t cols) {
+static size_t normalize_cols(size_t cols) {
     return cols ? cols : 80;
 }
 
-static size_t sh_display_cells(const char* buf, size_t len) {
+static size_t display_cells(const char* buf, size_t len) {
     if (!buf)
         return 0;
 
@@ -87,59 +87,59 @@ static size_t sh_display_cells(const char* buf, size_t len) {
     return cells;
 }
 
-void sh_input_set_sigint_flag(volatile sig_atomic_t* flag) {
+void input_set_sigint_flag(volatile sig_atomic_t* flag) {
     sh_sigint = flag;
 }
 
-static bool sh_tty_read(termios_t* out) {
+static bool tty_read(termios_t* out) {
     if (!out)
         return false;
 
-    return !(ioctl(STDIN_FILENO, TCGETS, out));
+    return !ioctl(STDIN_FILENO, TCGETS, out);
 }
 
-static bool sh_tty_write(const termios_t* in) {
+static bool tty_write(const termios_t* in) {
     if (!in)
         return false;
 
-    return !(ioctl(STDIN_FILENO, TCSETS, (void*)in));
+    return !ioctl(STDIN_FILENO, TCSETS, (void*)in);
 }
 
-static bool sh_tty_init_saved(void) {
+static bool tty_init_saved(void) {
     if (sh_tty_saved_valid)
         return true;
 
-    if (!sh_tty_read(&sh_tty_saved))
+    if (!tty_read(&sh_tty_saved))
         return false;
 
     sh_tty_saved_valid = true;
     return true;
 }
 
-static bool sh_tty_set_line_mode(bool edit_mode) {
-    if (!sh_tty_init_saved())
+static bool tty_set_line_mode(bool edit_mode) {
+    if (!tty_init_saved())
         return false;
 
     if (!edit_mode)
-        return sh_tty_write(&sh_tty_saved);
+        return tty_write(&sh_tty_saved);
 
     termios_t tos = sh_tty_saved;
     tos.c_lflag &= (tcflag_t) ~(ICANON | ECHO);
     tos.c_cc[VMIN] = 1;
     tos.c_cc[VTIME] = 0;
-    return sh_tty_write(&tos);
+    return tty_write(&tos);
 }
 
-static bool sh_got_sigint(void) {
+static bool got_sigint(void) {
     return sh_sigint && *sh_sigint;
 }
 
-static void sh_clear_sigint(void) {
+static void clear_sigint(void) {
     if (sh_sigint)
         *sh_sigint = 0;
 }
 
-static size_t sh_prev_char(const char* buf, size_t len) {
+static size_t prev_char(const char* buf, size_t len) {
     if (!buf || !len)
         return 0;
 
@@ -151,7 +151,7 @@ static size_t sh_prev_char(const char* buf, size_t len) {
     return i;
 }
 
-static size_t sh_next_char(const char* buf, size_t len, size_t pos) {
+static size_t next_char(const char* buf, size_t len, size_t pos) {
     if (!buf || pos >= len)
         return len;
 
@@ -162,7 +162,7 @@ static size_t sh_next_char(const char* buf, size_t len, size_t pos) {
     return i;
 }
 
-static void sh_layout(
+static void layout_line(
     const sh_layout_ctx_t* ctx,
     const char* buf,
     size_t len,
@@ -178,9 +178,9 @@ static void sh_layout(
         return;
     }
 
-    size_t cols = sh_normalize_cols(ctx->cols);
-    size_t line_cells = sh_display_cells(buf, len);
-    size_t cursor_cells = sh_display_cells(buf, cursor);
+    size_t cols = normalize_cols(ctx->cols);
+    size_t line_cells = display_cells(buf, len);
+    size_t cursor_cells = display_cells(buf, cursor);
     size_t total_cells = ctx->prompt_cells + line_cells;
     size_t total_cursor_cells = ctx->prompt_cells + cursor_cells;
 
@@ -188,25 +188,25 @@ static void sh_layout(
     *cursor_row_out = total_cursor_cells / cols;
 }
 
-static bool sh_cursor_on_wrap_boundary(const sh_layout_ctx_t* ctx, const char* buf, size_t cursor) {
+static bool cursor_on_wrap_boundary(const sh_layout_ctx_t* ctx, const char* buf, size_t cursor) {
     if (!ctx || !buf || !cursor)
         return false;
 
-    size_t cols = sh_normalize_cols(ctx->cols);
-    size_t cursor_cells = sh_display_cells(buf, cursor);
+    size_t cols = normalize_cols(ctx->cols);
+    size_t cursor_cells = display_cells(buf, cursor);
     size_t total = ctx->prompt_cells + cursor_cells;
     return !((total % cols));
 }
 
-static size_t sh_total_cells(const sh_layout_ctx_t* ctx, const char* buf, size_t cursor) {
+static size_t total_cells(const sh_layout_ctx_t* ctx, const char* buf, size_t cursor) {
     if (!ctx || !buf)
         return 0;
 
-    size_t cursor_cells = sh_display_cells(buf, cursor);
+    size_t cursor_cells = display_cells(buf, cursor);
     return ctx->prompt_cells + cursor_cells;
 }
 
-static void sh_ansi_move_down(size_t count) {
+static void ansi_move_down(size_t count) {
     if (!count)
         return;
 
@@ -215,32 +215,32 @@ static void sh_ansi_move_down(size_t count) {
     write_str(seq);
 }
 
-static void sh_move_left_from_total(size_t total, size_t cells, size_t cols) {
+static void move_left_from_total(size_t total, size_t cells, size_t cols) {
     while (cells > 0 && total > 0) {
         size_t col = total % cols;
         if (!col) {
             write_str("\r");
-            sh_ansi_move_up(1);
+            ansi_move_up(1);
             if (cols > 1)
-                sh_ansi_move_right(cols - 1);
+                ansi_move_right(cols - 1);
             total--;
             cells--;
             continue;
         }
 
         size_t step = cells < col ? cells : col;
-        sh_ansi_move_left(step);
+        ansi_move_left(step);
         total -= step;
         cells -= step;
     }
 }
 
-static void sh_move_right_from_total(size_t total, size_t cells, size_t cols) {
+static void move_right_from_total(size_t total, size_t cells, size_t cols) {
     while (cells > 0) {
         size_t col = total % cols;
         if (col + 1 >= cols) {
             write_str("\r");
-            sh_ansi_move_down(1);
+            ansi_move_down(1);
             total++;
             cells--;
             continue;
@@ -248,13 +248,13 @@ static void sh_move_right_from_total(size_t total, size_t cells, size_t cols) {
 
         size_t room = cols - 1 - col;
         size_t step = cells < room ? cells : room;
-        sh_ansi_move_right(step);
+        ansi_move_right(step);
         total += step;
         cells -= step;
     }
 }
 
-static void sh_redraw_line(
+static void redraw_line(
     const char* prompt,
     const sh_layout_ctx_t* ctx,
     const char* buf,
@@ -266,10 +266,10 @@ static void sh_redraw_line(
         return;
 
     if (state->cursor_row)
-        sh_ansi_move_up(state->cursor_row);
+        ansi_move_up(state->cursor_row);
 
     write_str("\r");
-    sh_ansi_clear_to_eos();
+    ansi_clear_to_eos();
 
     write_str(prompt);
     if (len)
@@ -282,10 +282,10 @@ static void sh_redraw_line(
             write(STDOUT_FILENO, buf, cursor);
     }
 
-    sh_layout(ctx, buf, len, cursor, &state->rows, &state->cursor_row);
+    layout_line(ctx, buf, len, cursor, &state->rows, &state->cursor_row);
 }
 
-void sh_history_add(const char* line) {
+void history_add(const char* line) {
     if (!line || !line[0])
         return;
 
@@ -304,7 +304,7 @@ void sh_history_add(const char* line) {
     snprintf(sh_history[SH_HISTORY_MAX - 1], sizeof(sh_history[SH_HISTORY_MAX - 1]), "%s", line);
 }
 
-void sh_history_print(void) {
+void history_print(void) {
     char line[320];
 
     for (size_t i = 0; i < sh_history_count; i++) {
@@ -313,19 +313,19 @@ void sh_history_print(void) {
     }
 }
 
-int sh_read_line_interactive(const char* prompt, char* buf, size_t len, bool use_history) {
+int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_history) {
     if (!prompt || !buf || len < 2)
         return -1;
 
-    if (!sh_tty_set_line_mode(true))
+    if (!tty_set_line_mode(true))
         return -1;
 
     size_t pos = 0;
     size_t cursor = 0;
     sh_render_state_t render = {1, 0};
     sh_layout_ctx_t layout = {
-        .cols = sh_normalize_cols(sh_term_cols()),
-        .prompt_cells = sh_display_cells(prompt, strlen(prompt)),
+        .cols = normalize_cols(term_cols()),
+        .prompt_cells = display_cells(prompt, strlen(prompt)),
     };
     int history_cursor = -1;
     char scratch[SH_INPUT_LINE_MAX] = {0};
@@ -334,9 +334,9 @@ int sh_read_line_interactive(const char* prompt, char* buf, size_t len, bool use
     write_str(prompt);
 
     for (;;) {
-        if (sh_got_sigint()) {
-            sh_clear_sigint();
-            sh_tty_set_line_mode(false);
+        if (got_sigint()) {
+            clear_sigint();
+            tty_set_line_mode(false);
             return -1;
         }
 
@@ -348,15 +348,15 @@ int sh_read_line_interactive(const char* prompt, char* buf, size_t len, bool use
         if (ch == '\r' || ch == '\n') {
             write_str("\n");
             buf[pos] = '\0';
-            sh_tty_set_line_mode(false);
+            tty_set_line_mode(false);
             return 0;
         }
 
         if (ch == '\b' || (unsigned char)ch == 0x7f) {
             if (cursor > 0) {
                 size_t old_cursor = cursor;
-                size_t start = sh_prev_char(buf, old_cursor);
-                size_t removed_cells = sh_display_cells(buf + start, old_cursor - start);
+                size_t start = prev_char(buf, old_cursor);
+                size_t removed_cells = display_cells(buf + start, old_cursor - start);
                 if (!removed_cells)
                     removed_cells = 1;
 
@@ -366,13 +366,13 @@ int sh_read_line_interactive(const char* prompt, char* buf, size_t len, bool use
                 history_cursor = -1;
                 size_t cols = layout.cols;
 
-                if (cursor == pos && !sh_cursor_on_wrap_boundary(&layout, buf, old_cursor)) {
+                if (cursor == pos && !cursor_on_wrap_boundary(&layout, buf, old_cursor)) {
                     for (size_t i = 0; i < removed_cells; i++)
                         write_str("\b \b");
-                    sh_layout(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
+                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
                 } else {
-                    size_t old_total = sh_total_cells(&layout, buf, old_cursor);
-                    sh_move_left_from_total(old_total, removed_cells, cols);
+                    size_t old_total = total_cells(&layout, buf, old_cursor);
+                    move_left_from_total(old_total, removed_cells, cols);
 
                     size_t tail_bytes = pos - cursor;
                     if (tail_bytes)
@@ -380,11 +380,11 @@ int sh_read_line_interactive(const char* prompt, char* buf, size_t len, bool use
 
                     write_str(" ");
 
-                    size_t tail_cells = sh_display_cells(buf + cursor, tail_bytes);
-                    size_t start_total = sh_total_cells(&layout, buf, cursor);
+                    size_t tail_cells = display_cells(buf + cursor, tail_bytes);
+                    size_t start_total = total_cells(&layout, buf, cursor);
                     size_t end_total = start_total + tail_cells + 1;
-                    sh_move_left_from_total(end_total, tail_cells + 1, cols);
-                    sh_layout(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
+                    move_left_from_total(end_total, tail_cells + 1, cols);
+                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
                 }
             }
             continue;
@@ -416,7 +416,7 @@ int sh_read_line_interactive(const char* prompt, char* buf, size_t len, bool use
                 snprintf(buf, len, "%s", sh_history[history_cursor]);
                 pos = strlen(buf);
                 cursor = pos;
-                sh_redraw_line(prompt, &layout, buf, pos, cursor, &render);
+                redraw_line(prompt, &layout, buf, pos, cursor, &render);
             } else if (seq2 == 'B' && use_history) {
                 if (history_cursor < 0)
                     continue;
@@ -431,29 +431,29 @@ int sh_read_line_interactive(const char* prompt, char* buf, size_t len, bool use
 
                 pos = strlen(buf);
                 cursor = pos;
-                sh_redraw_line(prompt, &layout, buf, pos, cursor, &render);
+                redraw_line(prompt, &layout, buf, pos, cursor, &render);
             } else if (seq2 == 'C') {
                 if (cursor < pos) {
                     size_t cols = layout.cols;
-                    size_t old_total = sh_total_cells(&layout, buf, cursor);
-                    size_t next = sh_next_char(buf, pos, cursor);
+                    size_t old_total = total_cells(&layout, buf, cursor);
+                    size_t next = next_char(buf, pos, cursor);
                     cursor = next;
-                    size_t new_total = sh_total_cells(&layout, buf, cursor);
-                    sh_move_right_from_total(old_total, new_total - old_total, cols);
-                    sh_layout(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
+                    size_t new_total = total_cells(&layout, buf, cursor);
+                    move_right_from_total(old_total, new_total - old_total, cols);
+                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
                 }
             } else if (seq2 == 'D') {
                 if (cursor > 0) {
                     size_t cols = layout.cols;
                     size_t old_cursor = cursor;
-                    size_t old_total = sh_total_cells(&layout, buf, old_cursor);
-                    size_t prev = sh_prev_char(buf, cursor);
+                    size_t old_total = total_cells(&layout, buf, old_cursor);
+                    size_t prev = prev_char(buf, cursor);
                     cursor = prev;
-                    size_t move_cells = sh_display_cells(buf + prev, old_cursor - prev);
+                    size_t move_cells = display_cells(buf + prev, old_cursor - prev);
                     if (!move_cells)
                         move_cells = 1;
-                    sh_move_left_from_total(old_total, move_cells, cols);
-                    sh_layout(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
+                    move_left_from_total(old_total, move_cells, cols);
+                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
                 }
             }
 
@@ -473,7 +473,7 @@ int sh_read_line_interactive(const char* prompt, char* buf, size_t len, bool use
             cursor = pos;
             buf[pos] = '\0';
             write(STDOUT_FILENO, &ch, 1);
-            sh_layout(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
+            layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
         } else {
             size_t old_cursor = cursor;
             memmove(buf + old_cursor + 1, buf + old_cursor, pos - old_cursor + 1);
@@ -485,13 +485,13 @@ int sh_read_line_interactive(const char* prompt, char* buf, size_t len, bool use
             size_t rewrite_len = pos - old_cursor;
             write(STDOUT_FILENO, buf + old_cursor, rewrite_len);
 
-            size_t tail_cells = sh_display_cells(buf + cursor, pos - cursor);
+            size_t tail_cells = display_cells(buf + cursor, pos - cursor);
             if (tail_cells) {
-                size_t end_total = sh_total_cells(&layout, buf, pos);
-                sh_move_left_from_total(end_total, tail_cells, cols);
+                size_t end_total = total_cells(&layout, buf, pos);
+                move_left_from_total(end_total, tail_cells, cols);
             }
 
-            sh_layout(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
+            layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
         }
     }
 }

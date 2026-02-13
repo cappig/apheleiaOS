@@ -5,18 +5,20 @@
 
 static void signal_trampoline(void) {
     syscall0(SYS_SIGRETURN);
+
     for (;;)
         ;
 }
 
 sighandler_t signal(int signum, sighandler_t handler) {
-    long ret = syscall3(
-        SYS_SIGNAL, (uintptr_t)signum, (uintptr_t)handler, (uintptr_t)signal_trampoline
-    );
+    long ret =
+        syscall3(SYS_SIGNAL, (uintptr_t)signum, (uintptr_t)handler, (uintptr_t)signal_trampoline);
+
     if (ret < 0) {
         errno = (int)-ret;
         return SIG_ERR;
     }
+
     return (sighandler_t)ret;
 }
 

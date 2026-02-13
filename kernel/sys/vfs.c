@@ -86,12 +86,14 @@ static vfs_node_t* _find_child(vfs_node_t* parent, const char* name, tree_node_t
     ll_foreach(child, parent->tree_entry->children) {
         tree_node_t* tnode = child->data;
         vfs_node_t* vnode = tnode ? tnode->data : NULL;
+
         if (!vnode || !vnode->name)
             continue;
 
         if (!strcmp(vnode->name, name)) {
             if (out_tnode)
                 *out_tnode = tnode;
+
             return vnode;
         }
     }
@@ -387,10 +389,11 @@ bool vfs_access(vfs_node_t* vnode, uid_t uid, gid_t gid, int mode) {
     if (!vnode)
         return false;
 
-    if (uid == 0)
+    if (!uid)
         return true;
 
-    vnode = _resolve_link(vnode);
+    vnode = vfs_resolve_link(vnode);
+
     if (!vnode)
         return false;
 
@@ -431,6 +434,7 @@ bool vfs_stat_node(vfs_node_t* node, stat_t* out, bool follow_links) {
         return false;
 
     memset(out, 0, sizeof(*out));
+
     out->st_ino = node->inode;
     out->st_mode = _type_mode(node->type) | (node->mode & ~S_IFMT);
     out->st_nlink = 1;
@@ -440,6 +444,7 @@ bool vfs_stat_node(vfs_node_t* node, stat_t* out, bool follow_links) {
     out->st_atime = node->time.accessed;
     out->st_mtime = node->time.modified;
     out->st_ctime = node->time.created;
+
     return true;
 }
 
@@ -466,8 +471,10 @@ bool vfs_chmod(vfs_node_t* node, mode_t mode) {
     }
 
     node->mode = mode;
+
     if (!node->fs)
-        node->time.created = _time_now();
+        node->time.created = vfs_time_now();
+
     return true;
 }
 
@@ -495,8 +502,10 @@ bool vfs_chown(vfs_node_t* node, uid_t uid, gid_t gid) {
 
     node->uid = uid;
     node->gid = gid;
+
     if (!node->fs)
-        node->time.created = _time_now();
+        node->time.created = vfs_time_now();
+
     return true;
 }
 
@@ -515,6 +524,7 @@ bool vfs_link(const char* target, const char* link_path) {
         return false;
 
     vfs_node_t* parent = vfs_lookup(dir_name);
+
     if (parent && VFS_IS_LINK(parent->type))
         parent = parent->link;
 
@@ -563,6 +573,7 @@ bool vfs_unlink(const char* path) {
         return false;
 
     vfs_node_t* parent = vfs_lookup(dir_name);
+
     if (parent && VFS_IS_LINK(parent->type))
         parent = parent->link;
 
@@ -602,6 +613,7 @@ bool vfs_rmdir(const char* path) {
         return false;
 
     vfs_node_t* parent = vfs_lookup(dir_name);
+
     if (parent && VFS_IS_LINK(parent->type))
         parent = parent->link;
 
@@ -689,6 +701,7 @@ bool vfs_rename(const char* old_path, const char* new_path) {
         free(child->name);
 
     child->name = vfs_strdup(new_base);
+
     free(old_base);
     free(new_base);
 
@@ -696,6 +709,7 @@ bool vfs_rename(const char* old_path, const char* new_path) {
         return false;
 
     tree_insert_child(new_parent->tree_entry, child_tnode);
+
     return true;
 }
 
@@ -880,8 +894,10 @@ ssize_t vfs_read(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t 
         return -1;
 
     ssize_t rc = node->interface->read(node, buf, offset, len, flags);
+
     if (rc >= 0 && !node->fs)
-        node->time.accessed = _time_now();
+        node->time.accessed = vfs_time_now();
+
     return rc;
 }
 
@@ -895,7 +911,8 @@ ssize_t vfs_write(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t
 
     ssize_t rc = node->interface->write(node, buf, offset, len, flags);
     if (rc >= 0 && !node->fs) {
-        time_t now = _time_now();
+        time_t now = vfs_time_now();
+
         node->time.accessed = now;
         node->time.modified = now;
         node->time.created = now;
@@ -913,7 +930,8 @@ ssize_t vfs_truncate(vfs_node_t* node, size_t len) {
 
     ssize_t rc = node->interface->truncate(node, len);
     if (rc >= 0 && !node->fs) {
-        time_t now = _time_now();
+        time_t now = vfs_time_now();
+
         node->time.modified = now;
         node->time.created = now;
     }

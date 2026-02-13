@@ -34,6 +34,7 @@ static int read_line(char* buf, size_t len) {
     while (pos + 1 < len) {
         char ch = 0;
         ssize_t count = read(STDIN_FILENO, &ch, 1);
+
         if (count <= 0)
             continue;
 
@@ -58,6 +59,7 @@ static int read_line(char* buf, size_t len) {
 
 static bool tty_set_echo(bool enable) {
     termios_t tos;
+
     if (ioctl(STDIN_FILENO, TCGETS, &tos) < 0)
         return false;
 
@@ -66,7 +68,7 @@ static bool tty_set_echo(bool enable) {
     else
         tos.c_lflag &= ~ECHO;
 
-    return ioctl(STDIN_FILENO, TCSETS, &tos) == 0;
+    return !ioctl(STDIN_FILENO, TCSETS, &tos);
 }
 
 int main(int argc, char** argv) {
@@ -76,6 +78,7 @@ int main(int argc, char** argv) {
     for (;;) {
         char name[32] = {0};
         char pass[64] = {0};
+
         pid_t pid = getpid();
         ioctl(STDIN_FILENO, TIOCSPGRP, &pid);
 
@@ -102,18 +105,21 @@ int main(int argc, char** argv) {
 
         write_str("Password: ");
         tty_set_echo(false);
+
         if (read_line(pass, sizeof(pass)) < 0) {
             tty_set_echo(true);
             write_str("\n");
             continue;
         }
+
         tty_set_echo(true);
         write_str("\n");
 
         strip_newline(pass);
 
         const char* hashed = crypt(pass, shadow.sp_pwd);
-        if (!hashed || strcmp(hashed, shadow.sp_pwd) != 0) {
+
+        if (!hashed || strcmp(hashed, shadow.sp_pwd)) {
             write_str("login: authentication failed\n");
             continue;
         }

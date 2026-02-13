@@ -195,6 +195,7 @@ static bool has_port2 = false;
 static bool _wait_input_clear(void) {
     for (size_t timeout = PS2_WAIT_LIMIT; timeout > 0; timeout--) {
         u8 status = inb(PS2_REG_STATUS);
+
         if (!(status & PS2_STA_IN_BUFFER))
             return true;
     }
@@ -205,6 +206,7 @@ static bool _wait_input_clear(void) {
 static bool _wait_output_full(void) {
     for (size_t timeout = PS2_WAIT_LIMIT; timeout > 0; timeout--) {
         u8 status = inb(PS2_REG_STATUS);
+
         if (status & PS2_STA_OUT_BUFFER)
             return true;
     }
@@ -217,6 +219,7 @@ static bool _write_cmd(u8 cmd) {
         return false;
 
     outb(PS2_REG_COMMAND, cmd);
+
     return true;
 }
 
@@ -225,6 +228,7 @@ static bool _write_data(u8 data) {
         return false;
 
     outb(PS2_REG_DATA, data);
+
     return true;
 }
 
@@ -242,6 +246,7 @@ static bool _read_data(u8* out) {
 static void _flush_output(void) {
     for (;;) {
         u8 status = inb(PS2_REG_STATUS);
+
         if (!(status & PS2_STA_OUT_BUFFER))
             break;
 
@@ -277,7 +282,8 @@ static bool _mouse_command(u8 cmd) {
 static bool _controller_init(void) {
     if (!_write_cmd(PS2_COM_DISABLE_PORT1))
         return false;
-    if (!_write_cmd(PS2_COM_DISABLE_PORT2))
+
+    if (!ps2_write_cmd(PS2_COM_DISABLE_PORT2))
         return false;
 
     _flush_output();
@@ -294,29 +300,34 @@ static bool _controller_init(void) {
 
     if (!_write_cmd(PS2_COM_WRITE_CONFIG))
         return false;
-    if (!_write_data(config))
+
+    if (!ps2_write_data(config))
         return false;
 
     if (_write_cmd(PS2_COM_TEST_CONTROLLER)) {
         u8 resp = 0;
-        if (!_read_data(&resp) || resp != PS2_SELFTEST_OK)
+
+        if (!ps2_read_data(&resp) || resp != PS2_SELFTEST_OK)
             log_warn("ps2: controller self-test failed");
     }
 
     if (_write_cmd(PS2_COM_TEST_PORT1)) {
         u8 resp = 0;
-        if (_read_data(&resp))
+
+        if (ps2_read_data(&resp))
             has_port1 = (resp == PS2_TEST_OK);
     }
 
     if (_write_cmd(PS2_COM_TEST_PORT2)) {
         u8 resp = 0;
-        if (_read_data(&resp))
+
+        if (ps2_read_data(&resp))
             has_port2 = (resp == PS2_TEST_OK);
     }
 
     if (has_port1)
-        _write_cmd(PS2_COM_ENABLE_PORT1);
+        ps2_write_cmd(PS2_COM_ENABLE_PORT1);
+
     if (has_port2)
         _write_cmd(PS2_COM_ENABLE_PORT2);
 
@@ -336,7 +347,8 @@ static bool _controller_init(void) {
 
     if (!_write_cmd(PS2_COM_WRITE_CONFIG))
         return false;
-    if (!_write_data(config))
+
+    if (!ps2_write_data(config))
         return false;
 
     return true;
@@ -387,7 +399,7 @@ static void _mouse_irq(UNUSED int_state_t* s) {
     if (!(status & PS2_STA_AUX))
         goto done;
 
-    if (mouse_byte == 0 && !(packet & 0x08))
+    if (!mouse_byte && !(packet & 0x08))
         goto done;
 
     mouse_packet[mouse_byte++] = packet;
@@ -405,6 +417,7 @@ static void _mouse_irq(UNUSED int_state_t* s) {
 
         if (flags & PS2_MOUSE_XSIGN)
             x -= 0x100;
+
         if (flags & PS2_MOUSE_YSIGN)
             y -= 0x100;
 
@@ -412,8 +425,10 @@ static void _mouse_irq(UNUSED int_state_t* s) {
 
         if (flags & PS2_MOUSE_LEFT)
             buttons |= MOUSE_LEFT_CLICK;
+
         if (flags & PS2_MOUSE_RIGHT)
             buttons |= MOUSE_RIGHT_CLICK;
+
         if (flags & PS2_MOUSE_MIDDLE)
             buttons |= MOUSE_MIDDLE_CLICK;
 

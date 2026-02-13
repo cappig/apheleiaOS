@@ -16,8 +16,6 @@ void* arch_phys_map(u64 paddr, size_t size);
 void arch_phys_unmap(void* vaddr, size_t size);
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size);
 
-u32 arch_pci_read(u8 bus, u8 slot, u8 func, u8 offset, u8 size);
-
 void arch_dump_stack_trace(void);
 
 const char* arch_font_path(void);
@@ -28,6 +26,7 @@ ssize_t arch_console_write(const void* buf, size_t len);
 ssize_t arch_console_write_screen(size_t screen, const void* buf, size_t len);
 bool arch_console_set_active(size_t screen);
 bool arch_console_get_size(size_t* cols, size_t* rows);
+
 ssize_t arch_tty_read(void* buf, size_t len);
 ssize_t arch_tty_write(const void* buf, size_t len);
 
@@ -38,20 +37,28 @@ void arch_vm_switch(arch_vm_space_t* space);
 void* arch_vm_root(arch_vm_space_t* space);
 
 void arch_tlb_flush(uintptr_t addr);
-bool arch_pci_ecam_addr_ok(u64 addr);
+
 void arch_cpu_set_local(void* ptr);
 
 unsigned long arch_irq_save(void);
 void arch_irq_restore(unsigned long flags);
+
 void arch_cpu_halt(void);
 void arch_cpu_wait(void);
+
 void arch_irq_disable(void);
+
 u64 arch_timer_ticks(void);
 u32 arch_timer_hz(void);
+
 const char* arch_name(void);
 const char* arch_cpu_name(void);
+
 u64 arch_cpu_khz(void);
+
 size_t arch_mem_total(void);
 size_t arch_mem_free(void);
+
 void arch_syscall_install(int vector, arch_syscall_handler_t handler);
+
 void arch_set_kernel_stack(uintptr_t sp);

@@ -29,18 +29,13 @@ typedef struct {
     ext2_inode_t inode;
 } ext2_node_info_t;
 
-static ssize_t _ext2_read_file(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags);
-static ssize_t _ext2_write_file(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags);
-static ssize_t _ext2_truncate_file(vfs_node_t* node, size_t len);
-
-static ssize_t _ext2_dir_create(vfs_node_t* node, vfs_node_t* child);
-static ssize_t _ext2_dir_remove(vfs_node_t* node, char* name);
 
 static bool _ext2_read(disk_partition_t* part, void* dest, size_t offset, size_t bytes) {
     if (!part || !part->disk || !part->disk->interface || !part->disk->interface->read)
         return false;
 
     ssize_t read = part->disk->interface->read(part->disk, dest, part->offset + offset, bytes);
+
     return read == (ssize_t)bytes;
 }
 
@@ -50,6 +45,7 @@ static bool _ext2_write(disk_partition_t* part, const void* src, size_t offset, 
 
     ssize_t written =
         part->disk->interface->write(part->disk, (void*)src, part->offset + offset, bytes);
+
     return written == (ssize_t)bytes;
 }
 
@@ -77,7 +73,7 @@ _ext2_write_block(ext2_private_t* priv, disk_partition_t* part, u32 block, const
 
 static bool
 _ext2_read_inode(ext2_private_t* priv, disk_partition_t* part, u32 inode_num, ext2_inode_t* inode) {
-    if (!priv || !part || !inode || inode_num == 0)
+    if (!priv || !part || !inode || !inode_num)
         return false;
 
     u32 group = (inode_num - 1) / priv->superblock.inodes_in_group;
@@ -94,6 +90,7 @@ _ext2_read_inode(ext2_private_t* priv, disk_partition_t* part, u32 inode_num, ex
     memset(inode, 0, sizeof(ext2_inode_t));
 
     size_t read_size = priv->inode_size;
+
     if (read_size > sizeof(ext2_inode_t))
         read_size = sizeof(ext2_inode_t);
 
@@ -106,7 +103,7 @@ static bool _ext2_write_inode(
     u32 inode_num,
     const ext2_inode_t* inode
 ) {
-    if (!priv || !part || !inode || inode_num == 0)
+    if (!priv || !part || !inode || !inode_num)
         return false;
 
     u32 group = (inode_num - 1) / priv->superblock.inodes_in_group;
@@ -121,6 +118,7 @@ static bool _ext2_write_inode(
     size_t inode_offset = inode_table + (size_t)index * priv->inode_size;
 
     size_t write_size = priv->inode_size;
+
     if (write_size > sizeof(ext2_inode_t))
         write_size = sizeof(ext2_inode_t);
 
@@ -156,6 +154,7 @@ _ext2_group_block_bitmap(ext2_private_t* priv, disk_partition_t* part, u32 group
         return false;
 
     u32 bitmap_block = priv->groups[group].usage_bitmap_offset;
+
     return ext2_read_block(priv, part, bitmap_block, bitmap);
 }
 
@@ -169,7 +168,8 @@ static bool _ext2_write_group_block_bitmap(
         return false;
 
     u32 bitmap_block = priv->groups[group].usage_bitmap_offset;
-    return _ext2_write_block(priv, part, bitmap_block, bitmap);
+
+    return ext2_write_block(priv, part, bitmap_block, bitmap);
 }
 
 static bool
@@ -178,6 +178,7 @@ _ext2_group_inode_bitmap(ext2_private_t* priv, disk_partition_t* part, u32 group
         return false;
 
     u32 bitmap_block = priv->groups[group].inode_bitmap_offset;
+
     return ext2_read_block(priv, part, bitmap_block, bitmap);
 }
 
@@ -191,7 +192,8 @@ static bool _ext2_write_group_inode_bitmap(
         return false;
 
     u32 bitmap_block = priv->groups[group].inode_bitmap_offset;
-    return _ext2_write_block(priv, part, bitmap_block, bitmap);
+
+    return ext2_write_block(priv, part, bitmap_block, bitmap);
 }
 
 static bool _ext2_find_free_bit(const u8* bitmap, size_t bit_count, size_t* index_out) {
@@ -201,7 +203,8 @@ static bool _ext2_find_free_bit(const u8* bitmap, size_t bit_count, size_t* inde
     for (size_t i = 0; i < bit_count; i++) {
         size_t byte = i / 8;
         size_t bit = i % 8;
-        if ((bitmap[byte] & (1u << bit)) == 0) {
+
+        if (!(bitmap[byte] & (1u << bit))) {
             *index_out = i;
             return true;
         }
@@ -229,6 +232,7 @@ static u32 _ext2_now(ext2_private_t* priv) {
     u64 now_ticks = arch_timer_ticks();
     u64 delta_ticks = now_ticks - priv->time_tick_base;
     u64 delta_secs = delta_ticks / hz;
+
     return priv->time_base + (u32)delta_secs;
 }
 
@@ -270,6 +274,7 @@ static bool _ext2_alloc_block(ext2_private_t* priv, disk_partition_t* part, u32*
 
         u32 first = group * priv->superblock.blocks_in_group;
         size_t count = priv->superblock.blocks_in_group;
+
         if (first >= priv->superblock.block_count)
             continue;
 
@@ -286,6 +291,7 @@ static bool _ext2_alloc_block(ext2_private_t* priv, disk_partition_t* part, u32*
             break;
 
         gd->unallocated_block_count--;
+
         if (priv->superblock.free_block_count)
             priv->superblock.free_block_count--;
 
@@ -366,6 +372,7 @@ static bool _ext2_alloc_inode(ext2_private_t* priv, disk_partition_t* part, u32*
 
         u32 first = group * priv->superblock.inodes_in_group;
         size_t count = priv->superblock.inodes_in_group;
+
         if (first >= priv->superblock.inode_count)
             continue;
 
@@ -382,6 +389,7 @@ static bool _ext2_alloc_inode(ext2_private_t* priv, disk_partition_t* part, u32*
             break;
 
         gd->unallocated_inode_count--;
+
         if (priv->superblock.free_inode_count)
             priv->superblock.free_inode_count--;
 
@@ -398,7 +406,7 @@ static bool _ext2_alloc_inode(ext2_private_t* priv, disk_partition_t* part, u32*
 }
 
 static bool _ext2_free_inode(ext2_private_t* priv, disk_partition_t* part, u32 inode_num) {
-    if (!priv || !part || inode_num == 0)
+    if (!priv || !part || !inode_num)
         return false;
 
     u32 zero = inode_num - 1;
@@ -451,8 +459,10 @@ static bool _ext2_zero_block(ext2_private_t* priv, disk_partition_t* part, u32 b
     if (!zero)
         return false;
 
-    bool ok = _ext2_write_block(priv, part, block, zero);
+    bool ok = ext2_write_block(priv, part, block, zero);
+
     free(zero);
+
     return ok;
 }
 
@@ -484,16 +494,11 @@ static u32 _ext2_block_for_index(
         return _read_indirect(priv, part, outer, block_index % n);
     }
 
-    block_index -= n * n;
+    u32 block = table[block_index];
 
-    // Triple indirect
-    if (block_index < n * n * n) {
-        u32 l1 = _read_indirect(priv, part, inode->indirect_block_ptr[2], block_index / (n * n));
-        u32 l2 = _read_indirect(priv, part, l1, (block_index / n) % n);
-        return _read_indirect(priv, part, l2, block_index % n);
-    }
+    free(table);
 
-    return 0;
+    return block;
 }
 
 static bool _ext2_ensure_block_for_index(
@@ -513,7 +518,8 @@ static bool _ext2_ensure_block_for_index(
     if (block_index < 12) {
         if (!info->inode.direct_block_ptr[block_index]) {
             u32 block = 0;
-            if (!_ext2_alloc_block(priv, part, &block))
+
+            if (!ext2_alloc_block(priv, part, &block))
                 return false;
 
             if (!_ext2_zero_block(priv, part, block)) {
@@ -536,12 +542,14 @@ static bool _ext2_ensure_block_for_index(
 
     u32 index = block_index - 12;
     u32 entries_per_block = priv->block_size / sizeof(u32);
+
     if (index >= entries_per_block)
         return false;
 
     if (!info->inode.indirect_block_ptr[0]) {
         u32 ind_block = 0;
-        if (!_ext2_alloc_block(priv, part, &ind_block))
+
+        if (!ext2_alloc_block(priv, part, &ind_block))
             return false;
 
         if (!_ext2_zero_block(priv, part, ind_block)) {
@@ -622,6 +630,7 @@ _ext2_release_inode_blocks(ext2_private_t* priv, disk_partition_t* part, ext2_in
         }
 
         u32 entries_per_block = priv->block_size / sizeof(u32);
+
         for (u32 i = 0; i < entries_per_block; i++) {
             if (!table[i])
                 continue;
@@ -715,6 +724,7 @@ static bool _ext2_dir_write_dot_entries(
         return false;
 
     ext2_directory_t* dot = (ext2_directory_t*)buf;
+
     dot->inode = self_inode;
     dot->size = (u16)_ext2_dir_entry_size(1);
     dot->name_size = 1;
@@ -722,6 +732,7 @@ static bool _ext2_dir_write_dot_entries(
     dot->name[0] = '.';
 
     ext2_directory_t* dotdot = (ext2_directory_t*)(buf + dot->size);
+
     dotdot->inode = parent_inode;
     dotdot->size = (u16)(priv->block_size - dot->size);
     dotdot->name_size = 2;
@@ -778,15 +789,20 @@ static bool _ext2_dir_find_entry(
                 break;
 
             if (entry->inode && entry->name_size == wanted_len &&
-                memcmp(entry->name, name, wanted_len) == 0) {
+                !memcmp(entry->name, name, wanted_len)) {
+
                 if (inode_out)
                     *inode_out = entry->inode;
+
                 if (block_out)
                     *block_out = block_num;
+
                 if (pos_out)
                     *pos_out = pos;
+
                 if (size_out)
                     *size_out = entry->size;
+
                 if (type_out)
                     *type_out = entry->type;
 
@@ -847,7 +863,7 @@ static bool _ext2_dir_add_entry(
             if (entry->size < 8 || entry->size > block_size - pos)
                 break;
 
-            if (entry->inode == 0 && entry->size >= need) {
+            if (!entry->inode && entry->size >= need) {
                 entry->inode = inode_num;
                 entry->name_size = (u8)name_len;
                 entry->type = type;
@@ -858,7 +874,8 @@ static bool _ext2_dir_add_entry(
                 return ok;
             }
 
-            size_t used = _ext2_dir_entry_size(entry->name_size);
+            size_t used = ext2_dir_entry_size(entry->name_size);
+
             if (entry->inode != 0 && entry->size >= used + need) {
                 ext2_directory_t* new_entry = (ext2_directory_t*)((u8*)entry + used);
 
@@ -903,6 +920,7 @@ static bool _ext2_dir_add_entry(
         return false;
 
     u64 new_size = (u64)(blocks + 1) * block_size;
+
     if (new_size > ext2_file_size(&dir_info->inode))
         _ext2_set_file_size(&dir_info->inode, new_size);
 
@@ -939,8 +957,10 @@ static bool _ext2_dir_remove_entry(
     entry->inode = 0;
     entry->type = EXT2_DIR_UNKNOWN;
 
-    bool ok = _ext2_write_block(priv, part, block_num, block);
+    bool ok = ext2_write_block(priv, part, block_num, block);
+
     free(block);
+
     return ok;
 }
 
@@ -955,6 +975,7 @@ _ext2_dir_is_empty(ext2_private_t* priv, disk_partition_t* part, const ext2_inod
 
     u32 block_size = priv->block_size;
     u32 blocks = DIV_ROUND_UP(size, block_size);
+
     u8* block = malloc(block_size);
     if (!block)
         return false;
@@ -999,38 +1020,6 @@ _ext2_dir_is_empty(ext2_private_t* priv, disk_partition_t* part, const ext2_inod
     return empty;
 }
 
-static vfs_interface_t* _ext2_make_file_interface(void) {
-    return vfs_create_interface(_ext2_read_file, _ext2_write_file, _ext2_truncate_file);
-}
-
-static vfs_interface_t* _ext2_make_dir_interface(void) {
-    vfs_interface_t* iface = calloc(1, sizeof(vfs_interface_t));
-    if (!iface)
-        return NULL;
-
-    iface->create = _ext2_dir_create;
-    iface->remove = _ext2_dir_remove;
-    return iface;
-}
-
-static bool _ext2_assign_interface(vfs_node_t* node, u32 vfs_type) {
-    if (!node)
-        return false;
-
-    vfs_interface_t* iface = NULL;
-
-    if (vfs_type == VFS_FILE)
-        iface = _ext2_make_file_interface();
-    else if (vfs_type == VFS_DIR)
-        iface = _ext2_make_dir_interface();
-
-    if ((vfs_type == VFS_FILE || vfs_type == VFS_DIR) && !iface)
-        return false;
-
-    node->interface = iface;
-    return true;
-}
-
 static bool
 _ext2_init_vnode(vfs_node_t* node, fs_instance_t* instance, u32 inode_num, const ext2_inode_t* inode) {
     if (!node || !instance || !inode)
@@ -1049,7 +1038,8 @@ _ext2_init_vnode(vfs_node_t* node, fs_instance_t* instance, u32 inode_num, const
     node->uid = inode->uid;
     node->gid = inode->gid;
     node->mode = inode->type & EXT2_IP_MASK;
-    _ext2_sync_vnode_from_inode(node, inode);
+
+    ext2_sync_vnode_from_inode(node, inode);
 
     return true;
 }
@@ -1109,10 +1099,12 @@ static ssize_t _ext2_read_file(vfs_node_t* node, void* buf, size_t offset, size_
 
     u32 now = _ext2_now(priv);
     info->inode.last_access_time = now;
+
     if (!ext2_write_inode(priv, part, info->inode_num, &info->inode))
         return -1;
 
-    _ext2_sync_vnode_from_inode(node, &info->inode);
+    ext2_sync_vnode_from_inode(node, &info->inode);
+
     return (ssize_t)(to_read - remaining);
 }
 
@@ -1137,6 +1129,7 @@ static ssize_t _ext2_write_file(vfs_node_t* node, void* buf, size_t offset, size
 
     u32 block_size = priv->block_size;
     u8* bounce = malloc(block_size);
+
     if (!bounce)
         return -1;
 
@@ -1190,7 +1183,8 @@ static ssize_t _ext2_write_file(vfs_node_t* node, void* buf, size_t offset, size
         inode_changed = true;
     }
 
-    u32 now = _ext2_now(priv);
+    u32 now = ext2_now(priv);
+
     info->inode.last_access_time = now;
     info->inode.last_modification_time = now;
     info->inode.creation_time = now;
@@ -1198,10 +1192,12 @@ static ssize_t _ext2_write_file(vfs_node_t* node, void* buf, size_t offset, size
 
     if (inode_changed && !ext2_write_inode(priv, part, info->inode_num, &info->inode))
         return -1;
-    if (!_ext2_update_super_write_time(priv, part, now))
+
+    if (!ext2_update_super_write_time(priv, part, now))
         return -1;
 
-    _ext2_sync_vnode_from_inode(node, &info->inode);
+    ext2_sync_vnode_from_inode(node, &info->inode);
+
     return (ssize_t)len;
 }
 
@@ -1222,122 +1218,20 @@ static ssize_t _ext2_truncate_file(vfs_node_t* node, size_t len) {
     if (!_ext2_release_inode_blocks(priv, part, &info->inode))
         return -1;
 
-    u32 now = _ext2_now(priv);
+    u32 now = ext2_now(priv);
+
     info->inode.last_access_time = now;
     info->inode.last_modification_time = now;
     info->inode.creation_time = now;
 
     if (!ext2_write_inode(priv, part, info->inode_num, &info->inode))
         return -1;
-    if (!_ext2_update_super_write_time(priv, part, now))
+
+    if (!ext2_update_super_write_time(priv, part, now))
         return -1;
 
-    _ext2_sync_vnode_from_inode(node, &info->inode);
-    return 0;
-}
+    ext2_sync_vnode_from_inode(node, &info->inode);
 
-static ssize_t _ext2_dir_create(vfs_node_t* node, vfs_node_t* child) {
-    if (!node || !child || !node->private || !node->fs || !child->name)
-        return -1;
-
-    ext2_node_info_t* parent_info = node->private;
-    ext2_private_t* priv = node->fs->private;
-    disk_partition_t* part = node->fs->partition;
-
-    if (!priv || !part)
-        return -1;
-
-    if (!ext2_is_type(&parent_info->inode, EXT2_IT_DIR)) {
-        log_warn("ext2: create '%s' failed: parent is not a directory", child->name);
-        return -1;
-    }
-
-    u16 inode_type = _ext2_vfs_type_to_inode_type(child->type);
-    if (!inode_type) {
-        log_warn("ext2: create '%s' failed: unsupported vnode type %u", child->name, child->type);
-        return -1;
-    }
-
-    u32 inode_num = 0;
-    if (!_ext2_alloc_inode(priv, part, &inode_num)) {
-        log_warn("ext2: create '%s' failed: no free inode", child->name);
-        return -1;
-    }
-
-    ext2_inode_t inode = {0};
-    u32 now = _ext2_now(priv);
-    inode.type = inode_type | (child->mode & EXT2_IP_MASK);
-    inode.uid = (u16)child->uid;
-    inode.gid = (u16)child->gid;
-    inode.last_access_time = now;
-    inode.last_modification_time = now;
-    inode.creation_time = now;
-    inode.hard_link_count = (child->type == VFS_DIR) ? 2 : 1;
-
-    if (child->type == VFS_DIR) {
-        u32 block = 0;
-        if (!_ext2_alloc_block(priv, part, &block)) {
-            log_warn("ext2: create '%s' failed: no free data block", child->name);
-            _ext2_free_inode(priv, part, inode_num);
-            return -1;
-        }
-
-        inode.direct_block_ptr[0] = block;
-        inode.disk_sector_count = priv->block_size / 512;
-        _ext2_set_file_size(&inode, priv->block_size);
-
-        if (!_ext2_dir_write_dot_entries(priv, part, block, inode_num, parent_info->inode_num)) {
-            log_warn("ext2: create '%s' failed: dot entries write", child->name);
-            _ext2_free_block(priv, part, block);
-            _ext2_free_inode(priv, part, inode_num);
-            return -1;
-        }
-    }
-
-    if (!ext2_write_inode(priv, part, inode_num, &inode)) {
-        log_warn("ext2: create '%s' failed: inode write", child->name);
-        _ext2_release_inode_blocks(priv, part, &inode);
-        _ext2_free_inode(priv, part, inode_num);
-        return -1;
-    }
-
-    if (!_ext2_dir_add_entry(
-            priv, part, parent_info, child->name, inode_num, _ext2_vfs_type_to_dir_type(child->type)
-        )) {
-        log_warn("ext2: create '%s' failed: parent entry insert", child->name);
-        _ext2_release_inode_blocks(priv, part, &inode);
-        _ext2_clear_inode(priv, part, inode_num);
-        _ext2_free_inode(priv, part, inode_num);
-        return -1;
-    }
-
-    if (child->type == VFS_DIR)
-        parent_info->inode.hard_link_count++;
-
-    parent_info->inode.last_access_time = now;
-    parent_info->inode.last_modification_time = now;
-    parent_info->inode.creation_time = now;
-
-    if (!ext2_write_inode(priv, part, parent_info->inode_num, &parent_info->inode)) {
-        log_warn("ext2: create '%s' failed: parent inode write", child->name);
-        return -1;
-    }
-    if (!_ext2_update_super_write_time(priv, part, now)) {
-        log_warn("ext2: create '%s' failed: superblock write time update", child->name);
-        return -1;
-    }
-
-    if (!ext2_init_vnode(child, node->fs, inode_num, &inode)) {
-        log_warn("ext2: create '%s' failed: vnode init", child->name);
-        return -1;
-    }
-
-    if (!_ext2_assign_interface(child, child->type)) {
-        log_warn("ext2: create '%s' failed: interface alloc", child->name);
-        return -1;
-    }
-
-    _ext2_sync_vnode_from_inode(node, &parent_info->inode);
     return 0;
 }
 
@@ -1384,18 +1278,178 @@ static ssize_t _ext2_dir_remove(vfs_node_t* node, char* name) {
     if (is_dir && parent_info->inode.hard_link_count > 1)
         parent_info->inode.hard_link_count--;
 
-    u32 now = _ext2_now(priv);
+    u32 now = ext2_now(priv);
+
     parent_info->inode.last_access_time = now;
     parent_info->inode.last_modification_time = now;
     parent_info->inode.creation_time = now;
 
     if (!ext2_write_inode(priv, part, parent_info->inode_num, &parent_info->inode))
         return -1;
-    if (!_ext2_update_super_write_time(priv, part, now))
+
+    if (!ext2_update_super_write_time(priv, part, now))
         return -1;
 
     _ext2_sync_vnode_from_inode(node, &parent_info->inode);
     return 0;
+}
+
+static ssize_t _ext2_dir_create(vfs_node_t* node, vfs_node_t* child) {
+    if (!node || !child || !node->private || !node->fs || !child->name)
+        return -1;
+
+    ext2_node_info_t* parent_info = node->private;
+    ext2_private_t* priv = node->fs->private;
+    disk_partition_t* part = node->fs->partition;
+
+    if (!priv || !part)
+        return -1;
+
+    if (!ext2_is_type(&parent_info->inode, EXT2_IT_DIR)) {
+        log_warn("ext2: create '%s' failed: parent is not a directory", child->name);
+        return -1;
+    }
+
+    u16 inode_type = ext2_vfs_type_to_inode_type(child->type);
+    if (!inode_type) {
+        log_warn("ext2: create '%s' failed: unsupported vnode type %u", child->name, child->type);
+        return -1;
+    }
+
+    u32 inode_num = 0;
+    if (!ext2_alloc_inode(priv, part, &inode_num)) {
+        log_warn("ext2: create '%s' failed: no free inode", child->name);
+        return -1;
+    }
+
+    ext2_inode_t inode = {0};
+    u32 now = ext2_now(priv);
+
+    inode.type = inode_type | (child->mode & EXT2_IP_MASK);
+    inode.uid = (u16)child->uid;
+    inode.gid = (u16)child->gid;
+    inode.last_access_time = now;
+    inode.last_modification_time = now;
+    inode.creation_time = now;
+    inode.hard_link_count = (child->type == VFS_DIR) ? 2 : 1;
+
+    if (child->type == VFS_DIR) {
+        u32 block = 0;
+
+        if (!ext2_alloc_block(priv, part, &block)) {
+            log_warn("ext2: create '%s' failed: no free data block", child->name);
+            _ext2_free_inode(priv, part, inode_num);
+            return -1;
+        }
+
+        inode.direct_block_ptr[0] = block;
+        inode.disk_sector_count = priv->block_size / 512;
+        ext2_set_file_size(&inode, priv->block_size);
+
+        if (!ext2_dir_write_dot_entries(priv, part, block, inode_num, parent_info->inode_num)) {
+            log_warn("ext2: create '%s' failed: dot entries write", child->name);
+            ext2_free_block(priv, part, block);
+            _ext2_free_inode(priv, part, inode_num);
+            return -1;
+        }
+    }
+
+    if (!ext2_write_inode(priv, part, inode_num, &inode)) {
+        log_warn("ext2: create '%s' failed: inode write", child->name);
+        ext2_release_inode_blocks(priv, part, &inode);
+        _ext2_free_inode(priv, part, inode_num);
+        return -1;
+    }
+
+    if (!ext2_dir_add_entry(
+            priv, part, parent_info, child->name, inode_num, ext2_vfs_type_to_dir_type(child->type)
+        )) {
+        log_warn("ext2: create '%s' failed: parent entry insert", child->name);
+        ext2_release_inode_blocks(priv, part, &inode);
+        ext2_clear_inode(priv, part, inode_num);
+        _ext2_free_inode(priv, part, inode_num);
+        return -1;
+    }
+
+    if (child->type == VFS_DIR)
+        parent_info->inode.hard_link_count++;
+
+    parent_info->inode.last_access_time = now;
+    parent_info->inode.last_modification_time = now;
+    parent_info->inode.creation_time = now;
+
+    if (!ext2_write_inode(priv, part, parent_info->inode_num, &parent_info->inode)) {
+        log_warn("ext2: create '%s' failed: parent inode write", child->name);
+        return -1;
+    }
+
+    if (!ext2_update_super_write_time(priv, part, now)) {
+        log_warn("ext2: create '%s' failed: superblock write time update", child->name);
+        return -1;
+    }
+
+    if (!ext2_init_vnode(child, node->fs, inode_num, &inode)) {
+        log_warn("ext2: create '%s' failed: vnode init", child->name);
+        return -1;
+    }
+
+    vfs_interface_t* iface = NULL;
+
+    if (child->type == VFS_FILE) {
+        iface = vfs_create_interface(ext2_read_file, ext2_write_file, ext2_truncate_file);
+    } else if (child->type == VFS_DIR) {
+        iface = calloc(1, sizeof(vfs_interface_t));
+        if (iface) {
+            iface->create = _ext2_dir_create;
+            iface->remove = ext2_dir_remove;
+        }
+    }
+
+    if ((child->type == VFS_FILE || child->type == VFS_DIR) && !iface) {
+        log_warn("ext2: create '%s' failed: interface alloc", child->name);
+        return -1;
+    }
+
+    child->interface = iface;
+
+    ext2_sync_vnode_from_inode(node, &parent_info->inode);
+
+    return 0;
+}
+
+
+static vfs_interface_t* _ext2_make_file_interface(void) {
+    return vfs_create_interface(ext2_read_file, ext2_write_file, ext2_truncate_file);
+}
+
+static vfs_interface_t* _ext2_make_dir_interface(void) {
+    vfs_interface_t* iface = calloc(1, sizeof(vfs_interface_t));
+    if (!iface)
+        return NULL;
+
+    iface->create = _ext2_dir_create;
+    iface->remove = ext2_dir_remove;
+
+    return iface;
+}
+
+static bool _ext2_assign_interface(vfs_node_t* node, u32 vfs_type) {
+    if (!node)
+        return false;
+
+    vfs_interface_t* iface = NULL;
+
+    if (vfs_type == VFS_FILE)
+        iface = _ext2_make_file_interface();
+    else if (vfs_type == VFS_DIR)
+        iface = _ext2_make_dir_interface();
+
+    if ((vfs_type == VFS_FILE || vfs_type == VFS_DIR) && !iface)
+        return false;
+
+    node->interface = iface;
+
+    return true;
 }
 
 static bool _ext2_build_dir(fs_instance_t* instance, vfs_node_t* parent, const ext2_inode_t* inode) {
@@ -1609,7 +1663,8 @@ static bool _ext2_node_chmod(fs_instance_t* instance, vfs_node_t* node, mode_t m
 
     if (!_ext2_write_inode(priv, instance->partition, info->inode_num, &info->inode))
         return false;
-    if (!_ext2_update_super_write_time(priv, instance->partition, now))
+
+    if (!ext2_update_super_write_time(priv, instance->partition, now))
         return false;
 
     _ext2_sync_vnode_from_inode(node, &info->inode);
@@ -1630,7 +1685,8 @@ static bool _ext2_node_chown(fs_instance_t* instance, vfs_node_t* node, uid_t ui
 
     if (!_ext2_write_inode(priv, instance->partition, info->inode_num, &info->inode))
         return false;
-    if (!_ext2_update_super_write_time(priv, instance->partition, now))
+
+    if (!ext2_update_super_write_time(priv, instance->partition, now))
         return false;
 
     _ext2_sync_vnode_from_inode(node, &info->inode);
@@ -1662,7 +1718,8 @@ static bool _ext2_destroy_tree(fs_instance_t* instance) {
         return false;
 
     tree_node_t* root = instance->subtree_root;
-    tree_foreach_node(root, _ext2_free_vnode, NULL);
+
+    tree_foreach_node(root, ext2_free_vnode, NULL);
     tree_prune(root);
 
     ext2_private_t* priv = instance->private;
@@ -1674,6 +1731,7 @@ static bool _ext2_destroy_tree(fs_instance_t* instance) {
 
     instance->subtree_root = NULL;
     instance->has_tree = false;
+
     return true;
 }
 
@@ -1697,7 +1755,9 @@ bool ext2fs_init(void) {
     };
 
     bool ok = file_system_register(&ext2_fs);
+
     if (ok)
         log_info("ext2: registered");
+
     return ok;
 }

@@ -1,6 +1,5 @@
-#include <fcntl.h>
-#include <grp.h>
 #include <pwd.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +11,13 @@
 #define ARCH_NAME "unknown"
 #endif
 
+static const char* owl[] = {
+    "    ,___,   ",
+    "    (o,o)   ",
+    "    /)_)    ",
+    "     \" \"    ",
+};
+
 static void print_row(const char* left, const char* right) {
     char line[256];
     snprintf(line, sizeof(line), "%-12s %s\n", left ? left : "", right ? right : "");
@@ -22,8 +28,7 @@ static bool read_sysctl_string(const char* name, char* out, size_t out_len) {
     if (!name || !out || out_len < 2)
         return false;
 
-    ssize_t ret = sysctl(name, out, out_len);
-    if (ret < 0) {
+    if (sysctl(name, out, out_len) < 0) {
         out[0] = '\0';
         return false;
     }
@@ -32,25 +37,68 @@ static bool read_sysctl_string(const char* name, char* out, size_t out_len) {
     return true;
 }
 
-int main(void) {
-    passwd_t pwd = {0};
-    uid_t uid = getuid();
-    bool have_pwd = getpwuid(uid, &pwd) == 0;
+static bool read_sysctl_u64(const char* name, unsigned long long* out) {
+    if (!out)
+        return false;
 
-    char user[64];
-    char shell[128];
+    char value[64] = {0};
+    if (!read_sysctl_string(name, value, sizeof(value)))
+        return false;
+
+    *out = (unsigned long long)atoll(value);
+    return true;
+}
+
+static void resolve_user(char* user, size_t user_len, char* shell, size_t shell_len) {
+    if (!user || !user_len || !shell || !shell_len)
+        return;
+
+    uid_t uid = getuid();
+    passwd_t pwd = {0};
+    bool have_pwd = !getpwuid(uid, &pwd);
 
     if (have_pwd && pwd.pw_name[0])
-        snprintf(user, sizeof(user), "%s", pwd.pw_name);
+        snprintf(user, user_len, "%s", pwd.pw_name);
     else
-        snprintf(user, sizeof(user), "%llu", (unsigned long long)uid);
+        snprintf(user, user_len, "%llu", (unsigned long long)uid);
 
     if (have_pwd && pwd.pw_shell[0])
-        snprintf(shell, sizeof(shell), "%s", pwd.pw_shell);
+        snprintf(shell, shell_len, "%s", pwd.pw_shell);
     else
-        snprintf(shell, sizeof(shell), "/sbin/sh");
+        snprintf(shell, shell_len, "/sbin/sh");
+}
 
-    const char* owl[] = {"    ,___,   ", "    (o,o)   ", "    /)_)    ", "     \" \"    "};
+static void fill_separator(char* out, size_t out_len, size_t width) {
+    if (!out || !out_len)
+        return;
+
+    if (width >= out_len)
+        width = out_len - 1;
+
+    memset(out, '-', width);
+    out[width] = '\0';
+}
+
+static void print_fetch_rows(
+    const char* user_at,
+    const char* sep,
+    const char* os_line,
+    const char* shell_line,
+    const char* ram_line,
+    const char* cpu_line
+) {
+    print_row("", user_at);
+    print_row(owl[0], sep);
+    print_row(owl[1], os_line);
+    print_row(owl[2], shell_line);
+    print_row(owl[3], ram_line);
+    print_row("", cpu_line);
+}
+
+int main(void) {
+    char user[64] = {0};
+    char shell[128] = {0};
+    resolve_user(user, sizeof(user), shell, sizeof(shell));
 
     char user_at[96];
     char os_line[96];
@@ -61,24 +109,17 @@ int main(void) {
 
     char os_name[32] = "apheleiaOS";
     char os_arch[32] = ARCH_NAME;
-    char cpu_model[32] = "<unknown>";
-    char value[64] = {0};
+    char cpu_model[64] = "<unknown>";
     unsigned long long total_kib = 0;
     unsigned long long free_kib = 0;
     unsigned long long freq_khz = 0;
 
-    if (read_sysctl_string("kern.ostype", value, sizeof(value)))
-        snprintf(os_name, sizeof(os_name), "%s", value);
-    if (read_sysctl_string("kern.arch", value, sizeof(value)))
-        snprintf(os_arch, sizeof(os_arch), "%s", value);
-    if (read_sysctl_string("vm.mem.total_kib", value, sizeof(value)))
-        total_kib = (unsigned long long)atoll(value);
-    if (read_sysctl_string("vm.mem.free_kib", value, sizeof(value)))
-        free_kib = (unsigned long long)atoll(value);
-    if (read_sysctl_string("hw.model", value, sizeof(value)))
-        snprintf(cpu_model, sizeof(cpu_model), "%s", value);
-    if (read_sysctl_string("hw.clockrate", value, sizeof(value)))
-        freq_khz = (unsigned long long)atoll(value);
+    read_sysctl_string("kern.ostype", os_name, sizeof(os_name));
+    read_sysctl_string("kern.arch", os_arch, sizeof(os_arch));
+    read_sysctl_string("hw.model", cpu_model, sizeof(cpu_model));
+    read_sysctl_u64("vm.mem.total_kib", &total_kib);
+    read_sysctl_u64("vm.mem.free_kib", &free_kib);
+    read_sysctl_u64("hw.clockrate", &freq_khz);
 
     snprintf(user_at, sizeof(user_at), "%s@$sysname", user);
     snprintf(os_line, sizeof(os_line), "os: %s %s", os_name, os_arch);
@@ -86,9 +127,7 @@ int main(void) {
 
     if (total_kib > 0) {
         unsigned long long used_kib = total_kib >= free_kib ? (total_kib - free_kib) : 0;
-        snprintf(
-            ram_line, sizeof(ram_line), "ram: %llu/%llu MiB", used_kib / 1024, total_kib / 1024
-        );
+        snprintf(ram_line, sizeof(ram_line), "ram: %llu/%llu MiB", used_kib / 1024, total_kib / 1024);
     } else {
         snprintf(ram_line, sizeof(ram_line), "ram: <unknown>");
     }
@@ -98,41 +137,9 @@ int main(void) {
     else
         snprintf(cpu_line, sizeof(cpu_line), "cpu: %s", cpu_model);
 
-    size_t sep_len = strlen(user_at);
-    if (sep_len >= sizeof(sep))
-        sep_len = sizeof(sep) - 1;
+    fill_separator(sep, sizeof(sep), strlen(user_at));
 
-    for (size_t i = 0; i < sep_len; i++)
-        sep[i] = '-';
-
-    sep[sep_len] = '\0';
-
-    const char* right_rows[] = {
-        user_at,
-        sep,
-        os_line,
-        shell_line,
-        ram_line,
-        cpu_line,
-    };
-
-    size_t owl_rows = sizeof(owl) / sizeof(owl[0]);
-    size_t right_rows_count = sizeof(right_rows) / sizeof(right_rows[0]);
-
-    size_t owl_top_pad = 0;
-    if (right_rows_count > owl_rows)
-        owl_top_pad = (right_rows_count - owl_rows) / 2;
-
-    for (size_t i = 0; i < right_rows_count; i++) {
-        const char* left = "";
-        if (i >= owl_top_pad) {
-            size_t owl_idx = i - owl_top_pad;
-            if (owl_idx < owl_rows)
-                left = owl[owl_idx];
-        }
-
-        print_row(left, right_rows[i]);
-    }
+    print_fetch_rows(user_at, sep, os_line, shell_line, ram_line, cpu_line);
 
     return 0;
 }

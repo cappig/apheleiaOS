@@ -130,7 +130,7 @@ static bool _tty_is_erase_char(const termios_t* tos, char ch) {
 }
 
 static size_t _tty_line_prev_codepoint_len(const char* line, size_t line_len, u32* out_cp) {
-    if (!line || line_len == 0)
+    if (!line || !line_len)
         return 0;
 
     size_t start = line_len - 1;
@@ -229,7 +229,7 @@ _tty_pop_ansi_sequence(size_t screen, const termios_t* tos, size_t* erase_bytes,
         i--;
     }
 
-    if (i == 0)
+    if (!i)
         return false;
 
     u8 intro = (u8)line[i - 1];
@@ -263,7 +263,7 @@ _tty_pop_ansi_sequence(size_t screen, const termios_t* tos, size_t* erase_bytes,
 }
 
 static void _tty_erase_columns(size_t screen, const termios_t* tos, size_t cols) {
-    if (!tos || cols == 0)
+    if (!tos || !cols)
         return;
 
     if (!(tos->c_lflag & ECHO))
@@ -312,7 +312,7 @@ _tty_flush_line(size_t screen, ring_buffer_t* buffer, bool add_newline, bool ech
 
 static ssize_t
 _read_raw(size_t screen, ring_buffer_t* buffer, void* buf, size_t len, const termios_t* tos) {
-    if (!buffer || !buf || !tos || len == 0)
+    if (!buffer || !buf || !tos || !len)
         return 0;
 
     size_t vmin = tos->c_cc[VMIN];
@@ -321,7 +321,7 @@ _read_raw(size_t screen, ring_buffer_t* buffer, void* buf, size_t len, const ter
     if (vmin > len)
         vmin = len;
 
-    if (vmin == 0 && vtime == 0) {
+    if (!vmin && !vtime) {
         unsigned long flags = arch_irq_save();
         size_t popped = ring_buffer_pop_array(buffer, buf, len);
         arch_irq_restore(flags);
@@ -336,7 +336,7 @@ _read_raw(size_t screen, ring_buffer_t* buffer, void* buf, size_t len, const ter
     if (vtime) {
         u32 hz = arch_timer_hz();
         timeout_ticks = ((u64)vtime * (u64)hz + 9) / 10;
-        if (timeout_ticks == 0)
+        if (!timeout_ticks)
             timeout_ticks = 1;
     }
 
@@ -353,7 +353,7 @@ _read_raw(size_t screen, ring_buffer_t* buffer, void* buf, size_t len, const ter
                 timer_start = arch_timer_ticks();
             }
 
-            if (vmin == 0)
+            if (!vmin)
                 return (ssize_t)total;
 
             if (total >= vmin)
@@ -364,7 +364,7 @@ _read_raw(size_t screen, ring_buffer_t* buffer, void* buf, size_t len, const ter
             u64 now = arch_timer_ticks();
             if (now - timer_start >= timeout_ticks)
                 return (ssize_t)total;
-        } else if (vmin == 0 && timeout_ticks) {
+        } else if (!vmin && timeout_ticks) {
             timer_started = true;
             timer_start = arch_timer_ticks();
         }
@@ -486,9 +486,10 @@ static void _push_impl(char ch, bool from_serial) {
                 size_t erase_cols = 0;
                 u32 cp = 0;
 
-                if (!_tty_pop_ansi_sequence(screen, tos, &erased, &erase_cols)) {
-                    erased = _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
-                    erase_cols = _tty_echo_columns_for_cp(tos, cp);
+                if (!tty_pop_ansi_sequence(screen, tos, &erased, &erase_cols)) {
+                    erased =
+                        _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                    erase_cols = tty_echo_columns_for_cp(tos, cp);
                 }
 
                 *line_len -= erased;
@@ -508,7 +509,8 @@ static void _push_impl(char ch, bool from_serial) {
                 size_t erase_cols = 0;
                 while (*line_len) {
                     u32 cp = 0;
-                    size_t erased = _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                    size_t erased =
+                        _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
                     if (!erased)
                         break;
                     *line_len -= erased;
@@ -539,16 +541,18 @@ static void _push_impl(char ch, bool from_serial) {
                 u32 cp = 0;
 
                 while (*line_len) {
-                    size_t erased = _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
-                    if (!erased || !_tty_cp_isspace(cp))
+                    size_t erased =
+                        _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                    if (!erased || !tty_cp_isspace(cp))
                         break;
                     *line_len -= erased;
                     erase_cols += _tty_echo_columns_for_cp(tos, cp);
                 }
 
                 while (*line_len) {
-                    size_t erased = _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
-                    if (!erased || _tty_cp_isspace(cp))
+                    size_t erased =
+                        _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                    if (!erased || tty_cp_isspace(cp))
                         break;
                     *line_len -= erased;
                     erase_cols += _tty_echo_columns_for_cp(tos, cp);
@@ -567,7 +571,7 @@ static void _push_impl(char ch, bool from_serial) {
         }
 
         if (ch == (char)tos->c_cc[VEOF]) {
-            if (tty_state[screen].line_len == 0) {
+            if (!tty_state[screen].line_len) {
                 ring_buffer_push(buffer, 0);
                 sched_wake_one(&tty_state[screen].wait);
             } else {
@@ -631,7 +635,7 @@ ssize_t tty_input_read(size_t screen, void* buf, size_t len) {
         arch_irq_restore(flags);
 
         if (popped) {
-            if (popped == 1 && out[0] == 0)
+            if (popped == 1 && !out[0])
                 return 0;
 
             if (tty_state[screen].pending_newlines) {
