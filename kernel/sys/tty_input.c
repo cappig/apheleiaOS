@@ -1,6 +1,7 @@
 #include "tty_input.h"
 
 #include <arch/arch.h>
+#include <base/utf8.h>
 #include <ctype.h>
 #include <data/ring.h>
 #include <input/kbd.h>
@@ -18,9 +19,11 @@ typedef struct {
     termios_t termios;
     winsize_t winsize;
     bool termios_ready;
+    bool winsize_user_set;
     bool literal_next;
     bool cr_pending;
     size_t pending_newlines;
+    bool serial_input_seen;
 } tty_input_state_t;
 
 static tty_input_state_t tty_state[TTY_SCREEN_COUNT] = {0};
@@ -61,6 +64,8 @@ static void _tty_init_screen_state(size_t screen) {
     tty_state[screen].literal_next = false;
     tty_state[screen].cr_pending = false;
     tty_state[screen].pending_newlines = 0;
+    tty_state[screen].winsize_user_set = false;
+    tty_state[screen].serial_input_seen = false;
     tty_state[screen].termios_ready = true;
 }
 
@@ -116,6 +121,48 @@ static void _tty_echo_backspace(size_t screen) {
     tty_write_screen_output(screen, bs_seq, sizeof(bs_seq) - 1);
 }
 
+static bool _tty_is_erase_char(const termios_t* tos, char ch) {
+    if (!tos)
+        return false;
+
+    u8 c = (u8)ch;
+    return c == (u8)tos->c_cc[VERASE] || c == (u8)'\b' || c == 0x7f;
+}
+
+static size_t _tty_line_prev_codepoint_len(const char* line, size_t line_len, u32* out_cp) {
+    if (!line || line_len == 0)
+        return 0;
+
+    size_t start = line_len - 1;
+    size_t continuation_bytes = 0;
+
+    while (start > 0 && (((u8)line[start] & 0xc0) == 0x80) && continuation_bytes < 3) {
+        start--;
+        continuation_bytes++;
+    }
+
+    size_t bytes = line_len - start;
+    size_t expected = utf8_sequence_len((u8)line[start]);
+
+    if (expected && expected == bytes) {
+        u32 cp = 0;
+        if (utf8_decode((const u8*)&line[start], expected, &cp) == expected) {
+            if (out_cp)
+                *out_cp = cp;
+            return expected;
+        }
+    }
+
+    if (out_cp)
+        *out_cp = (u8)line[line_len - 1];
+
+    return 1;
+}
+
+static bool _tty_cp_isspace(u32 cp) {
+    return cp < 0x80 && isspace((unsigned char)cp);
+}
+
 static void _tty_echo_control(size_t screen, char ch) {
     char caret = ctrl_to_caret(ch);
     if (!caret)
@@ -147,14 +194,82 @@ static void _tty_echo_char(size_t screen, const termios_t* tos, char ch, bool fo
     tty_write_screen_output(screen, &ch, 1);
 }
 
-static void _tty_erase_chars(size_t screen, const termios_t* tos, size_t count) {
-    if (!tos || count == 0)
+static size_t _tty_echo_columns_for_cp(const termios_t* tos, u32 cp) {
+    if (!tos)
+        return 1;
+
+    if (cp < 0x80 && iscntrl((unsigned char)cp) && cp != '\n' && cp != '\t') {
+        if (tos->c_lflag & ECHOCTL)
+            return 2;
+        return 0;
+    }
+
+    return 1;
+}
+
+static bool
+_tty_pop_ansi_sequence(size_t screen, const termios_t* tos, size_t* erase_bytes, size_t* erase_cols) {
+    if (!tos || !erase_bytes || !erase_cols || screen >= TTY_SCREEN_COUNT)
+        return false;
+
+    size_t line_len = tty_state[screen].line_len;
+    const char* line = tty_state[screen].line_buf;
+    if (line_len < 2)
+        return false;
+
+    u8 final = (u8)line[line_len - 1];
+    if (final < '@' || final > '~')
+        return false;
+
+    size_t i = line_len - 1;
+    while (i > 0) {
+        u8 c = (u8)line[i - 1];
+        if (!(isdigit(c) || c == ';' || c == '?'))
+            break;
+        i--;
+    }
+
+    if (i == 0)
+        return false;
+
+    u8 intro = (u8)line[i - 1];
+    if (intro != '[' && intro != 'O')
+        return false;
+
+    size_t start = i - 1;
+    bool esc_stored = false;
+    bool caret_prefix = false;
+
+    if (start > 0 && (u8)line[start - 1] == 0x1b) {
+        start--;
+        esc_stored = true;
+    } else if (start >= 2 && line[start - 2] == '^' && line[start - 1] == '[') {
+        start -= 2;
+        caret_prefix = true;
+    }
+
+    size_t bytes = line_len - start;
+    size_t cols = 0;
+
+    if (!esc_stored && !caret_prefix)
+        cols += _tty_echo_columns_for_cp(tos, 0x1b);
+
+    for (size_t j = start; j < line_len; j++)
+        cols += _tty_echo_columns_for_cp(tos, (u8)line[j]);
+
+    *erase_bytes = bytes;
+    *erase_cols = cols;
+    return true;
+}
+
+static void _tty_erase_columns(size_t screen, const termios_t* tos, size_t cols) {
+    if (!tos || cols == 0)
         return;
 
     if (!(tos->c_lflag & ECHO))
         return;
 
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < cols; i++) {
         if (tos->c_lflag & ECHOE)
             tty_echo_backspace(screen);
         else
@@ -282,12 +397,16 @@ void tty_input_set_current(size_t screen) {
     tty_input_buffer(screen);
 }
 
-void tty_input_push(char ch) {
+static void _push_impl(char ch, bool from_serial) {
     size_t screen = tty_current_screen();
     ring_buffer_t* buffer = tty_input_buffer(screen);
 
     if (!buffer || ch == '\0')
         return;
+
+    if (from_serial) {
+        tty_state[screen].serial_input_seen = true;
+    }
 
     char raw = ch;
     termios_t* tos = &tty_state[screen].termios;
@@ -346,7 +465,7 @@ void tty_input_push(char ch) {
 
             if (canon) {
                 if (tos->c_lflag & ECHOCTL)
-                    tty_echo_control(screen, ch);
+                    _tty_echo_control(screen, ch);
                 if (tos->c_lflag & ECHO) {
                     char nl = '\n';
                     tty_write_screen_output(screen, &nl, 1);
@@ -360,13 +479,22 @@ void tty_input_push(char ch) {
     }
 
     if (canon && !literal) {
-        if (ch == (char)tos->c_cc[VERASE]) {
+        if (_tty_is_erase_char(tos, ch)) {
             size_t* line_len = &tty_state[screen].line_len;
             if (*line_len) {
-                (*line_len)--;
+                size_t erased = 0;
+                size_t erase_cols = 0;
+                u32 cp = 0;
+
+                if (!_tty_pop_ansi_sequence(screen, tos, &erased, &erase_cols)) {
+                    erased = _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                    erase_cols = _tty_echo_columns_for_cp(tos, cp);
+                }
+
+                *line_len -= erased;
                 if (tos->c_lflag & ECHO) {
                     if (tos->c_lflag & ECHOE)
-                        _tty_echo_backspace(screen);
+                        _tty_erase_columns(screen, tos, erase_cols);
                     else
                         _tty_echo_char(screen, tos, ch, false);
                 }
@@ -377,12 +505,19 @@ void tty_input_push(char ch) {
         if (ch == (char)tos->c_cc[VKILL]) {
             size_t* line_len = &tty_state[screen].line_len;
             if (*line_len) {
+                size_t erase_cols = 0;
+                while (*line_len) {
+                    u32 cp = 0;
+                    size_t erased = _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                    if (!erased)
+                        break;
+                    *line_len -= erased;
+                    erase_cols += _tty_echo_columns_for_cp(tos, cp);
+                }
+
                 if (tos->c_lflag & ECHO) {
                     if (tos->c_lflag & ECHOE) {
-                        while (*line_len) {
-                            (*line_len)--;
-                            _tty_echo_backspace(screen);
-                        }
+                        _tty_erase_columns(screen, tos, erase_cols);
                     } else {
                         _tty_echo_char(screen, tos, ch, false);
                     }
@@ -394,33 +529,39 @@ void tty_input_push(char ch) {
                 }
             }
 
-            *line_len = 0;
             return;
         }
 
         if (ch == (char)tos->c_cc[VWERASE]) {
             size_t* line_len = &tty_state[screen].line_len;
             if (*line_len) {
-                size_t erase = 0;
+                size_t erase_cols = 0;
+                u32 cp = 0;
 
-                while (*line_len && isspace((unsigned char)tty_state[screen].line_buf[*line_len - 1])) {
-                    (*line_len)--;
-                    erase++;
+                while (*line_len) {
+                    size_t erased = _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                    if (!erased || !_tty_cp_isspace(cp))
+                        break;
+                    *line_len -= erased;
+                    erase_cols += _tty_echo_columns_for_cp(tos, cp);
                 }
 
-                while (*line_len && !isspace((unsigned char)tty_state[screen].line_buf[*line_len - 1])) {
-                    (*line_len)--;
-                    erase++;
+                while (*line_len) {
+                    size_t erased = _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                    if (!erased || _tty_cp_isspace(cp))
+                        break;
+                    *line_len -= erased;
+                    erase_cols += _tty_echo_columns_for_cp(tos, cp);
                 }
 
-                _tty_erase_chars(screen, tos, erase);
+                _tty_erase_columns(screen, tos, erase_cols);
             }
             return;
         }
 
         if (ch == (char)tos->c_cc[VREPRINT]) {
             if (tos->c_lflag & ECHOCTL)
-                tty_echo_control(screen, ch);
+                _tty_echo_control(screen, ch);
             _tty_reprint_line(screen, tos);
             return;
         }
@@ -459,6 +600,14 @@ void tty_input_push(char ch) {
 
     tty_state[screen].line_buf[tty_state[screen].line_len++] = ch;
     tty_echo_char(screen, tos, ch, false);
+}
+
+void tty_input_push(char ch) {
+    _push_impl(ch, false);
+}
+
+void tty_input_push_serial(char ch) {
+    _push_impl(ch, true);
 }
 
 ssize_t tty_input_read(size_t screen, void* buf, size_t len) {
@@ -541,7 +690,16 @@ bool tty_input_get_winsize(size_t screen, winsize_t* out) {
     if (!out || screen >= TTY_SCREEN_COUNT)
         return false;
 
-    _tty_init_screen_state(screen);
+    tty_init_screen_state(screen);
+
+    if (tty_state[screen].serial_input_seen) {
+        out->ws_col = 80;
+        out->ws_row = 25;
+        out->ws_xpixel = 0;
+        out->ws_ypixel = 0;
+        return true;
+    }
+
     memcpy(out, &tty_state[screen].winsize, sizeof(*out));
     return true;
 }
@@ -552,6 +710,7 @@ bool tty_input_set_winsize(size_t screen, const winsize_t* in) {
 
     _tty_init_screen_state(screen);
     memcpy(&tty_state[screen].winsize, in, sizeof(*in));
+    tty_state[screen].winsize_user_set = true;
     return true;
 }
 

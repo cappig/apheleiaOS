@@ -54,6 +54,52 @@ static void _update_modifiers(keyboard_dev_t* kbd, bool action, u8 code) {
         kbd->capslock = !kbd->capslock;
 }
 
+static bool _push_ansi_key(u8 code) {
+    const char* seq = NULL;
+
+    switch (code) {
+    case KBD_UP:
+        seq = "\x1b[A";
+        break;
+    case KBD_DOWN:
+        seq = "\x1b[B";
+        break;
+    case KBD_RIGHT:
+        seq = "\x1b[C";
+        break;
+    case KBD_LEFT:
+        seq = "\x1b[D";
+        break;
+    case KBD_HOME:
+        seq = "\x1b[H";
+        break;
+    case KBD_END:
+        seq = "\x1b[F";
+        break;
+    case KBD_INSERT:
+        seq = "\x1b[2~";
+        break;
+    case KBD_DELETE:
+        seq = "\x1b[3~";
+        break;
+    case KBD_PAGEUP:
+        seq = "\x1b[5~";
+        break;
+    case KBD_PAGEDOWN:
+        seq = "\x1b[6~";
+        break;
+    default:
+        return false;
+    }
+
+    while (*seq) {
+        tty_input_push(*seq);
+        seq++;
+    }
+
+    return true;
+}
+
 ssize_t keyboard_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
@@ -110,6 +156,9 @@ void keyboard_handle_key(key_event event) {
             return;
         }
     }
+
+    if (_push_ansi_key(event.code))
+        return;
 
     bool is_alpha = (event.code >= KBD_A && event.code <= KBD_Z);
     bool shift = kbd->shift ^ (kbd->capslock && is_alpha);

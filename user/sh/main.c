@@ -13,6 +13,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "input.h"
+
 static volatile sig_atomic_t got_sigint = 0;
 
 #define SH_ENV_MAX     32
@@ -24,6 +26,7 @@ static volatile sig_atomic_t got_sigint = 0;
 #define SH_MAX_STAGES  8
 #define SH_MAX_JOBS    16
 #define SH_CMD_MAX     128
+#define SH_LINE_MAX    SH_INPUT_LINE_MAX
 
 typedef enum {
     JOB_RUNNING,
@@ -62,10 +65,6 @@ static ssize_t write_str(const char* str) {
         return 0;
 
     return write(STDOUT_FILENO, str, strlen(str));
-}
-
-static void print_prompt(void) {
-    write_str("\rsh$ ");
 }
 
 static void sigint_handler(int signum) {
@@ -227,7 +226,7 @@ static bool sh_wait_foreground_pgrp(pid_t pgid) {
             continue;
         }
 
-        if (waited == 0)
+        if (!waited)
             continue;
 
         if (errno == EINTR)
@@ -238,7 +237,7 @@ static bool sh_wait_foreground_pgrp(pid_t pgid) {
 }
 
 static int sh_fg(int argc, char** argv) {
-    if (sh_job_count == 0) {
+    if (!sh_job_count) {
         write_str("fg: no jobs\n");
         return 1;
     }
@@ -282,7 +281,7 @@ static int sh_fg(int argc, char** argv) {
 }
 
 static int sh_bg(int argc, char** argv) {
-    if (sh_job_count == 0) {
+    if (!sh_job_count) {
         write_str("bg: no jobs\n");
         return 1;
     }
@@ -525,7 +524,7 @@ static int read_line_fd(int fd, char* buf, size_t len, bool interactive) {
         char ch = 0;
         ssize_t read_count = read(fd, &ch, 1);
 
-        if (read_count == 0)
+        if (!read_count)
             break;
 
         if (read_count < 0)
@@ -547,7 +546,7 @@ static int read_line_fd(int fd, char* buf, size_t len, bool interactive) {
             break;
     }
 
-    if (pos == 0 && !interactive)
+    if (!pos && !interactive)
         return -1;
 
     buf[pos] = '\0';
@@ -564,7 +563,7 @@ static bool sh_is_operator(const char* token) {
 
 static int
 sh_tokenize(const char* line, char* storage, size_t storage_len, char** tokens, int max_tokens) {
-    if (!line || !storage || storage_len == 0 || !tokens || max_tokens <= 1)
+    if (!line || !storage || !storage_len || !tokens || max_tokens <= 1)
         return 0;
 
     int count = 0;
@@ -662,7 +661,7 @@ sh_parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* ba
     if (!line || !stages || !stage_count_out || !background_out)
         return -1;
 
-    char token_store[256];
+    char token_store[SH_LINE_MAX];
     char* tokens[SH_MAX_TOKENS];
 
     int token_count = sh_tokenize(line, token_store, sizeof(token_store), tokens, SH_MAX_TOKENS);
@@ -688,7 +687,7 @@ sh_parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* ba
         }
 
         if (!strcmp(token, "|")) {
-            if (stages[stage].argc == 0 || stage + 1 >= SH_MAX_STAGES) {
+            if (!stages[stage].argc || stage + 1 >= SH_MAX_STAGES) {
                 write_str("sh: invalid pipeline\n");
                 return -1;
             }
@@ -725,7 +724,7 @@ sh_parse_pipeline(char* line, sh_stage_t* stages, int* stage_count_out, bool* ba
         stages[stage].argv[stages[stage].argc++] = tokens[i];
     }
 
-    if (stages[stage].argc == 0) {
+    if (!(stages[stage].argc)) {
         write_str("sh: empty command\n");
         return -1;
     }
@@ -762,9 +761,42 @@ static void sh_exec_script(const char* script, char* const argv[]) {
     execve("/sbin/sh", sh_args, NULL);
 }
 
+static bool
+sh_build_exec_path(char* out, size_t out_len, const char* dir, size_t dir_len, const char* cmd) {
+    if (!out || !dir || !cmd || !out_len) {
+        errno = EINVAL;
+        return false;
+    }
+
+    size_t cmd_len = strlen(cmd);
+    bool add_slash = dir_len > 0 && dir[dir_len - 1] != '/';
+    size_t total = dir_len + (add_slash ? 1 : 0) + cmd_len;
+
+    if (total + 1 > out_len) {
+        errno = ENAMETOOLONG;
+        return false;
+    }
+
+    if (dir_len)
+        memcpy(out, dir, dir_len);
+
+    size_t pos = dir_len;
+    if (add_slash)
+        out[pos++] = '/';
+
+    memcpy(out + pos, cmd, cmd_len);
+    out[pos + cmd_len] = '\0';
+    return true;
+}
+
 static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
     if (!cmd || !cmd[0])
         return false;
+
+    if (strlen(cmd) >= PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return false;
+    }
 
     if (strchr(cmd, '/')) {
         execve(cmd, argv, NULL);
@@ -775,27 +807,24 @@ static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
 
     const char* path = sh_env_path();
     const char* cursor = path;
-    char full[128];
+    char full[PATH_MAX];
+    int last_error = ENOENT;
 
     while (*cursor) {
         const char* next = strchr(cursor, ':');
         size_t len = next ? (size_t)(next - cursor) : strlen(cursor);
-        if (len > 0) {
-            if (len >= sizeof(full))
-                len = sizeof(full) - 1;
-            memcpy(full, cursor, len);
-            full[len] = '\0';
-
-            if (full[len - 1] == '/')
-                snprintf(full + len - 1, sizeof(full) - (len - 1), "/%s", cmd);
-            else
-                snprintf(full + len, sizeof(full) - len, "/%s", cmd);
-
+        if (!sh_build_exec_path(full, sizeof(full), cursor, len, cmd)) {
+            if (errno != ENOENT)
+                last_error = errno;
+        } else {
             execve(full, argv, NULL);
             if (errno == ENOEXEC) {
                 sh_exec_script(full, argv);
                 return false;
             }
+
+            if (errno != ENOENT && errno != ENOTDIR)
+                last_error = errno;
         }
 
         if (!next)
@@ -803,6 +832,7 @@ static bool sh_exec_in_path(const char* cmd, char* const argv[]) {
         cursor = next + 1;
     }
 
+    errno = last_error;
     return false;
 }
 
@@ -834,7 +864,7 @@ static int handle_builtin(int argc, char** argv) {
     }
 
     if (!strcmp(argv[0], "help")) {
-        write_str("builtins: help, echo, exit, set, unset, env, cd, umask, jobs, fg, bg\n");
+        write_str("builtins: help, echo, exit, set, unset, env, cd, umask, history, jobs, fg, bg\n");
         return 1;
     }
 
@@ -932,6 +962,11 @@ static int handle_builtin(int argc, char** argv) {
         return 1;
     }
 
+    if (!strcmp(argv[0], "history")) {
+        sh_history_print();
+        return 1;
+    }
+
     if (!strcmp(argv[0], "fg"))
         return sh_fg(argc, argv);
 
@@ -1018,8 +1053,8 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
     for (int i = 0; i < stage_count; i++) {
         pid_t pid = fork();
 
-        if (pid == 0) {
-            pid_t target_pgid = (pgid == 0) ? getpid() : pgid;
+        if (!pid) {
+            pid_t target_pgid = (!pgid) ? getpid() : pgid;
             setpgid(0, target_pgid);
 
             signal(SIGINT, SIG_DFL);
@@ -1047,7 +1082,10 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
                 _exit(0);
 
             sh_exec_in_path(stages[i].argv[0], stages[i].argv);
-            write_str("sh: exec failed\n");
+            if (errno == ENAMETOOLONG)
+                write_str("sh: command name too long\n");
+            else
+                write_str("sh: exec failed\n");
             _exit(1);
         }
 
@@ -1057,7 +1095,7 @@ sh_run_pipeline(sh_stage_t* stages, int stage_count, bool background, const char
             return -1;
         }
 
-        if (pgid == 0)
+        if (!pgid)
             pgid = pid;
 
         setpgid(pid, pgid);
@@ -1148,9 +1186,9 @@ static int run_script(const char* path) {
         return -1;
     }
 
-    char line[256];
+    char line[SH_LINE_MAX];
 
-    while (read_line_fd(fd, line, sizeof(line), false) == 0) {
+    while (!read_line_fd(fd, line, sizeof(line), false)) {
         char* cursor = line;
         while (*cursor && isspace((unsigned char)*cursor))
             cursor++;
@@ -1166,7 +1204,7 @@ static int run_script(const char* path) {
 }
 
 int main(int argc, char** argv) {
-    char line[256];
+    char line[SH_LINE_MAX];
 
     sh_pgid = getpid();
     setpgid(0, 0);
@@ -1176,16 +1214,21 @@ int main(int argc, char** argv) {
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
+
+    sh_input_set_sigint_flag(&got_sigint);
+
     sh_env_set("PATH", "/sbin");
     sh_env_set("HOME", "/");
+
     passwd_t pwd = {0};
-    if (getpwuid(getuid(), &pwd) == 0 && pwd.pw_dir[0])
+    if (!getpwuid(getuid(), &pwd) && pwd.pw_dir[0])
         sh_env_set("HOME", pwd.pw_dir);
+
     sh_env_set("PWD", "/");
     sh_update_pwd();
 
     if (argc > 2 && !strcmp(argv[1], "-c")) {
-        char cmdline[256];
+        char cmdline[SH_LINE_MAX];
         snprintf(cmdline, sizeof(cmdline), "%s", argv[2]);
         return run_command(cmdline);
     }
@@ -1198,9 +1241,7 @@ int main(int argc, char** argv) {
 
     for (;;) {
         sh_reap_jobs(true);
-        print_prompt();
-
-        if (read_line_fd(STDIN_FILENO, line, sizeof(line), true) < 0) {
+        if (sh_read_line_interactive("sh$ ", line, sizeof(line), true) < 0) {
             write_str("\n");
             continue;
         }
@@ -1224,9 +1265,7 @@ int main(int argc, char** argv) {
                 break;
             }
 
-            write_str("> ");
-
-            if (read_line_fd(STDIN_FILENO, line + len, sizeof(line) - len, true) < 0) {
+            if (sh_read_line_interactive("> ", line + len, sizeof(line) - len, false) < 0) {
                 write_str("\n");
                 line[0] = '\0';
                 break;
@@ -1236,6 +1275,7 @@ int main(int argc, char** argv) {
         if (!line[0])
             continue;
 
+        sh_history_add(line);
         run_command(line);
     }
 

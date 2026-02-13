@@ -39,6 +39,15 @@ static void _register_legacy(size_t irq, int_handler_t handler) {
 static void _timer_handler(int_state_t* state) {
     irq_tick_count++;
     irq_ack(IRQ_SYSTEM_TIMER);
+
+    for (size_t i = 0; i < 64; i++) {
+        char ch = 0;
+        if (!serial_try_receive(SERIAL_COM1, &ch))
+            break;
+        if (ch)
+            tty_input_push_serial(ch);
+    }
+
     sched_tick(state);
 }
 

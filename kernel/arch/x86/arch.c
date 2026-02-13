@@ -35,6 +35,65 @@ static void _console_puts(const char* s) {
 }
 
 static char font_path[128] = {0};
+static char cpu_name[64] = "x86";
+
+static void _trim_cpu_name(char* name) {
+    if (!name || !name[0])
+        return;
+
+    size_t start = 0;
+    size_t len = strlen(name);
+
+    while (start < len && name[start] == ' ')
+        start++;
+
+    while (len > start && name[len - 1] == ' ')
+        len--;
+
+    if (start > 0)
+        memmove(name, name + start, len - start);
+
+    name[len - start] = '\0';
+}
+
+static void _detect_cpu_name(void) {
+    cpuid_regs_t regs = {0};
+    cpuid(0x80000000, &regs);
+
+    if (regs.eax >= 0x80000004) {
+        u32 brand[12] = {0};
+        cpuid_regs_t leaf = {0};
+
+        cpuid(0x80000002, &leaf);
+        brand[0] = leaf.eax;
+        brand[1] = leaf.ebx;
+        brand[2] = leaf.ecx;
+        brand[3] = leaf.edx;
+
+        cpuid(0x80000003, &leaf);
+        brand[4] = leaf.eax;
+        brand[5] = leaf.ebx;
+        brand[6] = leaf.ecx;
+        brand[7] = leaf.edx;
+
+        cpuid(0x80000004, &leaf);
+        brand[8] = leaf.eax;
+        brand[9] = leaf.ebx;
+        brand[10] = leaf.ecx;
+        brand[11] = leaf.edx;
+
+        memcpy(cpu_name, brand, sizeof(brand));
+        cpu_name[sizeof(cpu_name) - 1] = '\0';
+        _trim_cpu_name(cpu_name);
+        if (cpu_name[0])
+            return;
+    }
+
+    cpuid(0x00000000, &regs);
+    u32 vendor[3] = {regs.ebx, regs.edx, regs.ecx};
+    memcpy(cpu_name, vendor, sizeof(vendor));
+    cpu_name[sizeof(vendor)] = '\0';
+}
 
 static void _select_log_level(const boot_info_t* info) {
     if (!info)
@@ -250,8 +309,9 @@ void arch_init(void* boot_info) {
     if (!info)
         panic("boot info missing");
 
-    _select_log_level(info);
-    _cache_font(info);
+    select_log_level(info);
+    arch_cache_font(info);
+    _detect_cpu_name();
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booting");
@@ -370,6 +430,30 @@ u64 arch_timer_ticks(void) {
 
 u32 arch_timer_hz(void) {
     return irq_timer_hz();
+}
+
+const char* arch_name(void) {
+#if defined(__x86_64__)
+    return "x86_64";
+#else
+    return "x86_32";
+#endif
+}
+
+const char* arch_cpu_name(void) {
+    return cpu_name;
+}
+
+u64 arch_cpu_khz(void) {
+    return tsc_khz();
+}
+
+size_t arch_mem_total(void) {
+    return pmm_total_mem();
+}
+
+size_t arch_mem_free(void) {
+    return pmm_free_mem();
 }
 
 void arch_syscall_install(int vector, arch_syscall_handler_t handler) {

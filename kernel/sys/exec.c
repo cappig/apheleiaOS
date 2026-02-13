@@ -437,6 +437,11 @@ _open_file(sched_thread_t* thread, const char* path, exec_file_t* out, bool requ
 
     memset(out, 0, sizeof(*out));
 
+    if (strlen(path) >= PATH_MAX) {
+        log_warn("exec: path too long");
+        return -ENAMETOOLONG;
+    }
+
     if (!path_resolve(thread->cwd, path, out->resolved, sizeof(out->resolved)))
         return -ENOENT;
 

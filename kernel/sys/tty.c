@@ -2,6 +2,7 @@
 
 #include <arch/arch.h>
 #include <log/log.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/tty_input.h>
 #include <termios.h>
@@ -93,8 +94,18 @@ static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len
     if (!(tos.c_oflag & OPOST))
         return tty_write_screen(index, buf, len);
 
+    bool has_cr = memchr(buf, '\r', len) != NULL;
+    bool has_nl = memchr(buf, '\n', len) != NULL;
+    bool needs_ocrnl = (tos.c_oflag & OCRNL) && has_cr;
+    bool needs_onlret = (tos.c_oflag & ONLRET) && has_nl;
+    bool needs_onlcr = (tos.c_oflag & ONLCR) && has_nl;
+
+    // Fast path: no output post-processing transforms are needed.
+    if (!needs_ocrnl && !needs_onlret && !needs_onlcr)
+        return tty_write_screen(index, buf, len);
+
     const u8* in = buf;
-    char out[128];
+    char out[256];
     size_t out_len = 0;
 
     for (size_t i = 0; i < len; i++) {
@@ -133,11 +144,6 @@ static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len
 ssize_t tty_write_screen_output(size_t index, const void* buf, size_t len) {
     if (!buf || len == 0)
         return 0;
-
-    if (len == 1 && *(const char*)buf == '\n') {
-        const char crlf[] = {'\r', '\n'};
-        return tty_write_screen(index, crlf, sizeof(crlf));
-    }
 
     return tty_write_screen_processed(index, buf, len);
 }

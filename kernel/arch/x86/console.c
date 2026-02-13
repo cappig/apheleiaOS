@@ -3,6 +3,7 @@
 #include <arch/arch.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <base/utf8.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,12 +21,17 @@ typedef enum {
 typedef struct {
     size_t cursor_x;
     size_t cursor_y;
+    size_t saved_cursor_x;
+    size_t saved_cursor_y;
+    bool saved_cursor_valid;
     u8 vga_attr;
     u8 fg_vga;
     u8 bg_vga;
     u32 fg_rgb;
     u32 bg_rgb;
     bool bright;
+    u8 utf8_pending[4];
+    size_t utf8_pending_len;
 } console_screen_t;
 
 typedef struct {
@@ -39,6 +45,7 @@ typedef struct {
     u64 fb_phys;
     u8* fb;
     size_t fb_size;
+    u8* fb_back;
     u32 width;
     u32 height;
     u32 pitch;
@@ -57,6 +64,18 @@ typedef struct {
     console_screen_t* screens;
     console_cell_t* cells;
     console_screen_t fallback_screen;
+
+    bool cursor_drawn;
+    size_t cursor_draw_x;
+    size_t cursor_draw_y;
+    bool cursor_batch;
+
+    bool flush_batch;
+    bool dirty;
+    size_t dirty_x0;
+    size_t dirty_y0;
+    size_t dirty_x1;
+    size_t dirty_y1;
 } console_state_t;
 
 static console_state_t console_state = {0};
@@ -89,6 +108,13 @@ static void _clear_vga(const console_screen_t* screen);
 static void _clear_vesa(const console_screen_t* screen);
 static void _draw_char_vesa(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32 bg_rgb);
 static void _draw_char_vga(u32 codepoint, size_t col, size_t row, u8 attr);
+static void _cursor_hide(void);
+static void _cursor_show(size_t screen_index);
+static void _update_vga_cursor(size_t col, size_t row);
+static bool _has_back_buffer(void);
+static void _mark_dirty_rect(size_t x, size_t y, size_t width, size_t height);
+static void _flush_dirty(void);
+static void _maybe_flush_dirty(void);
 
 static void _screen_update_vga_attr(console_screen_t* screen) {
     if (!screen)
@@ -117,6 +143,10 @@ static void _screen_reset(console_screen_t* screen) {
     _screen_reset_colors(screen);
     screen->cursor_x = 0;
     screen->cursor_y = 0;
+    screen->saved_cursor_x = 0;
+    screen->saved_cursor_y = 0;
+    screen->saved_cursor_valid = false;
+    screen->utf8_pending_len = 0;
 }
 
 static size_t _cell_count(void) {
@@ -157,12 +187,279 @@ static void _clear_screen_buffer(size_t index) {
     }
 }
 
+static void _update_vga_cursor(size_t col, size_t row) {
+    if (!console_state.cols || !console_state.rows)
+        return;
+
+    if (col >= console_state.cols)
+        col = console_state.cols - 1;
+    if (row >= console_state.rows)
+        row = console_state.rows - 1;
+
+    u16 pos = (u16)(row * console_state.cols + col);
+    outb(0x3d4, 0x0f);
+    outb(0x3d5, (u8)(pos & 0xff));
+    outb(0x3d4, 0x0e);
+    outb(0x3d5, (u8)((pos >> 8) & 0xff));
+}
+
+static void _cursor_hide(void) {
+    if (!console_state.cursor_drawn)
+        return;
+
+    if (console_state.mode == CONSOLE_VGA) {
+        console_state.cursor_drawn = false;
+        return;
+    }
+
+    if (console_state.mode != CONSOLE_VESA)
+        return;
+
+    console_screen_t* screen = console_get_screen(console_state.active_screen);
+    console_cell_t* cells = console_screen_cells(console_state.active_screen);
+    if (!screen || !cells)
+        return;
+
+    size_t col = console_state.cursor_draw_x;
+    size_t row = console_state.cursor_draw_y;
+
+    if (col >= console_state.cols || row >= console_state.rows)
+        return;
+
+    console_cell_t* cell = &cells[row * console_state.cols + col];
+    u32 codepoint = cell->codepoint ? cell->codepoint : ' ';
+    u32 fg = ansi_rgb[cell->fg & 0x0f];
+    u32 bg = ansi_rgb[cell->bg & 0x0f];
+
+    _draw_char_vesa(codepoint, col, row, fg, bg);
+    console_state.cursor_drawn = false;
+}
+
+static void _cursor_show(size_t screen_index) {
+    if (console_state.cursor_batch)
+        return;
+
+    if (screen_index != console_state.active_screen)
+        return;
+
+    console_screen_t* screen = console_get_screen(screen_index);
+    console_cell_t* cells = console_screen_cells(screen_index);
+    if (!screen || !cells || !console_state.cols || !console_state.rows)
+        return;
+
+    if (console_state.mode == CONSOLE_VGA) {
+        _update_vga_cursor(screen->cursor_x, screen->cursor_y);
+        console_state.cursor_drawn = true;
+        console_state.cursor_draw_x = screen->cursor_x;
+        console_state.cursor_draw_y = screen->cursor_y;
+        return;
+    }
+
+    if (console_state.mode != CONSOLE_VESA)
+        return;
+
+    _cursor_hide();
+
+    size_t col = screen->cursor_x;
+    size_t row = screen->cursor_y;
+    if (col >= console_state.cols || row >= console_state.rows)
+        return;
+
+    console_cell_t* cell = &cells[row * console_state.cols + col];
+    u32 codepoint = cell->codepoint ? cell->codepoint : ' ';
+    u32 fg = ansi_rgb[cell->bg & 0x0f];
+    u32 bg = ansi_rgb[cell->fg & 0x0f];
+
+    _draw_char_vesa(codepoint, col, row, fg, bg);
+
+    console_state.cursor_drawn = true;
+    console_state.cursor_draw_x = col;
+    console_state.cursor_draw_y = row;
+}
+
+static void _clear_screen_range(size_t index, size_t start, size_t end) {
+    console_screen_t* screen = console_get_screen(index);
+    console_cell_t* cells = console_screen_cells(index);
+
+    if (!screen)
+        return;
+
+    size_t count = console_cell_count();
+    if (!count || start >= count)
+        return;
+
+    if (end > count)
+        end = count;
+
+    bool full_clear = start == 0 && end == count;
+
+    if (cells) {
+        for (size_t i = start; i < end; i++) {
+            cells[i].codepoint = ' ';
+            cells[i].fg = screen->fg_vga;
+            cells[i].bg = screen->bg_vga;
+        }
+    }
+
+    if (index != console_state.active_screen)
+        return;
+
+    bool temp_batch = false;
+    if (_has_back_buffer() && !console_state.flush_batch) {
+        console_state.flush_batch = true;
+        temp_batch = true;
+    }
+
+    _cursor_hide();
+
+    if (full_clear) {
+        if (console_state.mode == CONSOLE_VGA)
+            _clear_vga(screen);
+        else if (console_state.mode == CONSOLE_VESA)
+            _clear_vesa(screen);
+
+        console_state.cursor_drawn = false;
+        if (temp_batch) {
+            console_state.flush_batch = false;
+            _flush_dirty();
+        }
+        return;
+    }
+
+    if (console_state.mode == CONSOLE_VGA) {
+        for (size_t i = start; i < end; i++) {
+            size_t row = i / console_state.cols;
+            size_t col = i % console_state.cols;
+            _draw_char_vga(' ', col, row, screen->vga_attr);
+        }
+    } else if (console_state.mode == CONSOLE_VESA) {
+        for (size_t i = start; i < end; i++) {
+            size_t row = i / console_state.cols;
+            size_t col = i % console_state.cols;
+            _draw_char_vesa(' ', col, row, screen->fg_rgb, screen->bg_rgb);
+        }
+    }
+
+    console_state.cursor_drawn = false;
+    if (temp_batch) {
+        console_state.flush_batch = false;
+        _flush_dirty();
+    }
+}
+
+static void _handle_csi_clear(size_t index, console_screen_t* screen, int mode) {
+    size_t cols = console_state.cols;
+    size_t rows = console_state.rows;
+    size_t count = console_cell_count();
+
+    if (!screen || !cols || !rows || !count)
+        return;
+
+    size_t cursor = screen->cursor_y * cols + screen->cursor_x;
+
+    switch (mode) {
+    case 0:
+        _clear_screen_range(index, cursor, count);
+        break;
+    case 1:
+        _clear_screen_range(index, 0, cursor + 1);
+        break;
+    case 2:
+        _clear_screen_range(index, 0, count);
+        break;
+    default:
+        break;
+    }
+
+    _cursor_show(index);
+}
+
+static void _handle_csi_clear_line(size_t index, console_screen_t* screen, int mode) {
+    if (!screen || !console_state.cols || !console_state.rows)
+        return;
+
+    size_t row = screen->cursor_y;
+    if (row >= console_state.rows)
+        row = console_state.rows - 1;
+
+    size_t row_start = row * console_state.cols;
+    size_t row_end = row_start + console_state.cols;
+    size_t cursor = row_start + screen->cursor_x;
+    if (cursor >= row_end)
+        cursor = row_end - 1;
+
+    switch (mode) {
+    case 0:
+        _clear_screen_range(index, cursor, row_end);
+        break;
+    case 1:
+        _clear_screen_range(index, row_start, cursor + 1);
+        break;
+    case 2:
+        _clear_screen_range(index, row_start, row_end);
+        break;
+    default:
+        break;
+    }
+
+    _cursor_show(index);
+}
+
+static void _handle_csi_cursor(size_t index, console_screen_t* screen, int row, int col) {
+    if (!screen)
+        return;
+
+    if (row <= 0)
+        row = 1;
+    if (col <= 0)
+        col = 1;
+
+    if ((size_t)row > console_state.rows)
+        row = (int)console_state.rows;
+    if ((size_t)col > console_state.cols)
+        col = (int)console_state.cols;
+
+    screen->cursor_y = (size_t)(row - 1);
+    screen->cursor_x = (size_t)(col - 1);
+    (void)index;
+
+    _cursor_show(index);
+}
+
+static void _handle_csi_move(size_t index, console_screen_t* screen, int row_delta, int col_delta) {
+    if (!screen || !console_state.cols || !console_state.rows)
+        return;
+
+    int row = (int)screen->cursor_y + row_delta;
+    int col = (int)screen->cursor_x + col_delta;
+
+    if (row < 0)
+        row = 0;
+    if (col < 0)
+        col = 0;
+
+    if ((size_t)row >= console_state.rows)
+        row = (int)console_state.rows - 1;
+    if ((size_t)col >= console_state.cols)
+        col = (int)console_state.cols - 1;
+
+    screen->cursor_y = (size_t)row;
+    screen->cursor_x = (size_t)col;
+    _cursor_show(index);
+}
+
 static void _redraw_screen(size_t index) {
-    console_screen_t* screen = _get_screen(index);
-    console_cell_t* cells = _screen_cells(index);
+    console_screen_t* screen = console_get_screen(index);
+    console_cell_t* cells = console_screen_cells(index);
 
     if (!screen || !console_state.ready)
         return;
+
+    bool temp_batch = false;
+    if (index == console_state.active_screen && _has_back_buffer() && !console_state.flush_batch) {
+        console_state.flush_batch = true;
+        temp_batch = true;
+    }
 
     if (console_state.mode == CONSOLE_VGA)
         _clear_vga(screen);
@@ -190,6 +487,13 @@ static void _redraw_screen(size_t index) {
             }
         }
     }
+
+    if (temp_batch) {
+        console_state.flush_batch = false;
+        _flush_dirty();
+    }
+
+    _cursor_show(index);
 }
 
 static bool _set_active(size_t index) {
@@ -366,6 +670,81 @@ static void _unmap_range(void* ptr, size_t size) {
 #endif
 }
 
+static bool _has_back_buffer(void) {
+    return console_state.mode == CONSOLE_VESA && console_state.fb_back && console_state.fb_size > 0;
+}
+
+static void _mark_dirty_rect(size_t x, size_t y, size_t width, size_t height) {
+    if (!_has_back_buffer() || !width || !height)
+        return;
+
+    if (x >= console_state.width || y >= console_state.height)
+        return;
+
+    if (x + width > console_state.width)
+        width = console_state.width - x;
+    if (y + height > console_state.height)
+        height = console_state.height - y;
+
+    size_t x1 = x + width;
+    size_t y1 = y + height;
+
+    if (!console_state.dirty) {
+        console_state.dirty = true;
+        console_state.dirty_x0 = x;
+        console_state.dirty_y0 = y;
+        console_state.dirty_x1 = x1;
+        console_state.dirty_y1 = y1;
+        return;
+    }
+
+    if (x < console_state.dirty_x0)
+        console_state.dirty_x0 = x;
+    if (y < console_state.dirty_y0)
+        console_state.dirty_y0 = y;
+    if (x1 > console_state.dirty_x1)
+        console_state.dirty_x1 = x1;
+    if (y1 > console_state.dirty_y1)
+        console_state.dirty_y1 = y1;
+}
+
+static void _flush_dirty(void) {
+    if (!_has_back_buffer() || !console_state.dirty)
+        return;
+
+    size_t x = console_state.dirty_x0;
+    size_t y = console_state.dirty_y0;
+    size_t width = console_state.dirty_x1 - console_state.dirty_x0;
+    size_t height = console_state.dirty_y1 - console_state.dirty_y0;
+
+    if (!width || !height) {
+        console_state.dirty = false;
+        return;
+    }
+
+    size_t width_bytes = width * console_state.bytes_per_pixel;
+    size_t offset = y * console_state.pitch + x * console_state.bytes_per_pixel;
+    size_t map_size = (height - 1) * console_state.pitch + width_bytes;
+
+    u8* fb = console_map_range(offset, map_size);
+    if (!fb)
+        return;
+
+    const u8* src = console_state.fb_back + offset;
+    for (size_t row = 0; row < height; row++)
+        memcpy(fb + row * console_state.pitch, src + row * console_state.pitch, width_bytes);
+
+    console_unmap_range(fb, map_size);
+    console_state.dirty = false;
+}
+
+static void _maybe_flush_dirty(void) {
+    if (console_state.flush_batch)
+        return;
+
+    _flush_dirty();
+}
+
 static void _write_pixel(u8* dst, u32 color) {
     switch (console_state.bytes_per_pixel) {
     case 4:
@@ -392,6 +771,29 @@ static void _write_pixel(u8* dst, u32 color) {
 static void _fill_rect(size_t x, size_t y, size_t width, size_t height, u32 color) {
     if (!console_state.fb_size || !width || !height)
         return;
+
+    if (x >= console_state.width || y >= console_state.height)
+        return;
+
+    if (x + width > console_state.width)
+        width = console_state.width - x;
+    if (y + height > console_state.height)
+        height = console_state.height - y;
+
+    if (_has_back_buffer()) {
+        size_t offset = y * console_state.pitch + x * console_state.bytes_per_pixel;
+        u8* base = console_state.fb_back + offset;
+
+        for (size_t row = 0; row < height; row++) {
+            u8* row_base = base + row * console_state.pitch;
+            for (size_t col = 0; col < width; col++)
+                _write_pixel(row_base + col * console_state.bytes_per_pixel, color);
+        }
+
+        _mark_dirty_rect(x, y, width, height);
+        _maybe_flush_dirty();
+        return;
+    }
 
     size_t width_bytes = width * console_state.bytes_per_pixel;
     size_t map_size = (height - 1) * console_state.pitch + width_bytes;
@@ -451,12 +853,17 @@ static void _scroll_vesa(const console_screen_t* screen) {
     size_t line_bytes = console_state.pitch * console_state.font_height;
     size_t move_bytes = console_state.pitch * (console_state.height - console_state.font_height);
 
-    u8* fb = console_map_range(0, console_state.fb_size);
-    if (!fb)
-        return;
+    if (_has_back_buffer()) {
+        memmove(console_state.fb_back, console_state.fb_back + line_bytes, move_bytes);
+        _mark_dirty_rect(0, 0, console_state.width, console_state.height);
+    } else {
+        u8* fb = console_map_range(0, console_state.fb_size);
+        if (!fb)
+            return;
 
-    memmove(fb, fb + line_bytes, move_bytes);
-    console_unmap_range(fb, console_state.fb_size);
+        memmove(fb, fb + line_bytes, move_bytes);
+        console_unmap_range(fb, console_state.fb_size);
+    }
 
     _fill_rect(
         0,
@@ -465,6 +872,8 @@ static void _scroll_vesa(const console_screen_t* screen) {
         console_state.font_height,
         screen->bg_rgb
     );
+
+    _maybe_flush_dirty();
 }
 
 static void _draw_char_vesa(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32 bg_rgb) {
@@ -481,9 +890,14 @@ static void _draw_char_vesa(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u
     const u8* glyph = console_state.font->glyphs + index * console_state.font_glyph_bytes;
 
     size_t offset = y * console_state.pitch + x * console_state.bytes_per_pixel;
-    u8* base = _map_range(offset, map_size);
-    if (!base)
-        return;
+    u8* base = NULL;
+    if (_has_back_buffer()) {
+        base = console_state.fb_back + offset;
+    } else {
+        base = console_map_range(offset, map_size);
+        if (!base)
+            return;
+    }
 
     for (size_t gy = 0; gy < console_state.font_height; gy++) {
         const u8* row_ptr = glyph + gy * console_state.font_row_bytes;
@@ -497,7 +911,12 @@ static void _draw_char_vesa(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u
         }
     }
 
-    _unmap_range(base, map_size);
+    if (_has_back_buffer()) {
+        _mark_dirty_rect(x, y, console_state.font_width, console_state.font_height);
+        _maybe_flush_dirty();
+    } else {
+        console_unmap_range(base, map_size);
+    }
 }
 
 static void _draw_char_vga(u32 codepoint, size_t col, size_t row, u8 attr) {
@@ -628,55 +1047,53 @@ static void _putc(console_screen_t* screen, size_t screen_index, u32 ch) {
     screen->cursor_x++;
 }
 
-static size_t _utf8_decode(const u8* data, size_t len, u32* out) {
-    if (!data || !len || !out)
-        return 0;
+static void _put_utf8_byte(console_screen_t* screen, size_t screen_index, u8 byte) {
+    if (!screen)
+        return;
 
-    u8 b0 = data[0];
-    if (b0 < 0x80) {
-        *out = b0;
-        return 1;
+    if (screen->utf8_pending_len == 0 && byte < 0x80) {
+        console_putc(screen, screen_index, byte);
+        return;
     }
 
-    if ((b0 & 0xe0) == 0xc0) {
-        if (len < 2 || (data[1] & 0xc0) != 0x80)
-            return 0;
-
-        u32 cp = ((u32)(b0 & 0x1f) << 6) | (u32)(data[1] & 0x3f);
-        if (cp < 0x80)
-            return 0;
-
-        *out = cp;
-        return 2;
+    if (screen->utf8_pending_len >= sizeof(screen->utf8_pending)) {
+        screen->utf8_pending_len = 0;
+        console_putc(screen, screen_index, '?');
     }
 
-    if ((b0 & 0xf0) == 0xe0) {
-        if (len < 3 || (data[1] & 0xc0) != 0x80 || (data[2] & 0xc0) != 0x80)
-            return 0;
+    screen->utf8_pending[screen->utf8_pending_len++] = byte;
 
-        u32 cp = ((u32)(b0 & 0x0f) << 12) | ((u32)(data[1] & 0x3f) << 6) | (u32)(data[2] & 0x3f);
-        if (cp < 0x800 || (cp >= 0xd800 && cp <= 0xdfff))
-            return 0;
-
-        *out = cp;
-        return 3;
+    size_t needed = utf8_sequence_len(screen->utf8_pending[0]);
+    if (!needed) {
+        screen->utf8_pending_len = 0;
+        console_putc(screen, screen_index, '?');
+        return;
     }
 
-    if ((b0 & 0xf8) == 0xf0) {
-        if (len < 4 || (data[1] & 0xc0) != 0x80 || (data[2] & 0xc0) != 0x80 ||
-            (data[3] & 0xc0) != 0x80)
-            return 0;
+    if (screen->utf8_pending_len < needed) {
+        if (screen->utf8_pending_len > 1 && (byte & 0xc0) != 0x80) {
+            screen->utf8_pending_len = 0;
+            console_putc(screen, screen_index, '?');
 
-        u32 cp = ((u32)(b0 & 0x07) << 18) | ((u32)(data[1] & 0x3f) << 12) |
-                 ((u32)(data[2] & 0x3f) << 6) | (u32)(data[3] & 0x3f);
-        if (cp < 0x10000 || cp > 0x10ffff)
-            return 0;
-
-        *out = cp;
-        return 4;
+            if (byte < 0x80)
+                console_putc(screen, screen_index, byte);
+            else if (utf8_sequence_len(byte) > 1)
+                screen->utf8_pending[screen->utf8_pending_len++] = byte;
+            else
+                console_putc(screen, screen_index, '?');
+        }
+        return;
     }
 
-    return 0;
+    u32 codepoint = 0;
+    size_t decoded = utf8_decode(screen->utf8_pending, needed, &codepoint);
+    screen->utf8_pending_len = 0;
+    if (!decoded) {
+        console_putc(screen, screen_index, '?');
+        return;
+    }
+
+    console_putc(screen, screen_index, codepoint);
 }
 
 static void _write_screen(size_t screen_index, const char* buf, size_t len) {
@@ -686,6 +1103,15 @@ static void _write_screen(size_t screen_index, const char* buf, size_t len) {
     console_screen_t* screen = _get_screen(screen_index);
     if (!screen)
         return;
+
+    bool batch_cursor = (screen_index == console_state.active_screen);
+    bool batch_flush = batch_cursor && _has_back_buffer();
+    if (batch_cursor) {
+        _cursor_hide();
+        console_state.cursor_batch = true;
+    }
+    if (batch_flush)
+        console_state.flush_batch = true;
 
     bool esc = false;
     bool csi = false;
@@ -698,30 +1124,24 @@ static void _write_screen(size_t screen_index, const char* buf, size_t len) {
 
         if (!esc) {
             if (ch == '\x1b') {
+                if (screen->utf8_pending_len) {
+                    screen->utf8_pending_len = 0;
+                    console_putc(screen, screen_index, '?');
+                }
                 esc = true;
                 csi = false;
                 continue;
             }
 
             if (ch < 0x20 || ch == 0x7f) {
-                _putc(screen, screen_index, ch);
+                if (screen->utf8_pending_len) {
+                    screen->utf8_pending_len = 0;
+                    console_putc(screen, screen_index, '?');
+                }
+                console_putc(screen, screen_index, ch);
                 continue;
             }
-
-            if (ch < 0x80) {
-                _putc(screen, screen_index, ch);
-                continue;
-            }
-
-            u32 codepoint = 0;
-            size_t consumed = _utf8_decode((const u8*)&buf[i], len - i, &codepoint);
-            if (!consumed) {
-                _putc(screen, screen_index, '?');
-                continue;
-            }
-
-            _putc(screen, screen_index, codepoint);
-            i += consumed - 1;
+            _put_utf8_byte(screen, screen_index, ch);
             continue;
         }
 
@@ -771,9 +1191,104 @@ static void _write_screen(size_t screen_index, const char* buf, size_t len) {
         }
 
         if (ch >= '@' && ch <= '~') {
+            if (current >= 0 && param_count < (sizeof(params) / sizeof(params[0]))) {
+                params[param_count++] = current;
+                current = -1;
+            }
+
+            switch (ch) {
+            case 'J': {
+                int mode = 0;
+                if (param_count == 0)
+                    mode = 0;
+                else
+                    mode = params[0];
+                _handle_csi_clear(screen_index, screen, mode);
+                break;
+            }
+            case 'K': {
+                int mode = 0;
+                if (param_count == 0)
+                    mode = 0;
+                else
+                    mode = params[0];
+                _handle_csi_clear_line(screen_index, screen, mode);
+                break;
+            }
+            case 'A': {
+                int count = 1;
+                if (param_count >= 1 && params[0] > 0)
+                    count = params[0];
+                _handle_csi_move(screen_index, screen, -count, 0);
+                break;
+            }
+            case 'B': {
+                int count = 1;
+                if (param_count >= 1 && params[0] > 0)
+                    count = params[0];
+                _handle_csi_move(screen_index, screen, count, 0);
+                break;
+            }
+            case 'C': {
+                int count = 1;
+                if (param_count >= 1 && params[0] > 0)
+                    count = params[0];
+                _handle_csi_move(screen_index, screen, 0, count);
+                break;
+            }
+            case 'D': {
+                int count = 1;
+                if (param_count >= 1 && params[0] > 0)
+                    count = params[0];
+                _handle_csi_move(screen_index, screen, 0, -count);
+                break;
+            }
+            case 'G': {
+                int col = 1;
+                if (param_count >= 1)
+                    col = params[0];
+                _handle_csi_cursor(screen_index, screen, (int)screen->cursor_y + 1, col);
+                break;
+            }
+            case 'H':
+            case 'f': {
+                int row = 1;
+                int col = 1;
+                if (param_count >= 1)
+                    row = params[0];
+                if (param_count >= 2)
+                    col = params[1];
+                _handle_csi_cursor(screen_index, screen, row, col);
+                break;
+            }
+            case 's':
+                screen->saved_cursor_x = screen->cursor_x;
+                screen->saved_cursor_y = screen->cursor_y;
+                screen->saved_cursor_valid = true;
+                break;
+            case 'u':
+                if (screen->saved_cursor_valid) {
+                    screen->cursor_x = screen->saved_cursor_x;
+                    screen->cursor_y = screen->saved_cursor_y;
+                    _cursor_show(screen_index);
+                }
+                break;
+            default:
+                break;
+            }
+
             esc = false;
             csi = false;
         }
+    }
+
+    if (batch_cursor) {
+        if (batch_flush) {
+            console_state.flush_batch = false;
+            _flush_dirty();
+        }
+        console_state.cursor_batch = false;
+        _cursor_show(screen_index);
     }
 }
 
@@ -857,6 +1372,7 @@ void console_init(const boot_info_t* info) {
             console_state.mode = CONSOLE_VESA;
             console_state.use_phys_window = true;
             console_state.ready = true;
+            console_state.fb_back = calloc(1, size);
 
             _init_screens(TTY_CONSOLE);
             _redraw_screen(console_state.active_screen);
@@ -883,6 +1399,7 @@ void console_init(const boot_info_t* info) {
 
             console_state.mode = CONSOLE_VESA;
             console_state.ready = true;
+            console_state.fb_back = calloc(1, size);
 
             _init_screens(TTY_CONSOLE);
             _redraw_screen(console_state.active_screen);
@@ -946,7 +1463,7 @@ ssize_t arch_console_write_screen(size_t screen, const void* buf, size_t len) {
     if (mirror)
         send_serial_sized_string(SERIAL_COM1, buf, len);
 
-    console_write_screen(screen, buf, len);
+    _write_screen(screen, buf, len);
     arch_irq_restore(flags);
     return (ssize_t)len;
 }
