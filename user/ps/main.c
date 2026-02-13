@@ -38,6 +38,7 @@ static const char* tty_name(const proc_info_t* info, char* buf, size_t buf_len) 
         return "console";
 
     snprintf(buf, buf_len, "tty%d", info->tty_index - 1);
+
     return buf;
 }
 

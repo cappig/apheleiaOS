@@ -1,5 +1,7 @@
 NAME := apheleia
 VERSION := pre-alpha
+BUILD_DATE ?= $(shell date -u +%Y-%m-%d)
+GIT_COMMIT_SHORT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 ARCH := x86_64
 

@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <io.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,7 +7,7 @@
 #include <unistd.h>
 
 static void usage(void) {
-    write(STDOUT_FILENO, "usage: chmod MODE FILE...\n", 26);
+    io_write_str("usage: chmod MODE FILE...\n");
 }
 
 static int parse_mode(const char* text, mode_t* out) {
@@ -34,7 +35,7 @@ int main(int argc, char** argv) {
 
     mode_t mode = 0;
     if (parse_mode(argv[1], &mode) != 0) {
-        write(STDOUT_FILENO, "chmod: invalid mode\n", 20);
+        io_write_str("chmod: invalid mode\n");
         return 1;
     }
 
@@ -43,7 +44,7 @@ int main(int argc, char** argv) {
         if (chmod(argv[i], mode) != 0) {
             char msg[128];
             snprintf(msg, sizeof(msg), "chmod: %s: %d\n", argv[i], errno);
-            write(STDOUT_FILENO, msg, strlen(msg));
+            io_write_str(msg);
             rc = 1;
         }
     }

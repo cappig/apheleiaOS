@@ -1,60 +1,23 @@
+#include <kv.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-
-static bool read_kv_u64(const char* text, const char* key, unsigned long long* out) {
-    if (!text || !key || !out)
-        return false;
-
-    const char* line = text;
-    size_t key_len = strlen(key);
-
-    for (;;) {
-        const char* next = strchr(line, '\n');
-        size_t line_len = next ? (size_t)(next - line) : strlen(line);
-
-        if (line_len > key_len && !strncmp(line, key, key_len)) {
-            line += key_len;
-            break;
-        }
-
-        if (!next)
-            return false;
-
-        line = next + 1;
-    }
-
-    if (sscanf(line, "%llu", out) != 1)
-        return false;
-
-    return true;
-}
 
 static bool read_uptime(unsigned long long* sec_out) {
     if (!sec_out)
         return false;
 
-    int fd = open("/dev/clock", O_RDONLY, 0);
-    if (fd < 0)
-        return false;
-
     char buf[256] = {0};
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-
-    if (n <= 0)
+    if (kv_read_file("/dev/clock", buf, sizeof(buf)) <= 0)
         return false;
-
-    buf[n] = '\0';
 
     unsigned long long now = 0;
     unsigned long long boot = 0;
 
-    if (!read_kv_u64(buf, "now=", &now))
+    if (!kv_read_u64(buf, "now", &now))
         return false;
 
-    if (!read_kv_u64(buf, "boot=", &boot))
+    if (!kv_read_u64(buf, "boot", &boot))
         return false;
 
     *sec_out = now >= boot ? now - boot : 0;

@@ -1,11 +1,10 @@
+#include <kv.h>
 #include <pwd.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <fcntl.h>
 
 #ifndef ARCH_NAME
 #define ARCH_NAME "unknown"
@@ -22,82 +21,6 @@ static void print_row(const char* left, const char* right) {
     char line[256];
     snprintf(line, sizeof(line), "%-12s %s\n", left ? left : "", right ? right : "");
     write(STDOUT_FILENO, line, strlen(line));
-}
-
-static ssize_t read_all(const char* path, char* out, size_t out_len) {
-    if (!path || !out || out_len < 2)
-        return -1;
-
-    int fd = open(path, O_RDONLY, 0);
-    if (fd < 0)
-        return -1;
-
-    size_t off = 0;
-
-    while (off + 1 < out_len) {
-        ssize_t got = read(fd, out + off, out_len - off - 1);
-        if (!got)
-            break;
-        if (got < 0) {
-            close(fd);
-            return -1;
-        }
-
-        off += (size_t)got;
-    }
-
-    close(fd);
-    out[off] = '\0';
-
-    return (ssize_t)off;
-}
-
-static bool read_kv_string(
-    const char* text,
-    const char* key,
-    char* out,
-    size_t out_len
-) {
-    if (!text || !key || !out || out_len < 2)
-        return false;
-
-    size_t key_len = strlen(key);
-    const char* line = text;
-
-    while (*line) {
-        const char* next = strchr(line, '\n');
-        size_t line_len = next ? (size_t)(next - line) : strlen(line);
-
-        if (line_len > key_len + 1 && !strncmp(line, key, key_len) && line[key_len] == '=') {
-            size_t value_len = line_len - key_len - 1;
-
-            if (value_len >= out_len)
-                value_len = out_len - 1;
-
-            memcpy(out, line + key_len + 1, value_len);
-            out[value_len] = '\0';
-            return true;
-        }
-
-        if (!next)
-            break;
-
-        line = next + 1;
-    }
-
-    return false;
-}
-
-static bool read_kv_u64(const char* text, const char* key, unsigned long long* out) {
-    if (!out)
-        return false;
-
-    char value[64] = {0};
-    if (!read_kv_string(text, key, value, sizeof(value)))
-        return false;
-
-    *out = (unsigned long long)atoll(value);
-    return true;
 }
 
 static void resolve_user(char* user, size_t user_len, char* shell, size_t shell_len) {
@@ -201,19 +124,19 @@ int main(void) {
     char swap_kv[256] = {0};
     char cpu_kv[256] = {0};
 
-    if (read_all("/dev/os", os_kv, sizeof(os_kv)) > 0) {
-        read_kv_string(os_kv, "name", os_name, sizeof(os_name));
-        read_kv_string(os_kv, "arch", os_arch, sizeof(os_arch));
+    if (kv_read_file("/dev/os", os_kv, sizeof(os_kv)) > 0) {
+        kv_read_string(os_kv, "name", os_name, sizeof(os_name));
+        kv_read_string(os_kv, "arch", os_arch, sizeof(os_arch));
     }
 
-    if (read_all("/dev/swap", swap_kv, sizeof(swap_kv)) > 0) {
-        read_kv_u64(swap_kv, "total_kib", &total_kib);
-        read_kv_u64(swap_kv, "used_kib", &used_kib);
+    if (kv_read_file("/dev/swap", swap_kv, sizeof(swap_kv)) > 0) {
+        kv_read_u64(swap_kv, "total_kib", &total_kib);
+        kv_read_u64(swap_kv, "used_kib", &used_kib);
     }
 
-    if (read_all("/dev/cpu", cpu_kv, sizeof(cpu_kv)) > 0) {
-        read_kv_string(cpu_kv, "model", cpu_model, sizeof(cpu_model));
-        read_kv_u64(cpu_kv, "clockrate_khz", &freq_khz);
+    if (kv_read_file("/dev/cpu", cpu_kv, sizeof(cpu_kv)) > 0) {
+        kv_read_string(cpu_kv, "model", cpu_model, sizeof(cpu_model));
+        kv_read_u64(cpu_kv, "clockrate_khz", &freq_khz);
     }
 
     snprintf(user_at, sizeof(user_at), "%s@%s", user, os_name);

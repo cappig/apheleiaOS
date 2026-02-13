@@ -1,26 +1,15 @@
+#include <account.h>
 #include <dirent.h>
 #include <fcntl.h>
-#include <grp.h>
-#include <pwd.h>
+#include <io.h>
+#include <fsutil.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <termios.h>
 #include <unistd.h>
-
-static ssize_t write_str(const char* str) {
-    if (!str)
-        return 0;
-
-    return write(STDOUT_FILENO, str, strlen(str));
-}
-
-static void write_char(char ch) {
-    write(STDOUT_FILENO, &ch, 1);
-}
 
 static bool want_name(const char* name, bool opt_all, bool opt_almost) {
     if (!name || !name[0])
@@ -46,108 +35,12 @@ static size_t term_width(void) {
     return 80;
 }
 
-static char mode_type(mode_t mode) {
-    switch (mode & S_IFMT) {
-    case S_IFDIR:
-        return 'd';
-    case S_IFLNK:
-        return 'l';
-    case S_IFCHR:
-        return 'c';
-    case S_IFBLK:
-        return 'b';
-    case S_IFIFO:
-        return 'p';
-    case S_IFSOCK:
-        return 's';
-    default:
-        return '-';
-    }
-}
-
-static void format_mode(mode_t mode, char out[11]) {
-    out[0] = mode_type(mode);
-    out[1] = (mode & S_IRUSR) ? 'r' : '-';
-    out[2] = (mode & S_IWUSR) ? 'w' : '-';
-    out[3] = (mode & S_IXUSR) ? 'x' : '-';
-    if (mode & S_ISUID)
-        out[3] = (mode & S_IXUSR) ? 's' : 'S';
-
-    out[4] = (mode & S_IRGRP) ? 'r' : '-';
-    out[5] = (mode & S_IWGRP) ? 'w' : '-';
-    out[6] = (mode & S_IXGRP) ? 'x' : '-';
-    if (mode & S_ISGID)
-        out[6] = (mode & S_IXGRP) ? 's' : 'S';
-
-    out[7] = (mode & S_IROTH) ? 'r' : '-';
-    out[8] = (mode & S_IWOTH) ? 'w' : '-';
-    out[9] = (mode & S_IXOTH) ? 'x' : '-';
-    if (mode & S_ISVTX)
-        out[9] = (mode & S_IXOTH) ? 't' : 'T';
-    out[10] = '\0';
-}
-
-static void format_time(time_t t, char* out, size_t out_len) {
-    if (!out || !out_len)
-        return;
-
-    struct tm tm_val;
-    if (!gmtime_r(&t, &tm_val) || !strftime(out, out_len, "%b %e %H:%M", &tm_val))
-        snprintf(out, out_len, "??? ?? ??:??");
-}
-
-static const char* uid_name(uid_t uid, char* buf, size_t len) {
-    if (!buf || !len)
-        return "";
-
-    passwd_t pwd = {0};
-    if (!getpwuid(uid, &pwd) && pwd.pw_name[0]) {
-        snprintf(buf, len, "%s", pwd.pw_name);
-        return buf;
-    }
-
-    snprintf(buf, len, "%llu", (unsigned long long)uid);
-    return buf;
-}
-
-static const char* gid_name(gid_t gid, char* buf, size_t len) {
-    if (!buf || !len)
-        return "";
-
-    group_t grp = {0};
-    if (!getgrgid(gid, &grp) && grp.gr_name[0]) {
-        snprintf(buf, len, "%s", grp.gr_name);
-        return buf;
-    }
-
-    snprintf(buf, len, "%llu", (unsigned long long)gid);
-    return buf;
-}
-
-static void join_path(char* out, size_t out_len, const char* dir, const char* name) {
-    if (!out || !out_len) {
-        return;
-    }
-
-    if (!dir || !dir[0]) {
-        snprintf(out, out_len, "%s", name ? name : "");
-        return;
-    }
-
-    size_t dlen = strlen(dir);
-
-    if (dlen && dir[dlen - 1] == '/')
-        snprintf(out, out_len, "%s%s", dir, name ? name : "");
-    else
-        snprintf(out, out_len, "%s/%s", dir, name ? name : "");
-}
-
 static int
 list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool opt_single) {
     int fd = open(path, O_RDONLY, 0);
 
     if (fd < 0) {
-        write_str("ls: failed to open\n");
+        io_write_str("ls: failed to open\n");
         return 1;
     }
 
@@ -175,15 +68,15 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
             char full[256];
             stat_t st;
 
-            join_path(full, sizeof(full), path, name);
+            fs_join_path(full, sizeof(full), path, name);
 
             if (stat(full, &st) < 0)
                 memset(&st, 0, sizeof(st));
 
             char uid_buf[16];
             char gid_buf[16];
-            const char* uname = uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
-            const char* gname = gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
+            const char* uname = account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
+            const char* gname = account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
 
             size_t uname_len = strlen(uname);
             size_t gname_len = strlen(gname);
@@ -235,24 +128,24 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
             char full[256];
             stat_t st;
 
-            join_path(full, sizeof(full), path, name);
+            fs_join_path(full, sizeof(full), path, name);
 
             if (stat(full, &st) < 0)
                 memset(&st, 0, sizeof(st));
 
             char mode[11];
-            format_mode(st.st_mode, mode);
+            fs_format_mode(st.st_mode, mode);
 
             char line[256];
             char timebuf[32];
-            format_time(st.st_mtime, timebuf, sizeof(timebuf));
+            fs_format_time_short(st.st_mtime, timebuf, sizeof(timebuf));
 
             char uid_buf[16];
             char gid_buf[16];
-            const char* uname = uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
-            const char* gname = gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
+            const char* uname = account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
+            const char* gname = account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
 
-            int len = snprintf(
+            snprintf(
                 line,
                 sizeof(line),
                 "%s %*lu %-*s %-*s %*llu %s %s\n",
@@ -269,39 +162,35 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
                 name
             );
 
-            if (len < 0)
-                continue;
-
-            size_t out = (len < (int)sizeof(line)) ? (size_t)len : sizeof(line) - 1;
-            write(STDOUT_FILENO, line, out);
+            io_write_str(line);
 
             continue;
         }
 
-        write_str(name);
+        io_write_str(name);
 
         size_t name_len = strlen(name);
 
         if (opt_single || cols == 1) {
-            write_char('\n');
+            io_write_char('\n');
             col = 0;
             continue;
         }
 
         size_t pad = col_width > name_len ? col_width - name_len : 1;
         for (size_t i = 0; i < pad; i++)
-            write_char(' ');
+            io_write_char(' ');
 
         col++;
 
         if (col >= cols) {
-            write_char('\n');
+            io_write_char('\n');
             col = 0;
         }
     }
 
     if (!opt_long && !opt_single && col != 0)
-        write_char('\n');
+        io_write_char('\n');
 
     close(fd);
     return 0;
@@ -341,7 +230,7 @@ int main(int argc, char** argv) {
                 opt_single = true;
                 break;
             default:
-                write_str("ls: unknown option\n");
+                io_write_str("ls: unknown option\n");
                 return 1;
             }
         }
@@ -358,15 +247,15 @@ int main(int argc, char** argv) {
     int status = 0;
     for (int i = argi; i < argc; i++) {
         if (paths > 1) {
-            write_str(argv[i]);
-            write_str(":\n");
+            io_write_str(argv[i]);
+            io_write_str(":\n");
         }
 
         if (list_dir(argv[i], opt_all, opt_almost, opt_long, opt_single) != 0)
             status = 1;
 
         if (paths > 1 && i + 1 < argc)
-            write_char('\n');
+            io_write_char('\n');
     }
 
     return status;

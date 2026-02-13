@@ -1,6 +1,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <io.h>
+#include <fsutil.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -8,38 +10,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static void write_str(const char* text) {
-    if (!text)
-        return;
-
-    write(STDOUT_FILENO, text, strlen(text));
-}
-
 static void print_error(const char* path) {
     char line[256];
     snprintf(line, sizeof(line), "rm: %s: %d\n", path ? path : "(null)", errno);
-    write_str(line);
-}
-
-static bool is_dir_mode(mode_t mode) {
-    return (mode & S_IFMT) == S_IFDIR;
-}
-
-static void join_path(char* out, size_t out_len, const char* left, const char* right) {
-    if (!out || !out_len)
-        return;
-
-    if (!left || !left[0]) {
-        snprintf(out, out_len, "%s", right ? right : "");
-        return;
-    }
-
-    size_t len = strlen(left);
-
-    if (len > 0 && left[len - 1] == '/')
-        snprintf(out, out_len, "%s%s", left, right ? right : "");
-    else
-        snprintf(out, out_len, "%s/%s", left, right ? right : "");
+    io_write_str(line);
 }
 
 static int rm_dir_recursive(const char* path, bool force) {
@@ -60,7 +34,7 @@ static int rm_dir_recursive(const char* path, bool force) {
             continue;
 
         char child[PATH_MAX];
-        join_path(child, sizeof(child), path, ent.d_name);
+        fs_join_path(child, sizeof(child), path, ent.d_name);
 
         stat_t child_st;
         if (lstat(child, &child_st) < 0) {
@@ -72,7 +46,7 @@ static int rm_dir_recursive(const char* path, bool force) {
             continue;
         }
 
-        if (is_dir_mode(child_st.st_mode)) {
+        if (fs_is_dir_mode(child_st.st_mode)) {
             if (rm_dir_recursive(child, force) != 0)
                 rc = 1;
 
@@ -107,7 +81,7 @@ static int rm_path(const char* path, bool recursive, bool force) {
         return 1;
     }
 
-    if (is_dir_mode(st.st_mode)) {
+    if (fs_is_dir_mode(st.st_mode)) {
         if (!recursive) {
             errno = EISDIR;
             print_error(path);
@@ -141,7 +115,7 @@ int main(int argc, char** argv) {
 
         const char* opt = argv[argi] + 1;
         if (!opt[0]) {
-            write_str("usage: rm [-f] [-r] FILE...\n");
+            io_write_str("usage: rm [-f] [-r] FILE...\n");
             return 1;
         }
 
@@ -150,9 +124,8 @@ int main(int argc, char** argv) {
                 force = true;
             } else if (*opt == 'r' || *opt == 'R') {
                 recursive = true;
-            }
-            else {
-                write_str("usage: rm [-f] [-r] FILE...\n");
+            } else {
+                io_write_str("usage: rm [-f] [-r] FILE...\n");
                 return 1;
             }
 
@@ -166,7 +139,7 @@ int main(int argc, char** argv) {
         if (force)
             return 0;
 
-        write_str("usage: rm [-f] [-r] FILE...\n");
+        io_write_str("usage: rm [-f] [-r] FILE...\n");
         return 1;
     }
 

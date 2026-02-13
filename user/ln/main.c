@@ -1,15 +1,9 @@
 #include <errno.h>
+#include <io.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-
-static void write_str(const char* text) {
-    if (!text)
-        return;
-
-    write(STDOUT_FILENO, text, strlen(text));
-}
 
 static void print_error(const char* target, const char* link_path) {
     char line[320];
@@ -21,7 +15,7 @@ static void print_error(const char* target, const char* link_path) {
         link_path ? link_path : "(null)",
         errno
     );
-    write_str(line);
+    io_write_str(line);
 }
 
 int main(int argc, char** argv) {
@@ -40,12 +34,12 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        write_str("usage: ln [-f] TARGET LINK_NAME\n");
+        io_write_str("usage: ln [-f] TARGET LINK_NAME\n");
         return 1;
     }
 
     if (argc - argi != 2) {
-        write_str("usage: ln [-f] TARGET LINK_NAME\n");
+        io_write_str("usage: ln [-f] TARGET LINK_NAME\n");
         return 1;
     }
 

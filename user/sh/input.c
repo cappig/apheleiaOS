@@ -1,5 +1,6 @@
 #include "input.h"
 
+#include <io.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -24,15 +25,8 @@ typedef struct {
     size_t prompt_cells;
 } sh_layout_ctx_t;
 
-static ssize_t write_str(const char* str) {
-    if (!str)
-        return 0;
-
-    return write(STDOUT_FILENO, str, strlen(str));
-}
-
 static void ansi_clear_to_eos(void) {
-    write_str("\x1b[J");
+    io_write_str("\x1b[J");
 }
 
 static void ansi_move_right(size_t count) {
@@ -41,7 +35,7 @@ static void ansi_move_right(size_t count) {
 
     char seq[32];
     snprintf(seq, sizeof(seq), "\x1b[%zuC", count);
-    write_str(seq);
+    io_write_str(seq);
 }
 
 static void ansi_move_left(size_t count) {
@@ -50,7 +44,7 @@ static void ansi_move_left(size_t count) {
 
     char seq[32];
     snprintf(seq, sizeof(seq), "\x1b[%zuD", count);
-    write_str(seq);
+    io_write_str(seq);
 }
 
 static void ansi_move_up(size_t count) {
@@ -59,7 +53,7 @@ static void ansi_move_up(size_t count) {
 
     char seq[32];
     snprintf(seq, sizeof(seq), "\x1b[%zuA", count);
-    write_str(seq);
+    io_write_str(seq);
 }
 
 static size_t term_cols(void) {
@@ -212,14 +206,14 @@ static void ansi_move_down(size_t count) {
 
     char seq[32];
     snprintf(seq, sizeof(seq), "\x1b[%zuB", count);
-    write_str(seq);
+    io_write_str(seq);
 }
 
 static void move_left_from_total(size_t total, size_t cells, size_t cols) {
     while (cells > 0 && total > 0) {
         size_t col = total % cols;
         if (!col) {
-            write_str("\r");
+            io_write_str("\r");
             ansi_move_up(1);
             if (cols > 1)
                 ansi_move_right(cols - 1);
@@ -239,7 +233,7 @@ static void move_right_from_total(size_t total, size_t cells, size_t cols) {
     while (cells > 0) {
         size_t col = total % cols;
         if (col + 1 >= cols) {
-            write_str("\r");
+            io_write_str("\r");
             ansi_move_down(1);
             total++;
             cells--;
@@ -268,16 +262,16 @@ static void redraw_line(
     if (state->cursor_row)
         ansi_move_up(state->cursor_row);
 
-    write_str("\r");
+    io_write_str("\r");
     ansi_clear_to_eos();
 
-    write_str(prompt);
+    io_write_str(prompt);
     if (len)
         write(STDOUT_FILENO, buf, len);
 
     if (cursor < len) {
-        write_str("\r");
-        write_str(prompt);
+        io_write_str("\r");
+        io_write_str(prompt);
         if (cursor)
             write(STDOUT_FILENO, buf, cursor);
     }
@@ -309,8 +303,27 @@ void history_print(void) {
 
     for (size_t i = 0; i < sh_history_count; i++) {
         snprintf(line, sizeof(line), "%zu %s\n", i + 1, sh_history[i]);
-        write_str(line);
+        io_write_str(line);
     }
+}
+
+static void load_history_line(
+    const char* prompt,
+    const sh_layout_ctx_t* layout,
+    sh_render_state_t* render,
+    const char* src,
+    char* buf,
+    size_t len,
+    size_t* pos,
+    size_t* cursor
+) {
+    if (!prompt || !layout || !render || !src || !buf || !len || !pos || !cursor)
+        return;
+
+    snprintf(buf, len, "%s", src);
+    *pos = strlen(buf);
+    *cursor = *pos;
+    redraw_line(prompt, layout, buf, *pos, *cursor, render);
 }
 
 int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_history) {
@@ -331,7 +344,7 @@ int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_hi
     char scratch[SH_INPUT_LINE_MAX] = {0};
     buf[0] = '\0';
 
-    write_str(prompt);
+    io_write_str(prompt);
 
     for (;;) {
         if (got_sigint()) {
@@ -346,7 +359,7 @@ int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_hi
             continue;
 
         if (ch == '\r' || ch == '\n') {
-            write_str("\n");
+            io_write_str("\n");
             buf[pos] = '\0';
             tty_set_line_mode(false);
             return 0;
@@ -368,7 +381,7 @@ int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_hi
 
                 if (cursor == pos && !cursor_on_wrap_boundary(&layout, buf, old_cursor)) {
                     for (size_t i = 0; i < removed_cells; i++)
-                        write_str("\b \b");
+                        io_write_str("\b \b");
                     layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
                 } else {
                     size_t old_total = total_cells(&layout, buf, old_cursor);
@@ -378,7 +391,7 @@ int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_hi
                     if (tail_bytes)
                         write(STDOUT_FILENO, buf + cursor, tail_bytes);
 
-                    write_str(" ");
+                    io_write_str(" ");
 
                     size_t tail_cells = display_cells(buf + cursor, tail_bytes);
                     size_t start_total = total_cells(&layout, buf, cursor);
@@ -413,25 +426,36 @@ int read_line_interactive(const char* prompt, char* buf, size_t len, bool use_hi
                     history_cursor--;
                 }
 
-                snprintf(buf, len, "%s", sh_history[history_cursor]);
-                pos = strlen(buf);
-                cursor = pos;
-                redraw_line(prompt, &layout, buf, pos, cursor, &render);
+                load_history_line(
+                    prompt,
+                    &layout,
+                    &render,
+                    sh_history[history_cursor],
+                    buf,
+                    len,
+                    &pos,
+                    &cursor
+                );
             } else if (seq2 == 'B' && use_history) {
                 if (history_cursor < 0)
                     continue;
 
                 if ((size_t)(history_cursor + 1) < sh_history_count) {
                     history_cursor++;
-                    snprintf(buf, len, "%s", sh_history[history_cursor]);
+                    load_history_line(
+                        prompt,
+                        &layout,
+                        &render,
+                        sh_history[history_cursor],
+                        buf,
+                        len,
+                        &pos,
+                        &cursor
+                    );
                 } else {
                     history_cursor = -1;
-                    snprintf(buf, len, "%s", scratch);
+                    load_history_line(prompt, &layout, &render, scratch, buf, len, &pos, &cursor);
                 }
-
-                pos = strlen(buf);
-                cursor = pos;
-                redraw_line(prompt, &layout, buf, pos, cursor, &render);
             } else if (seq2 == 'C') {
                 if (cursor < pos) {
                     size_t cols = layout.cols;

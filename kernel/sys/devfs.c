@@ -20,6 +20,14 @@
 #define FB_MAP_CHUNK (4 * MIB)
 #define SYSINFO_TEXT_MAX 384
 
+#ifndef BUILD_DATE
+#define BUILD_DATE "unknown"
+#endif
+
+#ifndef GIT_COMMIT
+#define GIT_COMMIT "unknown"
+#endif
+
 static tty_handle_t tty_handles[TTY_COUNT];
 static tty_handle_t tty_current = {.kind = TTY_HANDLE_CURRENT, .index = 0};
 static tty_handle_t tty_console = {.kind = TTY_HANDLE_CONSOLE, .index = TTY_CONSOLE};
@@ -191,7 +199,10 @@ static ssize_t _dev_os_read(vfs_node_t* node, void* buf, size_t offset, size_t l
         sizeof(text),
         "name=apheleiaOS\n"
         "release=pre-alpha\n"
+        "version=%s %s\n"
         "arch=%s\n",
+        BUILD_DATE,
+        GIT_COMMIT,
         arch_name()
     );
 

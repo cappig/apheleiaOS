@@ -72,7 +72,9 @@ LIBC_DIRS := libs/libc libs/libc_ext
 CC_BASE_COMMON := \
 	-Wno-unused-parameter \
 	-Wno-missing-braces \
-	-DVERSION=\"$(VERSION)\"
+	-DVERSION=\"$(VERSION)\" \
+	-DBUILD_DATE=\"$(BUILD_DATE)\" \
+	-DGIT_COMMIT=\"$(GIT_COMMIT_SHORT)\"
 
 CC_DEBUG := \
 	-DDISK_DEBUG \

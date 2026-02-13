@@ -1,101 +1,14 @@
-#include <grp.h>
-#include <pwd.h>
+#include <account.h>
+#include <io.h>
+#include <fsutil.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
 
-static ssize_t write_str(const char* str) {
-    if (!str)
-        return 0;
-
-    return write(STDOUT_FILENO, str, strlen(str));
-}
-
 static void usage(void) {
-    write_str("usage: stat FILE...\n");
-}
-
-static char mode_type(mode_t mode) {
-    switch (mode & S_IFMT) {
-    case S_IFDIR:
-        return 'd';
-    case S_IFLNK:
-        return 'l';
-    case S_IFCHR:
-        return 'c';
-    case S_IFBLK:
-        return 'b';
-    case S_IFIFO:
-        return 'p';
-    case S_IFSOCK:
-        return 's';
-    default:
-        return '-';
-    }
-}
-
-static void format_mode(mode_t mode, char out[11]) {
-    out[0] = mode_type(mode);
-    out[1] = (mode & S_IRUSR) ? 'r' : '-';
-    out[2] = (mode & S_IWUSR) ? 'w' : '-';
-    out[3] = (mode & S_IXUSR) ? 'x' : '-';
-    if (mode & S_ISUID)
-        out[3] = (mode & S_IXUSR) ? 's' : 'S';
-
-    out[4] = (mode & S_IRGRP) ? 'r' : '-';
-    out[5] = (mode & S_IWGRP) ? 'w' : '-';
-    out[6] = (mode & S_IXGRP) ? 'x' : '-';
-    if (mode & S_ISGID)
-        out[6] = (mode & S_IXGRP) ? 's' : 'S';
-
-    out[7] = (mode & S_IROTH) ? 'r' : '-';
-    out[8] = (mode & S_IWOTH) ? 'w' : '-';
-    out[9] = (mode & S_IXOTH) ? 'x' : '-';
-    if (mode & S_ISVTX)
-        out[9] = (mode & S_IXOTH) ? 't' : 'T';
-    out[10] = '\0';
-}
-
-static void format_time(time_t t, char* out, size_t out_len) {
-    if (!out || !out_len)
-        return;
-
-    struct tm tm_val;
-
-    if (!gmtime_r(&t, &tm_val) || !strftime(out, out_len, "%b %e %H:%M", &tm_val))
-        snprintf(out, out_len, "??? ?? ??:??");
-}
-
-static const char* uid_name(uid_t uid, char* buf, size_t len) {
-    if (!buf || !len)
-        return "";
-
-    passwd_t pwd = {0};
-
-    if (!getpwuid(uid, &pwd) && pwd.pw_name[0]) {
-        snprintf(buf, len, "%s", pwd.pw_name);
-        return buf;
-    }
-
-    snprintf(buf, len, "%llu", (unsigned long long)uid);
-    return buf;
-}
-
-static const char* gid_name(gid_t gid, char* buf, size_t len) {
-    if (!buf || !len)
-        return "";
-
-    group_t grp = {0};
-    if (!getgrgid(gid, &grp) && grp.gr_name[0]) {
-        snprintf(buf, len, "%s", grp.gr_name);
-        return buf;
-    }
-
-    snprintf(buf, len, "%llu", (unsigned long long)gid);
-    return buf;
+    io_write_str("usage: stat FILE...\n");
 }
 
 static int print_one(const char* path) {
@@ -104,7 +17,7 @@ static int print_one(const char* path) {
     if (lstat(path, &st) < 0) {
         char line[256];
         snprintf(line, sizeof(line), "stat: cannot stat '%s'\n", path);
-        write_str(line);
+        io_write_str(line);
         return 1;
     }
 
@@ -116,10 +29,10 @@ static int print_one(const char* path) {
     char ctime_buf[32];
     char line[512];
 
-    format_mode(st.st_mode, mode_buf);
-    format_time(st.st_atime, atime_buf, sizeof(atime_buf));
-    format_time(st.st_mtime, mtime_buf, sizeof(mtime_buf));
-    format_time(st.st_ctime, ctime_buf, sizeof(ctime_buf));
+    fs_format_mode(st.st_mode, mode_buf);
+    fs_format_time_short(st.st_atime, atime_buf, sizeof(atime_buf));
+    fs_format_time_short(st.st_mtime, mtime_buf, sizeof(mtime_buf));
+    fs_format_time_short(st.st_ctime, ctime_buf, sizeof(ctime_buf));
 
     snprintf(
         line,
@@ -137,15 +50,15 @@ static int print_one(const char* path) {
         st.st_mode & 07777,
         mode_buf,
         (unsigned long long)st.st_uid,
-        uid_name(st.st_uid, uid_buf, sizeof(uid_buf)),
+        account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf)),
         (unsigned long long)st.st_gid,
-        gid_name(st.st_gid, gid_buf, sizeof(gid_buf)),
+        account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf)),
         atime_buf,
         mtime_buf,
         ctime_buf
     );
 
-    write_str(line);
+    io_write_str(line);
     return 0;
 }
 
@@ -156,9 +69,11 @@ int main(int argc, char** argv) {
     }
 
     int rc = 0;
+
     for (int i = 1; i < argc; i++) {
         if (argc > 2 && i > 1)
-            write_str("\n");
+            io_write_str("\n");
+
         if (print_one(argv[i]) != 0)
             rc = 1;
     }

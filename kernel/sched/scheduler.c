@@ -891,6 +891,30 @@ out:
     _sched_lock_restore(flags);
 }
 
+static void _sleep_current_on_queue(sched_wait_queue_t* queue) {
+    sched_thread_t* self = sched_local_current();
+
+    if (!self || !queue)
+        return;
+
+    run_queue_remove(self);
+    self->wake_tick = 0;
+    self->state = THREAD_SLEEPING;
+    wait_queue_append(queue, self);
+}
+
+static void _wait_current_wakeup(void) {
+    sched_thread_t* self = sched_local_current();
+
+    if (!self)
+        return;
+
+    while (self->state == THREAD_SLEEPING) {
+        sched_yield();
+        arch_cpu_wait();
+    }
+}
+
 void sched_discard_thread(sched_thread_t* thread) {
     if (!thread)
         return;
@@ -1337,18 +1361,11 @@ pid_t sched_waitpid(pid_t pid, int* status, int options) {
             return -ECHILD;
         }
 
-        _run_queue_remove(self);
-
-        self->wake_tick = 0;
-        self->state = THREAD_SLEEPING;
-        wait_queue_append(&self->wait_queue, self);
+        _sleep_current_on_queue(&self->wait_queue);
 
         _sched_lock_restore(flags);
 
-        while (self->state == THREAD_SLEEPING) {
-            sched_yield();
-            arch_cpu_wait();
-        }
+        _wait_current_wakeup();
     }
 }
 
@@ -1399,18 +1416,11 @@ void sched_block(sched_wait_queue_t* queue) {
 
     unsigned long flags = _sched_lock_save();
 
-    _run_queue_remove(self);
-
-    self->wake_tick = 0;
-    self->state = THREAD_SLEEPING;
-    wait_queue_append(queue, self);
+    _sleep_current_on_queue(queue);
 
     _sched_lock_restore(flags);
 
-    while (self->state == THREAD_SLEEPING) {
-        sched_yield();
-        arch_cpu_wait();
-    }
+    _wait_current_wakeup();
 }
 
 void sched_block(sched_wait_queue_t* queue) {

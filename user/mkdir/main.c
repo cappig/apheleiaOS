@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <io.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -6,17 +7,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static void write_str(const char* text) {
-    if (!text)
-        return;
-
-    write(STDOUT_FILENO, text, strlen(text));
-}
-
 static void print_error(const char* path) {
     char line[256];
     snprintf(line, sizeof(line), "mkdir: %s: %d\n", path ? path : "(null)", errno);
-    write_str(line);
+    io_write_str(line);
 }
 
 static int mkdir_parents(const char* path, mode_t mode) {
@@ -27,6 +21,7 @@ static int mkdir_parents(const char* path, mode_t mode) {
 
     char tmp[PATH_MAX];
     size_t len = strnlen(path, sizeof(tmp));
+
     if (!len || len >= sizeof(tmp)) {
         errno = ENAMETOOLONG;
         return -1;
@@ -86,12 +81,12 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        write_str("usage: mkdir [-p] DIR...\n");
+        io_write_str("usage: mkdir [-p] DIR...\n");
         return 1;
     }
 
     if (argi >= argc) {
-        write_str("usage: mkdir [-p] DIR...\n");
+        io_write_str("usage: mkdir [-p] DIR...\n");
         return 1;
     }
 

@@ -1,5 +1,4 @@
-#include <grp.h>
-#include <pwd.h>
+#include <account.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -29,24 +28,27 @@ int main(int argc, char** argv) {
     uid_t uid = getuid();
     gid_t gid = getgid();
 
-    passwd_t pwd = {0};
-    group_t grp = {0};
-
-    const char* uname = NULL;
-    const char* gname = NULL;
-
-    if (!getpwuid(uid, &pwd))
-        uname = pwd.pw_name;
-
-    if (!getgrgid(gid, &grp))
-        gname = grp.gr_name;
+    char uname[32] = {0};
+    char gname[32] = {0};
 
     char uid_part[64] = {0};
     char gid_part[64] = {0};
     char line[160] = {0};
 
-    format_identity(uid_part, sizeof(uid_part), "uid", (unsigned long long)uid, uname);
-    format_identity(gid_part, sizeof(gid_part), "gid", (unsigned long long)gid, gname);
+    format_identity(
+        uid_part,
+        sizeof(uid_part),
+        "uid",
+        (unsigned long long)uid,
+        account_uid_name(uid, uname, sizeof(uname))
+    );
+    format_identity(
+        gid_part,
+        sizeof(gid_part),
+        "gid",
+        (unsigned long long)gid,
+        account_gid_name(gid, gname, sizeof(gname))
+    );
 
     int written = snprintf(line, sizeof(line), "%s %s\n", uid_part, gid_part);
 
