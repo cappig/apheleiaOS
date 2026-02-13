@@ -176,7 +176,7 @@ bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write);
 int sched_fd_alloc(sched_thread_t* thread, const sched_fd_t* fd, int min_fd);
 int sched_fd_install(sched_thread_t* thread, int target_fd, const sched_fd_t* fd);
 int sched_fd_close(sched_thread_t* thread, int fd);
-int sched_fd_dup2(sched_thread_t* thread, int oldfd, int newfd);
+int sched_fd_dup(sched_thread_t* thread, int oldfd, int newfd);
 bool sched_fd_clone_table(sched_thread_t* dst, const sched_thread_t* src);
 void sched_fd_close_all(sched_thread_t* thread);
 

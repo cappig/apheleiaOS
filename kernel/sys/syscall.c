@@ -672,12 +672,12 @@ static int _sys_pipe(int* fds) {
     return 0;
 }
 
-static int _sys_dup2(int oldfd, int newfd) {
+static int _sys_dup(int oldfd, int newfd) {
     sched_thread_t* thread = sched_current();
     if (!thread)
         return -EINVAL;
 
-    return sched_fd_dup2(thread, oldfd, newfd);
+    return sched_fd_dup(thread, oldfd, newfd);
 }
 
 static int _sys_mkdir(const char* path, mode_t mode) {
@@ -1490,15 +1490,6 @@ static int _sys_sleep(unsigned int seconds) {
     return 0;
 }
 
-static time_t _sys_time(time_t* out) {
-    time_t now = (time_t)arch_wallclock_seconds();
-
-    if (out)
-        *out = now;
-
-    return now;
-}
-
 static uintptr_t _sys_signal(int signum, sighandler_t handler, uintptr_t trampoline) {
     sched_thread_t* thread = sched_current();
 
@@ -1550,99 +1541,6 @@ static ssize_t _sys_getprocs(proc_info_t* out, size_t capacity) {
     return (ssize_t)sched_list_procs(out, capacity);
 }
 
-static ssize_t _sysctl_copy_text(void* out, size_t out_len, const char* value) {
-    if (!out || !value || !out_len)
-        return -EINVAL;
-
-    size_t value_len = strlen(value);
-    size_t copy_len = value_len;
-
-    if (copy_len >= out_len)
-        copy_len = out_len - 1;
-
-    memcpy(out, value, copy_len);
-    ((char*)out)[copy_len] = '\0';
-
-    return (ssize_t)copy_len;
-}
-
-static ssize_t _sys_sysctl(const char* name, void* out, size_t out_len) {
-    if (!name || !out || !out_len)
-        return -EINVAL;
-
-    char value[128];
-    memset(value, 0, sizeof(value));
-
-    if (!strcmp(name, "kern.ostype")) {
-        snprintf(value, sizeof(value), "apheleiaOS");
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "kern.osrelease")) {
-        snprintf(value, sizeof(value), "pre-alpha");
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "kern.arch")) {
-        snprintf(value, sizeof(value), "%s", arch_name());
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "kern.uptime")) {
-        u64 hz = arch_timer_hz();
-        u64 ticks = arch_timer_ticks();
-        u64 sec = hz ? (ticks / hz) : 0;
-        snprintf(value, sizeof(value), "%llu", (unsigned long long)sec);
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "kern.proc.count")) {
-        proc_info_t snapshot[128];
-        size_t count = sched_list_procs(snapshot, sizeof(snapshot) / sizeof(snapshot[0]));
-        size_t alive = 0;
-
-        for (size_t i = 0; i < count; i++) {
-            if (snapshot[i].pid > 0)
-                alive++;
-        }
-
-        snprintf(value, sizeof(value), "%llu", (unsigned long long)alive);
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "hw.model")) {
-        snprintf(value, sizeof(value), "%s", arch_cpu_name());
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "hw.ncpu")) {
-        snprintf(value, sizeof(value), "%llu", (unsigned long long)core_count);
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "hw.clockrate")) {
-        snprintf(value, sizeof(value), "%llu", (unsigned long long)arch_cpu_khz());
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "hw.pagesize")) {
-        snprintf(value, sizeof(value), "%u", (unsigned)PAGE_4KIB);
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "vm.mem.total_kib")) {
-        snprintf(value, sizeof(value), "%llu", (unsigned long long)(arch_mem_total() / 1024));
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    if (!strcmp(name, "vm.mem.free_kib")) {
-        snprintf(value, sizeof(value), "%llu", (unsigned long long)(arch_mem_free() / 1024));
-        return _sysctl_copy_text(out, out_len, value);
-    }
-
-    return -ENOENT;
-}
-
 static u64 _dispatch(arch_int_state_t* state) {
     u64 num = (u64)arch_syscall_num(state);
 
@@ -1679,9 +1577,9 @@ static u64 _dispatch(arch_int_state_t* state) {
     case SYS_CLOSE:
         return (u64)_sys_close((int)arch_syscall_arg1(state));
     case SYS_PIPE:
-        return (u64)_sys_pipe((int*)arch_syscall_arg1(state));
-    case SYS_DUP2:
-        return (u64)_sys_dup2((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
+        return (u64)sys_pipe((int*)arch_syscall_arg1(state));
+    case SYS_DUP:
+        return (u64)_sys_dup((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_PREAD:
         return (u64)_sys_pread(
             (int)arch_syscall_arg1(state),
@@ -1806,8 +1704,6 @@ static u64 _dispatch(arch_int_state_t* state) {
         return (u64)sys_setsid();
     case SYS_SLEEP:
         return (u64)sys_sleep((unsigned int)arch_syscall_arg1(state));
-    case SYS_TIME:
-        return (u64)_sys_time((time_t*)arch_syscall_arg1(state));
     case SYS_SIGNAL:
         return (u64)_sys_signal(
             (int)arch_syscall_arg1(state),
@@ -1822,12 +1718,6 @@ static u64 _dispatch(arch_int_state_t* state) {
         return (u64)_sys_getprocs(
             (proc_info_t*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state)
         );
-    case SYS_SYSCTL:
-        return (u64)_sys_sysctl(
-            (const char*)arch_syscall_arg1(state),
-            (void*)arch_syscall_arg2(state),
-            (size_t)arch_syscall_arg3(state)
-        );
     default:
         return (u64)-ENOSYS;
     }
@@ -1838,7 +1728,7 @@ static void _handler(arch_int_state_t* state) {
         return;
 
     u64 num = (u64)arch_syscall_num(state);
-    u64 ret = syscall_dispatch(state);
+    u64 ret = _dispatch(state);
 
     if (num == SYS_SIGRETURN && !ret)
         return;

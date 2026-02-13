@@ -1019,9 +1019,9 @@ static int open_redirection(const sh_stage_t* stage) {
             return -1;
         }
 
-        if (dup2(fd, STDIN_FILENO) < 0) {
+        if (dup(fd, STDIN_FILENO) < 0) {
             close(fd);
-            write_str("sh: dup2 failed\n");
+            write_str("sh: dup failed\n");
             return -1;
         }
 
@@ -1042,9 +1042,9 @@ static int open_redirection(const sh_stage_t* stage) {
             return -1;
         }
 
-        if (dup2(fd, STDOUT_FILENO) < 0) {
+        if (dup(fd, STDOUT_FILENO) < 0) {
             close(fd);
-            write_str("sh: dup2 failed\n");
+            write_str("sh: dup failed\n");
             return -1;
         }
 
@@ -1086,12 +1086,12 @@ static int run_pipeline(sh_stage_t* stages, int stage_count, bool background, co
             signal(SIGTTOU, SIG_DFL);
 
             if (i > 0) {
-                if (dup2(pipes[i - 1][0], STDIN_FILENO) < 0)
+                if (dup(pipes[i - 1][0], STDIN_FILENO) < 0)
                     _exit(1);
             }
 
             if (i + 1 < stage_count) {
-                if (dup2(pipes[i][1], STDOUT_FILENO) < 0)
+                if (dup(pipes[i][1], STDOUT_FILENO) < 0)
                     _exit(1);
             }
 

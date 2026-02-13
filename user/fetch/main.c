@@ -3,9 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/sysctl.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #ifndef ARCH_NAME
 #define ARCH_NAME "unknown"
@@ -24,25 +24,76 @@ static void print_row(const char* left, const char* right) {
     write(STDOUT_FILENO, line, strlen(line));
 }
 
-static bool read_sysctl_string(const char* name, char* out, size_t out_len) {
-    if (!name || !out || out_len < 2)
-        return false;
+static ssize_t read_all(const char* path, char* out, size_t out_len) {
+    if (!path || !out || out_len < 2)
+        return -1;
 
-    if (sysctl(name, out, out_len) < 0) {
-        out[0] = '\0';
-        return false;
+    int fd = open(path, O_RDONLY, 0);
+    if (fd < 0)
+        return -1;
+
+    size_t off = 0;
+
+    while (off + 1 < out_len) {
+        ssize_t got = read(fd, out + off, out_len - off - 1);
+        if (!got)
+            break;
+        if (got < 0) {
+            close(fd);
+            return -1;
+        }
+
+        off += (size_t)got;
     }
 
-    out[out_len - 1] = '\0';
-    return true;
+    close(fd);
+    out[off] = '\0';
+
+    return (ssize_t)off;
 }
 
-static bool read_sysctl_u64(const char* name, unsigned long long* out) {
+static bool read_kv_string(
+    const char* text,
+    const char* key,
+    char* out,
+    size_t out_len
+) {
+    if (!text || !key || !out || out_len < 2)
+        return false;
+
+    size_t key_len = strlen(key);
+    const char* line = text;
+
+    while (*line) {
+        const char* next = strchr(line, '\n');
+        size_t line_len = next ? (size_t)(next - line) : strlen(line);
+
+        if (line_len > key_len + 1 && !strncmp(line, key, key_len) && line[key_len] == '=') {
+            size_t value_len = line_len - key_len - 1;
+
+            if (value_len >= out_len)
+                value_len = out_len - 1;
+
+            memcpy(out, line + key_len + 1, value_len);
+            out[value_len] = '\0';
+            return true;
+        }
+
+        if (!next)
+            break;
+
+        line = next + 1;
+    }
+
+    return false;
+}
+
+static bool read_kv_u64(const char* text, const char* key, unsigned long long* out) {
     if (!out)
         return false;
 
     char value[64] = {0};
-    if (!read_sysctl_string(name, value, sizeof(value)))
+    if (!read_kv_string(text, key, value, sizeof(value)))
         return false;
 
     *out = (unsigned long long)atoll(value);
@@ -79,6 +130,38 @@ static void fill_separator(char* out, size_t out_len, size_t width) {
     out[width] = '\0';
 }
 
+static void format_ram_line(
+    unsigned long long used_kib,
+    unsigned long long total_kib,
+    char* out,
+    size_t out_len
+) {
+    if (!out || !out_len) {
+        return;
+    }
+
+    if (!total_kib) {
+        snprintf(out, out_len, "ram: <unknown>");
+        return;
+    }
+
+    unsigned long long unit_kib = 1;
+    const char* unit = "KiB";
+
+    if (total_kib >= 1024ULL * 1024ULL) {
+        unit_kib = 1024ULL * 1024ULL;
+        unit = "GiB";
+    } else if (total_kib >= 1024ULL) {
+        unit_kib = 1024ULL;
+        unit = "MiB";
+    }
+
+    unsigned long long used = used_kib / unit_kib;
+    unsigned long long total = total_kib / unit_kib;
+
+    snprintf(out, out_len, "ram: %llu %s / %llu %s", used, unit, total, unit);
+}
+
 static void print_fetch_rows(
     const char* user_at,
     const char* sep,
@@ -111,26 +194,33 @@ int main(void) {
     char os_arch[32] = ARCH_NAME;
     char cpu_model[64] = "<unknown>";
     unsigned long long total_kib = 0;
-    unsigned long long free_kib = 0;
+    unsigned long long used_kib = 0;
     unsigned long long freq_khz = 0;
 
-    read_sysctl_string("kern.ostype", os_name, sizeof(os_name));
-    read_sysctl_string("kern.arch", os_arch, sizeof(os_arch));
-    read_sysctl_string("hw.model", cpu_model, sizeof(cpu_model));
-    read_sysctl_u64("vm.mem.total_kib", &total_kib);
-    read_sysctl_u64("vm.mem.free_kib", &free_kib);
-    read_sysctl_u64("hw.clockrate", &freq_khz);
+    char os_kv[256] = {0};
+    char swap_kv[256] = {0};
+    char cpu_kv[256] = {0};
 
-    snprintf(user_at, sizeof(user_at), "%s@$sysname", user);
+    if (read_all("/dev/os", os_kv, sizeof(os_kv)) > 0) {
+        read_kv_string(os_kv, "name", os_name, sizeof(os_name));
+        read_kv_string(os_kv, "arch", os_arch, sizeof(os_arch));
+    }
+
+    if (read_all("/dev/swap", swap_kv, sizeof(swap_kv)) > 0) {
+        read_kv_u64(swap_kv, "total_kib", &total_kib);
+        read_kv_u64(swap_kv, "used_kib", &used_kib);
+    }
+
+    if (read_all("/dev/cpu", cpu_kv, sizeof(cpu_kv)) > 0) {
+        read_kv_string(cpu_kv, "model", cpu_model, sizeof(cpu_model));
+        read_kv_u64(cpu_kv, "clockrate_khz", &freq_khz);
+    }
+
+    snprintf(user_at, sizeof(user_at), "%s@%s", user, os_name);
     snprintf(os_line, sizeof(os_line), "os: %s %s", os_name, os_arch);
     snprintf(shell_line, sizeof(shell_line), "shell: %s", shell);
 
-    if (total_kib > 0) {
-        unsigned long long used_kib = total_kib >= free_kib ? (total_kib - free_kib) : 0;
-        snprintf(ram_line, sizeof(ram_line), "ram: %llu/%llu MiB", used_kib / 1024, total_kib / 1024);
-    } else {
-        snprintf(ram_line, sizeof(ram_line), "ram: <unknown>");
-    }
+    format_ram_line(used_kib, total_kib, ram_line, sizeof(ram_line));
 
     if (freq_khz > 0)
         snprintf(cpu_line, sizeof(cpu_line), "cpu: %s @ %llu MHz", cpu_model, freq_khz / 1000);

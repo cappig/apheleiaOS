@@ -255,7 +255,7 @@ int sched_fd_install(sched_thread_t* thread, int target_fd, const sched_fd_t* fd
     return target_fd;
 }
 
-int sched_fd_dup2(sched_thread_t* thread, int oldfd, int newfd) {
+int sched_fd_dup(sched_thread_t* thread, int oldfd, int newfd) {
     if (!thread || oldfd < 0 || oldfd >= SCHED_FD_MAX || !thread->fd_used[oldfd])
         return -EBADF;
 

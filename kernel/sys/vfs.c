@@ -18,6 +18,7 @@ static time_t _time_now(void) {
     u32 hz = arch_timer_hz();
     if (!hz)
         return 0;
+
     return (time_t)(arch_timer_ticks() / hz);
 }
 

@@ -43,8 +43,8 @@ int pipe(int pipefd[2]) {
     return SYSCALL_RET(int, syscall1(SYS_PIPE, (uintptr_t)pipefd));
 }
 
-int dup2(int oldfd, int newfd) {
-    return SYSCALL_RET(int, syscall2(SYS_DUP2, (uintptr_t)oldfd, (uintptr_t)newfd));
+int dup(int oldfd, int newfd) {
+    return SYSCALL_RET(int, syscall2(SYS_DUP, (uintptr_t)oldfd, (uintptr_t)newfd));
 }
 
 int mkdir(const char* path, mode_t mode) {

@@ -45,11 +45,9 @@
 #define SYS_GETPROCS  40
 #define SYS_WAITPID   41
 #define SYS_PIPE      42
-#define SYS_DUP2      43
+#define SYS_DUP       43
 #define SYS_RMDIR     44
 #define SYS_UMASK     45
-#define SYS_SYSCTL    46
-#define SYS_TIME      47
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
