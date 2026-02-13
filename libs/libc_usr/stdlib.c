@@ -54,11 +54,11 @@ int system(const char* command) {
 
     if (!pid) {
         if (strchr(argv[0], '/')) {
-            execve(argv[0], argv, NULL);
+            execve(argv[0], argv, environ);
         } else {
             char path[128];
             snprintf(path, sizeof(path), "/sbin/%s", argv[0]);
-            execve(path, argv, NULL);
+            execve(path, argv, environ);
         }
 
         _exit(127);

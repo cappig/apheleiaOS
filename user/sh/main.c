@@ -28,6 +28,7 @@ static volatile sig_atomic_t got_sigint = 0;
 #define SH_MAX_JOBS    16
 #define SH_CMD_MAX     128
 #define SH_LINE_MAX    SH_INPUT_LINE_MAX
+#define SH_ENV_ENTRY_MAX (SH_ENV_KEY_MAX + SH_ENV_VAL_MAX + 2)
 
 typedef enum {
     JOB_RUNNING,
@@ -743,7 +744,26 @@ static const char* env_path(void) {
     return "/sbin";
 }
 
-static void exec_script(const char* script, char* const argv[]) {
+static void env_build_exec(char env_data[SH_ENV_MAX][SH_ENV_ENTRY_MAX], char* envp[SH_ENV_MAX + 1]) {
+    size_t count = sh_env_count;
+    if (count > SH_ENV_MAX)
+        count = SH_ENV_MAX;
+
+    for (size_t i = 0; i < count; i++) {
+        snprintf(
+            env_data[i],
+            SH_ENV_ENTRY_MAX,
+            "%s=%s",
+            sh_env[i].key,
+            sh_env[i].value
+        );
+        envp[i] = env_data[i];
+    }
+
+    envp[count] = NULL;
+}
+
+static void exec_script(const char* script, char* const argv[], char* const envp[]) {
     char* sh_args[SH_MAX_ARGS];
     int argc = 0;
 
@@ -756,7 +776,7 @@ static void exec_script(const char* script, char* const argv[]) {
     }
 
     sh_args[argc] = NULL;
-    execve("/sbin/sh", sh_args, NULL);
+    execve("/sbin/sh", sh_args, envp);
 }
 
 static bool
@@ -789,7 +809,7 @@ build_exec_path(char* out, size_t out_len, const char* dir, size_t dir_len, cons
     return true;
 }
 
-static bool exec_in_path(const char* cmd, char* const argv[]) {
+static bool exec_in_path(const char* cmd, char* const argv[], char* const envp[]) {
     if (!cmd || !cmd[0])
         return false;
 
@@ -799,10 +819,10 @@ static bool exec_in_path(const char* cmd, char* const argv[]) {
     }
 
     if (strchr(cmd, '/')) {
-        execve(cmd, argv, NULL);
+        execve(cmd, argv, envp);
 
         if (errno == ENOEXEC)
-            exec_script(cmd, argv);
+            exec_script(cmd, argv, envp);
 
         return false;
     }
@@ -820,10 +840,10 @@ static bool exec_in_path(const char* cmd, char* const argv[]) {
             if (errno != ENOENT)
                 last_error = errno;
         } else {
-            execve(full, argv, NULL);
+            execve(full, argv, envp);
 
             if (errno == ENOEXEC) {
-                exec_script(full, argv);
+                exec_script(full, argv, envp);
                 return false;
             }
 
@@ -1095,7 +1115,11 @@ static int run_pipeline(sh_stage_t* stages, int stage_count, bool background, co
             if (handle_builtin(stages[i].argc, stages[i].argv))
                 _exit(0);
 
-            exec_in_path(stages[i].argv[0], stages[i].argv);
+            char env_data[SH_ENV_MAX][SH_ENV_ENTRY_MAX];
+            char* envp[SH_ENV_MAX + 1];
+            env_build_exec(env_data, envp);
+
+            exec_in_path(stages[i].argv[0], stages[i].argv, envp);
 
             if (errno == ENAMETOOLONG)
                 io_write_str("sh: command name too long\n");

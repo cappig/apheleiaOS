@@ -30,11 +30,27 @@ static void _serial_puts(const char* s) {
     send_serial_string(SERIAL_COM1, s);
 }
 
-static void _console_puts(const char* s) {
+typedef struct {
+    bool console_enabled;
+    bool serial_enabled;
+    bool console_ready;
+} log_sinks_t;
+
+static log_sinks_t log_sinks = {
+    .console_enabled = true,
+    .serial_enabled = true,
+    .console_ready = false,
+};
+
+static void _log_puts(const char* s) {
     if (!s)
         return;
 
-    arch_console_write(s, strlen(s));
+    if (log_sinks.serial_enabled)
+        serial_puts(s);
+
+    if (log_sinks.console_enabled && log_sinks.console_ready)
+        arch_console_write(s, strlen(s));
 }
 
 static char font_path[128] = {0};
@@ -137,6 +153,71 @@ static void _cache_font(const boot_info_t* info) {
 
     strncpy(font_path, info->args.font, sizeof(font_path) - 1);
     font_path[sizeof(font_path) - 1] = '\0';
+}
+
+static bool _console_token_is_serial(const char* token) {
+    if (!token || !token[0])
+        return false;
+
+    return !strcasecmp(token, "/dev/ttyS0") || !strcasecmp(token, "/dev/ttys0") ||
+           !strcasecmp(token, "ttyS0") || !strcasecmp(token, "ttys0");
+}
+
+static bool _console_token_is_console(const char* token) {
+    if (!token || !token[0])
+        return false;
+
+    return !strcasecmp(token, "/dev/console") || !strcasecmp(token, "console") ||
+           !strcasecmp(token, "/dev/tty") || !strcasecmp(token, "tty") ||
+           !strcasecmp(token, "/dev/tty0") || !strcasecmp(token, "tty0");
+}
+
+static void _configure_log_sinks(const boot_info_t* info) {
+    if (!info)
+        return;
+
+    if (!info->args.console[0]) {
+        log_sinks.console_enabled = true;
+        log_sinks.serial_enabled = true;
+        return;
+    }
+
+    char devices[sizeof(info->args.console)];
+    strncpy(devices, info->args.console, sizeof(devices) - 1);
+    devices[sizeof(devices) - 1] = '\0';
+
+    bool console_enabled = false;
+    bool serial_enabled = false;
+    bool saw_valid_device = false;
+    char* cursor = devices;
+
+    while (cursor && *cursor) {
+        char* next = strchr(cursor, ',');
+        if (next)
+            *next = '\0';
+
+        char* token = strtrim(cursor);
+        strtrunc(token);
+
+        if (_console_token_is_console(token)) {
+            console_enabled = true;
+            saw_valid_device = true;
+        } else if (_console_token_is_serial(token)) {
+            serial_enabled = true;
+            saw_valid_device = true;
+        }
+
+        if (!next)
+            break;
+
+        cursor = next + 1;
+    }
+
+    if (!saw_valid_device)
+        console_enabled = true;
+
+    log_sinks.console_enabled = console_enabled;
+    log_sinks.serial_enabled = serial_enabled;
 }
 
 static bool _handle_user_signal(int signum, int_state_t* state) {
@@ -265,10 +346,10 @@ static void _gp_fault_handler(int_state_t* state) {
 
 static void _invalid_opcode_handler(int_state_t* state) {
 #if defined(__x86_64__)
-    if (handle_user_signal(SIGILL, state))
+    if (_handle_user_signal(SIGILL, state))
         return;
 #else
-    if (handle_user_signal(SIGILL, state))
+    if (_handle_user_signal(SIGILL, state))
         return;
 #endif
 
@@ -337,11 +418,13 @@ void arch_init(void* boot_info) {
     boot_info_t* info = boot_info;
 
     init_serial(SERIAL_COM1, SERAIL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
-    log_init(serial_puts);
     asm volatile("cld");
 
     if (!info)
         panic("boot info missing");
+
+    _configure_log_sinks(info);
+    log_init(_log_puts);
 
     select_log_level(info);
     _cache_font(info);
@@ -370,8 +453,8 @@ void arch_init(void* boot_info) {
     pmm_ref_init();
 
     console_init(info);
-    _publish_framebuffer(info);
-    log_init(console_puts);
+    log_sinks.console_ready = true;
+    publish_framebuffer(info);
 
     acpi_init(info->acpi_root_ptr);
     tsc_init();

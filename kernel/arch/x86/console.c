@@ -1424,15 +1424,6 @@ ssize_t arch_console_write_screen(size_t screen, const void* buf, size_t len) {
 
     unsigned long flags = arch_irq_save();
 
-    size_t serial_screen = TTY_USER_TO_SCREEN(0);
-    bool mirror = (screen == TTY_CONSOLE) || (screen == serial_screen);
-
-    if (!mirror && console_state.ready && screen >= console_state.screen_count)
-        mirror = true;
-
-    if (mirror)
-        send_serial_sized_string(SERIAL_COM1, buf, len);
-
     console_write_screen(screen, buf, len);
 
     arch_irq_restore(flags);

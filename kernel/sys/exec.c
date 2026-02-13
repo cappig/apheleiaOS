@@ -16,6 +16,10 @@
 #include <unistd.h>
 
 #define USER_STACK_PAGES 16
+#define EXEC_MAX_ARGS    16
+#define EXEC_MAX_ARG_LEN 128
+#define EXEC_MAX_ENV     32
+#define EXEC_MAX_ENV_LEN 128
 
 static uintptr_t next_stack_top;
 
@@ -23,6 +27,11 @@ typedef struct {
     int argc;
     char* argv[EXEC_MAX_ARGS + 1];
 } exec_args_t;
+
+typedef struct {
+    int envc;
+    char* envp[EXEC_MAX_ENV + 1];
+} exec_env_t;
 
 typedef struct {
     char path[PATH_MAX];
@@ -90,17 +99,46 @@ static u64 _elf_flags_to_page_flags(u32 elf_flags) {
     return flags;
 }
 
+static bool _elf_segment_is_valid(u64 file_size, u64 mem_size, u64 offset, u64 image_size, u64 vaddr) {
+    if (!mem_size)
+        return false;
+
+    if (file_size > mem_size)
+        return false;
+
+    if (offset > image_size || file_size > image_size - offset)
+        return false;
+
+    if (vaddr + mem_size < vaddr)
+        return false;
+
+    return true;
+}
+
 static bool
 _map_user_region(sched_thread_t* thread, uintptr_t vaddr, uintptr_t paddr, size_t pages, u64 flags) {
-    if (!thread || !thread->vm_space || !pages)
+    if (!thread || !thread->vm_space || !pages || !paddr)
         return false;
 
     void* root = arch_vm_root(thread->vm_space);
-    if (!root)
+    if (!root) {
+        arch_free_frames((void*)paddr, pages);
         return false;
+    }
 
     arch_map_region(root, pages, vaddr, paddr, flags);
-    return sched_add_user_region(thread, vaddr, paddr, pages, flags);
+
+    if (sched_add_user_region(thread, vaddr, paddr, pages, flags))
+        return true;
+
+    for (size_t i = 0; i < pages; i++) {
+        uintptr_t page = vaddr + i * PAGE_4KIB;
+        unmap_page((page_t*)root, page);
+        arch_tlb_flush(page);
+    }
+
+    arch_free_frames((void*)paddr, pages);
+    return false;
 }
 
 static bool _load_segments_64(sched_thread_t* thread, const u8* image, size_t size, u64* entry_out) {
@@ -127,15 +165,22 @@ static bool _load_segments_64(sched_thread_t* thread, const u8* image, size_t si
         if (!ph->mem_size)
             continue;
 
+        if (!_elf_segment_is_valid(ph->file_size, ph->mem_size, ph->offset, size, ph->vaddr))
+            return false;
+
         u64 map_base = ALIGN_DOWN(ph->vaddr, PAGE_4KIB);
         u64 map_end = ALIGN(ph->vaddr + ph->mem_size, PAGE_4KIB);
+
+        if (map_end <= map_base)
+            return false;
+
         size_t pages = (size_t)((map_end - map_base) / PAGE_4KIB);
 
-        u64 flags = _elf_flags_to_page_flags(ph->flags);
-        // Allow loading into read-only segments during early bring-up.
-        flags |= PT_WRITE;
+        u64 flags = elf_flags_to_page_flags(ph->flags);
 
         uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
+        if (!paddr)
+            return false;
 
         if (!_map_user_region(thread, map_base, paddr, pages, flags))
             return false;
@@ -149,8 +194,7 @@ static bool _load_segments_64(sched_thread_t* thread, const u8* image, size_t si
 
         memset(dst, 0, pages * PAGE_4KIB);
 
-        if (ph->offset + copy_len <= size)
-            memcpy((u8*)dst + copy_off, image + ph->offset, copy_len);
+        memcpy((u8*)dst + copy_off, image + ph->offset, copy_len);
 
         arch_phys_unmap(dst, pages * PAGE_4KIB);
     }
@@ -185,13 +229,22 @@ static bool _load_segments_32(sched_thread_t* thread, const u8* image, size_t si
         if (!ph->mem_size)
             continue;
 
+        if (!_elf_segment_is_valid(ph->file_size, ph->mem_size, ph->offset, size, ph->vaddr))
+            return false;
+
         u32 map_base = ALIGN_DOWN(ph->vaddr, PAGE_4KIB);
         u32 map_end = ALIGN(ph->vaddr + ph->mem_size, PAGE_4KIB);
+
+        if (map_end <= map_base)
+            return false;
+
         size_t pages = (size_t)((map_end - map_base) / PAGE_4KIB);
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
 
         uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
+        if (!paddr)
+            return false;
 
         if (!_map_user_region(thread, map_base, paddr, pages, flags))
             return false;
@@ -205,8 +258,7 @@ static bool _load_segments_32(sched_thread_t* thread, const u8* image, size_t si
 
         memset(dst, 0, pages * PAGE_4KIB);
 
-        if (ph->offset + copy_len <= size)
-            memcpy((u8*)dst + copy_off, image + ph->offset, copy_len);
+        memcpy((u8*)dst + copy_off, image + ph->offset, copy_len);
 
         arch_phys_unmap(dst, pages * PAGE_4KIB);
     }
@@ -282,7 +334,7 @@ static bool _args_push(exec_args_t* args, const char* value) {
 
     size_t len = _strnlen(value, EXEC_MAX_ARG_LEN);
     if (len >= EXEC_MAX_ARG_LEN)
-        len = EXEC_MAX_ARG_LEN - 1;
+        return false;
 
     char* copy = malloc(len + 1);
     if (!copy)
@@ -309,6 +361,44 @@ static void _free_args(exec_args_t* args) {
     args->argv[0] = NULL;
 }
 
+static bool _env_push(exec_env_t* env, const char* value) {
+    if (!env || !value)
+        return false;
+
+    if (env->envc >= EXEC_MAX_ENV)
+        return false;
+
+    size_t len = exec_strnlen(value, EXEC_MAX_ENV_LEN);
+
+    if (len >= EXEC_MAX_ENV_LEN)
+        return false;
+
+    char* copy = malloc(len + 1);
+    if (!copy)
+        return false;
+
+    memcpy(copy, value, len);
+    copy[len] = '\0';
+
+    env->envp[env->envc++] = copy;
+    env->envp[env->envc] = NULL;
+
+    return true;
+}
+
+static void _free_env(exec_env_t* env) {
+    if (!env)
+        return;
+
+    for (int i = 0; i < env->envc; i++) {
+        free(env->envp[i]);
+        env->envp[i] = NULL;
+    }
+
+    env->envc = 0;
+    env->envp[0] = NULL;
+}
+
 static bool _copy_args(char* const argv[], exec_args_t* out) {
     if (!out)
         return false;
@@ -333,10 +423,44 @@ static bool _copy_args(char* const argv[], exec_args_t* out) {
     return true;
 }
 
-static uintptr_t _build_user_stack_args(uintptr_t stack_top, const exec_args_t* args) {
+static bool _copy_env(char* const envp[], exec_env_t* out) {
+    if (!out)
+        return false;
+
+    memset(out, 0, sizeof(*out));
+
+    if (!envp)
+        return true;
+
+    for (int i = 0; i < EXEC_MAX_ENV; i++) {
+        const char* env = envp[i];
+        if (!env)
+            break;
+
+        if (!_env_push(out, env)) {
+            _free_env(out);
+            return false;
+        }
+    }
+
+    out->envp[out->envc] = NULL;
+    return true;
+}
+
+static uintptr_t
+_build_user_stack_args(uintptr_t stack_top, const exec_args_t* args, const exec_env_t* env) {
     uintptr_t sp = stack_top;
     size_t argc = args ? (size_t)args->argc : 0;
+    size_t envc = env ? (size_t)env->envc : 0;
     uintptr_t arg_ptrs[EXEC_MAX_ARGS] = {0};
+    uintptr_t env_ptrs[EXEC_MAX_ENV] = {0};
+
+    for (int i = (int)envc - 1; i >= 0; i--) {
+        size_t len = strlen(env->envp[i]) + 1;
+        sp -= len;
+        memcpy((void*)sp, env->envp[i], len);
+        env_ptrs[i] = sp;
+    }
 
     for (int i = (int)argc - 1; i >= 0; i--) {
         size_t len = strlen(args->argv[i]) + 1;
@@ -347,7 +471,7 @@ static uintptr_t _build_user_stack_args(uintptr_t stack_top, const exec_args_t* 
 
     sp = ALIGN_DOWN(sp, 16);
 
-    size_t slots = argc + 3;
+    size_t slots = argc + envc + 3;
     if ((slots % 2) != 0) {
         sp -= sizeof(uintptr_t);
         *(uintptr_t*)sp = 0;
@@ -355,6 +479,11 @@ static uintptr_t _build_user_stack_args(uintptr_t stack_top, const exec_args_t* 
 
     sp -= sizeof(uintptr_t);
     *(uintptr_t*)sp = 0;
+
+    for (int i = (int)envc - 1; i >= 0; i--) {
+        sp -= sizeof(uintptr_t);
+        *(uintptr_t*)sp = env_ptrs[i];
+    }
 
     sp -= sizeof(uintptr_t);
     *(uintptr_t*)sp = 0;
@@ -385,9 +514,11 @@ static bool _map_user_stack(sched_thread_t* thread, uintptr_t* stack_top_out) {
         return false;
 
     uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
+    if (!paddr)
+        return false;
 
     u64 flags = arch_user_stack_flags();
-    if (!map_user_region(thread, base, paddr, pages, flags))
+    if (!_map_user_region(thread, base, paddr, pages, flags))
         return false;
 
     thread->user_stack_base = base;
@@ -617,7 +748,8 @@ sched_thread_t* user_spawn(const char* path) {
 
     exec_shebang_t shebang = {0};
     exec_args_t args = {0};
-    bool is_script = _parse_shebang(file.buffer, file.size, &shebang);
+    exec_env_t env = {0};
+    bool is_script = exec_parse_shebang(file.buffer, file.size, &shebang);
 
     if (is_script) {
         if (!_build_shebang_args(NULL, &shebang, exec_name_buf, &args)) {
@@ -629,8 +761,9 @@ sched_thread_t* user_spawn(const char* path) {
         exec_file_t interp = {0};
         err = _open_file(thread, shebang.path, &interp, true);
         if (err) {
-            _free_args(&args);
-            _close_file(&file);
+            exec_free_args(&args);
+            _free_env(&env);
+            exec_close_file(&file);
             sched_discard_thread(thread);
             return NULL;
         }
@@ -638,8 +771,9 @@ sched_thread_t* user_spawn(const char* path) {
         _close_file(&file);
         file = interp;
     } else {
-        if (!_args_push(&args, path)) {
-            _close_file(&file);
+        if (!exec_args_push(&args, path)) {
+            _free_env(&env);
+            exec_close_file(&file);
             sched_discard_thread(thread);
             return NULL;
         }
@@ -653,8 +787,9 @@ sched_thread_t* user_spawn(const char* path) {
 
     if (!ok) {
         log_warn("exec: '%s' is not a valid executable for this arch", file.resolved);
-        _free_args(&args);
-        _close_file(&file);
+        exec_free_args(&args);
+        _free_env(&env);
+        exec_close_file(&file);
         sched_discard_thread(thread);
         return NULL;
     }
@@ -662,14 +797,15 @@ sched_thread_t* user_spawn(const char* path) {
     uintptr_t stack_top = 0;
     if (!_map_user_stack(thread, &stack_top)) {
         log_warn("exec: failed to map user stack");
-        _free_args(&args);
-        _close_file(&file);
+        exec_free_args(&args);
+        _free_env(&env);
+        exec_close_file(&file);
         sched_discard_thread(thread);
         return NULL;
     }
 
     arch_vm_switch(thread->vm_space);
-    stack_top = _build_user_stack_args(stack_top, &args);
+    stack_top = _build_user_stack_args(stack_top, &args, &env);
     arch_vm_switch(arch_vm_kernel());
 
     sched_prepare_user_thread(thread, entry, stack_top);
@@ -677,8 +813,9 @@ sched_thread_t* user_spawn(const char* path) {
     sched_set_thread_name(thread, exec_basename(exec_name_buf));
 
     thread->state = THREAD_READY;
-    _free_args(&args);
-    _close_file(&file);
+    exec_free_args(&args);
+    _free_env(&env);
+    exec_close_file(&file);
     return thread;
 }
 
@@ -686,16 +823,21 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
     if (!thread || !path)
         return -EINVAL;
 
-    (void)envp;
-
     exec_args_t args = {0};
+    exec_env_t env = {0};
     if (!_copy_args(argv, &args))
         return -ENOMEM;
+
+    if (!_copy_env(envp, &env)) {
+        exec_free_args(&args);
+        return -ENOMEM;
+    }
 
     exec_file_t file = {0};
     int err = _open_file(thread, path, &file, true);
     if (err) {
-        _free_args(&args);
+        exec_free_args(&args);
+        _free_env(&env);
         return err;
     }
 
@@ -708,9 +850,10 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
     bool is_script = _parse_shebang(file.buffer, file.size, &shebang);
 
     if (is_script) {
-        if (!_build_shebang_args(&args, &shebang, exec_name_buf, &script_args)) {
-            _free_args(&args);
-            _close_file(&file);
+        if (!exec_build_shebang_args(&args, &shebang, exec_name_buf, &script_args)) {
+            exec_free_args(&args);
+            _free_env(&env);
+            exec_close_file(&file);
             return -ENOMEM;
         }
 
@@ -720,8 +863,9 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
         exec_file_t interp = {0};
         err = _open_file(thread, shebang.path, &interp, true);
         if (err) {
-            _free_args(&args);
-            _close_file(&file);
+            exec_free_args(&args);
+            _free_env(&env);
+            exec_close_file(&file);
             return err;
         }
 
@@ -732,8 +876,9 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
     arch_vm_space_t* old_vm = thread->vm_space;
     arch_vm_space_t* fresh = arch_vm_create_user();
     if (!fresh) {
-        _free_args(&args);
-        _close_file(&file);
+        exec_free_args(&args);
+        _free_env(&env);
+        exec_close_file(&file);
         return -ENOMEM;
     }
 
@@ -758,8 +903,9 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
         thread->regions = old_regions;
         thread->vm_space = old_vm;
         arch_vm_destroy(fresh);
-        _free_args(&args);
-        _close_file(&file);
+        exec_free_args(&args);
+        _free_env(&env);
+        exec_close_file(&file);
         return -ENOEXEC;
     }
 
@@ -769,12 +915,16 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
         thread->regions = old_regions;
         thread->vm_space = old_vm;
         arch_vm_destroy(fresh);
-        _free_args(&args);
-        _close_file(&file);
+        exec_free_args(&args);
+        _free_env(&env);
+        exec_close_file(&file);
         return -ENOMEM;
     }
 
     arch_vm_switch(thread->vm_space);
+    stack_top = _build_user_stack_args(stack_top, &args, &env);
+    sched_signal_reset_thread(thread);
+
     if (old_vm && old_vm != arch_vm_kernel())
         arch_vm_destroy(old_vm);
 
@@ -789,6 +939,7 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
     }
 
     const char* thread_name = exec_name_buf;
+
     if (!is_script && args.argv[0])
         thread_name = args.argv[0];
     else if (!is_script)
@@ -796,7 +947,9 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
 
     sched_set_thread_name(thread, exec_basename(thread_name));
 
-    _free_args(&args);
-    _close_file(&file);
+    exec_free_args(&args);
+    _free_env(&env);
+    exec_close_file(&file);
+
     return 0;
 }

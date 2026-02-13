@@ -4,6 +4,8 @@
 #include <sys/proc.h>
 #include <sys/types.h>
 
+extern char** environ;
+
 ssize_t read(int fd, void* buf, size_t count);
 ssize_t write(int fd, const void* buf, size_t count);
 ssize_t pread(int fd, void* buf, size_t count, off_t offset);

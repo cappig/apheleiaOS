@@ -224,9 +224,9 @@ static bool _region_overlaps(const sched_user_region_t* region, uintptr_t start,
         return false;
 
     uintptr_t region_start = region->vaddr;
-    uintptr_t region_end = region->vaddr + region->pages * PAGE_4KIB;
+    uintptr_t _region_end = region->vaddr + region->pages * PAGE_4KIB;
 
-    return start < region_end && end > region_start;
+    return start < _region_end && end > region_start;
 }
 
 static uintptr_t _pick_mmap_base(sched_thread_t* thread, size_t size) {
@@ -313,6 +313,13 @@ static u64 _mmap_prot_flags(int prot) {
         flags |= PT_NO_EXECUTE;
 
     return flags;
+}
+
+static uintptr_t _region_end(const sched_user_region_t* region) {
+    if (!region)
+        return 0;
+
+    return region->vaddr + region->pages * PAGE_4KIB;
 }
 
 static ssize_t _sys_read(int fd, void* buf, size_t len) {
@@ -951,6 +958,16 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
     if (prot == PROT_NONE)
         return (uintptr_t)-EINVAL;
 
+    int map_type = args->flags & (MAP_SHARED | MAP_PRIVATE);
+    if (map_type != MAP_SHARED && map_type != MAP_PRIVATE)
+        return (uintptr_t)-EINVAL;
+
+    if (map_type == MAP_SHARED)
+        return (uintptr_t)-ENOTSUP;
+
+    if ((args->flags & MAP_ANON) && args->fd != -1)
+        return (uintptr_t)-EINVAL;
+
     uintptr_t addr = (uintptr_t)args->addr;
     if (addr && (addr % PAGE_4KIB))
         return (uintptr_t)-EINVAL;
@@ -1016,7 +1033,7 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
             return (uintptr_t)-EACCES;
 
         int need = R_OK;
-        if (prot & PROT_WRITE)
+        if (map_type == MAP_SHARED && (prot & PROT_WRITE))
             need |= W_OK;
 
         if (!vfs_access(file, thread->uid, thread->gid, need))
@@ -1121,33 +1138,96 @@ static int _sys_munmap(void* addr, size_t len) {
         return -EINVAL;
 
     size_t size = ALIGN(len, PAGE_4KIB);
-    size_t pages = size / PAGE_4KIB;
-
-    sched_user_region_t* prev = NULL;
-    sched_user_region_t* region = _find_region_exact(thread, base, pages, &prev);
-
-    if (!region)
+    uintptr_t end = base + size;
+    if (end < base)
         return -EINVAL;
 
     void* root = arch_vm_root(thread->vm_space);
     if (!root)
         return -EINVAL;
 
-    for (size_t i = 0; i < pages; i++) {
-        uintptr_t vaddr = base + i * PAGE_4KIB;
-        unmap_page((page_t*)root, vaddr);
-        arch_tlb_flush(vaddr);
+    bool unmapped = false;
+    sched_user_region_t* prev = NULL;
+    sched_user_region_t* region = thread->regions;
+
+    while (region) {
+        sched_user_region_t* next = region->next;
+        uintptr_t start = region->vaddr;
+        uintptr_t finish = _region_end(region);
+
+        uintptr_t overlap_start = base > start ? base : start;
+        uintptr_t overlap_end = end < finish ? end : finish;
+
+        if (overlap_start >= overlap_end) {
+            prev = region;
+            region = next;
+            continue;
+        }
+
+        size_t before_pages = (overlap_start - start) / PAGE_4KIB;
+        size_t overlap_pages = (overlap_end - overlap_start) / PAGE_4KIB;
+        size_t after_pages = (finish - overlap_end) / PAGE_4KIB;
+        size_t overlap_page_index = before_pages;
+
+        sched_user_region_t* tail = NULL;
+        if (before_pages && after_pages) {
+            tail = calloc(1, sizeof(*tail));
+            if (!tail)
+                return -ENOMEM;
+
+            tail->vaddr = overlap_end;
+            tail->paddr = region->paddr + (overlap_page_index + overlap_pages) * PAGE_4KIB;
+            tail->pages = after_pages;
+            tail->flags = region->flags;
+            tail->next = next;
+        }
+
+        for (size_t i = 0; i < overlap_pages; i++) {
+            uintptr_t vaddr = overlap_start + i * PAGE_4KIB;
+            unmap_page((page_t*)root, vaddr);
+            arch_tlb_flush(vaddr);
+        }
+
+        uintptr_t overlap_paddr = region->paddr + overlap_page_index * (uintptr_t)PAGE_4KIB;
+        arch_free_frames((void*)overlap_paddr, overlap_pages);
+        unmapped = true;
+
+        if (!before_pages && !after_pages) {
+            if (prev)
+                prev->next = next;
+            else
+                thread->regions = next;
+
+            free(region);
+            region = next;
+            continue;
+        }
+
+        if (!before_pages) {
+            region->vaddr = overlap_end;
+            region->paddr += (overlap_page_index + overlap_pages) * PAGE_4KIB;
+            region->pages = after_pages;
+            prev = region;
+            region = next;
+            continue;
+        }
+
+        region->pages = before_pages;
+
+        if (tail) {
+            region->next = tail;
+            prev = tail;
+            region = tail->next;
+            continue;
+        }
+
+        prev = region;
+        region = next;
     }
 
-    if (prev)
-        prev->next = region->next;
-    else
-        thread->regions = region->next;
+    if (!unmapped)
+        return -EINVAL;
 
-    if (region->paddr)
-        arch_free_frames((void*)(uintptr_t)region->paddr, pages);
-
-    free(region);
     return 0;
 }
 
