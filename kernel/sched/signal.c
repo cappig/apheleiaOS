@@ -133,15 +133,8 @@ int sched_signal_send_thread(sched_thread_t* thread, int signum) {
 
     signal_mark_pending(thread, signum);
 
-    if (thread->state == THREAD_SLEEPING) {
-        if (thread->blocked_on && thread->blocked_on->list && thread->in_wait_queue) {
-            list_remove(thread->blocked_on->list, &thread->wait_node);
-            thread->in_wait_queue = false;
-            thread->blocked_on = NULL;
-        }
-
-        sched_make_runnable(thread);
-    }
+    if (thread->state == THREAD_SLEEPING)
+        sched_unblock_thread(thread);
 
     return 1;
 }

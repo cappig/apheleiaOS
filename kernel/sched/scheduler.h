@@ -144,6 +144,7 @@ pid_t sched_waitpid(pid_t pid, int* status, int options);
 void sched_prepare_user_thread(sched_thread_t* thread, uintptr_t entry, uintptr_t user_stack_top);
 void sched_discard_thread(sched_thread_t* thread);
 void sched_make_runnable(sched_thread_t* thread);
+void sched_unblock_thread(sched_thread_t* thread);
 void sched_stop_thread(sched_thread_t* thread, int signum);
 void sched_continue_thread(sched_thread_t* thread);
 void sched_set_thread_name(sched_thread_t* thread, const char* name);
