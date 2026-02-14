@@ -3,20 +3,27 @@
 #include <arch/arch.h>
 #include <base/macros.h>
 #include <base/units.h>
+#include <errno.h>
+#include <gui/fb.h>
 #include <inttypes.h>
 #include <log/log.h>
+#include <sched/scheduler.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/cpu.h>
+#include <sys/console.h>
 #include <sys/framebuffer.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 
 #include "keyboard.h"
+#include "input.h"
 #include "mouse.h"
 #include "pty.h"
 #include "tty.h"
 #include "vfs.h"
+#include "ws.h"
 
 #define FB_MAP_CHUNK (4 * MIB)
 #define SYSINFO_TEXT_MAX 384
@@ -36,6 +43,7 @@ static pty_handle_t pty_master_handles[PTY_COUNT];
 static pty_handle_t pty_slave_handles[PTY_COUNT];
 static pty_handle_t pty_master_default = {.index = 0, .is_master = true};
 static u64 boot_seconds = 0;
+static u32 ws_ids[WS_MAX_WINDOWS] = {0};
 
 static u64 _boot_seconds(void) {
     if (boot_seconds)
@@ -95,6 +103,10 @@ static ssize_t _dev_tty_ioctl(vfs_node_t* node, u64 request, void* args) {
     return tty_ioctl_handle(node ? node->private : NULL, request, args);
 }
 
+static short _dev_tty_poll(vfs_node_t* node, short events, u32 flags) {
+    return tty_poll_handle(node ? node->private : NULL, events, flags);
+}
+
 static ssize_t _dev_pty_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
 
@@ -109,6 +121,65 @@ static ssize_t _dev_pty_write(vfs_node_t* node, void* buf, size_t offset, size_t
 
 static ssize_t _dev_pty_ioctl(vfs_node_t* node, u64 request, void* args) {
     return pty_ioctl_handle(node ? node->private : NULL, request, args);
+}
+
+static short _dev_pty_poll(vfs_node_t* node, short events, u32 flags) {
+    return pty_poll_handle(node ? node->private : NULL, events, flags);
+}
+
+static ssize_t _dev_input_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    return input_read(node, buf, offset, len, flags);
+}
+
+static short _dev_input_poll(vfs_node_t* node, short events, u32 flags) {
+    return input_poll(node, events, flags);
+}
+
+static ssize_t _dev_wsctl_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    return ws_ctl_read(node, buf, offset, len, flags);
+}
+
+static ssize_t _dev_wsctl_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    return ws_ctl_write(node, buf, offset, len, flags);
+}
+
+static short _dev_wsctl_poll(vfs_node_t* node, short events, u32 flags) {
+    return ws_ctl_poll(node, events, flags);
+}
+
+static ssize_t _dev_ws_fb_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    if (!node || !node->private)
+        return -EINVAL;
+
+    return ws_fb_read(*(u32*)node->private, buf, offset, len, flags);
+}
+
+static ssize_t _dev_ws_fb_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    if (!node || !node->private)
+        return -EINVAL;
+
+    return ws_fb_write(*(u32*)node->private, buf, offset, len, flags);
+}
+
+static short _dev_ws_fb_poll(vfs_node_t* node, short events, u32 flags) {
+    if (!node || !node->private)
+        return POLLNVAL;
+
+    return ws_fb_poll(*(u32*)node->private, events, flags);
+}
+
+static ssize_t _dev_ws_ev_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    if (!node || !node->private)
+        return -EINVAL;
+
+    return ws_ev_read(*(u32*)node->private, buf, offset, len, flags);
+}
+
+static short _dev_ws_ev_poll(vfs_node_t* node, short events, u32 flags) {
+    if (!node || !node->private)
+        return POLLNVAL;
+
+    return ws_ev_poll(*(u32*)node->private, events, flags);
 }
 
 static ssize_t _dev_null_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
@@ -206,7 +277,56 @@ static ssize_t _dev_fb_write(vfs_node_t* node, void* buf, size_t offset, size_t 
     (void)node;
     (void)flags;
 
-    return _dev_fb_transfer(framebuffer_get_info(), buf, offset, len, true);
+    ssize_t owner_screen = console_fb_owner_screen();
+    if (owner_screen != TTY_NONE && tty_current_screen() != (size_t)owner_screen)
+        return -EAGAIN;
+
+    return dev_fb_transfer(framebuffer_get_info(), buf, offset, len, true);
+}
+
+static ssize_t _dev_fb_ioctl(vfs_node_t* node, u64 request, void* args) {
+    (void)node;
+
+    const framebuffer_info_t* fb = framebuffer_get_info();
+
+    switch (request) {
+    case FBIOGETINFO:
+        if (!args)
+            return -EINVAL;
+
+        fb_info_t* info = args;
+        memset(info, 0, sizeof(*info));
+
+        if (!fb)
+            return 0;
+
+        info->width = fb->width;
+        info->height = fb->height;
+        info->pitch = fb->pitch;
+        info->bpp = fb->bpp;
+        info->available = fb->available;
+        return 0;
+    case FBIOACQUIRE: {
+        sched_thread_t* current = sched_current();
+        if (!current)
+            return -EPERM;
+
+        size_t screen = TTY_CONSOLE;
+        if (current->tty_index >= 0 && current->tty_index < TTY_SCREEN_COUNT)
+            screen = (size_t)current->tty_index;
+
+        return console_fb_acquire(current->pid, screen);
+    }
+    case FBIORELEASE: {
+        sched_thread_t* current = sched_current();
+        if (!current)
+            return -EPERM;
+
+        return console_fb_release(current->pid);
+    }
+    default:
+        return -ENOTTY;
+    }
 }
 
 static ssize_t _dev_os_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
@@ -357,9 +477,12 @@ static void _create_ptys(vfs_node_t* dev_dir, vfs_interface_t* pty_if) {
     }
 }
 
+// FIXME: this is horrible, fix this eyesore asap!
 void devfs_init(void) {
     tty_init();
     pty_init();
+    input_init();
+    ws_init();
     devfs_seed_tty_handles();
     _seed_pty_handles();
     devfs_boot_seconds();
@@ -388,7 +511,8 @@ void devfs_init(void) {
         return;
     }
 
-    tty_if->ioctl = _dev_tty_ioctl;
+    tty_if->ioctl = dev_tty_ioctl;
+    tty_if->poll = _dev_tty_poll;
 
     if (!_create_node(dev_dir, "tty", VFS_CHARDEV, 0666, tty_if, &tty_current))
         log_warn("devfs: failed to create /dev/tty");
@@ -402,7 +526,8 @@ void devfs_init(void) {
     if (!pty_if) {
         log_warn("devfs: failed to allocate pty interface");
     } else {
-        pty_if->ioctl = _dev_pty_ioctl;
+        pty_if->ioctl = dev_pty_ioctl;
+        pty_if->poll = _dev_pty_poll;
 
         if (!devfs_create_node(dev_dir, "ptmx", VFS_CHARDEV, 0666, pty_if, &pty_master_default))
             log_warn("devfs: failed to create /dev/ptmx");
@@ -428,6 +553,16 @@ void devfs_init(void) {
         log_warn("devfs: failed to create /dev/mouse");
     }
 
+    vfs_interface_t* input_if = vfs_create_interface(_dev_input_read, NULL, NULL);
+    if (!input_if) {
+        log_warn("devfs: failed to allocate input interface");
+    } else {
+        input_if->poll = _dev_input_poll;
+
+        if (!devfs_create_node(dev_dir, "input", VFS_CHARDEV, 0666, input_if, NULL))
+            log_warn("devfs: failed to create /dev/input");
+    }
+
     vfs_interface_t* null_if = vfs_create_interface(_dev_null_read, dev_null_write, NULL);
     if (!null_if) {
         log_warn("devfs: failed to allocate null interface");
@@ -447,8 +582,10 @@ void devfs_init(void) {
         vfs_interface_t* fb_if = vfs_create_interface(dev_fb_read, dev_fb_write, NULL);
         if (!fb_if) {
             log_warn("devfs: failed to allocate framebuffer interface");
-        } else if (!_create_node(dev_dir, "fb", VFS_CHARDEV, 0660, fb_if, NULL)) {
+        } else if (!devfs_create_node(dev_dir, "fb", VFS_CHARDEV, 0666, fb_if, NULL)) {
             log_warn("devfs: failed to create /dev/fb");
+        } else {
+            fb_if->ioctl = _dev_fb_ioctl;
         }
     }
 
@@ -478,6 +615,51 @@ void devfs_init(void) {
         log_warn("devfs: failed to allocate cpu interface");
     } else if (!_create_node(dev_dir, "cpu", VFS_CHARDEV, 0444, cpu_if, NULL)) {
         log_warn("devfs: failed to create /dev/cpu");
+    }
+
+    vfs_interface_t* wsctl_if = vfs_create_interface(_dev_wsctl_read, _dev_wsctl_write, NULL);
+    if (!wsctl_if) {
+        log_warn("devfs: failed to allocate wsctl interface");
+    } else {
+        wsctl_if->poll = _dev_wsctl_poll;
+
+        if (!devfs_create_node(dev_dir, "wsctl", VFS_CHARDEV, 0666, wsctl_if, NULL))
+            log_warn("devfs: failed to create /dev/wsctl");
+    }
+
+    vfs_node_t* ws_dir = vfs_lookup_from(dev_dir, "ws");
+    if (!ws_dir)
+        ws_dir = vfs_create(dev_dir, "ws", VFS_DIR, 0755);
+
+    if (!ws_dir) {
+        log_warn("devfs: failed to create /dev/ws");
+    } else {
+        vfs_interface_t* ws_fb_if = vfs_create_interface(_dev_ws_fb_read, _dev_ws_fb_write, NULL);
+        vfs_interface_t* ws_ev_if = vfs_create_interface(_dev_ws_ev_read, NULL, NULL);
+
+        if (!ws_fb_if || !ws_ev_if) {
+            log_warn("devfs: failed to allocate ws window interfaces");
+        } else {
+            ws_fb_if->poll = _dev_ws_fb_poll;
+            ws_ev_if->poll = _dev_ws_ev_poll;
+
+            for (u32 i = 0; i < WS_MAX_WINDOWS; i++) {
+                ws_ids[i] = i;
+
+                char slot_name[4];
+                snprintf(slot_name, sizeof(slot_name), "%u", i);
+
+                vfs_node_t* slot = vfs_lookup_from(ws_dir, slot_name);
+                if (!slot)
+                    slot = vfs_create(ws_dir, slot_name, VFS_DIR, 0755);
+
+                if (!slot)
+                    continue;
+
+                devfs_create_node(slot, "fb", VFS_CHARDEV, 0666, ws_fb_if, &ws_ids[i]);
+                devfs_create_node(slot, "ev", VFS_CHARDEV, 0666, ws_ev_if, &ws_ids[i]);
+            }
+        }
     }
 
     log_info("devfs: devices ready");

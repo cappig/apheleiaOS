@@ -8,6 +8,8 @@
 #include <string.h>
 #include <sys/framebuffer.h>
 
+#include "input.h"
+
 static vector_t* mice = NULL;
 static ring_buffer_t* buffer = NULL;
 
@@ -66,6 +68,8 @@ void mouse_handle_event(mouse_event event) {
 
     if (buffer)
         ring_buffer_push_array(buffer, (u8*)&event, sizeof(event));
+
+    input_push_mouse_event(&event);
 }
 
 u8 mouse_register(const char* name) {

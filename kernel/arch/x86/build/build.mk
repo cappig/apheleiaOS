@@ -13,6 +13,7 @@ KERNEL_SRC_DIRS := \
 	libs/alloc \
 	libs/data \
 	libs/input \
+	libs/term \
 	libs/parse
 
 KERNEL_ALL_SRC := $(foreach dir, $(KERNEL_SRC_DIRS), $(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))

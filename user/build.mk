@@ -11,6 +11,9 @@ USER_MAIN_SRC := $(wildcard user/*/main.c)
 USER_PROGS := $(patsubst user/%/main.c,%,$(USER_MAIN_SRC))
 USER_APP_SRC := $(wildcard user/*/*.c)
 USER_COMMON_SRC := $(wildcard libs/user/*.c)
+USER_GUI_SRC := $(wildcard libs/gui/*.c)
+USER_TERM_SRC := $(wildcard libs/term/*.c)
+USER_PARSE_SRC := libs/parse/psf.c
 
 ifeq ($(ARCH_VARIANT), 64)
 USER_ARCH_NAME := x86_64
@@ -31,6 +34,7 @@ USER_CC := \
 	-Ilibs/libc \
 	-Ilibs/libc_usr \
 	-Ilibs/user \
+	-Ilibs/gui \
 	-m$(ARCH_VARIANT) \
 	-DARCH_NAME=\"$(USER_ARCH_NAME)\"
 USER_AS := -felf$(ARCH_VARIANT)
@@ -45,6 +49,9 @@ USER_LIBC_OBJ := $(patsubst %.c, $(USER_OBJ_DIR)/%.c.o, $(USER_LIBC_SRC))
 USER_CRT_OBJ := $(patsubst %.asm, $(USER_OBJ_DIR)/%.asm.o, $(USER_CRT_SRC))
 USER_APP_OBJ := $(patsubst %.c,$(USER_OBJ_DIR)/%.c.o,$(USER_APP_SRC))
 USER_COMMON_OBJ := $(patsubst %.c,$(USER_OBJ_DIR)/%.c.o,$(USER_COMMON_SRC))
+USER_GUI_OBJ := $(patsubst %.c,$(USER_OBJ_DIR)/%.c.o,$(USER_GUI_SRC))
+USER_TERM_OBJ := $(patsubst %.c,$(USER_OBJ_DIR)/%.c.o,$(USER_TERM_SRC))
+USER_PARSE_OBJ := $(patsubst %.c,$(USER_OBJ_DIR)/%.c.o,$(USER_PARSE_SRC))
 
 USER_PROGS_BIN := $(foreach prog, $(USER_PROGS), $(USER_BIN_DIR)/$(prog))
 
@@ -52,7 +59,7 @@ USER_PROGS_ROOT := $(foreach prog, $(USER_PROGS), $(USER_STAGE_DIR)/$(prog))
 
 USER_BINARIES := $(USER_PROGS_ROOT)
 
-.SECONDARY: $(USER_LIBC_OBJ) $(USER_CRT_OBJ) $(USER_APP_OBJ) $(USER_COMMON_OBJ) $(USER_PROGS_BIN)
+.SECONDARY: $(USER_LIBC_OBJ) $(USER_CRT_OBJ) $(USER_APP_OBJ) $(USER_COMMON_OBJ) $(USER_GUI_OBJ) $(USER_TERM_OBJ) $(USER_PARSE_OBJ) $(USER_PROGS_BIN)
 
 $(USER_OBJ_DIR)/%.c.o: %.c
 	@mkdir -p $(@D)
@@ -63,7 +70,7 @@ $(USER_OBJ_DIR)/%.asm.o: %.asm
 	$(call as, $(USER_AS), $@, $<)
 
 define USER_LINK_RULE
-$(USER_BIN_DIR)/$(1): $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_COMMON_OBJ) $$(filter $(USER_OBJ_DIR)/user/$(1)/%.c.o,$(USER_APP_OBJ)) $(USER_LIBGCC)
+$(USER_BIN_DIR)/$(1): $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_COMMON_OBJ) $(USER_GUI_OBJ) $(USER_TERM_OBJ) $(USER_PARSE_OBJ) $$(filter $(USER_OBJ_DIR)/user/$(1)/%.c.o,$(USER_APP_OBJ)) $(USER_LIBGCC)
 	@mkdir -p $$(@D)
 	$$(call ld, $(USER_LD), $$@, $$^)
 endef

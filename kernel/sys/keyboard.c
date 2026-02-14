@@ -10,6 +10,8 @@
 #include <sys/tty.h>
 #include <sys/tty_input.h>
 
+#include "input.h"
+
 static vector_t* kbds = NULL;
 static ring_buffer_t* buffer = NULL;
 static sched_wait_queue_t kbd_wait = {0};
@@ -139,6 +141,7 @@ void keyboard_handle_key(key_event event) {
     sched_wake_all(&kbd_wait);
 
     keyboard_update_modifiers(kbd, action, event.code);
+    input_push_key_event(&event, kbd->shift, kbd->ctrl, kbd->alt, kbd->capslock);
 
     if (!action)
         return;
@@ -157,7 +160,10 @@ void keyboard_handle_key(key_event event) {
         }
     }
 
-    if (_push_ansi_key(event.code))
+    if (input_capture_screen(tty_current_screen()))
+        return;
+
+    if (keyboard_push_ansi_key(event.code))
         return;
 
     bool is_alpha = (event.code >= KBD_A && event.code <= KBD_Z);

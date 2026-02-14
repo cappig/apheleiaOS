@@ -1,46 +1,17 @@
 #include "psf.h"
 
-#include <arch/arch.h>
 #include <base/attributes.h>
 #include <base/macros.h>
 #include <base/types.h>
 #include <base/utf8.h>
 #include <log/log.h>
+#include <parse/psf.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/console.h>
 #include <sys/font.h>
 
 #include "vfs.h"
-
-#define PSF1_MAGIC 0x0436
-#define PSF2_MAGIC 0x864ab572
-#define PSF1_WIDTH 8
-
-typedef struct PACKED {
-    u16 magic;
-    u8 mode;
-    u8 char_size;
-} psf1_header_t;
-
-enum psf1_modes {
-    PSF1_MODE_512 = 0x01,
-    PSF1_MODE_UNICODE = 0x02,
-};
-
-typedef struct PACKED {
-    u32 magic;
-    u32 version;
-    u32 header_size;
-    u32 flags;
-    u32 glyph_count;
-    u32 glyph_bytes;
-    u32 height;
-    u32 width;
-} psf2_header_t;
-
-enum psf2_modes {
-    PSF2_MODE_UNICODE = 0x01,
-};
 
 static void* loaded_blob = NULL;
 static size_t loaded_blob_size = 0;
@@ -107,109 +78,61 @@ _font_map_push(font_map_t** map, size_t* count, size_t* capacity, u32 codepoint,
     return true;
 }
 
-static bool _parse(
-    const void* data,
-    size_t size,
-    font_t* out,
-    font_map_t** map,
-    size_t* map_count,
-    size_t* map_capacity
-) {
-    if (!data || !out || size < sizeof(psf1_header_t))
-        return false;
+static bool
+_parse_psf2_unicode(const psf_blob_t* blob, font_map_t** map, size_t* map_count, size_t* map_capacity) {
+    if (!blob || !blob->unicode_table || !blob->unicode_size)
+        return true;
 
-    const psf2_header_t* psf2 = data;
+    const u8* table = blob->unicode_table;
+    const u8* end = table + blob->unicode_size;
 
-    if (psf2->magic == PSF2_MAGIC) {
-        if (psf2->header_size < sizeof(psf2_header_t))
-            return false;
-
-        if (!psf2->glyph_count || !psf2->glyph_bytes)
-            return false;
-
-        size_t glyphs_size = (size_t)psf2->glyph_count * psf2->glyph_bytes;
-
-        if (psf2->header_size + glyphs_size > size)
-            return false;
-
-        const u8* glyphs = (const u8*)data + psf2->header_size;
-
-        out->glyphs = glyphs;
-        out->glyph_width = psf2->width;
-        out->glyph_height = psf2->height;
-        out->glyph_count = psf2->glyph_count;
-        out->first_char = 0;
-
-        if (psf2->flags & PSF2_MODE_UNICODE) {
-            const u8* table = glyphs + glyphs_size;
-            const u8* end = (const u8*)data + size;
-
-            for (u32 glyph = 0; glyph < psf2->glyph_count && table < end; glyph++) {
-                while (table < end && *table != 0xff) {
-                    if (*table == 0xfe) {
-                        table++;
-                        continue;
-                    }
-
-                    u32 cp = 0;
-                    size_t consumed = utf8_decode(table, (size_t)(end - table), &cp);
-
-                    if (!consumed) {
-                        table++;
-                        continue;
-                    }
-
-                    if (!_font_map_push(map, map_count, map_capacity, cp, glyph))
-                        return false;
-
-                    table += consumed;
-                }
-
-                if (table < end && *table == 0xff)
-                    table++;
+    for (u32 glyph = 0; glyph < blob->glyph_count && table < end; glyph++) {
+        while (table < end && *table != 0xffU) {
+            if (*table == 0xfeU) {
+                table++;
+                continue;
             }
+
+            u32 cp = 0;
+            size_t consumed = utf8_decode(table, (size_t)(end - table), &cp);
+            if (!consumed) {
+                table++;
+                continue;
+            }
+
+            if (!font_map_push(map, map_count, map_capacity, cp, glyph))
+                return false;
+
+            table += consumed;
         }
 
-        return true;
+        if (table < end && *table == 0xffU)
+            table++;
     }
 
-    const psf1_header_t* psf1 = data;
-    if (psf1->magic != PSF1_MAGIC)
-        return false;
+    return true;
+}
 
-    u32 glyph_count = (psf1->mode & PSF1_MODE_512) ? 512 : 256;
-    size_t glyph_size = psf1->char_size;
-    size_t glyphs_size = glyph_size * glyph_count;
-    size_t header_size = sizeof(psf1_header_t);
+static bool
+_parse_psf1_unicode(const psf_blob_t* blob, font_map_t** map, size_t* map_count, size_t* map_capacity) {
+    if (!blob || !blob->unicode_table || !blob->unicode_size)
+        return true;
 
-    if (header_size + glyphs_size > size)
-        return false;
+    const u8* table = blob->unicode_table;
+    const u8* end = table + blob->unicode_size;
 
-    out->glyphs = (const u8*)data + header_size;
-    out->glyph_width = PSF1_WIDTH;
-    out->glyph_height = psf1->char_size;
-    out->glyph_count = glyph_count;
-    out->first_char = 0;
+    for (u32 glyph = 0; glyph < blob->glyph_count && table + 1 < end; glyph++) {
+        while (table + 1 < end) {
+            u16 code = (u16)(table[0] | ((u16)table[1] << 8));
+            table += 2;
 
-    if (psf1->mode & PSF1_MODE_UNICODE) {
-        const u8* table = (const u8*)data + header_size + glyphs_size;
-        const u8* end = (const u8*)data + size;
+            if (code == 0xffffU)
+                break;
+            if (code == 0xfffeU)
+                continue;
 
-        for (u32 glyph = 0; glyph < glyph_count && table + 1 < end; glyph++) {
-            while (table + 1 < end) {
-                u16 code = (u16)(table[0] | (table[1] << 8));
-
-                table += 2;
-
-                if (code == 0xffff)
-                    break;
-
-                if (code == 0xfffe)
-                    continue;
-
-                if (!_font_map_push(map, map_count, map_capacity, code, glyph))
-                    return false;
-            }
+            if (!font_map_push(map, map_count, map_capacity, code, glyph))
+                return false;
         }
     }
 
@@ -243,21 +166,41 @@ bool psf_load(const char* path) {
         return false;
     }
 
-    font_t parsed = {0};
+    psf_blob_t blob_info = {0};
     font_map_t* map = NULL;
     size_t map_count = 0;
     size_t map_capacity = 0;
 
-    if (!psf_parse(blob, (size_t)node->size, &parsed, &map, &map_count, &map_capacity)) {
+    if (!psf_parse_blob(blob, (size_t)node->size, &blob_info)) {
         free(blob);
-
-        if (map)
-            free(map);
 
         log_warn("console: failed to parse font '%s'", path);
 
         return false;
     }
+
+    if (blob_info.flags & PSF_BLOB_UNICODE) {
+        bool ok = true;
+        if (blob_info.type == PSF_TYPE_2)
+            ok = _parse_psf2_unicode(&blob_info, &map, &map_count, &map_capacity);
+        else if (blob_info.type == PSF_TYPE_1)
+            ok = _parse_psf1_unicode(&blob_info, &map, &map_count, &map_capacity);
+
+        if (!ok) {
+            free(blob);
+            if (map)
+                free(map);
+            return false;
+        }
+    }
+
+    font_t parsed = {
+        .glyphs = blob_info.glyphs,
+        .glyph_width = blob_info.width,
+        .glyph_height = blob_info.height,
+        .glyph_count = blob_info.glyph_count,
+        .first_char = 0,
+    };
 
     psf_discard();
 
@@ -270,7 +213,7 @@ bool psf_load(const char* path) {
     loaded_font.map = loaded_map;
     loaded_font.map_count = (u32)loaded_map_count;
 
-    arch_set_font(&loaded_font);
+    console_set_font(&loaded_font);
 
     log_info(
         "console: loaded font '%s' (%ux%u, %u glyphs)",

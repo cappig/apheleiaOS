@@ -19,6 +19,7 @@ TMP_EXT2=$(mktemp)
 TMP_ROOT=$(mktemp -d)
 
 cp -a "$ROOTFS"/. "$TMP_ROOT"/
+mkdir -p "$TMP_ROOT/dev"
 
 ROOT_SIZE_BYTES=$(du -sb "$TMP_ROOT" | cut -f1)
 EXT2_TARGET_BYTES=$((ROOT_SIZE_BYTES + ROOT_SIZE_BYTES / 2))
@@ -28,10 +29,12 @@ truncate -s "$EXT2_TARGET_BYTES" "$TMP_EXT2"
 if command -v fakeroot >/dev/null 2>&1; then
     fakeroot sh -c "
         chown 0:0 \"$TMP_ROOT/etc/passwd\" \"$TMP_ROOT/etc/group\" \"$TMP_ROOT/etc/loader.conf\" \"$TMP_ROOT/etc/shadow\" 2>/dev/null || true
+        chown 0:0 \"$TMP_ROOT/dev\" 2>/dev/null || true
         chown 0:0 \"$TMP_ROOT/home\" 2>/dev/null || true
         chown 1000:1000 \"$TMP_ROOT/home/user\" 2>/dev/null || true
         chmod 0644 \"$TMP_ROOT/etc/passwd\" \"$TMP_ROOT/etc/group\" \"$TMP_ROOT/etc/loader.conf\" 2>/dev/null || true
         chmod 0600 \"$TMP_ROOT/etc/shadow\" 2>/dev/null || true
+        chmod 0755 \"$TMP_ROOT/dev\" 2>/dev/null || true
         chmod 0755 \"$TMP_ROOT/home\" \"$TMP_ROOT/home/user\" 2>/dev/null || true
         mkfs.ext2 -q -m 0 -b 1024 -d \"$TMP_ROOT\" \"$TMP_EXT2\"
     "

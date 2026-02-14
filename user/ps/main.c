@@ -31,10 +31,15 @@ static const char* tty_name(const proc_info_t* info, char* buf, size_t buf_len) 
     if (!info)
         return "??";
 
-    if (info->tty_index < 0)
+    if (PROC_TTY_IS_PTS(info->tty_index)) {
+        snprintf(buf, buf_len, "pts%d", PROC_TTY_PTS_INDEX(info->tty_index));
+        return buf;
+    }
+
+    if (info->tty_index == PROC_TTY_NONE)
         return "??";
 
-    if (!info->tty_index)
+    if (info->tty_index == PROC_TTY_CONSOLE)
         return "console";
 
     snprintf(buf, buf_len, "tty%d", info->tty_index - 1);
