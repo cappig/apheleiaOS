@@ -1,12 +1,12 @@
 #include "tty.h"
 
-#include <arch/arch.h>
 #include <errno.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/console.h>
 #include <sys/ioctl.h>
 #include <sys/tty_input.h>
 #include <termios.h>
@@ -95,7 +95,7 @@ void tty_init(void) {
     tty_input_init();
     tty_input_set_current((size_t)current_tty);
 
-    if (!arch_console_set_active((size_t)current_tty))
+    if (!console_set_active((size_t)current_tty))
         log_warn("tty: failed to activate console screen %zu", (size_t)current_tty);
 }
 
@@ -107,7 +107,7 @@ bool tty_set_current(size_t index) {
 
     tty_input_set_current(index);
 
-    if (!arch_console_set_active(index))
+    if (!console_set_active(index))
         log_warn("tty: failed to activate console screen %zu", index);
 
     return true;
@@ -138,7 +138,7 @@ static ssize_t _write_screen(size_t index, const void* buf, size_t len) {
     if (index >= TTY_SCREEN_COUNT)
         return -EINVAL;
 
-    return arch_console_write_screen(index, buf, len);
+    return console_write_screen(index, buf, len);
 }
 
 static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len) {
@@ -331,4 +331,22 @@ ssize_t tty_ioctl_handle(const tty_handle_t* handle, u64 request, void* args) {
     default:
         return -ENOTTY;
     }
+}
+
+short tty_poll_handle(const tty_handle_t* handle, short events, u32 flags) {
+    (void)flags;
+
+    size_t screen = 0;
+    if (!tty_resolve_screen(handle, &screen))
+        return POLLNVAL;
+
+    short revents = 0;
+
+    if ((events & POLLIN) && tty_input_has_data(screen))
+        revents |= POLLIN;
+
+    if (events & POLLOUT)
+        revents |= POLLOUT;
+
+    return revents;
 }

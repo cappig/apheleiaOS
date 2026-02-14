@@ -42,3 +42,6 @@ char receive_serial(size_t port);
 
 void send_serial_string(size_t port, const char* s);
 void send_serial_sized_string(size_t port, const char* s, size_t len);
+
+void serial_devfs_init(void);
+void serial_dev_push_rx(size_t index, char ch);

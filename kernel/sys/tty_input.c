@@ -9,6 +9,7 @@
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <string.h>
+#include <sys/console.h>
 #include <sys/tty.h>
 
 typedef struct {
@@ -24,21 +25,9 @@ typedef struct {
     bool literal_next;
     bool cr_pending;
     size_t pending_newlines;
-    bool serial_input_seen;
 } tty_input_state_t;
 
 static tty_input_state_t tty_state[TTY_SCREEN_COUNT] = {0};
-
-static size_t _target_screen(bool from_serial) {
-    if (!from_serial)
-        return tty_current_screen();
-
-    size_t serial_screen = TTY_USER_TO_SCREEN(0);
-    if (serial_screen >= TTY_SCREEN_COUNT)
-        return tty_current_screen();
-
-    return serial_screen;
-}
 
 static void _tty_signal_flush(size_t screen, ring_buffer_t* buffer, const termios_t* tos) {
     if (!tos || (tos->c_lflag & NOFLSH))
@@ -61,7 +50,7 @@ static void _tty_init_screen_state(size_t screen) {
 
     size_t cols = 80;
     size_t rows = 25;
-    if (arch_console_get_size(&cols, &rows)) {
+    if (console_get_size(&cols, &rows)) {
         tty_state[screen].winsize.ws_col = (unsigned short)cols;
         tty_state[screen].winsize.ws_row = (unsigned short)rows;
     } else {
@@ -77,7 +66,6 @@ static void _tty_init_screen_state(size_t screen) {
     tty_state[screen].cr_pending = false;
     tty_state[screen].pending_newlines = 0;
     tty_state[screen].winsize_user_set = false;
-    tty_state[screen].serial_input_seen = false;
     tty_state[screen].termios_ready = true;
 }
 
@@ -234,6 +222,7 @@ _tty_pop_ansi_sequence(size_t screen, const termios_t* tos, size_t* erase_bytes,
         return false;
 
     size_t i = line_len - 1;
+
     while (i > 0) {
         u8 c = (u8)line[i - 1];
         if (!(isdigit(c) || c == ';' || c == '?'))
@@ -355,6 +344,7 @@ _read_raw(size_t screen, ring_buffer_t* buffer, void* buf, size_t len, const ter
     for (;;) {
         unsigned long flags = arch_irq_save();
         size_t popped = ring_buffer_pop_array(buffer, (u8*)buf + total, len - total);
+
         arch_irq_restore(flags);
 
         if (popped) {
@@ -374,6 +364,7 @@ _read_raw(size_t screen, ring_buffer_t* buffer, void* buf, size_t len, const ter
 
         if (timer_started && timeout_ticks) {
             u64 now = arch_timer_ticks();
+
             if (now - timer_start >= timeout_ticks)
                 return (ssize_t)total;
         } else if (!vmin && timeout_ticks) {
@@ -409,16 +400,12 @@ void tty_input_set_current(size_t screen) {
     tty_input_buffer(screen);
 }
 
-static void _push_impl(char ch, bool from_serial) {
-    size_t screen = _target_screen(from_serial);
+static void _push_impl(char ch) {
+    size_t screen = tty_current_screen();
     ring_buffer_t* buffer = tty_input_buffer(screen);
 
     if (!buffer || ch == '\0')
         return;
-
-    if (from_serial) {
-        tty_state[screen].serial_input_seen = true;
-    }
 
     char raw = ch;
     termios_t* tos = &tty_state[screen].termios;
@@ -457,6 +444,7 @@ static void _push_impl(char ch, bool from_serial) {
 
     if ((tos->c_lflag & ISIG) && !literal) {
         int sig = 0;
+
         if (ch == (char)tos->c_cc[VINTR])
             sig = SIGINT;
         else if (ch == (char)tos->c_cc[VQUIT])
@@ -468,6 +456,7 @@ static void _push_impl(char ch, bool from_serial) {
             pid_t pgrp = tty_get_pgrp(screen);
             if (!pgrp) {
                 sched_thread_t* current = sched_current();
+
                 if (current)
                     pgrp = current->pid;
             }
@@ -477,11 +466,13 @@ static void _push_impl(char ch, bool from_serial) {
 
             if (canon) {
                 if (tos->c_lflag & ECHOCTL)
-                    _tty_echo_control(screen, ch);
+                    tty_echo_control(screen, ch);
+
                 if (tos->c_lflag & ECHO) {
                     char nl = '\n';
                     tty_write_screen_output(screen, &nl, 1);
                 }
+
                 tty_state[screen].line_len = 0;
             }
 
@@ -493,6 +484,7 @@ static void _push_impl(char ch, bool from_serial) {
     if (canon && !literal) {
         if (_tty_is_erase_char(tos, ch)) {
             size_t* line_len = &tty_state[screen].line_len;
+
             if (*line_len) {
                 size_t erased = 0;
                 size_t erase_cols = 0;
@@ -505,6 +497,7 @@ static void _push_impl(char ch, bool from_serial) {
                 }
 
                 *line_len -= erased;
+
                 if (tos->c_lflag & ECHO) {
                     if (tos->c_lflag & ECHOE)
                         _tty_erase_columns(screen, tos, erase_cols);
@@ -512,19 +505,24 @@ static void _push_impl(char ch, bool from_serial) {
                         _tty_echo_char(screen, tos, ch, false);
                 }
             }
+
             return;
         }
 
         if (ch == (char)tos->c_cc[VKILL]) {
             size_t* line_len = &tty_state[screen].line_len;
+
             if (*line_len) {
                 size_t erase_cols = 0;
+
                 while (*line_len) {
                     u32 cp = 0;
                     size_t erased =
-                        _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                        tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+
                     if (!erased)
                         break;
+
                     *line_len -= erased;
                     erase_cols += _tty_echo_columns_for_cp(tos, cp);
                 }
@@ -548,37 +546,45 @@ static void _push_impl(char ch, bool from_serial) {
 
         if (ch == (char)tos->c_cc[VWERASE]) {
             size_t* line_len = &tty_state[screen].line_len;
+
             if (*line_len) {
                 size_t erase_cols = 0;
                 u32 cp = 0;
 
                 while (*line_len) {
                     size_t erased =
-                        _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                        tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+
                     if (!erased || !tty_cp_isspace(cp))
                         break;
+
                     *line_len -= erased;
                     erase_cols += _tty_echo_columns_for_cp(tos, cp);
                 }
 
                 while (*line_len) {
                     size_t erased =
-                        _tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+                        tty_line_prev_codepoint_len(tty_state[screen].line_buf, *line_len, &cp);
+
                     if (!erased || tty_cp_isspace(cp))
                         break;
+
                     *line_len -= erased;
                     erase_cols += _tty_echo_columns_for_cp(tos, cp);
                 }
 
                 _tty_erase_columns(screen, tos, erase_cols);
             }
+
             return;
         }
 
         if (ch == (char)tos->c_cc[VREPRINT]) {
             if (tos->c_lflag & ECHOCTL)
-                _tty_echo_control(screen, ch);
-            _tty_reprint_line(screen, tos);
+                tty_echo_control(screen, ch);
+
+            tty_reprint_line(screen, tos);
+
             return;
         }
 
@@ -589,6 +595,7 @@ static void _push_impl(char ch, bool from_serial) {
             } else {
                 _tty_flush_line(screen, buffer, false, false);
             }
+
             return;
         }
 
@@ -619,11 +626,7 @@ static void _push_impl(char ch, bool from_serial) {
 }
 
 void tty_input_push(char ch) {
-    _push_impl(ch, false);
-}
-
-void tty_input_push_serial(char ch) {
-    _push_impl(ch, true);
+    _push_impl(ch);
 }
 
 ssize_t tty_input_read(size_t screen, void* buf, size_t len) {
@@ -654,8 +657,10 @@ ssize_t tty_input_read(size_t screen, void* buf, size_t len) {
                 for (size_t i = 0; i < popped; i++) {
                     if (out[i] != '\n')
                         continue;
+
                     if (!tty_state[screen].pending_newlines)
                         break;
+
                     char nl = '\n';
                     tty_write_screen_output(screen, &nl, 1);
                     tty_state[screen].pending_newlines--;
@@ -684,6 +689,7 @@ bool tty_input_get_termios(size_t screen, termios_t* out) {
 
     _tty_init_screen_state(screen);
     memcpy(out, &tty_state[screen].termios, sizeof(*out));
+
     return true;
 }
 
@@ -708,14 +714,6 @@ bool tty_input_get_winsize(size_t screen, winsize_t* out) {
 
     tty_init_screen_state(screen);
 
-    if (tty_state[screen].serial_input_seen) {
-        out->ws_col = 80;
-        out->ws_row = 25;
-        out->ws_xpixel = 0;
-        out->ws_ypixel = 0;
-        return true;
-    }
-
     memcpy(out, &tty_state[screen].winsize, sizeof(*out));
     return true;
 }
@@ -727,7 +725,23 @@ bool tty_input_set_winsize(size_t screen, const winsize_t* in) {
     _tty_init_screen_state(screen);
     memcpy(&tty_state[screen].winsize, in, sizeof(*in));
     tty_state[screen].winsize_user_set = true;
+
     return true;
+}
+
+bool tty_input_has_data(size_t screen) {
+    if (screen >= TTY_SCREEN_COUNT)
+        return false;
+
+    ring_buffer_t* buffer = tty_input_buffer(screen);
+    if (!buffer)
+        return false;
+
+    unsigned long flags = arch_irq_save();
+    bool ready = !ring_buffer_is_empty(buffer);
+    arch_irq_restore(flags);
+
+    return ready;
 }
 
 void tty_input_flush(size_t screen) {

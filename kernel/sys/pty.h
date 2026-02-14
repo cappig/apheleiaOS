@@ -1,6 +1,7 @@
 #pragma once
 
 #include <base/types.h>
+#include <poll.h>
 #include <stddef.h>
 #include <sys/types.h>
 #include <termios.h>
@@ -23,3 +24,4 @@ void pty_put(size_t index);
 ssize_t pty_read_handle(const pty_handle_t* handle, void* buf, size_t len, u32 flags);
 ssize_t pty_write_handle(const pty_handle_t* handle, const void* buf, size_t len, u32 flags);
 ssize_t pty_ioctl_handle(const pty_handle_t* handle, u64 request, void* args);
+short pty_poll_handle(const pty_handle_t* handle, short events, u32 flags);

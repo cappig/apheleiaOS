@@ -3,6 +3,7 @@
 #include <base/types.h>
 #include <data/list.h>
 #include <data/tree.h>
+#include <poll.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -51,6 +52,7 @@ struct vfs_interface {
     ssize_t (*read)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags);
     ssize_t (*write)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags);
     ssize_t (*truncate)(vfs_node_t* node, size_t len);
+    short (*poll)(vfs_node_t* node, short events, u32 flags);
 
     ssize_t (*mmap)(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags);
     ssize_t (*ioctl)(vfs_node_t* node, u64 request, void* args);
@@ -127,5 +129,6 @@ ssize_t vfs_write(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t
 ssize_t vfs_truncate(vfs_node_t* node, size_t len);
 ssize_t vfs_mmap(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_ioctl(vfs_node_t* node, u64 request, void* args);
+short vfs_poll(vfs_node_t* node, short events, size_t flags);
 
 void dump_vfs(void);

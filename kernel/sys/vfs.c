@@ -967,3 +967,30 @@ ssize_t vfs_ioctl(vfs_node_t* node, u64 request, void* args) {
 
     return node->interface->ioctl(node, request, args);
 }
+
+short vfs_poll(vfs_node_t* node, short events, size_t flags) {
+    node = vfs_resolve_link(node);
+    if (!node)
+        return -ENODEV;
+
+    if (node->interface && node->interface->poll)
+        return node->interface->poll(node, events, (u32)flags);
+
+    short revents = 0;
+
+    if (events & POLLIN) {
+        if (node->type == VFS_FILE || node->type == VFS_DIR || node->type == VFS_CHARDEV ||
+            node->type == VFS_BLOCKDEV) {
+            revents |= POLLIN;
+        }
+    }
+
+    if (events & POLLOUT) {
+        if (node->type == VFS_FILE || node->type == VFS_CHARDEV || node->type == VFS_BLOCKDEV) {
+            revents |= POLLOUT;
+        }
+    }
+
+    (void)flags;
+    return revents;
+}

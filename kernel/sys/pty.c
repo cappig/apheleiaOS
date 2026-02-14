@@ -31,6 +31,31 @@ typedef struct {
 
 static pty_t ptys[PTY_COUNT] = {0};
 
+static void _queue_reset(pty_queue_t* queue) {
+    if (!queue)
+        return;
+
+    queue->read_pos = 0;
+    queue->write_pos = 0;
+    queue->size = 0;
+}
+
+static void _reset_state(pty_t* pty) {
+    if (!pty)
+        return;
+
+    _queue_reset(&pty->master_rx);
+    _queue_reset(&pty->slave_rx);
+    __termios_default_init(&pty->termios);
+
+    pty->winsize.ws_col = 80;
+    pty->winsize.ws_row = 25;
+    pty->winsize.ws_xpixel = 0;
+    pty->winsize.ws_ypixel = 0;
+    pty->pgrp = 0;
+    pty->refs = 0;
+}
+
 static bool _handle_valid(const pty_handle_t* handle) {
     if (!handle)
         return false;
@@ -127,6 +152,28 @@ static size_t _queue_write_once(pty_queue_t* queue, const void* buf, size_t len)
     return chunk;
 }
 
+static size_t _queue_size(pty_queue_t* queue) {
+    if (!queue)
+        return 0;
+
+    unsigned long irq_flags = arch_irq_save();
+    size_t used = queue->size;
+    arch_irq_restore(irq_flags);
+
+    return used;
+}
+
+static size_t _queue_free_space(pty_queue_t* queue) {
+    if (!queue)
+        return 0;
+
+    unsigned long irq_flags = arch_irq_save();
+    size_t free_space = PTY_BUFFER_SIZE - queue->size;
+    arch_irq_restore(irq_flags);
+
+    return free_space;
+}
+
 static void _queue_clear(pty_queue_t* queue) {
     if (!queue)
         return;
@@ -220,17 +267,10 @@ void pty_init(void) {
     for (size_t i = 0; i < PTY_COUNT; i++) {
         pty_t* pty = &ptys[i];
 
-        _queue_init(&pty->master_rx);
-        _queue_init(&pty->slave_rx);
-        __termios_default_init(&pty->termios);
-
-        pty->winsize.ws_col = 80;
-        pty->winsize.ws_row = 25;
-        pty->winsize.ws_xpixel = 0;
-        pty->winsize.ws_ypixel = 0;
-        pty->pgrp = 0;
+        queue_init(&pty->master_rx);
+        queue_init(&pty->slave_rx);
+        _reset_state(pty);
         pty->allocated = false;
-        pty->refs = 0;
     }
 }
 
@@ -245,8 +285,8 @@ bool pty_reserve(size_t* index_out) {
         if (pty->allocated)
             continue;
 
+        _reset_state(pty);
         pty->allocated = true;
-        pty->refs = 0;
         *index_out = i;
 
         arch_irq_restore(irq_flags);
@@ -264,8 +304,10 @@ void pty_unreserve(size_t index) {
     unsigned long irq_flags = arch_irq_save();
     pty_t* pty = &ptys[index];
 
-    if (pty->allocated && !pty->refs)
+    if (pty->allocated && !pty->refs) {
+        _reset_state(pty);
         pty->allocated = false;
+    }
 
     arch_irq_restore(irq_flags);
 }
@@ -293,8 +335,10 @@ void pty_put(size_t index) {
     if (pty->allocated && pty->refs) {
         pty->refs--;
 
-        if (!pty->refs)
+        if (!pty->refs) {
+            _reset_state(pty);
             pty->allocated = false;
+        }
     }
 
     arch_irq_restore(irq_flags);
@@ -397,4 +441,31 @@ ssize_t pty_ioctl_handle(const pty_handle_t* handle, u64 request, void* args) {
     default:
         return -ENOTTY;
     }
+}
+
+short pty_poll_handle(const pty_handle_t* handle, short events, u32 flags) {
+    (void)flags;
+
+    pty_t* pty = handle_pty(handle);
+    if (!pty)
+        return POLLNVAL;
+
+    pty_queue_t* rx = handle_rx_queue(pty, handle);
+    pty_queue_t* tx = handle_tx_queue(pty, handle);
+
+    if (!rx || !tx)
+        return POLLNVAL;
+
+    short revents = 0;
+
+    if ((events & POLLIN) && _queue_size(rx))
+        revents |= POLLIN;
+
+    if ((events & POLLOUT) && _queue_free_space(tx))
+        revents |= POLLOUT;
+
+    if (!pty->allocated)
+        revents |= POLLHUP;
+
+    return revents;
 }
