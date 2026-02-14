@@ -2,7 +2,6 @@
 
 #include <x86/asm.h>
 
-
 void init_serial(size_t port, u8 line, u32 baud) {
     outb(port + SERIAL_INTERRUPT_ENABLE, 0x00);
     outb(port + SERIAL_LINE_CONTROL, 0x80); // set the divisor latch access bit

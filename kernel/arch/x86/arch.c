@@ -5,11 +5,13 @@
 #include <log/log.h>
 #include <string.h>
 #include <sys/acpi.h>
+#include <sys/console.h>
 #include <sys/cpu.h>
-#include <sys/font.h>
 #include <sys/framebuffer.h>
+#include <sys/logsink.h>
 #include <sys/panic.h>
 #include <sys/pci.h>
+#include <sys/tty.h>
 #include <x86/ahci.h>
 #include <x86/asm.h>
 #include <x86/ata.h>
@@ -26,34 +28,77 @@
 #include <x86/serial.h>
 #include <x86/tsc.h>
 
-static void _serial_puts(const char* s) {
-    send_serial_string(SERIAL_COM1, s);
+#define LOG_BOOT_HISTORY_CAP (64 * 512)
+
+static bool log_console_ready = false;
+static kernel_args_t boot_args = {0};
+
+static char boot_log_history[LOG_BOOT_HISTORY_CAP];
+static size_t boot_log_history_len = 0;
+
+
+static void _log_history_append(const char* s, size_t len) {
+    if (!s || !len || !LOG_BOOT_HISTORY_CAP)
+        return;
+
+    if (len >= LOG_BOOT_HISTORY_CAP) {
+        memcpy(boot_log_history, s + (len - LOG_BOOT_HISTORY_CAP), LOG_BOOT_HISTORY_CAP);
+        boot_log_history_len = LOG_BOOT_HISTORY_CAP;
+        return;
+    }
+
+    if (boot_log_history_len + len > LOG_BOOT_HISTORY_CAP) {
+        size_t drop = (boot_log_history_len + len) - LOG_BOOT_HISTORY_CAP;
+
+        memmove(boot_log_history, boot_log_history + drop, boot_log_history_len - drop);
+        boot_log_history_len -= drop;
+    }
+
+    memcpy(boot_log_history + boot_log_history_len, s, len);
+    boot_log_history_len += len;
 }
 
-typedef struct {
-    bool console_enabled;
-    bool serial_enabled;
-    bool console_ready;
-} log_sinks_t;
+static void _log_history_replay_console(void) {
+    if (!log_console_ready || !boot_log_history_len)
+        return;
 
-static log_sinks_t log_sinks = {
-    .console_enabled = true,
-    .serial_enabled = true,
-    .console_ready = false,
-};
+    console_write_screen(TTY_CONSOLE, boot_log_history, boot_log_history_len);
+}
+
+static void _log_write_early(const char* s, size_t len) {
+    if (!s || !len)
+        return;
+
+    send_serial_sized_string(SERIAL_COM1, s, len);
+
+    if (log_console_ready)
+        console_write_screen(TTY_CONSOLE, s, len);
+}
 
 static void _log_puts(const char* s) {
     if (!s)
         return;
 
-    if (log_sinks.serial_enabled)
-        serial_puts(s);
+    size_t len = strlen(s);
+    if (!len)
+        return;
 
-    if (log_sinks.console_enabled && log_sinks.console_ready)
-        arch_console_write(s, strlen(s));
+    _log_history_append(s, len);
+
+    if (!logsink_is_bound()) {
+        _log_write_early(s, len);
+        return;
+    }
+
+    logsink_write(s, len);
 }
 
-static char font_path[128] = {0};
+void arch_panic_enter(void) {
+    logsink_unbind_devices();
+    log_console_ready = true;
+    console_panic();
+}
+
 static char cpu_name[64] = "x86";
 
 static void _trim_cpu_name(char* name) {
@@ -145,40 +190,14 @@ static void _route_irqs_to_pic(void) {
     outb(0x23, (u8)(imcr & ~0x01));
 }
 
-static void _cache_font(const boot_info_t* info) {
-    if (!info) {
-        font_path[0] = '\0';
-        return;
-    }
-
-    strncpy(font_path, info->args.font, sizeof(font_path) - 1);
-    font_path[sizeof(font_path) - 1] = '\0';
-}
-
-static bool _console_token_is_serial(const char* token) {
-    if (!token || !token[0])
-        return false;
-
-    return !strcasecmp(token, "/dev/ttyS0") || !strcasecmp(token, "/dev/ttys0") ||
-           !strcasecmp(token, "ttyS0") || !strcasecmp(token, "ttys0");
-}
-
-static bool _console_token_is_console(const char* token) {
-    if (!token || !token[0])
-        return false;
-
-    return !strcasecmp(token, "/dev/console") || !strcasecmp(token, "console") ||
-           !strcasecmp(token, "/dev/tty") || !strcasecmp(token, "tty") ||
-           !strcasecmp(token, "/dev/tty0") || !strcasecmp(token, "tty0");
-}
-
 static void _configure_log_sinks(const boot_info_t* info) {
     if (!info)
         return;
 
+    logsink_reset();
+
     if (!info->args.console[0]) {
-        log_sinks.console_enabled = true;
-        log_sinks.serial_enabled = true;
+        logsink_add_target("/dev/console");
         return;
     }
 
@@ -186,9 +205,6 @@ static void _configure_log_sinks(const boot_info_t* info) {
     strncpy(devices, info->args.console, sizeof(devices) - 1);
     devices[sizeof(devices) - 1] = '\0';
 
-    bool console_enabled = false;
-    bool serial_enabled = false;
-    bool saw_valid_device = false;
     char* cursor = devices;
 
     while (cursor && *cursor) {
@@ -199,13 +215,8 @@ static void _configure_log_sinks(const boot_info_t* info) {
         char* token = strtrim(cursor);
         strtrunc(token);
 
-        if (_console_token_is_console(token)) {
-            console_enabled = true;
-            saw_valid_device = true;
-        } else if (_console_token_is_serial(token)) {
-            serial_enabled = true;
-            saw_valid_device = true;
-        }
+        if (token[0])
+            logsink_add_target(token);
 
         if (!next)
             break;
@@ -213,11 +224,8 @@ static void _configure_log_sinks(const boot_info_t* info) {
         cursor = next + 1;
     }
 
-    if (!saw_valid_device)
-        console_enabled = true;
-
-    log_sinks.console_enabled = console_enabled;
-    log_sinks.serial_enabled = serial_enabled;
+    if (!logsink_has_targets())
+        logsink_add_target("/dev/console");
 }
 
 static bool _handle_user_signal(int signum, int_state_t* state) {
@@ -269,6 +277,8 @@ static void _page_fault_handler(int_state_t* state) {
     if (_handle_user_signal(SIGSEGV, state))
         return;
 
+    panic_prepare();
+
 #if defined(__x86_64__)
     if (state) {
         u64 rip = state->s_regs.rip;
@@ -278,12 +288,7 @@ static void _page_fault_handler(int_state_t* state) {
         log_fatal(
             "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " rip=%#" PRIx64
             " rsp=%#" PRIx64 " cs=%#" PRIx64,
-            addr,
-            code,
-            cr3,
-            rip,
-            rsp,
-            cs
+            addr, code, cr3, rip, rsp, cs
         );
     } else {
         log_fatal("page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
@@ -297,12 +302,7 @@ static void _page_fault_handler(int_state_t* state) {
         log_fatal(
             "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " eip=%#" PRIx64
             " esp=%#" PRIx64 " cs=%#" PRIx64,
-            addr,
-            code,
-            cr3,
-            eip,
-            esp,
-            cs
+            addr, code, cr3, eip, esp, cs
         );
     } else {
         log_fatal("page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
@@ -315,6 +315,11 @@ static void _page_fault_handler(int_state_t* state) {
 
 static void _gp_fault_handler(int_state_t* state) {
     u64 code = state ? (u64)state->error_code : 0;
+
+    if (handle_user_signal(SIGSEGV, state))
+        return;
+
+    panic_prepare();
 
 #if defined(__x86_64__)
     if (state) {
@@ -352,6 +357,8 @@ static void _invalid_opcode_handler(int_state_t* state) {
     if (_handle_user_signal(SIGILL, state))
         return;
 #endif
+
+    panic_prepare();
 
 #if defined(__x86_64__)
     if (state) {
@@ -403,18 +410,7 @@ static void _publish_framebuffer(const boot_info_t* info) {
     framebuffer_set_info(&fb);
 }
 
-const char* arch_font_path(void) {
-    if (!font_path[0])
-        return NULL;
-
-    return font_path;
-}
-
-void arch_set_font(const font_t* font) {
-    console_set_font(font);
-}
-
-void arch_init(void* boot_info) {
+const kernel_args_t* arch_init(void* boot_info) {
     boot_info_t* info = boot_info;
 
     init_serial(SERIAL_COM1, SERAIL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
@@ -423,12 +419,13 @@ void arch_init(void* boot_info) {
     if (!info)
         panic("boot info missing");
 
+    memcpy(&boot_args, &info->args, sizeof(boot_args));
+
     _configure_log_sinks(info);
-    log_init(_log_puts);
+    log_init(log_puts);
 
     select_log_level(info);
-    _cache_font(info);
-    _detect_cpu_name();
+    detect_cpu_name();
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booting");
@@ -452,8 +449,10 @@ void arch_init(void* boot_info) {
     arch_init_alloc();
     pmm_ref_init();
 
+    x86_console_backend_init();
     console_init(info);
-    log_sinks.console_ready = true;
+    log_console_ready = true;
+    _log_history_replay_console();
     publish_framebuffer(info);
 
     acpi_init(info->acpi_root_ptr);
@@ -473,11 +472,17 @@ void arch_init(void* boot_info) {
 #else
     log_info("apheleiaOS kernel (x86_32) booted");
 #endif
+
+    return &boot_args;
 }
 
 void arch_storage_init(void) {
     ata_disk_init();
     ahci_disk_init();
+}
+
+void arch_register_devices(void) {
+    serial_devfs_init();
 }
 
 void arch_tlb_flush(uintptr_t addr) {
