@@ -4,6 +4,7 @@
 #include <base/utf8.h>
 #include <ctype.h>
 #include <data/ring.h>
+#include <errno.h>
 #include <input/kbd.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
@@ -385,7 +386,7 @@ _read_raw(size_t screen, ring_buffer_t* buffer, void* buf, size_t len, const ter
 
         sched_thread_t* current = sched_current();
         if (current && sched_signal_has_pending(current))
-            return -1;
+            return -EINTR;
 
         if (timer_started && timeout_ticks) {
             sched_sleep(1);
@@ -631,7 +632,7 @@ ssize_t tty_input_read(size_t screen, void* buf, size_t len) {
 
     ring_buffer_t* buffer = _buffer(screen);
     if (!buffer)
-        return -1;
+        return -EIO;
 
     u8* out = buf;
     termios_t tos;
@@ -671,7 +672,7 @@ ssize_t tty_input_read(size_t screen, void* buf, size_t len) {
 
         sched_thread_t* current = sched_current();
         if (current && sched_signal_has_pending(current))
-            return -1;
+            return -EINTR;
 
         sched_block(&tty_state[screen].wait);
     }
@@ -686,7 +687,7 @@ bool tty_input_get_termios(size_t screen, termios_t* out) {
     return true;
 }
 
-bool tty_input_set_termios(size_t screen, const termios_t* in, bool flush) {
+bool tty_input_set_termios(size_t screen, const termios_t* in, u32 flags) {
     if (!in || screen >= TTY_SCREEN_COUNT)
         return false;
 
@@ -695,7 +696,7 @@ bool tty_input_set_termios(size_t screen, const termios_t* in, bool flush) {
     tty_state[screen].literal_next = false;
     tty_state[screen].cr_pending = false;
 
-    if (flush)
+    if (flags & TTY_TERMIOS_SET_FLUSH)
         tty_input_flush(screen);
 
     return true;

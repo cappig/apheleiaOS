@@ -1,8 +1,9 @@
 #include <arch/sys.h>
 #include <errno.h>
 #include <libc_usr/unistd.h>
-
+#include <limits.h>
 #include <stdint.h>
+#include <termios.h>
 #include <unistd.h>
 
 #define SYSCALL_RET(type, expr) ((type)__SYSCALL_ERRNO(expr))
@@ -70,7 +71,10 @@ mode_t umask(mode_t mask) {
 }
 
 unsigned int sleep(unsigned int seconds) {
-    long ret = syscall1(SYS_SLEEP, (uintptr_t)seconds);
+    unsigned long long total_ms = (unsigned long long)seconds * 1000ULL;
+    unsigned int ms = total_ms > UINT_MAX ? UINT_MAX : (unsigned int)total_ms;
+
+    long ret = syscall1(SYS_SLEEP, (uintptr_t)ms);
     if (ret < 0) {
         errno = (int)-ret;
         return (unsigned int)-1;
@@ -88,6 +92,11 @@ char* getcwd(char* buf, size_t size) {
 
     long ret = __SYSCALL_ERRNO(syscall2(SYS_GETCWD, (uintptr_t)buf, (uintptr_t)size));
     return !ret ? buf : NULL;
+}
+
+int isatty(int fd) {
+    termios_t tos;
+    return tcgetattr(fd, &tos) ? 0 : 1;
 }
 
 int link(const char* oldpath, const char* newpath) {

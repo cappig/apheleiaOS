@@ -127,6 +127,17 @@ static size_t _queue_write_once(pty_queue_t* queue, const void* buf, size_t len)
     return chunk;
 }
 
+static void _queue_clear(pty_queue_t* queue) {
+    if (!queue)
+        return;
+
+    unsigned long irq_flags = arch_irq_save();
+    queue->read_pos = 0;
+    queue->write_pos = 0;
+    queue->size = 0;
+    arch_irq_restore(irq_flags);
+}
+
 static ssize_t _queue_read(pty_queue_t* queue, void* buf, size_t len, bool nonblock) {
     if (!queue || !buf)
         return -EINVAL;
@@ -322,12 +333,26 @@ ssize_t pty_ioctl_handle(const pty_handle_t* handle, u64 request, void* args) {
         memcpy(args, &pty->termios, sizeof(pty->termios));
         return 0;
     case TCSETS:
+        if (!args)
+            return -EINVAL;
+
+        memcpy(&pty->termios, args, sizeof(pty->termios));
+        return 0;
     case TCSETSW:
+        if (!args)
+            return -EINVAL;
+
+        memcpy(&pty->termios, args, sizeof(pty->termios));
+        return 0;
     case TCSETSF:
         if (!args)
             return -EINVAL;
 
         memcpy(&pty->termios, args, sizeof(pty->termios));
+        _queue_clear(&pty->master_rx);
+        _queue_clear(&pty->slave_rx);
+        sched_wake_all(&pty->master_rx.write_wait);
+        sched_wake_all(&pty->slave_rx.write_wait);
         return 0;
     case TIOCGWINSZ:
         if (!args)
@@ -344,6 +369,16 @@ ssize_t pty_ioctl_handle(const pty_handle_t* handle, u64 request, void* args) {
     case TIOCSPGRP:
         if (!args)
             return -EINVAL;
+
+        if (*(pid_t*)args <= 0)
+            return -EINVAL;
+
+        sched_thread_t* current = sched_current();
+        if (!current || !current->user_thread)
+            return -EPERM;
+
+        if (!sched_pgrp_in_session(*(pid_t*)args, current->sid))
+            return -EPERM;
 
         pty->pgrp = *(pid_t*)args;
         return 0;

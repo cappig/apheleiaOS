@@ -27,6 +27,7 @@ typedef enum {
 } sched_fd_kind_t;
 
 typedef struct sched_pipe {
+    volatile int lock;
     u8* data;
     size_t capacity;
     size_t read_pos;
@@ -34,6 +35,7 @@ typedef struct sched_pipe {
     size_t size;
     size_t readers;
     size_t writers;
+    bool destroying;
     struct sched_wait_queue* read_wait_queue;
     struct sched_wait_queue* write_wait_queue;
     bool read_wait_owned;
@@ -137,6 +139,11 @@ void scheduler_start(void);
 bool sched_is_running(void);
 
 sched_thread_t* sched_current(void);
+sched_thread_t* sched_find_thread(pid_t pid);
+bool sched_process_is_child(pid_t child_pid, pid_t parent_pid);
+bool sched_pid_is_group_leader(pid_t pid);
+bool sched_pgrp_exists(pid_t pgid);
+bool sched_pgrp_in_session(pid_t pgid, pid_t sid);
 sched_thread_t* sched_create_kernel_thread(const char* name, thread_entry_t entry, void* arg);
 sched_thread_t* sched_create_user_thread(const char* name);
 pid_t sched_fork(arch_int_state_t* state);

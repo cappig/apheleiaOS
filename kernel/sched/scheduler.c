@@ -187,6 +187,21 @@ static void _sched_fd_reset(sched_fd_t* fd) {
     fd->flags = 0;
 }
 
+static void _pipe_lock(sched_pipe_t* pipe) {
+    if (!pipe)
+        return;
+
+    while (__sync_lock_test_and_set(&pipe->lock, 1))
+        arch_cpu_wait();
+}
+
+static void _pipe_unlock(sched_pipe_t* pipe) {
+    if (!pipe)
+        return;
+
+    __sync_lock_release(&pipe->lock);
+}
+
 sched_pipe_t* sched_pipe_create(size_t capacity) {
     if (!capacity)
         capacity = SCHED_PIPE_CAPACITY;
@@ -221,7 +236,13 @@ static void _sched_pipe_try_destroy(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
-    if (pipe->readers || pipe->writers)
+    _pipe_lock(pipe);
+    bool in_use = pipe->readers || pipe->writers || pipe->destroying;
+    if (!in_use)
+        pipe->destroying = true;
+    _pipe_unlock(pipe);
+
+    if (in_use)
         return;
 
     if (pipe->read_wait_owned && pipe->read_wait_queue)
@@ -239,18 +260,18 @@ void sched_pipe_acquire_reader(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    _pipe_lock(pipe);
     pipe->readers++;
-    _sched_lock_restore(flags);
+    _pipe_unlock(pipe);
 }
 
 void sched_pipe_acquire_writer(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    _pipe_lock(pipe);
     pipe->writers++;
-    _sched_lock_restore(flags);
+    _pipe_unlock(pipe);
 }
 
 void sched_pipe_release_reader(sched_pipe_t* pipe) {
@@ -258,13 +279,13 @@ void sched_pipe_release_reader(sched_pipe_t* pipe) {
         return;
 
     bool destroy = false;
-    unsigned long flags = _sched_lock_save();
+    _pipe_lock(pipe);
 
     if (pipe->readers > 0)
         pipe->readers--;
 
     destroy = !pipe->readers && !pipe->writers;
-    _sched_lock_restore(flags);
+    _pipe_unlock(pipe);
 
     if (pipe->write_wait_queue)
         sched_wake_all(pipe->write_wait_queue);
@@ -280,13 +301,13 @@ void sched_pipe_release_writer(sched_pipe_t* pipe) {
         return;
 
     bool destroy = false;
-    unsigned long flags = _sched_lock_save();
+    _pipe_lock(pipe);
 
     if (pipe->writers > 0)
         pipe->writers--;
 
     destroy = !pipe->readers && !pipe->writers;
-    _sched_lock_restore(flags);
+    _pipe_unlock(pipe);
 
     if (pipe->read_wait_queue)
         sched_wake_all(pipe->read_wait_queue);
@@ -1116,6 +1137,96 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
 
 sched_thread_t* sched_current(void) {
     return _sched_local_current();
+}
+
+bool sched_process_is_child(pid_t child_pid, pid_t parent_pid) {
+    if (child_pid <= 0 || parent_pid <= 0 || !all_list)
+        return false;
+
+    bool is_child = false;
+    unsigned long flags = sched_lock_save();
+
+    ll_foreach(node, all_list) {
+        sched_thread_t* thread = node->data;
+
+        if (!thread || thread->pid != child_pid)
+            continue;
+
+        is_child = thread->ppid == parent_pid;
+        break;
+    }
+
+    sched_lock_restore(flags);
+    return is_child;
+}
+
+bool sched_pid_is_group_leader(pid_t pid) {
+    if (pid <= 0 || !all_list)
+        return false;
+
+    bool is_leader = false;
+    unsigned long flags = sched_lock_save();
+
+    ll_foreach(node, all_list) {
+        sched_thread_t* thread = node->data;
+
+        if (!thread || thread->pid != pid)
+            continue;
+
+        is_leader = thread->pgid == pid;
+        break;
+    }
+
+    sched_lock_restore(flags);
+    return is_leader;
+}
+
+bool sched_pgrp_exists(pid_t pgid) {
+    if (pgid <= 0 || !all_list)
+        return false;
+
+    bool found = false;
+    unsigned long flags = sched_lock_save();
+
+    ll_foreach(node, all_list) {
+        sched_thread_t* thread = node->data;
+
+        if (!thread)
+            continue;
+
+        if (thread->pgid != pgid)
+            continue;
+
+        found = true;
+        break;
+    }
+
+    sched_lock_restore(flags);
+    return found;
+}
+
+bool sched_pgrp_in_session(pid_t pgid, pid_t sid) {
+    if (pgid <= 0 || sid <= 0 || !all_list)
+        return false;
+
+    bool found = false;
+    unsigned long flags = sched_lock_save();
+
+    ll_foreach(node, all_list) {
+        sched_thread_t* thread = node->data;
+
+        if (!thread)
+            continue;
+
+        if (thread->pgid != pgid || thread->sid != sid)
+            continue;
+
+        found = true;
+        break;
+    }
+
+    sched_lock_restore(flags);
+    return found;
 }
 
 void scheduler_init(void) {

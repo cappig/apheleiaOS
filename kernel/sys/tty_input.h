@@ -5,6 +5,8 @@
 #include <termios.h>
 
 #define TTY_INPUT_BUFFER_SIZE 1024
+#define TTY_TERMIOS_SET_NONE  0u
+#define TTY_TERMIOS_SET_FLUSH 1u
 
 void tty_input_init(void);
 void tty_input_set_current(size_t screen);
@@ -13,7 +15,7 @@ void tty_input_push(char ch);
 void tty_input_push_serial(char ch);
 
 bool tty_input_get_termios(size_t screen, termios_t* out);
-bool tty_input_set_termios(size_t screen, const termios_t* in, bool flush);
+bool tty_input_set_termios(size_t screen, const termios_t* in, u32 flags);
 bool tty_input_get_winsize(size_t screen, winsize_t* out);
 bool tty_input_set_winsize(size_t screen, const winsize_t* in);
 void tty_input_flush(size_t screen);

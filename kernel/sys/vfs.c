@@ -457,6 +457,7 @@ bool vfs_chmod(vfs_node_t* node, mode_t mode) {
     if (!node)
         return false;
 
+    mode_t desired = mode & 07777;
     fs_t* filesystem = node->fs ? node->fs->filesystem : NULL;
 
     if (filesystem) {
@@ -467,11 +468,11 @@ bool vfs_chmod(vfs_node_t* node, mode_t mode) {
         else if (filesystem->fs_interface && filesystem->fs_interface->chmod)
             iface = filesystem->fs_interface;
 
-        if (iface && !iface->chmod(node->fs, node, mode))
+        if (iface && !iface->chmod(node->fs, node, desired))
             return false;
     }
 
-    node->mode = mode;
+    node->mode = desired;
 
     if (!node->fs)
         node->time.created = vfs_time_now();

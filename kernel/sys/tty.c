@@ -37,7 +37,9 @@ static ssize_t _check_foreground_read(size_t screen) {
     if (!_is_background_group(current, screen))
         return 0;
 
-    sched_signal_send_pgrp(current->pgid, SIGTTIN);
+    if (sched_signal_send_pgrp(current->pgid, SIGTTIN) < 0)
+        return -EIO;
+
     return -EINTR;
 }
 
@@ -53,7 +55,9 @@ static ssize_t _check_foreground_write(size_t screen) {
     if (!(tos.c_lflag & TOSTOP))
         return 0;
 
-    sched_signal_send_pgrp(current->pgid, SIGTTOU);
+    if (sched_signal_send_pgrp(current->pgid, SIGTTOU) < 0)
+        return -EIO;
+
     return -EINTR;
 }
 
@@ -287,25 +291,36 @@ ssize_t tty_ioctl_handle(const tty_handle_t* handle, u64 request, void* args) {
         if (!args)
             return -EINVAL;
 
-        return tty_input_set_termios(screen, args, false) ? 0 : -EIO;
+        return tty_input_set_termios(screen, args, TTY_TERMIOS_SET_NONE) ? 0 : -EIO;
     case TCSETSW:
+        if (!args)
+            return -EINVAL;
+
+        return tty_input_set_termios(screen, args, TTY_TERMIOS_SET_NONE) ? 0 : -EIO;
     case TCSETSF:
         if (!args)
             return -EINVAL;
 
-        return tty_input_set_termios(screen, args, true) ? 0 : -EIO;
+        return tty_input_set_termios(screen, args, TTY_TERMIOS_SET_FLUSH) ? 0 : -EIO;
     case TIOCSPGRP:
         if (!args)
             return -EINVAL;
 
-        if (*(pid_t*)args <= 0)
+        pid_t requested = *(pid_t*)args;
+        if (requested <= 0)
             return -EINVAL;
 
         sched_thread_t* current = sched_current();
-        if (current && current->user_thread && !_is_controlling_screen(current, screen))
+        if (!current || !current->user_thread)
+            return -EPERM;
+
+        if (!tty_is_controlling_screen(current, screen))
             return -ENOTTY;
 
-        tty_pgrp[screen] = *(pid_t*)args;
+        if (current->sid <= 0 || !sched_pgrp_in_session(requested, current->sid))
+            return -EPERM;
+
+        tty_pgrp[screen] = requested;
         return 0;
     case TIOCGPGRP:
         if (!args)

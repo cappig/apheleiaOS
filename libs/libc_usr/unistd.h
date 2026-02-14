@@ -22,6 +22,7 @@ mode_t umask(mode_t mask);
 unsigned int sleep(unsigned int seconds);
 int chdir(const char* path);
 char* getcwd(char* buf, size_t size);
+int isatty(int fd);
 int link(const char* oldpath, const char* newpath);
 int unlink(const char* path);
 int rename(const char* oldpath, const char* newpath);

@@ -154,6 +154,17 @@ enum termios_baud {
     B115200 = 115200,
 };
 
+enum termios_set_action {
+    TCSANOW = 0,
+    TCSADRAIN = 1,
+    TCSAFLUSH = 2,
+};
+
+enum termios_flush_queue {
+    TCIFLUSH = 0,
+    TCOFLUSH = 1,
+    TCIOFLUSH = 2,
+};
 
 // Some sane defaults for termios to use
 #ifndef NO_LIBC_EXTENTIONS
@@ -186,4 +197,14 @@ inline termios_t* __termios_default_init(termios_t* tos) {
 
     return tos;
 }
+#endif
+
+#ifndef _KERNEL
+int tcgetattr(int fd, struct termios* tos);
+int tcsetattr(int fd, int optional_actions, const struct termios* tos);
+speed_t cfgetispeed(const struct termios* tos);
+speed_t cfgetospeed(const struct termios* tos);
+int cfsetispeed(struct termios* tos, speed_t speed);
+int cfsetospeed(struct termios* tos, speed_t speed);
+void cfmakeraw(struct termios* tos);
 #endif
