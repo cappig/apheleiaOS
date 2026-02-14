@@ -45,7 +45,7 @@ static void _timer_handler(int_state_t* state) {
         if (!serial_try_receive(SERIAL_COM1, &ch))
             break;
         if (ch)
-            tty_input_push_serial(ch);
+            serial_dev_push_rx(0, ch);
     }
 
     sched_tick(state);

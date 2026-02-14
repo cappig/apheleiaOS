@@ -48,6 +48,7 @@ typedef struct sched_fd {
     sched_pipe_t* pipe;
     size_t offset;
     int pty_index;
+    int tty_index;
     u32 flags;
 } sched_fd_t;
 

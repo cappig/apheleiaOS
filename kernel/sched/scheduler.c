@@ -14,8 +14,8 @@
 #include <string.h>
 #include <sys/cpu.h>
 #include <sys/panic.h>
-#include <sys/pty.h>
 #include <sys/proc.h>
+#include <sys/pty.h>
 #include <sys/tty.h>
 #include <sys/wait.h>
 
@@ -184,6 +184,7 @@ static void _sched_fd_reset(sched_fd_t* fd) {
     fd->pipe = NULL;
     fd->offset = 0;
     fd->pty_index = -1;
+    fd->tty_index = TTY_NONE;
     fd->flags = 0;
 }
 
@@ -1718,10 +1719,9 @@ static void _sched_reparent_children(sched_thread_t* parent) {
 
 void sched_exit(void) {
     arch_irq_disable();
+    sched_thread_t* self = sched_local_current();
 
     unsigned long flags = _sched_lock_save();
-
-    sched_thread_t* self = _sched_local_current();
 
     if (self) {
         _sched_reparent_children(self);

@@ -23,7 +23,14 @@ sighandler_t signal(int signum, sighandler_t handler) {
 }
 
 int kill(pid_t pid, int signum) {
-    return (int)__SYSCALL_ERRNO(syscall2(SYS_KILL, (uintptr_t)pid, (uintptr_t)signum));
+    long ret = syscall2(SYS_KILL, (uintptr_t)pid, (uintptr_t)signum);
+
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+
+    return 0;
 }
 
 int raise(int signum) {
