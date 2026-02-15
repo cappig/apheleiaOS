@@ -8,6 +8,12 @@
 static tss_entry_t tss = {0};
 static gdt_desc_t gdtd = {0};
 
+#if defined(__x86_64__)
+#define IST_STACK_SIZE 4096
+ALIGNED(16)
+static u8 ist_double_fault_stack[IST_STACK_SIZE];
+#endif
+
 ALIGNED(0x10)
 static gdt_entry_t gdt_entries[GDT_ENTRY_COUNT] = {0};
 
@@ -103,6 +109,7 @@ void tss_init(uintptr_t kernel_stack_top) {
     _set_gdt_entry(5, tss_addr, sizeof(tss_entry_t) - 1, 0x89, 0);
 #if defined(__x86_64__)
     _set_gdt_high_entry(5, tss_addr);
+    tss.ist[0] = (u64)(uintptr_t)(ist_double_fault_stack + IST_STACK_SIZE);
 #endif
 
     set_tss_stack(kernel_stack_top);

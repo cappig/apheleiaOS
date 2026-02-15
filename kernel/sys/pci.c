@@ -210,6 +210,183 @@ void pci_destroy_device(pci_device_t* dev) {
     free(dev);
 }
 
+static pci_found_t* _find_by_bsf(u8 bus, u8 slot, u8 func) {
+    if (!pci_devices)
+        return NULL;
+
+    ll_foreach(node, pci_devices) {
+        pci_found_t* dev = node->data;
+
+        if (dev->bus == bus && dev->slot == slot && dev->func == func)
+            return dev;
+    }
+
+    return NULL;
+}
+
+static void _write_legacy(u8 bus, u8 slot, u8 func, u8 offset, u32 value, u8 size) {
+    pci_bus_write(bus, slot, func, offset, value, size);
+}
+
+static u32 _ecam_read(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u8 size) {
+    u64 phys = _ecam_addr(base, bus, slot, func);
+    void* map = arch_phys_map(phys, 4096);
+
+    if (!map)
+        return 0xffffffffU;
+
+    volatile u8* ptr = (volatile u8*)map + offset;
+    u32 result;
+
+    switch (size) {
+    case 4:
+        result = *(volatile u32*)ptr;
+        break;
+    case 2:
+        result = *(volatile u16*)ptr;
+        break;
+    case 1:
+        result = *(volatile u8*)ptr;
+        break;
+    default:
+        result = 0xffffffffU;
+        break;
+    }
+
+    arch_phys_unmap(map, 4096);
+    return result;
+}
+
+static void _ecam_write(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size) {
+    u64 phys = _ecam_addr(base, bus, slot, func);
+    void* map = arch_phys_map(phys, 4096);
+
+    if (!map)
+        return;
+
+    volatile u8* ptr = (volatile u8*)map + offset;
+
+    switch (size) {
+    case 4:
+        *(volatile u32*)ptr = value;
+        break;
+    case 2:
+        *(volatile u16*)ptr = (u16)value;
+        break;
+    case 1:
+        *(volatile u8*)ptr = (u8)value;
+        break;
+    }
+
+    arch_phys_unmap(map, 4096);
+}
+
+pci_found_t* pci_find_node(u8 class, u8 subclass, pci_found_t* from) {
+    list_node_t* start = pci_devices ? pci_devices->head : NULL;
+    bool matched_from = (from == NULL);
+
+    ll_foreach_from(node, start) {
+        pci_found_t* dev = node->data;
+
+        if (!matched_from) {
+            if (dev == from)
+                matched_from = true;
+
+            continue;
+        }
+
+        if (dev->header.class == class && dev->header.subclass == subclass)
+            return dev;
+    }
+
+    return NULL;
+}
+
+u32 pci_read_config(u8 bus, u8 slot, u8 func, u16 offset, u8 size) {
+    pci_found_t* node = _find_by_bsf(bus, slot, func);
+
+    if (node && node->base != (u64)-1)
+        return _ecam_read(node->base, bus, slot, func, offset, size);
+
+    return _read_legacy(bus, slot, func, (u8)offset, size);
+}
+
+void pci_write_config(u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size) {
+    pci_found_t* node = _find_by_bsf(bus, slot, func);
+
+    if (node && node->base != (u64)-1)
+        _ecam_write(node->base, bus, slot, func, offset, value, size);
+    else
+        _write_legacy(bus, slot, func, (u8)offset, value, size);
+}
+
+void pci_enable_bus_mastering(u8 bus, u8 slot, u8 func) {
+    u16 cmd = (u16)pci_read_config(bus, slot, func, PCI_CFG_COMMAND, 2);
+    cmd |= PCI_COMMAND_BUS_MASTER | PCI_COMMAND_MEM_SPACE;
+    pci_write_config(bus, slot, func, PCI_CFG_COMMAND, cmd, 2);
+}
+
+u16 pci_find_capability(u8 bus, u8 slot, u8 func, u8 cap_id) {
+    u16 status = (u16)pci_read_config(bus, slot, func, PCI_CFG_STATUS, 2);
+
+    if (!(status & (1U << 4))) /* Capabilities List bit */
+        return 0;
+
+    u8 ptr = (u8)(pci_read_config(bus, slot, func, PCI_CFG_CAP_PTR, 1) & 0xfc);
+
+    for (size_t i = 0; i < 48 && ptr; i++) {
+        u8 id = (u8)pci_read_config(bus, slot, func, ptr, 1);
+
+        if (id == cap_id)
+            return ptr;
+
+        ptr = (u8)(pci_read_config(bus, slot, func, ptr + 1, 1) & 0xfc);
+    }
+
+    return 0;
+}
+
+bool pci_enable_msi(u8 bus, u8 slot, u8 func, u8 vector, u32 lapic_dest) {
+    u16 cap = pci_find_capability(bus, slot, func, PCI_CAP_MSI);
+
+    if (!cap)
+        return false;
+
+    u16 msg_ctrl = (u16)pci_read_config(bus, slot, func, cap + 2, 2);
+    bool is_64bit = (msg_ctrl & (1U << 7)) != 0;
+
+    /* Disable MSI while programming */
+    pci_write_config(bus, slot, func, cap + 2, msg_ctrl & ~1U, 2);
+
+    /* Message Address: 0xFEE00000 | (LAPIC_ID << 12) */
+    u32 addr_lo = 0xFEE00000U | (lapic_dest << 12);
+    pci_write_config(bus, slot, func, cap + 4, addr_lo, 4);
+
+    u16 data_offset;
+
+    if (is_64bit) {
+        pci_write_config(bus, slot, func, cap + 8, 0, 4); /* upper address = 0 */
+        data_offset = cap + 12;
+    } else {
+        data_offset = cap + 8;
+    }
+
+    /* Message Data: vector number, fixed delivery */
+    pci_write_config(bus, slot, func, data_offset, vector, 2);
+
+    /* Request single message, enable MSI */
+    msg_ctrl &= ~(0x70U); /* clear Multiple Message Enable */
+    msg_ctrl |= 1U;       /* MSI Enable */
+    pci_write_config(bus, slot, func, cap + 2, msg_ctrl, 2);
+
+    /* Disable legacy INTx */
+    u16 cmd = (u16)pci_read_config(bus, slot, func, PCI_CFG_COMMAND, 2);
+    cmd |= PCI_COMMAND_INT_DIS;
+    pci_write_config(bus, slot, func, PCI_CFG_COMMAND, cmd, 2);
+
+    return true;
+}
+
 const char* pci_stringify_class(u8 class) {
     if (class <= 0x13)
         return pci_class_strings[class];

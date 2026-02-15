@@ -207,12 +207,12 @@ static void _setup_default_args(boot_info_t* info) {
         return;
 
     uefi_mem_zero(&info->args, sizeof(info->args));
-    info->args.debug = BOOT_DEFAULT_DEBUG;
+    info->args.debug = DEBUG_ALL;
     info->args.video = BOOT_DEFAULT_VIDEO;
     info->args.vesa_width = (u16)BOOT_DEFAULT_VESA_WIDTH;
     info->args.vesa_height = (u16)BOOT_DEFAULT_VESA_HEIGHT;
     info->args.vesa_bpp = BOOT_DEFAULT_VESA_BPP;
-    uefi_str_copy(info->args.console, sizeof(info->args.console), "");
+    uefi_str_copy(info->args.console, sizeof(info->args.console), "/dev/ttyS0,/dev/console");
     uefi_str_copy(info->args.font, sizeof(info->args.font), BOOT_DEFAULT_FONT);
 }
 

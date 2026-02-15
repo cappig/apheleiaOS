@@ -102,6 +102,28 @@ void arch_panic_enter(void) {
     console_panic();
 }
 
+
+void arch_fpu_init(void* buf) {
+    if (!buf)
+        return;
+
+    asm volatile("fninit");
+    asm volatile("fxsave %0" : "=m"(*(u8*)buf));
+}
+
+void arch_fpu_save(void* buf) {
+    if (!buf)
+        return;
+
+    asm volatile("fxsave %0" : "=m"(*(u8*)buf));
+}
+
+void arch_fpu_restore(const void* buf) {
+    if (!buf)
+        return;
+
+    asm volatile("fxrstor %0" : : "m"(*(const u8*)buf));
+}
 static char cpu_name[64] = "x86";
 
 static void _trim_cpu_name(char* name) {
@@ -352,6 +374,13 @@ static void _gp_fault_handler(int_state_t* state) {
     halt();
 }
 
+static void _double_fault_handler(UNUSED int_state_t* state) {
+    panic_prepare();
+    log_fatal("double fault (unrecoverable)");
+    disable_interrupts();
+    halt();
+}
+
 static void _invalid_opcode_handler(int_state_t* state) {
 #if defined(__x86_64__)
     if (_handle_user_signal(SIGILL, state))
@@ -446,6 +475,10 @@ const kernel_args_t* arch_init(void* boot_info) {
     set_int_handler(INT_PAGE_FAULT, _page_fault_handler);
     set_int_handler(INT_GENERAL_PROTECTION_FAULT, _gp_fault_handler);
     set_int_handler(INT_INVALID_OPCODE, _invalid_opcode_handler);
+    set_int_handler(INT_DOUBLE_FAULT, _double_fault_handler);
+#if defined(__x86_64__)
+    configure_int(INT_DOUBLE_FAULT, GDT_KERNEL_CODE, 1, IDT_INT);
+#endif
 
     pmm_init(&info->memory_map);
     heap_init();

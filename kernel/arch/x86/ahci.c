@@ -13,6 +13,7 @@
 #include "mm/physical.h"
 #include "sys/disk.h"
 #include "sys/pci.h"
+#include "x86/apic.h"
 #include "x86/asm.h"
 #include "x86/irq.h"
 #if defined(__x86_64__)
@@ -22,6 +23,8 @@
 #endif
 
 // OSdevWiki provides extensive documentation on AHCI -- https://wiki.osdev.org/AHCI
+
+#define AHCI_MSI_VECTOR 0x40
 
 static ahci_device_t* ahci_primary = NULL;
 static u8 ahci_primary_irq_line = 0xff;
@@ -55,7 +58,7 @@ static bool ahci_zero_phys(u64 paddr, size_t size) {
 }
 
 static bool ahci_irq_line_supported(u8 irq_line) {
-    return irq_line == IRQ_OPEN_10 || irq_line == IRQ_OPEN_11;
+    return irq_line <= IRQ_SECONDARY_ATA;
 }
 
 static inline u32 ahci_port_ack(ahci_hba_port_t* port) {
@@ -80,7 +83,9 @@ static void ahci_primary_irq(UNUSED int_state_t* s) {
             sched_wake_all(&dev->irq_wait);
     }
 
-    if (irq_line <= IRQ_SECONDARY_ATA)
+    if (dev && dev->msi_enabled)
+        lapic_end_int();
+    else if (irq_line <= IRQ_SECONDARY_ATA)
         irq_ack(irq_line);
 }
 
@@ -709,45 +714,42 @@ static bool ahci_find_controller(ahci_device_t* dev) {
     if (!dev)
         return false;
 
-    pci_device_t* cursor = NULL;
+    pci_found_t* cursor = NULL;
 
     for (;;) {
-        pci_device_t* current = pci_find_device(PCI_MASS_STORAGE, PCI_MS_SATA, cursor);
+        pci_found_t* node = pci_find_node(PCI_MASS_STORAGE, PCI_MS_SATA, cursor);
 
-        if (cursor)
-            pci_destroy_device(cursor);
-
-        cursor = NULL;
-
-        if (!current)
+        if (!node)
             return false;
 
-        if (current->header.prog_if != 0x01) {
-            cursor = current;
+        cursor = node;
+
+        if (node->header.prog_if != 0x01)
             continue;
-        }
+
+        u32 bar5 = pci_read_config(node->bus, node->slot, node->func, PCI_CFG_BAR5, 4);
+        u8 int_line = (u8)pci_read_config(node->bus, node->slot, node->func, PCI_CFG_INT_LINE, 1);
 
         log_debug(
             "ahci: pci command=%#x status=%#x int_line=%u",
-            current->header.command,
-            current->header.status,
-            current->generic.int_line
+            node->header.command,
+            node->header.status,
+            int_line
         );
 
-        u32 abar = current->generic.bar5 & ~0x0fU;
-        if (!abar) {
-            cursor = current;
+        u32 abar = bar5 & ~0x0fU;
+        if (!abar)
             continue;
-        }
 
         dev->abar_paddr = abar;
-        dev->irq_line = current->generic.int_line;
+        dev->irq_line = int_line;
+        dev->bus = node->bus;
+        dev->slot = node->slot;
+        dev->func = node->func;
 
         void* mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE);
-        if (!mmio_map) {
-            cursor = current;
+        if (!mmio_map)
             continue;
-        }
 
         ahci_hba_mem_t* hba = mmio_map;
         u32 pi = hba->pi;
@@ -766,12 +768,8 @@ static bool ahci_find_controller(ahci_device_t* dev) {
         }
 
         arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
-        if (found_port) {
-            pci_destroy_device(current);
+        if (found_port)
             return true;
-        }
-
-        cursor = current;
     }
 }
 
@@ -789,17 +787,24 @@ bool ahci_disk_init(void) {
         return false;
     }
 
-    if (!ahci_irq_line_supported(dev->irq_line)) {
-        log_error("ahci: unsupported IRQ line %u", dev->irq_line);
-        ahci_destroy_device(dev);
-        return false;
+    pci_enable_bus_mastering(dev->bus, dev->slot, dev->func);
+
+    /* Try MSI first, fall back to legacy INTx */
+    if (pci_enable_msi(dev->bus, dev->slot, dev->func, AHCI_MSI_VECTOR, lapic_id())) {
+        ahci_primary = dev;
+        dev->irq_enabled = true;
+        dev->msi_enabled = true;
+        set_int_handler(AHCI_MSI_VECTOR, ahci_primary_irq);
+        log_info("ahci: using MSI vector %#x", AHCI_MSI_VECTOR);
+    } else if (!ahci_irq_line_supported(dev->irq_line)) {
+        log_warn("ahci: IRQ line %u out of range, falling back to polling", dev->irq_line);
+        dev->irq_enabled = false;
+    } else {
+        ahci_primary = dev;
+        ahci_primary_irq_line = dev->irq_line;
+        dev->irq_enabled = true;
+        irq_register(dev->irq_line, ahci_primary_irq);
     }
-
-    ahci_primary = dev;
-    ahci_primary_irq_line = dev->irq_line;
-    dev->irq_enabled = true;
-
-    irq_register(dev->irq_line, ahci_primary_irq);
 
     if (!ahci_setup_port(dev)) {
         log_error("ahci: failed to setup port %u", dev->port_index);

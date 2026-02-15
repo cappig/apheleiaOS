@@ -105,7 +105,10 @@ void unmap_page(page_t* pdpt, u64 vaddr) {
 
     get_page(pdpt, vaddr, &page);
 
-    page = 0;
+    if (page) {
+        *page = 0;
+        tlb_flush((u32)vaddr);
+    }
 }
 
 void map_region(page_t* pdpt, size_t pages, u64 vaddr, u64 paddr, u64 flags) {

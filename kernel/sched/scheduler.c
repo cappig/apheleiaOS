@@ -1277,6 +1277,10 @@ create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, b
 
     sched_wait_queue_init(&thread->wait_queue);
     sched_signal_init_thread(thread);
+
+    arch_fpu_init(thread->fpu_state);
+    thread->fpu_initialized = true;
+
     add_all_thread(thread);
 
     if (enqueue)
@@ -1460,6 +1464,11 @@ pid_t sched_fork(arch_int_state_t* state) {
     child->signal_saved_valid = false;
     child->current_signal = 0;
     child->tty_index = parent->tty_index;
+
+    if (parent->fpu_initialized) {
+        memcpy(child->fpu_state, parent->fpu_state, sizeof(child->fpu_state));
+        child->fpu_initialized = true;
+    }
 
     bool cow_enabled = pmm_ref_ready();
 
@@ -1777,8 +1786,15 @@ void sched_tick(arch_int_state_t* state) {
     next->state = THREAD_RUNNING;
     sched_local_set_current(next);
 
+    if (thread->fpu_initialized)
+        arch_fpu_save(thread->fpu_state);
+
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);
+
+    if (next->fpu_initialized)
+        arch_fpu_restore(next->fpu_state);
+
     arch_context_switch(next->context);
 }
 

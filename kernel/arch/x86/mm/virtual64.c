@@ -8,6 +8,7 @@
 
 #include "physical.h"
 #include "virtual.h"
+#include "x86/asm.h"
 #include "x86/boot.h"
 
 // Locate the requested index in the child table, allocate if it doesn't exist
@@ -81,7 +82,10 @@ void unmap_page(page_t* lvl4_paddr, u64 vaddr) {
 
     get_page(lvl4_paddr, vaddr, &page);
 
-    page = 0;
+    if (page) {
+        *page = 0;
+        tlb_flush(vaddr);
+    }
 }
 
 

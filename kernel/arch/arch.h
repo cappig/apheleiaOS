@@ -53,3 +53,7 @@ void arch_syscall_install(int vector, arch_syscall_handler_t handler);
 
 void arch_set_kernel_stack(uintptr_t sp);
 void arch_panic_enter(void);
+
+void arch_fpu_init(void* buf);
+void arch_fpu_save(void* buf);
+void arch_fpu_restore(const void* buf);

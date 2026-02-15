@@ -129,9 +129,126 @@ static bool _parse_mbr(disk_dev_t* dev) {
     return true;
 }
 
+#define GPT_SIGNATURE 0x5452415020494645ULL /* "EFI PART" */
+
+typedef struct PACKED {
+    u64 signature;
+    u32 revision;
+    u32 header_size;
+    u32 header_crc32;
+    u32 _reserved;
+    u64 my_lba;
+    u64 alternate_lba;
+    u64 first_usable_lba;
+    u64 last_usable_lba;
+    u8 disk_guid[16];
+    u64 partition_entry_lba;
+    u32 num_partition_entries;
+    u32 partition_entry_size;
+    u32 partition_entry_crc32;
+} gpt_header_t;
+
+typedef struct PACKED {
+    u8 type_guid[16];
+    u8 unique_guid[16];
+    u64 first_lba;
+    u64 last_lba;
+    u64 attributes;
+    u16 name[36];
+} gpt_entry_t;
+
+/* 0FC63DAF-8483-4772-8E79-3D69D8477DE4 (mixed-endian) */
+static const u8 _gpt_linux_fs_guid[16] = {
+    0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47,
+    0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4,
+};
+
+/* C12A7328-F81F-11D2-BA4B-00A0C93EC93B */
+static const u8 _gpt_efi_system_guid[16] = {
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11,
+    0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
+};
+
+static bool _guid_is_zero(const u8 guid[16]) {
+    for (size_t i = 0; i < 16; i++) {
+        if (guid[i])
+            return false;
+    }
+
+    return true;
+}
+
+static u8 _gpt_type_to_mbr(const u8 guid[16]) {
+    if (!memcmp(guid, _gpt_linux_fs_guid, 16))
+        return MBR_LINUX;
+
+    if (!memcmp(guid, _gpt_efi_system_guid, 16))
+        return MBR_FAT32_LBA;
+
+    return MBR_UNKNOWN;
+}
+
 static bool _parse_gpt(disk_dev_t* dev) {
-    (void)dev;
-    return false;
+    if (!dev || !dev->interface || !dev->interface->read)
+        return false;
+
+    u8 header_buf[512] = {0};
+    ssize_t read = dev->interface->read(dev, header_buf, dev->sector_size, sizeof(header_buf));
+
+    if (read < (ssize_t)sizeof(header_buf))
+        return false;
+
+    gpt_header_t* header = (gpt_header_t*)header_buf;
+
+    if (header->signature != GPT_SIGNATURE)
+        return false;
+
+    if (!header->num_partition_entries || !header->partition_entry_size)
+        return false;
+
+    if (header->partition_entry_size < sizeof(gpt_entry_t))
+        return false;
+
+    u64 entries_lba = header->partition_entry_lba;
+    u32 count = header->num_partition_entries;
+    u32 entry_size = header->partition_entry_size;
+
+    size_t entries_bytes = (size_t)count * entry_size;
+    size_t entries_offset = (size_t)entries_lba * dev->sector_size;
+
+    u8* entries = calloc(1, entries_bytes);
+    if (!entries)
+        return false;
+
+    read = dev->interface->read(dev, entries, entries_offset, entries_bytes);
+    if (read < (ssize_t)entries_bytes) {
+        free(entries);
+        return false;
+    }
+
+    ssize_t part_num = 0;
+
+    for (u32 i = 0; i < count; i++) {
+        gpt_entry_t* entry = (gpt_entry_t*)(entries + (size_t)i * entry_size);
+
+        if (_guid_is_zero(entry->type_guid))
+            continue;
+
+        u8 mbr_type = _gpt_type_to_mbr(entry->type_guid);
+        size_t first_lba = (size_t)entry->first_lba;
+        size_t last_lba = (size_t)entry->last_lba;
+        size_t sectors = last_lba - first_lba + 1;
+
+        _create_partition(dev, part_num++, MBR_INACTIVE, mbr_type, first_lba, sectors);
+    }
+
+    free(entries);
+
+    if (!part_num)
+        return false;
+
+    log_info("disk: parsed GPT with %zd partition(s)", part_num);
+    return true;
 }
 
 static size_t _parse_partitions(disk_dev_t* dev) {

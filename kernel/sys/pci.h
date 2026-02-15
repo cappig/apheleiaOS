@@ -7,6 +7,20 @@
 
 #define PCI_NONE 0xffff
 
+#define PCI_CFG_COMMAND  0x04
+#define PCI_CFG_STATUS   0x06
+#define PCI_CFG_BAR5     0x24
+#define PCI_CFG_CAP_PTR  0x34
+#define PCI_CFG_INT_LINE 0x3c
+
+#define PCI_COMMAND_IO_SPACE   (1U << 0)
+#define PCI_COMMAND_MEM_SPACE  (1U << 1)
+#define PCI_COMMAND_BUS_MASTER (1U << 2)
+#define PCI_COMMAND_INT_DIS    (1U << 10)
+
+#define PCI_CAP_MSI  0x05
+#define PCI_CAP_MSIX 0x11
+
 typedef struct PACKED {
     u16 vendor_id;
     u16 device_id;
@@ -151,3 +165,12 @@ const char* pci_stringify_class(u8 class);
 
 pci_device_t* pci_find_device(u8 class, u8 subclass, pci_device_t* from);
 void pci_destroy_device(pci_device_t* dev);
+
+pci_found_t* pci_find_node(u8 class, u8 subclass, pci_found_t* from);
+
+u32 pci_read_config(u8 bus, u8 slot, u8 func, u16 offset, u8 size);
+void pci_write_config(u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size);
+void pci_enable_bus_mastering(u8 bus, u8 slot, u8 func);
+
+u16 pci_find_capability(u8 bus, u8 slot, u8 func, u8 cap_id);
+bool pci_enable_msi(u8 bus, u8 slot, u8 func, u8 vector, u32 lapic_dest);

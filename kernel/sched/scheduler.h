@@ -135,6 +135,9 @@ typedef struct sched_thread {
     sighandler_t signal_handlers[NSIG];
 
     int tty_index;
+
+    u8 fpu_state[512] ALIGNED(16);
+    bool fpu_initialized;
 } sched_thread_t;
 
 void scheduler_init(void);

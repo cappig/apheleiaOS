@@ -158,8 +158,13 @@ typedef struct {
     u64 ct_paddr;
     u64 dma_paddr;
 
+    u8 bus;
+    u8 slot;
+    u8 func;
+
     u8 irq_line;
     bool irq_enabled;
+    bool msi_enabled;
     volatile u64 irq_seq;
 
     size_t sector_size;
