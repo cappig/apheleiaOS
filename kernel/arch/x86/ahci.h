@@ -56,7 +56,7 @@
 #define AHCI_PAGE_SIZE         4096U
 #define AHCI_DMA_SIZE_BYTES    (AHCI_DMA_PAGES * AHCI_PAGE_SIZE)
 #define AHCI_MAX_SECTORS       (AHCI_DMA_SIZE_BYTES / AHCI_SECTOR_SIZE)
-#define AHCI_IRQ_TIMEOUT_TICKS 1000
+#define AHCI_IRQ_TIMEOUT_MS    100
 
 typedef volatile struct {
     u32 clb;
@@ -167,6 +167,7 @@ typedef struct {
 
     volatile bool io_busy;
     sched_wait_queue_t io_wait;
+    sched_wait_queue_t irq_wait;
 } ahci_device_t;
 
 typedef ahci_hba_port_t hba_port_t;

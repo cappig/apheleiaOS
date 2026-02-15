@@ -103,7 +103,7 @@ static int _tty_binding_from_dev_name(const char* dev_name) {
     return TTY_NONE;
 }
 
-static void _sync_thread_tty_from_entry(sched_thread_t* thread, const sched_fd_t* entry) {
+static void _sync_thread_tty(sched_thread_t* thread, const sched_fd_t* entry) {
     if (!thread || !entry)
         return;
 
@@ -112,7 +112,7 @@ static void _sync_thread_tty_from_entry(sched_thread_t* thread, const sched_fd_t
 }
 
 static int
-_enforce_sticky_delete(const sched_thread_t* thread, vfs_node_t* parent, vfs_node_t* target) {
+_enforce_sticky(const sched_thread_t* thread, vfs_node_t* parent, vfs_node_t* target) {
     if (!thread || !parent || !target)
         return -EINVAL;
 
@@ -169,7 +169,7 @@ static void _pipe_unlock(sched_pipe_t* pipe) {
     __sync_lock_release(&pipe->lock);
 }
 
-static ssize_t _pipe_read_internal(sched_pipe_t* pipe, void* buf, size_t len, bool nonblock) {
+static ssize_t _pipe_read(sched_pipe_t* pipe, void* buf, size_t len, bool nonblock) {
     if (!pipe || !buf)
         return -EINVAL;
     if (!len)
@@ -232,7 +232,7 @@ static ssize_t _pipe_read_internal(sched_pipe_t* pipe, void* buf, size_t len, bo
     }
 }
 
-static ssize_t _pipe_write_internal(sched_pipe_t* pipe, const void* buf, size_t len, bool nonblock) {
+static ssize_t _pipe_write(sched_pipe_t* pipe, const void* buf, size_t len, bool nonblock) {
     if (!pipe || !buf)
         return -EINVAL;
     if (!len)
@@ -303,7 +303,7 @@ static ssize_t _pipe_write_internal(sched_pipe_t* pipe, const void* buf, size_t 
 }
 
 static bool
-_split_parent_path(const char* path, char* parent, size_t parent_len, char* base, size_t base_len) {
+_split_parent(const char* path, char* parent, size_t parent_len, char* base, size_t base_len) {
     if (!path || !parent || !base || parent_len < 2 || !base_len)
         return false;
 
@@ -440,7 +440,7 @@ static uintptr_t _region_end(const sched_user_region_t* region) {
     return region->vaddr + region->pages * PAGE_4KIB;
 }
 
-static ssize_t _sys_read(int fd, void* buf, size_t len) {
+static ssize_t sys_read(int fd, void* buf, size_t len) {
     if (!buf)
         return -EFAULT;
 
@@ -450,18 +450,18 @@ static ssize_t _sys_read(int fd, void* buf, size_t len) {
     sched_thread_t* thread = sched_current();
     sched_fd_t* entry = NULL;
 
-    if (thread && fd_lookup(thread, fd, &entry)) {
-        _sync_thread_tty_from_entry(thread, entry);
+    if (thread && _fd_lookup(thread, fd, &entry)) {
+        _sync_thread_tty(thread, entry);
 
         if (entry->kind == SCHED_FD_PIPE_READ) {
             bool nonblock = (entry->flags & O_NONBLOCK) != 0;
-            return _pipe_read_internal(entry->pipe, buf, len, nonblock);
+            return _pipe_read(entry->pipe, buf, len, nonblock);
         }
 
         if (entry->kind != SCHED_FD_VFS || !entry->node)
             return -EBADF;
 
-        if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
+        if (!_open_has_read(entry->flags))
             return -EBADF;
 
         size_t vfs_flags = 0;
@@ -492,7 +492,7 @@ static ssize_t _sys_read(int fd, void* buf, size_t len) {
     return -EBADF;
 }
 
-static ssize_t _sys_pread(int fd, void* buf, size_t len, off_t offset) {
+static ssize_t sys_pread(int fd, void* buf, size_t len, off_t offset) {
     if (!buf)
         return -EFAULT;
 
@@ -508,12 +508,12 @@ static ssize_t _sys_pread(int fd, void* buf, size_t len, off_t offset) {
     if (!_fd_lookup(thread, fd, &entry))
         return -EBADF;
 
-    _sync_thread_tty_from_entry(thread, entry);
+    _sync_thread_tty(thread, entry);
 
     if (entry->kind != SCHED_FD_VFS || !entry->node)
         return -ESPIPE;
 
-    if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
+    if (!_open_has_read(entry->flags))
         return -EBADF;
 
     size_t vfs_flags = 0;
@@ -529,7 +529,7 @@ static ssize_t _sys_pread(int fd, void* buf, size_t len, off_t offset) {
     return ret;
 }
 
-static ssize_t _sys_write(int fd, const void* buf, size_t len) {
+static ssize_t sys_write(int fd, const void* buf, size_t len) {
     if (!buf)
         return -EFAULT;
 
@@ -539,18 +539,18 @@ static ssize_t _sys_write(int fd, const void* buf, size_t len) {
     sched_thread_t* thread = sched_current();
     sched_fd_t* entry = NULL;
 
-    if (thread && fd_lookup(thread, fd, &entry)) {
-        _sync_thread_tty_from_entry(thread, entry);
+    if (thread && _fd_lookup(thread, fd, &entry)) {
+        _sync_thread_tty(thread, entry);
 
         if (entry->kind == SCHED_FD_PIPE_WRITE) {
             bool nonblock = (entry->flags & O_NONBLOCK) != 0;
-            return pipe_write_internal(entry->pipe, buf, len, nonblock);
+            return _pipe_write(entry->pipe, buf, len, nonblock);
         }
 
         if (entry->kind != SCHED_FD_VFS || !entry->node)
             return -EBADF;
 
-        if (!((entry->flags & O_WRONLY) || (entry->flags & O_RDWR)))
+        if (!_open_has_write(entry->flags))
             return -EBADF;
 
         size_t vfs_flags = 0;
@@ -585,7 +585,7 @@ static ssize_t _sys_write(int fd, const void* buf, size_t len) {
     return -EBADF;
 }
 
-static ssize_t _sys_pwrite(int fd, const void* buf, size_t len, off_t offset) {
+static ssize_t sys_pwrite(int fd, const void* buf, size_t len, off_t offset) {
     if (!buf)
         return -EFAULT;
 
@@ -601,12 +601,12 @@ static ssize_t _sys_pwrite(int fd, const void* buf, size_t len, off_t offset) {
     if (!_fd_lookup(thread, fd, &entry))
         return -EBADF;
 
-    _sync_thread_tty_from_entry(thread, entry);
+    _sync_thread_tty(thread, entry);
 
     if (entry->kind != SCHED_FD_VFS || !entry->node)
         return -ESPIPE;
 
-    if (!((entry->flags & O_WRONLY) || (entry->flags & O_RDWR)))
+    if (!_open_has_write(entry->flags))
         return -EBADF;
 
     size_t vfs_flags = 0;
@@ -621,13 +621,13 @@ static ssize_t _sys_pwrite(int fd, const void* buf, size_t len, off_t offset) {
     return ret;
 }
 
-static ssize_t _sys_ioctl(int fd, u64 request, void* args) {
+static ssize_t sys_ioctl(int fd, u64 request, void* args) {
     sched_thread_t* thread = sched_current();
     sched_fd_t* entry = NULL;
 
-    if (thread && fd_lookup(thread, fd, &entry)) {
+    if (thread && _fd_lookup(thread, fd, &entry)) {
         if (entry->kind == SCHED_FD_VFS && entry->node) {
-            _sync_thread_tty_from_entry(thread, entry);
+            _sync_thread_tty(thread, entry);
             return vfs_ioctl(entry->node, request, args);
         }
 
@@ -645,7 +645,7 @@ static ssize_t _sys_ioctl(int fd, u64 request, void* args) {
     return tty_ioctl_handle(&handle, request, args);
 }
 
-static int _sys_open(const char* path, int flags, mode_t mode) {
+static int sys_open(const char* path, int flags, mode_t mode) {
     if (!path)
         return -EFAULT;
 
@@ -693,7 +693,7 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
         char parent_path[PATH_MAX];
         char base[PATH_MAX];
 
-        if (!split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
+        if (!_split_parent(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
             return _open_fail(ptmx_open, ptmx_index, -EINVAL);
 
         vfs_node_t* parent = vfs_lookup(parent_path);
@@ -707,7 +707,7 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
         if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
             return _open_fail(ptmx_open, ptmx_index, -EACCES);
 
-        mode_t create_mode = apply_umask(mode & 07777, thread->umask);
+        mode_t create_mode = _apply_umask(mode & 07777, thread->umask);
         node = vfs_create(parent, base, VFS_FILE, create_mode);
         if (!node)
             return _open_fail(ptmx_open, ptmx_index, -EIO);
@@ -745,9 +745,9 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
 
         if (resolved_node->type == VFS_FILE) {
             if (vfs_truncate(resolved_node, 0) < 0)
-                return open_fail(ptmx_open, ptmx_index, -EIO);
+                return _open_fail(ptmx_open, ptmx_index, -EIO);
 
-            maybe_clear_setid(thread, resolved_node);
+            _maybe_clear_setid(thread, resolved_node);
         }
     }
 
@@ -771,7 +771,7 @@ static int _sys_open(const char* path, int flags, mode_t mode) {
     return ret;
 }
 
-static int _sys_close(int fd) {
+static int sys_close(int fd) {
     if (fd < 0)
         return -EBADF;
 
@@ -782,13 +782,13 @@ static int _sys_close(int fd) {
     if (fd >= SCHED_FD_MAX)
         return -EBADF;
 
-    if (!thread->fd_used[fd] && fd < 3)
-        return 0;
+    if (!thread->fd_used[fd])
+        return -EBADF;
 
     return sched_fd_close(thread, fd);
 }
 
-static int _sys_pipe(int* fds) {
+static int sys_pipe(int* fds) {
     if (!fds)
         return -EFAULT;
 
@@ -838,7 +838,7 @@ static int _sys_pipe(int* fds) {
     return 0;
 }
 
-static int _sys_dup(int oldfd, int newfd) {
+static int sys_dup(int oldfd, int newfd) {
     sched_thread_t* thread = sched_current();
     if (!thread)
         return -EINVAL;
@@ -846,7 +846,7 @@ static int _sys_dup(int oldfd, int newfd) {
     return sched_fd_dup(thread, oldfd, newfd);
 }
 
-static int _sys_mkdir(const char* path, mode_t mode) {
+static int sys_mkdir(const char* path, mode_t mode) {
     if (!path)
         return -EFAULT;
 
@@ -864,7 +864,7 @@ static int _sys_mkdir(const char* path, mode_t mode) {
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
 
-    if (!_split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
+    if (!_split_parent(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
         return -EINVAL;
 
     vfs_node_t* parent = vfs_lookup(parent_path);
@@ -887,7 +887,7 @@ static int _sys_mkdir(const char* path, mode_t mode) {
     return 0;
 }
 
-static mode_t _sys_umask(mode_t mask) {
+static mode_t sys_umask(mode_t mask) {
     sched_thread_t* thread = sched_current();
     if (!thread)
         return (mode_t)-EINVAL;
@@ -898,7 +898,7 @@ static mode_t _sys_umask(mode_t mask) {
     return old;
 }
 
-static int _sys_rmdir(const char* path) {
+static int sys_rmdir(const char* path) {
     if (!path)
         return -EFAULT;
 
@@ -933,7 +933,7 @@ static int _sys_rmdir(const char* path) {
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
 
-    if (!_split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
+    if (!_split_parent(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
         return -EINVAL;
 
     vfs_node_t* parent = vfs_lookup(parent_path);
@@ -947,14 +947,14 @@ static int _sys_rmdir(const char* path) {
     if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK))
         return -EACCES;
 
-    int sticky = _enforce_sticky_delete(thread, parent, node);
+    int sticky = _enforce_sticky(thread, parent, node);
     if (sticky < 0)
         return sticky;
 
     return vfs_rmdir(resolved) ? 0 : -EIO;
 }
 
-static int _sys_chdir(const char* path) {
+static int sys_chdir(const char* path) {
     if (!path)
         return -EFAULT;
 
@@ -983,15 +983,12 @@ static int _sys_chdir(const char* path) {
     return 0;
 }
 
-static int _sys_getcwd(char* buf, size_t size) {
+static int sys_getcwd(char* buf, size_t size) {
     if (!buf)
         return -EFAULT;
 
     if (!size)
         return -EINVAL;
-
-    if (!_valid_user_ptr(buf, size))
-        return -1;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
@@ -1005,7 +1002,7 @@ static int _sys_getcwd(char* buf, size_t size) {
     return 0;
 }
 
-static int _sys_access(const char* path, int mode) {
+static int sys_access(const char* path, int mode) {
     if (!path)
         return -EFAULT;
 
@@ -1027,7 +1024,7 @@ static int _sys_access(const char* path, int mode) {
     return vfs_access(node, thread->uid, thread->gid, mode) ? 0 : -EACCES;
 }
 
-static uintptr_t _sys_mmap(const mmap_args_t* args) {
+static uintptr_t sys_mmap(const mmap_args_t* args) {
     if (!args)
         return (uintptr_t)-EFAULT;
 
@@ -1123,7 +1120,7 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
 
         file = entry->node;
 
-        if (!((entry->flags & O_RDONLY) || (entry->flags & O_RDWR)))
+        if (!_open_has_read(entry->flags))
             return (uintptr_t)-EACCES;
 
         int need = R_OK;
@@ -1219,7 +1216,7 @@ static uintptr_t _sys_mmap(const mmap_args_t* args) {
     return addr;
 }
 
-static int _sys_munmap(void* addr, size_t len) {
+static int sys_munmap(void* addr, size_t len) {
     if (!addr || !len)
         return -EINVAL;
 
@@ -1325,7 +1322,7 @@ static int _sys_munmap(void* addr, size_t len) {
     return 0;
 }
 
-static long _sys_getuid(void) {
+static long sys_getuid(void) {
     sched_thread_t* thread = sched_current();
     if (!thread)
         return -EINVAL;
@@ -1333,7 +1330,7 @@ static long _sys_getuid(void) {
     return thread->uid;
 }
 
-static long _sys_getgid(void) {
+static long sys_getgid(void) {
     sched_thread_t* thread = sched_current();
     if (!thread)
         return -EINVAL;
@@ -1341,7 +1338,7 @@ static long _sys_getgid(void) {
     return thread->gid;
 }
 
-static int _sys_setuid(uid_t uid) {
+static int sys_setuid(uid_t uid) {
     sched_thread_t* thread = sched_current();
     if (!thread)
         return -EINVAL;
@@ -1353,7 +1350,7 @@ static int _sys_setuid(uid_t uid) {
     return 0;
 }
 
-static int _sys_setgid(gid_t gid) {
+static int sys_setgid(gid_t gid) {
     sched_thread_t* thread = sched_current();
     if (!thread)
         return -EINVAL;
@@ -1365,7 +1362,7 @@ static int _sys_setgid(gid_t gid) {
     return 0;
 }
 
-static pid_t _sys_getpgid(pid_t pid) {
+static pid_t sys_getpgid(pid_t pid) {
     sched_thread_t* thread = sched_current();
     if (!thread)
         return -EINVAL;
@@ -1380,7 +1377,7 @@ static pid_t _sys_getpgid(pid_t pid) {
     return target->pgid;
 }
 
-static int _sys_setpgid(pid_t pid, pid_t pgid) {
+static int sys_setpgid(pid_t pid, pid_t pgid) {
     sched_thread_t* thread = sched_current();
     if (!thread || !thread->user_thread)
         return -EINVAL;
@@ -1416,7 +1413,7 @@ static int _sys_setpgid(pid_t pid, pid_t pgid) {
     return 0;
 }
 
-static pid_t _sys_setsid(void) {
+static pid_t sys_setsid(void) {
     sched_thread_t* thread = sched_current();
     if (!thread || !thread->user_thread)
         return -EINVAL;
@@ -1431,16 +1428,13 @@ static pid_t _sys_setsid(void) {
     return thread->sid;
 }
 
-static pid_t _sys_waitpid(pid_t pid, int* status, int options) {
+static pid_t sys_waitpid(pid_t pid, int* status, int options) {
     return sched_waitpid(pid, status, options);
 }
 
-static int _sys_stat_path(const char* path, stat_t* st, bool follow_links) {
+static int sys_stat_path(const char* path, stat_t* st, bool follow_links) {
     if (!path || !st)
         return -EFAULT;
-
-    if (!_valid_user_ptr(path, 1) || !_valid_user_ptr(st, sizeof(stat_t)))
-        return -1;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
@@ -1457,7 +1451,7 @@ static int _sys_stat_path(const char* path, stat_t* st, bool follow_links) {
     return vfs_stat_node(node, st, follow_links) ? 0 : -EIO;
 }
 
-static int _sys_fstat(int fd, stat_t* st) {
+static int sys_fstat(int fd, stat_t* st) {
     if (!st)
         return -EFAULT;
 
@@ -1482,7 +1476,7 @@ static int _sys_fstat(int fd, stat_t* st) {
     return vfs_stat_node(entry->node, st, true) ? 0 : -EIO;
 }
 
-static int _sys_chmod(const char* path, mode_t mode) {
+static int sys_chmod(const char* path, mode_t mode) {
     if (!path)
         return -EFAULT;
 
@@ -1523,7 +1517,7 @@ static int _sys_chmod(const char* path, mode_t mode) {
     return vfs_chmod(node, desired) ? 0 : -EIO;
 }
 
-static int _sys_chown(const char* path, uid_t uid, gid_t gid) {
+static int sys_chown(const char* path, uid_t uid, gid_t gid) {
     if (!path)
         return -EFAULT;
 
@@ -1562,12 +1556,9 @@ static int _sys_chown(const char* path, uid_t uid, gid_t gid) {
     return 0;
 }
 
-static int _sys_link(const char* oldpath, const char* newpath) {
+static int sys_link(const char* oldpath, const char* newpath) {
     if (!oldpath || !newpath)
         return -EFAULT;
-
-    if (!_valid_user_ptr(oldpath, 1) || !_valid_user_ptr(newpath, 1))
-        return -1;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
@@ -1585,7 +1576,7 @@ static int _sys_link(const char* oldpath, const char* newpath) {
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
 
-    if (!_split_parent_path(resolved_new, parent_path, sizeof(parent_path), base, sizeof(base)))
+    if (!_split_parent(resolved_new, parent_path, sizeof(parent_path), base, sizeof(base)))
         return -EINVAL;
 
     vfs_node_t* parent = vfs_lookup(parent_path);
@@ -1601,7 +1592,7 @@ static int _sys_link(const char* oldpath, const char* newpath) {
     return vfs_link(resolved_old, resolved_new) ? 0 : -EIO;
 }
 
-static int _sys_unlink(const char* path) {
+static int sys_unlink(const char* path) {
     if (!path)
         return -EFAULT;
 
@@ -1616,7 +1607,7 @@ static int _sys_unlink(const char* path) {
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
 
-    if (!_split_parent_path(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
+    if (!_split_parent(resolved, parent_path, sizeof(parent_path), base, sizeof(base)))
         return -EINVAL;
 
     vfs_node_t* parent = vfs_lookup(parent_path);
@@ -1633,19 +1624,16 @@ static int _sys_unlink(const char* path) {
     if (!target)
         return -ENOENT;
 
-    int sticky = _enforce_sticky_delete(thread, parent, target);
+    int sticky = _enforce_sticky(thread, parent, target);
     if (sticky < 0)
         return sticky;
 
     return vfs_unlink(resolved) ? 0 : -EIO;
 }
 
-static int _sys_rename(const char* oldpath, const char* newpath) {
+static int sys_rename(const char* oldpath, const char* newpath) {
     if (!oldpath || !newpath)
         return -EFAULT;
-
-    if (!_valid_user_ptr(oldpath, 1) || !_valid_user_ptr(newpath, 1))
-        return -1;
 
     sched_thread_t* thread = sched_current();
     if (!thread)
@@ -1663,7 +1651,7 @@ static int _sys_rename(const char* oldpath, const char* newpath) {
     char old_parent_path[PATH_MAX];
     char old_base[PATH_MAX];
 
-    if (!split_parent_path(
+    if (!_split_parent(
             resolved_old, old_parent_path, sizeof(old_parent_path), old_base, sizeof(old_base)
         ))
         return -EINVAL;
@@ -1671,7 +1659,7 @@ static int _sys_rename(const char* oldpath, const char* newpath) {
     char new_parent_path[PATH_MAX];
     char new_base[PATH_MAX];
 
-    if (!split_parent_path(
+    if (!_split_parent(
             resolved_new, new_parent_path, sizeof(new_parent_path), new_base, sizeof(new_base)
         ))
         return -EINVAL;
@@ -1699,13 +1687,13 @@ static int _sys_rename(const char* oldpath, const char* newpath) {
     if (!old_node)
         return -ENOENT;
 
-    int sticky = _enforce_sticky_delete(thread, old_parent, old_node);
+    int sticky = _enforce_sticky(thread, old_parent, old_node);
     if (sticky < 0)
         return sticky;
 
     vfs_node_t* new_node = vfs_lookup(resolved_new);
     if (new_node) {
-        sticky = _enforce_sticky_delete(thread, new_parent, new_node);
+        sticky = _enforce_sticky(thread, new_parent, new_node);
         if (sticky < 0)
             return sticky;
     }
@@ -1713,7 +1701,7 @@ static int _sys_rename(const char* oldpath, const char* newpath) {
     return vfs_rename(resolved_old, resolved_new) ? 0 : -EIO;
 }
 
-static off_t _sys_seek(int fd, off_t offset, int whence) {
+static off_t sys_seek(int fd, off_t offset, int whence) {
     sched_thread_t* thread = sched_current();
     sched_fd_t* entry = NULL;
 
@@ -1747,7 +1735,7 @@ static off_t _sys_seek(int fd, off_t offset, int whence) {
     return next;
 }
 
-static int _sys_getdents(int fd, dirent_t* out) {
+static int sys_getdents(int fd, dirent_t* out) {
     if (!out)
         return -EFAULT;
 
@@ -1798,7 +1786,7 @@ static int _sys_getdents(int fd, dirent_t* out) {
     return 0;
 }
 
-static int _sys_sleep(unsigned int milliseconds) {
+static int sys_sleep(unsigned int milliseconds) {
     u32 hz = arch_timer_hz();
     if (!hz)
         return -EINVAL;
@@ -1812,7 +1800,7 @@ static int _sys_sleep(unsigned int milliseconds) {
     return 0;
 }
 
-static uintptr_t _sys_signal(int signum, sighandler_t handler, uintptr_t trampoline) {
+static uintptr_t sys_signal(int signum, sighandler_t handler, uintptr_t trampoline) {
     sched_thread_t* thread = sched_current();
 
     if (!thread)
@@ -1826,7 +1814,7 @@ static uintptr_t _sys_signal(int signum, sighandler_t handler, uintptr_t trampol
     return (uintptr_t)prev;
 }
 
-static u64 _sys_sigreturn(arch_int_state_t* state) {
+static u64 sys_sigreturn(arch_int_state_t* state) {
     sched_thread_t* thread = sched_current();
     if (!thread || !state)
         return (u64)-EINVAL;
@@ -1834,36 +1822,44 @@ static u64 _sys_sigreturn(arch_int_state_t* state) {
     return sched_signal_sigreturn(thread, state) ? 0 : (u64)-EINVAL;
 }
 
-static u64 _sys_kill(pid_t pid, int signum) {
+static u64 sys_kill(pid_t pid, int signum) {
+    sched_thread_t* self = sched_current();
+    if (!self)
+        return (u64)-EINVAL;
+
     if (pid < 0) {
         int ret = sched_signal_send_pgrp(-pid, signum);
         return ret < 0 ? (u64)-ESRCH : (u64)ret;
     }
 
     if (!pid) {
-        sched_thread_t* thread = sched_current();
-
-        if (!thread || !thread->pgid)
+        if (!self->pgid)
             return (u64)-ESRCH;
 
-        int ret = sched_signal_send_pgrp(thread->pgid, signum);
-
+        int ret = sched_signal_send_pgrp(self->pgid, signum);
         return ret < 0 ? (u64)-ESRCH : (u64)ret;
     }
 
-    int ret = sched_signal_send_pid(pid, signum);
+    // Permission check: non-root can only signal processes with the same uid
+    sched_thread_t* target = sched_find_thread(pid);
+    if (!target)
+        return (u64)-ESRCH;
 
+    if (self->uid != 0 && self->uid != target->uid)
+        return (u64)-EPERM;
+
+    int ret = sched_signal_send_thread(target, signum);
     return ret < 0 ? (u64)-ESRCH : (u64)ret;
 }
 
-static ssize_t _sys_getprocs(proc_info_t* out, size_t capacity) {
+static ssize_t sys_getprocs(proc_info_t* out, size_t capacity) {
     if (!out || !capacity)
         return -EINVAL;
 
     return (ssize_t)sched_list_procs(out, capacity);
 }
 
-static short _pipe_poll_internal(sched_pipe_t* pipe, bool read_end, short events) {
+static short _pipe_poll(sched_pipe_t* pipe, bool read_end, short events) {
     if (!pipe)
         return POLLERR;
 
@@ -1872,12 +1868,12 @@ static short _pipe_poll_internal(sched_pipe_t* pipe, bool read_end, short events
     size_t readers = 0;
     size_t writers = 0;
 
-    pipe_lock(pipe);
+    _pipe_lock(pipe);
     size = pipe->size;
     free_space = pipe->capacity - pipe->size;
     readers = pipe->readers;
     writers = pipe->writers;
-    pipe_unlock(pipe);
+    _pipe_unlock(pipe);
 
     short revents = 0;
 
@@ -1904,12 +1900,12 @@ static short _fd_poll_revents(sched_thread_t* thread, int fd, short events) {
 
     sched_fd_t* entry = NULL;
 
-    if (thread && fd_lookup(thread, fd, &entry)) {
+    if (thread && _fd_lookup(thread, fd, &entry)) {
         if (entry->kind == SCHED_FD_PIPE_READ)
-            return _pipe_poll_internal(entry->pipe, true, events);
+            return _pipe_poll(entry->pipe, true, events);
 
         if (entry->kind == SCHED_FD_PIPE_WRITE)
-            return _pipe_poll_internal(entry->pipe, false, events);
+            return _pipe_poll(entry->pipe, false, events);
 
         if (entry->kind == SCHED_FD_VFS && entry->node) {
             size_t vfs_flags = 0;
@@ -1936,7 +1932,7 @@ static short _fd_poll_revents(sched_thread_t* thread, int fd, short events) {
     return POLLNVAL;
 }
 
-static int _sys_poll(struct pollfd* fds, nfds_t nfds, int timeout_ms) {
+static int sys_poll(struct pollfd* fds, nfds_t nfds, int timeout_ms) {
     if (!fds && nfds)
         return -EFAULT;
 
@@ -2001,7 +1997,7 @@ static int _sys_poll(struct pollfd* fds, nfds_t nfds, int timeout_ms) {
     }
 }
 
-static u64 _dispatch(arch_int_state_t* state) {
+static u64 _syscall_dispatch(arch_int_state_t* state) {
     u64 num = (u64)arch_syscall_num(state);
 
     switch (num) {
@@ -2016,132 +2012,127 @@ static u64 _dispatch(arch_int_state_t* state) {
 
         return 0;
     }
+
     case SYS_READ:
-        return (u64)_read(
+        return (u64)sys_read(
             (int)arch_syscall_arg1(state),
             (void*)arch_syscall_arg2(state),
             (size_t)arch_syscall_arg3(state)
         );
     case SYS_WRITE:
-        return (u64)_write(
+        return (u64)sys_write(
             (int)arch_syscall_arg1(state),
             (void*)arch_syscall_arg2(state),
             (size_t)arch_syscall_arg3(state)
         );
     case SYS_OPEN:
-        return (u64)_sys_open(
+        return (u64)sys_open(
             (const char*)arch_syscall_arg1(state),
             (int)arch_syscall_arg2(state),
             (mode_t)arch_syscall_arg3(state)
         );
     case SYS_CLOSE:
-        return (u64)_sys_close((int)arch_syscall_arg1(state));
+        return (u64)sys_close((int)arch_syscall_arg1(state));
     case SYS_PIPE:
         return (u64)sys_pipe((int*)arch_syscall_arg1(state));
     case SYS_DUP:
-        return (u64)_sys_dup((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
+        return (u64)sys_dup((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_PREAD:
-        return (u64)_sys_pread(
+        return (u64)sys_pread(
             (int)arch_syscall_arg1(state),
             (void*)arch_syscall_arg2(state),
             (size_t)arch_syscall_arg3(state),
             (off_t)arch_syscall_arg4(state)
         );
     case SYS_PWRITE:
-        return (u64)_sys_pwrite(
+        return (u64)sys_pwrite(
             (int)arch_syscall_arg1(state),
             (void*)arch_syscall_arg2(state),
             (size_t)arch_syscall_arg3(state),
             (off_t)arch_syscall_arg4(state)
         );
     case SYS_SEEK:
-        return (u64)_sys_seek(
+        return (u64)sys_seek(
             (int)arch_syscall_arg1(state),
             (off_t)arch_syscall_arg2(state),
             (int)arch_syscall_arg3(state)
         );
     case SYS_MMAP:
-        return (u64)_sys_mmap((const mmap_args_t*)arch_syscall_arg1(state));
+        return (u64)sys_mmap((const mmap_args_t*)arch_syscall_arg1(state));
     case SYS_MUNMAP:
-        return (u64)_sys_munmap((void*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
+        return (u64)sys_munmap((void*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_IOCTL:
-        return (u64)_sys_ioctl(
+        return (u64)sys_ioctl(
             (int)arch_syscall_arg1(state),
             (u64)arch_syscall_arg2(state),
             (void*)arch_syscall_arg3(state)
         );
     case SYS_GETDENTS:
-        return (u64)_sys_getdents((int)arch_syscall_arg1(state), (dirent_t*)arch_syscall_arg2(state));
+        return (u64)sys_getdents((int)arch_syscall_arg1(state), (dirent_t*)arch_syscall_arg2(state));
     case SYS_CHDIR:
-        return (u64)_sys_chdir((const char*)arch_syscall_arg1(state));
+        return (u64)sys_chdir((const char*)arch_syscall_arg1(state));
     case SYS_GETCWD:
-        return (u64)_sys_getcwd((char*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
+        return (u64)sys_getcwd((char*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_MKDIR:
-        return (u64)_sys_mkdir(
+        return (u64)sys_mkdir(
             (const char*)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state)
         );
     case SYS_UMASK:
         return (u64)sys_umask((mode_t)arch_syscall_arg1(state));
     case SYS_POLL:
-        return (u64)_sys_poll(
+        return (u64)sys_poll(
             (struct pollfd*)arch_syscall_arg1(state),
             (nfds_t)arch_syscall_arg2(state),
             (int)arch_syscall_arg3(state)
         );
     case SYS_RMDIR:
-        return (u64)_sys_rmdir((const char*)arch_syscall_arg1(state));
+        return (u64)sys_rmdir((const char*)arch_syscall_arg1(state));
     case SYS_ACCESS:
         return (u64)sys_access((const char*)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_STAT:
-        return (u64)_sys_stat_path(
+        return (u64)sys_stat_path(
             (const char*)arch_syscall_arg1(state), (stat_t*)arch_syscall_arg2(state), true
         );
     case SYS_LSTAT:
-        return (u64)_sys_stat_path(
+        return (u64)sys_stat_path(
             (const char*)arch_syscall_arg1(state), (stat_t*)arch_syscall_arg2(state), false
         );
     case SYS_FSTAT:
-        return (u64)_sys_fstat((int)arch_syscall_arg1(state), (stat_t*)arch_syscall_arg2(state));
+        return (u64)sys_fstat((int)arch_syscall_arg1(state), (stat_t*)arch_syscall_arg2(state));
     case SYS_CHMOD:
-        return (u64)_sys_chmod(
+        return (u64)sys_chmod(
             (const char*)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state)
         );
     case SYS_CHOWN:
-        return (u64)_sys_chown(
+        return (u64)sys_chown(
             (const char*)arch_syscall_arg1(state),
             (uid_t)arch_syscall_arg2(state),
             (gid_t)arch_syscall_arg3(state)
         );
     case SYS_LINK:
-        return (u64)_sys_link(
+        return (u64)sys_link(
             (const char*)arch_syscall_arg1(state), (const char*)arch_syscall_arg2(state)
         );
     case SYS_UNLINK:
-        return (u64)_sys_unlink((const char*)arch_syscall_arg1(state));
+        return (u64)sys_unlink((const char*)arch_syscall_arg1(state));
     case SYS_RENAME:
-        return (u64)_sys_rename(
+        return (u64)sys_rename(
             (const char*)arch_syscall_arg1(state), (const char*)arch_syscall_arg2(state)
         );
     case SYS_FORK:
         return (u64)sched_fork(state);
-    case SYS_EXECVE: {
-        const char* path = (const char*)arch_syscall_arg1(state);
-        if (!path || !_valid_user_ptr(path, 1))
-            return (u64)-1;
-        return (u64)user_exec(sched_current(), path, state);
-    }
-    case SYS_WAIT: {
-        int* status = (int*)arch_syscall_arg2(state);
-        if (status && !_valid_user_ptr(status, sizeof(int)))
-            return (u64)-1;
-        return (u64)sched_wait(
-            (pid_t)arch_syscall_arg1(state),
-            status
+    case SYS_EXECVE:
+        return (u64)user_exec(
+            sched_current(),
+            (const char*)arch_syscall_arg1(state),
+            (char* const*)arch_syscall_arg2(state),
+            (char* const*)arch_syscall_arg3(state),
+            state
         );
     case SYS_WAIT:
         return (u64)sched_wait((pid_t)arch_syscall_arg1(state), (int*)arch_syscall_arg2(state));
     case SYS_WAITPID:
-        return (u64)_sys_waitpid(
+        return (u64)sys_waitpid(
             (pid_t)arch_syscall_arg1(state),
             (int*)arch_syscall_arg2(state),
             (int)arch_syscall_arg3(state)
@@ -2155,9 +2146,9 @@ static u64 _dispatch(arch_int_state_t* state) {
         return thread ? (u64)thread->ppid : (u64)-ESRCH;
     }
     case SYS_GETUID:
-        return (u64)_sys_getuid();
+        return (u64)sys_getuid();
     case SYS_GETGID:
-        return (u64)_sys_getgid();
+        return (u64)sys_getgid();
     case SYS_SETUID:
         return (u64)sys_setuid((uid_t)arch_syscall_arg1(state));
     case SYS_SETGID:
@@ -2169,9 +2160,9 @@ static u64 _dispatch(arch_int_state_t* state) {
     case SYS_SETSID:
         return (u64)sys_setsid();
     case SYS_SLEEP:
-        return (u64)_sys_sleep((unsigned int)arch_syscall_arg1(state));
+        return (u64)sys_sleep((unsigned int)arch_syscall_arg1(state));
     case SYS_SIGNAL:
-        return (u64)_sys_signal(
+        return (u64)sys_signal(
             (int)arch_syscall_arg1(state),
             (sighandler_t)arch_syscall_arg2(state),
             (uintptr_t)arch_syscall_arg3(state)
@@ -2179,9 +2170,9 @@ static u64 _dispatch(arch_int_state_t* state) {
     case SYS_SIGRETURN:
         return sys_sigreturn(state);
     case SYS_KILL:
-        return _sys_kill((pid_t)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
+        return sys_kill((pid_t)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_GETPROCS:
-        return (u64)_sys_getprocs(
+        return (u64)sys_getprocs(
             (proc_info_t*)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state)
         );
     default:
@@ -2189,20 +2180,21 @@ static u64 _dispatch(arch_int_state_t* state) {
     }
 }
 
-static void _handler(arch_int_state_t* state) {
+static void _syscall_handler(arch_int_state_t* state) {
     if (!state)
         return;
 
     u64 num = (u64)arch_syscall_num(state);
-    u64 ret = _dispatch(state);
+    u64 ret = _syscall_dispatch(state);
 
     if (num == SYS_SIGRETURN && !ret)
         return;
 
     arch_syscall_set_ret(state, (arch_syscall_t)ret);
+    sched_signal_deliver_current(state);
 }
 
 void syscall_init(void) {
-    arch_syscall_install(SYSCALL_INT, _handler);
+    arch_syscall_install(SYSCALL_INT, _syscall_handler);
     log_debug("syscall: interface initialized");
 }

@@ -16,6 +16,7 @@ typedef struct {
 
     size_t word_count;
     bitmap_word_t* bitmap;
+    size_t next_fit_block;
 } bitmap_allocator_t;
 
 

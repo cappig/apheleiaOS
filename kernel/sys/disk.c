@@ -282,7 +282,7 @@ static void _publish_partition_nodes(disk_dev_t* dev) {
 
         node->fs = part->fs_instance ? part->fs_instance : _probe_partition(part);
         node->private = part;
-        node->interface = vfs_create_interface(disk_vfs_read, disk_vfs_write, NULL);
+        node->interface = vfs_create_interface(_vfs_read, _vfs_write, NULL);
     }
 }
 

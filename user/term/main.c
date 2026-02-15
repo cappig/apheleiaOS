@@ -28,8 +28,8 @@ static void stop_child(pid_t child) {
     kill(child, SIGHUP);
 }
 
-static bool read_pty(int master_fd, bool* dirty) {
-    if (master_fd < 0 || !dirty)
+static bool read_pty(int master_fd) {
+    if (master_fd < 0)
         return false;
 
     u8 buf[256];
@@ -37,7 +37,6 @@ static bool read_pty(int master_fd, bool* dirty) {
 
     if (n > 0) {
         term_screen_feed(buf, (size_t)n);
-        *dirty = true;
         return true;
     }
 
@@ -86,7 +85,12 @@ int main(void) {
         return 1;
     }
 
-    int master_fd = open("/dev/ptmx", O_RDWR | O_NONBLOCK, 0);
+    if (window_flush(&window) < 0) {
+        window_deinit(&window);
+        return 1;
+    }
+
+    int master_fd = open("/dev/ptmx", O_RDWR, 0);
     if (master_fd < 0) {
         window_deinit(&window);
         return 1;
@@ -107,13 +111,18 @@ int main(void) {
     };
 
     bool running = true;
-    bool dirty = true;
+    bool pending_flush = false;
+    u32 flush_x = 0;
+    u32 flush_y = 0;
+    u32 flush_w = 0;
+    u32 flush_h = 0;
 
     while (running) {
         if (!child_alive(child))
             break;
 
-        int ready = poll(pfds, 2, 16);
+        int timeout_ms = pending_flush ? 16 : -1;
+        int ready = poll(pfds, 2, timeout_ms);
         if (ready < 0) {
             if (errno == EINTR)
                 continue;
@@ -121,7 +130,7 @@ int main(void) {
             break;
         }
 
-        if ((pfds[0].revents & POLLIN) && !read_pty(master_fd, &dirty))
+        if ((pfds[0].revents & POLLIN) && !read_pty(master_fd))
             break;
 
         if (pfds[1].revents & POLLIN) {
@@ -136,17 +145,22 @@ int main(void) {
             }
         }
 
-        if (!dirty)
+        if (!pending_flush && !term_screen_render_rect(&flush_x, &flush_y, &flush_w, &flush_h))
             continue;
 
-        term_screen_render();
-        if (window_flush(&window) < 0) {
+        pending_flush = true;
+
+        if (window_flush_rect(&window, flush_x, flush_y, flush_w, flush_h) < 0) {
             if (errno == ENOENT)
                 break;
+            if (errno == EAGAIN)
+                continue;
+
             if (errno != EAGAIN)
                 break;
         }
-        dirty = false;
+
+        pending_flush = false;
     }
 
     if (child_alive(child))

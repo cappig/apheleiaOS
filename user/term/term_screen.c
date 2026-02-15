@@ -1,13 +1,11 @@
 #include "term_screen.h"
 
 #include <draw.h>
-#include <fcntl.h>
 #include <psf.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 #include <term/ansi.h>
-#include <unistd.h>
 
 #define TERM_BG 0x001a1a1aU
 #define TERM_FG 0x00f0f0f0U
@@ -34,11 +32,35 @@ typedef struct {
     size_t saved_x;
     size_t saved_y;
     bool cursor_visible;
+    bool cursor_prev_valid;
+    size_t cursor_prev_x;
+    size_t cursor_prev_y;
+    bool dirty;
+    size_t dirty_x0;
+    size_t dirty_y0;
+    size_t dirty_x1;
+    size_t dirty_y1;
     ansi_parser_t ansi;
     bool ready;
 } term_screen_state_t;
 
 static term_screen_state_t term_screen = {0};
+
+static void clear_pixels_full(void) {
+    if (!term_screen.pixels || !term_screen.width || !term_screen.height)
+        return;
+
+    draw_fill_rect(
+        term_screen.pixels,
+        term_screen.width,
+        term_screen.height,
+        0,
+        0,
+        term_screen.width,
+        term_screen.height,
+        TERM_BG
+    );
+}
 
 static bool load_font_file(const char* path) {
     return psf_load_file(path, term_screen.font_buf, sizeof(term_screen.font_buf), &term_screen.font);
@@ -57,6 +79,60 @@ static bool init_font(void) {
     return false;
 }
 
+static void mark_dirty_rect(size_t x0, size_t y0, size_t x1, size_t y1) {
+    if (!term_screen.cols || !term_screen.rows || x0 >= x1 || y0 >= y1)
+        return;
+
+    if (x0 >= term_screen.cols || y0 >= term_screen.rows)
+        return;
+
+    if (x1 > term_screen.cols)
+        x1 = term_screen.cols;
+
+    if (y1 > term_screen.rows)
+        y1 = term_screen.rows;
+
+    if (x0 >= x1 || y0 >= y1)
+        return;
+
+    if (!term_screen.dirty) {
+        term_screen.dirty = true;
+        term_screen.dirty_x0 = x0;
+        term_screen.dirty_y0 = y0;
+        term_screen.dirty_x1 = x1;
+        term_screen.dirty_y1 = y1;
+        return;
+    }
+
+    if (x0 < term_screen.dirty_x0)
+        term_screen.dirty_x0 = x0;
+
+    if (y0 < term_screen.dirty_y0)
+        term_screen.dirty_y0 = y0;
+
+    if (x1 > term_screen.dirty_x1)
+        term_screen.dirty_x1 = x1;
+
+    if (y1 > term_screen.dirty_y1)
+        term_screen.dirty_y1 = y1;
+}
+
+static void mark_dirty_cell(size_t x, size_t y) {
+    mark_dirty_rect(x, y, x + 1, y + 1);
+}
+
+static void mark_dirty_all(void) {
+    mark_dirty_rect(0, 0, term_screen.cols, term_screen.rows);
+}
+
+static void mark_cursor_move(size_t old_x, size_t old_y) {
+    if (old_x < term_screen.cols && old_y < term_screen.rows)
+        mark_dirty_cell(old_x, old_y);
+
+    if (term_screen.cursor_x < term_screen.cols && term_screen.cursor_y < term_screen.rows)
+        mark_dirty_cell(term_screen.cursor_x, term_screen.cursor_y);
+}
+
 static void clear_cells(void) {
     for (size_t y = 0; y < term_screen.rows; y++) {
         for (size_t x = 0; x < term_screen.cols; x++)
@@ -72,6 +148,8 @@ static void scroll_up(void) {
 
     for (size_t x = 0; x < term_screen.cols; x++)
         term_screen.cells[term_screen.rows - 1][x].ch = ' ';
+
+    mark_dirty_all();
 }
 
 static void newline(void) {
@@ -90,19 +168,25 @@ static size_t next_tab_stop(size_t cursor_x) {
 }
 
 static void put_char(char ch) {
+    size_t old_x = term_screen.cursor_x;
+    size_t old_y = term_screen.cursor_y;
+
     if (ch == '\r') {
         term_screen.cursor_x = 0;
+        mark_cursor_move(old_x, old_y);
         return;
     }
 
     if (ch == '\n') {
         newline();
+        mark_cursor_move(old_x, old_y);
         return;
     }
 
     if (ch == '\b') {
         if (term_screen.cursor_x > 0)
             term_screen.cursor_x--;
+        mark_cursor_move(old_x, old_y);
         return;
     }
 
@@ -121,30 +205,47 @@ static void put_char(char ch) {
     if (term_screen.cursor_x >= term_screen.cols)
         newline();
 
-    term_screen.cells[term_screen.cursor_y][term_screen.cursor_x].ch = ch;
+    term_cell_t* cell = &term_screen.cells[term_screen.cursor_y][term_screen.cursor_x];
+    if (cell->ch != ch) {
+        cell->ch = ch;
+        mark_dirty_cell(term_screen.cursor_x, term_screen.cursor_y);
+    }
+
     term_screen.cursor_x++;
 
     if (term_screen.cursor_x >= term_screen.cols)
         newline();
+
+    mark_cursor_move(old_x, old_y);
 }
 
 static void clear_line_mode(int mode) {
+    size_t y = term_screen.cursor_y;
+
     if (mode == 2) {
         for (size_t x = 0; x < term_screen.cols; x++)
-            term_screen.cells[term_screen.cursor_y][x].ch = ' ';
+            term_screen.cells[y][x].ch = ' ';
 
+        mark_dirty_rect(0, y, term_screen.cols, y + 1);
         return;
     }
 
     if (mode == 1) {
-        for (size_t x = 0; x <= term_screen.cursor_x && x < term_screen.cols; x++)
-            term_screen.cells[term_screen.cursor_y][x].ch = ' ';
+        size_t end = term_screen.cursor_x + 1;
+        if (end > term_screen.cols)
+            end = term_screen.cols;
 
+        for (size_t x = 0; x < end; x++)
+            term_screen.cells[y][x].ch = ' ';
+
+        mark_dirty_rect(0, y, end, y + 1);
         return;
     }
 
     for (size_t x = term_screen.cursor_x; x < term_screen.cols; x++)
-        term_screen.cells[term_screen.cursor_y][x].ch = ' ';
+        term_screen.cells[y][x].ch = ' ';
+
+    mark_dirty_rect(term_screen.cursor_x, y, term_screen.cols, y + 1);
 }
 
 static void clear_screen_mode(int mode) {
@@ -152,25 +253,31 @@ static void clear_screen_mode(int mode) {
         clear_cells();
         term_screen.cursor_x = 0;
         term_screen.cursor_y = 0;
+        mark_dirty_all();
         return;
     }
 
     if (mode == 1) {
         for (size_t y = 0; y <= term_screen.cursor_y && y < term_screen.rows; y++) {
-            size_t end = (y == term_screen.cursor_y) ? term_screen.cursor_x : (term_screen.cols - 1);
+            size_t end = y == term_screen.cursor_y ? term_screen.cursor_x + 1 : term_screen.cols;
+            if (end > term_screen.cols)
+                end = term_screen.cols;
 
-            for (size_t x = 0; x <= end && x < term_screen.cols; x++)
+            for (size_t x = 0; x < end; x++)
                 term_screen.cells[y][x].ch = ' ';
         }
+
+        mark_dirty_rect(0, 0, term_screen.cols, term_screen.cursor_y + 1);
         return;
     }
 
     for (size_t y = term_screen.cursor_y; y < term_screen.rows; y++) {
-        size_t start = (y == term_screen.cursor_y) ? term_screen.cursor_x : 0;
-
+        size_t start = y == term_screen.cursor_y ? term_screen.cursor_x : 0;
         for (size_t x = start; x < term_screen.cols; x++)
             term_screen.cells[y][x].ch = ' ';
     }
+
+    mark_dirty_rect(0, term_screen.cursor_y, term_screen.cols, term_screen.rows);
 }
 
 static void ansi_on_print(void* ctx, u8 ch) {
@@ -186,9 +293,12 @@ static void ansi_on_control(void* ctx, u8 ch) {
 static void ansi_on_csi(void* ctx, char op, const int* params, size_t count, bool private_mode) {
     (void)ctx;
 
+    size_t old_x = term_screen.cursor_x;
+    size_t old_y = term_screen.cursor_y;
     int n = ansi_param(params, count, 0, 1);
     int row = 1;
     int col = 1;
+
     if (n < 1)
         n = 1;
 
@@ -198,40 +308,31 @@ static void ansi_on_csi(void* ctx, char op, const int* params, size_t count, boo
             term_screen.cursor_y = 0;
         else
             term_screen.cursor_y -= (size_t)n;
-
         break;
     case 'B':
         term_screen.cursor_y += (size_t)n;
-
         if (term_screen.cursor_y >= term_screen.rows)
             term_screen.cursor_y = term_screen.rows - 1;
-
         break;
     case 'C':
         term_screen.cursor_x += (size_t)n;
-
         if (term_screen.cursor_x >= term_screen.cols)
             term_screen.cursor_x = term_screen.cols - 1;
-
         break;
     case 'D':
         if ((size_t)n > term_screen.cursor_x)
             term_screen.cursor_x = 0;
         else
             term_screen.cursor_x -= (size_t)n;
-
         break;
     case 'G':
         col = ansi_param(params, count, 0, 1);
-
         if (col < 1)
             col = 1;
 
         term_screen.cursor_x = (size_t)(col - 1);
-
         if (term_screen.cursor_x >= term_screen.cols)
             term_screen.cursor_x = term_screen.cols - 1;
-
         break;
     case 'H':
     case 'f':
@@ -252,7 +353,6 @@ static void ansi_on_csi(void* ctx, char op, const int* params, size_t count, boo
 
         if (term_screen.cursor_x >= term_screen.cols)
             term_screen.cursor_x = term_screen.cols - 1;
-
         break;
     case 'J':
         clear_screen_mode(ansi_param(params, count, 0, 0));
@@ -265,8 +365,10 @@ static void ansi_on_csi(void* ctx, char op, const int* params, size_t count, boo
         term_screen.saved_y = term_screen.cursor_y;
         break;
     case 'u':
-        term_screen.cursor_x = term_screen.saved_x < term_screen.cols ? term_screen.saved_x : term_screen.cols - 1;
-        term_screen.cursor_y = term_screen.saved_y < term_screen.rows ? term_screen.saved_y : term_screen.rows - 1;
+        term_screen.cursor_x =
+            term_screen.saved_x < term_screen.cols ? term_screen.saved_x : term_screen.cols - 1;
+        term_screen.cursor_y =
+            term_screen.saved_y < term_screen.rows ? term_screen.saved_y : term_screen.rows - 1;
         break;
     case 'h':
         if (private_mode && ansi_param(params, count, 0, 0) == 25)
@@ -281,6 +383,8 @@ static void ansi_on_csi(void* ctx, char op, const int* params, size_t count, boo
     default:
         break;
     }
+
+    mark_cursor_move(old_x, old_y);
 }
 
 static const ansi_callbacks_t term_ansi_callbacks = {
@@ -340,9 +444,12 @@ bool term_screen_init(u32 width, u32 height, u32* pixels, size_t pixels_count) {
     term_screen.saved_x = 0;
     term_screen.saved_y = 0;
     term_screen.cursor_visible = true;
+    term_screen.cursor_prev_valid = false;
 
     ansi_parser_init(&term_screen.ansi);
     clear_cells();
+    clear_pixels_full();
+    mark_dirty_all();
 
     term_screen.ready = true;
     return true;
@@ -357,9 +464,12 @@ void term_screen_reset(void) {
     term_screen.saved_x = 0;
     term_screen.saved_y = 0;
     term_screen.cursor_visible = true;
+    term_screen.cursor_prev_valid = false;
 
     ansi_parser_reset(&term_screen.ansi);
     clear_cells();
+    clear_pixels_full();
+    mark_dirty_all();
 }
 
 void term_screen_feed(const u8* bytes, size_t len) {
@@ -370,27 +480,71 @@ void term_screen_feed(const u8* bytes, size_t len) {
         ansi_parser_feed(&term_screen.ansi, bytes[i], &term_ansi_callbacks, NULL);
 }
 
-void term_screen_render(void) {
+bool term_screen_render_rect(u32* x, u32* y, u32* width, u32* height) {
     if (!term_screen.ready)
-        return;
+        return false;
 
-    draw_fill_rect(term_screen.pixels, term_screen.width, term_screen.height, 0, 0, term_screen.width, term_screen.height, TERM_BG);
+    if (term_screen.cursor_prev_valid)
+        mark_dirty_cell(term_screen.cursor_prev_x, term_screen.cursor_prev_y);
 
-    for (size_t y = 0; y < term_screen.rows; y++) {
-        for (size_t x = 0; x < term_screen.cols; x++) {
-            size_t px = x * term_screen.font.width;
-            size_t py = y * term_screen.font.height;
-            draw_glyph(px, py, term_screen.cells[y][x].ch, TERM_FG, TERM_BG);
+    if (term_screen.cursor_visible && term_screen.cursor_x < term_screen.cols &&
+        term_screen.cursor_y < term_screen.rows)
+        mark_dirty_cell(term_screen.cursor_x, term_screen.cursor_y);
+
+    if (!term_screen.dirty)
+        return false;
+
+    size_t x0 = term_screen.dirty_x0;
+    size_t y0 = term_screen.dirty_y0;
+    size_t x1 = term_screen.dirty_x1;
+    size_t y1 = term_screen.dirty_y1;
+
+    for (size_t row = y0; row < y1; row++) {
+        for (size_t col = x0; col < x1; col++) {
+            size_t px = col * term_screen.font.width;
+            size_t py = row * term_screen.font.height;
+            draw_glyph(px, py, term_screen.cells[row][col].ch, TERM_FG, TERM_BG);
         }
     }
 
-    if (term_screen.cursor_visible && term_screen.cursor_x < term_screen.cols && term_screen.cursor_y < term_screen.rows) {
+    if (term_screen.cursor_visible && term_screen.cursor_x < term_screen.cols &&
+        term_screen.cursor_y < term_screen.rows) {
         size_t px = term_screen.cursor_x * term_screen.font.width;
         size_t py = term_screen.cursor_y * term_screen.font.height;
 
-        draw_fill_rect(term_screen.pixels, term_screen.width, term_screen.height, (i32)px, (i32)py, term_screen.font.width, term_screen.font.height, TERM_FG);
+        draw_fill_rect(
+            term_screen.pixels,
+            term_screen.width,
+            term_screen.height,
+            (i32)px,
+            (i32)py,
+            term_screen.font.width,
+            term_screen.font.height,
+            TERM_FG
+        );
         draw_glyph(px, py, term_screen.cells[term_screen.cursor_y][term_screen.cursor_x].ch, TERM_BG, TERM_FG);
+        term_screen.cursor_prev_x = term_screen.cursor_x;
+        term_screen.cursor_prev_y = term_screen.cursor_y;
+        term_screen.cursor_prev_valid = true;
+    } else {
+        term_screen.cursor_prev_valid = false;
     }
+
+    term_screen.dirty = false;
+
+    if (x)
+        *x = (u32)(x0 * term_screen.font.width);
+
+    if (y)
+        *y = (u32)(y0 * term_screen.font.height);
+
+    if (width)
+        *width = (u32)((x1 - x0) * term_screen.font.width);
+
+    if (height)
+        *height = (u32)((y1 - y0) * term_screen.font.height);
+
+    return true;
 }
 
 size_t term_screen_cols(void) {

@@ -267,8 +267,8 @@ void pty_init(void) {
     for (size_t i = 0; i < PTY_COUNT; i++) {
         pty_t* pty = &ptys[i];
 
-        queue_init(&pty->master_rx);
-        queue_init(&pty->slave_rx);
+        _queue_init(&pty->master_rx);
+        _queue_init(&pty->slave_rx);
         _reset_state(pty);
         pty->allocated = false;
     }
@@ -446,12 +446,12 @@ ssize_t pty_ioctl_handle(const pty_handle_t* handle, u64 request, void* args) {
 short pty_poll_handle(const pty_handle_t* handle, short events, u32 flags) {
     (void)flags;
 
-    pty_t* pty = handle_pty(handle);
+    pty_t* pty = _handle_pty(handle);
     if (!pty)
         return POLLNVAL;
 
-    pty_queue_t* rx = handle_rx_queue(pty, handle);
-    pty_queue_t* tx = handle_tx_queue(pty, handle);
+    pty_queue_t* rx = _handle_rx_queue(pty, handle);
+    pty_queue_t* tx = _handle_tx_queue(pty, handle);
 
     if (!rx || !tx)
         return POLLNVAL;

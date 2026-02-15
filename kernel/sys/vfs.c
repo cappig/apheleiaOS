@@ -249,7 +249,7 @@ void vfs_destroy_interface(vfs_interface_t* interface) {
 }
 
 
-bool vfs_validate_name(const char* name) {
+bool _validate_name(const char* name) {
     if (!name || !name[0])
         return false;
 
@@ -317,7 +317,10 @@ vfs_node_t* vfs_lookup_from(vfs_node_t* from, const char* path) {
 
         ll_foreach(child, node->children) {
             tree_node_t* tnode = child->data;
-            vfs_node_t* vnode = tnode->data;
+            vfs_node_t* vnode = tnode ? tnode->data : NULL;
+
+            if (!vnode || !vnode->name)
+                continue;
 
             if (!strcmp(vnode->name, pos)) {
                 found = true;
@@ -393,7 +396,7 @@ bool vfs_access(vfs_node_t* vnode, uid_t uid, gid_t gid, int mode) {
     if (!uid)
         return true;
 
-    vnode = vfs_resolve_link(vnode);
+    vnode = _resolve_link(vnode);
 
     if (!vnode)
         return false;
@@ -475,7 +478,7 @@ bool vfs_chmod(vfs_node_t* node, mode_t mode) {
     node->mode = desired;
 
     if (!node->fs)
-        node->time.created = vfs_time_now();
+        node->time.created = _time_now();
 
     return true;
 }
@@ -506,7 +509,7 @@ bool vfs_chown(vfs_node_t* node, uid_t uid, gid_t gid) {
     node->gid = gid;
 
     if (!node->fs)
-        node->time.created = vfs_time_now();
+        node->time.created = _time_now();
 
     return true;
 }
@@ -522,7 +525,7 @@ bool vfs_link(const char* target, const char* link_path) {
     char* dir_name = NULL;
     char* base_name = NULL;
 
-    if (!vfs_split_path(link_path, &dir_name, &base_name))
+    if (!_split_path(link_path, &dir_name, &base_name))
         return false;
 
     vfs_node_t* parent = vfs_lookup(dir_name);
@@ -537,7 +540,7 @@ bool vfs_link(const char* target, const char* link_path) {
         return false;
     }
 
-    if (!vfs_validate_name(base_name) || _find_child(parent, base_name, NULL)) {
+    if (!_validate_name(base_name) || _find_child(parent, base_name, NULL)) {
         free(base_name);
         return false;
     }
@@ -571,7 +574,7 @@ bool vfs_unlink(const char* path) {
     char* dir_name = NULL;
     char* base_name = NULL;
 
-    if (!vfs_split_path(path, &dir_name, &base_name))
+    if (!_split_path(path, &dir_name, &base_name))
         return false;
 
     vfs_node_t* parent = vfs_lookup(dir_name);
@@ -611,7 +614,7 @@ bool vfs_rmdir(const char* path) {
     char* dir_name = NULL;
     char* base_name = NULL;
 
-    if (!vfs_split_path(path, &dir_name, &base_name))
+    if (!_split_path(path, &dir_name, &base_name))
         return false;
 
     vfs_node_t* parent = vfs_lookup(dir_name);
@@ -627,7 +630,7 @@ bool vfs_rmdir(const char* path) {
     }
 
     tree_node_t* child_tnode = NULL;
-    vfs_node_t* child = vfs_find_child(parent, base_name, &child_tnode);
+    vfs_node_t* child = _find_child(parent, base_name, &child_tnode);
     free(base_name);
 
     if (!child || !child_tnode)
@@ -644,7 +647,7 @@ bool vfs_rmdir(const char* path) {
             return false;
     }
 
-    return vfs_remove_child(parent, child);
+    return _remove_child(parent, child);
 }
 
 bool vfs_rename(const char* old_path, const char* new_path) {
@@ -656,10 +659,10 @@ bool vfs_rename(const char* old_path, const char* new_path) {
     char* new_dir = NULL;
     char* new_base = NULL;
 
-    if (!vfs_split_path(old_path, &old_dir, &old_base))
+    if (!_split_path(old_path, &old_dir, &old_base))
         return false;
 
-    if (!vfs_split_path(new_path, &new_dir, &new_base)) {
+    if (!_split_path(new_path, &new_dir, &new_base)) {
         free(old_dir);
         free(old_base);
         return false;
@@ -691,7 +694,7 @@ bool vfs_rename(const char* old_path, const char* new_path) {
         return false;
     }
 
-    if (!vfs_validate_name(new_base) || _find_child(new_parent, new_base, NULL)) {
+    if (!_validate_name(new_base) || _find_child(new_parent, new_base, NULL)) {
         free(old_base);
         free(new_base);
         return false;
@@ -699,16 +702,18 @@ bool vfs_rename(const char* old_path, const char* new_path) {
 
     tree_remove_child(old_parent->tree_entry, child_tnode);
 
-    if (child->name)
-        free(child->name);
-
-    child->name = vfs_strdup(new_base);
+    char* new_name = _strdup(new_base);
 
     free(old_base);
     free(new_base);
 
-    if (!child->name)
+    if (!new_name) {
+        tree_insert_child(old_parent->tree_entry, child_tnode);
         return false;
+    }
+
+    free(child->name);
+    child->name = new_name;
 
     tree_insert_child(new_parent->tree_entry, child_tnode);
 
@@ -724,7 +729,7 @@ bool vfs_insert_child(vfs_node_t* parent, vfs_node_t* child) {
         return false;
     }
 
-    if (!vfs_validate_name(child->name)) {
+    if (!_validate_name(child->name)) {
         errno = EBADF;
         log_warn("vfs: invalid child name");
         return false;
@@ -866,7 +871,7 @@ bool vfs_unmount(vfs_node_t* mount, bool destroy_tree) {
 static void _dump_recursive(tree_node_t* parent, size_t depth) {
     vfs_node_t* vnode_parent = parent->data;
 
-    if (VFS_IS_LINK(vnode_parent->type))
+    if (VFS_IS_LINK(vnode_parent->type) && vnode_parent->link)
         parent = vnode_parent->link->tree_entry;
 
     ll_foreach(node, parent->children) {
@@ -898,7 +903,7 @@ ssize_t vfs_read(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t 
     ssize_t rc = node->interface->read(node, buf, offset, len, flags);
 
     if (rc >= 0 && !node->fs)
-        node->time.accessed = vfs_time_now();
+        node->time.accessed = _time_now();
 
     return rc;
 }
@@ -913,7 +918,7 @@ ssize_t vfs_write(vfs_node_t* node, void* buf, size_t offset, size_t len, size_t
 
     ssize_t rc = node->interface->write(node, buf, offset, len, flags);
     if (rc >= 0 && !node->fs) {
-        time_t now = vfs_time_now();
+        time_t now = _time_now();
 
         node->time.accessed = now;
         node->time.modified = now;
@@ -932,7 +937,7 @@ ssize_t vfs_truncate(vfs_node_t* node, size_t len) {
 
     ssize_t rc = node->interface->truncate(node, len);
     if (rc >= 0 && !node->fs) {
-        time_t now = vfs_time_now();
+        time_t now = _time_now();
 
         node->time.modified = now;
         node->time.created = now;
@@ -969,7 +974,7 @@ ssize_t vfs_ioctl(vfs_node_t* node, u64 request, void* args) {
 }
 
 short vfs_poll(vfs_node_t* node, short events, size_t flags) {
-    node = vfs_resolve_link(node);
+    node = _resolve_link(node);
     if (!node)
         return -ENODEV;
 

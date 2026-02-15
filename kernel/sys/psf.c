@@ -100,7 +100,7 @@ _parse_psf2_unicode(const psf_blob_t* blob, font_map_t** map, size_t* map_count,
                 continue;
             }
 
-            if (!font_map_push(map, map_count, map_capacity, cp, glyph))
+            if (!_font_map_push(map, map_count, map_capacity, cp, glyph))
                 return false;
 
             table += consumed;
@@ -131,7 +131,7 @@ _parse_psf1_unicode(const psf_blob_t* blob, font_map_t** map, size_t* map_count,
             if (code == 0xfffeU)
                 continue;
 
-            if (!font_map_push(map, map_count, map_capacity, code, glyph))
+            if (!_font_map_push(map, map_count, map_capacity, code, glyph))
                 return false;
         }
     }
@@ -202,7 +202,7 @@ bool psf_load(const char* path) {
         .first_char = 0,
     };
 
-    psf_discard();
+    _discard();
 
     loaded_blob = blob;
     loaded_blob_size = (size_t)node->size;

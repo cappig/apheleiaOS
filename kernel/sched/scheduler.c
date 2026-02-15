@@ -9,6 +9,7 @@
 #include <base/units.h>
 #include <errno.h>
 #include <log/log.h>
+#include <sched/signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,8 +43,11 @@ static sched_cpu_state_t sched_cpu_state[MAX_CORES] = {0};
 static volatile int sched_lock = 0;
 static size_t sched_lock_owner = (size_t)-1;
 static size_t sched_lock_depth = 0;
+static sched_thread_t** sleep_heap = NULL;
+static size_t sleep_heap_count = 0;
+static size_t sleep_heap_capacity = 0;
 
-static size_t _sched_cpu_id(void) {
+static size_t sched_cpu_id(void) {
     cpu_core_t* core = cpu_current();
 
     if (!core || core->id >= MAX_CORES)
@@ -52,13 +56,13 @@ static size_t _sched_cpu_id(void) {
     return core->id;
 }
 
-static sched_cpu_state_t* _sched_local(void) {
-    return &sched_cpu_state[_sched_cpu_id()];
+static sched_cpu_state_t* sched_local(void) {
+    return &sched_cpu_state[sched_cpu_id()];
 }
 
-static unsigned long _sched_lock_save(void) {
+static unsigned long sched_lock_save(void) {
     unsigned long flags = arch_irq_save();
-    size_t cpu_id = _sched_cpu_id();
+    size_t cpu_id = sched_cpu_id();
 
     if (sched_lock_owner == cpu_id) {
         sched_lock_depth++;
@@ -76,8 +80,8 @@ static unsigned long _sched_lock_save(void) {
     return flags;
 }
 
-static void _sched_lock_restore(unsigned long flags) {
-    size_t cpu_id = _sched_cpu_id();
+static void sched_lock_restore(unsigned long flags) {
+    size_t cpu_id = sched_cpu_id();
 
     if (sched_lock_owner == cpu_id) {
         if (sched_lock_depth > 1) {
@@ -92,56 +96,192 @@ static void _sched_lock_restore(unsigned long flags) {
     arch_irq_restore(flags);
 }
 
-static pid_t _sched_next_pid(void) {
-    unsigned long flags = _sched_lock_save();
+static bool sleep_heap_less(size_t left, size_t right) {
+    sched_thread_t* a = sleep_heap[left];
+    sched_thread_t* b = sleep_heap[right];
+
+    if (!a)
+        return false;
+
+    if (!b)
+        return true;
+
+    if (a->wake_tick != b->wake_tick)
+        return a->wake_tick < b->wake_tick;
+
+    return a->pid < b->pid;
+}
+
+static void sleep_heap_swap(size_t left, size_t right) {
+    sched_thread_t* tmp = sleep_heap[left];
+    sleep_heap[left] = sleep_heap[right];
+    sleep_heap[right] = tmp;
+
+    if (sleep_heap[left])
+        sleep_heap[left]->sleep_index = left;
+
+    if (sleep_heap[right])
+        sleep_heap[right]->sleep_index = right;
+}
+
+static void sleep_heap_sift_up(size_t index) {
+    while (index > 0) {
+        size_t parent = (index - 1) / 2;
+        if (!sleep_heap_less(index, parent))
+            break;
+
+        sleep_heap_swap(index, parent);
+        index = parent;
+    }
+}
+
+static void sleep_heap_sift_down(size_t index) {
+    for (;;) {
+        size_t left = index * 2 + 1;
+        size_t right = left + 1;
+        size_t best = index;
+
+        if (left < sleep_heap_count && sleep_heap_less(left, best))
+            best = left;
+
+        if (right < sleep_heap_count && sleep_heap_less(right, best))
+            best = right;
+
+        if (best == index)
+            return;
+
+        sleep_heap_swap(index, best);
+        index = best;
+    }
+}
+
+static bool sleep_heap_reserve(size_t needed) {
+    if (sleep_heap_capacity >= needed)
+        return true;
+
+    size_t new_capacity = sleep_heap_capacity ? sleep_heap_capacity * 2 : 64;
+    while (new_capacity < needed)
+        new_capacity *= 2;
+
+    sched_thread_t** resized = malloc(new_capacity * sizeof(sched_thread_t*));
+    if (!resized)
+        return false;
+
+    if (sleep_heap && sleep_heap_count)
+        memcpy(resized, sleep_heap, sleep_heap_count * sizeof(sched_thread_t*));
+
+    for (size_t i = sleep_heap_count; i < new_capacity; i++)
+        resized[i] = NULL;
+
+    free(sleep_heap);
+    sleep_heap = resized;
+    sleep_heap_capacity = new_capacity;
+    return true;
+}
+
+static bool sleep_heap_insert(sched_thread_t* thread) {
+    if (!thread || thread->sleep_queued)
+        return true;
+
+    if (!sleep_heap_reserve(sleep_heap_count + 1))
+        return false;
+
+    size_t index = sleep_heap_count++;
+    sleep_heap[index] = thread;
+    thread->sleep_queued = true;
+    thread->sleep_index = index;
+    sleep_heap_sift_up(index);
+    return true;
+}
+
+static void sleep_heap_remove_at(size_t index) {
+    if (index >= sleep_heap_count)
+        return;
+
+    sched_thread_t* removed = sleep_heap[index];
+    sleep_heap_count--;
+
+    if (index != sleep_heap_count) {
+        sleep_heap[index] = sleep_heap[sleep_heap_count];
+        if (sleep_heap[index])
+            sleep_heap[index]->sleep_index = index;
+
+        sleep_heap_sift_down(index);
+        sleep_heap_sift_up(index);
+    }
+
+    sleep_heap[sleep_heap_count] = NULL;
+
+    if (removed) {
+        removed->sleep_queued = false;
+        removed->sleep_index = 0;
+    }
+}
+
+static void sleep_heap_remove(sched_thread_t* thread) {
+    if (!thread || !thread->sleep_queued)
+        return;
+
+    sleep_heap_remove_at(thread->sleep_index);
+}
+
+static sched_thread_t* sleep_heap_top(void) {
+    if (!sleep_heap_count)
+        return NULL;
+
+    return sleep_heap[0];
+}
+
+static pid_t sched_next_pid(void) {
+    unsigned long flags = sched_lock_save();
     pid_t pid = next_pid++;
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
     return pid;
 }
 
-static inline sched_thread_t* _sched_local_current(void) {
-    return _sched_local()->current;
+static inline sched_thread_t* sched_local_current(void) {
+    return sched_local()->current;
 }
 
-static inline void _sched_local_set_current(sched_thread_t* thread) {
-    _sched_local()->current = thread;
+static inline void sched_local_set_current(sched_thread_t* thread) {
+    sched_local()->current = thread;
 }
 
-static inline sched_thread_t* _sched_local_idle(void) {
-    return _sched_local()->idle_thread;
+static inline sched_thread_t* sched_local_idle(void) {
+    return sched_local()->idle_thread;
 }
 
-static inline void _sched_local_set_idle(sched_thread_t* thread) {
-    _sched_local()->idle_thread = thread;
+static inline void sched_local_set_idle(sched_thread_t* thread) {
+    sched_local()->idle_thread = thread;
 }
 
-static inline size_t _sched_local_ticks_left(void) {
-    return _sched_local()->ticks_left;
+static inline size_t sched_local_ticks_left(void) {
+    return sched_local()->ticks_left;
 }
 
-static inline void _sched_local_set_ticks_left(size_t ticks) {
-    _sched_local()->ticks_left = ticks;
+static inline void sched_local_set_ticks_left(size_t ticks) {
+    sched_local()->ticks_left = ticks;
 }
 
-static inline void _sched_local_dec_ticks_left(void) {
-    if (_sched_local()->ticks_left > 0)
-        _sched_local()->ticks_left--;
+static inline void sched_local_dec_ticks_left(void) {
+    if (sched_local()->ticks_left > 0)
+        sched_local()->ticks_left--;
 }
 
-static inline void _sched_local_inc_preempt_depth(void) {
-    _sched_local()->preempt_depth++;
+static inline void sched_local_inc_preempt_depth(void) {
+    sched_local()->preempt_depth++;
 }
 
-static inline void _sched_local_dec_preempt_depth(void) {
-    if (_sched_local()->preempt_depth > 0)
-        _sched_local()->preempt_depth--;
+static inline void sched_local_dec_preempt_depth(void) {
+    if (sched_local()->preempt_depth > 0)
+        sched_local()->preempt_depth--;
 }
 
-static inline bool _sched_local_preempt_disabled(void) {
-    return _sched_local()->preempt_depth != 0;
+static inline bool sched_local_preempt_disabled(void) {
+    return sched_local()->preempt_depth != 0;
 }
 
-static proc_state_t _sched_state_to_proc(thread_state_t state) {
+static proc_state_t sched_state_to_proc(thread_state_t state) {
     switch (state) {
     case THREAD_READY:
         return PROC_STATE_READY;
@@ -158,24 +298,24 @@ static proc_state_t _sched_state_to_proc(thread_state_t state) {
     }
 }
 
-static void _add_all_thread(sched_thread_t* thread) {
+static void add_all_thread(sched_thread_t* thread) {
     if (!thread || !all_list)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     if (thread->in_all_list) {
-        _sched_lock_restore(flags);
+        sched_lock_restore(flags);
         return;
     }
 
     thread->all_node.data = thread;
     list_append(all_list, &thread->all_node);
     thread->in_all_list = true;
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
-static void _sched_fd_reset(sched_fd_t* fd) {
+static void sched_fd_reset(sched_fd_t* fd) {
     if (!fd)
         return;
 
@@ -188,7 +328,7 @@ static void _sched_fd_reset(sched_fd_t* fd) {
     fd->flags = 0;
 }
 
-static void _pipe_lock(sched_pipe_t* pipe) {
+static void pipe_lock(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
@@ -196,7 +336,7 @@ static void _pipe_lock(sched_pipe_t* pipe) {
         arch_cpu_wait();
 }
 
-static void _pipe_unlock(sched_pipe_t* pipe) {
+static void pipe_unlock(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
@@ -233,15 +373,15 @@ sched_pipe_t* sched_pipe_create(size_t capacity) {
     return pipe;
 }
 
-static void _sched_pipe_try_destroy(sched_pipe_t* pipe) {
+static void sched_pipe_try_destroy(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
-    _pipe_lock(pipe);
+    pipe_lock(pipe);
     bool in_use = pipe->readers || pipe->writers || pipe->destroying;
     if (!in_use)
         pipe->destroying = true;
-    _pipe_unlock(pipe);
+    pipe_unlock(pipe);
 
     if (in_use)
         return;
@@ -261,65 +401,59 @@ void sched_pipe_acquire_reader(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
-    _pipe_lock(pipe);
+    pipe_lock(pipe);
     pipe->readers++;
-    _pipe_unlock(pipe);
+    pipe_unlock(pipe);
 }
 
 void sched_pipe_acquire_writer(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
-    _pipe_lock(pipe);
+    pipe_lock(pipe);
     pipe->writers++;
-    _pipe_unlock(pipe);
+    pipe_unlock(pipe);
+}
+
+static void _pipe_release(sched_pipe_t* pipe, bool is_reader) {
+    if (!pipe)
+        return;
+
+    pipe_lock(pipe);
+
+    if (is_reader) {
+        if (pipe->readers > 0)
+            pipe->readers--;
+    } else {
+        if (pipe->writers > 0)
+            pipe->writers--;
+    }
+
+    bool destroy = !pipe->readers && !pipe->writers;
+
+    // Wake waiters while still holding the lock so the pipe can't be
+    // freed by a concurrent release on another CPU before the wake
+    // completes.
+    if (pipe->read_wait_queue)
+        sched_wake_all(pipe->read_wait_queue);
+    if (pipe->write_wait_queue)
+        sched_wake_all(pipe->write_wait_queue);
+
+    pipe_unlock(pipe);
+
+    if (destroy)
+        sched_pipe_try_destroy(pipe);
 }
 
 void sched_pipe_release_reader(sched_pipe_t* pipe) {
-    if (!pipe)
-        return;
-
-    bool destroy = false;
-    _pipe_lock(pipe);
-
-    if (pipe->readers > 0)
-        pipe->readers--;
-
-    destroy = !pipe->readers && !pipe->writers;
-    _pipe_unlock(pipe);
-
-    if (pipe->write_wait_queue)
-        sched_wake_all(pipe->write_wait_queue);
-    if (pipe->read_wait_queue)
-        sched_wake_all(pipe->read_wait_queue);
-
-    if (destroy)
-        _sched_pipe_try_destroy(pipe);
+    _pipe_release(pipe, true);
 }
 
 void sched_pipe_release_writer(sched_pipe_t* pipe) {
-    if (!pipe)
-        return;
-
-    bool destroy = false;
-    _pipe_lock(pipe);
-
-    if (pipe->writers > 0)
-        pipe->writers--;
-
-    destroy = !pipe->readers && !pipe->writers;
-    _pipe_unlock(pipe);
-
-    if (pipe->read_wait_queue)
-        sched_wake_all(pipe->read_wait_queue);
-    if (pipe->write_wait_queue)
-        sched_wake_all(pipe->write_wait_queue);
-
-    if (destroy)
-        _sched_pipe_try_destroy(pipe);
+    _pipe_release(pipe, false);
 }
 
-static void _sched_fd_retain(const sched_fd_t* fd) {
+static void sched_fd_retain(const sched_fd_t* fd) {
     if (!fd)
         return;
 
@@ -332,7 +466,7 @@ static void _sched_fd_retain(const sched_fd_t* fd) {
         sched_pipe_acquire_writer(fd->pipe);
 }
 
-static void _sched_fd_release_value(sched_fd_t* fd) {
+static void sched_fd_release_value(sched_fd_t* fd) {
     if (!fd)
         return;
 
@@ -344,7 +478,7 @@ static void _sched_fd_release_value(sched_fd_t* fd) {
     else if (fd->kind == SCHED_FD_PIPE_WRITE)
         sched_pipe_release_writer(fd->pipe);
 
-    _sched_fd_reset(fd);
+    sched_fd_reset(fd);
 }
 
 int sched_fd_alloc(sched_thread_t* thread, const sched_fd_t* fd, int min_fd) {
@@ -362,7 +496,7 @@ int sched_fd_alloc(sched_thread_t* thread, const sched_fd_t* fd, int min_fd) {
 
         thread->fd_used[slot] = true;
         thread->fds[slot] = *fd;
-        _sched_fd_retain(&thread->fds[slot]);
+        sched_fd_retain(&thread->fds[slot]);
         return slot;
     }
 
@@ -424,7 +558,7 @@ bool sched_fd_clone_table(sched_thread_t* dst, const sched_thread_t* src) {
 
         dst->fd_used[fd] = true;
         dst->fds[fd] = src->fds[fd];
-        _sched_fd_retain(&dst->fds[fd]);
+        sched_fd_retain(&dst->fds[fd]);
     }
 
     return true;
@@ -442,7 +576,7 @@ void sched_fd_close_all(sched_thread_t* thread) {
     }
 }
 
-static void _sched_init_thread_name(sched_thread_t* thread, const char* name) {
+static void sched_init_thread_name(sched_thread_t* thread, const char* name) {
     if (!thread) {
         return;
     }
@@ -456,42 +590,42 @@ static void _sched_init_thread_name(sched_thread_t* thread, const char* name) {
     thread->name[len] = '\0';
 }
 
-static void _remove_all_thread(sched_thread_t* thread) {
+static void remove_all_thread(sched_thread_t* thread) {
     if (!thread || !all_list)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     if (!thread->in_all_list) {
-        _sched_lock_restore(flags);
+        sched_lock_restore(flags);
         return;
     }
 
     list_remove(all_list, &thread->all_node);
     thread->in_all_list = false;
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
-static sched_thread_t* _find_thread_by_pid(pid_t pid) {
+static sched_thread_t* find_thread_by_pid(pid_t pid) {
     if (!all_list)
         return NULL;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     ll_foreach(node, all_list) {
         sched_thread_t* thread = node->data;
 
         if (thread && thread->pid == pid) {
-            _sched_lock_restore(flags);
+            sched_lock_restore(flags);
             return thread;
         }
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
     return NULL;
 }
 
-static NORETURN void _thread_trampoline(void) {
+static NORETURN void thread_trampoline(void) {
     sched_thread_t* thread = sched_current();
 
     if (thread && thread->entry)
@@ -544,7 +678,7 @@ void sched_clear_user_regions(sched_thread_t* thread) {
     thread->regions = NULL;
 }
 
-static sched_user_region_t* _find_user_region(sched_thread_t* thread, uintptr_t addr) {
+static sched_user_region_t* find_user_region(sched_thread_t* thread, uintptr_t addr) {
     if (!thread)
         return NULL;
 
@@ -562,7 +696,7 @@ static sched_user_region_t* _find_user_region(sched_thread_t* thread, uintptr_t 
     return NULL;
 }
 
-static void _mark_cow_range(sched_thread_t* thread, sched_user_region_t* region) {
+static void mark_cow_range(sched_thread_t* thread, sched_user_region_t* region) {
     if (!thread || !region || !region->pages)
         return;
 
@@ -586,7 +720,7 @@ static void _mark_cow_range(sched_thread_t* thread, sched_user_region_t* region)
     }
 }
 
-static bool _split_region_for_page(
+static bool split_region_for_page(
     sched_user_region_t* region,
     size_t page_index,
     uintptr_t new_page_paddr,
@@ -708,31 +842,34 @@ bool sched_handle_cow_fault(sched_thread_t* thread, uintptr_t addr, bool write) 
     if (refs > 1) {
         uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(1);
 
-        if (!arch_phys_copy(new_paddr, old_paddr, PAGE_4KIB))
+        if (!arch_phys_copy(new_paddr, old_paddr, PAGE_4KIB)) {
+            arch_free_frames((void*)new_paddr, 1);
             return false;
+        }
+
+        if (!split_region_for_page(region, (page_addr - region->vaddr) / PAGE_4KIB, new_paddr, new_flags)) {
+            arch_free_frames((void*)new_paddr, 1);
+            return false;
+        }
 
         *entry = 0;
         arch_page_set_paddr(entry, new_paddr);
         *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
-
-        if (!split_region_for_page(region, (page_addr - region->vaddr) / PAGE_4KIB, new_paddr, new_flags))
-            return false;
-
         arch_free_frames((void*)(uintptr_t)old_paddr, 1);
     } else {
+        if (!split_region_for_page(region, (page_addr - region->vaddr) / PAGE_4KIB, (uintptr_t)old_paddr, new_flags))
+            return false;
+
         *entry = 0;
         arch_page_set_paddr(entry, old_paddr);
         *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
-
-        if (!split_region_for_page(region, (page_addr - region->vaddr) / PAGE_4KIB, (uintptr_t)old_paddr, new_flags))
-            return false;
     }
 
     arch_tlb_flush(page_addr);
     return true;
 }
 
-static void _destroy_thread(sched_thread_t* thread) {
+static void destroy_thread(sched_thread_t* thread) {
     if (!thread)
         return;
 
@@ -748,23 +885,23 @@ static void _destroy_thread(sched_thread_t* thread) {
     if (thread->stack)
         free(thread->stack);
 
-    _remove_all_thread(thread);
+    remove_all_thread(thread);
 
     free(thread);
 }
 
-static void _sched_reap(void) {
+static void sched_reap(void) {
     if (!zombie_list)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
     list_node_t* node = zombie_list->head;
 
     while (node) {
         list_node_t* next = node->next;
         sched_thread_t* thread = node->data;
 
-        if (thread && thread != _sched_local_current() && thread != _sched_local_idle()) {
+        if (thread && thread != sched_local_current() && thread != sched_local_idle()) {
             if (thread->user_thread) {
                 node = next;
                 continue;
@@ -773,28 +910,28 @@ static void _sched_reap(void) {
             list_remove(zombie_list, node);
             thread->in_zombie_list = false;
 
-            _destroy_thread(thread);
+            destroy_thread(thread);
         }
 
         node = next;
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
-static void _idle_entry(UNUSED void* arg) {
+static void idle_entry(UNUSED void* arg) {
     for (;;) {
-        _sched_reap();
+        sched_reap();
         arch_cpu_wait();
     }
 }
 
-static uintptr_t _build_initial_stack(sched_thread_t* thread) {
+static uintptr_t build_initial_stack(sched_thread_t* thread) {
     return arch_build_kernel_stack(thread, (uintptr_t)thread_trampoline);
 }
 
 static uintptr_t
-_build_user_stack(sched_thread_t* thread, uintptr_t entry, uintptr_t user_stack_top) {
+build_user_stack(sched_thread_t* thread, uintptr_t entry, uintptr_t user_stack_top) {
     uintptr_t sp = (uintptr_t)thread->stack + thread->stack_size;
     sp = ALIGN_DOWN(sp, 16);
 
@@ -808,7 +945,7 @@ _build_user_stack(sched_thread_t* thread, uintptr_t entry, uintptr_t user_stack_
     return sp;
 }
 
-static uintptr_t _build_fork_stack(sched_thread_t* thread, arch_int_state_t* state) {
+static uintptr_t build_fork_stack(sched_thread_t* thread, arch_int_state_t* state) {
     if (!thread || !state)
         return 0;
 
@@ -829,14 +966,14 @@ void sched_prepare_user_thread(sched_thread_t* thread, uintptr_t entry, uintptr_
     if (!thread)
         return;
 
-    thread->context = _build_user_stack(thread, entry, user_stack_top);
+    thread->context = build_user_stack(thread, entry, user_stack_top);
 }
 
-static void _enqueue_thread(sched_thread_t* thread) {
-    if (!thread || thread == _sched_local_idle())
+static void enqueue_thread(sched_thread_t* thread) {
+    if (!thread || thread == sched_local_idle())
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     if (thread->in_run_queue)
         goto out;
@@ -846,53 +983,57 @@ static void _enqueue_thread(sched_thread_t* thread) {
     thread->in_run_queue = true;
 
 out:
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
-static void _run_queue_remove(sched_thread_t* thread) {
+static void run_queue_remove(sched_thread_t* thread) {
     if (!thread || !thread->in_run_queue || !run_queue)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     if (thread->in_run_queue && run_queue) {
         list_remove(run_queue, &thread->run_node);
         thread->in_run_queue = false;
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
-static void _sched_wake_sleepers(u64 now) {
-    if (!all_list)
-        return;
+static void sched_wake_sleepers(u64 now) {
+    unsigned long flags = sched_lock_save();
 
-    unsigned long flags = _sched_lock_save();
+    for (;;) {
+        sched_thread_t* thread = sleep_heap_top();
+        if (!thread) {
+            break;
+        }
 
-    ll_foreach(node, all_list) {
-        sched_thread_t* thread = node->data;
-        if (!thread || thread->state != THREAD_SLEEPING)
+        if (!thread->sleep_queued) {
+            sleep_heap_remove_at(0);
             continue;
+        }
 
-        if (!thread->wake_tick)
-            continue;
+        if (!thread->wake_tick || thread->wake_tick > now)
+            break;
 
-        if (thread->wake_tick > now)
-            continue;
-
+        sleep_heap_remove(thread);
         thread->wake_tick = 0;
-        thread->state = THREAD_READY;
-        _enqueue_thread(thread);
+
+        if (thread->state == THREAD_SLEEPING) {
+            thread->state = THREAD_READY;
+            enqueue_thread(thread);
+        }
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
-static void _wait_queue_remove(sched_thread_t* thread) {
+static void wait_queue_remove(sched_thread_t* thread) {
     if (!thread || !thread->in_wait_queue || !thread->blocked_on || !thread->blocked_on->list)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     if (thread->in_wait_queue && thread->blocked_on && thread->blocked_on->list) {
         list_remove(thread->blocked_on->list, &thread->wait_node);
@@ -900,14 +1041,14 @@ static void _wait_queue_remove(sched_thread_t* thread) {
         thread->blocked_on = NULL;
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
-static void _wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread) {
+static void wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread) {
     if (!queue || !queue->list || !thread || thread->in_wait_queue)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     if (thread->in_wait_queue || !queue || !queue->list || !thread)
         goto out;
@@ -918,22 +1059,23 @@ static void _wait_queue_append(sched_wait_queue_t* queue, sched_thread_t* thread
     thread->blocked_on = queue;
 
 out:
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
-static void _sleep_current_on_queue(sched_wait_queue_t* queue) {
+static void sleep_current_on_queue(sched_wait_queue_t* queue) {
     sched_thread_t* self = sched_local_current();
 
     if (!self || !queue)
         return;
 
     run_queue_remove(self);
+    sleep_heap_remove(self);
     self->wake_tick = 0;
     self->state = THREAD_SLEEPING;
     wait_queue_append(queue, self);
 }
 
-static void _wait_current_wakeup(void) {
+static void wait_current_wakeup(void) {
     sched_thread_t* self = sched_local_current();
 
     if (!self)
@@ -949,18 +1091,19 @@ void sched_discard_thread(sched_thread_t* thread) {
     if (!thread)
         return;
 
-    _run_queue_remove(thread);
+    run_queue_remove(thread);
     wait_queue_remove(thread);
+    sleep_heap_remove(thread);
 
     if (thread->in_zombie_list && zombie_list) {
-        unsigned long flags = _sched_lock_save();
+        unsigned long flags = sched_lock_save();
 
         if (thread->in_zombie_list) {
             list_remove(zombie_list, &thread->zombie_node);
             thread->in_zombie_list = false;
         }
 
-        _sched_lock_restore(flags);
+        sched_lock_restore(flags);
     }
 
     destroy_thread(thread);
@@ -970,41 +1113,44 @@ void sched_make_runnable(sched_thread_t* thread) {
     if (!thread)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     wait_queue_remove(thread);
+    sleep_heap_remove(thread);
     thread->wake_tick = 0;
     thread->state = THREAD_READY;
-    _enqueue_thread(thread);
+    enqueue_thread(thread);
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
 void sched_unblock_thread(sched_thread_t* thread) {
     if (!thread)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     wait_queue_remove(thread);
+    sleep_heap_remove(thread);
 
     if (thread->state == THREAD_SLEEPING || thread->state == THREAD_READY) {
         thread->wake_tick = 0;
         thread->state = THREAD_READY;
-        _enqueue_thread(thread);
+        enqueue_thread(thread);
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
 void sched_stop_thread(sched_thread_t* thread, int signum) {
     if (!thread || thread->state == THREAD_ZOMBIE || thread->state == THREAD_STOPPED)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
-    _run_queue_remove(thread);
-    _wait_queue_remove(thread);
+    run_queue_remove(thread);
+    wait_queue_remove(thread);
+    sleep_heap_remove(thread);
 
     thread->wake_tick = 0;
     thread->state = THREAD_STOPPED;
@@ -1012,7 +1158,7 @@ void sched_stop_thread(sched_thread_t* thread, int signum) {
     thread->stop_reported = false;
 
     if (thread->user_thread) {
-        sched_thread_t* parent = _find_thread_by_pid(thread->ppid);
+        sched_thread_t* parent = find_thread_by_pid(thread->ppid);
 
         if (parent) {
             sched_wake_one(&parent->wait_queue);
@@ -1020,9 +1166,9 @@ void sched_stop_thread(sched_thread_t* thread, int signum) {
         }
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 
-    if (thread == _sched_local_current() && sched_running)
+    if (thread == sched_local_current() && sched_running)
         sched_yield();
 }
 
@@ -1030,50 +1176,50 @@ void sched_continue_thread(sched_thread_t* thread) {
     if (!thread || thread->state != THREAD_STOPPED)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     thread->state = THREAD_READY;
     thread->stop_signal = 0;
     thread->stop_reported = false;
-    _enqueue_thread(thread);
+    enqueue_thread(thread);
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
-static sched_thread_t* _dequeue_thread(void) {
-    unsigned long flags = _sched_lock_save();
+static sched_thread_t* dequeue_thread(void) {
+    unsigned long flags = sched_lock_save();
 
     list_node_t* node = list_pop_front(run_queue);
     if (!node) {
-        _sched_lock_restore(flags);
+        sched_lock_restore(flags);
         return NULL;
     }
 
     sched_thread_t* thread = node->data;
     if (!thread) {
-        _sched_lock_restore(flags);
+        sched_lock_restore(flags);
         return NULL;
     }
 
     thread->in_run_queue = false;
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 
     return thread;
 }
 
-static sched_thread_t* _pick_next_thread(void) {
-    sched_thread_t* next = _dequeue_thread();
+static sched_thread_t* pick_next_thread(void) {
+    sched_thread_t* next = dequeue_thread();
     if (next)
         return next;
 
-    if (_sched_local_idle())
-        return _sched_local_idle();
+    if (sched_local_idle())
+        return sched_local_idle();
 
-    return _sched_local_current();
+    return sched_local_current();
 }
 
 static sched_thread_t*
-_create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, bool user_thread) {
+create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, bool user_thread) {
     sched_thread_t* thread = calloc(1, sizeof(*thread));
     if (!thread)
         return NULL;
@@ -1084,10 +1230,10 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     thread->arg = arg;
     thread->state = THREAD_READY;
     thread->user_thread = user_thread;
-    thread->pid = _sched_next_pid();
+    thread->pid = sched_next_pid();
     thread->ppid = 0;
 
-    sched_thread_t* parent = _sched_local_current();
+    sched_thread_t* parent = sched_local_current();
 
     if (parent && parent->pid != 0) {
         thread->pgid = parent->pgid;
@@ -1103,6 +1249,8 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     thread->stack_size = SCHED_STACK_SIZE;
     thread->stack = malloc(thread->stack_size);
     thread->tty_index = parent ? parent->tty_index : -1;
+    thread->sleep_queued = false;
+    thread->sleep_index = 0;
 
     if (!thread->stack) {
         free(thread);
@@ -1128,16 +1276,21 @@ _create_thread(const char* name, thread_entry_t entry, void* arg, bool enqueue, 
     }
 
     sched_wait_queue_init(&thread->wait_queue);
-    _add_all_thread(thread);
+    sched_signal_init_thread(thread);
+    add_all_thread(thread);
 
     if (enqueue)
-        _enqueue_thread(thread);
+        enqueue_thread(thread);
 
     return thread;
 }
 
 sched_thread_t* sched_current(void) {
-    return _sched_local_current();
+    return sched_local_current();
+}
+
+sched_thread_t* sched_find_thread(pid_t pid) {
+    return find_thread_by_pid(pid);
 }
 
 bool sched_process_is_child(pid_t child_pid, pid_t parent_pid) {
@@ -1252,10 +1405,10 @@ void scheduler_init(void) {
     idle->state = THREAD_RUNNING;
     idle->tty_index = TTY_NONE;
 
-    _sched_local_set_idle(idle);
-    _sched_local_set_current(idle);
+    sched_local_set_idle(idle);
+    sched_local_set_current(idle);
 
-    _sched_local_set_ticks_left(SCHED_SLICE);
+    sched_local_set_ticks_left(SCHED_SLICE);
     sched_running = false;
 }
 
@@ -1269,15 +1422,15 @@ bool sched_is_running(void) {
 }
 
 sched_thread_t* sched_create_kernel_thread(const char* name, thread_entry_t entry, void* arg) {
-    return _create_thread(name, entry, arg, true, false);
+    return create_thread(name, entry, arg, true, false);
 }
 
 sched_thread_t* sched_create_user_thread(const char* name) {
-    return _create_thread(name, NULL, NULL, false, true);
+    return create_thread(name, NULL, NULL, false, true);
 }
 
 pid_t sched_fork(arch_int_state_t* state) {
-    sched_thread_t* parent = _sched_local_current();
+    sched_thread_t* parent = sched_local_current();
 
     if (!parent || !parent->user_thread || !state)
         return -1;
@@ -1363,9 +1516,9 @@ pid_t sched_fork(arch_int_state_t* state) {
         region = region->next;
     }
 
-    child->context = _build_fork_stack(child, state);
+    child->context = build_fork_stack(child, state);
 
-    _enqueue_thread(child);
+    enqueue_thread(child);
     return child->pid;
 }
 
@@ -1374,7 +1527,7 @@ pid_t sched_wait(pid_t pid, int* status) {
 }
 
 static bool
-_waitpid_target_matches(const sched_thread_t* parent, const sched_thread_t* child, pid_t pid) {
+waitpid_target_matches(const sched_thread_t* parent, const sched_thread_t* child, pid_t pid) {
     if (!parent || !child || !child->user_thread)
         return false;
 
@@ -1394,7 +1547,7 @@ _waitpid_target_matches(const sched_thread_t* parent, const sched_thread_t* chil
 }
 
 pid_t sched_waitpid(pid_t pid, int* status, int options) {
-    sched_thread_t* self = _sched_local_current();
+    sched_thread_t* self = sched_local_current();
     if (!self || !self->user_thread)
         return -ECHILD;
 
@@ -1403,10 +1556,10 @@ pid_t sched_waitpid(pid_t pid, int* status, int options) {
         sched_thread_t* stopped = NULL;
         bool has_matching_child = false;
 
-        unsigned long flags = _sched_lock_save();
+        unsigned long flags = sched_lock_save();
 
         if (!zombie_list || !all_list) {
-            _sched_lock_restore(flags);
+            sched_lock_restore(flags);
             return -ECHILD;
         }
 
@@ -1426,10 +1579,10 @@ pid_t sched_waitpid(pid_t pid, int* status, int options) {
             list_remove(zombie_list, &found->zombie_node);
             found->in_zombie_list = false;
 
-            _sched_lock_restore(flags);
+            sched_lock_restore(flags);
 
             pid_t ret = found->pid;
-            _destroy_thread(found);
+            destroy_thread(found);
             return ret;
         }
 
@@ -1453,7 +1606,7 @@ pid_t sched_waitpid(pid_t pid, int* status, int options) {
                 stopped->stop_reported = true;
                 if (status)
                     *status = 0x7f | ((stopped->stop_signal & 0xff) << 8);
-                _sched_lock_restore(flags);
+                sched_lock_restore(flags);
                 return stopped->pid;
             }
         } else {
@@ -1467,25 +1620,25 @@ pid_t sched_waitpid(pid_t pid, int* status, int options) {
         }
 
         if (!has_matching_child) {
-            _sched_lock_restore(flags);
+            sched_lock_restore(flags);
             return -ECHILD;
         }
 
         if (options & WNOHANG) {
-            _sched_lock_restore(flags);
+            sched_lock_restore(flags);
             return 0;
         }
 
         if (!sched_running) {
-            _sched_lock_restore(flags);
+            sched_lock_restore(flags);
             return -ECHILD;
         }
 
-        _sleep_current_on_queue(&self->wait_queue);
+        sleep_current_on_queue(&self->wait_queue);
 
-        _sched_lock_restore(flags);
+        sched_lock_restore(flags);
 
-        _wait_current_wakeup();
+        wait_current_wakeup();
     }
 }
 
@@ -1508,10 +1661,10 @@ void sched_wait_queue_destroy(sched_wait_queue_t* queue) {
 }
 
 void sched_set_thread_name(sched_thread_t* thread, const char* name) {
-    _sched_init_thread_name(thread, name);
+    sched_init_thread_name(thread, name);
 }
 
-static sched_thread_t* _wait_queue_pop(sched_wait_queue_t* queue) {
+static sched_thread_t* wait_queue_pop(sched_wait_queue_t* queue) {
     if (!queue || !queue->list)
         return NULL;
 
@@ -1524,72 +1677,68 @@ static sched_thread_t* _wait_queue_pop(sched_wait_queue_t* queue) {
         return NULL;
 
     thread->in_wait_queue = false;
+    thread->blocked_on = NULL;
     return thread;
 }
 
 void sched_block(sched_wait_queue_t* queue) {
-    sched_thread_t* self = _sched_local_current();
+    sched_thread_t* self = sched_local_current();
 
     if (!sched_running || !queue || !queue->list || !self) {
         return;
     }
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
-    _sleep_current_on_queue(queue);
+    sleep_current_on_queue(queue);
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 
-    _wait_current_wakeup();
-}
-
-void sched_block(sched_wait_queue_t* queue) {
-    unsigned long flags = irq_save();
-    sched_block_locked(queue, flags);
+    wait_current_wakeup();
 }
 
 void sched_wake_one(sched_wait_queue_t* queue) {
     if (!queue || !queue->list)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
     sched_thread_t* thread = wait_queue_pop(queue);
 
     if (thread) {
         thread->state = THREAD_READY;
-        _enqueue_thread(thread);
+        enqueue_thread(thread);
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
 void sched_wake_all(sched_wait_queue_t* queue) {
     if (!queue || !queue->list)
         return;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     for (;;) {
-        sched_thread_t* thread = _wait_queue_pop(queue);
+        sched_thread_t* thread = wait_queue_pop(queue);
         if (!thread)
             break;
 
         thread->state = THREAD_READY;
-        _enqueue_thread(thread);
+        enqueue_thread(thread);
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 }
 
 void sched_tick(arch_int_state_t* state) {
     static bool logged_first_switch = false;
-    sched_thread_t* thread = _sched_local_current();
+    sched_thread_t* thread = sched_local_current();
 
     if (!sched_running || !state || !thread)
         return;
 
-    _sched_reap();
-    _sched_wake_sleepers(arch_timer_ticks());
+    sched_reap();
+    sched_wake_sleepers(arch_timer_ticks());
 
     thread->context = (uintptr_t)state;
     sched_signal_deliver_current(state);
@@ -1597,16 +1746,16 @@ void sched_tick(arch_int_state_t* state) {
     if (sched_preempt_disabled())
         return;
 
-    _sched_local_dec_ticks_left();
+    sched_local_dec_ticks_left();
 
-    if (_sched_local_ticks_left() > 0)
+    if (sched_local_ticks_left() > 0)
         return;
 
-    _sched_local_set_ticks_left(SCHED_SLICE);
+    sched_local_set_ticks_left(SCHED_SLICE);
 
-    if (thread->state == THREAD_RUNNING && thread != _sched_local_idle()) {
+    if (thread->state == THREAD_RUNNING && thread != sched_local_idle()) {
         thread->state = THREAD_READY;
-        _enqueue_thread(thread);
+        enqueue_thread(thread);
     }
 
     sched_thread_t* next = pick_next_thread();
@@ -1624,8 +1773,9 @@ void sched_tick(arch_int_state_t* state) {
         logged_first_switch = true;
     }
 
+
     next->state = THREAD_RUNNING;
-    _sched_local_set_current(next);
+    sched_local_set_current(next);
 
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);
@@ -1633,15 +1783,15 @@ void sched_tick(arch_int_state_t* state) {
 }
 
 void sched_yield(void) {
-    if (!sched_running || !_sched_local_current())
+    if (!sched_running || !sched_local_current())
         return;
 
-    _sched_reap();
-    _sched_local_set_ticks_left(0);
+    sched_reap();
+    sched_local_set_ticks_left(0);
 }
 
 void sched_sleep(u64 ticks) {
-    sched_thread_t* self = _sched_local_current();
+    sched_thread_t* self = sched_local_current();
     if (!self || !ticks)
         return;
 
@@ -1653,29 +1803,42 @@ void sched_sleep(u64 ticks) {
     }
 
     u64 deadline = arch_timer_ticks() + ticks;
+    unsigned long flags = sched_lock_save();
     self->wake_tick = deadline;
+    self->state = THREAD_SLEEPING;
+    if (!sleep_heap_insert(self)) {
+        self->state = THREAD_READY;
+        self->wake_tick = 0;
+        sched_lock_restore(flags);
 
-    for (;;) {
-        self->state = THREAD_SLEEPING;
-        sched_yield();
-
-        while (self->state == THREAD_SLEEPING)
+        u64 start = arch_timer_ticks();
+        while ((arch_timer_ticks() - start) < ticks)
             arch_cpu_wait();
+        return;
+    }
+    sched_lock_restore(flags);
 
-        if (arch_timer_ticks() >= deadline)
-            break;
-
-        if (self->state == THREAD_ZOMBIE)
-            break;
-
+    while (self->state == THREAD_SLEEPING) {
         if (sched_signal_has_pending(self))
             break;
+
+        sched_yield();
+        arch_cpu_wait();
     }
 
+    flags = sched_lock_save();
+    sleep_heap_remove(self);
     self->wake_tick = 0;
+
+    if (self->state == THREAD_SLEEPING) {
+        self->state = THREAD_READY;
+        enqueue_thread(self);
+    }
+
+    sched_lock_restore(flags);
 }
 
-static void _sched_reparent_children(sched_thread_t* parent) {
+static void sched_reparent_children(sched_thread_t* parent) {
     if (!parent || !all_list)
         return;
 
@@ -1721,48 +1884,40 @@ void sched_exit(void) {
     arch_irq_disable();
     sched_thread_t* self = sched_local_current();
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     if (self) {
-        _sched_reparent_children(self);
+        wait_queue_remove(self);
+        sleep_heap_remove(self);
+        sched_reparent_children(self);
         self->state = THREAD_ZOMBIE;
 
-        if (self != _sched_local_idle() && !self->in_zombie_list) {
+        if (self != sched_local_idle() && !self->in_zombie_list) {
             self->zombie_node.data = self;
             list_append(zombie_list, &self->zombie_node);
             self->in_zombie_list = true;
         }
 
         if (self->user_thread) {
-            ll_foreach(node, all_list) {
-                sched_thread_t* child = node->data;
-                if (!child || child->ppid != self->pid)
-                    continue;
+            sched_thread_t* parent = find_thread_by_pid(self->ppid);
 
-                child->ppid = 1;
-                if (child->state == THREAD_ZOMBIE) {
-                    sched_thread_t* init = _find_thread_by_pid(1);
-                    if (init)
-                        sched_wake_one(&init->wait_queue);
-                }
-            }
-
-            sched_thread_t* parent = _find_thread_by_pid(self->ppid);
-            if (parent)
+            if (parent) {
                 sched_wake_one(&parent->wait_queue);
+                sched_signal_send_thread(parent, SIGCHLD);
+            }
         }
     }
 
     sched_thread_t* next = pick_next_thread();
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
 
     if (!next) {
         for (;;)
             arch_cpu_halt();
     }
 
-    _sched_local_set_current(next);
+    sched_local_set_current(next);
     next->state = THREAD_RUNNING;
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);
@@ -1770,22 +1925,22 @@ void sched_exit(void) {
 }
 
 void sched_preempt_disable(void) {
-    _sched_local_inc_preempt_depth();
+    sched_local_inc_preempt_depth();
 }
 
 void sched_preempt_enable(void) {
-    _sched_local_dec_preempt_depth();
+    sched_local_dec_preempt_depth();
 }
 
 bool sched_preempt_disabled(void) {
-    return _sched_local_preempt_disabled();
+    return sched_local_preempt_disabled();
 }
 
 size_t sched_list_procs(proc_info_t* out, size_t capacity) {
     if (!out || !capacity || !all_list)
         return 0;
 
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
     size_t count = 0;
 
     ll_foreach(node, all_list) {
@@ -1804,14 +1959,14 @@ size_t sched_list_procs(proc_info_t* out, size_t capacity) {
         info->sid = thread->sid;
         info->uid = thread->uid;
         info->gid = thread->gid;
-        info->state = _sched_state_to_proc(thread->state);
+        info->state = sched_state_to_proc(thread->state);
         info->tty_index = thread->tty_index;
 
         memset(info->name, 0, sizeof(info->name));
         strncpy(info->name, thread->name, sizeof(info->name) - 1);
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
     return count;
 }
 
@@ -1820,7 +1975,7 @@ int sched_signal_send_pgrp(pid_t pgid, int signum) {
         return -1;
 
     int count = 0;
-    unsigned long flags = _sched_lock_save();
+    unsigned long flags = sched_lock_save();
 
     ll_foreach(node, all_list) {
         sched_thread_t* thread = node->data;
@@ -1832,6 +1987,6 @@ int sched_signal_send_pgrp(pid_t pgid, int signum) {
             count++;
     }
 
-    _sched_lock_restore(flags);
+    sched_lock_restore(flags);
     return count ? count : -1;
 }

@@ -6,6 +6,7 @@
 #include <base/units.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
+#include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,15 +27,24 @@ static ahci_device_t* ahci_primary = NULL;
 static u8 ahci_primary_irq_line = 0xff;
 static bool ahci_warned_irq_fallback = false;
 
-static inline u32 _lo32(u64 v) {
+static u64 ahci_irq_timeout_ticks(void) {
+    u32 hz = arch_timer_hz();
+    if (!hz)
+        return 1;
+
+    u64 ticks = ((u64)hz * AHCI_IRQ_TIMEOUT_MS + 999ULL) / 1000ULL;
+    return ticks ? ticks : 1;
+}
+
+static inline u32 lo32(u64 v) {
     return (u32)(v & 0xffffffffULL);
 }
 
-static inline u32 _hi32(u64 v) {
+static inline u32 hi32(u64 v) {
     return (u32)((v >> 32) & 0xffffffffULL);
 }
 
-static bool _zero_phys(u64 paddr, size_t size) {
+static bool ahci_zero_phys(u64 paddr, size_t size) {
     void* map = arch_phys_map(paddr, size);
     if (!map)
         return false;
@@ -44,11 +54,11 @@ static bool _zero_phys(u64 paddr, size_t size) {
     return true;
 }
 
-static bool _irq_line_supported(u8 irq_line) {
+static bool ahci_irq_line_supported(u8 irq_line) {
     return irq_line == IRQ_OPEN_10 || irq_line == IRQ_OPEN_11;
 }
 
-static inline u32 _port_ack(ahci_hba_port_t* port) {
+static inline u32 ahci_port_ack(ahci_hba_port_t* port) {
     if (!port)
         return 0;
 
@@ -57,7 +67,7 @@ static inline u32 _port_ack(ahci_hba_port_t* port) {
     return is;
 }
 
-static void _primary_irq(UNUSED int_state_t* s) {
+static void ahci_primary_irq(UNUSED int_state_t* s) {
     ahci_device_t* dev = ahci_primary;
     u8 irq_line = ahci_primary_irq_line;
 
@@ -65,13 +75,16 @@ static void _primary_irq(UNUSED int_state_t* s) {
         unsigned long flags = arch_irq_save();
         dev->irq_seq++;
         arch_irq_restore(flags);
+
+        if (dev->irq_wait.list)
+            sched_wake_all(&dev->irq_wait);
     }
 
     if (irq_line <= IRQ_SECONDARY_ATA)
         irq_ack(irq_line);
 }
 
-static u64 _irq_snapshot(ahci_device_t* dev) {
+static u64 ahci_irq_snapshot(ahci_device_t* dev) {
     if (!dev)
         return 0;
 
@@ -81,11 +94,12 @@ static u64 _irq_snapshot(ahci_device_t* dev) {
     return seq;
 }
 
-static bool _wait_irq_event(ahci_device_t* dev, u64* seq) {
+static bool ahci_wait_irq_event(ahci_device_t* dev, u64* seq) {
     if (!dev || !seq || !dev->irq_enabled)
         return false;
 
     u64 start = irq_ticks();
+    u64 timeout = ahci_irq_timeout_ticks();
 
     for (;;) {
         unsigned long flags = arch_irq_save();
@@ -99,17 +113,23 @@ static bool _wait_irq_event(ahci_device_t* dev, u64* seq) {
 
         arch_irq_restore(flags);
 
-        if ((irq_ticks() - start) >= AHCI_IRQ_TIMEOUT_TICKS)
+        if ((irq_ticks() - start) >= timeout)
             return false;
 
-        if (sched_is_running() && sched_current())
+        if (sched_is_running() && sched_current()) {
+            sched_thread_t* current = sched_current();
+            if (current && sched_signal_has_pending(current))
+                return false;
+
             sched_yield();
+            continue;
+        }
 
         arch_cpu_wait();
     }
 }
 
-static bool _wait_port_ready(ahci_hba_port_t* port, u64 timeout_ticks) {
+static bool ahci_wait_port_ready(ahci_hba_port_t* port, u64 timeout_ticks) {
     if (!port)
         return false;
 
@@ -123,20 +143,18 @@ static bool _wait_port_ready(ahci_hba_port_t* port, u64 timeout_ticks) {
         if (++spins > 1000000)
             return false;
 
-        if (sched_is_running() && sched_current())
-            sched_yield();
-
         arch_cpu_wait();
     }
 
     return true;
 }
 
-static bool _wait_cmd_poll(ahci_device_t* dev, ahci_hba_port_t* port, u32 slot_mask) {
+static bool ahci_wait_cmd_poll(ahci_device_t* dev, ahci_hba_port_t* port, u32 slot_mask) {
     if (!dev || !port)
         return false;
 
     u64 start = irq_ticks();
+    u64 timeout = ahci_irq_timeout_ticks();
     size_t spins = 0;
 
     for (;;) {
@@ -147,20 +165,17 @@ static bool _wait_cmd_poll(ahci_device_t* dev, ahci_hba_port_t* port, u32 slot_m
         if (!(port->ci & slot_mask))
             return true;
 
-        if ((irq_ticks() - start) >= AHCI_IRQ_TIMEOUT_TICKS)
+        if ((irq_ticks() - start) >= timeout)
             return false;
 
         if (++spins > 1000000)
             return false;
 
-        if (sched_is_running() && sched_current())
-            sched_yield();
-
         arch_cpu_wait();
     }
 }
 
-static void _destroy_device(ahci_device_t* dev) {
+static void ahci_destroy_device(ahci_device_t* dev) {
     if (!dev)
         return;
 
@@ -169,6 +184,8 @@ static void _destroy_device(ahci_device_t* dev) {
 
     if (dev->io_wait.list)
         sched_wait_queue_destroy(&dev->io_wait);
+    if (dev->irq_wait.list)
+        sched_wait_queue_destroy(&dev->irq_wait);
 
     if (dev->dma_paddr)
         free_frames((void*)(uintptr_t)dev->dma_paddr, AHCI_DMA_PAGES);
@@ -185,7 +202,7 @@ static void _destroy_device(ahci_device_t* dev) {
     free(dev);
 }
 
-static void _lock(ahci_device_t* dev) {
+static void ahci_lock(ahci_device_t* dev) {
     if (!dev)
         return;
 
@@ -209,7 +226,7 @@ static void _lock(ahci_device_t* dev) {
     }
 }
 
-static void _unlock(ahci_device_t* dev) {
+static void ahci_unlock(ahci_device_t* dev) {
     if (!dev)
         return;
 
@@ -221,7 +238,7 @@ static void _unlock(ahci_device_t* dev) {
         sched_wake_one(&dev->io_wait);
 }
 
-static bool _port_stop(ahci_hba_port_t* port) {
+static bool ahci_port_stop(ahci_hba_port_t* port) {
     if (!port)
         return false;
 
@@ -238,7 +255,7 @@ static bool _port_stop(ahci_hba_port_t* port) {
     return false;
 }
 
-static bool _port_start(ahci_hba_port_t* port) {
+static bool ahci_port_start(ahci_hba_port_t* port) {
     if (!port)
         return false;
 
@@ -260,7 +277,7 @@ static bool _port_start(ahci_hba_port_t* port) {
     return true;
 }
 
-static void _request_bios_handoff(ahci_hba_mem_t* hba) {
+static void ahci_request_bios_handoff(ahci_hba_mem_t* hba) {
     if (!hba)
         return;
 
@@ -270,16 +287,14 @@ static void _request_bios_handoff(ahci_hba_mem_t* hba) {
     hba->bohc |= AHCI_BOHC_OOS;
 
     u64 start = irq_ticks();
+    u64 timeout = ahci_irq_timeout_ticks();
 
-    while ((hba->bohc & AHCI_BOHC_BOS) && (irq_ticks() - start) < AHCI_IRQ_TIMEOUT_TICKS) {
-        if (sched_is_running() && sched_current())
-            sched_yield();
-
+    while ((hba->bohc & AHCI_BOHC_BOS) && (irq_ticks() - start) < timeout) {
         arch_cpu_wait();
     }
 }
 
-static bool _port_present(ahci_hba_port_t* port) {
+static bool ahci_port_present(ahci_hba_port_t* port) {
     if (!port)
         return false;
 
@@ -297,7 +312,7 @@ static bool _port_present(ahci_hba_port_t* port) {
 }
 
 static bool
-_exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, size_t bytes) {
+ahci_exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, size_t bytes) {
     if (!dev || !dev->irq_enabled || !sectors || !bytes)
         return false;
 
@@ -328,8 +343,8 @@ _exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, size
     ahci_cmd_tbl_t* tbl = ct_map;
     memset(tbl, 0, PAGE_4KIB);
 
-    tbl->prdt_entry[0].dba = _lo32(dev->dma_paddr);
-    tbl->prdt_entry[0].dbau = _hi32(dev->dma_paddr);
+    tbl->prdt_entry[0].dba = lo32(dev->dma_paddr);
+    tbl->prdt_entry[0].dbau = hi32(dev->dma_paddr);
     tbl->prdt_entry[0].dbc_i = ((u32)(bytes - 1) & AHCI_PRDT_DBC_MASK) | AHCI_PRDT_I;
 
     ahci_fis_reg_h2d_t* fis = (ahci_fis_reg_h2d_t*)tbl->cfis;
@@ -364,7 +379,7 @@ _exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, size
     ahci_hba_mem_t* hba = mmio_map;
     ahci_hba_port_t* port = &hba->ports[dev->port_index];
 
-    if (!_wait_port_ready(port, AHCI_IRQ_TIMEOUT_TICKS)) {
+    if (!ahci_wait_port_ready(port, ahci_irq_timeout_ticks())) {
         arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
         return false;
     }
@@ -378,7 +393,7 @@ _exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, size
         return false;
     }
 
-    u64 irq_seq = _irq_snapshot(dev);
+    u64 irq_seq = ahci_irq_snapshot(dev);
 
     hba->is = port_mask;
     port->is = 0xffffffffU;
@@ -397,7 +412,7 @@ _exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, size
             break;
         }
 
-        if (!_wait_irq_event(dev, &irq_seq)) {
+        if (!ahci_wait_irq_event(dev, &irq_seq)) {
             need_poll_fallback = true;
             break;
         }
@@ -412,7 +427,7 @@ _exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, size
         ok = ahci_wait_cmd_poll(dev, port, slot_mask);
     }
 
-    u32 complete_is = _port_ack(port);
+    u32 complete_is = ahci_port_ack(port);
 
     hba->is = port_mask;
 
@@ -438,11 +453,11 @@ _exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, size
     return ok;
 }
 
-static bool _identify(ahci_device_t* dev, u16* identify) {
+static bool ahci_identify(ahci_device_t* dev, u16* identify) {
     if (!dev || !identify)
         return false;
 
-    if (!_exec_cmd(dev, ATA_CMD_IDENTIFY, 0, 1, false, AHCI_SECTOR_SIZE))
+    if (!ahci_exec_cmd(dev, ATA_CMD_IDENTIFY, 0, 1, false, AHCI_SECTOR_SIZE))
         return false;
 
     void* dma = arch_phys_map(dev->dma_paddr, AHCI_SECTOR_SIZE);
@@ -455,7 +470,7 @@ static bool _identify(ahci_device_t* dev, u16* identify) {
     return true;
 }
 
-static bool _transfer(ahci_device_t* dev, u64 lba, u16 sectors, void* buf, bool write) {
+static bool ahci_transfer(ahci_device_t* dev, u64 lba, u16 sectors, void* buf, bool write) {
     if (!dev || !buf || !sectors)
         return false;
 
@@ -471,7 +486,7 @@ static bool _transfer(ahci_device_t* dev, u64 lba, u16 sectors, void* buf, bool 
     }
 
     u8 cmd = write ? ATA_CMD_WRITE_DMA_EXT : ATA_CMD_READ_DMA_EXT;
-    if (!_exec_cmd(dev, cmd, lba, sectors, write, bytes))
+    if (!ahci_exec_cmd(dev, cmd, lba, sectors, write, bytes))
         return false;
 
     if (!write) {
@@ -486,12 +501,12 @@ static bool _transfer(ahci_device_t* dev, u64 lba, u16 sectors, void* buf, bool 
     return true;
 }
 
-static ssize_t _read(disk_dev_t* disk, void* dest, size_t offset, size_t bytes) {
+static ssize_t ahci_read(disk_dev_t* disk, void* dest, size_t offset, size_t bytes) {
     if (!disk || !dest || !disk->private)
         return -1;
 
     ahci_device_t* dev = disk->private;
-    _lock(dev);
+    ahci_lock(dev);
 
     ssize_t ret = -1;
     size_t disk_size = dev->sector_count * dev->sector_size;
@@ -512,7 +527,7 @@ static ssize_t _read(disk_dev_t* disk, void* dest, size_t offset, size_t bytes) 
     u8 bounce[AHCI_SECTOR_SIZE];
 
     if (sector_off) {
-        if (!_transfer(dev, lba, 1, bounce, false))
+        if (!ahci_transfer(dev, lba, 1, bounce, false))
             goto done;
 
         size_t avail = dev->sector_size - sector_off;
@@ -533,7 +548,7 @@ static ssize_t _read(disk_dev_t* disk, void* dest, size_t offset, size_t bytes) 
             batch = AHCI_MAX_SECTORS;
 
         size_t chunk = batch * dev->sector_size;
-        if (!_transfer(dev, lba, (u16)batch, out, false))
+        if (!ahci_transfer(dev, lba, (u16)batch, out, false))
             goto done;
 
         out += chunk;
@@ -542,7 +557,7 @@ static ssize_t _read(disk_dev_t* disk, void* dest, size_t offset, size_t bytes) 
     }
 
     if (remaining) {
-        if (!_transfer(dev, lba, 1, bounce, false))
+        if (!ahci_transfer(dev, lba, 1, bounce, false))
             goto done;
 
         memcpy(out, bounce, remaining);
@@ -554,16 +569,16 @@ static ssize_t _read(disk_dev_t* disk, void* dest, size_t offset, size_t bytes) 
 done_empty:
     ret = 0;
 done:
-    _unlock(dev);
+    ahci_unlock(dev);
     return ret;
 }
 
-static ssize_t _write(disk_dev_t* disk, void* src, size_t offset, size_t bytes) {
+static ssize_t ahci_write(disk_dev_t* disk, void* src, size_t offset, size_t bytes) {
     if (!disk || !src || !disk->private)
         return -1;
 
     ahci_device_t* dev = disk->private;
-    _lock(dev);
+    ahci_lock(dev);
 
     ssize_t ret = -1;
     size_t disk_size = dev->sector_count * dev->sector_size;
@@ -588,7 +603,7 @@ static ssize_t _write(disk_dev_t* disk, void* src, size_t offset, size_t bytes) 
         bool partial = sector_off != 0 || remaining < dev->sector_size;
 
         if (partial) {
-            if (!_transfer(dev, lba, 1, bounce, false))
+            if (!ahci_transfer(dev, lba, 1, bounce, false))
                 goto done;
 
             chunk = dev->sector_size - sector_off;
@@ -607,7 +622,7 @@ static ssize_t _write(disk_dev_t* disk, void* src, size_t offset, size_t bytes) 
                 batch = AHCI_MAX_SECTORS;
 
             chunk = batch * dev->sector_size;
-            if (!_transfer(dev, lba, (u16)batch, in, true))
+            if (!ahci_transfer(dev, lba, (u16)batch, in, true))
                 goto done;
 
             lba += batch;
@@ -629,11 +644,11 @@ static ssize_t _write(disk_dev_t* disk, void* src, size_t offset, size_t bytes) 
 done_empty:
     ret = 0;
 done:
-    _unlock(dev);
+    ahci_unlock(dev);
     return ret;
 }
 
-static bool _setup_port(ahci_device_t* dev) {
+static bool ahci_setup_port(ahci_device_t* dev) {
     if (!dev)
         return false;
 
@@ -673,15 +688,15 @@ static bool _setup_port(ahci_device_t* dev) {
     port->sact = 0;
     port->ci = 0;
 
-    port->clb = _lo32(dev->clb_paddr);
-    port->clbu = _hi32(dev->clb_paddr);
-    port->fb = _lo32(dev->fb_paddr);
-    port->fbu = _hi32(dev->fb_paddr);
+    port->clb = lo32(dev->clb_paddr);
+    port->clbu = hi32(dev->clb_paddr);
+    port->fb = lo32(dev->fb_paddr);
+    port->fbu = hi32(dev->fb_paddr);
     port->serr = 0xffffffffU;
     port->is = 0xffffffffU;
     port->ie = dev->irq_enabled ? 0xffffffffU : 0;
 
-    if (!_port_start(port)) {
+    if (!ahci_port_start(port)) {
         arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
         return false;
     }
@@ -690,7 +705,7 @@ static bool _setup_port(ahci_device_t* dev) {
     return true;
 }
 
-static bool _find_controller(ahci_device_t* dev) {
+static bool ahci_find_controller(ahci_device_t* dev) {
     if (!dev)
         return false;
 
@@ -766,16 +781,17 @@ bool ahci_disk_init(void) {
         return false;
 
     sched_wait_queue_init(&dev->io_wait);
+    sched_wait_queue_init(&dev->irq_wait);
     dev->sector_size = AHCI_SECTOR_SIZE;
 
-    if (!_find_controller(dev)) {
-        _destroy_device(dev);
+    if (!ahci_find_controller(dev)) {
+        ahci_destroy_device(dev);
         return false;
     }
 
-    if (!_irq_line_supported(dev->irq_line)) {
+    if (!ahci_irq_line_supported(dev->irq_line)) {
         log_error("ahci: unsupported IRQ line %u", dev->irq_line);
-        _destroy_device(dev);
+        ahci_destroy_device(dev);
         return false;
     }
 
@@ -783,11 +799,11 @@ bool ahci_disk_init(void) {
     ahci_primary_irq_line = dev->irq_line;
     dev->irq_enabled = true;
 
-    irq_register(dev->irq_line, _primary_irq);
+    irq_register(dev->irq_line, ahci_primary_irq);
 
-    if (!_setup_port(dev)) {
+    if (!ahci_setup_port(dev)) {
         log_error("ahci: failed to setup port %u", dev->port_index);
-        _destroy_device(dev);
+        ahci_destroy_device(dev);
         return false;
     }
 
@@ -795,7 +811,7 @@ bool ahci_disk_init(void) {
 
     if (!ahci_identify(dev, identify)) {
         log_error("ahci: identify failed on port %u", dev->port_index);
-        _destroy_device(dev);
+        ahci_destroy_device(dev);
         return false;
     }
 
@@ -808,20 +824,20 @@ bool ahci_disk_init(void) {
 
     if (!sector_count) {
         log_error("ahci: identify reported zero sectors");
-        _destroy_device(dev);
+        ahci_destroy_device(dev);
         return false;
     }
 
     dev->sector_count = (size_t)sector_count;
 
     static disk_interface_t ahci_interface = {
-        .read = _read,
-        .write = _write,
+        .read = ahci_read,
+        .write = ahci_write,
     };
 
     disk_dev_t* disk = calloc(1, sizeof(disk_dev_t));
     if (!disk) {
-        _destroy_device(dev);
+        ahci_destroy_device(dev);
         return false;
     }
 
@@ -835,7 +851,7 @@ bool ahci_disk_init(void) {
     if (!disk->name || !disk_register(disk)) {
         free(disk->name);
         free(disk);
-        _destroy_device(dev);
+        ahci_destroy_device(dev);
         return false;
     }
 

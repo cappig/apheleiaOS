@@ -36,36 +36,59 @@ bool bitmap_alloc_init(
 
     // Mark the space occupied by the bitmap itself as used
     bitmap_set_region(alloc->bitmap, 0, bitmap_blocks);
+    alloc->next_fit_block = bitmap_blocks;
 
     return true;
 }
 
-static int _first_fit(bitmap_allocator_t* alloc, size_t blocks) {
+static int first_fit_in_range(bitmap_allocator_t* alloc, size_t blocks, size_t begin, size_t end) {
+    if (!alloc || !blocks || begin >= end)
+        return -1;
+
     size_t region_bottom = 0;
     size_t region_size = 0;
 
-    for (size_t word = 0; word < alloc->word_count; word++) {
-        if (alloc->bitmap[word] == (bitmap_word_t)-1) {
+    for (size_t block = begin; block < end; block++) {
+        size_t bit = block % BITMAP_WORD_SIZE;
+        size_t word = block / BITMAP_WORD_SIZE;
+        bitmap_word_t bits = alloc->bitmap[word];
+
+        if (bit == 0 && bits == (bitmap_word_t)-1 && (block + BITMAP_WORD_SIZE) <= end) {
             region_size = 0;
-            region_bottom = (word + 1) * BITMAP_WORD_SIZE;
+            block += BITMAP_WORD_SIZE - 1;
             continue;
         }
 
-        for (size_t bit = 0; bit < BITMAP_WORD_SIZE; bit++) {
-            if (alloc->bitmap[word] & (1 << bit)) {
-                region_size = 0;
-                region_bottom = word * BITMAP_WORD_SIZE + bit + 1;
-                continue;
-            }
-
-            region_size++;
-
-            if (region_size == blocks)
-                return region_bottom;
+        if (bits & ((bitmap_word_t)1U << bit)) {
+            region_size = 0;
+            continue;
         }
+
+        if (!region_size)
+            region_bottom = block;
+
+        region_size++;
+
+        if (region_size == blocks)
+            return (int)region_bottom;
     }
 
     return -1;
+}
+
+static int _first_fit(bitmap_allocator_t* alloc, size_t blocks) {
+    if (!alloc || !blocks)
+        return -1;
+
+    size_t start = alloc->next_fit_block;
+    if (start >= alloc->block_count)
+        start = 0;
+
+    int block = first_fit_in_range(alloc, blocks, start, alloc->block_count);
+    if (block < 0 && start)
+        block = first_fit_in_range(alloc, blocks, 0, start);
+
+    return block;
 }
 
 static int _last_fit(bitmap_allocator_t* alloc, size_t blocks) {
@@ -94,7 +117,7 @@ static int _last_fit(bitmap_allocator_t* alloc, size_t blocks) {
                 continue;
             }
 
-            if (alloc->bitmap[word_index] & (1 << bit_index)) {
+            if (alloc->bitmap[word_index] & ((bitmap_word_t)1U << bit_index)) {
                 region_size = 0;
                 region_top = block;
                 continue;
@@ -120,7 +143,9 @@ void* bitmap_alloc_reserve(bitmap_allocator_t* alloc, size_t blocks) {
         return NULL;
 
     bitmap_set_region(alloc->bitmap, first_block, blocks);
-
+    alloc->next_fit_block = (size_t)first_block + blocks;
+    if (alloc->next_fit_block >= alloc->block_count)
+        alloc->next_fit_block = 0;
     alloc->free_blocks -= blocks;
 
     return bitmap_alloc_to_ptr(alloc, first_block);
@@ -149,6 +174,8 @@ bool bitmap_alloc_free(bitmap_allocator_t* alloc, void* ptr, size_t blocks) {
     size_t first_block = bitmap_alloc_to_block(alloc, ptr);
 
     bitmap_clear_region(alloc->bitmap, first_block, blocks);
+    if (first_block < alloc->next_fit_block)
+        alloc->next_fit_block = first_block;
 
     alloc->free_blocks += blocks;
 

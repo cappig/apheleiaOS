@@ -142,25 +142,26 @@ static ssize_t _write_screen(size_t index, const void* buf, size_t len) {
 }
 
 static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len) {
-    if (index >= TTY_SCREEN_COUNT || !buf || !len)
+    if (index >= TTY_SCREEN_COUNT || !buf)
+        return -EINVAL;
+    if (!len)
         return 0;
 
     termios_t tos;
     if (!tty_input_get_termios(index, &tos))
-        return tty_write_screen(index, buf, len);
+        return _write_screen(index, buf, len);
 
     if (!(tos.c_oflag & OPOST))
-        return tty_write_screen(index, buf, len);
+        return _write_screen(index, buf, len);
 
     bool has_cr = memchr(buf, '\r', len) != NULL;
     bool has_nl = memchr(buf, '\n', len) != NULL;
     bool needs_ocrnl = (tos.c_oflag & OCRNL) && has_cr;
-    bool needs_onlret = (tos.c_oflag & ONLRET) && has_nl;
     bool needs_onlcr = (tos.c_oflag & ONLCR) && has_nl;
 
     // Fast path: no output post-processing transforms are needed.
-    if (!needs_ocrnl && !needs_onlret && !needs_onlcr)
-        return tty_write_screen(index, buf, len);
+    if (!needs_ocrnl && !needs_onlcr)
+        return _write_screen(index, buf, len);
 
     const u8* in = buf;
     char out[256];
@@ -172,12 +173,9 @@ static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len
         if ((tos.c_oflag & OCRNL) && ch == '\r')
             ch = '\n';
 
-        if ((tos.c_oflag & ONLRET) && ch == '\n')
-            ch = '\r';
-
         if ((tos.c_oflag & ONLCR) && ch == '\n') {
             if (out_len + 2 >= sizeof(out)) {
-                tty_write_screen(index, out, out_len);
+                _write_screen(index, out, out_len);
                 out_len = 0;
             }
             out[out_len++] = '\r';
@@ -186,7 +184,7 @@ static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len
         }
 
         if (out_len + 1 >= sizeof(out)) {
-            tty_write_screen(index, out, out_len);
+            _write_screen(index, out, out_len);
             out_len = 0;
         }
 
@@ -194,7 +192,7 @@ static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len
     }
 
     if (out_len)
-        tty_write_screen(index, out, out_len);
+        _write_screen(index, out, out_len);
 
     return (ssize_t)len;
 }
@@ -223,14 +221,14 @@ ssize_t tty_read_handle(const tty_handle_t* handle, void* buf, size_t len) {
         if (current_tty == TTY_NONE)
             return -ENXIO;
 
-        return tty_read_screen((size_t)current_tty, buf, len);
+        return _read_screen((size_t)current_tty, buf, len);
     case TTY_HANDLE_CONSOLE:
         return tty_input_read(TTY_CONSOLE, buf, len);
     case TTY_HANDLE_NAMED:
         if (handle->index >= TTY_COUNT)
             return -EINVAL;
 
-        return tty_read_screen(TTY_USER_TO_SCREEN(handle->index), buf, len);
+        return _read_screen(TTY_USER_TO_SCREEN(handle->index), buf, len);
     default:
         return -EINVAL;
     }
@@ -314,7 +312,7 @@ ssize_t tty_ioctl_handle(const tty_handle_t* handle, u64 request, void* args) {
         if (!current || !current->user_thread)
             return -EPERM;
 
-        if (!tty_is_controlling_screen(current, screen))
+        if (!_is_controlling_screen(current, screen))
             return -ENOTTY;
 
         if (current->sid <= 0 || !sched_pgrp_in_session(requested, current->sid))
@@ -337,7 +335,7 @@ short tty_poll_handle(const tty_handle_t* handle, short events, u32 flags) {
     (void)flags;
 
     size_t screen = 0;
-    if (!tty_resolve_screen(handle, &screen))
+    if (!_resolve_screen(handle, &screen))
         return POLLNVAL;
 
     short revents = 0;

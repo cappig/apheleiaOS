@@ -57,4 +57,5 @@ int window_init(window_t* window, u32 width, u32 height, const char* title);
 void window_deinit(window_t* window);
 u32* window_buffer(window_t* window);
 int window_flush(window_t* window);
+int window_flush_rect(window_t* window, u32 x, u32 y, u32 width, u32 height);
 int window_wait_event(window_t* window, ws_input_event_t* event, int timeout_ms);

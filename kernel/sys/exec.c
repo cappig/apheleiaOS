@@ -10,8 +10,10 @@
 #include <errno.h>
 #include <log/log.h>
 #include <parse/elf.h>
+#include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/path.h>
 #include <sys/vfs.h>
 #include <unistd.h>
 
@@ -22,6 +24,7 @@
 #define EXEC_MAX_ENV_LEN 128
 
 static uintptr_t next_stack_top;
+static volatile int stack_lock;
 
 typedef struct {
     int argc;
@@ -176,7 +179,7 @@ static bool _load_segments_64(sched_thread_t* thread, const u8* image, size_t si
 
         size_t pages = (size_t)((map_end - map_base) / PAGE_4KIB);
 
-        u64 flags = elf_flags_to_page_flags(ph->flags);
+        u64 flags = _elf_flags_to_page_flags(ph->flags);
 
         uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
         if (!paddr)
@@ -214,7 +217,7 @@ static bool _load_segments_32(sched_thread_t* thread, const u8* image, size_t si
     if (header->magic != ELF_MAGIC || header->arch != EARCH_32)
         return false;
 
-    if (header->phoff + (u32)header->ph_num * header->phent_size > size)
+    if ((u64)header->phoff + (u64)header->ph_num * header->phent_size > size)
         return false;
 
     const elf32_prog_header_t* prog = (const elf32_prog_header_t*)(image + header->phoff);
@@ -304,25 +307,21 @@ _load_user_segments(sched_thread_t* thread, const u8* image, size_t size, arch_w
 static uintptr_t _alloc_stack_base(size_t size) {
     size = ALIGN(size, PAGE_4KIB);
 
+    while (__sync_lock_test_and_set(&stack_lock, 1))
+        arch_cpu_wait();
+
     if (!next_stack_top)
         next_stack_top = (uintptr_t)arch_user_stack_top();
 
-    if (next_stack_top <= size)
-        return 0;
+    uintptr_t base = 0;
 
-    next_stack_top = ALIGN_DOWN(next_stack_top - size, PAGE_4KIB);
-    return next_stack_top;
-}
+    if (next_stack_top > size) {
+        next_stack_top = ALIGN_DOWN(next_stack_top - size, PAGE_4KIB);
+        base = next_stack_top;
+    }
 
-static size_t _strnlen(const char* str, size_t max) {
-    if (!str)
-        return 0;
-
-    size_t len = 0;
-    while (len < max && str[len])
-        len++;
-
-    return len;
+    __sync_lock_release(&stack_lock);
+    return base;
 }
 
 static bool _args_push(exec_args_t* args, const char* value) {
@@ -332,7 +331,7 @@ static bool _args_push(exec_args_t* args, const char* value) {
     if (args->argc >= EXEC_MAX_ARGS)
         return false;
 
-    size_t len = _strnlen(value, EXEC_MAX_ARG_LEN);
+    size_t len = strnlen(value, EXEC_MAX_ARG_LEN);
     if (len >= EXEC_MAX_ARG_LEN)
         return false;
 
@@ -368,7 +367,7 @@ static bool _env_push(exec_env_t* env, const char* value) {
     if (env->envc >= EXEC_MAX_ENV)
         return false;
 
-    size_t len = exec_strnlen(value, EXEC_MAX_ENV_LEN);
+    size_t len = strnlen(value, EXEC_MAX_ENV_LEN);
 
     if (len >= EXEC_MAX_ENV_LEN)
         return false;
@@ -592,7 +591,7 @@ _open_file(sched_thread_t* thread, const char* path, exec_file_t* out, bool requ
         return -EACCES;
     }
 
-    if (!read_file(out->node, &out->buffer, &out->size)) {
+    if (!_read_file(out->node, &out->buffer, &out->size)) {
         log_warn("exec: failed to read '%s'", out->resolved);
         _close_file(out);
         return -EIO;
@@ -749,7 +748,7 @@ sched_thread_t* user_spawn(const char* path) {
     exec_shebang_t shebang = {0};
     exec_args_t args = {0};
     exec_env_t env = {0};
-    bool is_script = exec_parse_shebang(file.buffer, file.size, &shebang);
+    bool is_script = _parse_shebang(file.buffer, file.size, &shebang);
 
     if (is_script) {
         if (!_build_shebang_args(NULL, &shebang, exec_name_buf, &args)) {
@@ -761,9 +760,9 @@ sched_thread_t* user_spawn(const char* path) {
         exec_file_t interp = {0};
         err = _open_file(thread, shebang.path, &interp, true);
         if (err) {
-            exec_free_args(&args);
+            _free_args(&args);
             _free_env(&env);
-            exec_close_file(&file);
+            _close_file(&file);
             sched_discard_thread(thread);
             return NULL;
         }
@@ -771,9 +770,9 @@ sched_thread_t* user_spawn(const char* path) {
         _close_file(&file);
         file = interp;
     } else {
-        if (!exec_args_push(&args, path)) {
+        if (!_args_push(&args, path)) {
             _free_env(&env);
-            exec_close_file(&file);
+            _close_file(&file);
             sched_discard_thread(thread);
             return NULL;
         }
@@ -781,15 +780,15 @@ sched_thread_t* user_spawn(const char* path) {
 
     uintptr_t entry = 0;
     arch_word_t entry_raw = 0;
-    bool ok = load_user_segments(thread, file.buffer, file.size, &entry_raw);
+    bool ok = _load_user_segments(thread, file.buffer, file.size, &entry_raw);
     if (ok)
         entry = (uintptr_t)entry_raw;
 
     if (!ok) {
         log_warn("exec: '%s' is not a valid executable for this arch", file.resolved);
-        exec_free_args(&args);
+        _free_args(&args);
         _free_env(&env);
-        exec_close_file(&file);
+        _close_file(&file);
         sched_discard_thread(thread);
         return NULL;
     }
@@ -797,9 +796,9 @@ sched_thread_t* user_spawn(const char* path) {
     uintptr_t stack_top = 0;
     if (!_map_user_stack(thread, &stack_top)) {
         log_warn("exec: failed to map user stack");
-        exec_free_args(&args);
+        _free_args(&args);
         _free_env(&env);
-        exec_close_file(&file);
+        _close_file(&file);
         sched_discard_thread(thread);
         return NULL;
     }
@@ -810,16 +809,22 @@ sched_thread_t* user_spawn(const char* path) {
 
     sched_prepare_user_thread(thread, entry, stack_top);
     thread->ppid = 0;
-    sched_set_thread_name(thread, exec_basename(exec_name_buf));
+    sched_set_thread_name(thread, _basename(exec_name_buf));
 
     thread->state = THREAD_READY;
-    exec_free_args(&args);
+    _free_args(&args);
     _free_env(&env);
-    exec_close_file(&file);
+    _close_file(&file);
     return thread;
 }
 
-int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state) {
+int user_exec(
+    sched_thread_t* thread,
+    const char* path,
+    char* const argv[],
+    char* const envp[],
+    arch_int_state_t* state
+) {
     if (!thread || !path)
         return -EINVAL;
 
@@ -829,14 +834,14 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
         return -ENOMEM;
 
     if (!_copy_env(envp, &env)) {
-        exec_free_args(&args);
+        _free_args(&args);
         return -ENOMEM;
     }
 
     exec_file_t file = {0};
     int err = _open_file(thread, path, &file, true);
     if (err) {
-        exec_free_args(&args);
+        _free_args(&args);
         _free_env(&env);
         return err;
     }
@@ -850,10 +855,10 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
     bool is_script = _parse_shebang(file.buffer, file.size, &shebang);
 
     if (is_script) {
-        if (!exec_build_shebang_args(&args, &shebang, exec_name_buf, &script_args)) {
-            exec_free_args(&args);
+        if (!_build_shebang_args(&args, &shebang, exec_name_buf, &script_args)) {
+            _free_args(&args);
             _free_env(&env);
-            exec_close_file(&file);
+            _close_file(&file);
             return -ENOMEM;
         }
 
@@ -863,9 +868,9 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
         exec_file_t interp = {0};
         err = _open_file(thread, shebang.path, &interp, true);
         if (err) {
-            exec_free_args(&args);
+            _free_args(&args);
             _free_env(&env);
-            exec_close_file(&file);
+            _close_file(&file);
             return err;
         }
 
@@ -876,9 +881,9 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
     arch_vm_space_t* old_vm = thread->vm_space;
     arch_vm_space_t* fresh = arch_vm_create_user();
     if (!fresh) {
-        exec_free_args(&args);
+        _free_args(&args);
         _free_env(&env);
-        exec_close_file(&file);
+        _close_file(&file);
         return -ENOMEM;
     }
 
@@ -893,7 +898,7 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
 
     uintptr_t entry_point = 0;
     arch_word_t entry_raw = 0;
-    bool ok = load_user_segments(thread, file.buffer, file.size, &entry_raw);
+    bool ok = _load_user_segments(thread, file.buffer, file.size, &entry_raw);
     if (ok)
         entry_point = (uintptr_t)entry_raw;
 
@@ -903,9 +908,9 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
         thread->regions = old_regions;
         thread->vm_space = old_vm;
         arch_vm_destroy(fresh);
-        exec_free_args(&args);
+        _free_args(&args);
         _free_env(&env);
-        exec_close_file(&file);
+        _close_file(&file);
         return -ENOEXEC;
     }
 
@@ -915,9 +920,9 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
         thread->regions = old_regions;
         thread->vm_space = old_vm;
         arch_vm_destroy(fresh);
-        exec_free_args(&args);
+        _free_args(&args);
         _free_env(&env);
-        exec_close_file(&file);
+        _close_file(&file);
         return -ENOMEM;
     }
 
@@ -931,11 +936,13 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
     if (old_regions)
         _free_regions_list(old_regions);
 
-    sched_prepare_user_thread(thread, entry_point, stack_top);
     if (state) {
         memset(state, 0, sizeof(*state));
         arch_state_set_user_entry(state, entry_point, stack_top);
         arch_state_set_return(state, 0);
+        thread->context = (uintptr_t)state;
+    } else {
+        sched_prepare_user_thread(thread, entry_point, stack_top);
     }
 
     const char* thread_name = exec_name_buf;
@@ -945,11 +952,11 @@ int user_exec(sched_thread_t* thread, const char* path, arch_int_state_t* state)
     else if (!is_script)
         thread_name = path;
 
-    sched_set_thread_name(thread, exec_basename(thread_name));
+    sched_set_thread_name(thread, _basename(thread_name));
 
-    exec_free_args(&args);
+    _free_args(&args);
     _free_env(&env);
-    exec_close_file(&file);
+    _close_file(&file);
 
     return 0;
 }

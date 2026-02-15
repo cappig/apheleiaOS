@@ -4,6 +4,7 @@
 #include <base/types.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
+#include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <x86/asm.h>
@@ -39,6 +40,7 @@
 
 #define ATA_CTRL_IRQ_ENABLE 0x00
 #define ATA_MAX_PIO_SECTORS 255
+#define ATA_IRQ_TIMEOUT_MS 100
 
 typedef struct {
     u16 io_base;
@@ -51,11 +53,21 @@ typedef struct {
     volatile u64 irq_seq;
     volatile bool io_busy;
     sched_wait_queue_t io_wait;
+    sched_wait_queue_t irq_wait;
 } ata_device_t;
 
 static ata_device_t* ata_primary = NULL;
 
-static void _delay(ata_device_t* dev) {
+static u64 ata_irq_timeout_ticks(void) {
+    u32 hz = arch_timer_hz();
+    if (!hz)
+        return 1;
+
+    u64 ticks = ((u64)hz * ATA_IRQ_TIMEOUT_MS + 999ULL) / 1000ULL;
+    return ticks ? ticks : 1;
+}
+
+static void ata_delay(ata_device_t* dev) {
     if (!dev)
         return;
 
@@ -63,7 +75,7 @@ static void _delay(ata_device_t* dev) {
         inb(dev->ctrl_base);
 }
 
-static void _lock(ata_device_t* dev) {
+static void ata_lock(ata_device_t* dev) {
     if (!dev)
         return;
 
@@ -87,7 +99,7 @@ static void _lock(ata_device_t* dev) {
     }
 }
 
-static void _unlock(ata_device_t* dev) {
+static void ata_unlock(ata_device_t* dev) {
     if (!dev)
         return;
 
@@ -101,7 +113,7 @@ static void _unlock(ata_device_t* dev) {
         sched_wake_one(&dev->io_wait);
 }
 
-static u64 _irq_snapshot(ata_device_t* dev) {
+static u64 ata_irq_snapshot(ata_device_t* dev) {
     if (!dev)
         return 0;
 
@@ -115,9 +127,12 @@ static u64 _irq_snapshot(ata_device_t* dev) {
     return seq;
 }
 
-static bool _wait_irq_event(ata_device_t* dev, u64* seq) {
+static bool ata_wait_irq_event(ata_device_t* dev, u64* seq) {
     if (!dev || !seq)
         return false;
+
+    u64 start = arch_timer_ticks();
+    u64 timeout = ata_irq_timeout_ticks();
 
     for (;;) {
         unsigned long flags = arch_irq_save();
@@ -133,18 +148,27 @@ static bool _wait_irq_event(ata_device_t* dev, u64* seq) {
 
         arch_irq_restore(flags);
 
-        if (sched_is_running() && sched_current())
+        if ((arch_timer_ticks() - start) >= timeout)
+            return false;
+
+        if (sched_is_running() && sched_current()) {
+            sched_thread_t* current = sched_current();
+            if (current && sched_signal_has_pending(current))
+                return false;
+
             sched_yield();
+            continue;
+        }
 
         arch_cpu_wait();
     }
 }
 
-static bool _poll(ata_device_t* dev) {
+static bool ata_poll(ata_device_t* dev) {
     if (!dev)
         return false;
 
-    _delay(dev);
+    ata_delay(dev);
 
     for (size_t i = 0; i < 100000; i++) {
         u8 status = inb(dev->io_base + ATA_REG_STATUS);
@@ -164,11 +188,11 @@ static bool _poll(ata_device_t* dev) {
     return false;
 }
 
-static bool _wait_ready(ata_device_t* dev) {
+static bool ata_wait_ready(ata_device_t* dev) {
     if (!dev)
         return false;
 
-    _delay(dev);
+    ata_delay(dev);
 
     for (size_t i = 0; i < 100000; i++) {
         u8 status = inb(dev->io_base + ATA_REG_STATUS);
@@ -188,12 +212,12 @@ static bool _wait_ready(ata_device_t* dev) {
     return false;
 }
 
-static bool _wait_drq(ata_device_t* dev, u64* seq) {
+static bool ata_wait_drq(ata_device_t* dev, u64* seq) {
     if (!dev)
         return false;
 
     if (!dev->irq_enabled)
-        return _poll(dev);
+        return ata_poll(dev);
 
     for (;;) {
         u8 status = inb(dev->io_base + ATA_REG_STATUS);
@@ -212,7 +236,7 @@ static bool _wait_drq(ata_device_t* dev, u64* seq) {
     }
 }
 
-static bool _wait_ready_event(ata_device_t* dev, u64* seq) {
+static bool ata_wait_ready_event(ata_device_t* dev, u64* seq) {
     if (!dev)
         return false;
 
@@ -236,7 +260,7 @@ static bool _wait_ready_event(ata_device_t* dev, u64* seq) {
     }
 }
 
-static void _primary_irq(UNUSED int_state_t* s) {
+static void ata_primary_irq(UNUSED int_state_t* s) {
     if (!ata_primary) {
         irq_ack(IRQ_PRIMARY_ATA);
         return;
@@ -252,22 +276,25 @@ static void _primary_irq(UNUSED int_state_t* s) {
     ata_primary->irq_seq++;
     arch_irq_restore(flags);
 
+    if (ata_primary->irq_wait.list)
+        sched_wake_all(&ata_primary->irq_wait);
+
     irq_ack(IRQ_PRIMARY_ATA);
 }
 
-static void _select(ata_device_t* dev, u32 lba) {
+static void ata_select(ata_device_t* dev, u32 lba) {
     u8 head = (u8)((lba >> 24) & 0x0f);
     u8 device = 0xe0 | (dev->master ? 0x00 : 0x10) | head;
 
     outb(dev->io_base + ATA_REG_DEVICE, device);
-    _delay(dev);
+    ata_delay(dev);
 }
 
-static bool _identify(ata_device_t* dev, u16* data) {
+static bool ata_identify(ata_device_t* dev, u16* data) {
     if (!dev || !data)
         return false;
 
-    _select(dev, 0);
+    ata_select(dev, 0);
 
     outb(dev->io_base + ATA_REG_SECCOUNT, 0);
     outb(dev->io_base + ATA_REG_LBA0, 0);
@@ -278,7 +305,7 @@ static bool _identify(ata_device_t* dev, u16* data) {
     if (!inb(dev->io_base + ATA_REG_STATUS))
         return false;
 
-    if (!_poll(dev))
+    if (!ata_poll(dev))
         return false;
 
     for (size_t i = 0; i < 256; i++)
@@ -287,14 +314,14 @@ static bool _identify(ata_device_t* dev, u16* data) {
     return true;
 }
 
-static bool _read_sectors(ata_device_t* dev, u32 lba, u8 count, u16* buffer) {
+static bool ata_read_sectors(ata_device_t* dev, u32 lba, u8 count, u16* buffer) {
     if (!dev || !buffer || !count)
         return false;
 
     if ((u64)lba + (u64)count - 1 > 0x0fffffffULL)
         return false;
 
-    _select(dev, lba);
+    ata_select(dev, lba);
 
     outb(dev->io_base + ATA_REG_SECCOUNT, count);
     outb(dev->io_base + ATA_REG_LBA0, (u8)(lba & 0xff));
@@ -306,7 +333,7 @@ static bool _read_sectors(ata_device_t* dev, u32 lba, u8 count, u16* buffer) {
     outb(dev->io_base + ATA_REG_COMMAND, ATA_CMD_READ_PIO);
 
     for (u32 sector = 0; sector < count; sector++) {
-        if (!_wait_drq(dev, &seq))
+        if (!ata_wait_drq(dev, &seq))
             return false;
 
         u16* dst = buffer + sector * (ATA_SECTOR_SIZE / 2);
@@ -318,14 +345,14 @@ static bool _read_sectors(ata_device_t* dev, u32 lba, u8 count, u16* buffer) {
     return true;
 }
 
-static bool _write_sectors(ata_device_t* dev, u32 lba, u8 count, const u16* buffer) {
+static bool ata_write_sectors(ata_device_t* dev, u32 lba, u8 count, const u16* buffer) {
     if (!dev || !buffer || !count)
         return false;
 
     if ((u64)lba + (u64)count - 1 > 0x0fffffffULL)
         return false;
 
-    _select(dev, lba);
+    ata_select(dev, lba);
 
     outb(dev->io_base + ATA_REG_SECCOUNT, count);
     outb(dev->io_base + ATA_REG_LBA0, (u8)(lba & 0xff));
@@ -337,7 +364,7 @@ static bool _write_sectors(ata_device_t* dev, u32 lba, u8 count, const u16* buff
     outb(dev->io_base + ATA_REG_COMMAND, ATA_CMD_WRITE_PIO);
 
     for (u32 sector = 0; sector < count; sector++) {
-        if (!_wait_drq(dev, &seq))
+        if (!ata_wait_drq(dev, &seq))
             return false;
 
         const u16* src = buffer + sector * (ATA_SECTOR_SIZE / 2);
@@ -346,19 +373,19 @@ static bool _write_sectors(ata_device_t* dev, u32 lba, u8 count, const u16* buff
             outw(dev->io_base + ATA_REG_DATA, src[i]);
     }
 
-    if (!_wait_ready_event(dev, &seq))
+    if (!ata_wait_ready_event(dev, &seq))
         return false;
 
     outb(dev->io_base + ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
-    return _wait_ready_event(dev, &seq);
+    return ata_wait_ready_event(dev, &seq);
 }
 
-static ssize_t _read(disk_dev_t* dev, void* dest, size_t offset, size_t bytes) {
+static ssize_t ata_read(disk_dev_t* dev, void* dest, size_t offset, size_t bytes) {
     if (!dev || !dest || !dev->private)
         return -1;
 
     ata_device_t* ata = dev->private;
-    _lock(ata);
+    ata_lock(ata);
 
     ssize_t ret = -1;
     size_t disk_size = ata->sector_count * ata->sector_size;
@@ -383,7 +410,7 @@ static ssize_t _read(disk_dev_t* dev, void* dest, size_t offset, size_t bytes) {
     size_t remaining = bytes;
 
     if (sector_off) {
-        if (!_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
+        if (!ata_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
             goto done_free;
 
         size_t available = ata->sector_size - sector_off;
@@ -403,7 +430,7 @@ static ssize_t _read(disk_dev_t* dev, void* dest, size_t offset, size_t bytes) {
         if (batch > ATA_MAX_PIO_SECTORS)
             batch = ATA_MAX_PIO_SECTORS;
 
-        if (!_read_sectors(ata, (u32)lba, (u8)batch, (u16*)out))
+        if (!ata_read_sectors(ata, (u32)lba, (u8)batch, (u16*)out))
             goto done_free;
 
         size_t batch_bytes = batch * ata->sector_size;
@@ -414,7 +441,7 @@ static ssize_t _read(disk_dev_t* dev, void* dest, size_t offset, size_t bytes) {
     }
 
     if (remaining) {
-        if (!_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
+        if (!ata_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
             goto done_free;
 
         memcpy(out, bounce, remaining);
@@ -426,7 +453,7 @@ done_free:
     free(bounce);
 
 done:
-    _unlock(ata);
+    ata_unlock(ata);
     return ret;
 
 done_empty:
@@ -434,12 +461,12 @@ done_empty:
     goto done;
 }
 
-static ssize_t _write(disk_dev_t* dev, void* src, size_t offset, size_t bytes) {
+static ssize_t ata_write(disk_dev_t* dev, void* src, size_t offset, size_t bytes) {
     if (!dev || !src || !dev->private)
         return -1;
 
     ata_device_t* ata = dev->private;
-    _lock(ata);
+    ata_lock(ata);
 
     ssize_t ret = -1;
     size_t disk_size = ata->sector_count * ata->sector_size;
@@ -467,12 +494,12 @@ static ssize_t _write(disk_dev_t* dev, void* src, size_t offset, size_t bytes) {
         size_t available = ata->sector_size - sector_off;
         size_t chunk = remaining < available ? remaining : available;
 
-        if (!_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
+        if (!ata_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
             goto done_free;
 
         memcpy(bounce + sector_off, in, chunk);
 
-        if (!_write_sectors(ata, (u32)lba, 1, (const u16*)bounce))
+        if (!ata_write_sectors(ata, (u32)lba, 1, (const u16*)bounce))
             goto done_free;
 
         in += chunk;
@@ -487,7 +514,7 @@ static ssize_t _write(disk_dev_t* dev, void* src, size_t offset, size_t bytes) {
         if (batch > ATA_MAX_PIO_SECTORS)
             batch = ATA_MAX_PIO_SECTORS;
 
-        if (!_write_sectors(ata, (u32)lba, (u8)batch, (const u16*)in))
+        if (!ata_write_sectors(ata, (u32)lba, (u8)batch, (const u16*)in))
             goto done_free;
 
         size_t batch_bytes = batch * ata->sector_size;
@@ -498,12 +525,12 @@ static ssize_t _write(disk_dev_t* dev, void* src, size_t offset, size_t bytes) {
     }
 
     if (remaining) {
-        if (!_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
+        if (!ata_read_sectors(ata, (u32)lba, 1, (u16*)bounce))
             goto done_free;
 
         memcpy(bounce, in, remaining);
 
-        if (!_write_sectors(ata, (u32)lba, 1, (const u16*)bounce))
+        if (!ata_write_sectors(ata, (u32)lba, 1, (const u16*)bounce))
             goto done_free;
     }
 
@@ -513,7 +540,7 @@ done_free:
     free(bounce);
 
 done:
-    _unlock(ata);
+    ata_unlock(ata);
     return ret;
 
 done_empty:
@@ -531,13 +558,15 @@ bool ata_disk_init(void) {
     ata->master = true;
 
     sched_wait_queue_init(&ata->io_wait);
+    sched_wait_queue_init(&ata->irq_wait);
 
     outb(ata->ctrl_base, ATA_CTRL_IRQ_ENABLE);
 
     u16 identify[256];
-    if (!_identify(ata, identify)) {
+    if (!ata_identify(ata, identify)) {
         log_warn("ata: primary master not present");
         sched_wait_queue_destroy(&ata->io_wait);
+        sched_wait_queue_destroy(&ata->irq_wait);
         free(ata);
         return false;
     }
@@ -553,6 +582,7 @@ bool ata_disk_init(void) {
     if (!sectors) {
         log_warn("ata: device reported zero sectors");
         sched_wait_queue_destroy(&ata->io_wait);
+        sched_wait_queue_destroy(&ata->irq_wait);
         free(ata);
         return false;
     }
@@ -565,17 +595,18 @@ bool ata_disk_init(void) {
     ata->io_busy = false;
 
     ata_primary = ata;
-    irq_register(IRQ_PRIMARY_ATA, _primary_irq);
+    irq_register(IRQ_PRIMARY_ATA, ata_primary_irq);
 
     static disk_interface_t ata_interface = {
-        .read = _read,
-        .write = _write,
+        .read = ata_read,
+        .write = ata_write,
     };
 
     disk_dev_t* disk = calloc(1, sizeof(disk_dev_t));
     if (!disk) {
         ata_primary = NULL;
         sched_wait_queue_destroy(&ata->io_wait);
+        sched_wait_queue_destroy(&ata->irq_wait);
         free(ata);
         return false;
     }
@@ -592,6 +623,7 @@ bool ata_disk_init(void) {
         free(disk);
         ata_primary = NULL;
         sched_wait_queue_destroy(&ata->io_wait);
+        sched_wait_queue_destroy(&ata->irq_wait);
         free(ata);
         return false;
     }

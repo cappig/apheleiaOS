@@ -8,19 +8,19 @@ static const sighandler_t default_actions[NSIG] = {
     [SIGCHLD] = SIG_IGN,
 };
 
-static bool _valid(int signum) {
+static bool signal_valid(int signum) {
     return signum > 0 && signum < NSIG;
 }
 
-static bool _is_stop(int signum) {
+static bool signal_is_stop(int signum) {
     return signum == SIGTSTP || signum == SIGSTOP || signum == SIGTTIN || signum == SIGTTOU;
 }
 
-static bool _is_continue(int signum) {
+static bool signal_is_continue(int signum) {
     return signum == SIGCONT;
 }
 
-static sighandler_t _get_handler(sched_thread_t* thread, int signum) {
+static sighandler_t signal_get_handler(sched_thread_t* thread, int signum) {
     if (!thread || !signal_valid(signum))
         return SIG_DFL;
 
@@ -37,27 +37,27 @@ static sighandler_t _get_handler(sched_thread_t* thread, int signum) {
     return handler;
 }
 
-static void _mark_pending(sched_thread_t* thread, int signum) {
-    if (!thread || !_valid(signum))
+static void signal_mark_pending(sched_thread_t* thread, int signum) {
+    if (!thread || !signal_valid(signum))
         return;
 
     u32 mask = 1u << (signum - 1);
     thread->signal_pending |= mask;
 }
 
-static void _clear_pending(sched_thread_t* thread, int signum) {
-    if (!thread || !_valid(signum))
+static void signal_clear_pending(sched_thread_t* thread, int signum) {
+    if (!thread || !signal_valid(signum))
         return;
 
     u32 mask = 1u << (signum - 1);
     thread->signal_pending &= ~mask;
 }
 
-static int _next_pending(sched_thread_t* thread) {
+static int signal_next_pending(sched_thread_t* thread) {
     if (!thread)
         return 0;
 
-    u32 pending = thread->signal_pending;
+    u32 pending = thread->signal_pending & ~thread->signal_mask;
     if (!pending)
         return 0;
 
@@ -92,10 +92,10 @@ sighandler_t sched_signal_set_handler(
     sighandler_t handler,
     uintptr_t trampoline
 ) {
-    if (!thread || !_valid(signum))
+    if (!thread || !signal_valid(signum))
         return SIG_ERR;
 
-    if (signum == SIGKILL)
+    if (signum == SIGKILL || signum == SIGSTOP)
         return SIG_ERR;
 
     if (handler != SIG_DFL && handler != SIG_IGN && !trampoline)
@@ -113,20 +113,21 @@ sighandler_t sched_signal_set_handler(
 }
 
 int sched_signal_send_thread(sched_thread_t* thread, int signum) {
-    if (!thread || !_valid(signum))
+    if (!thread || !signal_valid(signum))
         return -1;
 
-    sighandler_t handler = _get_handler(thread, signum);
+    sighandler_t handler = signal_get_handler(thread, signum);
     if (handler == SIG_IGN)
         return 0;
 
-    if (_is_continue(signum) && thread->state == THREAD_STOPPED &&
-        (handler == SIG_DFL || handler == SIG_IGN)) {
+    // SIGCONT always continues a stopped process, regardless of handler
+    if (signal_is_continue(signum) && thread->state == THREAD_STOPPED)
         sched_continue_thread(thread);
-        return 1;
-    }
 
-    if (_is_stop(signum) && handler == SIG_DFL) {
+    if (signal_is_continue(signum) && handler == SIG_DFL)
+        return 1;
+
+    if (signal_is_stop(signum) && handler == SIG_DFL) {
         sched_stop_thread(thread, signum);
         return 1;
     }
@@ -158,24 +159,24 @@ void sched_signal_deliver_current(arch_int_state_t* state) {
     if (thread->signal_saved_valid)
         return;
 
-    int signum = _next_pending(thread);
+    int signum = signal_next_pending(thread);
     if (!signum)
         return;
 
     sighandler_t handler = signal_get_handler(thread, signum);
 
     if (handler == SIG_IGN) {
-        _clear_pending(thread, signum);
+        signal_clear_pending(thread, signum);
         return;
     }
 
-    if (handler == SIG_DFL && _is_stop(signum)) {
+    if (handler == SIG_DFL && signal_is_stop(signum)) {
         signal_clear_pending(thread, signum);
         sched_stop_thread(thread, signum);
         return;
     }
 
-    if (handler == SIG_DFL && _is_continue(signum)) {
+    if (handler == SIG_DFL && signal_is_continue(signum)) {
         signal_clear_pending(thread, signum);
         sched_continue_thread(thread);
         return;
@@ -201,7 +202,7 @@ void sched_signal_deliver_current(arch_int_state_t* state) {
         sched_exit();
     }
 
-    _clear_pending(thread, signum);
+    signal_clear_pending(thread, signum);
 }
 
 bool sched_signal_sigreturn(sched_thread_t* thread, arch_int_state_t* state) {
@@ -220,5 +221,5 @@ bool sched_signal_has_pending(sched_thread_t* thread) {
     if (!thread)
         return false;
 
-    return thread->signal_pending != 0;
+    return (thread->signal_pending & ~thread->signal_mask) != 0;
 }

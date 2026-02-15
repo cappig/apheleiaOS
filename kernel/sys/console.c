@@ -50,6 +50,9 @@ typedef struct {
     u32 font_height;
     u32 font_row_bytes;
     u32 font_glyph_bytes;
+    font_map_t* font_map_sorted;
+    u32 font_map_sorted_count;
+    const font_t* font_map_sorted_src;
     bool ready;
     size_t screen_count;
     size_t active_screen;
@@ -163,6 +166,51 @@ static void _update_text_cursor(size_t col, size_t row) {
         backend_ops->text_cursor_set(col, row);
 }
 
+static void _free_font_map_index(void) {
+    if (!console_state.font_map_sorted)
+        return;
+
+    free(console_state.font_map_sorted);
+    console_state.font_map_sorted = NULL;
+    console_state.font_map_sorted_count = 0;
+    console_state.font_map_sorted_src = NULL;
+}
+
+static void _build_font_map_index(const font_t* font) {
+    if (!font || !font->map || !font->map_count) {
+        _free_font_map_index();
+        return;
+    }
+
+    if (console_state.font_map_sorted_src == font && console_state.font_map_sorted &&
+        console_state.font_map_sorted_count == font->map_count)
+        return;
+
+    _free_font_map_index();
+
+    font_map_t* sorted = malloc(sizeof(font_map_t) * font->map_count);
+    if (!sorted)
+        return;
+
+    memcpy(sorted, font->map, sizeof(font_map_t) * font->map_count);
+
+    for (u32 i = 1; i < font->map_count; i++) {
+        font_map_t current = sorted[i];
+        u32 j = i;
+
+        while (j > 0 && sorted[j - 1].codepoint > current.codepoint) {
+            sorted[j] = sorted[j - 1];
+            j--;
+        }
+
+        sorted[j] = current;
+    }
+
+    console_state.font_map_sorted = sorted;
+    console_state.font_map_sorted_count = font->map_count;
+    console_state.font_map_sorted_src = font;
+}
+
 static void _use_font(const font_t* font) {
     if (!font || !font->glyphs || !font->glyph_width || !font->glyph_height)
         return;
@@ -172,6 +220,7 @@ static void _use_font(const font_t* font) {
     console_state.font_height = font->glyph_height;
     console_state.font_row_bytes = font_row_bytes(font);
     console_state.font_glyph_bytes = font_glyph_bytes(font);
+    _build_font_map_index(font);
 }
 
 static u32 _font_index(u32 codepoint) {
@@ -179,7 +228,23 @@ static u32 _font_index(u32 codepoint) {
     if (!font)
         return 0;
 
-    if (font->map && font->map_count) {
+    if (console_state.font_map_sorted && console_state.font_map_sorted_count) {
+        u32 lo = 0;
+        u32 hi = console_state.font_map_sorted_count;
+
+        while (lo < hi) {
+            u32 mid = lo + (hi - lo) / 2;
+            const font_map_t* entry = &console_state.font_map_sorted[mid];
+
+            if (entry->codepoint == codepoint)
+                return entry->glyph;
+
+            if (entry->codepoint < codepoint)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+    } else if (font->map && font->map_count) {
         for (u32 i = 0; i < font->map_count; i++) {
             if (font->map[i].codepoint == codepoint)
                 return font->map[i].glyph;
@@ -752,8 +817,13 @@ static void _redraw_screen(size_t index) {
     else if (console_state.mode == CONSOLE_FRAMEBUFFER)
         _clear_fb(screen);
 
-    if (!cells)
+    if (!cells) {
+        if (temp_batch) {
+            console_state.flush_batch = false;
+            _flush_dirty();
+        }
         return;
+    }
 
     size_t cols = console_state.cols;
     size_t rows = console_state.rows;
@@ -912,7 +982,8 @@ static void _newline(console_screen_t* screen, size_t screen_index) {
 }
 
 static size_t _next_tab_stop(size_t cursor_x) {
-    return ((cursor_x / CONSOLE_TAB_WIDTH) + 1) * CONSOLE_TAB_WIDTH;
+    size_t next = ((cursor_x / CONSOLE_TAB_WIDTH) + 1) * CONSOLE_TAB_WIDTH;
+    return next < console_state.cols ? next : console_state.cols;
 }
 
 static void _putc(console_screen_t* screen, size_t screen_index, u32 ch) {
@@ -1178,7 +1249,7 @@ static void _ansi_csi(void* opaque, char op, const int* params, size_t count, bo
     }
 }
 
-static const ansi_callbacks_t console_ansi_callbacks = {
+static const ansi_callbacks_t _ansi_callbacks = {
     .on_print = _ansi_print,
     .on_control = _ansi_control,
     .on_csi = _ansi_csi,
@@ -1215,7 +1286,7 @@ static void _write_screen_locked(size_t screen_index, const char* buf, size_t le
         if (ch == '\x1b')
             _flush_invalid_utf8(&ansi_ctx);
 
-        ansi_parser_feed(&screen->ansi, ch, &console_ansi_callbacks, &ansi_ctx);
+        ansi_parser_feed(&screen->ansi, ch, &_ansi_callbacks, &ansi_ctx);
     }
 
     if (batch_cursor) {

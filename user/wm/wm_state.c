@@ -15,36 +15,35 @@
 #define TITLE_TEXT     0x00f0f0f0U
 #define CLOSE_BG       0x00b04040U
 #define CLOSE_FG       0x00ffffffU
-#define WM_MAX_ROW_PIX WM_MAX_FB_W
 #define FONT_BUF_SIZE  (256 * 1024)
+#define MAX_TITLE_CHARS 48
 
 static wm_window_t windows[WS_MAX_WINDOWS];
-static u32 row_store[WM_MAX_ROW_PIX];
+static u32 row_store[WM_MAX_FB_W];
 static u8 font_buf[FONT_BUF_SIZE];
 static psf_font_t title_font = {0};
 
-static int open_ws_fb(u32 id) {
+static int _open_ws_fb(u32 id) {
     char path[64];
     snprintf(path, sizeof(path), "/dev/ws/%u/fb", id);
-    return open(path, O_RDWR | O_NONBLOCK, 0);
+    return open(path, O_RDWR, 0);
 }
 
-static bool load_font_file(const char* path) {
+static bool _load_font_file(const char* path) {
     return psf_load_file(path, font_buf, sizeof(font_buf), &title_font);
 }
 
-static void init_font(void) {
-    // we should move the font to etc probably
-    if (load_font_file("/boot/font.psf"))
+static void _init_font(void) {
+    if (_load_font_file("/boot/font.psf"))
         return;
 
-    if (load_font_file("/etc/font.psf"))
+    if (_load_font_file("/etc/font.psf"))
         return;
 
     memset(&title_font, 0, sizeof(title_font));
 }
 
-static void draw_pixel(u32* frame, u32 fb_width, u32 fb_height, i32 x, i32 y, u32 color) {
+static void _draw_pixel(u32* frame, u32 fb_width, u32 fb_height, i32 x, i32 y, u32 color) {
     if (!frame)
         return;
 
@@ -54,14 +53,13 @@ static void draw_pixel(u32* frame, u32 fb_width, u32 fb_height, i32 x, i32 y, u3
     frame[(size_t)y * fb_width + (size_t)x] = color;
 }
 
-static void draw_text(u32* frame, u32 fb_width, u32 fb_height, i32 x, i32 y, const char* text, u32 color) {
+static void _draw_text(u32* frame, u32 fb_width, u32 fb_height, i32 x, i32 y, const char* text, u32 color) {
     if (!title_font.glyphs || !text || !text[0])
         return;
 
     i32 pen_x = x;
-    size_t count = 0;
 
-    for (const char* p = text; *p && count < 48; p++, count++) {
+    for (const char* p = text; *p && (p - text) < MAX_TITLE_CHARS; p++) {
         u32 idx = (u8)(*p);
 
         if (idx >= title_font.glyph_count)
@@ -77,7 +75,7 @@ static void draw_text(u32* frame, u32 fb_width, u32 fb_height, i32 x, i32 y, con
                 u8 mask = (u8)(0x80 >> (gx & 7));
 
                 if (bits & mask)
-                    draw_pixel(frame, fb_width, fb_height, pen_x + (i32)gx, y + (i32)gy, color);
+                    _draw_pixel(frame, fb_width, fb_height, pen_x + (i32)gx, y + (i32)gy, color);
             }
         }
 
@@ -85,7 +83,7 @@ static void draw_text(u32* frame, u32 fb_width, u32 fb_height, i32 x, i32 y, con
     }
 }
 
-static void draw_close_button(u32* frame, u32 fb_width, u32 fb_height, const wm_window_t* window, bool focused) {
+static void _draw_close_button(u32* frame, u32 fb_width, u32 fb_height, const wm_window_t* window, bool focused) {
     if (!window)
         return;
 
@@ -95,14 +93,13 @@ static void draw_close_button(u32* frame, u32 fb_width, u32 fb_height, const wm_
 
     draw_fill_rect(frame, fb_width, fb_height, bx, by, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE, bg);
 
-    // draw the X using two diagonal lines, this should probably be replaced with an actual glyph at some point
     for (i32 i = 2; i < CLOSE_BTN_SIZE - 2; i++) {
-        draw_pixel(frame, fb_width, fb_height, bx + i, by + i, CLOSE_FG);
-        draw_pixel(frame, fb_width, fb_height, bx + i, by + (i32)CLOSE_BTN_SIZE - 1 - i, CLOSE_FG);
+        _draw_pixel(frame, fb_width, fb_height, bx + i, by + i, CLOSE_FG);
+        _draw_pixel(frame, fb_width, fb_height, bx + i, by + (i32)CLOSE_BTN_SIZE - 1 - i, CLOSE_FG);
     }
 }
 
-static void cleanup_window(wm_window_t* window) {
+static void _cleanup_window(wm_window_t* window) {
     if (!window)
         return;
 
@@ -113,18 +110,18 @@ static void cleanup_window(wm_window_t* window) {
     window->fb_fd = -1;
 }
 
-static bool point_in_rect(i32 px, i32 py, i32 x, i32 y, i32 w, i32 h) {
+static bool _point_in_rect(i32 px, i32 py, i32 x, i32 y, i32 w, i32 h) {
     return px >= x && py >= y && px < x + w && py < y + h;
 }
 
-static bool point_in_window(const wm_window_t* window, i32 px, i32 py) {
+static bool _point_in_window(const wm_window_t* window, i32 px, i32 py) {
     if (!window || !window->used)
         return false;
 
-    return point_in_rect(px, py, window->x, window->y, (i32)window->width, (i32)window->height + TITLE_H);
+    return _point_in_rect(px, py, window->x, window->y, (i32)window->width, (i32)window->height + TITLE_H);
 }
 
-static void sort_window_ids_by_z(u32* ids, size_t count) {
+static void _sort_by_z(u32* ids, size_t count) {
     if (!ids || count < 2)
         return;
 
@@ -141,7 +138,7 @@ static void sort_window_ids_by_z(u32* ids, size_t count) {
     }
 }
 
-static void blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* window) {
+static void _blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* window) {
     if (!frame || !window || !window->used)
         return;
 
@@ -155,26 +152,39 @@ static void blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* wi
     draw_fill_rect(frame, fb_width, fb_height, x, y + TITLE_H - BORDER_W, w, BORDER_W, BORDER_COLOR);
     draw_fill_rect(frame, fb_width, fb_height, x, y + TITLE_H, BORDER_W, h, BORDER_COLOR);
     draw_fill_rect(frame, fb_width, fb_height, x + (i32)w - BORDER_W, y + TITLE_H, BORDER_W, h, BORDER_COLOR);
-    draw_fill_rect(frame, fb_width, fb_height, x + BORDER_W, y + TITLE_H + BORDER_W, w - 2 * BORDER_W, h - 2 * BORDER_W, CLIENT_BG);
+    draw_fill_rect(
+        frame, fb_width, fb_height,
+        x + BORDER_W, y + TITLE_H + BORDER_W,
+        w - 2 * BORDER_W, h - 2 * BORDER_W, CLIENT_BG
+    );
 
-    draw_close_button(frame, fb_width, fb_height, window, window->focused);
+    _draw_close_button(frame, fb_width, fb_height, window, window->focused);
 
     if (window->title[0])
-        draw_text(frame, fb_width, fb_height, x + 6, y + 1, window->title, TITLE_TEXT);
+        _draw_text(frame, fb_width, fb_height, x + 6, y + 1, window->title, TITLE_TEXT);
 
     if (window->fb_fd < 0)
         return;
 
     u32 copy_cols = w;
-    if (copy_cols > WM_MAX_ROW_PIX)
-        copy_cols = WM_MAX_ROW_PIX;
+    if (copy_cols > WM_MAX_FB_W)
+        copy_cols = WM_MAX_FB_W;
 
     for (u32 row = 0; row < h; row++) {
         off_t row_off = (off_t)((size_t)row * (size_t)w * 4);
-        ssize_t n = pread(window->fb_fd, row_store, copy_cols * 4, row_off);
+        size_t row_bytes = copy_cols * 4;
 
-        if (n < 0 && errno != EAGAIN)
+        ssize_t n = pread(window->fb_fd, row_store, row_bytes, row_off);
+
+        if (n < 0) {
+            if (errno == EINTR)
+                continue;
+
             break;
+        }
+
+        if ((size_t)n != row_bytes)
+            continue;
 
         i32 dst_y = y + TITLE_H + (i32)row;
 
@@ -193,7 +203,7 @@ static void blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* wi
 }
 
 void wm_init(void) {
-    init_font();
+    _init_font();
     for (u32 i = 0; i < WS_MAX_WINDOWS; i++)
         windows[i].fb_fd = -1;
 }
@@ -209,7 +219,7 @@ bool wm_point_in_title(const wm_window_t* window, i32 px, i32 py) {
     if (!window || !window->used)
         return false;
 
-    return point_in_rect(px, py, window->x, window->y, (i32)window->width, TITLE_H);
+    return _point_in_rect(px, py, window->x, window->y, (i32)window->width, TITLE_H);
 }
 
 bool wm_point_in_close(const wm_window_t* window, i32 px, i32 py) {
@@ -219,7 +229,7 @@ bool wm_point_in_close(const wm_window_t* window, i32 px, i32 py) {
     i32 bx = window->x + (i32)window->width - CLOSE_BTN_SIZE - 3;
     i32 by = window->y + 3;
 
-    return point_in_rect(px, py, bx, by, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE);
+    return _point_in_rect(px, py, bx, by, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE);
 }
 
 wm_window_t* wm_top_window_at(i32 px, i32 py) {
@@ -228,7 +238,7 @@ wm_window_t* wm_top_window_at(i32 px, i32 py) {
     for (u32 i = 0; i < WS_MAX_WINDOWS; i++) {
         wm_window_t* window = &windows[i];
 
-        if (!point_in_window(window, px, py))
+        if (!_point_in_window(window, px, py))
             continue;
 
         if (!top || window->z >= top->z)
@@ -280,14 +290,14 @@ void wm_handle_ws_event(const ws_event_t* event) {
         return;
 
     if (event->type == WS_EVT_WINDOW_CLOSED) {
-        cleanup_window(window);
+        _cleanup_window(window);
         return;
     }
 
     if (event->type != WS_EVT_WINDOW_NEW)
         return;
 
-    cleanup_window(window);
+    _cleanup_window(window);
 
     window->used = true;
     window->id = event->id;
@@ -299,7 +309,7 @@ void wm_handle_ws_event(const ws_event_t* event) {
     window->focused = false;
     strncpy(window->title, event->title, sizeof(window->title) - 1);
     window->title[sizeof(window->title) - 1] = '\0';
-    window->fb_fd = open_ws_fb(window->id);
+    window->fb_fd = _open_ws_fb(window->id);
 }
 
 void wm_render_frame(u32* frame, u32 fb_width, u32 fb_height) {
@@ -318,13 +328,13 @@ void wm_render_frame(u32* frame, u32 fb_width, u32 fb_height) {
         order[active++] = i;
     }
 
-    sort_window_ids_by_z(order, active);
+    _sort_by_z(order, active);
 
     for (size_t i = 0; i < active; i++)
-        blit_window(frame, fb_width, fb_height, &windows[order[i]]);
+        _blit_window(frame, fb_width, fb_height, &windows[order[i]]);
 }
 
 void wm_cleanup_all_windows(void) {
     for (u32 i = 0; i < WS_MAX_WINDOWS; i++)
-        cleanup_window(&windows[i]);
+        _cleanup_window(&windows[i]);
 }

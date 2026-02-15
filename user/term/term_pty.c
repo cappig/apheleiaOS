@@ -1,5 +1,6 @@
 #include "term_pty.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <gui/input.h>
 #include <input/kbd.h>
@@ -19,11 +20,35 @@ static bool ctrl_down = false;
 static bool shift_down = false;
 static bool caps_lock = false;
 
+static bool write_retry(int fd, const void* data, size_t len) {
+    if (fd < 0 || !data || !len)
+        return false;
+
+    const u8* cursor = data;
+    size_t left = len;
+
+    while (left > 0) {
+        ssize_t n = write(fd, cursor, left);
+        if (n > 0) {
+            cursor += (size_t)n;
+            left -= (size_t)n;
+            continue;
+        }
+
+        if (n < 0 && errno == EINTR)
+            continue;
+
+        return false;
+    }
+
+    return true;
+}
+
 static void send_bytes(int fd, const char* bytes) {
     if (fd < 0 || !bytes)
         return;
 
-    write(fd, bytes, strlen(bytes));
+    write_retry(fd, bytes, strlen(bytes));
 }
 
 static bool send_foreground_signal(int master_fd, int signum) {
@@ -72,7 +97,7 @@ void term_handle_key_event(int master_fd, const ws_input_event_t* event) {
     if (ctrl && event->keycode == KBD_C) {
         if (!send_foreground_signal(master_fd, SIGINT)) {
             const char intr = 0x03;
-            write(master_fd, &intr, 1);
+            write_retry(master_fd, &intr, 1);
         }
         return;
     }
@@ -80,7 +105,7 @@ void term_handle_key_event(int master_fd, const ws_input_event_t* event) {
     if (ctrl && event->keycode == KBD_Z) {
         if (!send_foreground_signal(master_fd, SIGTSTP)) {
             const char susp = 0x1a;
-            write(master_fd, &susp, 1);
+            write_retry(master_fd, &susp, 1);
         }
         return;
     }
@@ -133,7 +158,7 @@ void term_handle_key_event(int master_fd, const ws_input_event_t* event) {
     if (ch == '\r')
         ch = '\n';
 
-    write(master_fd, &ch, 1);
+    write_retry(master_fd, &ch, 1);
 }
 
 pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 height) {

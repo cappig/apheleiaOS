@@ -450,6 +450,61 @@ int window_flush(window_t* window) {
     return -1;
 }
 
+static int window_flush_row(window_t* window, const u8* row, size_t bytes, off_t offset) {
+    if (!window || window->fb_fd < 0 || !row || !bytes) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t written = 0;
+
+    while (written < bytes) {
+        ssize_t n = pwrite(window->fb_fd, row + written, bytes - written, offset + (off_t)written);
+        if (n < 0)
+            return -1;
+
+        if (!n) {
+            errno = EIO;
+            return -1;
+        }
+
+        written += (size_t)n;
+    }
+
+    return 0;
+}
+
+int window_flush_rect(window_t* window, u32 x, u32 y, u32 width, u32 height) {
+    if (!window || !window->pixels || !window->pixels_count) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (x >= window->width || y >= window->height || !width || !height)
+        return 0;
+
+    u32 clip_w = width;
+    u32 clip_h = height;
+
+    if (x + clip_w > window->width)
+        clip_w = window->width - x;
+
+    if (y + clip_h > window->height)
+        clip_h = window->height - y;
+
+    size_t row_bytes = (size_t)clip_w * sizeof(u32);
+
+    for (u32 row = 0; row < clip_h; row++) {
+        const u8* src = (const u8*)(window->pixels + ((size_t)y + row) * window->width + x);
+        off_t dst_off = (off_t)(((size_t)y + row) * window->stride + (size_t)x * sizeof(u32));
+
+        if (window_flush_row(window, src, row_bytes, dst_off) < 0)
+            return -1;
+    }
+
+    return 0;
+}
+
 int window_wait_event(window_t* window, ws_input_event_t* event, int timeout_ms) {
     if (!window || window->ev_fd < 0 || !event) {
         errno = EINVAL;

@@ -281,7 +281,7 @@ static ssize_t _dev_fb_write(vfs_node_t* node, void* buf, size_t offset, size_t 
     if (owner_screen != TTY_NONE && tty_current_screen() != (size_t)owner_screen)
         return -EAGAIN;
 
-    return dev_fb_transfer(framebuffer_get_info(), buf, offset, len, true);
+    return _dev_fb_transfer(framebuffer_get_info(), buf, offset, len, true);
 }
 
 static ssize_t _dev_fb_ioctl(vfs_node_t* node, u64 request, void* args) {
@@ -472,8 +472,8 @@ static void _create_ptys(vfs_node_t* dev_dir, vfs_interface_t* pty_if) {
         pty_name[3] = (char)('0' + i);
         pts_name[3] = (char)('0' + i);
 
-        devfs_create_node(dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, &pty_master_handles[i]);
-        devfs_create_node(dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, &pty_slave_handles[i]);
+        _create_node(dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, &pty_master_handles[i]);
+        _create_node(dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, &pty_slave_handles[i]);
     }
 }
 
@@ -483,9 +483,9 @@ void devfs_init(void) {
     pty_init();
     input_init();
     ws_init();
-    devfs_seed_tty_handles();
+    _seed_tty_handles();
     _seed_pty_handles();
-    devfs_boot_seconds();
+    _boot_seconds();
 
     vfs_node_t* root = vfs_lookup("/");
 
@@ -504,14 +504,14 @@ void devfs_init(void) {
         return;
     }
 
-    vfs_interface_t* tty_if = vfs_create_interface(dev_tty_read, dev_tty_write, NULL);
+    vfs_interface_t* tty_if = vfs_create_interface(_dev_tty_read, _dev_tty_write, NULL);
 
     if (!tty_if) {
         log_warn("devfs: failed to allocate tty interface");
         return;
     }
 
-    tty_if->ioctl = dev_tty_ioctl;
+    tty_if->ioctl = _dev_tty_ioctl;
     tty_if->poll = _dev_tty_poll;
 
     if (!_create_node(dev_dir, "tty", VFS_CHARDEV, 0666, tty_if, &tty_current))
@@ -526,10 +526,10 @@ void devfs_init(void) {
     if (!pty_if) {
         log_warn("devfs: failed to allocate pty interface");
     } else {
-        pty_if->ioctl = dev_pty_ioctl;
+        pty_if->ioctl = _dev_pty_ioctl;
         pty_if->poll = _dev_pty_poll;
 
-        if (!devfs_create_node(dev_dir, "ptmx", VFS_CHARDEV, 0666, pty_if, &pty_master_default))
+        if (!_create_node(dev_dir, "ptmx", VFS_CHARDEV, 0666, pty_if, &pty_master_default))
             log_warn("devfs: failed to create /dev/ptmx");
 
         _create_ptys(dev_dir, pty_if);
@@ -559,18 +559,18 @@ void devfs_init(void) {
     } else {
         input_if->poll = _dev_input_poll;
 
-        if (!devfs_create_node(dev_dir, "input", VFS_CHARDEV, 0666, input_if, NULL))
+        if (!_create_node(dev_dir, "input", VFS_CHARDEV, 0666, input_if, NULL))
             log_warn("devfs: failed to create /dev/input");
     }
 
-    vfs_interface_t* null_if = vfs_create_interface(_dev_null_read, dev_null_write, NULL);
+    vfs_interface_t* null_if = vfs_create_interface(_dev_null_read, _dev_null_write, NULL);
     if (!null_if) {
         log_warn("devfs: failed to allocate null interface");
     } else if (!_create_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {
         log_warn("devfs: failed to create /dev/null");
     }
 
-    vfs_interface_t* zero_if = vfs_create_interface(dev_zero_read, dev_zero_write, NULL);
+    vfs_interface_t* zero_if = vfs_create_interface(_dev_zero_read, _dev_zero_write, NULL);
     if (!zero_if) {
         log_warn("devfs: failed to allocate zero interface");
     } else if (!_create_node(dev_dir, "zero", VFS_CHARDEV, 0666, zero_if, NULL)) {
@@ -579,10 +579,10 @@ void devfs_init(void) {
 
     const framebuffer_info_t* fb = framebuffer_get_info();
     if (fb) {
-        vfs_interface_t* fb_if = vfs_create_interface(dev_fb_read, dev_fb_write, NULL);
+        vfs_interface_t* fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);
         if (!fb_if) {
             log_warn("devfs: failed to allocate framebuffer interface");
-        } else if (!devfs_create_node(dev_dir, "fb", VFS_CHARDEV, 0666, fb_if, NULL)) {
+        } else if (!_create_node(dev_dir, "fb", VFS_CHARDEV, 0666, fb_if, NULL)) {
             log_warn("devfs: failed to create /dev/fb");
         } else {
             fb_if->ioctl = _dev_fb_ioctl;
@@ -623,7 +623,7 @@ void devfs_init(void) {
     } else {
         wsctl_if->poll = _dev_wsctl_poll;
 
-        if (!devfs_create_node(dev_dir, "wsctl", VFS_CHARDEV, 0666, wsctl_if, NULL))
+        if (!_create_node(dev_dir, "wsctl", VFS_CHARDEV, 0666, wsctl_if, NULL))
             log_warn("devfs: failed to create /dev/wsctl");
     }
 
@@ -656,8 +656,8 @@ void devfs_init(void) {
                 if (!slot)
                     continue;
 
-                devfs_create_node(slot, "fb", VFS_CHARDEV, 0666, ws_fb_if, &ws_ids[i]);
-                devfs_create_node(slot, "ev", VFS_CHARDEV, 0666, ws_ev_if, &ws_ids[i]);
+                _create_node(slot, "fb", VFS_CHARDEV, 0666, ws_fb_if, &ws_ids[i]);
+                _create_node(slot, "ev", VFS_CHARDEV, 0666, ws_ev_if, &ws_ids[i]);
             }
         }
     }

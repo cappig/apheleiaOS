@@ -81,6 +81,7 @@ typedef struct sched_thread {
 
     list_node_t wait_node;
     bool in_wait_queue;
+    struct sched_wait_queue* blocked_on;
 
     list_node_t zombie_node;
     bool in_zombie_list;
@@ -120,6 +121,8 @@ typedef struct sched_thread {
     char cwd[PATH_MAX];
 
     u64 wake_tick;
+    bool sleep_queued;
+    size_t sleep_index;
 
     u32 signal_pending;
     u32 signal_mask;
@@ -171,12 +174,16 @@ void sched_wait_queue_init(sched_wait_queue_t* queue);
 void sched_wait_queue_destroy(sched_wait_queue_t* queue);
 
 void sched_block(sched_wait_queue_t* queue);
-void sched_block_locked(sched_wait_queue_t* queue, unsigned long flags);
 void sched_wake_one(sched_wait_queue_t* queue);
 void sched_wake_all(sched_wait_queue_t* queue);
 
+void sched_preempt_disable(void);
+void sched_preempt_enable(void);
+bool sched_preempt_disabled(void);
+
 void sched_tick(arch_int_state_t* state);
 void sched_yield(void);
+void sched_sleep(u64 ticks);
 void sched_exit(void) NORETURN;
 size_t sched_list_procs(proc_info_t* out, size_t capacity);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
