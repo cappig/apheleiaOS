@@ -124,6 +124,9 @@ static inline void tlb_flush(u32 addr) {
 #endif
 
 
+#define CR0_EM (1ULL << 2)
+#define CR0_TS (1ULL << 3)
+#define CR0_MP (1ULL << 1)
 #define CR0_WP (1ULL << 16)
 #define CR0_PG (1ULL << 31)
 
@@ -188,8 +191,9 @@ static inline void write_cr3(u32 value) {
 }
 #endif
 
-#define CR4_PSE (1 << 4)
-#define CR4_PAE (1 << 5)
+#define CR4_PSE     (1 << 4)
+#define CR4_PAE     (1 << 5)
+#define CR4_OSFXSR  (1 << 9)
 
 #if defined(__x86_64__)
 static inline u64 read_cr4(void) {

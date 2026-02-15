@@ -108,22 +108,24 @@ void arch_fpu_init(void* buf) {
         return;
 
     asm volatile("fninit");
-    asm volatile("fxsave %0" : "=m"(*(u8*)buf));
+    asm volatile("fnsave %0" : "=m"(*(u8*)buf));
+    asm volatile("fninit");
 }
 
 void arch_fpu_save(void* buf) {
     if (!buf)
         return;
 
-    asm volatile("fxsave %0" : "=m"(*(u8*)buf));
+    asm volatile("fnsave %0" : "=m"(*(u8*)buf));
 }
 
 void arch_fpu_restore(const void* buf) {
     if (!buf)
         return;
 
-    asm volatile("fxrstor %0" : : "m"(*(const u8*)buf));
+    asm volatile("frstor %0" : : "m"(*(const u8*)buf));
 }
+
 static char cpu_name[64] = "x86";
 
 static void _trim_cpu_name(char* name) {
