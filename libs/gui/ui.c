@@ -366,8 +366,16 @@ int window_init(window_t* window, u32 width, u32 height, const char* title) {
     memset(window, 0, sizeof(*window));
     window_reset_runtime(window);
 
-    if (ui_open(&window->ui_local, 0))
+    if (ui_open(&window->ui_local, 0)) {
+        if (errno == ENOENT) {
+            const char* msg = "error: window manager is not running\n";
+            write(STDERR_FILENO, msg, strlen(msg));
+        } else {
+            const char* msg = "error: failed to open window system\n";
+            write(STDERR_FILENO, msg, strlen(msg));
+        }
         return -1;
+    }
 
     window->ui = &window->ui_local;
     window->ui_owned = true;
@@ -379,9 +387,18 @@ int window_init(window_t* window, u32 width, u32 height, const char* title) {
         return 0;
 
     int saved = errno;
+    if (saved == ENOENT) {
+        const char* msg = "error: window manager is not running\n";
+        write(STDERR_FILENO, msg, strlen(msg));
+    } else {
+        const char* msg = "error: failed to create window\n";
+        write(STDERR_FILENO, msg, strlen(msg));
+    }
+
     ui_close(window->ui);
     memset(window, 0, sizeof(*window));
     window_reset_runtime(window);
+
     errno = saved;
     return -1;
 }

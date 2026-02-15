@@ -24,6 +24,22 @@ typedef struct {
 
 static char sh_complete_path[SH_PATH_MAX] = "/sbin";
 
+static const char* sh_builtins[] = {
+    "bg",
+    "cd",
+    "echo",
+    "env",
+    "exit",
+    "fg",
+    "help",
+    "history",
+    "jobs",
+    "set",
+    "umask",
+    "unset",
+    NULL,
+};
+
 void complete_set_path(const char* path) {
     if (!path || !path[0]) {
         snprintf(sh_complete_path, sizeof(sh_complete_path), "/sbin");
@@ -210,6 +226,14 @@ static size_t collect_command_matches(
     snprintf(path_buf, sizeof(path_buf), "%s", sh_complete_path);
 
     size_t count = 0;
+
+    for (const char** bp = sh_builtins; *bp; bp++) {
+        if (!starts_with(*bp, prefix))
+            continue;
+
+        add_match(matches, &count, cap, *bp, false);
+    }
+
     char* cursor = path_buf;
 
     while (cursor && *cursor) {

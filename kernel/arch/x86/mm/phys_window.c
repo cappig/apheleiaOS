@@ -149,6 +149,7 @@ void arch_phys_unmap(void* vaddr, size_t size) {
     if (!window_stack_depth) {
         sched_preempt_enable();
         return;
+    }
 
     window_map_t prev = window_stack[--window_stack_depth];
     window_pages_mapped = prev.pages;
