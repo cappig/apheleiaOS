@@ -140,7 +140,7 @@ void keyboard_handle_key(key_event event) {
     ring_buffer_push_array(buffer, (u8*)&event, sizeof(event));
     sched_wake_all(&kbd_wait);
 
-    keyboard_update_modifiers(kbd, action, event.code);
+    _update_modifiers(kbd, action, event.code);
     input_push_key_event(&event, kbd->shift, kbd->ctrl, kbd->alt, kbd->capslock);
 
     if (!action)
@@ -163,7 +163,7 @@ void keyboard_handle_key(key_event event) {
     if (input_capture_screen(tty_current_screen()))
         return;
 
-    if (keyboard_push_ansi_key(event.code))
+    if (_push_ansi_key(event.code))
         return;
 
     bool is_alpha = (event.code >= KBD_A && event.code <= KBD_Z);

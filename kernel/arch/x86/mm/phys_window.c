@@ -120,7 +120,7 @@ void* arch_phys_map(u64 paddr, size_t size) {
         window_stack[window_stack_depth++] =
             (window_map_t){.paddr_base = window_paddr_base, .pages = window_pages_mapped};
 
-        clear_window_range(window_pages_mapped);
+        _clear_window_range(window_pages_mapped);
     }
 
     window_pages_mapped = pages;
@@ -157,7 +157,7 @@ void arch_phys_unmap(void* vaddr, size_t size) {
     u32 map_base = PHYS_WINDOW_BASE_32;
 
     for (size_t i = 0; i < prev.pages; i++) {
-        map_window_page(map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, PT_WRITE);
+        _map_window_page(map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, PT_WRITE);
     }
 }
 

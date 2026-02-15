@@ -3,6 +3,9 @@
 #include <inttypes.h>
 #include <libc_ext/string.h>
 #include <log/log.h>
+#include <sched/scheduler.h>
+#include <sched/signal.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/acpi.h>
 #include <sys/console.h>
@@ -316,7 +319,7 @@ static void _page_fault_handler(int_state_t* state) {
 static void _gp_fault_handler(int_state_t* state) {
     u64 code = state ? (u64)state->error_code : 0;
 
-    if (handle_user_signal(SIGSEGV, state))
+    if (_handle_user_signal(SIGSEGV, state))
         return;
 
     panic_prepare();
@@ -422,10 +425,10 @@ const kernel_args_t* arch_init(void* boot_info) {
     memcpy(&boot_args, &info->args, sizeof(boot_args));
 
     _configure_log_sinks(info);
-    log_init(log_puts);
+    log_init(_log_puts);
 
-    select_log_level(info);
-    detect_cpu_name();
+    _select_log_level(info);
+    _detect_cpu_name();
 
 #if defined(__x86_64__)
     log_info("apheleiaOS kernel (x86_64) booting");
@@ -435,13 +438,13 @@ const kernel_args_t* arch_init(void* boot_info) {
 
     _route_irqs_to_pic();
     gdt_init();
-    tss_init(read_stack_ptr());
+    tss_init(_read_stack_ptr());
     cpu_init_boot();
     pic_init();
     idt_init();
 
     set_int_handler(INT_PAGE_FAULT, _page_fault_handler);
-    set_int_handler(INT_GENERAL_PROTECTION_FAULT, gp_fault_handler);
+    set_int_handler(INT_GENERAL_PROTECTION_FAULT, _gp_fault_handler);
     set_int_handler(INT_INVALID_OPCODE, _invalid_opcode_handler);
 
     pmm_init(&info->memory_map);
@@ -453,7 +456,7 @@ const kernel_args_t* arch_init(void* boot_info) {
     console_init(info);
     log_console_ready = true;
     _log_history_replay_console();
-    publish_framebuffer(info);
+    _publish_framebuffer(info);
 
     acpi_init(info->acpi_root_ptr);
     tsc_init();
@@ -464,7 +467,6 @@ const kernel_args_t* arch_init(void* boot_info) {
         dump_pci_devices();
     console_init(info);
     _publish_framebuffer(info);
-    log_init(console_puts);
     enable_interrupts();
 
 #if defined(__x86_64__)

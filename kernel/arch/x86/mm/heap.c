@@ -206,7 +206,7 @@ static void* _kmalloc(size_t size) {
     }
 
     if (!space)
-        panic("kmalloc: out of heap memory after grow (requested=%zu bytes)", size);
+        panic("kmalloc: out of heap memory after _grow (requested=%zu bytes)", size);
 
     // Write the header
     kheap_header* header = space;
@@ -256,8 +256,8 @@ void arch_init_alloc() {
     log_debug("initializing malloc");
 
     libc_alloc_ops_t ops = {
-        .malloc_fn = kmalloc,
-        .free_fn = kfree,
+        .malloc_fn = _kmalloc,
+        .free_fn = _kfree,
     };
     __libc_init_alloc(&ops);
 

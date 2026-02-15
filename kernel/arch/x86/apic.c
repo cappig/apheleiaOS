@@ -213,7 +213,7 @@ static void _ioapic_update_info(ioapic_info_t* info) {
     if (!info || !info->valid)
         return;
 
-    u32 ver = ioapic_read_reg(info, IOAPIC_REG_VER);
+    u32 ver = _ioapic_read_reg(info, IOAPIC_REG_VER);
     info->int_count = ((ver >> IOAPIC_VERSION_MAX_REDIR_SHIFT) & IOAPIC_VERSION_MAX_REDIR_MASK) + 1;
 }
 
@@ -293,7 +293,7 @@ static void _write(u32 reg, u32 value) {
 }
 
 static u32 _read_id(void) {
-    u32 id = apic_read(LAPIC_ID_REG);
+    u32 id = _read(LAPIC_ID_REG);
     return (id >> LAPIC_ID_SHIFT) & LAPIC_ID_MASK;
 }
 
@@ -405,7 +405,7 @@ static u32 _calibrate_timer(u32 hz) {
     _write(LAPIC_LVT_TIMER_REG, LAPIC_LVT_MASK);
 
     const u32 begin = APIC_TIMER_INITIAL_MAX;
-    apic_write(LAPIC_TIMER_ICOUNT_REG, begin);
+    _write(LAPIC_TIMER_ICOUNT_REG, begin);
 
     tsc_spin(APIC_TIMER_CAL_MS);
 
@@ -453,16 +453,16 @@ bool apic_init(void) {
 
     write_msr(APIC_BASE_MSR, base);
 
-    lapic_mmio = apic_map_mmio(lapic_paddr);
+    lapic_mmio = _map_mmio(lapic_paddr);
 
     if (!lapic_mmio) {
         log_warn("apic: failed to map LAPIC");
         return false;
     }
 
-    apic_write(LAPIC_SPURIOUS_REG, INT_SPURIOUS | LAPIC_SPURIOUS_SW_ENABLE);
-    apic_write(LAPIC_LVT_LINT0_REG, LAPIC_LVT_MASK);
-    apic_write(LAPIC_LVT_LINT1_REG, LAPIC_LVT_MASK);
+    _write(LAPIC_SPURIOUS_REG, INT_SPURIOUS | LAPIC_SPURIOUS_SW_ENABLE);
+    _write(LAPIC_LVT_LINT0_REG, LAPIC_LVT_MASK);
+    _write(LAPIC_LVT_LINT1_REG, LAPIC_LVT_MASK);
 
     u32 id = _read_id();
     cpu_core_t* core = cpu_current();
@@ -486,8 +486,8 @@ bool apic_timer_init(u32 hz) {
 
     u32 lvt = IRQ_INT(IRQ_SYSTEM_TIMER) | LAPIC_TIMER_PERIODIC | LAPIC_LVT_MASK;
 
-    apic_write(LAPIC_LVT_TIMER_REG, lvt);
-    apic_write(LAPIC_TIMER_ICOUNT_REG, initial);
+    _write(LAPIC_LVT_TIMER_REG, lvt);
+    _write(LAPIC_TIMER_ICOUNT_REG, initial);
 
     apic_timer_rate_hz = hz;
     apic_timer_ready = true;
@@ -502,7 +502,7 @@ void apic_timer_enable(void) {
     u32 lvt = _read(LAPIC_LVT_TIMER_REG);
     lvt &= ~LAPIC_LVT_MASK;
 
-    apic_write(LAPIC_LVT_TIMER_REG, lvt);
+    _write(LAPIC_LVT_TIMER_REG, lvt);
 }
 
 void apic_timer_disable(void) {
@@ -512,7 +512,7 @@ void apic_timer_disable(void) {
     u32 lvt = _read(LAPIC_LVT_TIMER_REG);
     lvt |= LAPIC_LVT_MASK;
 
-    apic_write(LAPIC_LVT_TIMER_REG, lvt);
+    _write(LAPIC_LVT_TIMER_REG, lvt);
 }
 
 bool apic_timer_active(void) {
@@ -544,11 +544,11 @@ void ioapic_mask_all(void) {
 
         for (u32 pin = 0; pin < info->int_count; pin++) {
             u8 reg = (u8)(IOAPIC_REDTBL_BASE + pin * IOAPIC_REDTBL_STEP);
-            u32 low = ioapic_read_reg(info, reg);
+            u32 low = _ioapic_read_reg(info, reg);
 
             low |= (u32)IOAPIC_ENTRY_MASK;
 
-            ioapic_write_reg(info, reg, low);
+            _ioapic_write_reg(info, reg, low);
         }
     }
 }
@@ -559,13 +559,13 @@ void ioapic_mask_irq(u8 irq, bool masked) {
     _ioapic_resolve_gsi(irq, &gsi, NULL);
 
     u32 index = 0;
-    ioapic_info_t* info = ioapic_for_gsi(gsi, &index);
+    ioapic_info_t* info = _ioapic_for_gsi(gsi, &index);
 
     if (!info)
         return;
 
     u8 reg = (u8)(IOAPIC_REDTBL_BASE + index * IOAPIC_REDTBL_STEP);
-    u32 low = ioapic_read_reg(info, reg);
+    u32 low = _ioapic_read_reg(info, reg);
 
     if (masked)
         low |= (u32)IOAPIC_ENTRY_MASK;
@@ -582,20 +582,20 @@ bool ioapic_route_irq(u8 irq, u8 vector, u32 dest_apic) {
     _ioapic_resolve_gsi(irq, &gsi, &flags);
 
     u32 index = 0;
-    ioapic_info_t* info = ioapic_for_gsi(gsi, &index);
+    ioapic_info_t* info = _ioapic_for_gsi(gsi, &index);
 
     if (!info)
         return false;
 
     u64 entry = vector;
     entry |= (u64)(dest_apic & IOAPIC_DEST_ID_MASK) << IOAPIC_DEST_ID_SHIFT;
-    entry |= ioapic_flags_to_entry(flags);
+    entry |= _ioapic_flags_to_entry(flags);
     entry &= ~IOAPIC_ENTRY_MASK;
 
     u8 reg = (u8)(IOAPIC_REDTBL_BASE + index * IOAPIC_REDTBL_STEP);
 
-    ioapic_write_reg(info, (u8)(reg + IOAPIC_REDTBL_HIGH_WORD), (u32)(entry >> 32));
-    ioapic_write_reg(info, reg, (u32)(entry & 0xffffffff));
+    _ioapic_write_reg(info, (u8)(reg + IOAPIC_REDTBL_HIGH_WORD), (u32)(entry >> 32));
+    _ioapic_write_reg(info, reg, (u32)(entry & 0xffffffff));
 
     return true;
 }

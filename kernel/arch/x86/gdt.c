@@ -55,11 +55,11 @@ void gdt_init(void) {
     data_flags = 0x0C;
 #endif
 
-    set_gdt_entry(0, 0, 0, 0, 0); // Null segment
-    set_gdt_entry(1, 0, limit, 0x9a, code_flags); // Kernel code segment
-    set_gdt_entry(2, 0, limit, 0x92, data_flags); // Kernel data segment
-    set_gdt_entry(3, 0, limit, 0xfa, code_flags); // User code segment
-    set_gdt_entry(4, 0, limit, 0xf2, data_flags); // User data segment
+    _set_gdt_entry(0, 0, 0, 0, 0); // Null segment
+    _set_gdt_entry(1, 0, limit, 0x9a, code_flags); // Kernel code segment
+    _set_gdt_entry(2, 0, limit, 0x92, data_flags); // Kernel data segment
+    _set_gdt_entry(3, 0, limit, 0xfa, code_flags); // User code segment
+    _set_gdt_entry(4, 0, limit, 0xf2, data_flags); // User data segment
 
     asm volatile("lgdt %0" : : "m"(gdtd) : "memory");
 

@@ -1,5 +1,6 @@
 #include "irq.h"
 
+#include <x86/serial.h>
 #include <base/attributes.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
@@ -75,7 +76,7 @@ bool irq_init(void) {
     if (!use_apic_timer)
         pit_init();
 
-    irq_register(IRQ_SYSTEM_TIMER, timer_handler);
+    irq_register(IRQ_SYSTEM_TIMER, _timer_handler);
 
     if (use_apic_timer) {
         if (use_ioapic)
@@ -137,6 +138,12 @@ bool irq_using_ioapic(void) {
 
 u64 irq_ticks(void) {
     return irq_tick_count;
+}
+
+u32 irq_timer_hz(void) {
+    if (use_apic_timer)
+        return apic_timer_hz();
+    return pit_get_frequency();
 }
 
 void timer_enable(void) {

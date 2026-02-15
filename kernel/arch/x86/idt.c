@@ -41,7 +41,7 @@ static void _default_int_handler(int_state_t* state) {
 #if defined(__i386__)
         if (int_num >= 0x08 && int_num < 0x10) {
             u8 irq = (u8)(int_num - 0x08);
-            if (!irq_using_ioapic() && pic_irq_in_service(irq))
+            if (!irq_using_ioapic() && _pic_irq_in_service(irq))
                 irq_ack(irq);
 
             return;
@@ -49,7 +49,7 @@ static void _default_int_handler(int_state_t* state) {
 
         if (int_num >= 0x70 && int_num < 0x78) {
             u8 irq = (u8)(int_num - 0x70 + 8);
-            if (!irq_using_ioapic() && pic_irq_in_service(irq))
+            if (!irq_using_ioapic() && _pic_irq_in_service(irq))
                 irq_ack(irq);
 
             return;

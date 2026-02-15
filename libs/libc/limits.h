@@ -31,3 +31,7 @@
 #define LLONG_MAX  __LONG_LONG_MAX__
 #define LLONG_MIN  (-LLONG_MAX - 1)
 #define ULLONG_MAX (LLONG_MAX * 2ULL + 1ULL)
+
+#ifndef PATH_MAX
+#define PATH_MAX 256
+#endif

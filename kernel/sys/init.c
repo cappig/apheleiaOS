@@ -6,11 +6,11 @@
 #include <sys/tty.h>
 
 void init_spawn(void) {
-    log_info("init: spawning /sbin/init.elf");
-    sched_thread_t* init = user_spawn("/sbin/init.elf");
+    log_info("init: spawning /sbin/init");
+    sched_thread_t* init = user_spawn("/sbin/init");
 
     if (!init) {
-        log_warn("init: failed to spawn /sbin/init.elf");
+        log_warn("init: failed to spawn /sbin/init");
         return;
     }
 

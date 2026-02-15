@@ -32,6 +32,6 @@ typedef int sig_atomic_t;
 #define NSIG 32
 
 
-// #ifndef _KERNEL
-// #include <libc_usr/signal.h>
-// #endif
+#ifndef _KERNEL
+#include <libc_usr/signal.h>
+#endif

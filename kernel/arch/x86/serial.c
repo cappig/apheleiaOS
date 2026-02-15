@@ -56,3 +56,18 @@ void send_serial_sized_string(size_t port, const char* s, size_t len) {
     for (size_t i = 0; i < len; i++)
         send_serial(port, s[i]);
 }
+
+bool serial_has_data(size_t port) {
+    return (inb(port + 5) & 0x01) != 0;
+}
+
+bool serial_try_receive(size_t port, char* out) {
+    if (!out)
+        return false;
+
+    if (!serial_has_data(port))
+        return false;
+
+    *out = inb(port);
+    return true;
+}

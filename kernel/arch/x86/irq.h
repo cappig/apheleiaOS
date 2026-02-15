@@ -28,6 +28,7 @@ void irq_ack(size_t irq);
 bool irq_using_ioapic(void);
 
 u64 irq_ticks(void);
+u32 irq_timer_hz(void);
 
 void timer_enable(void);
 void timer_disable(void);

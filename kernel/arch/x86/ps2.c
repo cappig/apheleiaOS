@@ -283,7 +283,7 @@ static bool _controller_init(void) {
     if (!_write_cmd(PS2_COM_DISABLE_PORT1))
         return false;
 
-    if (!ps2_write_cmd(PS2_COM_DISABLE_PORT2))
+    if (!_write_cmd(PS2_COM_DISABLE_PORT2))
         return false;
 
     _flush_output();
@@ -301,32 +301,32 @@ static bool _controller_init(void) {
     if (!_write_cmd(PS2_COM_WRITE_CONFIG))
         return false;
 
-    if (!ps2_write_data(config))
+    if (!_write_data(config))
         return false;
 
     if (_write_cmd(PS2_COM_TEST_CONTROLLER)) {
         u8 resp = 0;
 
-        if (!ps2_read_data(&resp) || resp != PS2_SELFTEST_OK)
+        if (!_read_data(&resp) || resp != PS2_SELFTEST_OK)
             log_warn("ps2: controller self-test failed");
     }
 
     if (_write_cmd(PS2_COM_TEST_PORT1)) {
         u8 resp = 0;
 
-        if (ps2_read_data(&resp))
+        if (_read_data(&resp))
             has_port1 = (resp == PS2_TEST_OK);
     }
 
     if (_write_cmd(PS2_COM_TEST_PORT2)) {
         u8 resp = 0;
 
-        if (ps2_read_data(&resp))
+        if (_read_data(&resp))
             has_port2 = (resp == PS2_TEST_OK);
     }
 
     if (has_port1)
-        ps2_write_cmd(PS2_COM_ENABLE_PORT1);
+        _write_cmd(PS2_COM_ENABLE_PORT1);
 
     if (has_port2)
         _write_cmd(PS2_COM_ENABLE_PORT2);
@@ -348,7 +348,7 @@ static bool _controller_init(void) {
     if (!_write_cmd(PS2_COM_WRITE_CONFIG))
         return false;
 
-    if (!ps2_write_data(config))
+    if (!_write_data(config))
         return false;
 
     return true;
@@ -462,7 +462,7 @@ void ps2_init(void) {
         _kbd_command(2);
         _kbd_command(PS2_KBD_COM_ENABLE_SCAN);
 
-        irq_register(IRQ_PS2_KEYBOARD, ps2_kbd_irq);
+        irq_register(IRQ_PS2_KEYBOARD, _kbd_irq);
 
         kbd_index = keyboard_register("PS/2 keyboard", NULL);
     }
@@ -471,7 +471,7 @@ void ps2_init(void) {
         _mouse_command(PS2_MOUSE_COM_DEFAULT);
         _mouse_command(PS2_MOUSE_COM_ENABLE_DATA);
 
-        irq_register(IRQ_PS2_MOUSE, ps2_mouse_irq);
+        irq_register(IRQ_PS2_MOUSE, _mouse_irq);
 
         mouse_index = mouse_register("PS/2 mouse");
     }

@@ -30,7 +30,7 @@ static void _pmm_ref_set_range(void* ptr, size_t blocks, u16 value) {
     if (!frame_refs_ready || !ptr || !blocks)
         return;
 
-    size_t start = pmm_block_index(ptr);
+    size_t start = _pmm_block_index(ptr);
 
     for (size_t i = 0; i < blocks; i++) {
         size_t index = start + i;
@@ -160,7 +160,7 @@ void pmm_ref_hold(void* ptr, size_t blocks) {
     if (!frame_refs_ready || !ptr || !blocks)
         return;
 
-    size_t start = pmm_block_index(ptr);
+    size_t start = _pmm_block_index(ptr);
 
     for (size_t i = 0; i < blocks; i++) {
         size_t index = start + i;
@@ -174,7 +174,7 @@ u16 pmm_refcount(void* ptr) {
     if (!frame_refs_ready || !ptr)
         return 1;
 
-    size_t index = pmm_block_index(ptr);
+    size_t index = _pmm_block_index(ptr);
 
     if (index >= frame_refs_count)
         return 1;

@@ -72,7 +72,7 @@ static void _parse_rsdt(u64 rsdt_phys) {
     size_t entries = (rsdt->header.length - sizeof(sdt_header_t)) / sizeof(rsdt->table_ptrs[0]);
 
     for (size_t i = 0; i < entries; i++) {
-        sdt_header_t* entry = acpi_copy_table(rsdt->table_ptrs[i]);
+        sdt_header_t* entry = _copy_table(rsdt->table_ptrs[i]);
 
         if (!entry) {
             log_warn("acpi: RSDT entry %zu invalid", i);
@@ -96,7 +96,7 @@ static void _parse_xsdt(u64 xsdt_phys) {
     size_t entries = (xsdt->header.length - sizeof(sdt_header_t)) / sizeof(xsdt->table_ptrs[0]);
 
     for (size_t i = 0; i < entries; i++) {
-        sdt_header_t* entry = acpi_copy_table(xsdt->table_ptrs[i]);
+        sdt_header_t* entry = _copy_table(xsdt->table_ptrs[i]);
 
         if (!entry) {
             log_warn("acpi: XSDT entry %zu invalid", i);
