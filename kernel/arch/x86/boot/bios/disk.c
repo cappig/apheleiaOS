@@ -13,12 +13,13 @@
 #include "x86/mbr.h"
 #include "x86/regs.h"
 
-#define SECTOR_SIZE 512
+#define MBR_SECTOR_SIZE 512
 
 #define MAX_BIOS_SECTORS_PER_CALL 64
-#define BOUNCE_SECTORS            16
+#define BOUNCE_SIZE               8192
 
 static u16 disk_code = 0;
+static u16 disk_sector_size = MBR_SECTOR_SIZE;
 static size_t rootfs_base = 0;
 static ext2_superblock_t superblock = {0};
 
@@ -43,22 +44,25 @@ static bool _bios_read_lba(void* dest, size_t lba, u16 sectors) {
 }
 
 int read_disk(void* dest, size_t offset, size_t bytes) {
-    size_t lba = offset / SECTOR_SIZE;
-    size_t sector_off = offset % SECTOR_SIZE;
+    size_t ss = disk_sector_size;
+    size_t lba = offset / ss;
+    size_t sector_off = offset % ss;
 
-    uint8_t bounce[SECTOR_SIZE * BOUNCE_SECTORS];
+    u16 bounce_sectors = BOUNCE_SIZE / ss;
+    u16 max_sectors = (u16)min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)bounce_sectors);
+
+    uint8_t bounce[BOUNCE_SIZE];
     uint8_t* out = dest;
 
     while (bytes > 0) {
         size_t bytes_window = bytes + sector_off;
-        size_t sectors_window = DIV_ROUND_UP(bytes_window, SECTOR_SIZE);
-        size_t sectors_cap = min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)BOUNCE_SECTORS);
-        u16 sectors = (u16)min(sectors_window, sectors_cap);
+        size_t sectors_window = DIV_ROUND_UP(bytes_window, ss);
+        u16 sectors = (u16)min(sectors_window, (size_t)max_sectors);
 
         if (!_bios_read_lba(bounce, lba, sectors))
             panic("Disk read error!");
 
-        size_t available = (size_t)sectors * SECTOR_SIZE - sector_off;
+        size_t available = (size_t)sectors * ss - sector_off;
         size_t to_copy = min(bytes, available);
 
         memcpy(out, bounce + sector_off, to_copy);
@@ -66,7 +70,7 @@ int read_disk(void* dest, size_t offset, size_t bytes) {
         out += to_copy;
         bytes -= to_copy;
         lba += sectors;
-        sector_off = 0; // offset is only relevant for the first chunk
+        sector_off = 0;
     }
 
     return 0;
@@ -101,15 +105,36 @@ static bool _find_rootfs(mbr_partition_t* rootfs) {
     return false;
 }
 
+static void _detect_sector_size(void) {
+    disk_params_t params;
+    memset(&params, 0, sizeof(params));
+    params.size = sizeof(params);
+
+    regs32_t r = {0};
+    r.ah = 0x48;
+    r.dl = disk_code;
+    r.esi = (uintptr_t)&params;
+
+    bios_call(0x13, &r, &r);
+
+    if (!(r.flags & FLAG_CF) && params.bytes_per_sector >= 512)
+        disk_sector_size = params.bytes_per_sector;
+}
+
 void disk_init(u16 disk) {
     disk_code = disk;
+    _detect_sector_size();
+
+    printf("boot: disk=0x%x sector_size=%u\n\r", disk_code, disk_sector_size);
 
     mbr_partition_t rootfs = {0};
 
     if (!_find_rootfs(&rootfs))
         panic("Rootfs partition not found!");
 
-    rootfs_base = rootfs.lba_first * SECTOR_SIZE;
+    rootfs_base = rootfs.lba_first * MBR_SECTOR_SIZE;
+
+    printf("boot: rootfs lba=%u base=0x%x\n\r", rootfs.lba_first, (unsigned)rootfs_base);
 
     // Read the superblock at offset 1024
     read_disk(&superblock, rootfs_base + 1024, sizeof(ext2_superblock_t));
@@ -120,6 +145,9 @@ void disk_init(u16 disk) {
     // Verify filesystem state
     if (superblock.fs_state != EXT2_FS_CLEAN)
         panic("Filesystem has errors!");
+
+    printf("boot: ext2 blocks=%u block_size=%u\n\r",
+           superblock.block_count, ext2_block_size(&superblock));
 }
 
 
@@ -257,8 +285,6 @@ static u32 _find_file(const char* path) {
     u32 current_inode = EXT2_ROOT_INODE;
     const char* current = path + 1; // drop the leading '/'
 
-    u32 block_size = ext2_block_size(&superblock);
-
     while (*current) {
         ext2_inode_t inode;
         _get_inode(current_inode, &inode);
@@ -272,8 +298,9 @@ static u32 _find_file(const char* path) {
 
         bool found = false;
         size_t offset = 0;
+        u64 dir_size = ext2_file_size(&inode);
 
-        while (offset < block_size) {
+        while (offset < dir_size) {
             ext2_directory_t* dir = (ext2_directory_t*)(inode_buffer + offset);
 
             if (!dir->inode || !dir->size)
@@ -291,8 +318,10 @@ static u32 _find_file(const char* path) {
 
         free(inode_buffer);
 
-        if (!found)
+        if (!found) {
+            printf("boot: '%s' not found!\n\r", path);
             return 0;
+        }
 
         current += name_len;
         if (*current == '/')

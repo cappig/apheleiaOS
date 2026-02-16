@@ -169,6 +169,12 @@ static const u8 _gpt_efi_system_guid[16] = {
     0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
 };
 
+/* 21686148-6449-6E6F-744E-656564454649 */
+static const u8 _gpt_bios_boot_guid[16] = {
+    0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6F, 0x6E,
+    0x74, 0x4E, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49,
+};
+
 static bool _guid_is_zero(const u8 guid[16]) {
     for (size_t i = 0; i < 16; i++) {
         if (guid[i])
@@ -234,6 +240,9 @@ static bool _parse_gpt(disk_dev_t* dev) {
         if (_guid_is_zero(entry->type_guid))
             continue;
 
+        if (!memcmp(entry->type_guid, _gpt_bios_boot_guid, 16))
+            continue;
+
         u8 mbr_type = _gpt_type_to_mbr(entry->type_guid);
         size_t first_lba = (size_t)entry->first_lba;
         size_t last_lba = (size_t)entry->last_lba;
@@ -255,20 +264,15 @@ static size_t _parse_partitions(disk_dev_t* dev) {
     if (!dev)
         return 0;
 
-    bool is_optical = dev->type == DISK_OPTICAL;
-    bool is_virtual = dev->type == DISK_VIRTUAL;
-
-    if (is_virtual || is_optical) {
+    if (dev->type == DISK_VIRTUAL) {
         _create_partition(dev, -1, 0, 0, 0, dev->sector_count);
         return dev->partitions ? dev->partitions->size : 0;
     }
 
-    bool has_gpt = _parse_gpt(dev);
-
-    if (!has_gpt)
+    if (!_parse_gpt(dev))
         _parse_mbr(dev);
 
-    if (dev->partitions && !dev->partitions->size)
+    if (!dev->partitions || !dev->partitions->size)
         _create_partition(dev, -1, 0, 0, 0, dev->sector_count);
 
     return dev->partitions ? dev->partitions->size : 0;

@@ -21,9 +21,18 @@ NORETURN void kernel_main(void* boot_info) {
 
     arch_storage_init();
 
-    disk_dev_t* boot_disk = disk_lookup(1);
+    bool mounted = false;
 
-    if (!boot_disk || !mount_rootfs(boot_disk)) {
+    for (size_t id = 1; !mounted; id++) {
+        disk_dev_t* dev = disk_lookup(id);
+
+        if (!dev)
+            break;
+
+        mounted = mount_rootfs(dev);
+    }
+
+    if (!mounted) {
         log_warn("kernel: failed to mount rootfs");
     } else {
         load_symbols();
@@ -36,8 +45,8 @@ NORETURN void kernel_main(void* boot_info) {
             log_warn("kernel: failed to load console font '%s'", font_path);
     }
 
-    disk_publish_devices();
     devfs_init();
+    disk_publish_devices();
     arch_register_devices();
 
     logsink_bind_devices();

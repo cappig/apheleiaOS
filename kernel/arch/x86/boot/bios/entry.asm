@@ -12,6 +12,9 @@ _start:
     jmp 0:main
 
 main:
+    ; Save the BIOS boot-drive number to memory before anything can clobber it
+    mov [boot_drive], dl
+
     xor ax, ax
     mov ds, ax
     mov es, ax
@@ -57,10 +60,13 @@ protected_mode:
     sub ecx, edi
     rep stosb
 
-    ; Jump to the C entrypoint
-    push dx
+    ; Jump to the C entrypoint with the saved boot drive number
+    movzx edx, byte [boot_drive]
+    push edx
     call _load_entry
 
 halt:
     hlt
     jmp halt
+
+boot_drive: db 0

@@ -153,7 +153,7 @@ void init_graphics(boot_info_t* info) {
         }
     }
 
-    printf("video output: vga text");
+    printf("video output: vga text\n\r");
 
     video->mode = VIDEO_TEXT;
 

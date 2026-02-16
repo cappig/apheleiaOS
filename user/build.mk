@@ -81,4 +81,5 @@ $(USER_STAGE_DIR)/%: $(USER_BIN_DIR)/%
 	@mkdir -p $(@D)
 	@cp $< $@
 
-bin/$(IMG_NAME): $(USER_BINARIES)
+bin/$(IMAGE_NAME).img: $(USER_BINARIES)
+bin/$(IMAGE_NAME).iso: $(USER_BINARIES)

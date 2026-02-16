@@ -25,12 +25,6 @@ KERNEL_SRC_32 := $(filter %32.c %32.asm, $(KERNEL_ALL_SRC)) $(KERNEL_COMMON_SRC)
 include kernel/arch/x86/boot/bios/build.mk
 include kernel/arch/x86/boot/uefi/build.mk
 
-ifeq ($(BOOT), uefi)
-ifeq ($(ARCH_VARIANT), 32)
-$(error BOOT=uefi is only supported with ARCH=x86_64)
-endif
-endif
-
 ifeq ($(ARCH_VARIANT), 64)
 KERNEL_SRC := $(KERNEL_SRC_64)
 KERNEL_OBJ_DIR := bin/kernel64
@@ -91,7 +85,14 @@ $(SYMBOL_MAP): $(KERNEL_ELF)
 		touch $@; \
 	fi
 
-bin/$(IMG_NAME): bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF) $(SYMBOL_MAP)
+ifeq ($(ARCH_VARIANT), 64)
+IMAGE_BOOT_DEPS := bin/boot/bios.bin bin/boot/mbr.bin bin/boot/BOOTX64.EFI $(KERNEL_ELF) $(SYMBOL_MAP)
+else
+IMAGE_BOOT_DEPS := bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF) $(SYMBOL_MAP)
+endif
+
+# Populate the staging directory with kernel, symbol map, rootfs, and user binaries
+define stage_image
 	@mkdir -p $(@D)
 	@rm -rf $(IMAGE_STAGE_DIR)
 	@mkdir -p $(IMAGE_BOOT_DIR)
@@ -100,18 +101,21 @@ bin/$(IMG_NAME): bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF) $(SYMBOL_MAP)
 	@cp -r root/* $(IMAGE_STAGE_DIR)
 	@mkdir -p $(IMAGE_SBIN_DIR)
 	@cp -f bin/user/$(ARCH_VARIANT)/root/sbin/* $(IMAGE_SBIN_DIR)/
-	@kernel/image.sh $@ $< $(IMAGE_STAGE_DIR)
-	@kernel/arch/x86/build/mbr.sh bin/boot/mbr.bin $@
+endef
 
-bin/$(BUILD_NAME)_$(ARCH).iso: bin/$(IMG_NAME)
-	@mkdir -p $(@D)
-	@cp -f $< $@
-	@rm -f bin/$(BUILD_NAME)_$(ARCH)
-	@rm -f $<
-	@echo "ISO $@"
-
-ifeq ($(BOOT), uefi)
+bin/$(IMAGE_NAME).img: $(IMAGE_BOOT_DEPS)
+	$(call stage_image)
 ifeq ($(ARCH_VARIANT), 64)
-run: bin/uefi/EFI/BOOT/BOOTX64.EFI bin/uefi/boot/kernel64.elf
+	@kernel/disk_image.sh $@ bin/boot/mbr.bin bin/boot/bios.bin bin/boot/BOOTX64.EFI $(KERNEL_ELF) $(IMAGE_STAGE_DIR)
+else
+	@kernel/image.sh $@ bin/boot/bios.bin $(IMAGE_STAGE_DIR)
+	@kernel/arch/x86/build/mbr.sh bin/boot/mbr.bin $@
 endif
+
+bin/$(IMAGE_NAME).iso: $(IMAGE_BOOT_DEPS)
+	$(call stage_image)
+ifeq ($(ARCH_VARIANT), 64)
+	@kernel/iso_image.sh $@ bin/boot/mbr.bin bin/boot/bios.bin bin/boot/BOOTX64.EFI $(KERNEL_ELF) $(IMAGE_STAGE_DIR)
+else
+	@kernel/iso_image.sh $@ bin/boot/mbr.bin bin/boot/bios.bin "" "" $(IMAGE_STAGE_DIR)
 endif

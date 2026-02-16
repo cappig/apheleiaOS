@@ -10,6 +10,7 @@
 #include <sched/scheduler.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/cpu.h>
 #include <sys/console.h>
@@ -496,8 +497,20 @@ void devfs_init(void) {
 
     vfs_node_t* dev_dir = vfs_lookup("/dev");
 
-    if (!dev_dir)
-        dev_dir = vfs_create(root, "dev", VFS_DIR, 0755);
+    if (!dev_dir) {
+        dev_dir = vfs_create_node("dev", VFS_DIR);
+
+        if (dev_dir) {
+            dev_dir->mode = 0755;
+            tree_insert_child(root->tree_entry, dev_dir->tree_entry);
+        }
+    }
+
+    // clear any backing-store interface so child creation stays in-memory
+    if (dev_dir && dev_dir->interface) {
+        free(dev_dir->interface);
+        dev_dir->interface = NULL;
+    }
 
     if (!dev_dir) {
         log_warn("devfs: failed to create /dev");

@@ -10,7 +10,7 @@ QEMU := qemu-system-$(QEMU_ARCH)
 
 QEMU_CONSOLE ?= false
 BOOT ?= bios
-QEMU_MEMORY ?= 64M
+QEMU_MEMORY ?= 128M
 
 OVMF_DIR := .cache/ovmf
 OVMF_CODE_LOCAL := $(OVMF_DIR)/OVMF_CODE.fd
@@ -48,10 +48,8 @@ ovmf-fetch:
 ovmf-clean:
 	@rm -rf "$(OVMF_DIR)"
 
-# 	@test -f "$(OVMF_CODE)" || (echo "Missing OVMF code firmware: $(OVMF_CODE)" && false)
-# 	@test -f "$(OVMF_VARS)" || (echo "Missing OVMF vars template: $(OVMF_VARS)" && false)
 .PHONY: run
-run: bin/$(IMG_NAME)
+run: bin/$(IMAGE_NAME).img
 ifeq ($(BOOT), uefi)
 ifeq ($(ARCH), x86_64)
 ifeq ($(OVMF_CODE), $(OVMF_CODE_LOCAL))
@@ -59,18 +57,15 @@ ifeq ($(OVMF_VARS), $(OVMF_VARS_LOCAL))
 run: ovmf-fetch
 endif
 endif
-	@mkdir -p $(@D)
 	@cp -f "$(OVMF_VARS)" "$(OVMF_VARS_RUNTIME)"
 	@$(QEMU) $(QEMU_ARGS) \
 		-drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
 		-drive if=pflash,format=raw,file="$(OVMF_VARS_RUNTIME)" \
-		-drive format=raw,file=bin/$(IMG_NAME),if=ide,index=0 \
-		-drive if=none,id=uefi_esp,file=fat:rw:$(UEFI_STAGE_DIR),format=raw \
-		-device ide-hd,drive=uefi_esp,bus=ide.0,unit=1,bootindex=0
+		-drive format=raw,file=bin/$(IMAGE_NAME).img
 else
-	$(error BOOT=uefi is only supported with ARCH=x86_64)
+	$(error BOOT=uefi requires ARCH=x86_64)
 endif
 else
 	@$(QEMU) $(QEMU_ARGS) \
-		-drive format=raw,file=bin/$(IMG_NAME)
+		-drive format=raw,file=bin/$(IMAGE_NAME).img
 endif

@@ -1184,10 +1184,8 @@ static ssize_t _read_file(vfs_node_t* node, void* buf, size_t offset, size_t len
     u32 now = _now(priv);
     info->inode.last_access_time = now;
 
-    if (!_write_inode(priv, part, info->inode_num, &info->inode))
-        return -1;
-
-    _sync_vnode(node, &info->inode);
+    if (_write_inode(priv, part, info->inode_num, &info->inode))
+        _sync_vnode(node, &info->inode);
 
     return (ssize_t)(to_read - remaining);
 }

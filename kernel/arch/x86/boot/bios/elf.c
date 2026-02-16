@@ -46,8 +46,8 @@ static u64 _get_usable_top(const e820_map_t* map) {
 }
 
 static elf_header_t* _load_kernel_image(bool want_64, bool* is_64) {
-    const char* paths64[] = {"/boot/kernel64.elf", "/boot/kernel32.elf", "/boot/kernel.elf"};
-    const char* paths32[] = {"/boot/kernel32.elf", "/boot/kernel.elf", "/boot/kernel64.elf"};
+    const char* paths64[] = {"/boot/kernel64.elf", "/boot/kernel32.elf"};
+    const char* paths32[] = {"/boot/kernel32.elf", "/boot/kernel64.elf"};
     const char** paths = want_64 ? paths64 : paths32;
 
     for (size_t i = 0; i < ARRAY_LEN(paths64); i++) {
@@ -56,13 +56,16 @@ static elf_header_t* _load_kernel_image(bool want_64, bool* is_64) {
         if (!kernel)
             continue;
 
-        if (elf_verify(kernel)) {
+        elf_validity_t validity = elf_verify(kernel);
+        if (validity) {
+            printf("%s: invalid ELF (error %d)\n\r", paths[i], validity);
             free(kernel);
             continue;
         }
 
         if (kernel->machine == EM_X86_64) {
             if (!want_64) {
+                printf("%s: 64-bit kernel but CPU lacks long mode\n\r", paths[i]);
                 free(kernel);
                 continue;
             }
@@ -76,6 +79,7 @@ static elf_header_t* _load_kernel_image(bool want_64, bool* is_64) {
             return kernel;
         }
 
+        printf("%s: unsupported machine type 0x%x\n\r", paths[i], kernel->machine);
         free(kernel);
     }
 

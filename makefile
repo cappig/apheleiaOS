@@ -6,14 +6,10 @@ GIT_COMMIT_SHORT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unkno
 ARCH := x86_64
 
 BUILD_NAME := $(NAME)_$(VERSION)
-IMG_NAME := $(BUILD_NAME)_$(ARCH).img
+IMAGE_NAME := $(BUILD_NAME)_$(ARCH)
 IMAGE_FORMAT ?= img
 
-ifeq ($(IMAGE_FORMAT), img)
-IMAGE_NAME := $(IMG_NAME)
-else ifeq ($(IMAGE_FORMAT), iso)
-IMAGE_NAME := $(BUILD_NAME)_$(ARCH).iso
-else
+ifeq ($(filter $(IMAGE_FORMAT),img iso),)
 $(error Unsupported IMAGE_FORMAT '$(IMAGE_FORMAT)'; expected 'img' or 'iso')
 endif
 
@@ -60,7 +56,7 @@ include user/build.mk
 
 .DEFAULT_GOAL := all
 .PHONY: all
-all: bin/$(IMAGE_NAME) $(SYMBOL_MAP)
+all: bin/$(IMAGE_NAME).$(IMAGE_FORMAT) $(SYMBOL_MAP)
 	@echo "Build completed successfully!"
 
 .PHONY: clean

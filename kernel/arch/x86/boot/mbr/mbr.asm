@@ -51,16 +51,48 @@ found_part:
     mov eax, [si + 8]           ; start lba
     mov ecx, [si + 12]          ; number of sectors
 
-    mov si, dap
-    mov word [si + 2], cx
-    mov dword [si + 8], eax
+    ; Loading to 0x0000:0x7C00 can hold at most (0x10000-0x7C00)/512 = 66
+    ; sectors before crossing the 64K DMA boundary, so we split the read 
+    ; in two when the bootloader is larger than 66 sectors.
+    cmp ecx, 66
+    jbe .one_read
 
-    ; Read the bootloader to 0x7c00
+    ; first half: 66 sectors to 0x0000:0x7C00 (phys 0x7C00..0xFFFF)
+    mov [save_lba], eax
+    mov [save_cnt], cx
+
+    mov si, dap
+    mov word [si + 2], 66
+    mov dword [si + 8], eax
     mov ah, 0x42
     int 0x13
     jc read_error
 
-    ; Far jump to the scond stage
+    ; second half: remainder to 0x1000:0x0000 (phys 0x10000+)
+    mov cx, [save_cnt]
+    sub cx, 66
+    mov eax, [save_lba]
+    add eax, 66
+
+    mov si, dap
+    mov word [si + 2], cx
+    mov word [si + 4], 0x0000
+    mov word [si + 6], 0x1000
+    mov dword [si + 8], eax
+    mov ah, 0x42
+    int 0x13
+    jc read_error
+
+    jmp 0x0000:0x7c00
+
+.one_read:
+    mov si, dap
+    mov word [si + 2], cx
+    mov dword [si + 8], eax
+    mov ah, 0x42
+    int 0x13
+    jc read_error
+
     jmp 0x0000:0x7c00
 
 print:
@@ -100,6 +132,9 @@ dap:
     dw 0x7c00                   ; offset
     dw 0                        ; segment
     dq 0                        ; lba
+
+save_cnt: dw 0
+save_lba: dd 0
 
 msg_no_part db 'no valid partition found', 0
 msg_read_error db 'disk read error', 0
