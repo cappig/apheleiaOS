@@ -17,7 +17,7 @@ enum video_mode : u8 {
 
 // -1 means that the bootloader will attempt to autodetect
 #define BOOT_DEFAULT_DEBUG       DEBUG_MINIMAL
-#define BOOT_DEFAULT_VIDEO       VIDEO_GRAPHICS
+#define BOOT_DEFAULT_VIDEO       VIDEO_TEXT
 #define BOOT_DEFAULT_VESA_WIDTH  -1
 #define BOOT_DEFAULT_VESA_HEIGHT -1
 #define BOOT_DEFAULT_VESA_BPP    32

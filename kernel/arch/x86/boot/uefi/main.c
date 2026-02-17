@@ -34,6 +34,38 @@ static void _uefi_puts(const CHAR16* s) {
     g_st->ConOut->OutputString(g_st->ConOut, s);
 }
 
+static void _uefi_put_hex64(u64 value) {
+    static const CHAR16 hex[] = L"0123456789ABCDEF";
+    CHAR16 out[19];
+
+    out[0] = L'0';
+    out[1] = L'x';
+
+    for (int i = 0; i < 16; i++) {
+        int shift = (15 - i) * 4;
+        out[2 + i] = hex[(value >> shift) & 0x0f];
+    }
+
+    out[18] = 0;
+
+    _uefi_puts(out);
+}
+
+static EFI_STATUS _uefi_fail(const CHAR16* msg, EFI_STATUS status) {
+    if (msg)
+        _uefi_puts(msg);
+
+    _uefi_put_hex64(status);
+    _uefi_puts((const CHAR16*)L"\r\n");
+
+    if (g_bs && g_bs->Stall) {
+        typedef EFI_STATUS(EFIAPI * efi_stall_t)(UINTN);
+        ((efi_stall_t)g_bs->Stall)(3000000);
+    }
+
+    return status;
+}
+
 static EFI_STATUS _alloc_pages_low(UINTN pages, EFI_PHYSICAL_ADDRESS* addr) {
     if (!addr)
         return EFI_INVALID_PARAM;
@@ -140,6 +172,91 @@ static EFI_STATUS _map_identity_and_linear(void) {
     return EFI_SUCCESS;
 }
 
+static EFI_STATUS _map_region_identity_and_linear(u64 paddr, u64 size, u64 flags) {
+    if (!size)
+        return EFI_SUCCESS;
+
+    u64 base = ALIGN_DOWN(paddr, PAGE_4KIB);
+    u64 end = ALIGN(paddr + size, PAGE_4KIB);
+
+    if (end <= base)
+        return EFI_SUCCESS;
+
+    EFI_STATUS status = _map_region_4k(base, base, end - base, flags);
+    if (efi_error(status))
+        return status;
+
+    return _map_region_4k(base + LINEAR_MAP_OFFSET_64, base, end - base, flags);
+}
+
+static EFI_STATUS _map_loader_runtime(EFI_HANDLE image) {
+    if (!image || !g_bs)
+        return EFI_INVALID_PARAM;
+
+    EFI_LOADED_IMAGE_PROTOCOL* loaded_image = NULL;
+    EFI_STATUS status = g_bs->HandleProtocol(
+        image,
+        (EFI_GUID*)(uintptr_t)&loaded_image_guid,
+        (void**)&loaded_image
+    );
+
+    if (efi_error(status) || !loaded_image)
+        return status;
+
+    u64 image_base = (u64)(uintptr_t)loaded_image->ImageBase;
+    u64 image_size = loaded_image->ImageSize;
+
+    if (image_base && image_size) {
+        status = _map_region_identity_and_linear(image_base, image_size, PT_WRITE);
+
+        if (efi_error(status))
+            return status;
+    }
+
+    u64 rsp = 0;
+    asm volatile("mov %%rsp, %0" : "=r"(rsp));
+
+    const u64 stack_window = 128 * 1024;
+    u64 stack_base = (rsp > stack_window / 2) ? (rsp - stack_window / 2) : 0;
+
+    status = _map_region_identity_and_linear(stack_base, stack_window, PT_WRITE);
+
+    if (efi_error(status))
+        return status;
+
+    return EFI_SUCCESS;
+}
+
+static EFI_STATUS _map_framebuffer_linear(const boot_info_t* info) {
+    if (!info || info->video.mode != VIDEO_GRAPHICS || !info->video.framebuffer ||
+        !info->video.width || !info->video.height || !info->video.bytes_per_pixel)
+        return EFI_SUCCESS;
+
+    u64 pitch = info->video.bytes_per_line;
+    if (!pitch)
+        pitch = (u64)info->video.width * info->video.bytes_per_pixel;
+
+    u64 fb_size = pitch * info->video.height;
+    if (!fb_size)
+        return EFI_SUCCESS;
+
+    u64 fb_base = ALIGN_DOWN(info->video.framebuffer, PAGE_4KIB);
+    u64 fb_end = ALIGN(info->video.framebuffer + fb_size, PAGE_4KIB);
+
+    if (fb_end <= PROTECTED_MODE_TOP)
+        return EFI_SUCCESS;
+
+    if (fb_base < PROTECTED_MODE_TOP)
+        fb_base = PROTECTED_MODE_TOP;
+
+    return _map_region_4k(
+        fb_base + LINEAR_MAP_OFFSET_64,
+        fb_base,
+        fb_end - fb_base,
+        PT_WRITE | PT_NO_CACHE
+    );
+}
+
 
 static EFI_STATUS _load_kernel_elf(void* file_data, UINTN file_size, u64* entry) {
     if (!file_data || !entry || file_size < sizeof(elf_header_t))
@@ -190,9 +307,6 @@ static EFI_STATUS _load_kernel_elf(void* file_data, UINTN file_size, u64* entry)
         if (ph->flags & PF_W)
             flags |= PT_WRITE;
 
-        if (!(ph->flags & PF_X))
-            flags |= PT_NO_EXECUTE;
-
         status = _map_region_4k(ph->vaddr, paddr, ph->mem_size, flags);
         if (efi_error(status))
             return status;
@@ -216,13 +330,66 @@ static void _setup_default_args(boot_info_t* info) {
     uefi_str_copy(info->args.font, sizeof(info->args.font), BOOT_DEFAULT_FONT);
 }
 
+static void _stage_rootfs_from_esp(EFI_HANDLE image, boot_info_t* info) {
+    if (!image || !info || !g_bs)
+        return;
+
+    void* rootfs_file = NULL;
+    UINTN rootfs_size = 0;
+
+    EFI_STATUS status = uefi_load_file_from_boot_volume(
+        g_bs,
+        image,
+        &loaded_image_guid,
+        &simple_fs_guid,
+        &file_info_guid,
+        (const CHAR16*)L"\\boot\\rootfs.ext2",
+        &rootfs_file,
+        &rootfs_size
+    );
+
+    if (efi_error(status) || !rootfs_file || !rootfs_size) {
+        rootfs_file = NULL;
+        rootfs_size = 0;
+
+        status = uefi_load_file_from_boot_volume(
+            g_bs,
+            image,
+            &loaded_image_guid,
+            &simple_fs_guid,
+            &file_info_guid,
+            (const CHAR16*)L"\\rootfs.ext2",
+            &rootfs_file,
+            &rootfs_size
+        );
+    }
+
+    if (efi_error(status) || !rootfs_file || !rootfs_size)
+        return;
+
+    UINTN pages = (UINTN)DIV_ROUND_UP(rootfs_size, PAGE_4KIB);
+    EFI_PHYSICAL_ADDRESS rootfs_phys = 0;
+
+    status = _alloc_pages_low(pages, &rootfs_phys);
+
+    if (!efi_error(status)) {
+        uefi_mem_zero((void*)(uintptr_t)rootfs_phys, pages * EFI_PAGE_SIZE);
+        uefi_mem_copy((void*)(uintptr_t)rootfs_phys, rootfs_file, rootfs_size);
+        info->boot_rootfs_paddr = (u64)rootfs_phys;
+        info->boot_rootfs_size = (u64)rootfs_size;
+    }
+
+    g_bs->FreePool(rootfs_file);
+}
+
 static NORETURN void _jump_to_kernel(u64 entry, u64 stack_top, boot_info_t* info) {
-    asm volatile("mov %0, %%rsp\n\t"
+    asm volatile("cli\n\t"
+                 "cld\n\t"
+                 "mov %0, %%rsp\n\t"
                  "xor %%rbp, %%rbp\n\t"
-                 "mov %1, %%rdi\n\t"
-                 "jmp *%2"
+                 "jmp *%1"
                  :
-                 : "r"(stack_top), "r"(info), "r"(entry)
+                 : "r"(stack_top), "r"(entry), "D"(info)
                  : "memory");
 
     __builtin_unreachable();
@@ -234,6 +401,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system_table) {
 
     if (!g_bs || !g_st)
         return EFI_LOAD_ERROR;
+
+    _uefi_puts((const CHAR16*)L"apheleiaOS UEFI: start\r\n");
 
     if (g_bs->SetWatchdogTimer)
         g_bs->SetWatchdogTimer(0, 0, 0, NULL);
@@ -250,6 +419,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system_table) {
         &kernel_file,
         &kernel_file_size
     );
+
     if (efi_error(status)) {
         _uefi_puts((const CHAR16*)L"apheleiaOS: failed to open kernel64.elf\r\n");
         return status;
@@ -257,25 +427,37 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system_table) {
 
     EFI_PHYSICAL_ADDRESS info_phys = 0;
     status = _alloc_pages_low(1, &info_phys);
+
     if (efi_error(status))
-        return status;
+        return _uefi_fail((const CHAR16*)L"apheleiaOS: alloc boot info failed: ", status);
 
     boot_info_t* info = (boot_info_t*)(uintptr_t)info_phys;
     uefi_mem_zero(info, sizeof(*info));
+
     _setup_default_args(info);
+
     uefi_detect_acpi(info, g_st, &acpi2_guid, &acpi_guid);
     uefi_detect_video(info, g_bs, &gop_guid);
 
     status = _alloc_table(&g_lvl4);
     if (efi_error(status))
-        return status;
+        return _uefi_fail((const CHAR16*)L"apheleiaOS: alloc page tables failed: ", status);
 
     status = _map_identity_and_linear();
     if (efi_error(status))
-        return status;
+        return _uefi_fail((const CHAR16*)L"apheleiaOS: map low memory failed: ", status);
+
+    status = _map_loader_runtime(image);
+    if (efi_error(status))
+        return _uefi_fail((const CHAR16*)L"apheleiaOS: map loader runtime failed: ", status);
+
+    status = _map_framebuffer_linear(info);
+    if (efi_error(status))
+        return _uefi_fail((const CHAR16*)L"apheleiaOS: map framebuffer failed: ", status);
 
     u64 kernel_entry = 0;
     status = _load_kernel_elf(kernel_file, kernel_file_size, &kernel_entry);
+
     if (efi_error(status)) {
         _uefi_puts((const CHAR16*)L"apheleiaOS: failed to load kernel ELF\r\n");
         return status;
@@ -285,7 +467,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system_table) {
     EFI_PHYSICAL_ADDRESS stack_phys = 0;
     status = _alloc_pages_low(stack_pages, &stack_phys);
     if (efi_error(status))
-        return status;
+        return _uefi_fail((const CHAR16*)L"apheleiaOS: alloc kernel stack failed: ", status);
+
+    _stage_rootfs_from_esp(image, info);
 
     u64 stack_top = stack_phys + KERNEL_STACK_SIZE + LINEAR_MAP_OFFSET_64;
     boot_info_t* info_virt = (boot_info_t*)(uintptr_t)(info_phys + LINEAR_MAP_OFFSET_64);
@@ -297,7 +481,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system_table) {
     for (int attempts = 0; attempts < 8; attempts++) {
         status = uefi_get_memory_map_and_key(g_bs, info, &map_buf, &map_buf_size, &map_key);
         if (efi_error(status))
-            return status;
+            return _uefi_fail((const CHAR16*)L"apheleiaOS: get memory map failed: ", status);
 
         status = g_bs->ExitBootServices(image, map_key);
         if (!efi_error(status))
@@ -305,7 +489,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system_table) {
     }
 
     if (efi_error(status))
-        return status;
+        return _uefi_fail((const CHAR16*)L"apheleiaOS: ExitBootServices failed: ", status);
 
     write_cr3((u64)(uintptr_t)g_lvl4);
 

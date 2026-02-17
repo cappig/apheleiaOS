@@ -12,9 +12,6 @@ _start:
     jmp 0:main
 
 main:
-    ; Save the BIOS boot-drive number to memory before anything can clobber it
-    mov [boot_drive], dl
-
     xor ax, ax
     mov ds, ax
     mov es, ax
@@ -22,19 +19,24 @@ main:
     mov fs, ax
     mov gs, ax
 
+    mov [boot_drive], dl
+
     mov sp, 0x7c00
 
     ; Enable the A20 line via the fast method
-    ; TODO: this is not ideal
     in al, 0x92
     or al, 2
+    and al, 0xfe        ; clear bit 0 (system reset) before writing back
     out 0x92, al
+
+    sti
 
     ; Clear screen by resetting the VGA mode to 80x25
     mov ah, 0x00
     mov al, 0x03
     int 0x10
 
+    cli
     lgdt [_gdt_desc]
 
     ; Set the protected mode bit

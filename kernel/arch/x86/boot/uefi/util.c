@@ -288,11 +288,8 @@ void uefi_detect_video(boot_info_t* info, EFI_BOOT_SERVICES* bs, const EFI_GUID*
     if (!mode || !gop->Mode->FrameBufferBase)
         return;
 
-    if (gop->Mode->FrameBufferBase > 0xffffffffULL)
-        return;
-
     info->video.mode = VIDEO_GRAPHICS;
-    info->video.framebuffer = (u32)gop->Mode->FrameBufferBase;
+    info->video.framebuffer = (u64)gop->Mode->FrameBufferBase;
     info->video.width = (u16)mode->HorizontalResolution;
     info->video.height = (u16)mode->VerticalResolution;
     info->video.bytes_per_pixel = 4;

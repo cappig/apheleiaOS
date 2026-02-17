@@ -49,6 +49,9 @@ void clean_mmap(e820_map_t* map) {
         if (!entries[i].size)
             mmap_remove_entry(map, i--);
 
+        if (i + 1 >= map->count)
+            continue;
+
         u64 top = entries[i].address + entries[i].size;
 
         // Not touching or overlapping, skip
@@ -108,10 +111,12 @@ void* mmap_alloc_inner(e820_map_t* mmap, size_t bytes, u32 type, u32 alignment, 
         if (entries[i].size < bytes)
             continue;
 
-        u64 entry_top = entries[i].address + entries[i].size;
-
-        if (entry_top >= top)
+        if (entries[i].address >= top)
             continue;
+
+        u64 entry_top = entries[i].address + entries[i].size;
+        if (entry_top > top)
+            entry_top = top;
 
         // Only map conventional memory if asked explicitly to do so
         // This is a comparatively small slice of memory that is known be unreliable,

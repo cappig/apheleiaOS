@@ -33,6 +33,8 @@ UEFI_LDFLAGS := \
 	-m i386pep \
 	--subsystem 10 \
 	--entry efi_main \
+	--enable-reloc-section \
+	--disable-high-entropy-va \
 	--gc-sections
 else
 $(error UEFI build does not support TOOLCHAIN='$(TOOLCHAIN)')

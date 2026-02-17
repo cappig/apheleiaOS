@@ -21,7 +21,9 @@ static void _on_signal(int signum) {
 int main(void) {
     int ret = 1;
     int fb_fd = -1;
+
     ui_t ui = {0};
+
     bool fb_acquired = false;
     bool mgr_claimed = false;
 
@@ -34,6 +36,7 @@ int main(void) {
     signal(SIGHUP, _on_signal);
 
     fb_fd = open("/dev/fb", O_RDWR, 0);
+
     if (fb_fd < 0) {
         io_write_str("wm: open /dev/fb failed\n");
         goto out;
@@ -45,10 +48,17 @@ int main(void) {
         goto out;
     }
 
+    size_t packed_row_bytes = (size_t)fb_info.width * 4;
+    if (!fb_info.pitch || (size_t)fb_info.pitch < packed_row_bytes) {
+        io_write_str("wm: invalid framebuffer pitch\n");
+        goto out;
+    }
+
     if (ioctl(fb_fd, FBIOACQUIRE, NULL)) {
         io_write_str("wm: failed to acquire framebuffer\n");
         goto out;
     }
+
     fb_acquired = true;
 
     if (ui_open(&ui, UI_OPEN_INPUT)) {
@@ -60,10 +70,12 @@ int main(void) {
         io_write_str("wm: failed to claim ws manager\n");
         goto out;
     }
+
     mgr_claimed = true;
 
     size_t frame_pixels = (size_t)fb_info.width * (size_t)fb_info.height;
     size_t frame_bytes = frame_pixels * 4;
+
     if (frame_pixels > WM_MAX_FB_PIX) {
         io_write_str("wm: framebuffer too large\n");
         goto out;
@@ -75,11 +87,15 @@ int main(void) {
 out:
     if (mgr_claimed)
         ui_mgr_release(&ui);
+
     wm_cleanup_all_windows();
     ui_close(&ui);
+
     if (fb_acquired)
         ioctl(fb_fd, FBIORELEASE, NULL);
+
     if (fb_fd >= 0)
         close(fb_fd);
+
     return ret;
 }

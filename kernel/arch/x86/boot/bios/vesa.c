@@ -2,6 +2,7 @@
 
 #include <base/macros.h>
 #include <stdint.h>
+#include <string.h>
 #include <stdlib.h>
 
 #include "base/types.h"
@@ -14,31 +15,48 @@
 
 
 static bool _fetch_vbe_info(vesa_info_t* buffer) {
+    if (!buffer)
+        return true;
+
+    memcpy(buffer->signature, "VBE2", 4);
+
     regs32_t r = {0};
     r.ax = 0x4f00;
-    r.edi = (u32)(uintptr_t)buffer;
+    r.es = REAL_SEG(buffer);
+    r.edi = REAL_OFF(buffer);
 
     bios_call(0x10, &r, &r);
 
-    return r.ax != 0x4f;
+    if (r.al != 0x4f || r.ah != 0x00)
+        return true;
+
+    return memcmp(buffer->signature, "VESA", 4) != 0;
 }
 
 static bool _fetch_mode_info(vesa_mode_t* buffer, u16 mode) {
+    if (!buffer)
+        return true;
+
     regs32_t r = {0};
     r.ax = 0x4f01;
     r.cx = mode;
-    r.edi = (u32)(uintptr_t)buffer;
+    r.es = REAL_SEG(buffer);
+    r.edi = REAL_OFF(buffer);
 
     bios_call(0x10, &r, &r);
 
-    return r.ax != 0x4f;
+    return r.al != 0x4f || r.ah != 0x00;
 }
 
 static bool _fetch_edid_info(edid_data_t* buffer) {
+    if (!buffer)
+        return true;
+
     regs32_t r = {0};
     r.ax = 0x4f15;
     r.bx = 0x01;
-    r.edi = (u32)(uintptr_t)buffer;
+    r.es = REAL_SEG(buffer);
+    r.edi = REAL_OFF(buffer);
 
     bios_call(0x10, &r, &r);
 
@@ -50,15 +68,14 @@ static void _edid_resolution(u8* edid_data, edid_info_t* edid_info) {
     edid_info->monitor_height = edid_data[0x3b] | ((int)(edid_data[0x3d] & 0xf0) << 4);
 }
 
-static void _set_vesa_mode(u16 mode_index) {
+static bool _set_vesa_mode(u16 mode_index) {
     regs32_t r = {0};
     r.ax = 0x4f02;
     r.bx = mode_index | (1 << 14); // use linear framebuffer
 
     bios_call(0x10, &r, &r);
 
-    if (r.ax != 0x4f)
-        panic("Failed to set VESA mode!");
+    return r.al == 0x4f && r.ah == 0;
 }
 
 // Find the mode with the highest possible resolution and bpp
@@ -70,17 +87,33 @@ static vesa_mode_t _init_vesa(u16 max_width, u16 max_height, u16 max_bpp) {
     if (_fetch_vbe_info(&info_buffer))
         return current_mode;
 
-    u16* mode_ptr = (u16*)REAL_FLATTEN(info_buffer.video_mode_seg, info_buffer.video_mode_off);
+    uintptr_t mode_list = REAL_FLATTEN(info_buffer.video_mode_seg, info_buffer.video_mode_off);
 
-    // u16* mode_ptr = (u16*)(uintptr_t)info_buffer.video_mode;
+    // Guard against buggy firmware returning a junk mode_list pointer
+    if (mode_list < 0x0500 || mode_list > 0x10fff0)
+        return current_mode;
 
-    size_t best_mode_i = 0;
+    if (!max_width)
+        max_width = 0xffff;
 
-    for (size_t i = 0; mode_ptr[i] != 0xffff; i++) {
-        if (_fetch_mode_info(&current_mode, mode_ptr[i]))
+    if (!max_height)
+        max_height = 0xffff;
+
+    if (!max_bpp)
+        max_bpp = BOOT_DEFAULT_VESA_BPP;
+
+    u16* mode_ptr = (u16*)mode_list;
+
+    u16 best_mode_i = 0;
+
+    for (size_t i = 0; i < 1024; i++) {
+        u16 mode = mode_ptr[i];
+
+        if (mode == 0xffff)
+            break;
+
+        if (_fetch_mode_info(&current_mode, mode))
             continue;
-
-        // printf("2~~~> %d\n\r", current_mode.memory_model);
 
         // Check if mode is direct color
         if (current_mode.memory_model != 0x06)
@@ -92,31 +125,45 @@ static vesa_mode_t _init_vesa(u16 max_width, u16 max_height, u16 max_bpp) {
 
         // Ignore modes that are too large
         if (current_mode.width > max_width || current_mode.height > max_height ||
-            current_mode.bits_per_pixel > max_bpp * 8) {
+            current_mode.bits_per_pixel > max_bpp) {
             continue;
         }
 
         if (current_mode.width > best_mode.width || current_mode.height > best_mode.height ||
             current_mode.bits_per_pixel > best_mode.bits_per_pixel) {
-            best_mode_i = mode_ptr[i];
+            best_mode_i = mode;
             best_mode = current_mode;
         }
     }
 
-    if (best_mode.bits_per_pixel)
-        _set_vesa_mode(best_mode_i);
+    if (best_mode.bits_per_pixel && _set_vesa_mode(best_mode_i))
+        return best_mode;
 
-    return best_mode;
+    return (vesa_mode_t){0};
 }
 
 
 void init_graphics(boot_info_t* info) {
-    if (info->args.video == VIDEO_NONE)
+    if (!info)
         return;
 
     video_info_t* video = &info->video;
     edid_info_t* edid = &info->edid;
     kernel_args_t* args = &info->args;
+
+    // Start in text mode and only switch to graphics if mode set succeeds.
+    video->mode = VIDEO_TEXT;
+    video->framebuffer = VGA_ADDR;
+    video->width = VGA_WIDTH;
+    video->height = VGA_HEIGHT;
+    video->bytes_per_pixel = 2;
+    video->bytes_per_line = VGA_WIDTH * 2;
+    video->red_mask = 0;
+    video->green_mask = 0;
+    video->blue_mask = 0;
+
+    if (info->args.video == VIDEO_NONE)
+        return;
 
     edid_data_t edid_data = {0};
 
@@ -130,7 +177,7 @@ void init_graphics(boot_info_t* info) {
     }
 
     if (info->args.video == VIDEO_GRAPHICS) {
-        vesa_mode_t vesa = _init_vesa(info->video.width, info->video.height, info->args.vesa_bpp);
+        vesa_mode_t vesa = _init_vesa(video->width, video->height, info->args.vesa_bpp);
 
         if (vesa.bits_per_pixel) {
             video->mode = VIDEO_GRAPHICS;
@@ -154,11 +201,4 @@ void init_graphics(boot_info_t* info) {
     }
 
     printf("video output: vga text\n\r");
-
-    video->mode = VIDEO_TEXT;
-
-    video->framebuffer = VGA_ADDR;
-
-    video->width = VGA_WIDTH;
-    video->height = VGA_HEIGHT;
 }

@@ -223,6 +223,7 @@ static inline void write_cr4(u32 value) {
 #define CPUID_EXTENDED_INFO 0x80000001
 #define CPUID_EI_LM         (1 << 29)
 #define CPUID_EI_1G_PAGES   (1 << 26)
+#define CPUID_EI_NX         (1 << 20)
 
 typedef struct {
     u32 eax, ebx, ecx, edx;

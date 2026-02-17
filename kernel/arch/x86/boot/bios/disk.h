@@ -28,3 +28,4 @@ int read_disk(void* dest, size_t offset, size_t bytes);
 void disk_init(u16 disk);
 
 void* read_rootfs(const char* path);
+bool stage_rootfs_image(u64* paddr, u64* size);

@@ -7,16 +7,16 @@
 #include "x86/asm.h"
 
 static page_t* _walk_pdpt(page_t* pdpt, size_t index, u64 flags) {
-    if (pdpt[index] & PT_PRESENT) {
-        pdpt[index] |= flags & (PT_USER | PT_WRITE);
+    if (pdpt[index] & PT_PRESENT)
         return (page_t*)(uintptr_t)page_get_paddr(&pdpt[index]);
-    }
 
     page_t* pd = alloc_frames(1);
     memset(pd, 0, PAGE_4KIB);
 
     page_set_paddr(&pdpt[index], (page_t)(uintptr_t)pd);
-    pdpt[index] |= (flags | PT_PRESENT) & FLAGS_MASK;
+
+    u64 pdpt_flags = flags & (PT_PRESENT | PT_WRITE_THROUGH | PT_NO_CACHE | PT_NO_EXECUTE);
+    pdpt[index] |= (pdpt_flags | PT_PRESENT) & FLAGS_MASK;
 
     return pd;
 }

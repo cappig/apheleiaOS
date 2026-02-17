@@ -30,7 +30,7 @@ typedef struct PACKED {
     u16 width;
     u16 height;
 
-    u32 framebuffer;
+    u64 framebuffer;
 } video_info_t;
 
 typedef struct PACKED {
@@ -46,6 +46,8 @@ typedef struct PACKED {
     kernel_args_t args;
 
     u64 acpi_root_ptr;
+    u64 boot_rootfs_paddr;
+    u64 boot_rootfs_size;
 
     video_info_t video;
     edid_info_t edid;

@@ -1,15 +1,18 @@
 #include <arch/arch.h>
 #include <arch/thread.h>
+#include <base/macros.h>
 #include <inttypes.h>
 #include <libc_ext/string.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/acpi.h>
 #include <sys/console.h>
 #include <sys/cpu.h>
+#include <sys/disk.h>
 #include <sys/framebuffer.h>
 #include <sys/logsink.h>
 #include <sys/panic.h>
@@ -32,12 +35,21 @@
 #include <x86/tsc.h>
 
 #define LOG_BOOT_HISTORY_CAP (64 * 512)
+#define BOOT_ROOTFS_SECTOR_SIZE 512
 
 static bool log_console_ready = false;
 static kernel_args_t boot_args = {0};
+static u64 boot_rootfs_paddr = 0;
+static size_t boot_rootfs_size = 0;
+static bool boot_rootfs_registered = false;
 
 static char boot_log_history[LOG_BOOT_HISTORY_CAP];
 static size_t boot_log_history_len = 0;
+
+typedef struct {
+    u64 paddr;
+    size_t size;
+} boot_rootfs_t;
 
 
 static void _log_history_append(const char* s, size_t len) {
@@ -444,6 +456,101 @@ static void _publish_framebuffer(const boot_info_t* info) {
     framebuffer_set_info(&fb);
 }
 
+static ssize_t _boot_rootfs_read(disk_dev_t* dev, void* dest, size_t offset, size_t bytes) {
+    if (!dev || !dest || !dev->private)
+        return -1;
+
+    boot_rootfs_t* rootfs = dev->private;
+
+    if (offset >= rootfs->size)
+        return 0;
+
+    if (bytes > rootfs->size - offset)
+        bytes = rootfs->size - offset;
+
+    if (!bytes)
+        return 0;
+
+    void* src = arch_phys_map(rootfs->paddr + offset, bytes);
+    if (!src)
+        return -1;
+
+    memcpy(dest, src, bytes);
+    arch_phys_unmap(src, bytes);
+
+    return (ssize_t)bytes;
+}
+
+static ssize_t _boot_rootfs_write(disk_dev_t* dev, void* src, size_t offset, size_t bytes) {
+    if (!dev || !src || !dev->private)
+        return -1;
+
+    boot_rootfs_t* rootfs = dev->private;
+
+    if (offset >= rootfs->size)
+        return 0;
+
+    if (bytes > rootfs->size - offset)
+        bytes = rootfs->size - offset;
+
+    if (!bytes)
+        return 0;
+
+    void* dest = arch_phys_map(rootfs->paddr + offset, bytes);
+    if (!dest)
+        return -1;
+
+    memcpy(dest, src, bytes);
+    arch_phys_unmap(dest, bytes);
+
+    return (ssize_t)bytes;
+}
+
+static bool _register_boot_rootfs(void) {
+    if (!boot_rootfs_paddr || !boot_rootfs_size || boot_rootfs_registered)
+        return false;
+
+    boot_rootfs_t* rootfs = calloc(1, sizeof(boot_rootfs_t));
+    disk_dev_t* disk = calloc(1, sizeof(disk_dev_t));
+
+    if (!rootfs || !disk) {
+        free(rootfs);
+        free(disk);
+        return false;
+    }
+
+    rootfs->paddr = boot_rootfs_paddr;
+    rootfs->size = boot_rootfs_size;
+
+    static disk_interface_t interface = {
+        .read = _boot_rootfs_read,
+        .write = _boot_rootfs_write,
+    };
+
+    disk->name = strdup("ram0");
+    disk->type = DISK_VIRTUAL;
+    disk->sector_size = BOOT_ROOTFS_SECTOR_SIZE;
+    disk->sector_count = DIV_ROUND_UP(rootfs->size, (size_t)BOOT_ROOTFS_SECTOR_SIZE);
+    disk->interface = &interface;
+    disk->private = rootfs;
+
+    if (!disk->name || !disk->sector_count || !disk_register(disk)) {
+        free(disk->name);
+        free(disk);
+        free(rootfs);
+        return false;
+    }
+
+    boot_rootfs_registered = true;
+    log_info(
+        "bootdisk: registered /dev/%s from boot image (%zu KiB)",
+        disk->name,
+        rootfs->size / 1024
+    );
+
+    return true;
+}
+
 const kernel_args_t* arch_init(void* boot_info) {
     boot_info_t* info = boot_info;
 
@@ -454,6 +561,15 @@ const kernel_args_t* arch_init(void* boot_info) {
         panic("boot info missing");
 
     memcpy(&boot_args, &info->args, sizeof(boot_args));
+
+    boot_rootfs_paddr = info->boot_rootfs_paddr;
+    boot_rootfs_size = 0;
+
+    if (info->boot_rootfs_size > (u64)(size_t)-1) {
+        boot_rootfs_paddr = 0;
+    } else {
+        boot_rootfs_size = (size_t)info->boot_rootfs_size;
+    }
 
     _configure_log_sinks(info);
     log_init(_log_puts);
@@ -466,6 +582,14 @@ const kernel_args_t* arch_init(void* boot_info) {
 #else
     log_info("apheleiaOS kernel (x86_32) booting");
 #endif
+
+    if (boot_rootfs_paddr && boot_rootfs_size) {
+        log_info(
+            "bootdisk: staged rootfs at %#" PRIx64 " (%zu KiB)",
+            boot_rootfs_paddr,
+            boot_rootfs_size / 1024
+        );
+    }
 
     _route_irqs_to_pic();
     gdt_init();
@@ -516,6 +640,10 @@ const kernel_args_t* arch_init(void* boot_info) {
 void arch_storage_init(void) {
     ata_disk_init();
     ahci_disk_init();
+
+    if (boot_rootfs_paddr && boot_rootfs_size && !_register_boot_rootfs()) {
+        log_warn("bootdisk: failed to register staged rootfs fallback");
+    }
 }
 
 void arch_register_devices(void) {

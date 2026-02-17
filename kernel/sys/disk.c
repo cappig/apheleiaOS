@@ -511,17 +511,10 @@ bool mount_rootfs(disk_dev_t* dev) {
     if (!dev->partitions || !dev->partitions->size)
         return false;
 
-    disk_partition_t* part = _pick_rootfs_partition(dev);
+    disk_partition_t* preferred = _pick_rootfs_partition(dev);
 
-    if (!part) {
+    if (!preferred) {
         log_warn("disk: no rootfs partition found");
-        return false;
-    }
-
-    fs_instance_t* instance = _probe_partition(part);
-
-    if (!instance) {
-        log_warn("disk: no filesystem for %s", part->name ? part->name : "partition");
         return false;
     }
 
@@ -532,13 +525,35 @@ bool mount_rootfs(disk_dev_t* dev) {
         return false;
     }
 
-    if (!vfs_mount(instance, root)) {
-        log_warn("disk: failed to mount rootfs");
-        return false;
+    fs_instance_t* instance = _probe_partition(preferred);
+
+    if (instance && vfs_mount(instance, root)) {
+        log_info("disk: mounted %s at /", preferred->name ? preferred->name : "rootfs");
+        return true;
     }
 
-    log_info("disk: mounted %s at /", part->name ? part->name : "rootfs");
-    return true;
+    if (!instance)
+        log_warn("disk: no filesystem for %s", preferred->name ? preferred->name : "partition");
+
+    for (size_t i = 0; i < dev->partitions->size; i++) {
+        disk_partition_t* part = _vec_get_ptr(dev->partitions, i);
+
+        if (!part || part == preferred)
+            continue;
+
+        instance = _probe_partition(part);
+        if (!instance)
+            continue;
+
+        if (!vfs_mount(instance, root))
+            continue;
+
+        log_info("disk: mounted %s at /", part->name ? part->name : "rootfs");
+        return true;
+    }
+
+    log_warn("disk: failed to mount rootfs");
+    return false;
 }
 
 bool disk_publish_devices(void) {

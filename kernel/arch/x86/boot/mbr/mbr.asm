@@ -1,5 +1,5 @@
 bits 16
-section .text
+section .mbr
 
 ; Tiny MBR stub that gets placed at the beginning of the disk image
 ; It loads and jums to the second stage loader
@@ -24,13 +24,18 @@ _start:
     jmp 0:relocated
 
 relocated:
+    sti
+    mov [boot_drive], dl
+
     ; Check if we have int 0x13 extensions
     mov ah, 0x41
     mov bx, 0x55aa
     int 0x13
     jc no_int13
     cmp bx, 0xaa55
-    jc no_int13
+    jne no_int13
+    test cx, 1                   ; bit 0: AH=42h/43h extended disk access
+    jz no_int13
 
     ; Look for the boot partition
     mov si, 0x500 + 0x1be
@@ -65,6 +70,7 @@ found_part:
     mov word [si + 2], 66
     mov dword [si + 8], eax
     mov ah, 0x42
+    mov dl, [boot_drive]
     int 0x13
     jc read_error
 
@@ -80,6 +86,7 @@ found_part:
     mov word [si + 6], 0x1000
     mov dword [si + 8], eax
     mov ah, 0x42
+    mov dl, [boot_drive]
     int 0x13
     jc read_error
 
@@ -90,6 +97,7 @@ found_part:
     mov word [si + 2], cx
     mov dword [si + 8], eax
     mov ah, 0x42
+    mov dl, [boot_drive]
     int 0x13
     jc read_error
 
@@ -125,6 +133,7 @@ no_partition:
 
 
 ; Disk address packet
+align 4
 dap:
     db 16                       ; size
     db 0                        ; reserved
@@ -135,6 +144,7 @@ dap:
 
 save_cnt: dw 0
 save_lba: dd 0
+boot_drive: db 0
 
 msg_no_part db 'no valid partition found', 0
 msg_read_error db 'disk read error', 0

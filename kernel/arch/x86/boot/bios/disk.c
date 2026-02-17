@@ -9,7 +9,9 @@
 #include <string.h>
 
 #include "bios.h"
+#include "memory.h"
 #include "tty.h"
+#include "x86/boot.h"
 #include "x86/mbr.h"
 #include "x86/regs.h"
 
@@ -21,16 +23,20 @@
 static u16 disk_code = 0;
 static u16 disk_sector_size = MBR_SECTOR_SIZE;
 static size_t rootfs_base = 0;
+static size_t rootfs_size = 0;
 static ext2_superblock_t superblock = {0};
+static u8 bounce[BOUNCE_SIZE] = {0};
 
 static bool _bios_read_lba(void* dest, size_t lba, u16 sectors) {
     if (!dest || !sectors)
         return false;
 
+    u32 real_dest = (u32)REAL_OFF(dest) | ((u32)REAL_SEG(dest) << 16);
+
     dap_t dap = {
         .size = sizeof(dap_t),
         .sectors = sectors,
-        .destination = (u32)(uintptr_t)dest,
+        .destination = real_dest,
         .lba = lba,
     };
 
@@ -51,7 +57,6 @@ int read_disk(void* dest, size_t offset, size_t bytes) {
     u16 bounce_sectors = BOUNCE_SIZE / ss;
     u16 max_sectors = (u16)min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)bounce_sectors);
 
-    uint8_t bounce[BOUNCE_SIZE];
     uint8_t* out = dest;
 
     while (bytes > 0) {
@@ -132,9 +137,21 @@ void disk_init(u16 disk) {
     if (!_find_rootfs(&rootfs))
         panic("Rootfs partition not found!");
 
-    rootfs_base = rootfs.lba_first * MBR_SECTOR_SIZE;
+    if (rootfs.lba_first > ((size_t)-1 / MBR_SECTOR_SIZE))
+        panic("Rootfs offset too large!");
 
-    printf("boot: rootfs lba=%u base=0x%x\n\r", rootfs.lba_first, (unsigned)rootfs_base);
+    if (rootfs.sector_count > ((size_t)-1 / MBR_SECTOR_SIZE))
+        panic("Rootfs partition too large!");
+
+    rootfs_base = rootfs.lba_first * MBR_SECTOR_SIZE;
+    rootfs_size = rootfs.sector_count * MBR_SECTOR_SIZE;
+
+    printf(
+        "boot: rootfs lba=%u base=0x%x size=%u\n\r",
+        rootfs.lba_first,
+        (unsigned)rootfs_base,
+        (unsigned)rootfs_size
+    );
 
     // Read the superblock at offset 1024
     read_disk(&superblock, rootfs_base + 1024, sizeof(ext2_superblock_t));
@@ -148,6 +165,28 @@ void disk_init(u16 disk) {
 
     printf("boot: ext2 blocks=%u block_size=%u\n\r",
            superblock.block_count, ext2_block_size(&superblock));
+}
+
+bool stage_rootfs_image(u64* paddr, u64* size) {
+    if (!paddr || !size || !rootfs_size)
+        return false;
+
+    size_t alloc_size = ALIGN(rootfs_size, 0x1000);
+
+    if (alloc_size < rootfs_size)
+        return false;
+
+    void* image = mmap_alloc_top(alloc_size, E820_KERNEL, 0x1000, PROTECTED_MODE_TOP);
+
+    read_disk(image, rootfs_base, rootfs_size);
+
+    if (alloc_size > rootfs_size)
+        memset((u8*)image + rootfs_size, 0, alloc_size - rootfs_size);
+
+    *paddr = (u64)(uintptr_t)image;
+    *size = (u64)rootfs_size;
+
+    return true;
 }
 
 
@@ -228,9 +267,25 @@ static void _get_inode(u32 num, ext2_inode_t* inode) {
 
 static void* _read_inode(ext2_inode_t* inode) {
     u32 block_size = ext2_block_size(&superblock);
+    u64 file_size_u64 = ext2_file_size(inode);
+
+    if (file_size_u64 > (u64)(size_t)-1 - 1)
+        panic("File too large for bootloader!");
+
+    size_t file_size = (size_t)file_size_u64;
 
     // Flatten the inodes block list
-    size_t inode_blocks = DIV_ROUND_UP(ext2_file_size(inode), block_size);
+    size_t inode_blocks = DIV_ROUND_UP(file_size, block_size);
+
+    if (!inode_blocks) {
+        char* buffer = malloc(1);
+
+        if (!buffer)
+            panic("Failed to allocate memory for inode buffer!");
+
+        buffer[0] = '\0';
+        return buffer;
+    }
 
     u32* blocks = (u32*)malloc(inode_blocks * sizeof(u32));
 
@@ -256,7 +311,8 @@ static void* _read_inode(ext2_inode_t* inode) {
     if (n != inode_blocks)
         panic("Inode block count mismatch!");
 
-    void* buffer = malloc(inode_blocks * block_size);
+    size_t buffer_size = inode_blocks * block_size;
+    void* buffer = malloc(buffer_size + 1);
 
     if (!buffer)
         panic("Failed to allocate memory for inode buffer!");
@@ -274,6 +330,9 @@ static void* _read_inode(ext2_inode_t* inode) {
     }
 
     free(blocks);
+
+    // Ensure text consumers never read past EOF.
+    ((u8*)buffer)[file_size] = '\0';
 
     return buffer;
 }

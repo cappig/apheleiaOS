@@ -33,6 +33,75 @@ typedef struct {
     bool term_hotkey_down;
 } wm_runtime_t;
 
+static int _present_frame(int fb_fd, const fb_info_t* fb_info, const u32* frame, size_t frame_bytes) {
+    if (!fb_info || !frame)
+        return -1;
+
+    size_t packed_row_bytes = (size_t)fb_info->width * 4;
+
+    if ((size_t)fb_info->pitch == packed_row_bytes) {
+        size_t written = 0;
+        const u8* src = (const u8*)frame;
+
+        while (written < frame_bytes) {
+            ssize_t n = pwrite(fb_fd, src + written, frame_bytes - written, (off_t)written);
+
+            if (n < 0) {
+                if (errno == EINTR)
+                    continue;
+
+                if (errno == EAGAIN)
+                    return 1;
+
+                return -1;
+            }
+
+            if (!n)
+                return -1;
+
+            written += (size_t)n;
+        }
+
+        return 0;
+    }
+
+    size_t height = (size_t)fb_info->height;
+    const u8* src = (const u8*)frame;
+
+    for (size_t row = 0; row < height; row++) {
+        size_t written = 0;
+        off_t row_off = (off_t)(row * (size_t)fb_info->pitch);
+
+        const u8* row_src = src + row * packed_row_bytes;
+
+        while (written < packed_row_bytes) {
+            ssize_t n = pwrite(
+                fb_fd,
+                row_src + written,
+                packed_row_bytes - written,
+                row_off + (off_t)written
+            );
+
+            if (n < 0) {
+                if (errno == EINTR)
+                    continue;
+
+                if (errno == EAGAIN)
+                    return 1;
+
+                return -1;
+            }
+
+            if (!n)
+                return -1;
+
+            written += (size_t)n;
+        }
+    }
+
+    return 0;
+}
+
 static void _spawn_term(void) {
     pid_t pid = fork();
     if (pid < 0)
@@ -311,12 +380,13 @@ void wm_loop(ui_t* ui, int fb_fd, const fb_info_t* fb_info, u32* frame_store, si
             0x00ffffffU
         );
 
-        if (pwrite(fb_fd, frame_store, frame_bytes, 0) < 0) {
-            if (errno == EAGAIN)
-                continue;
+        int present = _present_frame(fb_fd, fb_info, frame_store, frame_bytes);
 
+        if (present > 0)
+            continue;
+
+        if (present < 0)
             return;
-        }
 
         needs_redraw = false;
     }

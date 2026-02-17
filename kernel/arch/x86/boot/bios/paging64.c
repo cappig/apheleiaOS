@@ -12,6 +12,18 @@
 #include "x86/paging64.h"
 
 static page_t* lvl4;
+static bool nx_supported = false;
+
+static bool _cpu_has_nx(void) {
+    cpuid_regs_t regs = {0};
+    cpuid(0x80000000, &regs);
+
+    if (regs.eax < CPUID_EXTENDED_INFO)
+        return false;
+
+    cpuid(CPUID_EXTENDED_INFO, &regs);
+    return (regs.edx & CPUID_EI_NX) != 0;
+}
 
 
 static page_t* _walk_table_once(page_t* table, size_t index, bool is_kernel) {
@@ -21,7 +33,9 @@ static page_t* _walk_table_once(page_t* table, size_t index, bool is_kernel) {
         next_table = (page_t*)(uintptr_t)page_get_paddr(&table[index]);
     } else {
         u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
+
         next_table = (page_t*)mmap_alloc(PAGE_4KIB, type, PAGE_4KIB);
+        memset(next_table, 0, PAGE_4KIB);
 
         page_set_paddr(&table[index], (u64)(uintptr_t)next_table);
 
@@ -93,9 +107,13 @@ void setup_paging_64(void) {
     memset(lvl4, 0, PAGE_4KIB);
     write_cr3((u32)(uintptr_t)lvl4);
 
-    // Enable the NX bit
-    u64 efer = read_msr(EFER_MSR);
-    write_msr(EFER_MSR, efer | EFER_NX);
+    nx_supported = _cpu_has_nx();
+
+    if (nx_supported) {
+        // Enable the NX bit only on CPUs that advertise it.
+        u64 efer = read_msr(EFER_MSR);
+        write_msr(EFER_MSR, efer | EFER_NX);
+    }
 
     // Enable write protect
     u32 cr0 = read_cr0();
@@ -123,7 +141,7 @@ static page_t _elf_to_page_flags(u32 elf_flags) {
     if (elf_flags & PF_W)
         flags |= PT_WRITE;
 
-    if (!(elf_flags & PF_X))
+    if (nx_supported && !(elf_flags & PF_X))
         flags |= PT_NO_EXECUTE;
 
     return flags;
