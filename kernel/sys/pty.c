@@ -2,9 +2,11 @@
 
 #include <arch/arch.h>
 #include <errno.h>
+#include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
 #include <string.h>
+#include <sys/devfs.h>
 #include <sys/ioctl.h>
 
 #include "vfs.h"
@@ -30,6 +32,10 @@ typedef struct {
 } pty_t;
 
 static pty_t ptys[PTY_COUNT] = {0};
+static pty_handle_t pty_master_handles[PTY_COUNT];
+static pty_handle_t pty_slave_handles[PTY_COUNT];
+static pty_handle_t pty_master_default = {.index = 0, .is_master = true};
+static bool pty_register_devfs(vfs_node_t* dev_dir);
 
 static void _queue_reset(pty_queue_t* queue) {
     if (!queue)
@@ -174,6 +180,35 @@ static size_t _queue_free_space(pty_queue_t* queue) {
     return free_space;
 }
 
+static void _seed_handles(void) {
+    for (size_t i = 0; i < PTY_COUNT; i++) {
+        pty_master_handles[i].index = i;
+        pty_master_handles[i].is_master = true;
+        pty_slave_handles[i].index = i;
+        pty_slave_handles[i].is_master = false;
+    }
+}
+
+static ssize_t _dev_pty_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)offset;
+
+    return pty_read_handle(node ? node->private : NULL, buf, len, flags);
+}
+
+static ssize_t _dev_pty_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)offset;
+
+    return pty_write_handle(node ? node->private : NULL, buf, len, flags);
+}
+
+static ssize_t _dev_pty_ioctl(vfs_node_t* node, u64 request, void* args) {
+    return pty_ioctl_handle(node ? node->private : NULL, request, args);
+}
+
+static short _dev_pty_poll(vfs_node_t* node, short events, u32 flags) {
+    return pty_poll_handle(node ? node->private : NULL, events, flags);
+}
+
 static void _queue_clear(pty_queue_t* queue) {
     if (!queue)
         return;
@@ -264,6 +299,9 @@ static ssize_t _queue_write(pty_queue_t* queue, const void* buf, size_t len, boo
 }
 
 void pty_init(void) {
+    if (!devfs_register_device("pty", pty_register_devfs))
+        log_warn("pty: failed to register devfs init callback");
+
     for (size_t i = 0; i < PTY_COUNT; i++) {
         pty_t* pty = &ptys[i];
 
@@ -272,6 +310,50 @@ void pty_init(void) {
         _reset_state(pty);
         pty->allocated = false;
     }
+}
+
+static bool pty_register_devfs(vfs_node_t* dev_dir) {
+    if (!dev_dir)
+        return false;
+
+    pty_init();
+    _seed_handles();
+
+    vfs_interface_t* pty_if = vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
+    if (!pty_if) {
+        log_warn("pty: failed to allocate /dev interface");
+        return false;
+    }
+
+    pty_if->ioctl = _dev_pty_ioctl;
+    pty_if->poll = _dev_pty_poll;
+
+    bool ok = true;
+
+    if (!devfs_register_node(dev_dir, "ptmx", VFS_CHARDEV, 0666, pty_if, &pty_master_default)) {
+        log_warn("pty: failed to create /dev/ptmx");
+        ok = false;
+    }
+
+    char pty_name[] = "pty0";
+    char pts_name[] = "pts0";
+
+    for (size_t i = 0; i < PTY_COUNT; i++) {
+        pty_name[3] = (char)('0' + i);
+        pts_name[3] = (char)('0' + i);
+
+        if (!devfs_register_node(dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, &pty_master_handles[i])) {
+            log_warn("pty: failed to create /dev/%s", pty_name);
+            ok = false;
+        }
+
+        if (!devfs_register_node(dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, &pty_slave_handles[i])) {
+            log_warn("pty: failed to create /dev/%s", pts_name);
+            ok = false;
+        }
+    }
+
+    return ok;
 }
 
 bool pty_reserve(size_t* index_out) {

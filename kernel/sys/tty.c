@@ -7,12 +7,17 @@
 #include <signal.h>
 #include <string.h>
 #include <sys/console.h>
+#include <sys/devfs.h>
 #include <sys/ioctl.h>
 #include <sys/tty_input.h>
 #include <termios.h>
 
 static ssize_t current_tty = TTY_NONE;
 static pid_t tty_pgrp[TTY_SCREEN_COUNT] = {0};
+static tty_handle_t tty_handles[TTY_COUNT];
+static tty_handle_t tty_current_handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+static tty_handle_t tty_console_handle = {.kind = TTY_HANDLE_CONSOLE, .index = TTY_CONSOLE};
+static bool tty_register_devfs(vfs_node_t* dev_dir);
 
 static bool _is_controlling_screen(const sched_thread_t* thread, size_t screen) {
     if (!thread || !thread->user_thread)
@@ -86,7 +91,39 @@ static bool _resolve_screen(const tty_handle_t* handle, size_t* screen_out) {
     }
 }
 
+static void _seed_handles(void) {
+    for (size_t i = 0; i < TTY_COUNT; i++) {
+        tty_handles[i].kind = TTY_HANDLE_NAMED;
+        tty_handles[i].index = i;
+    }
+}
+
+static ssize_t _dev_tty_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)offset;
+    (void)flags;
+
+    return tty_read_handle(node ? node->private : NULL, buf, len);
+}
+
+static ssize_t _dev_tty_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    (void)offset;
+    (void)flags;
+
+    return tty_write_handle(node ? node->private : NULL, buf, len);
+}
+
+static ssize_t _dev_tty_ioctl(vfs_node_t* node, u64 request, void* args) {
+    return tty_ioctl_handle(node ? node->private : NULL, request, args);
+}
+
+static short _dev_tty_poll(vfs_node_t* node, short events, u32 flags) {
+    return tty_poll_handle(node ? node->private : NULL, events, flags);
+}
+
 void tty_init(void) {
+    if (!devfs_register_device("tty", tty_register_devfs))
+        log_warn("tty: failed to register devfs init callback");
+
     if (!TTY_SCREEN_COUNT)
         return;
 
@@ -125,6 +162,46 @@ size_t tty_current_screen(void) {
         return TTY_CONSOLE;
 
     return (size_t)current_tty;
+}
+
+static bool tty_register_devfs(vfs_node_t* dev_dir) {
+    if (!dev_dir)
+        return false;
+
+    tty_init();
+    _seed_handles();
+
+    vfs_interface_t* tty_if = vfs_create_interface(_dev_tty_read, _dev_tty_write, NULL);
+    if (!tty_if) {
+        log_warn("tty: failed to allocate /dev interface");
+        return false;
+    }
+
+    tty_if->ioctl = _dev_tty_ioctl;
+    tty_if->poll = _dev_tty_poll;
+
+    bool ok = true;
+
+    if (!devfs_register_node(dev_dir, "tty", VFS_CHARDEV, 0666, tty_if, &tty_current_handle)) {
+        log_warn("tty: failed to create /dev/tty");
+        ok = false;
+    }
+
+    if (!devfs_register_node(dev_dir, "console", VFS_CHARDEV, 0666, tty_if, &tty_console_handle)) {
+        log_warn("tty: failed to create /dev/console");
+        ok = false;
+    }
+
+    char name[] = "tty0";
+    for (size_t i = 0; i < TTY_COUNT; i++) {
+        name[3] = (char)('0' + i);
+        if (!devfs_register_node(dev_dir, name, VFS_CHARDEV, 0666, tty_if, &tty_handles[i])) {
+            log_warn("tty: failed to create /dev/%s", name);
+            ok = false;
+        }
+    }
+
+    return ok;
 }
 
 static ssize_t _read_screen(size_t index, void* buf, size_t len) {

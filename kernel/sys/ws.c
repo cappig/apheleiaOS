@@ -2,10 +2,13 @@
 
 #include <arch/arch.h>
 #include <errno.h>
+#include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/devfs.h>
 
 #define WS_MGR_QUEUE_CAP 128
 #define WS_EV_QUEUE_CAP  128
@@ -56,6 +59,8 @@ typedef struct {
 
 static ws_state_t ws_state = {0};
 static volatile int ws_lock = 0;
+static u32 ws_ids[WS_MAX_WINDOWS] = {0};
+static bool ws_register_devfs(vfs_node_t* dev_dir);
 
 static void _lock_acquire(void) {
     while (__sync_lock_test_and_set(&ws_lock, 1)) {
@@ -441,6 +446,9 @@ static int _handle_manager_op(pid_t caller_pid, const ws_req_t* req, ws_resp_t* 
 }
 
 bool ws_init(void) {
+    if (!devfs_register_device("ws", ws_register_devfs))
+        log_warn("ws: failed to register devfs init callback");
+
     if (ws_state.ready)
         return true;
 
@@ -456,6 +464,120 @@ bool ws_init(void) {
     ws_state.ready = true;
 
     return true;
+}
+
+static ssize_t _dev_wsctl_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    return ws_ctl_read(node, buf, offset, len, flags);
+}
+
+static ssize_t _dev_wsctl_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    return ws_ctl_write(node, buf, offset, len, flags);
+}
+
+static short _dev_wsctl_poll(vfs_node_t* node, short events, u32 flags) {
+    return ws_ctl_poll(node, events, flags);
+}
+
+static ssize_t _dev_ws_fb_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    if (!node || !node->private)
+        return -EINVAL;
+
+    return ws_fb_read(*(u32*)node->private, buf, offset, len, flags);
+}
+
+static ssize_t _dev_ws_fb_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    if (!node || !node->private)
+        return -EINVAL;
+
+    return ws_fb_write(*(u32*)node->private, buf, offset, len, flags);
+}
+
+static short _dev_ws_fb_poll(vfs_node_t* node, short events, u32 flags) {
+    if (!node || !node->private)
+        return POLLNVAL;
+
+    return ws_fb_poll(*(u32*)node->private, events, flags);
+}
+
+static ssize_t _dev_ws_ev_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+    if (!node || !node->private)
+        return -EINVAL;
+
+    return ws_ev_read(*(u32*)node->private, buf, offset, len, flags);
+}
+
+static short _dev_ws_ev_poll(vfs_node_t* node, short events, u32 flags) {
+    if (!node || !node->private)
+        return POLLNVAL;
+
+    return ws_ev_poll(*(u32*)node->private, events, flags);
+}
+
+static bool ws_register_devfs(vfs_node_t* dev_dir) {
+    if (!dev_dir)
+        return false;
+
+    if (!ws_init()) {
+        log_warn("ws: init failed");
+        return false;
+    }
+
+    bool ok = true;
+
+    vfs_interface_t* wsctl_if = vfs_create_interface(_dev_wsctl_read, _dev_wsctl_write, NULL);
+    if (!wsctl_if) {
+        log_warn("ws: failed to allocate /dev/wsctl interface");
+        ok = false;
+    } else {
+        wsctl_if->poll = _dev_wsctl_poll;
+        if (!devfs_register_node(dev_dir, "wsctl", VFS_CHARDEV, 0666, wsctl_if, NULL)) {
+            log_warn("ws: failed to create /dev/wsctl");
+            ok = false;
+        }
+    }
+
+    vfs_node_t* ws_dir = devfs_register_dir(dev_dir, "ws", 0755);
+    if (!ws_dir) {
+        log_warn("ws: failed to create /dev/ws");
+        return false;
+    }
+
+    vfs_interface_t* ws_fb_if = vfs_create_interface(_dev_ws_fb_read, _dev_ws_fb_write, NULL);
+    vfs_interface_t* ws_ev_if = vfs_create_interface(_dev_ws_ev_read, NULL, NULL);
+
+    if (!ws_fb_if || !ws_ev_if) {
+        log_warn("ws: failed to allocate per-window interfaces");
+        return false;
+    }
+
+    ws_fb_if->poll = _dev_ws_fb_poll;
+    ws_ev_if->poll = _dev_ws_ev_poll;
+
+    for (u32 i = 0; i < WS_MAX_WINDOWS; i++) {
+        ws_ids[i] = i;
+
+        char slot_name[4];
+        snprintf(slot_name, sizeof(slot_name), "%u", i);
+
+        vfs_node_t* slot = devfs_register_dir(ws_dir, slot_name, 0755);
+        if (!slot) {
+            log_warn("ws: failed to create /dev/ws/%s", slot_name);
+            ok = false;
+            continue;
+        }
+
+        if (!devfs_register_node(slot, "fb", VFS_CHARDEV, 0666, ws_fb_if, &ws_ids[i])) {
+            log_warn("ws: failed to create /dev/ws/%s/fb", slot_name);
+            ok = false;
+        }
+
+        if (!devfs_register_node(slot, "ev", VFS_CHARDEV, 0666, ws_ev_if, &ws_ids[i])) {
+            log_warn("ws: failed to create /dev/ws/%s/ev", slot_name);
+            ok = false;
+        }
+    }
+
+    return ok;
 }
 
 ssize_t ws_ctl_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {

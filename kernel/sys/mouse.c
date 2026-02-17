@@ -6,12 +6,14 @@
 #include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/devfs.h>
 #include <sys/framebuffer.h>
 
 #include "input.h"
 
 static vector_t* mice = NULL;
 static ring_buffer_t* buffer = NULL;
+static bool mouse_register_devfs(vfs_node_t* dev_dir);
 
 static i32 mouse_x = 0;
 static i32 mouse_y = 0;
@@ -97,6 +99,9 @@ u8 mouse_register(const char* name) {
 }
 
 bool mouse_init(void) {
+    if (!devfs_register_device("mouse", mouse_register_devfs))
+        log_warn("mouse: failed to register devfs init callback");
+
     if (!mice)
         mice = vec_create(sizeof(mouse_dev_t*));
 
@@ -113,6 +118,29 @@ bool mouse_init(void) {
     if (fb && fb->available) {
         mouse_x = (i32)(fb->width / 2);
         mouse_y = (i32)(fb->height / 2);
+    }
+
+    return true;
+}
+
+static bool mouse_register_devfs(vfs_node_t* dev_dir) {
+    if (!dev_dir)
+        return false;
+
+    if (!mouse_init()) {
+        log_warn("mouse: init failed");
+        return false;
+    }
+
+    vfs_interface_t* mouse_if = vfs_create_interface(mouse_read, NULL, NULL);
+    if (!mouse_if) {
+        log_warn("mouse: failed to allocate /dev interface");
+        return false;
+    }
+
+    if (!devfs_register_node(dev_dir, "mouse", VFS_CHARDEV, 0666, mouse_if, NULL)) {
+        log_warn("mouse: failed to create /dev/mouse");
+        return false;
     }
 
     return true;

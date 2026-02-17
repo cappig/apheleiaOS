@@ -2,10 +2,12 @@
 
 #include <arch/arch.h>
 #include <errno.h>
+#include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
 #include <string.h>
 #include <sys/console.h>
+#include <sys/devfs.h>
 #include <sys/tty.h>
 
 #define INPUT_QUEUE_CAPACITY 256
@@ -21,6 +23,7 @@ typedef struct {
 } input_state_t;
 
 static input_state_t input_state = {0};
+static bool input_register_devfs(vfs_node_t* dev_dir);
 
 bool input_capture_screen(size_t screen) {
     if (screen >= TTY_SCREEN_COUNT)
@@ -71,12 +74,40 @@ static void _push_event(const input_event_t* event) {
 }
 
 bool input_init(void) {
+    if (!devfs_register_device("input", input_register_devfs))
+        log_warn("input: failed to register devfs init callback");
+
     if (input_state.ready)
         return true;
 
     memset(&input_state, 0, sizeof(input_state));
     sched_wait_queue_init(&input_state.wait_queue);
     input_state.ready = true;
+
+    return true;
+}
+
+static bool input_register_devfs(vfs_node_t* dev_dir) {
+    if (!dev_dir)
+        return false;
+
+    if (!input_init()) {
+        log_warn("input: init failed");
+        return false;
+    }
+
+    vfs_interface_t* input_if = vfs_create_interface(input_read, NULL, NULL);
+    if (!input_if) {
+        log_warn("input: failed to allocate /dev interface");
+        return false;
+    }
+
+    input_if->poll = input_poll;
+
+    if (!devfs_register_node(dev_dir, "input", VFS_CHARDEV, 0666, input_if, NULL)) {
+        log_warn("input: failed to create /dev/input");
+        return false;
+    }
 
     return true;
 }

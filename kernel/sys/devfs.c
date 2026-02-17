@@ -1,33 +1,21 @@
 #include "devfs.h"
 
 #include <arch/arch.h>
-#include <base/macros.h>
 #include <base/units.h>
 #include <errno.h>
-#include <gui/fb.h>
 #include <inttypes.h>
 #include <log/log.h>
-#include <sched/scheduler.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/cpu.h>
-#include <sys/console.h>
-#include <sys/framebuffer.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
 
-#include "keyboard.h"
-#include "input.h"
-#include "mouse.h"
-#include "pty.h"
-#include "tty.h"
 #include "vfs.h"
-#include "ws.h"
 
-#define FB_MAP_CHUNK (4 * MIB)
 #define SYSINFO_TEXT_MAX 384
+#define DEVFS_MAX_DEVICES 32
 
 #ifndef BUILD_DATE
 #define BUILD_DATE "unknown"
@@ -37,14 +25,15 @@
 #define GIT_COMMIT "unknown"
 #endif
 
-static tty_handle_t tty_handles[TTY_COUNT];
-static tty_handle_t tty_current = {.kind = TTY_HANDLE_CURRENT, .index = 0};
-static tty_handle_t tty_console = {.kind = TTY_HANDLE_CONSOLE, .index = TTY_CONSOLE};
-static pty_handle_t pty_master_handles[PTY_COUNT];
-static pty_handle_t pty_slave_handles[PTY_COUNT];
-static pty_handle_t pty_master_default = {.index = 0, .is_master = true};
 static u64 boot_seconds = 0;
-static u32 ws_ids[WS_MAX_WINDOWS] = {0};
+
+typedef struct {
+    const char* name;
+    devfs_device_init_fn init_fn;
+} devfs_device_entry_t;
+
+static devfs_device_entry_t devfs_devices[DEVFS_MAX_DEVICES];
+static size_t devfs_device_count = 0;
 
 static u64 _boot_seconds(void) {
     if (boot_seconds)
@@ -78,109 +67,11 @@ static ssize_t _dev_text_read(const char* text, void* buf, size_t offset, size_t
         return VFS_EOF;
 
     size_t copy_len = text_len - offset;
-
     if (copy_len > len)
         copy_len = len;
 
     memcpy(buf, text + offset, copy_len);
     return (ssize_t)copy_len;
-}
-
-static ssize_t _dev_tty_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    (void)offset;
-    (void)flags;
-
-    return tty_read_handle(node ? node->private : NULL, buf, len);
-}
-
-static ssize_t _dev_tty_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    (void)offset;
-    (void)flags;
-
-    return tty_write_handle(node ? node->private : NULL, buf, len);
-}
-
-static ssize_t _dev_tty_ioctl(vfs_node_t* node, u64 request, void* args) {
-    return tty_ioctl_handle(node ? node->private : NULL, request, args);
-}
-
-static short _dev_tty_poll(vfs_node_t* node, short events, u32 flags) {
-    return tty_poll_handle(node ? node->private : NULL, events, flags);
-}
-
-static ssize_t _dev_pty_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    (void)offset;
-
-    return pty_read_handle(node ? node->private : NULL, buf, len, flags);
-}
-
-static ssize_t _dev_pty_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    (void)offset;
-
-    return pty_write_handle(node ? node->private : NULL, buf, len, flags);
-}
-
-static ssize_t _dev_pty_ioctl(vfs_node_t* node, u64 request, void* args) {
-    return pty_ioctl_handle(node ? node->private : NULL, request, args);
-}
-
-static short _dev_pty_poll(vfs_node_t* node, short events, u32 flags) {
-    return pty_poll_handle(node ? node->private : NULL, events, flags);
-}
-
-static ssize_t _dev_input_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    return input_read(node, buf, offset, len, flags);
-}
-
-static short _dev_input_poll(vfs_node_t* node, short events, u32 flags) {
-    return input_poll(node, events, flags);
-}
-
-static ssize_t _dev_wsctl_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    return ws_ctl_read(node, buf, offset, len, flags);
-}
-
-static ssize_t _dev_wsctl_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    return ws_ctl_write(node, buf, offset, len, flags);
-}
-
-static short _dev_wsctl_poll(vfs_node_t* node, short events, u32 flags) {
-    return ws_ctl_poll(node, events, flags);
-}
-
-static ssize_t _dev_ws_fb_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    if (!node || !node->private)
-        return -EINVAL;
-
-    return ws_fb_read(*(u32*)node->private, buf, offset, len, flags);
-}
-
-static ssize_t _dev_ws_fb_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    if (!node || !node->private)
-        return -EINVAL;
-
-    return ws_fb_write(*(u32*)node->private, buf, offset, len, flags);
-}
-
-static short _dev_ws_fb_poll(vfs_node_t* node, short events, u32 flags) {
-    if (!node || !node->private)
-        return POLLNVAL;
-
-    return ws_fb_poll(*(u32*)node->private, events, flags);
-}
-
-static ssize_t _dev_ws_ev_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    if (!node || !node->private)
-        return -EINVAL;
-
-    return ws_ev_read(*(u32*)node->private, buf, offset, len, flags);
-}
-
-static short _dev_ws_ev_poll(vfs_node_t* node, short events, u32 flags) {
-    if (!node || !node->private)
-        return POLLNVAL;
-
-    return ws_ev_poll(*(u32*)node->private, events, flags);
 }
 
 static ssize_t _dev_null_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
@@ -221,113 +112,6 @@ static ssize_t _dev_zero_write(vfs_node_t* node, void* buf, size_t offset, size_
     (void)flags;
 
     return (ssize_t)len;
-}
-
-static ssize_t
-_dev_fb_transfer(const framebuffer_info_t* fb, void* buf, size_t offset, size_t len, bool write) {
-    if (!fb || !fb->available || !buf)
-        return -1;
-
-    u64 fb_size = fb->size;
-    u64 off = offset;
-
-    if (off >= fb_size)
-        return VFS_EOF;
-
-    u64 max_len = fb_size - off;
-    u64 req = len;
-    if (req > max_len)
-        req = max_len;
-
-    size_t remaining = (size_t)req;
-
-    size_t done = 0;
-    while (remaining) {
-        size_t chunk = remaining;
-        if (chunk > FB_MAP_CHUNK)
-            chunk = FB_MAP_CHUNK;
-
-        void* map = arch_phys_map(fb->paddr + off + done, chunk);
-        if (!map)
-            break;
-
-        if (write)
-            memcpy(map, (u8*)buf + done, chunk);
-        else
-            memcpy((u8*)buf + done, map, chunk);
-
-        arch_phys_unmap(map, chunk);
-        done += chunk;
-        remaining -= chunk;
-    }
-
-    if (!done)
-        return -1;
-
-    return (ssize_t)done;
-}
-
-static ssize_t _dev_fb_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    (void)node;
-    (void)flags;
-
-    return _dev_fb_transfer(framebuffer_get_info(), buf, offset, len, false);
-}
-
-static ssize_t _dev_fb_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
-    (void)node;
-    (void)flags;
-
-    ssize_t owner_screen = console_fb_owner_screen();
-    if (owner_screen != TTY_NONE && tty_current_screen() != (size_t)owner_screen)
-        return -EAGAIN;
-
-    return _dev_fb_transfer(framebuffer_get_info(), buf, offset, len, true);
-}
-
-static ssize_t _dev_fb_ioctl(vfs_node_t* node, u64 request, void* args) {
-    (void)node;
-
-    const framebuffer_info_t* fb = framebuffer_get_info();
-
-    switch (request) {
-    case FBIOGETINFO:
-        if (!args)
-            return -EINVAL;
-
-        fb_info_t* info = args;
-        memset(info, 0, sizeof(*info));
-
-        if (!fb)
-            return 0;
-
-        info->width = fb->width;
-        info->height = fb->height;
-        info->pitch = fb->pitch;
-        info->bpp = fb->bpp;
-        info->available = fb->available;
-        return 0;
-    case FBIOACQUIRE: {
-        sched_thread_t* current = sched_current();
-        if (!current)
-            return -EPERM;
-
-        size_t screen = TTY_CONSOLE;
-        if (current->tty_index >= 0 && current->tty_index < TTY_SCREEN_COUNT)
-            screen = (size_t)current->tty_index;
-
-        return console_fb_acquire(current->pid, screen);
-    }
-    case FBIORELEASE: {
-        sched_thread_t* current = sched_current();
-        if (!current)
-            return -EPERM;
-
-        return console_fb_release(current->pid);
-    }
-    default:
-        return -ENOTTY;
-    }
 }
 
 static ssize_t _dev_os_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
@@ -417,7 +201,7 @@ static ssize_t _dev_swap_read(vfs_node_t* node, void* buf, size_t offset, size_t
     return _dev_text_read(text, buf, offset, len);
 }
 
-static bool _create_node(
+bool devfs_register_node(
     vfs_node_t* parent,
     const char* name,
     u32 type,
@@ -425,6 +209,9 @@ static bool _create_node(
     vfs_interface_t* interface,
     void* priv
 ) {
+    if (!parent || !name)
+        return false;
+
     vfs_node_t* node = vfs_lookup_from(parent, name);
 
     if (!node)
@@ -440,240 +227,133 @@ static bool _create_node(
     return true;
 }
 
-static void _seed_tty_handles(void) {
-    for (size_t i = 0; i < TTY_COUNT; i++) {
-        tty_handles[i].kind = TTY_HANDLE_NAMED;
-        tty_handles[i].index = i;
+vfs_node_t* devfs_register_dir(vfs_node_t* parent, const char* name, mode_t mode) {
+    if (!parent || !name)
+        return NULL;
+
+    vfs_node_t* node = vfs_lookup_from(parent, name);
+    if (!node)
+        node = vfs_create(parent, (char*)name, VFS_DIR, mode);
+
+    if (!node)
+        return NULL;
+
+    node->type = VFS_DIR;
+    node->mode = mode;
+    node->interface = NULL;
+    node->private = NULL;
+    return node;
+}
+
+bool devfs_register_device(const char* name, devfs_device_init_fn init_fn) {
+    if (!name || !init_fn)
+        return false;
+
+    for (size_t i = 0; i < devfs_device_count; i++) {
+        if (devfs_devices[i].init_fn == init_fn)
+            return true;
+    }
+
+    if (devfs_device_count >= DEVFS_MAX_DEVICES) {
+        log_warn("devfs: device registry full");
+        return false;
+    }
+
+    devfs_devices[devfs_device_count].name = name;
+    devfs_devices[devfs_device_count].init_fn = init_fn;
+    devfs_device_count++;
+    return true;
+}
+
+static void _init_registered_devices(vfs_node_t* dev_dir) {
+    for (size_t i = 0; i < devfs_device_count; i++) {
+        const char* name = devfs_devices[i].name ? devfs_devices[i].name : "device";
+        devfs_device_init_fn init_fn = devfs_devices[i].init_fn;
+
+        if (!init_fn || !init_fn(dev_dir))
+            log_warn("devfs: %s registration failed", name);
     }
 }
 
-static void _seed_pty_handles(void) {
-    for (size_t i = 0; i < PTY_COUNT; i++) {
-        pty_master_handles[i].index = i;
-        pty_master_handles[i].is_master = true;
-        pty_slave_handles[i].index = i;
-        pty_slave_handles[i].is_master = false;
-    }
-}
-
-static void _create_ttys(vfs_node_t* dev_dir, vfs_interface_t* tty_if) {
-    char name[] = "tty0";
-
-    for (size_t i = 0; i < TTY_COUNT; i++) {
-        name[3] = (char)('0' + i);
-        _create_node(dev_dir, name, VFS_CHARDEV, 0666, tty_if, &tty_handles[i]);
-    }
-}
-
-static void _create_ptys(vfs_node_t* dev_dir, vfs_interface_t* pty_if) {
-    char pty_name[] = "pty0";
-    char pts_name[] = "pts0";
-
-    for (size_t i = 0; i < PTY_COUNT; i++) {
-        pty_name[3] = (char)('0' + i);
-        pts_name[3] = (char)('0' + i);
-
-        _create_node(dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, &pty_master_handles[i]);
-        _create_node(dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, &pty_slave_handles[i]);
-    }
-}
-
-// FIXME: this is horrible, fix this eyesore asap!
-void devfs_init(void) {
-    tty_init();
-    pty_init();
-    input_init();
-    ws_init();
-    _seed_tty_handles();
-    _seed_pty_handles();
-    _boot_seconds();
-
+static vfs_node_t* _ensure_dev_dir(void) {
     vfs_node_t* root = vfs_lookup("/");
-
     if (!root) {
         log_warn("devfs: missing root");
-        return;
+        return NULL;
     }
 
     vfs_node_t* dev_dir = vfs_lookup("/dev");
+    if (!dev_dir)
+        dev_dir = vfs_create(root, "dev", VFS_DIR, 0755);
 
     if (!dev_dir) {
-        dev_dir = vfs_create_node("dev", VFS_DIR);
-
-        if (dev_dir) {
-            dev_dir->mode = 0755;
-            tree_insert_child(root->tree_entry, dev_dir->tree_entry);
-        }
+        log_warn("devfs: failed to create /dev");
+        return NULL;
     }
 
-    // clear any backing-store interface so child creation stays in-memory
-    if (dev_dir && dev_dir->interface) {
+    // Keep /dev purely in-memory even if a backing fs is mounted
+    if (dev_dir->interface) {
         free(dev_dir->interface);
         dev_dir->interface = NULL;
     }
 
-    if (!dev_dir) {
-        log_warn("devfs: failed to create /dev");
-        return;
-    }
+    dev_dir->type = VFS_DIR;
+    dev_dir->mode = 0755;
+    return dev_dir;
+}
 
-    vfs_interface_t* tty_if = vfs_create_interface(_dev_tty_read, _dev_tty_write, NULL);
-
-    if (!tty_if) {
-        log_warn("devfs: failed to allocate tty interface");
-        return;
-    }
-
-    tty_if->ioctl = _dev_tty_ioctl;
-    tty_if->poll = _dev_tty_poll;
-
-    if (!_create_node(dev_dir, "tty", VFS_CHARDEV, 0666, tty_if, &tty_current))
-        log_warn("devfs: failed to create /dev/tty");
-
-    if (!_create_node(dev_dir, "console", VFS_CHARDEV, 0666, tty_if, &tty_console))
-        log_warn("devfs: failed to create /dev/console");
-
-    _create_ttys(dev_dir, tty_if);
-
-    vfs_interface_t* pty_if = vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
-    if (!pty_if) {
-        log_warn("devfs: failed to allocate pty interface");
-    } else {
-        pty_if->ioctl = _dev_pty_ioctl;
-        pty_if->poll = _dev_pty_poll;
-
-        if (!_create_node(dev_dir, "ptmx", VFS_CHARDEV, 0666, pty_if, &pty_master_default))
-            log_warn("devfs: failed to create /dev/ptmx");
-
-        _create_ptys(dev_dir, pty_if);
-    }
-
-    if (!keyboard_init())
-        log_warn("devfs: keyboard init failed");
-    vfs_interface_t* kbd_if = vfs_create_interface(keyboard_read, NULL, NULL);
-    if (!kbd_if) {
-        log_warn("devfs: failed to allocate keyboard interface");
-    } else if (!_create_node(dev_dir, "kbd", VFS_CHARDEV, 0666, kbd_if, NULL)) {
-        log_warn("devfs: failed to create /dev/kbd");
-    }
-
-    if (!mouse_init())
-        log_warn("devfs: mouse init failed");
-    vfs_interface_t* mouse_if = vfs_create_interface(mouse_read, NULL, NULL);
-    if (!mouse_if) {
-        log_warn("devfs: failed to allocate mouse interface");
-    } else if (!_create_node(dev_dir, "mouse", VFS_CHARDEV, 0666, mouse_if, NULL)) {
-        log_warn("devfs: failed to create /dev/mouse");
-    }
-
-    vfs_interface_t* input_if = vfs_create_interface(_dev_input_read, NULL, NULL);
-    if (!input_if) {
-        log_warn("devfs: failed to allocate input interface");
-    } else {
-        input_if->poll = _dev_input_poll;
-
-        if (!_create_node(dev_dir, "input", VFS_CHARDEV, 0666, input_if, NULL))
-            log_warn("devfs: failed to create /dev/input");
-    }
+static bool _register_builtin_nodes(vfs_node_t* dev_dir) {
+    bool ok = true;
 
     vfs_interface_t* null_if = vfs_create_interface(_dev_null_read, _dev_null_write, NULL);
-    if (!null_if) {
-        log_warn("devfs: failed to allocate null interface");
-    } else if (!_create_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {
+    if (!null_if || !devfs_register_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {
         log_warn("devfs: failed to create /dev/null");
+        ok = false;
     }
 
     vfs_interface_t* zero_if = vfs_create_interface(_dev_zero_read, _dev_zero_write, NULL);
-    if (!zero_if) {
-        log_warn("devfs: failed to allocate zero interface");
-    } else if (!_create_node(dev_dir, "zero", VFS_CHARDEV, 0666, zero_if, NULL)) {
+    if (!zero_if || !devfs_register_node(dev_dir, "zero", VFS_CHARDEV, 0666, zero_if, NULL)) {
         log_warn("devfs: failed to create /dev/zero");
-    }
-
-    const framebuffer_info_t* fb = framebuffer_get_info();
-    if (fb) {
-        vfs_interface_t* fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);
-        if (!fb_if) {
-            log_warn("devfs: failed to allocate framebuffer interface");
-        } else if (!_create_node(dev_dir, "fb", VFS_CHARDEV, 0666, fb_if, NULL)) {
-            log_warn("devfs: failed to create /dev/fb");
-        } else {
-            fb_if->ioctl = _dev_fb_ioctl;
-        }
+        ok = false;
     }
 
     vfs_interface_t* os_if = vfs_create_interface(_dev_os_read, NULL, NULL);
-    if (!os_if) {
-        log_warn("devfs: failed to allocate os interface");
-    } else if (!_create_node(dev_dir, "os", VFS_CHARDEV, 0444, os_if, NULL)) {
+    if (!os_if || !devfs_register_node(dev_dir, "os", VFS_CHARDEV, 0444, os_if, NULL)) {
         log_warn("devfs: failed to create /dev/os");
+        ok = false;
     }
 
     vfs_interface_t* clock_if = vfs_create_interface(_dev_clock_read, NULL, NULL);
-    if (!clock_if) {
-        log_warn("devfs: failed to allocate clock interface");
-    } else if (!_create_node(dev_dir, "clock", VFS_CHARDEV, 0444, clock_if, NULL)) {
+    if (!clock_if || !devfs_register_node(dev_dir, "clock", VFS_CHARDEV, 0444, clock_if, NULL)) {
         log_warn("devfs: failed to create /dev/clock");
+        ok = false;
     }
 
     vfs_interface_t* swap_if = vfs_create_interface(_dev_swap_read, NULL, NULL);
-    if (!swap_if) {
-        log_warn("devfs: failed to allocate swap interface");
-    } else if (!_create_node(dev_dir, "swap", VFS_CHARDEV, 0444, swap_if, NULL)) {
+    if (!swap_if || !devfs_register_node(dev_dir, "swap", VFS_CHARDEV, 0444, swap_if, NULL)) {
         log_warn("devfs: failed to create /dev/swap");
+        ok = false;
     }
 
     vfs_interface_t* cpu_if = vfs_create_interface(_dev_cpu_read, NULL, NULL);
-    if (!cpu_if) {
-        log_warn("devfs: failed to allocate cpu interface");
-    } else if (!_create_node(dev_dir, "cpu", VFS_CHARDEV, 0444, cpu_if, NULL)) {
+    if (!cpu_if || !devfs_register_node(dev_dir, "cpu", VFS_CHARDEV, 0444, cpu_if, NULL)) {
         log_warn("devfs: failed to create /dev/cpu");
+        ok = false;
     }
 
-    vfs_interface_t* wsctl_if = vfs_create_interface(_dev_wsctl_read, _dev_wsctl_write, NULL);
-    if (!wsctl_if) {
-        log_warn("devfs: failed to allocate wsctl interface");
-    } else {
-        wsctl_if->poll = _dev_wsctl_poll;
+    return ok;
+}
 
-        if (!_create_node(dev_dir, "wsctl", VFS_CHARDEV, 0666, wsctl_if, NULL))
-            log_warn("devfs: failed to create /dev/wsctl");
-    }
+void devfs_init(void) {
+    _boot_seconds();
 
-    vfs_node_t* ws_dir = vfs_lookup_from(dev_dir, "ws");
-    if (!ws_dir)
-        ws_dir = vfs_create(dev_dir, "ws", VFS_DIR, 0755);
+    vfs_node_t* dev_dir = _ensure_dev_dir();
+    if (!dev_dir)
+        return;
 
-    if (!ws_dir) {
-        log_warn("devfs: failed to create /dev/ws");
-    } else {
-        vfs_interface_t* ws_fb_if = vfs_create_interface(_dev_ws_fb_read, _dev_ws_fb_write, NULL);
-        vfs_interface_t* ws_ev_if = vfs_create_interface(_dev_ws_ev_read, NULL, NULL);
+    _init_registered_devices(dev_dir);
 
-        if (!ws_fb_if || !ws_ev_if) {
-            log_warn("devfs: failed to allocate ws window interfaces");
-        } else {
-            ws_fb_if->poll = _dev_ws_fb_poll;
-            ws_ev_if->poll = _dev_ws_ev_poll;
-
-            for (u32 i = 0; i < WS_MAX_WINDOWS; i++) {
-                ws_ids[i] = i;
-
-                char slot_name[4];
-                snprintf(slot_name, sizeof(slot_name), "%u", i);
-
-                vfs_node_t* slot = vfs_lookup_from(ws_dir, slot_name);
-                if (!slot)
-                    slot = vfs_create(ws_dir, slot_name, VFS_DIR, 0755);
-
-                if (!slot)
-                    continue;
-
-                _create_node(slot, "fb", VFS_CHARDEV, 0666, ws_fb_if, &ws_ids[i]);
-                _create_node(slot, "ev", VFS_CHARDEV, 0666, ws_ev_if, &ws_ids[i]);
-            }
-        }
-    }
+    _register_builtin_nodes(dev_dir);
 
     log_info("devfs: devices ready");
 }

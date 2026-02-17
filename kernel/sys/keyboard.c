@@ -7,6 +7,7 @@
 #include <sched/scheduler.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/devfs.h>
 #include <sys/tty.h>
 #include <sys/tty_input.h>
 
@@ -15,6 +16,7 @@
 static vector_t* kbds = NULL;
 static ring_buffer_t* buffer = NULL;
 static sched_wait_queue_t kbd_wait = {0};
+static bool keyboard_register_devfs(vfs_node_t* dev_dir);
 
 static bool _vec_push_ptr(vector_t* vec, void* ptr) {
     return vec_push(vec, &ptr);
@@ -209,6 +211,9 @@ u8 keyboard_register(const char* name, ascii_keymap* keymap) {
 }
 
 bool keyboard_init(void) {
+    if (!devfs_register_device("keyboard", keyboard_register_devfs))
+        log_warn("keyboard: failed to register devfs init callback");
+
     if (!kbds)
         kbds = vec_create(sizeof(keyboard_dev_t*));
 
@@ -222,5 +227,28 @@ bool keyboard_init(void) {
         return false;
 
     sched_wait_queue_init(&kbd_wait);
+    return true;
+}
+
+static bool keyboard_register_devfs(vfs_node_t* dev_dir) {
+    if (!dev_dir)
+        return false;
+
+    if (!keyboard_init()) {
+        log_warn("keyboard: init failed");
+        return false;
+    }
+
+    vfs_interface_t* kbd_if = vfs_create_interface(keyboard_read, NULL, NULL);
+    if (!kbd_if) {
+        log_warn("keyboard: failed to allocate /dev interface");
+        return false;
+    }
+
+    if (!devfs_register_node(dev_dir, "kbd", VFS_CHARDEV, 0666, kbd_if, NULL)) {
+        log_warn("keyboard: failed to create /dev/kbd");
+        return false;
+    }
+
     return true;
 }
