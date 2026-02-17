@@ -4,18 +4,6 @@
 #include <string.h>
 #include <unistd.h>
 
-#ifndef ARCH_NAME
-#define ARCH_NAME "unknown"
-#endif
-
-#ifndef BUILD_DATE
-#define BUILD_DATE "unknown"
-#endif
-
-#ifndef GIT_COMMIT
-#define GIT_COMMIT "unknown"
-#endif
-
 typedef struct {
     char name[32];
     char release[32];
@@ -27,10 +15,10 @@ static void load_info(uname_info_t* info) {
     if (!info)
         return;
 
-    snprintf(info->name, sizeof(info->name), "apheleiaOS");
-    snprintf(info->release, sizeof(info->release), "pre-alpha");
-    snprintf(info->version, sizeof(info->version), "%s %s", BUILD_DATE, GIT_COMMIT);
-    snprintf(info->arch, sizeof(info->arch), ARCH_NAME);
+    snprintf(info->name, sizeof(info->name), "unknown");
+    snprintf(info->release, sizeof(info->release), "unknown");
+    snprintf(info->version, sizeof(info->version), "unknown");
+    snprintf(info->arch, sizeof(info->arch), "unknown");
 
     char os_text[256] = {0};
     if (kv_read_file("/dev/os", os_text, sizeof(os_text)) <= 0)

@@ -15,5 +15,6 @@
 #define FBIOGETINFO 10
 #define FBIOACQUIRE 11
 #define FBIORELEASE 12
+#define FBIOPRESENT 13
 
 int ioctl(int fd, unsigned long request, ...);

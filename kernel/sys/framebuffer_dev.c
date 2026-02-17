@@ -5,6 +5,7 @@
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/console.h>
 #include <sys/devfs.h>
@@ -13,6 +14,10 @@
 #include <sys/tty.h>
 
 #define FB_MAP_CHUNK (4 * MIB)
+
+static u8* _back_buf;
+static size_t _back_buf_size;
+
 static bool framebuffer_register_devfs(vfs_node_t* dev_dir);
 
 static ssize_t _dev_fb_transfer(const framebuffer_info_t* fb, void* buf, size_t offset, size_t len, bool write) {
@@ -78,6 +83,36 @@ static ssize_t _dev_fb_write(vfs_node_t* node, void* buf, size_t offset, size_t 
     return _dev_fb_transfer(fb, buf, offset, len, true);
 }
 
+static ssize_t _dev_fb_present(const framebuffer_info_t* fb, const void* frame) {
+    if (!fb || !fb->available || !frame || !_back_buf)
+        return -EINVAL;
+
+    u32 width = fb->width;
+    u32 height = fb->height;
+    u32 pitch = fb->pitch;
+    u32 bpp_bytes = fb->bpp / 8;
+    u32 row_bytes = width * bpp_bytes;
+    size_t frame_size = (size_t)height * row_bytes;
+
+    // Copy userspace frame into kernel back buffer
+    memcpy(_back_buf, frame, frame_size);
+
+    // Copy back buffer to VRAM in one shot
+    void* vram = arch_phys_map(fb->paddr, fb->size);
+    if (!vram)
+        return -EIO;
+
+    if (pitch == row_bytes) {
+        memcpy(vram, _back_buf, frame_size);
+    } else {
+        for (u32 y = 0; y < height; y++)
+            memcpy((u8*)vram + (size_t)y * pitch, _back_buf + (size_t)y * row_bytes, row_bytes);
+    }
+
+    arch_phys_unmap(vram, fb->size);
+    return 0;
+}
+
 static ssize_t _dev_fb_ioctl(vfs_node_t* node, u64 request, void* args) {
     (void)node;
 
@@ -99,6 +134,7 @@ static ssize_t _dev_fb_ioctl(vfs_node_t* node, u64 request, void* args) {
         info->pitch = fb->pitch;
         info->bpp = fb->bpp;
         info->available = fb->available;
+
         return 0;
     case FBIOACQUIRE: {
         sched_thread_t* current = sched_current();
@@ -121,6 +157,16 @@ static ssize_t _dev_fb_ioctl(vfs_node_t* node, u64 request, void* args) {
 
         return console_fb_release(current->pid);
     }
+    case FBIOPRESENT: {
+        if (!args)
+            return -EINVAL;
+
+        ssize_t owner_screen = console_fb_owner_screen();
+        if (owner_screen != TTY_NONE && tty_current_screen() != (size_t)owner_screen)
+            return -EAGAIN;
+
+        return _dev_fb_present(fb, args);
+    }
     default:
         return -ENOTTY;
     }
@@ -138,6 +184,12 @@ static bool framebuffer_register_devfs(vfs_node_t* dev_dir) {
     const framebuffer_info_t* fb = framebuffer_get_info();
     if (!fb)
         return true;
+
+    // Allocate kernel-side back buffer for double buffering
+    _back_buf_size = (size_t)fb->height * (size_t)fb->width * (fb->bpp / 8);
+    _back_buf = malloc(_back_buf_size);
+    if (!_back_buf)
+        log_warn("framebuffer: failed to allocate back buffer (%zu bytes)", _back_buf_size);
 
     vfs_interface_t* fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);
     if (!fb_if) {

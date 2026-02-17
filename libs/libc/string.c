@@ -4,14 +4,22 @@
 
 #include "errno.h"
 #include "stddef.h"
+#include "stdint.h"
 
 
 void* memcpy(void* restrict dest, const void* restrict src, size_t len) {
-    const char* srcb = (const char*)src;
-    char* destb = (char*)dest;
+    unsigned char* d = (unsigned char*)dest;
+    const unsigned char* s = (const unsigned char*)src;
 
-    for (size_t i = 0; i < len; i++)
-        destb[i] = srcb[i];
+    while (len >= sizeof(unsigned long)) {
+        *(unsigned long*)d = *(const unsigned long*)s;
+        d += sizeof(unsigned long);
+        s += sizeof(unsigned long);
+        len -= sizeof(unsigned long);
+    }
+
+    while (len--)
+        *d++ = *s++;
 
     return dest;
 }
@@ -161,10 +169,21 @@ char* strpbrk(const char* str, const char* delim) {
 
 
 void* memset(void* dest, int val, size_t len) {
-    unsigned char* ptr = (unsigned char*)dest;
+    unsigned char c = (unsigned char)val;
+    unsigned char* d = (unsigned char*)dest;
+
+    unsigned long fill = c;
+    for (size_t i = 8; i < sizeof(unsigned long) * 8; i <<= 1)
+        fill |= fill << i;
+
+    while (len >= sizeof(unsigned long)) {
+        *(unsigned long*)d = fill;
+        d += sizeof(unsigned long);
+        len -= sizeof(unsigned long);
+    }
 
     while (len--)
-        *ptr++ = (unsigned char)val;
+        *d++ = c;
 
     return dest;
 }

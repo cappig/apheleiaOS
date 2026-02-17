@@ -25,6 +25,10 @@
 #define GIT_COMMIT "unknown"
 #endif
 
+#ifndef VERSION
+#define VERSION "unknown"
+#endif
+
 static u64 boot_seconds = 0;
 
 typedef struct {
@@ -123,7 +127,7 @@ static ssize_t _dev_os_read(vfs_node_t* node, void* buf, size_t offset, size_t l
         text,
         sizeof(text),
         "name=apheleiaOS\n"
-        "release=pre-alpha\n"
+        "release=" VERSION "\n"
         "version=%s %s\n"
         "arch=%s\n",
         BUILD_DATE,

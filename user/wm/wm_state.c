@@ -191,13 +191,21 @@ static void _blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* w
         if (dst_y < 0 || dst_y >= (i32)fb_height)
             continue;
 
-        for (u32 col = 0; col < copy_cols; col++) {
-            i32 dst_x = x + (i32)col;
+        i32 col_start = 0;
+        i32 col_end = (i32)copy_cols;
 
-            if (dst_x < 0 || dst_x >= (i32)fb_width)
-                continue;
+        if (x < 0)
+            col_start = -x;
 
-            frame[(size_t)dst_y * fb_width + (size_t)dst_x] = row_store[col];
+        if (x + col_end > (i32)fb_width)
+            col_end = (i32)fb_width - x;
+
+        if (col_start < col_end) {
+            memcpy(
+                &frame[(size_t)dst_y * fb_width + (size_t)(x + col_start)],
+                &row_store[col_start],
+                (size_t)(col_end - col_start) * 4
+            );
         }
     }
 }

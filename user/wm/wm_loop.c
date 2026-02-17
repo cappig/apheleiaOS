@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/ioctl.h>
 #include <ui.h>
 #include <unistd.h>
 
@@ -34,69 +35,18 @@ typedef struct {
 } wm_runtime_t;
 
 static int _present_frame(int fb_fd, const fb_info_t* fb_info, const u32* frame, size_t frame_bytes) {
+    (void)frame_bytes;
+
     if (!fb_info || !frame)
         return -1;
 
-    size_t packed_row_bytes = (size_t)fb_info->width * 4;
+    int ret = ioctl(fb_fd, FBIOPRESENT, frame);
 
-    if ((size_t)fb_info->pitch == packed_row_bytes) {
-        size_t written = 0;
-        const u8* src = (const u8*)frame;
+    if (ret < 0) {
+        if (errno == EAGAIN)
+            return 1;
 
-        while (written < frame_bytes) {
-            ssize_t n = pwrite(fb_fd, src + written, frame_bytes - written, (off_t)written);
-
-            if (n < 0) {
-                if (errno == EINTR)
-                    continue;
-
-                if (errno == EAGAIN)
-                    return 1;
-
-                return -1;
-            }
-
-            if (!n)
-                return -1;
-
-            written += (size_t)n;
-        }
-
-        return 0;
-    }
-
-    size_t height = (size_t)fb_info->height;
-    const u8* src = (const u8*)frame;
-
-    for (size_t row = 0; row < height; row++) {
-        size_t written = 0;
-        off_t row_off = (off_t)(row * (size_t)fb_info->pitch);
-
-        const u8* row_src = src + row * packed_row_bytes;
-
-        while (written < packed_row_bytes) {
-            ssize_t n = pwrite(
-                fb_fd,
-                row_src + written,
-                packed_row_bytes - written,
-                row_off + (off_t)written
-            );
-
-            if (n < 0) {
-                if (errno == EINTR)
-                    continue;
-
-                if (errno == EAGAIN)
-                    return 1;
-
-                return -1;
-            }
-
-            if (!n)
-                return -1;
-
-            written += (size_t)n;
-        }
+        return -1;
     }
 
     return 0;
