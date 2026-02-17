@@ -12,6 +12,7 @@
 -Ilibs/libc_ext
 -Ikernel
 -Ikernel/arch
+-Ikernel/arch/x86
 -Ilibs
 -Ikernel
 -DEXTERNAL_ALLOC
