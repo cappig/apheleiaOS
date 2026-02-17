@@ -15,8 +15,10 @@ void init_spawn(void) {
     }
 
     log_info("init: spawned pid %ld", (long)init->pid);
+
     init->tty_index = (int)TTY_USER_TO_SCREEN(0);
     tty_set_current(TTY_USER_TO_SCREEN(0));
     sched_make_runnable(init);
-    log_debug("init: marked pid %ld runnable", (long)init->pid);
+
+    // log_debug("init: marked pid %ld runnable", (long)init->pid);
 }

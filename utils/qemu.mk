@@ -9,19 +9,18 @@ endif
 QEMU := qemu-system-$(QEMU_ARCH)
 
 QEMU_CONSOLE ?= false
-BOOT ?= bios
-QEMU_MEMORY ?= 128M
+BOOT         ?= bios
+QEMU_MEMORY  ?= 128M
 
-OVMF_DIR := .cache/ovmf
-OVMF_CODE_LOCAL := $(OVMF_DIR)/OVMF_CODE.fd
-OVMF_VARS_LOCAL := $(OVMF_DIR)/OVMF_VARS.fd
-OVMF_FETCH_SCRIPT := utils/ovmf-fetch.sh
+OVMF_DIR          := .cache/ovmf
+OVMF_CODE_LOCAL   := $(OVMF_DIR)/OVMF_CODE.fd
+OVMF_VARS_LOCAL   := $(OVMF_DIR)/OVMF_VARS.fd
+OVMF_FETCH_SCRIPT := utils/ovmf_fetch.py
 
-# Stable OVMF package from Debian 12
 OVMF_DEB_URL ?= https://deb.debian.org/debian/pool/main/e/edk2/ovmf_2022.11-6+deb12u2_all.deb
 
-OVMF_CODE ?= $(OVMF_CODE_LOCAL)
-OVMF_VARS ?= $(OVMF_VARS_LOCAL)
+OVMF_CODE         ?= $(OVMF_CODE_LOCAL)
+OVMF_VARS         ?= $(OVMF_VARS_LOCAL)
 OVMF_VARS_RUNTIME := bin/ovmf_vars.fd
 
 QEMU_CONSOLE_ARGS :=
@@ -40,15 +39,14 @@ QEMU_ARGS := \
 	-m $(QEMU_MEMORY) \
 	$(QEMU_CONSOLE_ARGS)
 
-.PHONY: ovmf-fetch
-ovmf-fetch:
-	@$(OVMF_FETCH_SCRIPT) "$(OVMF_DIR)" "$(OVMF_DEB_URL)"
+.PHONY: ovmf-fetch ovmf-clean run
 
-.PHONY: ovmf-clean
+ovmf-fetch:
+	@python3 $(OVMF_FETCH_SCRIPT) "$(OVMF_DIR)" "$(OVMF_DEB_URL)"
+
 ovmf-clean:
 	@rm -rf "$(OVMF_DIR)"
 
-.PHONY: run
 run: bin/$(IMAGE_NAME).img
 ifeq ($(BOOT), uefi)
 ifeq ($(ARCH), x86_64)

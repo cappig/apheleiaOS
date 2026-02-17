@@ -3,16 +3,14 @@ OC := objcopy
 ST := strip
 NM := nm
 
-# This evaluates to the directory of the calling makefile
-MAKE_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
-
-GNU_CC ?= gcc
+GNU_CC        ?= gcc
 GNU_CC_x86_64 ?= x86_64-linux-gnu-gcc
 GNU_CC_x86_32 ?= $(GNU_CC)
 
-LLVM_CC ?= clang
+LLVM_CC        ?= clang
 LLVM_CC_x86_64 ?= $(LLVM_CC)
 LLVM_CC_x86_32 ?= $(LLVM_CC)
+
 
 ifeq ($(TOOLCHAIN), gnu)
 	CC := $(GNU_CC)
@@ -64,7 +62,7 @@ define nm
 	@echo "NM $(2)"
 endef
 
-# Link against libgcc for common builtins
+
 LIBGCC = $(shell $(CC) $(CC_BASE) $(1) -print-libgcc-file-name)
 
 LIBC_DIRS := libs/libc libs/libc_ext
@@ -88,14 +86,12 @@ CC_DEBUG_EXTRA := \
 	-DINT_DEBUG \
 	-DSYSCALL_DEBUG
 
-# In the arch string everything after the first '_' is treated as a variant of the base tree.
-# Example: x86_64 maps to the x86 tree with the 64-bit variant.
-ARCH_TREE := $(word 1, $(subst _, ,$(ARCH)))
+ARCH_TREE    := $(word 1, $(subst _, ,$(ARCH)))
 ARCH_VARIANT := $(word 2, $(subst _, ,$(ARCH)))
 
 include kernel/arch/$(ARCH_TREE)/build/build.mk
 
-# GCC static analyzer
+
 GCC_ANALYZER ?= false
 
 CC_BASE_ANALYZER :=
@@ -107,8 +103,6 @@ CC_BASE_ANALYZER := \
 endif
 endif
 
-# If we want reliable stack tracing we need symbols and frame pointers.
-TRACEABLE_KERNEL ?= true
 
 STRIP_KERNEL ?= false
 

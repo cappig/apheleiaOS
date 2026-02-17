@@ -1,9 +1,7 @@
-BIOS_MAKE_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
-BOOT_MAKE_DIR := $(patsubst %/,%,$(dir $(BIOS_MAKE_DIR)))
-
-MBR_DIR := $(BOOT_MAKE_DIR)/mbr
-BIOS_DIR := $(BIOS_MAKE_DIR)
+BIOS_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
+MBR_DIR  := $(dir $(BIOS_DIR))mbr
 BOOT_LIB_DIRS := $(ARCH_DIR) kernel/lib
+
 
 BIOS_SRC_DIRS := \
 	$(BIOS_DIR) \
@@ -25,7 +23,7 @@ BIOS_SRC := \
 
 MBR_SRC := $(wildcard $(MBR_DIR)/*.asm)
 
-MBR_OBJ := $(patsubst %, bin/boot/%.o, $(MBR_SRC))
+MBR_OBJ  := $(patsubst %, bin/boot/%.o, $(MBR_SRC))
 BIOS_OBJ := $(patsubst %, bin/boot/%.o, $(BIOS_SRC))
 
 AS_BOOT := -felf32
@@ -40,12 +38,10 @@ LD_MBR := \
 	-T$(MBR_DIR)/linker.ld
 
 LD_BIOS := \
-	$(LD_BOOT) \
 	-T$(BIOS_DIR)/linker.ld
 
-OC_BIOS := \
-	-O \
-	binary
+OC_BIOS := -O binary
+
 
 bin/boot/%.asm.o: %.asm
 	@mkdir -p $(@D)

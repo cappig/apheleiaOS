@@ -1,13 +1,11 @@
-UEFI_MAKE_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
-
-UEFI_DIR := $(UEFI_MAKE_DIR)
-UEFI_STAGE_DIR := bin/uefi
+UEFI_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 
 UEFI_SRC := \
 	$(UEFI_DIR)/main.c \
 	$(UEFI_DIR)/util.c
 
-UEFI_OBJ := $(patsubst $(UEFI_DIR)/%.c,bin/uefi/obj/%.o,$(UEFI_SRC))
+UEFI_OBJ := $(patsubst $(UEFI_DIR)/%.c, bin/uefi/obj/%.o, $(UEFI_SRC))
+
 
 ifeq ($(TOOLCHAIN), llvm)
 UEFI_CC := $(CC)
@@ -40,6 +38,7 @@ else
 $(error UEFI build does not support TOOLCHAIN='$(TOOLCHAIN)')
 endif
 
+
 bin/uefi/obj/%.o: CC := $(UEFI_CC)
 bin/uefi/obj/%.o: $(UEFI_DIR)/%.c $(UEFI_DIR)/efi.h $(UEFI_DIR)/util.h
 	@mkdir -p $(@D)
@@ -50,7 +49,7 @@ bin/boot/BOOTX64.EFI: LD_BASE :=
 bin/boot/BOOTX64.EFI: $(UEFI_OBJ)
 	@mkdir -p $(@D)
 	$(call ld, $(UEFI_LDFLAGS), $@, $^)
-	@echo "UEFI $@"
+
 
 ifeq ($(ARCH_VARIANT), 64)
 bin/uefi/EFI/BOOT/BOOTX64.EFI: bin/boot/BOOTX64.EFI

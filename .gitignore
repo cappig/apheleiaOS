@@ -16,3 +16,6 @@ bin/
 *.log
 
 compile_commands.json
+
+__pycache__/
+*.pyc

@@ -336,32 +336,30 @@ static void _stage_rootfs_from_esp(EFI_HANDLE image, boot_info_t* info) {
 
     void* rootfs_file = NULL;
     UINTN rootfs_size = 0;
-
-    EFI_STATUS status = uefi_load_file_from_boot_volume(
-        g_bs,
-        image,
-        &loaded_image_guid,
-        &simple_fs_guid,
-        &file_info_guid,
+    EFI_STATUS status = EFI_NOT_FOUND;
+    const CHAR16* candidates[] = {
+        (const CHAR16*)L"\\boot\\rootfs.img",
+        (const CHAR16*)L"\\rootfs.img",
         (const CHAR16*)L"\\boot\\rootfs.ext2",
-        &rootfs_file,
-        &rootfs_size
-    );
+        (const CHAR16*)L"\\rootfs.ext2",
+    };
 
-    if (efi_error(status) || !rootfs_file || !rootfs_size) {
+    for (size_t i = 0; i < ARRAY_LEN(candidates); i++) {
         rootfs_file = NULL;
         rootfs_size = 0;
-
         status = uefi_load_file_from_boot_volume(
             g_bs,
             image,
             &loaded_image_guid,
             &simple_fs_guid,
             &file_info_guid,
-            (const CHAR16*)L"\\rootfs.ext2",
+            candidates[i],
             &rootfs_file,
             &rootfs_size
         );
+
+        if (!efi_error(status) && rootfs_file && rootfs_size)
+            break;
     }
 
     if (efi_error(status) || !rootfs_file || !rootfs_size)
