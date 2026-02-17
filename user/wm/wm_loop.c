@@ -58,10 +58,10 @@ static void _spawn_term(void) {
         return;
 
     if (!pid) {
-        char* argv[] = {"/sbin/term", NULL};
+        char* argv[] = {"/bin/term", NULL};
         char* empty_env[] = {NULL};
         char* const* envp = environ ? environ : empty_env;
-        execve("/sbin/term", argv, envp);
+        execve("/bin/term", argv, envp);
         _exit(127);
     }
 }

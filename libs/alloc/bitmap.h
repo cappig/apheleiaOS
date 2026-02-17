@@ -12,6 +12,7 @@ typedef struct {
 
     size_t block_size;
     size_t block_count;
+    size_t usable_blocks;
     size_t free_blocks;
 
     size_t word_count;

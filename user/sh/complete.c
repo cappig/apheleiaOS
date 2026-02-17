@@ -22,7 +22,7 @@ typedef struct {
     bool is_dir;
 } sh_match_t;
 
-static char sh_complete_path[SH_PATH_MAX] = "/sbin";
+static char sh_complete_path[SH_PATH_MAX] = "/bin";
 
 static const char* sh_builtins[] = {
     "bg",
@@ -42,7 +42,7 @@ static const char* sh_builtins[] = {
 
 void complete_set_path(const char* path) {
     if (!path || !path[0]) {
-        snprintf(sh_complete_path, sizeof(sh_complete_path), "/sbin");
+        snprintf(sh_complete_path, sizeof(sh_complete_path), "/bin");
         return;
     }
 

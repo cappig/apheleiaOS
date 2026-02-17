@@ -1,7 +1,7 @@
 ARCH_DIR        := kernel/arch/x86
 IMAGE_STAGE_DIR := bin/image
 IMAGE_BOOT_DIR  := $(IMAGE_STAGE_DIR)/boot
-IMAGE_SBIN_DIR  := $(IMAGE_STAGE_DIR)/sbin
+IMAGE_BIN_DIR   := $(IMAGE_STAGE_DIR)/bin
 
 
 KERNEL_SRC_DIRS := \
@@ -102,8 +102,8 @@ define stage_image
 	@cp -f $(KERNEL_ELF) $(IMAGE_BOOT_DIR)/
 	@cp -f $(SYMBOL_MAP) $(IMAGE_BOOT_DIR)/sym.map
 	@cp -r root/* $(IMAGE_STAGE_DIR)
-	@mkdir -p $(IMAGE_SBIN_DIR)
-	@cp -f bin/user/$(ARCH_VARIANT)/root/sbin/* $(IMAGE_SBIN_DIR)/
+	@mkdir -p $(IMAGE_BIN_DIR)
+	@cp -f bin/user/$(ARCH_VARIANT)/root/bin/* $(IMAGE_BIN_DIR)/
 endef
 
 bin/$(IMAGE_NAME).img: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS)

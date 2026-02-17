@@ -39,7 +39,7 @@ static void resolve_user(char* user, size_t user_len, char* shell, size_t shell_
     if (have_pwd && pwd.pw_shell[0])
         snprintf(shell, shell_len, "%s", pwd.pw_shell);
     else
-        snprintf(shell, shell_len, "/sbin/sh");
+        snprintf(shell, shell_len, "/bin/sh");
 }
 
 static void fill_separator(char* out, size_t out_len, size_t width) {
@@ -68,21 +68,50 @@ static void format_ram_line(
         return;
     }
 
-    unsigned long long unit_kib = 1;
-    const char* unit = "KiB";
+    static const struct {
+        unsigned long long kib;
+        const char* name;
+    } units[] = {
+        {1024ULL * 1024ULL, "GiB"},
+        {1024ULL, "MiB"},
+        {1ULL, "KiB"},
+    };
 
-    if (total_kib >= 1024ULL * 1024ULL) {
-        unit_kib = 1024ULL * 1024ULL;
-        unit = "GiB";
-    } else if (total_kib >= 1024ULL) {
-        unit_kib = 1024ULL;
-        unit = "MiB";
+    char used_buf[32];
+    char total_buf[32];
+
+    const unsigned long long values[] = {used_kib, total_kib};
+    char* outputs[] = {used_buf, total_buf};
+
+    for (size_t i = 0; i < 2; i++) {
+        unsigned long long value = values[i];
+        unsigned long long unit_kib = units[2].kib;
+        const char* unit = units[2].name;
+
+        for (size_t u = 0; u < 3; u++) {
+            if (value >= units[u].kib) {
+                unit_kib = units[u].kib;
+                unit = units[u].name;
+                break;
+            }
+        }
+
+        unsigned long long whole = value / unit_kib;
+        unsigned long long rem = value % unit_kib;
+        unsigned long long tenths = (rem * 10ULL + (unit_kib / 2ULL)) / unit_kib;
+
+        if (tenths >= 10ULL) {
+            whole++;
+            tenths = 0;
+        }
+
+        if (tenths && whole < 10ULL)
+            snprintf(outputs[i], 32, "%llu.%llu %s", whole, tenths, unit);
+        else
+            snprintf(outputs[i], 32, "%llu %s", whole, unit);
     }
 
-    unsigned long long used = used_kib / unit_kib;
-    unsigned long long total = total_kib / unit_kib;
-
-    snprintf(out, out_len, "ram: %llu %s / %llu %s", used, unit, total, unit);
+    snprintf(out, out_len, "ram: %s / %s", used_buf, total_buf);
 }
 
 static void print_fetch_rows(
@@ -145,10 +174,24 @@ int main(void) {
 
     format_ram_line(used_kib, total_kib, ram_line, sizeof(ram_line));
 
-    if (freq_khz > 0)
-        snprintf(cpu_line, sizeof(cpu_line), "cpu: %s @ %llu MHz", cpu_model, freq_khz / 1000);
-    else
+    if (freq_khz > 0) {
+        char model_clean[sizeof(cpu_model)];
+        snprintf(model_clean, sizeof(model_clean), "%s", cpu_model);
+
+        char* at = NULL;
+        for (char* p = model_clean; p[0]; p++) {
+            if (p[0] == ' ' && p[1] == '@' && p[2] == ' ') {
+                at = p;
+                break;
+            }
+        }
+        if (at)
+            *at = '\0';
+
+        snprintf(cpu_line, sizeof(cpu_line), "cpu: %s @ %llu MHz", model_clean, freq_khz / 1000);
+    } else {
         snprintf(cpu_line, sizeof(cpu_line), "cpu: %s", cpu_model);
+    }
 
     fill_separator(sep, sizeof(sep), strlen(user_at));
 

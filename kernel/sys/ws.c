@@ -227,9 +227,47 @@ static void _clear_focus(void) {
         ws_state.windows[i].flags &= ~WS_WINDOW_FOCUSED;
 }
 
+static void _drop_manager_and_close_windows(pid_t manager_pid) {
+    pid_t owners[WS_MAX_WINDOWS];
+    size_t owner_count = 0;
+
+    ws_state.manager_pid = 0;
+
+    for (u32 i = 0; i < WS_MAX_WINDOWS; i++) {
+        ws_window_t* window = &ws_state.windows[i];
+        if (!window->allocated)
+            continue;
+
+        pid_t owner_pid = window->owner_pid;
+        _free_window(i, false);
+
+        if (owner_pid <= 0 || owner_pid == manager_pid)
+            continue;
+
+        bool seen = false;
+        for (size_t j = 0; j < owner_count; j++) {
+            if (owners[j] == owner_pid) {
+                seen = true;
+                break;
+            }
+        }
+
+        if (!seen)
+            owners[owner_count++] = owner_pid;
+    }
+
+    ws_state.mgr_head = 0;
+    ws_state.mgr_tail = 0;
+    ws_state.mgr_count = 0;
+    _clear_focus();
+
+    for (size_t i = 0; i < owner_count; i++)
+        sched_signal_send_pid(owners[i], SIGHUP);
+}
+
 static void _reap_dead_owners(void) {
     if (ws_state.manager_pid && !_pid_alive(ws_state.manager_pid))
-        ws_state.manager_pid = 0;
+        _drop_manager_and_close_windows(ws_state.manager_pid);
 
     for (u32 i = 0; i < WS_MAX_WINDOWS; i++) {
         ws_window_t* window = &ws_state.windows[i];
@@ -389,7 +427,7 @@ static int _handle_manager_op(pid_t caller_pid, const ws_req_t* req, ws_resp_t* 
     case WS_OP_RELEASE_MANAGER:
         if (!_is_manager(caller_pid))
             return -EPERM;
-        ws_state.manager_pid = 0;
+        _drop_manager_and_close_windows(caller_pid);
         *out = _make_resp(0, req->id);
         return 0;
     default:

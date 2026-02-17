@@ -58,9 +58,6 @@ int system(const char* command) {
         } else {
             char path[128];
 
-            snprintf(path, sizeof(path), "/sbin/%s", argv[0]);
-            execve(path, argv, environ);
-
             snprintf(path, sizeof(path), "/bin/%s", argv[0]);
             execve(path, argv, environ);
         }

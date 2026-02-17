@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
         if (pwd.pw_dir[0])
             chdir(pwd.pw_dir);
 
-        const char* shell = pwd.pw_shell[0] ? pwd.pw_shell : "/sbin/sh";
+        const char* shell = pwd.pw_shell[0] ? pwd.pw_shell : "/bin/sh";
         char* args[] = {(char*)shell, NULL};
         execve(shell, args, NULL);
 

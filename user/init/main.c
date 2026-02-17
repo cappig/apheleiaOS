@@ -25,9 +25,9 @@ static pid_t spawn_getty(const char* tty_path) {
     pid_t pid = fork();
 
     if (!pid) {
-        char* args[] = {"getty", (char*)tty_path, "/sbin/login", NULL};
+        char* args[] = {"getty", (char*)tty_path, "/bin/login", NULL};
 
-        if (execve("/sbin/getty", args, NULL) < 0) {
+        if (execve("/bin/getty", args, NULL) < 0) {
             write_str("init: exec failed\n");
             _exit(1);
         }
@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
 
     if (!access("/etc/rc", R_OK)) {
         write_str("init: running /etc/rc\n");
-        system("/sbin/sh /etc/rc");
+        system("/bin/sh /etc/rc");
     }
 
     getty_slot_t slots[INIT_TTY_COUNT] = {

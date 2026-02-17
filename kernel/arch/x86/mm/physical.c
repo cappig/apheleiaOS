@@ -79,7 +79,7 @@ bool pmm_ref_ready(void) {
 }
 
 size_t pmm_total_mem(void) {
-    return frame_alloc.block_count * frame_alloc.block_size;
+    return frame_alloc.usable_blocks * frame_alloc.block_size;
 }
 
 size_t pmm_free_mem(void) {

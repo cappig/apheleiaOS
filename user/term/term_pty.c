@@ -16,9 +16,6 @@
 extern char** environ;
 
 static const u8 ctrl_ascii[6] = {'\n', '\n', '\b', '\t', '\e', 0x7f};
-static bool ctrl_down = false;
-static bool shift_down = false;
-static bool caps_lock = false;
 
 static bool write_retry(int fd, const void* data, size_t len) {
     if (fd < 0 || !data || !len)
@@ -77,23 +74,10 @@ void term_handle_key_event(int master_fd, const ws_input_event_t* event) {
     if (!event)
         return;
 
-    if (event->keycode == KBD_LEFT_CTRL || event->keycode == KBD_RIGHT_CTRL) {
-        ctrl_down = event->action != 0;
-        return;
-    }
-
-    if (event->keycode == KBD_LEFT_SHIFT || event->keycode == KBD_RIGHT_SHIFT) {
-        shift_down = event->action != 0;
-        return;
-    }
-
-    if (event->keycode == KBD_CAPSLOCK && event->action)
-        caps_lock = !caps_lock;
-
     if (!event->action)
         return;
 
-    bool ctrl = ((event->modifiers & INPUT_MOD_CTRL) != 0) || ctrl_down;
+    bool ctrl = (event->modifiers & INPUT_MOD_CTRL) != 0;
     if (ctrl && event->keycode == KBD_C) {
         if (!send_foreground_signal(master_fd, SIGINT)) {
             const char intr = 0x03;
@@ -136,8 +120,8 @@ void term_handle_key_event(int master_fd, const ws_input_event_t* event) {
         break;
     }
 
-    bool shift = ((event->modifiers & INPUT_MOD_SHIFT) != 0) || shift_down;
-    bool caps = ((event->modifiers & INPUT_MOD_CAPS) != 0) || caps_lock;
+    bool shift = (event->modifiers & INPUT_MOD_SHIFT) != 0;
+    bool caps = (event->modifiers & INPUT_MOD_CAPS) != 0;
 
     char ch = key_to_ascii((u8)event->keycode, shift);
     if (!ch)
@@ -202,8 +186,8 @@ pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 h
         close(slave_fd);
         close(master_fd);
 
-        char* argv[] = {"/sbin/sh", NULL};
-        execve("/sbin/sh", argv, environ);
+        char* argv[] = {"/bin/sh", NULL};
+        execve("/bin/sh", argv, environ);
         _exit(127);
     }
 

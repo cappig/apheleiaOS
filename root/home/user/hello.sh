@@ -1,4 +1,4 @@
-#!/sbin/sh
+#!/bin/sh
 echo "hello from script"
 uname
 pwd

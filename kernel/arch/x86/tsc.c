@@ -1,6 +1,7 @@
 #include "tsc.h"
 
 #include <log/log.h>
+#include <stdlib.h>
 #include <sys/panic.h>
 #include <x86/asm.h>
 #include <x86/pit.h>
@@ -9,6 +10,7 @@
 #define CAL_COUNTER (PIT_BASE_FREQ / (1000 / CAL_MILLIS))
 #define CAL_LOOPS   256
 #define RETRY_COUNT 4
+#define CAL_SAMPLES 5
 
 static u64 tsc_rate_khz = 0;
 
@@ -19,12 +21,9 @@ static bool _has(void) {
     return (r.edx & (1u << 4)) != 0;
 }
 
-bool tsc_init(void) {
-    if (!_has()) {
-        log_warn("tsc: CPU does not advertise TSC");
-        return false;
-    }
-
+// Single PIT-based measurement returning TSC ticks over CAL_MILLIS ms.
+// Returns 0 on failure (PIT gate count too low).
+static u64 _measure_once(void) {
     size_t retry_counter = 0;
 
 retry:
@@ -53,17 +52,52 @@ retry:
         if (retry_counter <= RETRY_COUNT)
             goto retry;
 
-        log_warn("tsc: calibration failed");
+        return 0;
+    }
+
+    return end - begin;
+}
+
+static int _cmp_u64(const void* a, const void* b) {
+    u64 va = *(const u64*)a;
+    u64 vb = *(const u64*)b;
+
+    if (va < vb)
+        return -1;
+    if (va > vb)
+        return 1;
+    return 0;
+}
+
+bool tsc_init(void) {
+    if (!_has()) {
+        log_warn("tsc: CPU does not advertise TSC");
         return false;
     }
 
-    u64 delta = end - begin;
-    tsc_rate_khz = delta / CAL_MILLIS;
+    // Take multiple samples and pick the median to reject outliers
+    // caused by SMIs or other transient delays.
+    u64 samples[CAL_SAMPLES];
+    size_t good = 0;
 
-    log_info("tsc: calibrated at %llu MHz", (unsigned long long)(tsc_rate_khz / 1000));
+    for (size_t i = 0; i < CAL_SAMPLES; i++) {
+        u64 delta = _measure_once();
+        if (delta)
+            samples[good++] = delta;
+    }
 
-    const char* try_str = (retry_counter > 1) ? "tries" : "try";
-    log_debug("tsc: calibration took %zu %s", retry_counter, try_str);
+    if (!good) {
+        log_warn("tsc: calibration failed (no valid samples)");
+        return false;
+    }
+
+    qsort(samples, good, sizeof(u64), _cmp_u64);
+
+    u64 median = samples[good / 2];
+    tsc_rate_khz = median / CAL_MILLIS;
+
+    log_info("tsc: calibrated at %llu MHz (%zu/%d samples)",
+             (unsigned long long)(tsc_rate_khz / 1000), good, CAL_SAMPLES);
 
     return true;
 }

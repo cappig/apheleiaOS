@@ -40,7 +40,7 @@ static int attach_tty(const char* path) {
 
 int main(int argc, char** argv) {
     const char* tty_path = "/dev/tty0";
-    const char* login_path = "/sbin/login";
+    const char* login_path = "/bin/login";
 
     if (argc > 1 && argv[1] && argv[1][0])
         tty_path = argv[1];

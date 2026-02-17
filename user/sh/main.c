@@ -787,7 +787,7 @@ static void exec_script(const char* script, char* const argv[], char* const envp
     }
 
     sh_args[argc] = NULL;
-    execve("/sbin/sh", sh_args, envp);
+    execve("/bin/sh", sh_args, envp);
 }
 
 static bool
@@ -832,7 +832,7 @@ static bool exec_in_path(const char* cmd, char* const argv[], char* const envp[]
 
     const char* path = env_get("PATH");
     if (!path || !path[0])
-        path = "/sbin";
+        path = "/bin";
     const char* cursor = path;
     char full[PATH_MAX];
     int last_error = ENOENT;
@@ -1303,7 +1303,7 @@ int main(int argc, char** argv) {
 
     input_set_sigint_flag(&got_sigint);
 
-    env_set("PATH", "/sbin");
+    env_set("PATH", "/bin");
     env_set("HOME", "/");
 
     passwd_t pwd = {0};

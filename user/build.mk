@@ -1,6 +1,6 @@
 USER_OBJ_DIR   := bin/user/$(ARCH_VARIANT)
 USER_BIN_DIR   := $(USER_OBJ_DIR)/bin
-USER_STAGE_DIR := $(USER_OBJ_DIR)/root/sbin
+USER_STAGE_DIR := $(USER_OBJ_DIR)/root/bin
 
 USER_LIBC_SRC   := $(wildcard libs/libc/*.c) $(wildcard libs/libc_ext/*.c) $(wildcard libs/libc_usr/*.c)
 USER_COMMON_SRC := $(wildcard libs/user/*.c)

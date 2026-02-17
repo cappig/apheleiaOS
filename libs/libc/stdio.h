@@ -20,6 +20,8 @@ int snprintf(char* restrict buffer, size_t max_size, const char* restrict format
     __attribute__((format(printf, 3, 4)));
 int sprintf(char* restrict buffer, const char* restrict format, ...)
     __attribute__((format(printf, 2, 3)));
+int printf(char* restrict format, ...)
+    __attribute__((format(printf, 1, 2)));
 
 
 int vsnscanf(const char* restrict str, size_t max, const char* restrict format, va_list vlist);

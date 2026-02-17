@@ -301,6 +301,7 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
     // Mark the whole bitmap as used
     memset(alloc->bitmap, (unsigned int)-1, bitmap_size);
     alloc->free_blocks = 0;
+    alloc->usable_blocks = 0;
 
     for (size_t i = 0; i < mmap->count; i++) {
         e820_entry_t* current = &mmap->entries[i];
@@ -331,6 +332,7 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
 
         if (current->type == E820_AVAILABLE) {
             alloc->free_blocks += blocks;
+            alloc->usable_blocks += blocks;
             bitmap_clear_region(alloc->bitmap, start_block, blocks);
         } else {
             // Do we need this?
