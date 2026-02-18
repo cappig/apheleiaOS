@@ -19,8 +19,6 @@
 static u8* _back_buf;
 static size_t _back_buf_size;
 
-static bool framebuffer_register_devfs(vfs_node_t* dev_dir);
-
 static ssize_t _dev_fb_transfer(const framebuffer_info_t* fb, void* buf, size_t offset, size_t len, bool write) {
     if (!fb || !fb->available || !buf)
         return -1;
@@ -204,11 +202,6 @@ static ssize_t _dev_fb_ioctl(vfs_node_t* node, u64 request, void* args) {
     }
 }
 
-void framebuffer_devfs_init(void) {
-    if (!devfs_register_device("framebuffer", framebuffer_register_devfs))
-        log_warn("framebuffer: failed to register devfs init callback");
-}
-
 static bool framebuffer_register_devfs(vfs_node_t* dev_dir) {
     if (!dev_dir)
         return false;
@@ -237,4 +230,9 @@ static bool framebuffer_register_devfs(vfs_node_t* dev_dir) {
     }
 
     return true;
+}
+
+void framebuffer_devfs_init(void) {
+    if (!devfs_register_device("framebuffer", framebuffer_register_devfs))
+        log_warn("framebuffer: failed to register devfs init callback");
 }

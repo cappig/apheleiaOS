@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/devfs.h>
+#include <sys/lock.h>
 
 #define WS_MGR_QUEUE_CAP 128
 #define WS_EV_QUEUE_CAP  128
@@ -59,21 +60,11 @@ typedef struct {
     bool mgr_fb_dirty;
 } ws_state_t;
 
+
 static ws_state_t ws_state = {0};
 static volatile int ws_lock = 0;
 static u32 ws_ids[WS_MAX_WINDOWS] = {0};
-static bool ws_register_devfs(vfs_node_t* dev_dir);
 
-static void _lock_acquire(void) {
-    while (__sync_lock_test_and_set(&ws_lock, 1)) {
-        while (ws_lock)
-            arch_cpu_wait();
-    }
-}
-
-static void _lock_release(void) {
-    __sync_lock_release(&ws_lock);
-}
 
 static pid_t _current_pid(void) {
     sched_thread_t* current = sched_current();
@@ -115,10 +106,14 @@ static ws_resp_slot_t* _find_resp_slot(pid_t pid, bool create) {
 
     linked_list_t* wait_list = free_slot->wait.list;
     memset(free_slot, 0, sizeof(*free_slot));
+
     free_slot->wait.list = wait_list;
+
     if (!free_slot->wait.list)
         sched_wait_queue_init(&free_slot->wait);
+
     free_slot->pid = pid;
+
     return free_slot;
 }
 
@@ -180,6 +175,7 @@ static void _finalize_window_free(u32 id, bool notify_manager) {
 
     memset(window, 0, sizeof(*window));
     window->ev_wait.list = ev_wait_list;
+
     if (!window->ev_wait.list)
         sched_wait_queue_init(&window->ev_wait);
 
@@ -345,6 +341,7 @@ static int _handle_alloc(pid_t caller_pid, const ws_req_t* req, ws_resp_t* out) 
 
     u64 stride = (u64)req->width * 4ULL;
     u64 fb_size_u64 = stride * (u64)req->height;
+
     if (!stride || fb_size_u64 > WS_MAX_FB_BYTES)
         return -EINVAL;
 
@@ -361,7 +358,9 @@ static int _handle_alloc(pid_t caller_pid, const ws_req_t* req, ws_resp_t* out) 
 
     ws_window_t* window = &ws_state.windows[free_id];
     linked_list_t* ev_wait_list = window->ev_wait.list;
+
     memset(window, 0, sizeof(*window));
+
     window->ev_wait.list = ev_wait_list;
     if (!window->ev_wait.list)
         sched_wait_queue_init(&window->ev_wait);
@@ -423,14 +422,18 @@ static int _handle_manager_op(pid_t caller_pid, const ws_req_t* req, ws_resp_t* 
     case WS_OP_CLAIM_MANAGER:
         if (ws_state.manager_pid && ws_state.manager_pid != caller_pid)
             return -EBUSY;
+
         ws_state.manager_pid = caller_pid;
         *out = _make_resp(0, req->id);
+
         return 0;
     case WS_OP_RELEASE_MANAGER:
         if (!_is_manager(caller_pid))
             return -EPERM;
+
         _drop_manager_and_close_windows(caller_pid);
         *out = _make_resp(0, req->id);
+
         return 0;
     default:
         break;
@@ -470,25 +473,27 @@ static int _handle_manager_op(pid_t caller_pid, const ws_req_t* req, ws_resp_t* 
         window->ev_queue[window->ev_tail] = req->input;
         window->ev_tail = (window->ev_tail + 1) % WS_EV_QUEUE_CAP;
         window->ev_count++;
+
         sched_wake_all(&window->ev_wait);
         *out = _make_resp(0, req->id);
+
         return 0;
     case WS_OP_CLOSE:
         pid_t owner_pid = window->owner_pid;
         _free_window(req->id, true);
+
         if (owner_pid > 0 && owner_pid != caller_pid)
             sched_signal_send_pid(owner_pid, SIGHUP);
+
         *out = _make_resp(0, req->id);
+
         return 0;
     default:
         return -EINVAL;
     }
 }
 
-bool ws_init(void) {
-    if (!devfs_register_device("ws", ws_register_devfs))
-        log_warn("ws: failed to register devfs init callback");
-
+static bool _ws_state_init(void) {
     if (ws_state.ready)
         return true;
 
@@ -557,7 +562,7 @@ static bool ws_register_devfs(vfs_node_t* dev_dir) {
     if (!dev_dir)
         return false;
 
-    if (!ws_init()) {
+    if (!_ws_state_init()) {
         log_warn("ws: init failed");
         return false;
     }
@@ -620,6 +625,13 @@ static bool ws_register_devfs(vfs_node_t* dev_dir) {
     return ok;
 }
 
+bool ws_init(void) {
+    if (!devfs_register_device("ws", ws_register_devfs))
+        log_warn("ws: failed to register devfs init callback");
+
+    return _ws_state_init();
+}
+
 ssize_t ws_ctl_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
@@ -638,7 +650,7 @@ ssize_t ws_ctl_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32
     ws_resp_t resp = {0};
     int status = 0;
 
-    _lock_acquire();
+    lock(&ws_lock);
     _reap_dead_owners();
 
     switch (req.op) {
@@ -672,7 +684,7 @@ ssize_t ws_ctl_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32
 
     _store_response(caller_pid, &resp);
 
-    _lock_release();
+    unlock(&ws_lock);
 
     return (ssize_t)sizeof(ws_req_t);
 }
@@ -686,24 +698,24 @@ ssize_t ws_ctl_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 
         return -EPERM;
 
     for (;;) {
-        _lock_acquire();
+        lock(&ws_lock);
         _reap_dead_owners();
 
         ws_resp_slot_t* slot = _find_resp_slot(caller_pid, true);
         if (!slot) {
-            _lock_release();
+            unlock(&ws_lock);
             return -ENOMEM;
         }
 
         if (slot->ready) {
             if (len < sizeof(ws_resp_t)) {
-                _lock_release();
+                unlock(&ws_lock);
                 return -EINVAL;
             }
 
             ws_resp_t resp = slot->resp;
             slot->ready = false;
-            _lock_release();
+            unlock(&ws_lock);
 
             memcpy(buf, &resp, sizeof(resp));
             return (ssize_t)sizeof(resp);
@@ -711,22 +723,23 @@ ssize_t ws_ctl_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 
 
         if (_is_manager(caller_pid)) {
             if (len < sizeof(ws_event_t)) {
-                _lock_release();
+                unlock(&ws_lock);
                 return -EINVAL;
             }
 
             if (ws_state.mgr_count > 0) {
                 ws_event_t event = ws_state.mgr_queue[ws_state.mgr_head];
+
                 ws_state.mgr_head = (ws_state.mgr_head + 1) % WS_MGR_QUEUE_CAP;
                 ws_state.mgr_count--;
-                _lock_release();
+                unlock(&ws_lock);
 
                 memcpy(buf, &event, sizeof(event));
                 return (ssize_t)sizeof(event);
             }
         }
 
-        _lock_release();
+        unlock(&ws_lock);
 
         if (flags & VFS_NONBLOCK)
             return -EAGAIN;
@@ -741,9 +754,9 @@ ssize_t ws_ctl_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 
         if (_is_manager(caller_pid)) {
             sched_block(&ws_state.mgr_wait);
         } else {
-            _lock_acquire();
+            lock(&ws_lock);
             slot = _find_resp_slot(caller_pid, true);
-            _lock_release();
+            unlock(&ws_lock);
 
             if (!slot)
                 return -ENOMEM;
@@ -761,7 +774,7 @@ short ws_ctl_poll(vfs_node_t* node, short events, u32 flags) {
     if (caller_pid <= 0)
         return POLLNVAL;
 
-    _lock_acquire();
+    lock(&ws_lock);
     _reap_dead_owners();
 
     short revents = 0;
@@ -783,7 +796,7 @@ short ws_ctl_poll(vfs_node_t* node, short events, u32 flags) {
         }
     }
 
-    _lock_release();
+    unlock(&ws_lock);
     return revents;
 }
 
@@ -797,30 +810,30 @@ ssize_t ws_fb_read(u32 id, void* buf, size_t offset, size_t len, u32 flags) {
     if (caller_pid <= 0)
         return -EPERM;
 
-    _lock_acquire();
+    lock(&ws_lock);
 
     ws_window_t* window = NULL;
     int status = _window_lookup(id, caller_pid, &window);
     if (status) {
-        _lock_release();
+        unlock(&ws_lock);
         return status;
     }
 
     size_t copy_len = _copy_len(window->fb_size, offset, len);
     if (!copy_len) {
-        _lock_release();
+        unlock(&ws_lock);
         return VFS_EOF;
     }
 
     _window_acquire_io(window);
     const void* src = window->fb + offset;
-    _lock_release();
+    unlock(&ws_lock);
 
     memcpy(buf, src, copy_len);
 
-    _lock_acquire();
+    lock(&ws_lock);
     _window_release_io(id, window);
-    _lock_release();
+    unlock(&ws_lock);
 
     return (ssize_t)copy_len;
 }
@@ -835,44 +848,48 @@ ssize_t ws_fb_write(u32 id, const void* buf, size_t offset, size_t len, u32 flag
     if (caller_pid <= 0)
         return -EPERM;
 
-    _lock_acquire();
+    lock(&ws_lock);
 
     ws_window_t* window = NULL;
     int status = _window_lookup(id, caller_pid, &window);
     if (status) {
-        _lock_release();
+        unlock(&ws_lock);
         return status;
     }
 
     size_t copy_len = _copy_len(window->fb_size, offset, len);
     if (!copy_len) {
-        _lock_release();
+        unlock(&ws_lock);
         return VFS_EOF;
     }
 
     _window_acquire_io(window);
     void* dst = window->fb + offset;
-    _lock_release();
+    unlock(&ws_lock);
 
     memcpy(dst, buf, copy_len);
 
-    _lock_acquire();
+    lock(&ws_lock);
     window->fb_dirty = true;
     ws_state.mgr_fb_dirty = true;
+
     if (ws_state.manager_pid)
         sched_wake_all(&ws_state.mgr_wait);
+
     _window_release_io(id, window);
-    _lock_release();
+    unlock(&ws_lock);
 
     return (ssize_t)copy_len;
 }
 
 void ws_notify_screen_active(void) {
-    _lock_acquire();
+    lock(&ws_lock);
     ws_state.mgr_fb_dirty = true;
+
     if (ws_state.manager_pid)
         sched_wake_all(&ws_state.mgr_wait);
-    _lock_release();
+
+    unlock(&ws_lock);
 }
 
 short ws_fb_poll(u32 id, short events, u32 flags) {
@@ -885,27 +902,29 @@ short ws_fb_poll(u32 id, short events, u32 flags) {
     if (caller_pid <= 0)
         return POLLNVAL;
 
-    _lock_acquire();
+    lock(&ws_lock);
 
     ws_window_t* window = NULL;
     int status = _window_lookup(id, caller_pid, &window);
     if (status == -ENOENT) {
-        _lock_release();
+        unlock(&ws_lock);
         return POLLHUP;
     }
 
     if (status) {
-        _lock_release();
+        unlock(&ws_lock);
         return POLLNVAL;
     }
 
     short revents = 0;
+
     if (events & POLLIN)
         revents |= POLLIN;
+
     if (events & POLLOUT)
         revents |= POLLOUT;
 
-    _lock_release();
+    unlock(&ws_lock);
     return revents;
 }
 
@@ -929,13 +948,13 @@ ssize_t ws_ev_read(u32 id, void* buf, size_t offset, size_t len, u32 flags) {
     for (;;) {
         size_t copied = 0;
 
-        _lock_acquire();
+        lock(&ws_lock);
         _reap_dead_owners();
 
         ws_window_t* window = NULL;
         int status = _window_lookup(id, caller_pid, &window);
         if (status) {
-            _lock_release();
+            unlock(&ws_lock);
             return status;
         }
 
@@ -947,37 +966,37 @@ ssize_t ws_ev_read(u32 id, void* buf, size_t offset, size_t len, u32 flags) {
         }
 
         if (copied) {
-            _lock_release();
+            unlock(&ws_lock);
             return (ssize_t)(copied * sizeof(ws_input_event_t));
         }
 
         if (flags & VFS_NONBLOCK) {
-            _lock_release();
+            unlock(&ws_lock);
             return -EAGAIN;
         }
 
         if (!sched_is_running()) {
-            _lock_release();
+            unlock(&ws_lock);
             continue;
         }
 
         sched_thread_t* current = sched_current();
         if (current && sched_signal_has_pending(current)) {
-            _lock_release();
+            unlock(&ws_lock);
             return -EINTR;
         }
 
         // Hold io_ref while blocking so the window (and its wait queue list)
-        // cannot be finalized underneath us.
+        // cannot be finalized underneath us
         _window_acquire_io(window);
         sched_wait_queue_t* wait_queue = &window->ev_wait;
-        _lock_release();
+        unlock(&ws_lock);
 
         sched_block(wait_queue);
 
-        _lock_acquire();
+        lock(&ws_lock);
         _window_release_io(id, window);
-        _lock_release();
+        unlock(&ws_lock);
     }
 }
 
@@ -991,18 +1010,18 @@ short ws_ev_poll(u32 id, short events, u32 flags) {
     if (caller_pid <= 0)
         return POLLNVAL;
 
-    _lock_acquire();
+    lock(&ws_lock);
     _reap_dead_owners();
 
     ws_window_t* window = NULL;
     int status = _window_lookup(id, caller_pid, &window);
     if (status == -ENOENT) {
-        _lock_release();
+        unlock(&ws_lock);
         return POLLHUP;
     }
 
     if (status) {
-        _lock_release();
+        unlock(&ws_lock);
         return POLLNVAL;
     }
 
@@ -1010,6 +1029,6 @@ short ws_ev_poll(u32 id, short events, u32 flags) {
     if ((events & POLLIN) && window->ev_count)
         revents |= POLLIN;
 
-    _lock_release();
+    unlock(&ws_lock);
     return revents;
 }

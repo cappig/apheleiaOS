@@ -13,10 +13,10 @@
 
 static vector_t* mice = NULL;
 static ring_buffer_t* buffer = NULL;
-static bool mouse_register_devfs(vfs_node_t* dev_dir);
 
 static i32 mouse_x = 0;
 static i32 mouse_y = 0;
+
 
 static bool _vec_push_ptr(vector_t* vec, void* ptr) {
     return vec_push(vec, &ptr);
@@ -34,14 +34,17 @@ static char* _strdup(const char* src) {
 
     memcpy(out, src, len);
     out[len] = '\0';
+
     return out;
 }
 
 static i32 _clamp_i32(i32 value, i32 min, i32 max) {
     if (value < min)
         return min;
+
     if (value > max)
         return max;
+
     return value;
 }
 
@@ -98,9 +101,34 @@ u8 mouse_register(const char* name) {
     return (u8)(mice->size - 1);
 }
 
+static bool mouse_register_devfs(vfs_node_t* dev_dir) {
+    if (!dev_dir)
+        return false;
+
+    if (!mice || !buffer) {
+        log_warn("mouse: state not initialized");
+        return false;
+    }
+
+    vfs_interface_t* mouse_if = vfs_create_interface(mouse_read, NULL, NULL);
+    if (!mouse_if) {
+        log_warn("mouse: failed to allocate /dev interface");
+        return false;
+    }
+
+    if (!devfs_register_node(dev_dir, "mouse", VFS_CHARDEV, 0666, mouse_if, NULL)) {
+        log_warn("mouse: failed to create /dev/mouse");
+        return false;
+    }
+
+    return true;
+}
+
 bool mouse_init(void) {
     if (!devfs_register_device("mouse", mouse_register_devfs))
         log_warn("mouse: failed to register devfs init callback");
+
+    bool first_init = (mice == NULL || buffer == NULL);
 
     if (!mice)
         mice = vec_create(sizeof(mouse_dev_t*));
@@ -114,33 +142,12 @@ bool mouse_init(void) {
     if (!buffer)
         return false;
 
-    const framebuffer_info_t* fb = framebuffer_get_info();
-    if (fb && fb->available) {
-        mouse_x = (i32)(fb->width / 2);
-        mouse_y = (i32)(fb->height / 2);
-    }
-
-    return true;
-}
-
-static bool mouse_register_devfs(vfs_node_t* dev_dir) {
-    if (!dev_dir)
-        return false;
-
-    if (!mouse_init()) {
-        log_warn("mouse: init failed");
-        return false;
-    }
-
-    vfs_interface_t* mouse_if = vfs_create_interface(mouse_read, NULL, NULL);
-    if (!mouse_if) {
-        log_warn("mouse: failed to allocate /dev interface");
-        return false;
-    }
-
-    if (!devfs_register_node(dev_dir, "mouse", VFS_CHARDEV, 0666, mouse_if, NULL)) {
-        log_warn("mouse: failed to create /dev/mouse");
-        return false;
+    if (first_init) {
+        const framebuffer_info_t* fb = framebuffer_get_info();
+        if (fb && fb->available) {
+            mouse_x = (i32)(fb->width / 2);
+            mouse_y = (i32)(fb->height / 2);
+        }
     }
 
     return true;

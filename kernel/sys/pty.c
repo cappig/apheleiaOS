@@ -35,7 +35,7 @@ static pty_t ptys[PTY_COUNT] = {0};
 static pty_handle_t pty_master_handles[PTY_COUNT];
 static pty_handle_t pty_slave_handles[PTY_COUNT];
 static pty_handle_t pty_master_default = {.index = 0, .is_master = true};
-static bool pty_register_devfs(vfs_node_t* dev_dir);
+
 
 static void _queue_reset(pty_queue_t* queue) {
     if (!queue)
@@ -103,8 +103,10 @@ static void _queue_init(pty_queue_t* queue) {
     queue->read_pos = 0;
     queue->write_pos = 0;
     queue->size = 0;
+
     sched_wait_queue_init(&queue->read_wait);
     sched_wait_queue_init(&queue->write_wait);
+
     queue->ready = true;
 }
 
@@ -191,13 +193,11 @@ static void _seed_handles(void) {
 
 static ssize_t _dev_pty_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
-
     return pty_read_handle(node ? node->private : NULL, buf, len, flags);
 }
 
 static ssize_t _dev_pty_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
-
     return pty_write_handle(node ? node->private : NULL, buf, len, flags);
 }
 
@@ -214,9 +214,11 @@ static void _queue_clear(pty_queue_t* queue) {
         return;
 
     unsigned long irq_flags = arch_irq_save();
+
     queue->read_pos = 0;
     queue->write_pos = 0;
     queue->size = 0;
+
     arch_irq_restore(irq_flags);
 }
 
@@ -252,6 +254,7 @@ static ssize_t _queue_read(pty_queue_t* queue, void* buf, size_t len, bool nonbl
             continue;
 
         sched_thread_t* current = sched_current();
+
         if (current && sched_signal_has_pending(current))
             return -EINTR;
 
@@ -298,25 +301,15 @@ static ssize_t _queue_write(pty_queue_t* queue, const void* buf, size_t len, boo
     }
 }
 
-void pty_init(void) {
-    if (!devfs_register_device("pty", pty_register_devfs))
-        log_warn("pty: failed to register devfs init callback");
-
-    for (size_t i = 0; i < PTY_COUNT; i++) {
-        pty_t* pty = &ptys[i];
-
-        _queue_init(&pty->master_rx);
-        _queue_init(&pty->slave_rx);
-        _reset_state(pty);
-        pty->allocated = false;
-    }
-}
-
 static bool pty_register_devfs(vfs_node_t* dev_dir) {
     if (!dev_dir)
         return false;
 
-    pty_init();
+    if (PTY_COUNT && !ptys[0].master_rx.ready) {
+        log_warn("pty: state not initialized");
+        return false;
+    }
+
     _seed_handles();
 
     vfs_interface_t* pty_if = vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
@@ -356,6 +349,23 @@ static bool pty_register_devfs(vfs_node_t* dev_dir) {
     return ok;
 }
 
+void pty_init(void) {
+    if (!devfs_register_device("pty", pty_register_devfs))
+        log_warn("pty: failed to register devfs init callback");
+
+    if (PTY_COUNT && ptys[0].master_rx.ready)
+        return;
+
+    for (size_t i = 0; i < PTY_COUNT; i++) {
+        pty_t* pty = &ptys[i];
+
+        _queue_init(&pty->master_rx);
+        _queue_init(&pty->slave_rx);
+        _reset_state(pty);
+        pty->allocated = false;
+    }
+}
+
 bool pty_reserve(size_t* index_out) {
     if (!index_out)
         return false;
@@ -364,6 +374,7 @@ bool pty_reserve(size_t* index_out) {
 
     for (size_t i = 0; i < PTY_COUNT; i++) {
         pty_t* pty = &ptys[i];
+
         if (pty->allocated)
             continue;
 
@@ -399,6 +410,7 @@ void pty_hold(size_t index) {
         return;
 
     unsigned long irq_flags = arch_irq_save();
+
     pty_t* pty = &ptys[index];
 
     if (pty->allocated)

@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/cpu.h>
+#include <sys/lock.h>
 #include <sys/panic.h>
 #include <sys/proc.h>
 #include <sys/pty.h>
@@ -328,21 +329,6 @@ static void sched_fd_reset(sched_fd_t* fd) {
     fd->flags = 0;
 }
 
-static void pipe_lock(sched_pipe_t* pipe) {
-    if (!pipe)
-        return;
-
-    while (__sync_lock_test_and_set(&pipe->lock, 1))
-        arch_cpu_wait();
-}
-
-static void pipe_unlock(sched_pipe_t* pipe) {
-    if (!pipe)
-        return;
-
-    __sync_lock_release(&pipe->lock);
-}
-
 sched_pipe_t* sched_pipe_create(size_t capacity) {
     if (!capacity)
         capacity = SCHED_PIPE_CAPACITY;
@@ -377,11 +363,11 @@ static void sched_pipe_try_destroy(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
-    pipe_lock(pipe);
+    lock(&pipe->lock);
     bool in_use = pipe->readers || pipe->writers || pipe->destroying;
     if (!in_use)
         pipe->destroying = true;
-    pipe_unlock(pipe);
+    unlock(&pipe->lock);
 
     if (in_use)
         return;
@@ -401,25 +387,25 @@ void sched_pipe_acquire_reader(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
-    pipe_lock(pipe);
+    lock(&pipe->lock);
     pipe->readers++;
-    pipe_unlock(pipe);
+    unlock(&pipe->lock);
 }
 
 void sched_pipe_acquire_writer(sched_pipe_t* pipe) {
     if (!pipe)
         return;
 
-    pipe_lock(pipe);
+    lock(&pipe->lock);
     pipe->writers++;
-    pipe_unlock(pipe);
+    unlock(&pipe->lock);
 }
 
 static void _pipe_release(sched_pipe_t* pipe, bool is_reader) {
     if (!pipe)
         return;
 
-    pipe_lock(pipe);
+    lock(&pipe->lock);
 
     if (is_reader) {
         if (pipe->readers > 0)
@@ -432,14 +418,13 @@ static void _pipe_release(sched_pipe_t* pipe, bool is_reader) {
     bool destroy = !pipe->readers && !pipe->writers;
 
     // Wake waiters while still holding the lock so the pipe can't be
-    // freed by a concurrent release on another CPU before the wake
-    // completes.
+    // freed by a concurrent release on another CPU before the wake completes
     if (pipe->read_wait_queue)
         sched_wake_all(pipe->read_wait_queue);
     if (pipe->write_wait_queue)
         sched_wake_all(pipe->write_wait_queue);
 
-    pipe_unlock(pipe);
+    unlock(&pipe->lock);
 
     if (destroy)
         sched_pipe_try_destroy(pipe);
@@ -875,10 +860,10 @@ static void destroy_thread(sched_thread_t* thread) {
 
     sched_fd_close_all(thread);
 
+    sched_clear_user_regions(thread);
+
     if (thread->vm_space && thread->vm_space != kernel_vm)
         arch_vm_destroy(thread->vm_space);
-
-    sched_clear_user_regions(thread);
 
     sched_wait_queue_destroy(&thread->wait_queue);
 

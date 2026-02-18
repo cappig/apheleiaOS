@@ -1,7 +1,6 @@
 #include "wm_loop.h"
 
 #include <base/macros.h>
-#include <draw.h>
 #include <errno.h>
 #include <gui/fb.h>
 #include <input/kbd.h>
@@ -14,6 +13,7 @@
 #include <ui.h>
 #include <unistd.h>
 
+#include "wm_cursor.h"
 #include "wm.h"
 
 extern char** environ;
@@ -32,6 +32,7 @@ typedef struct {
     int focused_id;
     bool term_hotkey_down;
 } wm_runtime_t;
+
 
 static int _present_frame(int fb_fd, const fb_info_t* fb_info, const u32* frame, size_t frame_bytes) {
     (void)frame_bytes;
@@ -321,16 +322,7 @@ void wm_loop(ui_t* ui, int fb_fd, const fb_info_t* fb_info, u32* frame_store, si
             continue;
 
         wm_render_frame(frame_store, fb_info->width, fb_info->height);
-        draw_fill_rect(
-            frame_store,
-            fb_info->width,
-            fb_info->height,
-            rt.mouse_x - 2,
-            rt.mouse_y - 2,
-            5,
-            5,
-            0x00ffffffU
-        );
+        wm_cursor_draw(frame_store, fb_info->width, fb_info->height, rt.mouse_x, rt.mouse_y);
 
         int present = _present_frame(fb_fd, fb_info, frame_store, frame_bytes);
 

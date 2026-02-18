@@ -23,7 +23,7 @@ typedef struct {
 } input_state_t;
 
 static input_state_t input_state = {0};
-static bool input_register_devfs(vfs_node_t* dev_dir);
+
 
 bool input_capture_screen(size_t screen) {
     if (screen >= TTY_SCREEN_COUNT)
@@ -73,26 +73,12 @@ static void _push_event(const input_event_t* event) {
     sched_wake_all(&input_state.wait_queue);
 }
 
-bool input_init(void) {
-    if (!devfs_register_device("input", input_register_devfs))
-        log_warn("input: failed to register devfs init callback");
-
-    if (input_state.ready)
-        return true;
-
-    memset(&input_state, 0, sizeof(input_state));
-    sched_wait_queue_init(&input_state.wait_queue);
-    input_state.ready = true;
-
-    return true;
-}
-
 static bool input_register_devfs(vfs_node_t* dev_dir) {
     if (!dev_dir)
         return false;
 
-    if (!input_init()) {
-        log_warn("input: init failed");
+    if (!input_state.ready) {
+        log_warn("input: state not initialized");
         return false;
     }
 
@@ -108,6 +94,20 @@ static bool input_register_devfs(vfs_node_t* dev_dir) {
         log_warn("input: failed to create /dev/input");
         return false;
     }
+
+    return true;
+}
+
+bool input_init(void) {
+    if (!devfs_register_device("input", input_register_devfs))
+        log_warn("input: failed to register devfs init callback");
+
+    if (input_state.ready)
+        return true;
+
+    memset(&input_state, 0, sizeof(input_state));
+    sched_wait_queue_init(&input_state.wait_queue);
+    input_state.ready = true;
 
     return true;
 }

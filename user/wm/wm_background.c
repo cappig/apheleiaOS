@@ -1,13 +1,11 @@
 #include "wm_background.h"
+#include "wm_file.h"
 
-#include <fcntl.h>
-#include <limits.h>
 #include <parse/ppm.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include <limits.h>
 
 #define WM_BG_MAX_FILE_BYTES (64U * 1024U * 1024U)
 
@@ -18,10 +16,13 @@ static u32 bg_height = 0;
 static int _hex_nibble(char ch) {
     if (ch >= '0' && ch <= '9')
         return ch - '0';
+
     if (ch >= 'a' && ch <= 'f')
         return 10 + (ch - 'a');
+
     if (ch >= 'A' && ch <= 'F')
         return 10 + (ch - 'A');
+
     return -1;
 }
 
@@ -66,68 +67,6 @@ static bool _parse_hex_color(const char* text, u32* color_out) {
 static void _fill_solid_color(size_t pixels, u32 color) {
     for (size_t i = 0; i < pixels; i++)
         bg_pixels[i] = color;
-}
-
-static bool _read_all(const char* path, u8** data_out, size_t* len_out) {
-    if (!path || !data_out || !len_out)
-        return false;
-
-    *data_out = NULL;
-    *len_out = 0;
-
-    int fd = open(path, O_RDONLY, 0);
-    if (fd < 0)
-        return false;
-
-    stat_t st = {0};
-    if (fstat(fd, &st) < 0) {
-        close(fd);
-        return false;
-    }
-
-    if (st.st_size <= 0 || st.st_size > (off_t)WM_BG_MAX_FILE_BYTES) {
-        close(fd);
-        return false;
-    }
-
-    size_t len = (size_t)st.st_size;
-    if ((off_t)len != st.st_size) {
-        close(fd);
-        return false;
-    }
-
-    u8* data = malloc(len);
-    if (!data) {
-        close(fd);
-        return false;
-    }
-
-    size_t read_total = 0;
-    while (read_total < len) {
-        ssize_t n = read(fd, data + read_total, len - read_total);
-
-        if (n < 0) {
-            free(data);
-            close(fd);
-            return false;
-        }
-
-        if (!n)
-            break;
-
-        read_total += (size_t)n;
-    }
-
-    close(fd);
-
-    if (read_total != len) {
-        free(data);
-        return false;
-    }
-
-    *data_out = data;
-    *len_out = len;
-    return true;
 }
 
 static void _build_cover_map(
@@ -218,7 +157,7 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char* path) {
     u8* file_data = NULL;
     size_t file_len = 0;
 
-    if (!_read_all(path, &file_data, &file_len))
+    if (!wm_file_read_all(path, WM_BG_MAX_FILE_BYTES, &file_data, &file_len))
         goto fail;
 
     ppm_p6_blob_t ppm_blob = {0};
@@ -227,11 +166,14 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char* path) {
 
     u32* x_map = malloc((size_t)fb_width * sizeof(u32));
     u32* y_map = malloc((size_t)fb_height * sizeof(u32));
+
     if (!x_map || !y_map) {
         if (x_map)
             free(x_map);
+
         if (y_map)
             free(y_map);
+
         goto fail;
     }
 

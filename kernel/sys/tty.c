@@ -17,7 +17,7 @@ static pid_t tty_pgrp[TTY_SCREEN_COUNT] = {0};
 static tty_handle_t tty_handles[TTY_COUNT];
 static tty_handle_t tty_current_handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
 static tty_handle_t tty_console_handle = {.kind = TTY_HANDLE_CONSOLE, .index = TTY_CONSOLE};
-static bool tty_register_devfs(vfs_node_t* dev_dir);
+
 
 static bool _is_controlling_screen(const sched_thread_t* thread, size_t screen) {
     if (!thread || !thread->user_thread)
@@ -120,22 +120,6 @@ static short _dev_tty_poll(vfs_node_t* node, short events, u32 flags) {
     return tty_poll_handle(node ? node->private : NULL, events, flags);
 }
 
-void tty_init(void) {
-    if (!devfs_register_device("tty", tty_register_devfs))
-        log_warn("tty: failed to register devfs init callback");
-
-    if (!TTY_SCREEN_COUNT)
-        return;
-
-    current_tty = TTY_CONSOLE;
-
-    tty_input_init();
-    tty_input_set_current((size_t)current_tty);
-
-    if (!console_set_active((size_t)current_tty))
-        log_warn("tty: failed to activate console screen %zu", (size_t)current_tty);
-}
-
 bool tty_set_current(size_t index) {
     if (index >= TTY_SCREEN_COUNT)
         return false;
@@ -168,7 +152,11 @@ static bool tty_register_devfs(vfs_node_t* dev_dir) {
     if (!dev_dir)
         return false;
 
-    tty_init();
+    if (TTY_SCREEN_COUNT && current_tty == TTY_NONE) {
+        log_warn("tty: state not initialized");
+        return false;
+    }
+
     _seed_handles();
 
     vfs_interface_t* tty_if = vfs_create_interface(_dev_tty_read, _dev_tty_write, NULL);
@@ -195,6 +183,7 @@ static bool tty_register_devfs(vfs_node_t* dev_dir) {
     char name[] = "tty0";
     for (size_t i = 0; i < TTY_COUNT; i++) {
         name[3] = (char)('0' + i);
+
         if (!devfs_register_node(dev_dir, name, VFS_CHARDEV, 0666, tty_if, &tty_handles[i])) {
             log_warn("tty: failed to create /dev/%s", name);
             ok = false;
@@ -202,6 +191,25 @@ static bool tty_register_devfs(vfs_node_t* dev_dir) {
     }
 
     return ok;
+}
+
+void tty_init(void) {
+    if (!devfs_register_device("tty", tty_register_devfs))
+        log_warn("tty: failed to register devfs init callback");
+
+    if (!TTY_SCREEN_COUNT)
+        return;
+
+    if (current_tty != TTY_NONE)
+        return;
+
+    current_tty = TTY_CONSOLE;
+
+    tty_input_init();
+    tty_input_set_current((size_t)current_tty);
+
+    if (!console_set_active((size_t)current_tty))
+        log_warn("tty: failed to activate console screen %zu", (size_t)current_tty);
 }
 
 static ssize_t _read_screen(size_t index, void* buf, size_t len) {
@@ -221,6 +229,7 @@ static ssize_t _write_screen(size_t index, const void* buf, size_t len) {
 static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len) {
     if (index >= TTY_SCREEN_COUNT || !buf)
         return -EINVAL;
+
     if (!len)
         return 0;
 
@@ -236,7 +245,6 @@ static ssize_t _write_screen_processed(size_t index, const void* buf, size_t len
     bool needs_ocrnl = (tos.c_oflag & OCRNL) && has_cr;
     bool needs_onlcr = (tos.c_oflag & ONLCR) && has_nl;
 
-    // Fast path: no output post-processing transforms are needed.
     if (!needs_ocrnl && !needs_onlcr)
         return _write_screen(index, buf, len);
 

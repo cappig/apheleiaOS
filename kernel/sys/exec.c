@@ -13,6 +13,7 @@
 #include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/lock.h>
 #include <sys/path.h>
 #include <sys/vfs.h>
 #include <unistd.h>
@@ -89,6 +90,7 @@ typedef struct PACKED {
     u32 flags;
     u32 align;
 } elf32_prog_header_t;
+
 
 static u64 _elf_flags_to_page_flags(u32 elf_flags) {
     u64 flags = PT_USER;
@@ -285,8 +287,10 @@ _load_user_segments(sched_thread_t* thread, const u8* image, size_t size, arch_w
 
         u64 entry = 0;
         bool ok = _load_segments_64(thread, image, size, &entry);
+
         if (ok && entry_out)
             *entry_out = (arch_word_t)entry;
+
         return ok;
     }
 
@@ -296,8 +300,10 @@ _load_user_segments(sched_thread_t* thread, const u8* image, size_t size, arch_w
 
         u32 entry = 0;
         bool ok = _load_segments_32(thread, image, size, &entry);
+
         if (ok && entry_out)
             *entry_out = (arch_word_t)entry;
+
         return ok;
     }
 
@@ -307,8 +313,7 @@ _load_user_segments(sched_thread_t* thread, const u8* image, size_t size, arch_w
 static uintptr_t _alloc_stack_base(size_t size) {
     size = ALIGN(size, PAGE_4KIB);
 
-    while (__sync_lock_test_and_set(&stack_lock, 1))
-        arch_cpu_wait();
+    lock(&stack_lock);
 
     if (!next_stack_top)
         next_stack_top = (uintptr_t)arch_user_stack_top();
@@ -320,7 +325,7 @@ static uintptr_t _alloc_stack_base(size_t size) {
         base = next_stack_top;
     }
 
-    __sync_lock_release(&stack_lock);
+    unlock(&stack_lock);
     return base;
 }
 
@@ -344,6 +349,7 @@ static bool _args_push(exec_args_t* args, const char* value) {
 
     args->argv[args->argc++] = copy;
     args->argv[args->argc] = NULL;
+
     return true;
 }
 
@@ -449,8 +455,10 @@ static bool _copy_env(char* const envp[], exec_env_t* out) {
 static uintptr_t
 _build_user_stack_args(uintptr_t stack_top, const exec_args_t* args, const exec_env_t* env) {
     uintptr_t sp = stack_top;
+
     size_t argc = args ? (size_t)args->argc : 0;
     size_t envc = env ? (size_t)env->envc : 0;
+
     uintptr_t arg_ptrs[EXEC_MAX_ARGS] = {0};
     uintptr_t env_ptrs[EXEC_MAX_ENV] = {0};
 
@@ -546,6 +554,7 @@ static bool _read_file(vfs_node_t* node, u8** buffer_out, size_t* size_out) {
 
     *buffer_out = buffer;
     *size_out = size;
+
     return true;
 }
 
@@ -614,8 +623,10 @@ static bool _parse_shebang(const u8* buffer, size_t size, exec_shebang_t* out) {
     size_t start = idx;
     while (idx < size) {
         u8 ch = buffer[idx];
+
         if (ch == '\n' || ch == '\r' || isspace((int)ch))
             break;
+
         idx++;
     }
 
@@ -624,8 +635,10 @@ static bool _parse_shebang(const u8* buffer, size_t size, exec_shebang_t* out) {
         return false;
 
     memset(out, 0, sizeof(*out));
+
     if (len >= sizeof(out->path))
         len = sizeof(out->path) - 1;
+
     memcpy(out->path, buffer + start, len);
     out->path[len] = '\0';
 
@@ -748,6 +761,7 @@ sched_thread_t* user_spawn(const char* path) {
     exec_shebang_t shebang = {0};
     exec_args_t args = {0};
     exec_env_t env = {0};
+
     bool is_script = _parse_shebang(file.buffer, file.size, &shebang);
 
     if (is_script) {
@@ -786,20 +800,26 @@ sched_thread_t* user_spawn(const char* path) {
 
     if (!ok) {
         log_warn("exec: '%s' is not a valid executable for this arch", file.resolved);
+
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
+
         sched_discard_thread(thread);
+
         return NULL;
     }
 
     uintptr_t stack_top = 0;
     if (!_map_user_stack(thread, &stack_top)) {
         log_warn("exec: failed to map user stack");
+
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
+
         sched_discard_thread(thread);
+
         return NULL;
     }
 
@@ -812,9 +832,11 @@ sched_thread_t* user_spawn(const char* path) {
     sched_set_thread_name(thread, _basename(exec_name_buf));
 
     thread->state = THREAD_READY;
+
     _free_args(&args);
     _free_env(&env);
     _close_file(&file);
+
     return thread;
 }
 
@@ -830,6 +852,7 @@ int user_exec(
 
     exec_args_t args = {0};
     exec_env_t env = {0};
+
     if (!_copy_args(argv, &args))
         return -ENOMEM;
 
@@ -852,6 +875,7 @@ int user_exec(
 
     exec_shebang_t shebang = {0};
     exec_args_t script_args = {0};
+
     bool is_script = _parse_shebang(file.buffer, file.size, &shebang);
 
     if (is_script) {
@@ -898,6 +922,7 @@ int user_exec(
 
     uintptr_t entry_point = 0;
     arch_word_t entry_raw = 0;
+
     bool ok = _load_user_segments(thread, file.buffer, file.size, &entry_raw);
     if (ok)
         entry_point = (uintptr_t)entry_raw;
@@ -905,24 +930,32 @@ int user_exec(
     if (!ok) {
         log_warn("exec: '%s' is not a valid executable for this arch", file.resolved);
         sched_clear_user_regions(thread);
+
         thread->regions = old_regions;
         thread->vm_space = old_vm;
+
         arch_vm_destroy(fresh);
+
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
+
         return -ENOEXEC;
     }
 
     uintptr_t stack_top = 0;
     if (!_map_user_stack(thread, &stack_top)) {
         _free_regions_list(thread->regions);
+
         thread->regions = old_regions;
         thread->vm_space = old_vm;
+
         arch_vm_destroy(fresh);
+
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
+
         return -ENOMEM;
     }
 
@@ -930,11 +963,11 @@ int user_exec(
     stack_top = _build_user_stack_args(stack_top, &args, &env);
     sched_signal_reset_thread(thread);
 
-    if (old_vm && old_vm != arch_vm_kernel())
-        arch_vm_destroy(old_vm);
-
     if (old_regions)
         _free_regions_list(old_regions);
+
+    if (old_vm && old_vm != arch_vm_kernel())
+        arch_vm_destroy(old_vm);
 
     if (state) {
         memset(state, 0, sizeof(*state));

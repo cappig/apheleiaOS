@@ -20,6 +20,7 @@
 #include <string.h>
 #include <sys/cpu.h>
 #include <sys/exec.h>
+#include <sys/lock.h>
 #include <sys/mman.h>
 #include <sys/path.h>
 #include <sys/proc.h>
@@ -154,21 +155,6 @@ static bool _fd_lookup(sched_thread_t* thread, int fd, sched_fd_t** entry_out) {
     return true;
 }
 
-static void _pipe_lock(sched_pipe_t* pipe) {
-    if (!pipe)
-        return;
-
-    while (__sync_lock_test_and_set(&pipe->lock, 1))
-        arch_cpu_wait();
-}
-
-static void _pipe_unlock(sched_pipe_t* pipe) {
-    if (!pipe)
-        return;
-
-    __sync_lock_release(&pipe->lock);
-}
-
 static ssize_t _pipe_read(sched_pipe_t* pipe, void* buf, size_t len, bool nonblock) {
     if (!pipe || !buf)
         return -EINVAL;
@@ -181,7 +167,7 @@ static ssize_t _pipe_read(sched_pipe_t* pipe, void* buf, size_t len, bool nonblo
     for (;;) {
         bool eof = false;
 
-        _pipe_lock(pipe);
+        lock(&pipe->lock);
         if (pipe->size > 0) {
             size_t chunk = len - total;
 
@@ -204,7 +190,7 @@ static ssize_t _pipe_read(sched_pipe_t* pipe, void* buf, size_t len, bool nonblo
         }
 
         eof = !pipe->writers;
-        _pipe_unlock(pipe);
+        unlock(&pipe->lock);
 
         if (total > 0) {
             if (pipe->write_wait_queue)
@@ -235,6 +221,7 @@ static ssize_t _pipe_read(sched_pipe_t* pipe, void* buf, size_t len, bool nonblo
 static ssize_t _pipe_write(sched_pipe_t* pipe, const void* buf, size_t len, bool nonblock) {
     if (!pipe || !buf)
         return -EINVAL;
+
     if (!len)
         return 0;
 
@@ -244,10 +231,10 @@ static ssize_t _pipe_write(sched_pipe_t* pipe, const void* buf, size_t len, bool
     for (;;) {
         bool no_readers = false;
 
-        _pipe_lock(pipe);
+        lock(&pipe->lock);
 
         if (!pipe->readers) {
-            _pipe_unlock(pipe);
+            unlock(&pipe->lock);
             return total > 0 ? (ssize_t)total : -EPIPE;
         }
 
@@ -273,7 +260,7 @@ static ssize_t _pipe_write(sched_pipe_t* pipe, const void* buf, size_t len, bool
         }
 
         no_readers = !pipe->readers;
-        _pipe_unlock(pipe);
+        unlock(&pipe->lock);
 
         if (total > 0) {
             if (pipe->read_wait_queue)
@@ -469,13 +456,14 @@ static ssize_t sys_read(int fd, void* buf, size_t len) {
         if (entry->flags & O_NONBLOCK)
             vfs_flags |= VFS_NONBLOCK;
 
-        ssize_t ret = vfs_read(entry->node, buf, entry->offset, len, vfs_flags);
+        size_t offset = entry->offset;
+        ssize_t ret = vfs_read(entry->node, buf, offset, len, vfs_flags);
 
         if (ret == VFS_EOF)
             return 0;
 
         if (ret > 0)
-            entry->offset += (size_t)ret;
+            entry->offset = offset + (size_t)ret;
 
         return ret;
     }
@@ -1032,10 +1020,10 @@ static uintptr_t sys_mmap(const mmap_args_t* args) {
     if (!thread || !thread->vm_space)
         return (uintptr_t)-EINVAL;
 
-    size_t size = args->len;
-    if (!size)
+    if (!args->len)
         return (uintptr_t)-EINVAL;
 
+    size_t size = args->len;
     size = ALIGN(size, PAGE_4KIB);
     size_t pages = size / PAGE_4KIB;
 
@@ -1093,6 +1081,7 @@ static uintptr_t sys_mmap(const mmap_args_t* args) {
         for (sched_user_region_t* region = thread->regions; region; region = region->next) {
             if (!_region_overlaps(region, addr, end))
                 continue;
+
             addr = _pick_mmap_base(thread, size);
             end = addr + size;
             break;
@@ -1131,17 +1120,16 @@ static uintptr_t sys_mmap(const mmap_args_t* args) {
             return (uintptr_t)-EACCES;
     }
 
+    void* root = arch_vm_root(thread->vm_space);
+    if (!root)
+        return (uintptr_t)-ENOMEM;
+
+    u64 page_flags = _mmap_prot_flags(prot);
+
     uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
     if (!paddr)
         return (uintptr_t)-ENOMEM;
 
-    void* root = arch_vm_root(thread->vm_space);
-    if (!root) {
-        arch_free_frames((void*)paddr, pages);
-        return (uintptr_t)-ENOMEM;
-    }
-
-    u64 page_flags = _mmap_prot_flags(prot);
     arch_map_region(root, pages, addr, paddr, page_flags);
 
     if (!sched_add_user_region(thread, addr, paddr, pages, page_flags)) {
@@ -1275,12 +1263,14 @@ static int sys_munmap(void* addr, size_t len) {
 
         for (size_t i = 0; i < overlap_pages; i++) {
             uintptr_t vaddr = overlap_start + i * PAGE_4KIB;
+
             unmap_page((page_t*)root, vaddr);
             arch_tlb_flush(vaddr);
         }
 
         uintptr_t overlap_paddr = region->paddr + overlap_page_index * (uintptr_t)PAGE_4KIB;
         arch_free_frames((void*)overlap_paddr, overlap_pages);
+
         unmapped = true;
 
         if (!before_pages && !after_pages) {
@@ -1868,12 +1858,12 @@ static short _pipe_poll(sched_pipe_t* pipe, bool read_end, short events) {
     size_t readers = 0;
     size_t writers = 0;
 
-    _pipe_lock(pipe);
+    lock(&pipe->lock);
     size = pipe->size;
     free_space = pipe->capacity - pipe->size;
     readers = pipe->readers;
     writers = pipe->writers;
-    _pipe_unlock(pipe);
+    unlock(&pipe->lock);
 
     short revents = 0;
 

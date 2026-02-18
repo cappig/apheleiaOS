@@ -16,7 +16,7 @@
 static vector_t* kbds = NULL;
 static ring_buffer_t* buffer = NULL;
 static sched_wait_queue_t kbd_wait = {0};
-static bool keyboard_register_devfs(vfs_node_t* dev_dir);
+
 
 static bool _vec_push_ptr(vector_t* vec, void* ptr) {
     return vec_push(vec, &ptr);
@@ -26,6 +26,7 @@ static keyboard_dev_t* _get(size_t index) {
     keyboard_dev_t** slot = vec_at(kbds, index);
     if (!slot)
         return NULL;
+
     return *slot;
 }
 
@@ -41,6 +42,7 @@ static char* _strdup(const char* src) {
 
     memcpy(out, src, len);
     out[len] = '\0';
+
     return out;
 }
 
@@ -156,8 +158,10 @@ void keyboard_handle_key(key_event event) {
 
         if (event.code >= KBD_F2 && event.code <= (KBD_F2 + TTY_COUNT - 1)) {
             size_t index = (size_t)(event.code - KBD_F2);
+
             if (index < TTY_COUNT)
                 tty_set_current(TTY_USER_TO_SCREEN(index));
+
             return;
         }
     }
@@ -210,6 +214,29 @@ u8 keyboard_register(const char* name, ascii_keymap* keymap) {
     return (u8)(kbds->size - 1);
 }
 
+static bool keyboard_register_devfs(vfs_node_t* dev_dir) {
+    if (!dev_dir)
+        return false;
+
+    if (!kbds || !buffer) {
+        log_warn("keyboard: state not initialized");
+        return false;
+    }
+
+    vfs_interface_t* kbd_if = vfs_create_interface(keyboard_read, NULL, NULL);
+    if (!kbd_if) {
+        log_warn("keyboard: failed to allocate /dev interface");
+        return false;
+    }
+
+    if (!devfs_register_node(dev_dir, "kbd", VFS_CHARDEV, 0666, kbd_if, NULL)) {
+        log_warn("keyboard: failed to create /dev/kbd");
+        return false;
+    }
+
+    return true;
+}
+
 bool keyboard_init(void) {
     if (!devfs_register_device("keyboard", keyboard_register_devfs))
         log_warn("keyboard: failed to register devfs init callback");
@@ -226,29 +253,8 @@ bool keyboard_init(void) {
     if (!buffer)
         return false;
 
-    sched_wait_queue_init(&kbd_wait);
-    return true;
-}
-
-static bool keyboard_register_devfs(vfs_node_t* dev_dir) {
-    if (!dev_dir)
-        return false;
-
-    if (!keyboard_init()) {
-        log_warn("keyboard: init failed");
-        return false;
-    }
-
-    vfs_interface_t* kbd_if = vfs_create_interface(keyboard_read, NULL, NULL);
-    if (!kbd_if) {
-        log_warn("keyboard: failed to allocate /dev interface");
-        return false;
-    }
-
-    if (!devfs_register_node(dev_dir, "kbd", VFS_CHARDEV, 0666, kbd_if, NULL)) {
-        log_warn("keyboard: failed to create /dev/kbd");
-        return false;
-    }
+    if (!kbd_wait.list)
+        sched_wait_queue_init(&kbd_wait);
 
     return true;
 }
