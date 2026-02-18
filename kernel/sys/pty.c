@@ -342,7 +342,7 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (PTY_COUNT && !ptys[0].master_rx.ready) {
-        log_warn("pty: state not initialized");
+        log_warn("PTY state not initialized");
         return false;
     }
 
@@ -350,7 +350,7 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
 
     vfs_interface_t *pty_if = vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
     if (!pty_if) {
-        log_warn("pty: failed to allocate /dev interface");
+        log_warn("PTY failed to allocate /dev interface");
         return false;
     }
 
@@ -360,7 +360,7 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
     bool ok = true;
 
     if (!devfs_register_node(dev_dir, "ptmx", VFS_CHARDEV, 0666, pty_if, &pty_master_default)) {
-        log_warn("pty: failed to create /dev/ptmx");
+        log_warn("failed to create /dev/ptmx");
         ok = false;
     }
 
@@ -370,18 +370,20 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
     for (size_t i = 0; i < PTY_COUNT; i++) {
         pty_name[3] = (char)('0' + i);
         pts_name[3] = (char)('0' + i);
+        pty_handle_t *master_handle = &pty_master_handles[i];
+        pty_handle_t *slave_handle = &pty_slave_handles[i];
 
-        if (!devfs_register_node(
-                dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, &pty_master_handles[i]
-            )) {
-            log_warn("pty: failed to create /dev/%s", pty_name);
+        bool master_registered =
+            devfs_register_node(dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, master_handle);
+        if (!master_registered) {
+            log_warn("failed to create /dev/%s", pty_name);
             ok = false;
         }
 
-        if (!devfs_register_node(
-                dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, &pty_slave_handles[i]
-            )) {
-            log_warn("pty: failed to create /dev/%s", pts_name);
+        bool slave_registered =
+            devfs_register_node(dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, slave_handle);
+        if (!slave_registered) {
+            log_warn("failed to create /dev/%s", pts_name);
             ok = false;
         }
     }
@@ -391,7 +393,7 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
 
 void pty_init(void) {
     if (!devfs_register_device("pty", pty_register_devfs)) {
-        log_warn("pty: failed to register devfs init callback");
+        log_warn("failed to register devfs init callback");
     }
 
     if (PTY_COUNT && ptys[0].master_rx.ready) {

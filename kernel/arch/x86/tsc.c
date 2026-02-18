@@ -75,7 +75,7 @@ static int _cmp_u64(const void *a, const void *b) {
 
 bool tsc_init(void) {
     if (!_has()) {
-        log_warn("tsc: CPU does not advertise TSC");
+        log_warn("CPU does not advertise TSC");
         return false;
     }
 
@@ -92,7 +92,7 @@ bool tsc_init(void) {
     }
 
     if (!good) {
-        log_warn("tsc: calibration failed (no valid samples)");
+        log_warn("calibration failed (no valid samples)");
         return false;
     }
 
@@ -102,7 +102,7 @@ bool tsc_init(void) {
     tsc_rate_khz = median / CAL_MILLIS;
 
     log_info(
-        "tsc: calibrated at %llu MHz (%zu/%d samples)",
+        "calibrated at %llu MHz (%zu/%d samples)",
         (unsigned long long)(tsc_rate_khz / 1000),
         good,
         CAL_SAMPLES

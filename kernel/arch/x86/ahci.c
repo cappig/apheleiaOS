@@ -437,7 +437,7 @@ ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, bool write, 
     const u32 port_mask = (1U << dev->port_index);
 
     if (port->ci & slot_mask) {
-        log_warn("ahci: slot %u still busy before issue (ci=%#x)", AHCI_CMD_SLOT, port->ci);
+        log_warn("AHCI slot %u still busy before issue (ci=%#x)", AHCI_CMD_SLOT, port->ci);
         arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
         return false;
     }
@@ -470,9 +470,7 @@ ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, bool write, 
 
     if (need_poll_fallback) {
         if (!ahci_warned_irq_fallback) {
-            log_warn(
-                "ahci: IRQ timeout on port %u, falling back to completion polling", dev->port_index
-            );
+            log_warn("IRQ timeout on port %u, falling back to completion polling", dev->port_index);
             ahci_warned_irq_fallback = true;
         }
 
@@ -489,7 +487,7 @@ ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, bool write, 
 
     if (!ok) {
         log_debug(
-            "ahci: cmd=%#x port=%u tfd=%#x is=%#x ci=%#x sact=%#x serr=%#x cmdreg=%#x ssts=%#x",
+            "cmd=%#x port=%u tfd=%#x is=%#x ci=%#x sact=%#x serr=%#x cmdreg=%#x ssts=%#x",
             command,
             dev->port_index,
             port->tfd,
@@ -810,7 +808,7 @@ static bool ahci_find_controller(ahci_device_t *dev) {
         u8 int_line = (u8)pci_read_config(node->bus, node->slot, node->func, PCI_CFG_INT_LINE, 1);
 
         log_debug(
-            "ahci: pci command=%#x status=%#x int_line=%u",
+            "PCI command=%#x status=%#x int_line=%u",
             node->header.command,
             node->header.status,
             int_line
@@ -873,15 +871,16 @@ bool ahci_disk_init(void) {
 
     pci_enable_bus_mastering(dev->bus, dev->slot, dev->func);
 
-    /* Try MSI first, fall back to legacy INTx */
+    // Try MSI first, fall back to legacy INTx
     if (pci_enable_msi(dev->bus, dev->slot, dev->func, AHCI_MSI_VECTOR, lapic_id())) {
         ahci_primary = dev;
         dev->irq_enabled = true;
         dev->msi_enabled = true;
+
         set_int_handler(AHCI_MSI_VECTOR, ahci_primary_irq);
-        log_info("ahci: using MSI vector %#x", AHCI_MSI_VECTOR);
+        log_debug("AHCI using MSI vector %#x", AHCI_MSI_VECTOR);
     } else if (!ahci_irq_line_supported(dev->irq_line)) {
-        log_warn("ahci: IRQ line %u out of range, falling back to polling", dev->irq_line);
+        log_warn("IRQ line %u out of range, falling back to polling", dev->irq_line);
         dev->irq_enabled = false;
     } else {
         ahci_primary = dev;
@@ -891,7 +890,7 @@ bool ahci_disk_init(void) {
     }
 
     if (!ahci_setup_port(dev)) {
-        log_error("ahci: failed to setup port %u", dev->port_index);
+        log_error("AHCI failed to setup port %u", dev->port_index);
         ahci_destroy_device(dev);
         return false;
     }
@@ -899,7 +898,7 @@ bool ahci_disk_init(void) {
     u16 identify[256] = {0};
 
     if (!ahci_identify(dev, identify)) {
-        log_error("ahci: identify failed on port %u", dev->port_index);
+        log_error("AHCI identify failed on port %u", dev->port_index);
         ahci_destroy_device(dev);
         return false;
     }
@@ -915,7 +914,7 @@ bool ahci_disk_init(void) {
     }
 
     if (!sector_count) {
-        log_error("ahci: identify reported zero sectors");
+        log_error("AHCI identify reported zero sectors");
         ahci_destroy_device(dev);
         return false;
     }
@@ -948,7 +947,7 @@ bool ahci_disk_init(void) {
     }
 
     log_info(
-        "ahci: initialized port %u irq=%u (%zu sectors, %zu MiB)",
+        "AHCI initialized port %u irq=%u (%zu sectors, %zu MiB)",
         dev->port_index,
         dev->irq_line,
         dev->sector_count,

@@ -239,19 +239,19 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
     _back_buf_size = (size_t)fb->height * (size_t)fb->width * (fb->bpp / 8);
     _back_buf = malloc(_back_buf_size);
     if (!_back_buf) {
-        log_warn("framebuffer: failed to allocate back buffer (%zu bytes)", _back_buf_size);
+        log_warn("failed to allocate back buffer (%zu bytes)", _back_buf_size);
     }
 
     vfs_interface_t *fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);
     if (!fb_if) {
-        log_warn("framebuffer: failed to allocate /dev interface");
+        log_warn("failed to allocate /dev interface");
         return false;
     }
 
     fb_if->ioctl = _dev_fb_ioctl;
 
     if (!devfs_register_node(dev_dir, "fb", VFS_CHARDEV, 0666, fb_if, NULL)) {
-        log_warn("framebuffer: failed to create /dev/fb");
+        log_warn("failed to create /dev/fb");
         return false;
     }
 
@@ -260,6 +260,6 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
 
 void framebuffer_devfs_init(void) {
     if (!devfs_register_device("framebuffer", framebuffer_register_devfs)) {
-        log_warn("framebuffer: failed to register devfs init callback");
+        log_warn("failed to register devfs init callback");
     }
 }

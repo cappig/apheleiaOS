@@ -22,7 +22,7 @@
 #include <sys/wait.h>
 
 #define SCHED_STACK_SIZE (16 * KIB)
-#define SCHED_SLICE      5
+#define SCHED_SLICE      2
 
 static linked_list_t *run_queue = NULL;
 static linked_list_t *zombie_list = NULL;
@@ -902,6 +902,7 @@ bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write) 
     u64 old_paddr = arch_page_get_paddr(entry);
     u16 refs = pmm_refcount((void *)(uintptr_t)old_paddr);
     u64 new_flags = (region->flags & ~SCHED_REGION_COW) | PT_WRITE;
+    size_t page_index = (page_addr - region->vaddr) / PAGE_4KIB;
 
     if (!pmm_ref_ready()) {
         refs = 2;
@@ -915,9 +916,8 @@ bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write) 
             return false;
         }
 
-        if (!split_region_for_page(
-                region, (page_addr - region->vaddr) / PAGE_4KIB, new_paddr, new_flags
-            )) {
+        bool split_ok = split_region_for_page(region, page_index, new_paddr, new_flags);
+        if (!split_ok) {
             arch_free_frames((void *)new_paddr, 1);
             return false;
         }
@@ -927,9 +927,8 @@ bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write) 
         *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
         arch_free_frames((void *)(uintptr_t)old_paddr, 1);
     } else {
-        if (!split_region_for_page(
-                region, (page_addr - region->vaddr) / PAGE_4KIB, (uintptr_t)old_paddr, new_flags
-            )) {
+        bool split_ok = split_region_for_page(region, page_index, (uintptr_t)old_paddr, new_flags);
+        if (!split_ok) {
             return false;
         }
 
@@ -1526,7 +1525,7 @@ void scheduler_init(void) {
 }
 
 void scheduler_start(void) {
-    log_info("scheduler: starting");
+    log_info("scheduler starting");
     sched_running = true;
 }
 
@@ -1874,7 +1873,6 @@ void sched_wake_all(sched_wait_queue_t *queue) {
 }
 
 void sched_tick(arch_int_state_t *state) {
-    static bool logged_first_switch = false;
     sched_thread_t *thread = sched_local_current();
 
     if (!sched_running || !state || !thread) {
@@ -1909,16 +1907,6 @@ void sched_tick(arch_int_state_t *state) {
         thread->state = THREAD_RUNNING;
         return;
     }
-
-    if (!logged_first_switch) {
-        log_info(
-            "scheduler: switching to %s (pid=%ld)",
-            next->name[0] ? next->name : "thread",
-            (long)next->pid
-        );
-        logged_first_switch = true;
-    }
-
 
     next->state = THREAD_RUNNING;
     sched_local_set_current(next);

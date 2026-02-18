@@ -42,7 +42,7 @@ NORETURN void kernel_main(void *boot_info) {
     }
 
     if (!mounted) {
-        log_warn("kernel: failed to mount rootfs");
+        log_warn("failed to mount rootfs");
     } else {
         load_symbols();
     }
@@ -51,7 +51,7 @@ NORETURN void kernel_main(void *boot_info) {
 
     if (font_path && font_path[0]) {
         if (!psf_load(font_path)) {
-            log_warn("kernel: failed to load console font '%s'", font_path);
+            log_warn("failed to load console font '%s'", font_path);
         }
     }
 
@@ -59,19 +59,19 @@ NORETURN void kernel_main(void *boot_info) {
     pty_init();
 
     if (!input_init()) {
-        log_warn("kernel: input init failed");
+        log_warn("input init failed");
     }
 
     if (!keyboard_init()) {
-        log_warn("kernel: keyboard init failed");
+        log_warn("keyboard init failed");
     }
 
     if (!mouse_init()) {
-        log_warn("kernel: mouse init failed");
+        log_warn("mouse init failed");
     }
 
     if (!ws_init()) {
-        log_warn("kernel: ws init failed");
+        log_warn("ws init failed");
     }
 
     framebuffer_devfs_init();

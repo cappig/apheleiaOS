@@ -166,12 +166,12 @@ bool psf_load(const char *path) {
 
     vfs_node_t *node = vfs_lookup(path);
     if (!node) {
-        log_warn("console: font '%s' not found", path);
+        log_warn("font '%s' not found", path);
         return false;
     }
 
     if (!node->size) {
-        log_warn("console: font '%s' is empty", path);
+        log_warn("font '%s' is empty", path);
         return false;
     }
 
@@ -195,7 +195,7 @@ bool psf_load(const char *path) {
 
     if (!psf_parse_blob(blob, (size_t)node->size, &blob_info)) {
         free(blob);
-        log_warn("console: failed to parse font '%s'", path);
+        log_warn("failed to parse font '%s'", path);
         return false;
     }
 
@@ -237,8 +237,8 @@ bool psf_load(const char *path) {
 
     console_set_font(&loaded_font);
 
-    log_info(
-        "console: loaded font '%s' (%ux%u, %u glyphs)",
+    log_debug(
+        "loaded font '%s' (%ux%u, %u glyphs)",
         path,
         loaded_font.glyph_width,
         loaded_font.glyph_height,

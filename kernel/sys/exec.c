@@ -647,7 +647,7 @@ _open_file(sched_thread_t *thread, const char *path, exec_file_t *out, bool requ
     memset(out, 0, sizeof(*out));
 
     if (strlen(path) >= PATH_MAX) {
-        log_warn("exec: path too long");
+        // log_warn("path too long");
         return -ENAMETOOLONG;
     }
 
@@ -657,22 +657,22 @@ _open_file(sched_thread_t *thread, const char *path, exec_file_t *out, bool requ
 
     out->node = vfs_lookup(out->resolved);
     if (!out->node) {
-        log_warn("exec: '%s' not found", out->resolved);
+        // log_warn("'%s' not found", out->resolved);
         return -ENOENT;
     }
 
     if (out->node->type != VFS_FILE) {
-        log_warn("exec: '%s' is not a file (type=%u)", out->resolved, out->node->type);
+        // log_warn("'%s' is not a file (type=%u)", out->resolved, out->node->type);
         return -EISDIR;
     }
 
     if (require_exec && !vfs_access(out->node, thread->uid, thread->gid, X_OK)) {
-        log_warn("exec: '%s' is not executable", out->resolved);
+        // log_warn("'%s' is not executable", out->resolved);
         return -EACCES;
     }
 
     if (!_read_file(out->node, &out->buffer, &out->size)) {
-        log_warn("exec: failed to read '%s'", out->resolved);
+        // log_warn("failed to read '%s'", out->resolved);
         _close_file(out);
         return -EIO;
     }
@@ -817,13 +817,13 @@ sched_thread_t *user_spawn(const char *path) {
 
     sched_thread_t *thread = sched_create_user_thread("init");
     if (!thread) {
-        log_warn("exec: failed to allocate user thread");
+        log_warn("failed to allocate user thread");
         return NULL;
     }
 
     arch_vm_space_t *fresh = arch_vm_create_user();
     if (!fresh) {
-        log_warn("exec: failed to allocate user address space");
+        log_warn("failed to allocate user address space");
         sched_discard_thread(thread);
         return NULL;
     }
@@ -884,7 +884,7 @@ sched_thread_t *user_spawn(const char *path) {
     }
 
     if (!ok) {
-        log_warn("exec: '%s' is not a valid executable for this arch", file.resolved);
+        log_warn("'%s' is not a valid executable for this arch", file.resolved);
 
         _free_args(&args);
         _free_env(&env);
@@ -897,7 +897,7 @@ sched_thread_t *user_spawn(const char *path) {
 
     uintptr_t stack_top = 0;
     if (!_map_user_stack(thread, &stack_top)) {
-        log_warn("exec: failed to map user stack");
+        log_warn("failed to map user stack");
 
         _free_args(&args);
         _free_env(&env);
@@ -1016,7 +1016,7 @@ int user_exec(
     }
 
     if (!ok) {
-        log_warn("exec: '%s' is not a valid executable for this arch", file.resolved);
+        log_warn("'%s' is not a valid executable for this arch", file.resolved);
         sched_clear_user_regions(thread);
 
         thread->regions = old_regions;

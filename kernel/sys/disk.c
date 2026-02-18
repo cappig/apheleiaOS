@@ -89,13 +89,13 @@ static bool _parse_mbr(disk_dev_t *dev) {
     ssize_t read = dev->interface->read(dev, mbr, 0, sizeof(mbr));
 
     if (read < (ssize_t)sizeof(mbr)) {
-        log_warn("disk: failed to read MBR");
+        log_warn("failed to read MBR");
         return false;
     }
 
     u16 signature = (u16)mbr[510] | ((u16)mbr[511] << 8);
     if (signature != MBR_SIGNATURE) {
-        log_warn("disk: invalid MBR signature");
+        log_warn("invalid MBR signature");
         return false;
     }
 
@@ -119,7 +119,8 @@ static bool _parse_mbr(disk_dev_t *dev) {
     return true;
 }
 
-#define GPT_SIGNATURE 0x5452415020494645ULL /* "EFI PART" */
+// "EFI PART"
+#define GPT_SIGNATURE 0x5452415020494645ULL
 
 typedef struct PACKED {
     u64 signature;
@@ -147,7 +148,7 @@ typedef struct PACKED {
     u16 name[36];
 } gpt_entry_t;
 
-/* 0FC63DAF-8483-4772-8E79-3D69D8477DE4 (mixed-endian) */
+// 0FC63DAF-8483-4772-8E79-3D69D8477DE4 (mixed-endian)
 static const u8 _gpt_linux_fs_guid[16] = {
     0xAF,
     0x3D,
@@ -167,7 +168,7 @@ static const u8 _gpt_linux_fs_guid[16] = {
     0xE4,
 };
 
-/* C12A7328-F81F-11D2-BA4B-00A0C93EC93B */
+// C12A7328-F81F-11D2-BA4B-00A0C93EC93B
 static const u8 _gpt_efi_system_guid[16] = {
     0x28,
     0x73,
@@ -187,7 +188,7 @@ static const u8 _gpt_efi_system_guid[16] = {
     0x3B,
 };
 
-/* 21686148-6449-6E6F-744E-656564454649 */
+// 21686148-6449-6E6F-744E-656564454649
 static const u8 _gpt_bios_boot_guid[16] = {
     0x48,
     0x61,
@@ -300,7 +301,7 @@ static bool _parse_gpt(disk_dev_t *dev) {
         return false;
     }
 
-    log_info("disk: parsed GPT with %zd partition(s)", part_num);
+    log_debug("parsed GPT with %zd partition(s)", part_num);
     return true;
 }
 
@@ -375,7 +376,7 @@ static bool _probe_disk(disk_dev_t *dev) {
     }
 
     if (!_parse_partitions(dev)) {
-        log_warn("disk: no partitions found on %s", dev->name ? dev->name : "disk");
+        log_warn("no partitions found on %s", dev->name ? dev->name : "disk");
     }
 
     vec_insert(disks, dev->id - 1, &dev);
@@ -442,7 +443,7 @@ static void _publish_partition_nodes(disk_dev_t *dev) {
     vfs_node_t *dev_dir = vfs_open("/dev", VFS_DIR, true, KDIR_MODE);
 
     if (!dev_dir) {
-        log_warn("disk: failed to create /dev directory");
+        log_warn("failed to create /dev directory");
         return;
     }
 
@@ -463,7 +464,7 @@ static void _publish_partition_nodes(disk_dev_t *dev) {
         vfs_node_t *node = vfs_create(dev_dir, part->name, VFS_BLOCKDEV, KFILE_MODE);
 
         if (!node) {
-            log_warn("disk: failed to create /dev/%s", part->name);
+            log_warn("failed to create /dev/%s", part->name);
             continue;
         }
 
@@ -537,7 +538,7 @@ bool disk_register(disk_dev_t *dev) {
         return false;
     }
 
-    log_debug("disk: registered %s (%zu)", dev->name ? dev->name : "disk", dev->id);
+    log_debug("registered %s (%zu)", dev->name ? dev->name : "disk", dev->id);
     dump_partitions(dev);
     return true;
 }
@@ -566,7 +567,7 @@ bool file_system_register(fs_t *fs) {
     fs->id = next_fs_id++;
 
     vec_push(file_systems, &fs);
-    log_debug("disk: registered file system %s (%zu)", fs->name ? fs->name : "fs", fs->id);
+    log_debug("registered file system %s (%zu)", fs->name ? fs->name : "fs", fs->id);
     return true;
 }
 
@@ -598,26 +599,26 @@ bool mount_rootfs(disk_dev_t *dev) {
     disk_partition_t *preferred = _pick_rootfs_partition(dev);
 
     if (!preferred) {
-        log_warn("disk: no rootfs partition found");
+        log_warn("no rootfs partition found");
         return false;
     }
 
     vfs_node_t *root = vfs_lookup("/");
 
     if (!root) {
-        log_warn("disk: missing vfs root");
+        log_warn("missing vfs root");
         return false;
     }
 
     fs_instance_t *instance = _probe_partition(preferred);
 
     if (instance && vfs_mount(instance, root)) {
-        log_info("disk: mounted %s at /", preferred->name ? preferred->name : "rootfs");
+        log_info("mounted %s at /", preferred->name ? preferred->name : "rootfs");
         return true;
     }
 
     if (!instance) {
-        log_warn("disk: no filesystem for %s", preferred->name ? preferred->name : "partition");
+        log_warn("no filesystem for %s", preferred->name ? preferred->name : "partition");
     }
 
     for (size_t i = 0; i < dev->partitions->size; i++) {
@@ -636,11 +637,11 @@ bool mount_rootfs(disk_dev_t *dev) {
             continue;
         }
 
-        log_info("disk: mounted %s at /", part->name ? part->name : "rootfs");
+        log_info("mounted %s at /", part->name ? part->name : "rootfs");
         return true;
     }
 
-    log_warn("disk: failed to mount rootfs");
+    log_warn("failed to mount rootfs");
     return false;
 }
 
@@ -662,7 +663,7 @@ void dump_partitions(disk_dev_t *dev) {
         return;
     }
 
-    log_debug("disk: partitions on /dev/%s", dev->name ? dev->name : "disk");
+    log_debug("partitions on /dev/%s", dev->name ? dev->name : "disk");
 
     if (!dev->partitions->size) {
         log_debug("[ empty table ]");

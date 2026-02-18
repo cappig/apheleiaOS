@@ -875,9 +875,9 @@ static bool ata_probe_device(ata_channel_t *ch, bool is_master, size_t dev_index
     }
 
     if (found_atapi) {
-        log_info("ata: %s: ATAPI CD-ROM", ata_pos_names[dev_index]);
+        log_info("%s: ATAPI CD-ROM", ata_pos_names[dev_index]);
     } else {
-        log_info("ata: %s ready (%zu sectors)", ata_pos_names[dev_index], disk->sector_count);
+        log_info("%s ready (%zu sectors)", ata_pos_names[dev_index], disk->sector_count);
     }
 
     return true;
@@ -934,7 +934,7 @@ bool ata_disk_init(void) {
     }
 
     if (!found) {
-        log_warn("ata: no devices found");
+        log_warn("no ata devices found");
         return false;
     }
 

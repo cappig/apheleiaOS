@@ -64,7 +64,7 @@ void pmm_ref_init(void) {
 
     frame_refs = calloc(frame_alloc.block_count, sizeof(*frame_refs));
     if (!frame_refs) {
-        log_warn("PMM: failed to allocate refcount table");
+        log_warn("failed to allocate refcount table");
         return;
     }
 
@@ -77,7 +77,7 @@ void pmm_ref_init(void) {
     }
 
     frame_refs_ready = true;
-    log_debug("PMM: refcount table ready");
+    log_debug("refcount table ready");
 }
 
 bool pmm_ref_ready(void) {

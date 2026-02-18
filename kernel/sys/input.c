@@ -83,20 +83,20 @@ static bool input_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (!input_state.ready) {
-        log_warn("input: state not initialized");
+        log_warn("input state not initialized");
         return false;
     }
 
     vfs_interface_t *input_if = vfs_create_interface(input_read, NULL, NULL);
     if (!input_if) {
-        log_warn("input: failed to allocate /dev interface");
+        log_warn("failed to allocate /dev interface");
         return false;
     }
 
     input_if->poll = input_poll;
 
     if (!devfs_register_node(dev_dir, "input", VFS_CHARDEV, 0666, input_if, NULL)) {
-        log_warn("input: failed to create /dev/input");
+        log_warn("failed to create /dev/input");
         return false;
     }
 
@@ -105,7 +105,7 @@ static bool input_register_devfs(vfs_node_t *dev_dir) {
 
 bool input_init(void) {
     if (!devfs_register_device("input", input_register_devfs)) {
-        log_warn("input: failed to register devfs init callback");
+        log_warn("failed to register devfs init callback");
     }
 
     if (input_state.ready) {

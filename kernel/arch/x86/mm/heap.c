@@ -148,7 +148,7 @@ static bool _grow(size_t min_blocks) {
         return false;
     }
 
-    // log_info("heap: added arena %zu (%zu pages)", heap_arena_count - 1, grow_pages);
+    // log_info("added arena %zu (%zu pages)", heap_arena_count - 1, grow_pages);
     return true;
 }
 

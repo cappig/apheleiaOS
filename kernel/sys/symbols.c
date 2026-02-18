@@ -13,12 +13,12 @@ void load_symbols(void) {
     vfs_node_t *file = vfs_lookup("/boot/sym.map");
 
     if (!file) {
-        log_warn("symbols: /boot/sym.map not found");
+        log_warn("/boot/sym.map not found");
         return;
     }
 
     if (!file->size) {
-        log_warn("symbols: /boot/sym.map is empty");
+        log_warn("/boot/sym.map is empty");
         return;
     }
 
@@ -35,13 +35,13 @@ void load_symbols(void) {
 
     char *buffer = malloc(file->size + 1);
     if (!buffer) {
-        log_warn("symbols: failed to allocate buffer");
+        log_warn("failed to allocate buffer");
         return;
     }
 
     ssize_t read = vfs_read(file, buffer, 0, file->size, 0);
     if (read <= 0) {
-        log_warn("symbols: failed to read /boot/sym.map");
+        log_warn("failed to read /boot/sym.map");
         free(buffer);
         return;
     }
@@ -51,7 +51,7 @@ void load_symbols(void) {
 
     size_t lines = sym_count(buffer, (size_t)read);
     if (!lines) {
-        log_warn("symbols: /boot/sym.map has no entries");
+        log_warn("/boot/sym.map has no entries");
         free(sym_blob);
         sym_blob = NULL;
         return;
@@ -59,7 +59,7 @@ void load_symbols(void) {
 
     sym_table.map = malloc(lines * sizeof(symbol_entry_t));
     if (!sym_table.map) {
-        log_warn("symbols: failed to allocate symbol table");
+        log_warn("failed to allocate symbol table");
         free(buffer);
         return;
     }
@@ -67,7 +67,7 @@ void load_symbols(void) {
     sym_table.len = lines;
 
     if (!sym_parse(sym_blob, &sym_table)) {
-        log_warn("symbols: failed to parse /boot/sym.map");
+        log_warn("failed to parse /boot/sym.map");
         free(sym_table.map);
         sym_table.map = NULL;
         sym_table.len = 0;
@@ -75,7 +75,7 @@ void load_symbols(void) {
         sym_blob = NULL;
     }
 
-    log_debug("symbols: loaded %zu entries", sym_table.len);
+    log_debug("loaded %zu entries", sym_table.len);
 }
 
 static bool _symbol_is_text(const symbol_entry_t *sym) {

@@ -83,7 +83,7 @@ u8 mouse_register(const char *name) {
         return 0;
     }
 
-    log_info("mouse: registered %s", mse->name ? mse->name : "device");
+    log_debug("registered %s", mse->name ? mse->name : "device");
     return (u8)(mice->size - 1);
 }
 
@@ -93,18 +93,18 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (!mice || !buffer) {
-        log_warn("mouse: state not initialized");
+        log_warn("mouse state not initialized");
         return false;
     }
 
     vfs_interface_t *mouse_if = vfs_create_interface(mouse_read, NULL, NULL);
     if (!mouse_if) {
-        log_warn("mouse: failed to allocate /dev interface");
+        log_warn("failed to allocate /dev interface");
         return false;
     }
 
     if (!devfs_register_node(dev_dir, "mouse", VFS_CHARDEV, 0666, mouse_if, NULL)) {
-        log_warn("mouse: failed to create /dev/mouse");
+        log_warn("failed to create /dev/mouse");
         return false;
     }
 
@@ -113,7 +113,7 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
 
 bool mouse_init(void) {
     if (!devfs_register_device("mouse", mouse_register_devfs)) {
-        log_warn("mouse: failed to register devfs init callback");
+        log_warn("failed to register devfs init callback");
     }
 
     bool first_init = (mice == NULL || buffer == NULL);

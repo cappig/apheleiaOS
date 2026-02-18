@@ -173,7 +173,7 @@ static void *_map_mmio(u64 paddr) {
     apic_mmio_next_vaddr += APIC_MMIO_STRIDE_32;
 
     if (apic_mmio_next_vaddr >= PHYS_WINDOW_BASE_32) {
-        log_warn("apic: MMIO mapping space exhausted");
+        log_warn("apic MMIO mapping space exhausted");
         return NULL;
     }
 
@@ -459,7 +459,7 @@ bool apic_init(void) {
     bool has_msr = (regs.edx & CPUID_FEAT_EDX_MSR) != 0;
 
     if (!has_apic || !has_msr) {
-        log_warn("apic: not supported (apic=%u msr=%u)", (u32)has_apic, (u32)has_msr);
+        log_warn("apic not supported, falling back to legacy pic");
         return false;
     }
 
@@ -483,7 +483,7 @@ bool apic_init(void) {
     lapic_mmio = _map_mmio(lapic_paddr);
 
     if (!lapic_mmio) {
-        log_warn("apic: failed to map LAPIC");
+        log_warn("failed to map LAPIC");
         return false;
     }
 
@@ -499,7 +499,7 @@ bool apic_init(void) {
     }
 
     apic_enabled = true;
-    log_info("apic: local APIC enabled (id=%u)", id);
+    log_info("local APIC enabled (id=%u)", id);
 
     return true;
 }

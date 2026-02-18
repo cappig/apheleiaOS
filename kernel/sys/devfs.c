@@ -273,7 +273,7 @@ bool devfs_register_device(const char *name, devfs_device_init_fn init_fn) {
     }
 
     if (devfs_device_count >= DEVFS_MAX_DEVICES) {
-        log_warn("devfs: device registry full");
+        log_warn("device registry full");
         return false;
     }
 
@@ -289,7 +289,7 @@ static void _init_registered_devices(vfs_node_t *dev_dir) {
         devfs_device_init_fn init_fn = devfs_devices[i].init_fn;
 
         if (!init_fn || !init_fn(dev_dir)) {
-            log_warn("devfs: %s registration failed", name);
+            log_warn("%s registration failed", name);
         }
     }
 }
@@ -297,7 +297,7 @@ static void _init_registered_devices(vfs_node_t *dev_dir) {
 static vfs_node_t *_ensure_dev_dir(void) {
     vfs_node_t *root = vfs_lookup("/");
     if (!root) {
-        log_warn("devfs: missing root");
+        log_warn("missing root");
         return NULL;
     }
 
@@ -307,7 +307,7 @@ static vfs_node_t *_ensure_dev_dir(void) {
     }
 
     if (!dev_dir) {
-        log_warn("devfs: failed to create /dev");
+        log_warn("failed to create /dev");
         return NULL;
     }
 
@@ -327,37 +327,37 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
 
     vfs_interface_t *null_if = vfs_create_interface(_dev_null_read, _dev_null_write, NULL);
     if (!null_if || !devfs_register_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {
-        log_warn("devfs: failed to create /dev/null");
+        log_warn("failed to create /dev/null");
         ok = false;
     }
 
     vfs_interface_t *zero_if = vfs_create_interface(_dev_zero_read, _dev_zero_write, NULL);
     if (!zero_if || !devfs_register_node(dev_dir, "zero", VFS_CHARDEV, 0666, zero_if, NULL)) {
-        log_warn("devfs: failed to create /dev/zero");
+        log_warn("failed to create /dev/zero");
         ok = false;
     }
 
     vfs_interface_t *os_if = vfs_create_interface(_dev_os_read, NULL, NULL);
     if (!os_if || !devfs_register_node(dev_dir, "os", VFS_CHARDEV, 0444, os_if, NULL)) {
-        log_warn("devfs: failed to create /dev/os");
+        log_warn("failed to create /dev/os");
         ok = false;
     }
 
     vfs_interface_t *clock_if = vfs_create_interface(_dev_clock_read, NULL, NULL);
     if (!clock_if || !devfs_register_node(dev_dir, "clock", VFS_CHARDEV, 0444, clock_if, NULL)) {
-        log_warn("devfs: failed to create /dev/clock");
+        log_warn("failed to create /dev/clock");
         ok = false;
     }
 
     vfs_interface_t *swap_if = vfs_create_interface(_dev_swap_read, NULL, NULL);
     if (!swap_if || !devfs_register_node(dev_dir, "swap", VFS_CHARDEV, 0444, swap_if, NULL)) {
-        log_warn("devfs: failed to create /dev/swap");
+        log_warn("failed to create /dev/swap");
         ok = false;
     }
 
     vfs_interface_t *cpu_if = vfs_create_interface(_dev_cpu_read, NULL, NULL);
     if (!cpu_if || !devfs_register_node(dev_dir, "cpu", VFS_CHARDEV, 0444, cpu_if, NULL)) {
-        log_warn("devfs: failed to create /dev/cpu");
+        log_warn("failed to create /dev/cpu");
         ok = false;
     }
 
@@ -376,5 +376,5 @@ void devfs_init(void) {
 
     _register_builtin_nodes(dev_dir);
 
-    log_info("devfs: devices ready");
+    log_debug("devfs devices ready");
 }

@@ -325,7 +325,7 @@ static bool _controller_init(void) {
         u8 resp = 0;
 
         if (!_read_data(&resp) || resp != PS2_SELFTEST_OK) {
-            log_warn("ps2: controller self-test failed");
+            log_warn("controller self-test failed");
         }
     }
 
@@ -481,12 +481,12 @@ done:
 
 void ps2_init(void) {
     if (!_controller_init()) {
-        log_warn("ps2: controller init failed");
+        log_warn("controller init failed");
         return;
     }
 
     if (!has_port1 && !has_port2) {
-        log_info("ps2: no devices detected");
+        log_debug("no devices detected");
         return;
     }
 
@@ -509,5 +509,5 @@ void ps2_init(void) {
         mouse_index = mouse_register("PS/2 mouse");
     }
 
-    log_info("ps2: controller ready");
+    log_debug("controller ready");
 }

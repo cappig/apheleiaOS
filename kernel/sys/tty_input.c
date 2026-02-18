@@ -84,7 +84,7 @@ static ring_buffer_t *_input_buffer(size_t screen) {
     }
 
     if (!tty_state[screen].buffer) {
-        log_warn("tty: failed to allocate input buffer for screen %zu", screen);
+        log_warn("failed to allocate input buffer for screen %zu", screen);
         return NULL;
     }
 

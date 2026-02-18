@@ -124,7 +124,7 @@ void keyboard_handle_key(key_event event) {
     keyboard_dev_t *kbd = _get(event.source);
 
     if (!kbd) {
-        log_warn("keyboard: input from unknown source");
+        log_warn("keyboard input from unknown source");
         return;
     }
 
@@ -207,7 +207,7 @@ u8 keyboard_register(const char *name, ascii_keymap *keymap) {
         return 0;
     }
 
-    log_info("keyboard: registered %s", kbd->name ? kbd->name : "device");
+    log_debug("registered %s", kbd->name ? kbd->name : "device");
     return (u8)(kbds->size - 1);
 }
 
@@ -217,18 +217,18 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (!kbds || !buffer) {
-        log_warn("keyboard: state not initialized");
+        log_warn("keyboard state not initialized");
         return false;
     }
 
     vfs_interface_t *kbd_if = vfs_create_interface(keyboard_read, NULL, NULL);
     if (!kbd_if) {
-        log_warn("keyboard: failed to allocate /dev interface");
+        log_warn("failed to allocate /dev interface");
         return false;
     }
 
     if (!devfs_register_node(dev_dir, "kbd", VFS_CHARDEV, 0666, kbd_if, NULL)) {
-        log_warn("keyboard: failed to create /dev/kbd");
+        log_warn("failed to create /dev/kbd");
         return false;
     }
 
@@ -237,7 +237,7 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
 
 bool keyboard_init(void) {
     if (!devfs_register_device("keyboard", keyboard_register_devfs)) {
-        log_warn("keyboard: failed to register devfs init callback");
+        log_warn("failed to register devfs init callback");
     }
 
     if (!kbds) {

@@ -534,7 +534,7 @@ static void _publish_framebuffer(const boot_info_t *info) {
     fb.available = fb.size != 0;
 
     log_info(
-        "framebuffer: %ux%u bpp=%u pitch=%u rgb(r:%u/%u g:%u/%u b:%u/%u)",
+        "framebuffer %ux%u bpp=%u pitch=%u rgb(r:%u/%u g:%u/%u b:%u/%u)",
         fb.width,
         fb.height,
         fb.bpp,
@@ -647,9 +647,7 @@ static bool _register_boot_rootfs(void) {
     }
 
     boot_rootfs_registered = true;
-    log_info(
-        "bootdisk: registered /dev/%s from boot image (%zu KiB)", disk->name, rootfs->size / 1024
-    );
+    log_info("registered /dev/%s from boot image (%zu KiB)", disk->name, rootfs->size / 1024);
 
     return true;
 }
@@ -689,9 +687,7 @@ const kernel_args_t *arch_init(void *boot_info) {
 
     if (boot_rootfs_paddr && boot_rootfs_size) {
         log_info(
-            "bootdisk: staged rootfs at %#" PRIx64 " (%zu KiB)",
-            boot_rootfs_paddr,
-            boot_rootfs_size / 1024
+            "staged rootfs at %#" PRIx64 " (%zu KiB)", boot_rootfs_paddr, boot_rootfs_size / 1024
         );
     }
 
@@ -748,7 +744,7 @@ void arch_storage_init(void) {
     ahci_disk_init();
 
     if (boot_rootfs_paddr && boot_rootfs_size && !_register_boot_rootfs()) {
-        log_warn("bootdisk: failed to register staged rootfs fallback");
+        log_warn("failed to register staged rootfs fallback");
     }
 }
 

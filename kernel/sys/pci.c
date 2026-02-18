@@ -139,7 +139,7 @@ static void _init_express(mcfg_t *table) {
         }
 
         if (!pci_ecam_addr_supported(entry->base_addr)) {
-            log_warn("pci: skipping MCFG entry above 4GiB");
+            log_warn("skipping MCFG entry above 4GiB");
             continue;
         }
 
@@ -166,9 +166,7 @@ size_t pci_init(void) {
     }
 
     log_info(
-        "pci: detected %zu devices on the %s bus",
-        pci_devices->length,
-        pci_is_express ? "PCIE" : "PCI"
+        "detected %zu devices on the %s bus", pci_devices->length, pci_is_express ? "PCIE" : "PCI"
     );
 
     return pci_devices->length;
@@ -436,7 +434,7 @@ void dump_pci_devices(void) {
         return;
     }
 
-    log_debug("pci: dump of detected %s devices:", pci_is_express ? "PCIE" : "PCI");
+    log_debug("dump of detected %s devices:", pci_is_express ? "PCIE" : "PCI");
 
     ll_foreach(node, pci_devices) {
         pci_found_t *dev = node->data;

@@ -185,7 +185,7 @@ vfs_t *vfs_init(void) {
     vfs_node_t *root = vfs_create_node(NULL, VFS_DIR);
     vfs->tree = tree_create_rooted(root->tree_entry);
 
-    log_info("vfs: initialized");
+    log_debug("VFS initialized");
     return vfs;
 }
 
@@ -795,7 +795,7 @@ bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
 
     if (!_validate_name(child->name)) {
         errno = EBADF;
-        log_warn("vfs: invalid child name");
+        // log_warn("invalid child name");
         return false;
     }
 
@@ -804,7 +804,7 @@ bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
 
         if (!parent) {
             errno = EINVAL;
-            log_warn("vfs: link target missing during insert");
+            // log_warn("link target missing during insert");
             return false;
         }
     }
@@ -820,7 +820,7 @@ bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
 
         if (!strcmp(child_vnode->name, child->name)) {
             errno = EEXIST;
-            log_warn("vfs: duplicate name '%s'", child->name);
+            // log_warn("duplicate name '%s'", child->name);
             return false;
         }
     }
@@ -900,7 +900,7 @@ bool vfs_mount(fs_instance_t *instance, vfs_node_t *mount) {
 
     instance->refcount++;
 
-    log_info("vfs: mounted '%s'", mount->name ? mount->name : "/");
+    log_debug("mounted '%s'", mount->name ? mount->name : "/");
     return true;
 }
 
@@ -940,7 +940,7 @@ bool vfs_unmount(vfs_node_t *mount, bool destroy_tree) {
     mount->type = VFS_DIR;
     mount->link = NULL;
 
-    log_info("vfs: unmounted '%s'", mount->name ? mount->name : "/");
+    log_debug("unmounted '%s'", mount->name ? mount->name : "/");
     return true;
 }
 

@@ -2440,5 +2440,5 @@ static void _syscall_handler(arch_int_state_t *state) {
 
 void syscall_init(void) {
     arch_syscall_install(SYSCALL_INT, _syscall_handler);
-    log_debug("syscall: interface initialized");
+    log_debug("syscall interface initialized");
 }

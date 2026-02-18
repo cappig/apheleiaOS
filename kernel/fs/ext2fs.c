@@ -1543,19 +1543,19 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     }
 
     if (!ext2_is_type(&parent_info->inode, EXT2_IT_DIR)) {
-        log_warn("ext2: create '%s' failed: parent is not a directory", child->name);
+        log_warn("create '%s' failed: parent is not a directory", child->name);
         return -1;
     }
 
     u16 inode_type = _vfs_to_inode_type(child->type);
     if (!inode_type) {
-        log_warn("ext2: create '%s' failed: unsupported vnode type %u", child->name, child->type);
+        log_warn("create '%s' failed: unsupported vnode type %u", child->name, child->type);
         return -1;
     }
 
     u32 inode_num = 0;
     if (!_alloc_inode(priv, part, &inode_num)) {
-        log_warn("ext2: create '%s' failed: no free inode", child->name);
+        log_warn("create '%s' failed: no free inode", child->name);
         return -1;
     }
 
@@ -1574,7 +1574,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         u32 block = 0;
 
         if (!_alloc_block(priv, part, &block)) {
-            log_warn("ext2: create '%s' failed: no free data block", child->name);
+            log_warn("create '%s' failed: no free data block", child->name);
             _free_inode(priv, part, inode_num);
             return -1;
         }
@@ -1584,7 +1584,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         _set_file_size(&inode, priv->block_size);
 
         if (!_dir_write_dots(priv, part, block, inode_num, parent_info->inode_num)) {
-            log_warn("ext2: create '%s' failed: dot entries write", child->name);
+            log_warn("create '%s' failed: dot entries write", child->name);
             _free_block(priv, part, block);
             _free_inode(priv, part, inode_num);
             return -1;
@@ -1592,16 +1592,16 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     }
 
     if (!_write_inode(priv, part, inode_num, &inode)) {
-        log_warn("ext2: create '%s' failed: inode write", child->name);
+        log_warn("create '%s' failed: inode write", child->name);
         _release_inode_blocks(priv, part, &inode);
         _free_inode(priv, part, inode_num);
         return -1;
     }
 
-    if (!_dir_add_entry(
-            priv, part, parent_info, child->name, inode_num, _vfs_to_dir_type(child->type)
-        )) {
-        log_warn("ext2: create '%s' failed: parent entry insert", child->name);
+    u8 dir_type = _vfs_to_dir_type(child->type);
+
+    if (!_dir_add_entry(priv, part, parent_info, child->name, inode_num, dir_type)) {
+        log_warn("create '%s' failed: parent entry insert", child->name);
         _release_inode_blocks(priv, part, &inode);
         _clear_inode(priv, part, inode_num);
         _free_inode(priv, part, inode_num);
@@ -1616,17 +1616,17 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     parent_info->inode.last_modification_time = now;
 
     if (!_write_inode(priv, part, parent_info->inode_num, &parent_info->inode)) {
-        log_warn("ext2: create '%s' failed: parent inode write", child->name);
+        log_warn("create '%s' failed: parent inode write", child->name);
         return -1;
     }
 
     if (!_update_super_write_time(priv, part, now)) {
-        log_warn("ext2: create '%s' failed: superblock write time update", child->name);
+        log_warn("create '%s' failed: superblock write time update", child->name);
         return -1;
     }
 
     if (!_init_vnode(child, node->fs, inode_num, &inode)) {
-        log_warn("ext2: create '%s' failed: vnode init", child->name);
+        log_warn("create '%s' failed: vnode init", child->name);
         return -1;
     }
 
@@ -1643,7 +1643,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     }
 
     if ((child->type == VFS_FILE || child->type == VFS_DIR) && !iface) {
-        log_warn("ext2: create '%s' failed: interface alloc", child->name);
+        log_warn("create '%s' failed: interface alloc", child->name);
         return -1;
     }
 
@@ -1775,22 +1775,22 @@ static bool _build_dir(fs_instance_t *instance, vfs_node_t *parent, const ext2_i
 
                         if (child) {
                             if (!_init_vnode(child, instance, entry->inode, &child_inode)) {
-                                log_warn("ext2: failed to init node %s", name);
+                                log_warn("failed to init node %s", name);
                             }
 
                             if (vfs_type == VFS_FILE) {
                                 if (!_assign_interface(child, VFS_FILE)) {
-                                    log_warn("ext2: failed to allocate interface for %s", name);
+                                    log_warn("failed to allocate interface for %s", name);
                                 }
                             }
 
                             if (vfs_type == VFS_DIR) {
                                 if (!_build_dir(instance, child, &child_inode)) {
-                                    log_warn("ext2: failed to build dir %s", name);
+                                    log_warn("failed to build dir %s", name);
                                 }
 
                                 if (!_assign_interface(child, VFS_DIR)) {
-                                    log_warn("ext2: failed to allocate interface for %s", name);
+                                    log_warn("failed to allocate interface for %s", name);
                                 }
                             }
                         }
@@ -1885,10 +1885,10 @@ static fs_instance_t *_probe(disk_partition_t *part) {
     instance->subtree_root = NULL;
 
     if (priv->superblock.fs_state != EXT2_FS_CLEAN) {
-        log_warn("ext2: filesystem marked dirty");
+        log_warn("filesystem marked dirty");
     }
 
-    log_debug("ext2: filesystem detected");
+    log_debug("filesystem detected");
     return instance;
 }
 
@@ -1918,7 +1918,7 @@ static bool _build_tree(fs_instance_t *instance) {
     instance->has_tree = true;
 
     if (!_build_dir(instance, root, &root_inode)) {
-        log_warn("ext2: failed to build directory tree");
+        log_warn("failed to build directory tree");
     }
 
     if (!_assign_interface(root, VFS_DIR)) {
@@ -2038,7 +2038,7 @@ bool ext2fs_init(void) {
     bool ok = file_system_register(&ext2_fs);
 
     if (ok) {
-        log_info("ext2: registered");
+        log_debug("registered");
     }
 
     return ok;

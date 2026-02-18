@@ -142,7 +142,7 @@ bool tty_set_current(size_t index) {
     tty_input_set_current(index);
 
     if (!console_set_active(index)) {
-        log_warn("tty: failed to activate console screen %zu", index);
+        log_warn("failed to activate console screen %zu", index);
     }
 
     return true;
@@ -170,7 +170,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (TTY_SCREEN_COUNT && current_tty == TTY_NONE) {
-        log_warn("tty: state not initialized");
+        log_warn("TTY state not initialized");
         return false;
     }
 
@@ -178,7 +178,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
     vfs_interface_t *tty_if = vfs_create_interface(_dev_tty_read, _dev_tty_write, NULL);
     if (!tty_if) {
-        log_warn("tty: failed to allocate /dev interface");
+        log_warn("TTY failed to allocate /dev interface");
         return false;
     }
 
@@ -188,12 +188,12 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
     bool ok = true;
 
     if (!devfs_register_node(dev_dir, "tty", VFS_CHARDEV, 0666, tty_if, &tty_current_handle)) {
-        log_warn("tty: failed to create /dev/tty");
+        log_warn("failed to create /dev/tty");
         ok = false;
     }
 
     if (!devfs_register_node(dev_dir, "console", VFS_CHARDEV, 0666, tty_if, &tty_console_handle)) {
-        log_warn("tty: failed to create /dev/console");
+        log_warn("failed to create /dev/console");
         ok = false;
     }
 
@@ -202,7 +202,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
         name[3] = (char)('0' + i);
 
         if (!devfs_register_node(dev_dir, name, VFS_CHARDEV, 0666, tty_if, &tty_handles[i])) {
-            log_warn("tty: failed to create /dev/%s", name);
+            log_warn("failed to create /dev/%s", name);
             ok = false;
         }
     }
@@ -212,7 +212,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
 void tty_init(void) {
     if (!devfs_register_device("tty", tty_register_devfs)) {
-        log_warn("tty: failed to register devfs init callback");
+        log_warn("failed to register devfs init callback");
     }
 
     if (!TTY_SCREEN_COUNT) {
@@ -229,7 +229,7 @@ void tty_init(void) {
     tty_input_set_current((size_t)current_tty);
 
     if (!console_set_active((size_t)current_tty)) {
-        log_warn("tty: failed to activate console screen %zu", (size_t)current_tty);
+        log_warn("failed to activate console screen %zu", (size_t)current_tty);
     }
 }
 

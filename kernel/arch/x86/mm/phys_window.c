@@ -115,6 +115,13 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     if (pages > window_pages)
         panic("phys window map too large");
 
+    // The 32-bit phys window is a single shared virtual range!
+    // Hold preemption from first map to final unmap so the current
+    // thread cannot be switched out while using the returned pointer
+    if (!window_pages_mapped) {
+        sched_preempt_disable();
+    }
+
     // single sliding window, new mappings invalidate any previous one
     if (window_pages_mapped) {
         if (window_stack_depth >= PHYS_WINDOW_STACK_MAX)

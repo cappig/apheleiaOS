@@ -812,7 +812,7 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (!_ws_state_init()) {
-        log_warn("ws: init failed");
+        log_warn("WS init failed");
         return false;
     }
 
@@ -820,19 +820,19 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
 
     vfs_interface_t *wsctl_if = vfs_create_interface(_dev_wsctl_read, _dev_wsctl_write, NULL);
     if (!wsctl_if) {
-        log_warn("ws: failed to allocate /dev/wsctl interface");
+        log_warn("failed to allocate /dev/wsctl interface");
         ok = false;
     } else {
         wsctl_if->poll = _dev_wsctl_poll;
         if (!devfs_register_node(dev_dir, "wsctl", VFS_CHARDEV, 0666, wsctl_if, NULL)) {
-            log_warn("ws: failed to create /dev/wsctl");
+            log_warn("failed to create /dev/wsctl");
             ok = false;
         }
     }
 
     vfs_node_t *ws_dir = devfs_register_dir(dev_dir, "ws", 0755);
     if (!ws_dir) {
-        log_warn("ws: failed to create /dev/ws");
+        log_warn("failed to create /dev/ws");
         return false;
     }
 
@@ -840,7 +840,7 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
     vfs_interface_t *ws_ev_if = vfs_create_interface(_dev_ws_ev_read, NULL, NULL);
 
     if (!ws_fb_if || !ws_ev_if) {
-        log_warn("ws: failed to allocate per-window interfaces");
+        log_warn("failed to allocate window interfaces");
         return false;
     }
 
@@ -855,18 +855,18 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
 
         vfs_node_t *slot = devfs_register_dir(ws_dir, slot_name, 0755);
         if (!slot) {
-            log_warn("ws: failed to create /dev/ws/%s", slot_name);
+            log_warn("failed to create /dev/ws/%s", slot_name);
             ok = false;
             continue;
         }
 
         if (!devfs_register_node(slot, "fb", VFS_CHARDEV, 0666, ws_fb_if, &ws_ids[i])) {
-            log_warn("ws: failed to create /dev/ws/%s/fb", slot_name);
+            log_warn("failed to create /dev/ws/%s/fb", slot_name);
             ok = false;
         }
 
         if (!devfs_register_node(slot, "ev", VFS_CHARDEV, 0666, ws_ev_if, &ws_ids[i])) {
-            log_warn("ws: failed to create /dev/ws/%s/ev", slot_name);
+            log_warn("failed to create /dev/ws/%s/ev", slot_name);
             ok = false;
         }
     }
@@ -876,7 +876,7 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
 
 bool ws_init(void) {
     if (!devfs_register_device("ws", ws_register_devfs)) {
-        log_warn("ws: failed to register devfs init callback");
+        log_warn("failed to register devfs init callback");
     }
 
     return _ws_state_init();

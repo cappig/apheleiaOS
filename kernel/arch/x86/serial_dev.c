@@ -144,13 +144,13 @@ void serial_devfs_init(void) {
 
     vfs_node_t *dev_dir = vfs_lookup("/dev");
     if (!dev_dir) {
-        log_warn("serial: /dev missing");
+        log_warn("/dev missing");
         return;
     }
 
     vfs_interface_t *serial_if = vfs_create_interface(_read, _write, NULL);
     if (!serial_if) {
-        log_warn("serial: interface alloc failed");
+        log_warn("interface alloc failed");
         return;
     }
 
@@ -167,11 +167,11 @@ void serial_devfs_init(void) {
         name[4] = (char)('0' + serial_devices[i].index);
 
         if (!_create_node(dev_dir, name, serial_if, &serial_devices[i])) {
-            log_warn("serial: failed to create /dev/%s", name);
+            log_warn("failed to create /dev/%s", name);
             continue;
         }
 
-        log_info("serial: created /dev/%s", name);
+        log_debug("created /dev/%s", name);
     }
 
     serial_nodes_ready = true;
