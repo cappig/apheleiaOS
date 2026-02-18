@@ -30,7 +30,7 @@ typedef struct {
     int drag_id;
     i32 drag_dx;
     i32 drag_dy;
-    wm_window_t* focused;
+    int focused_id;
     bool term_hotkey_down;
 } wm_runtime_t;
 
@@ -100,20 +100,22 @@ static int _handle_ws_events(ui_t* ui, wm_runtime_t* rt) {
 
         for (size_t i = 0; i < count; i++) {
             bool focus_closed =
-                rt->focused && events[i].type == WS_EVT_WINDOW_CLOSED && rt->focused->id == events[i].id;
+                rt->focused_id >= 0 && events[i].type == WS_EVT_WINDOW_CLOSED && (u32)rt->focused_id == events[i].id;
 
             wm_handle_ws_event(&events[i]);
 
             if (events[i].type == WS_EVT_WINDOW_NEW) {
-                rt->focused = wm_window_by_id(events[i].id);
-                wm_set_focus(ui, rt->focused, &rt->z_counter);
+                wm_window_t* win = wm_window_by_id(events[i].id);
+                rt->focused_id = win ? (int)win->id : -1;
+                wm_set_focus(ui, win, &rt->z_counter);
             }
 
             if (focus_closed) {
-                rt->focused = wm_top_window();
+                wm_window_t* top = wm_top_window();
+                rt->focused_id = top ? (int)top->id : -1;
 
-                if (rt->focused)
-                    wm_set_focus(ui, rt->focused, &rt->z_counter);
+                if (top)
+                    wm_set_focus(ui, top, &rt->z_counter);
             }
         }
     }
@@ -133,7 +135,7 @@ static bool _handle_mouse_move(ui_t* ui, wm_runtime_t* rt, const fb_info_t* fb_i
         return changed;
 
     wm_window_t* window = wm_window_by_id((u32)rt->drag_id);
-    if (!window || !window->used)
+    if (!window)
         return changed;
 
     i32 next_x = rt->mouse_x - rt->drag_dx;
@@ -159,11 +161,11 @@ static bool _handle_mouse_button(ui_t* ui, wm_runtime_t* rt, const input_event_t
 
         if (window) {
             wm_set_focus(ui, window, &rt->z_counter);
-            rt->focused = window;
+            rt->focused_id = (int)window->id;
 
             if (wm_point_in_close(window, rt->mouse_x, rt->mouse_y)) {
                 ui_mgr_close(ui, window->id);
-                rt->focused = NULL;
+                rt->focused_id = -1;
                 rt->drag_id = -1;
                 changed = true;
             } else if (wm_point_in_title(window, rt->mouse_x, rt->mouse_y)) {
@@ -202,9 +204,9 @@ static bool _handle_key(ui_t* ui, wm_runtime_t* rt, input_event_t* event, volati
         }
     }
 
-    if (event->action && ctrl && event->keycode == KBD_W && rt->focused) {
-        ui_mgr_close(ui, rt->focused->id);
-        rt->focused = NULL;
+    if (event->action && ctrl && event->keycode == KBD_W && rt->focused_id >= 0) {
+        ui_mgr_close(ui, (u32)rt->focused_id);
+        rt->focused_id = -1;
         return true;
     }
 
@@ -247,8 +249,8 @@ static int _handle_input_events(
                     continue;
             }
 
-            if (rt->focused)
-                ui_mgr_send(ui, rt->focused->id, event);
+            if (rt->focused_id >= 0)
+                ui_mgr_send(ui, (u32)rt->focused_id, event);
         }
     }
 }
@@ -262,7 +264,7 @@ void wm_loop(ui_t* ui, int fb_fd, const fb_info_t* fb_info, u32* frame_store, si
         .drag_id = -1,
         .drag_dx = 0,
         .drag_dy = 0,
-        .focused = NULL,
+        .focused_id = -1,
         .term_hotkey_down = false,
     };
 

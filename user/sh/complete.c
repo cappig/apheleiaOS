@@ -412,7 +412,9 @@ void complete_line(
     memcpy(token, buf + token_start, token_len);
     token[token_len] = '\0';
 
-    sh_match_t matches[SH_MATCH_MAX];
+    sh_match_t* matches = malloc(SH_MATCH_MAX * sizeof(sh_match_t));
+    if (!matches)
+        return;
     bool command_mode = !strchr(token, '/') && is_command_position(buf, token_start);
     bool include_hidden = token[0] == '.';
     size_t match_count = 0;
@@ -438,8 +440,10 @@ void complete_line(
         match_count = collect_matches(dir_open, base_prefix, include_hidden, matches, SH_MATCH_MAX);
     }
 
-    if (!match_count)
+    if (!match_count) {
+        free(matches);
         return;
+    }
 
     char candidate[SH_PATH_MAX];
     bool have_candidate = false;
@@ -477,12 +481,15 @@ void complete_line(
 
             if (result)
                 result->listed = true;
+            free(matches);
             return;
         }
     }
 
-    if (!have_candidate)
+    if (!have_candidate) {
+        free(matches);
         return;
+    }
 
     size_t candidate_len = strlen(candidate);
     size_t tail_len = *len - *cursor;
@@ -508,4 +515,6 @@ void complete_line(
             result->erase_end = old_cursor + (candidate_len - token_len);
         }
     }
+
+    free(matches);
 }

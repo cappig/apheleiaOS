@@ -481,11 +481,28 @@ static void _publish_framebuffer(const boot_info_t* info) {
     fb.height = info->video.height;
     fb.pitch = pitch;
     fb.bpp = (u8)(info->video.bytes_per_pixel * 8);
-    fb.red_mask = info->video.red_mask;
-    fb.green_mask = info->video.green_mask;
-    fb.blue_mask = info->video.blue_mask;
+    fb.red_shift = info->video.red_shift;
+    fb.green_shift = info->video.green_shift;
+    fb.blue_shift = info->video.blue_shift;
+    fb.red_size = info->video.red_size;
+    fb.green_size = info->video.green_size;
+    fb.blue_size = info->video.blue_size;
     fb.size = (u64)pitch * (u64)info->video.height;
     fb.available = fb.size != 0;
+
+    log_info(
+        "framebuffer: %ux%u bpp=%u pitch=%u rgb(r:%u/%u g:%u/%u b:%u/%u)",
+        fb.width,
+        fb.height,
+        fb.bpp,
+        fb.pitch,
+        fb.red_shift,
+        fb.red_size,
+        fb.green_shift,
+        fb.green_size,
+        fb.blue_shift,
+        fb.blue_size
+    );
 
     framebuffer_set_info(&fb);
 }

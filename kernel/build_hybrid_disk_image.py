@@ -51,7 +51,7 @@ def main() -> None:
         esp_img = td_path / "esp.img"
 
         prepare_root_tree(args.rootfs_dir, root_tree)
-        build_ext2_image(root_tree, ext2_img, block_size=1024)
+        build_ext2_image(root_tree, ext2_img, block_size=4096)
         build_esp_fat16_image(
             esp_img,
             size_sectors=ESP_SECTORS,

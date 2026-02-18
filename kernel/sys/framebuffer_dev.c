@@ -2,6 +2,7 @@
 #include <base/units.h>
 #include <errno.h>
 #include <gui/fb.h>
+#include <gui/pixel.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <stddef.h>
@@ -91,11 +92,43 @@ static ssize_t _dev_fb_present(const framebuffer_info_t* fb, const void* frame) 
     u32 height = fb->height;
     u32 pitch = fb->pitch;
     u32 bpp_bytes = fb->bpp / 8;
-    u32 row_bytes = width * bpp_bytes;
-    size_t frame_size = (size_t)height * row_bytes;
+    if (!bpp_bytes)
+        return -EINVAL;
 
-    // Copy userspace frame into kernel back buffer
-    memcpy(_back_buf, frame, frame_size);
+    u32 row_bytes = width * bpp_bytes;
+    size_t hw_frame_size = (size_t)height * row_bytes;
+    const u32* src = frame;
+
+    u8 red_shift = fb->red_shift;
+    u8 green_shift = fb->green_shift;
+    u8 blue_shift = fb->blue_shift;
+    u8 red_size = fb->red_size;
+    u8 green_size = fb->green_size;
+    u8 blue_size = fb->blue_size;
+    pixel_apply_legacy_defaults(
+        (u8)bpp_bytes, &red_shift, &green_shift, &blue_shift, &red_size, &green_size, &blue_size
+    );
+
+    if (pixel_is_fast_bgrx8888(
+            (u8)bpp_bytes, red_shift, green_shift, blue_shift, red_size, green_size, blue_size
+        )) {
+        size_t src_row_bytes = (size_t)width * sizeof(u32);
+        for (u32 y = 0; y < height; y++) {
+            memcpy(_back_buf + (size_t)y * row_bytes, src + (size_t)y * width, src_row_bytes);
+        }
+    } else {
+        for (u32 y = 0; y < height; y++) {
+            const u32* src_row = src + (size_t)y * width;
+            u8* dst_row = _back_buf + (size_t)y * row_bytes;
+
+            for (u32 x = 0; x < width; x++) {
+                u32 packed = pixel_pack_rgb888(
+                    src_row[x], red_shift, green_shift, blue_shift, red_size, green_size, blue_size
+                );
+                pixel_store_packed(dst_row + (size_t)x * bpp_bytes, (u8)bpp_bytes, packed);
+            }
+        }
+    }
 
     // Copy back buffer to VRAM in one shot
     void* vram = arch_phys_map(fb->paddr, fb->size);
@@ -103,7 +136,7 @@ static ssize_t _dev_fb_present(const framebuffer_info_t* fb, const void* frame) 
         return -EIO;
 
     if (pitch == row_bytes) {
-        memcpy(vram, _back_buf, frame_size);
+        memcpy(vram, _back_buf, hw_frame_size);
     } else {
         for (u32 y = 0; y < height; y++)
             memcpy((u8*)vram + (size_t)y * pitch, _back_buf + (size_t)y * row_bytes, row_bytes);

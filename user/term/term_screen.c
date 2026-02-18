@@ -4,6 +4,7 @@
 #include <psf.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include <term/ansi.h>
 
@@ -20,7 +21,7 @@ typedef struct {
 typedef struct {
     psf_font_t font;
     term_cell_t cells[TERM_MAX_ROWS][TERM_MAX_COLS];
-    u8 font_buf[FONT_BUF_SIZE];
+    u8* font_buf;
     u32* pixels;
     size_t pixels_count;
     u32 width;
@@ -63,12 +64,18 @@ static void clear_pixels_full(void) {
 }
 
 static bool load_font_file(const char* path) {
-    return psf_load_file(path, term_screen.font_buf, sizeof(term_screen.font_buf), &term_screen.font);
+    return psf_load_file(path, term_screen.font_buf, FONT_BUF_SIZE, &term_screen.font);
 }
 
 static bool init_font(void) {
     if (term_screen.font.glyphs)
         return true;
+
+    if (!term_screen.font_buf) {
+        term_screen.font_buf = malloc(FONT_BUF_SIZE);
+        if (!term_screen.font_buf)
+            return false;
+    }
 
     if (load_font_file("/boot/font.psf"))
         return true;
@@ -212,9 +219,6 @@ static void put_char(char ch) {
     }
 
     term_screen.cursor_x++;
-
-    if (term_screen.cursor_x >= term_screen.cols)
-        newline();
 
     mark_cursor_move(old_x, old_y);
 }

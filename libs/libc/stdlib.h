@@ -40,6 +40,7 @@ void __libc_init_alloc(const libc_alloc_ops_t* ops);
 
 void* malloc(size_t size);
 void* calloc(size_t num, size_t size);
+void* realloc(void* ptr, size_t size);
 void free(void* ptr);
 
 long long strtoll(char const* restrict str, char** restrict endptr, int base);

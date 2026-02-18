@@ -1,6 +1,7 @@
 #pragma once
 
 #include <base/types.h>
+#include <data/vector.h>
 #include <gui/ws.h>
 #include <stdbool.h>
 #include <ui.h>
@@ -15,7 +16,6 @@
 #define WM_MAX_FB_PIX (WM_MAX_FB_W * WM_MAX_FB_H)
 
 typedef struct {
-    bool used;
     u32 id;
     i32 x;
     i32 y;
@@ -28,6 +28,7 @@ typedef struct {
 } wm_window_t;
 
 void wm_init(void);
+void wm_destroy(void);
 
 wm_window_t* wm_window_by_id(u32 id);
 wm_window_t* wm_top_window_at(i32 px, i32 py);

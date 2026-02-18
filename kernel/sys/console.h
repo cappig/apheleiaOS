@@ -20,6 +20,12 @@ typedef struct {
     u32 height;
     u32 pitch;
     u8 bytes_per_pixel;
+    u8 red_shift;
+    u8 green_shift;
+    u8 blue_shift;
+    u8 red_size;
+    u8 green_size;
+    u8 blue_size;
 } console_hw_desc_t;
 
 typedef struct console_backend_ops {

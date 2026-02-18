@@ -267,7 +267,6 @@ char* strtok(char* restrict str, const char* restrict delim) {
 }
 
 
-#ifdef EXTERNAL_ALLOC
 char* strndup(const char* str, size_t size) {
     if (!str)
         return NULL;
@@ -287,7 +286,6 @@ char* strdup(const char* str) {
 
     return strndup(str, strlen(str));
 }
-#endif
 
 
 static char* error_strings[] = {

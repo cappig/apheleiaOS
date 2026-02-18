@@ -264,6 +264,93 @@ void uefi_detect_acpi(
     }
 }
 
+static void _set_default_rgb888(video_info_t* video) {
+    if (!video)
+        return;
+
+    video->red_shift = 16;
+    video->green_shift = 8;
+    video->blue_shift = 0;
+    video->red_size = 8;
+    video->green_size = 8;
+    video->blue_size = 8;
+}
+
+static bool _parse_bitmask_channel(u32 mask, u8* shift_out, u8* size_out) {
+    if (!shift_out || !size_out || !mask)
+        return false;
+
+    u8 shift = 0;
+    while (!(mask & 1U)) {
+        shift++;
+        mask >>= 1;
+    }
+
+    u8 size = 0;
+    while (mask & 1U) {
+        size++;
+        mask >>= 1;
+    }
+
+    if (mask || !size)
+        return false;
+
+    *shift_out = shift;
+    *size_out = size;
+    return true;
+}
+
+static bool _fill_video_format_from_gop(
+    video_info_t* video,
+    const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* mode
+) {
+    if (!video || !mode)
+        return false;
+
+    switch (mode->PixelFormat) {
+    case PixelBlueGreenRedReserved8BitPerColor:
+        video->red_shift = 16;
+        video->green_shift = 8;
+        video->blue_shift = 0;
+        video->red_size = 8;
+        video->green_size = 8;
+        video->blue_size = 8;
+        return true;
+    case PixelRedGreenBlueReserved8BitPerColor:
+        video->red_shift = 0;
+        video->green_shift = 8;
+        video->blue_shift = 16;
+        video->red_size = 8;
+        video->green_size = 8;
+        video->blue_size = 8;
+        return true;
+    case PixelBitMask: {
+        bool ok_r = _parse_bitmask_channel(
+            mode->PixelInformation.RedMask,
+            &video->red_shift,
+            &video->red_size
+        );
+        bool ok_g = _parse_bitmask_channel(
+            mode->PixelInformation.GreenMask,
+            &video->green_shift,
+            &video->green_size
+        );
+        bool ok_b = _parse_bitmask_channel(
+            mode->PixelInformation.BlueMask,
+            &video->blue_shift,
+            &video->blue_size
+        );
+
+        return ok_r && ok_g && ok_b;
+    }
+    case PixelBltOnly:
+        return false;
+    default:
+        _set_default_rgb888(video);
+        return true;
+    }
+}
+
 void uefi_detect_video(boot_info_t* info, EFI_BOOT_SERVICES* bs, const EFI_GUID* gop_guid) {
     if (!info)
         return;
@@ -275,6 +362,12 @@ void uefi_detect_video(boot_info_t* info, EFI_BOOT_SERVICES* bs, const EFI_GUID*
     info->video.height = VGA_HEIGHT;
     info->video.bytes_per_pixel = 2;
     info->video.bytes_per_line = VGA_WIDTH * 2;
+    info->video.red_shift = 0;
+    info->video.green_shift = 0;
+    info->video.blue_shift = 0;
+    info->video.red_size = 0;
+    info->video.green_size = 0;
+    info->video.blue_size = 0;
 
     if (!bs || !gop_guid)
         return;
@@ -294,7 +387,19 @@ void uefi_detect_video(boot_info_t* info, EFI_BOOT_SERVICES* bs, const EFI_GUID*
     info->video.height = (u16)mode->VerticalResolution;
     info->video.bytes_per_pixel = 4;
     info->video.bytes_per_line = (u16)(mode->PixelsPerScanLine * 4);
-    info->video.red_mask = 8;
-    info->video.green_mask = 8;
-    info->video.blue_mask = 8;
+
+    if (!_fill_video_format_from_gop(&info->video, mode)) {
+        if (mode->PixelFormat == PixelBltOnly) {
+            uefi_mem_zero(&info->video, sizeof(info->video));
+            info->video.mode = VIDEO_TEXT;
+            info->video.framebuffer = VGA_ADDR;
+            info->video.width = VGA_WIDTH;
+            info->video.height = VGA_HEIGHT;
+            info->video.bytes_per_pixel = 2;
+            info->video.bytes_per_line = VGA_WIDTH * 2;
+            return;
+        }
+
+        _set_default_rgb888(&info->video);
+    }
 }

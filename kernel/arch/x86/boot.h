@@ -20,9 +20,13 @@
 typedef struct PACKED {
     u8 mode;
 
-    u8 red_mask;
-    u8 green_mask;
-    u8 blue_mask;
+    u8 red_shift;
+    u8 green_shift;
+    u8 blue_shift;
+
+    u8 red_size;
+    u8 green_size;
+    u8 blue_size;
 
     u16 bytes_per_pixel; // 'depth'
     u16 bytes_per_line; // 'pitch'

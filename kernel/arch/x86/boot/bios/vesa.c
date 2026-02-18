@@ -158,9 +158,12 @@ void init_graphics(boot_info_t* info) {
     video->height = VGA_HEIGHT;
     video->bytes_per_pixel = 2;
     video->bytes_per_line = VGA_WIDTH * 2;
-    video->red_mask = 0;
-    video->green_mask = 0;
-    video->blue_mask = 0;
+    video->red_shift = 0;
+    video->green_shift = 0;
+    video->blue_shift = 0;
+    video->red_size = 0;
+    video->green_size = 0;
+    video->blue_size = 0;
 
     if (info->args.video == VIDEO_NONE)
         return;
@@ -190,9 +193,12 @@ void init_graphics(boot_info_t* info) {
             video->bytes_per_pixel = (u32)vesa.bits_per_pixel / 8;
             video->bytes_per_line = (u32)vesa.bytes_per_line;
 
-            video->red_mask = vesa.red.mask;
-            video->green_mask = vesa.green.mask;
-            video->blue_mask = vesa.blue.mask;
+            video->red_shift = vesa.red.position;
+            video->green_shift = vesa.green.position;
+            video->blue_shift = vesa.blue.position;
+            video->red_size = vesa.red.mask;
+            video->green_size = vesa.green.mask;
+            video->blue_size = vesa.blue.mask;
 
             printf("video output: graphics %hdx%hd\n\r", video->width, video->height);
 

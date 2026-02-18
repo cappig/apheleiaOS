@@ -1198,6 +1198,12 @@ static int run_pipeline(sh_stage_t* stages, int stage_count, bool background, co
     return 0;
 }
 
+typedef struct {
+    char expanded[SH_MAX_STAGES][SH_MAX_ARGS][SH_EXPAND_MAX];
+    char in_paths[SH_MAX_STAGES][SH_EXPAND_MAX];
+    char out_paths[SH_MAX_STAGES][SH_EXPAND_MAX];
+} sh_expand_t;
+
 static void expand_stages(
     sh_stage_t* stages,
     int stage_count,
@@ -1245,19 +1251,25 @@ static int run_command(char* line) {
     if (parse_ret <= 0)
         return 0;
 
-    char expanded[SH_MAX_STAGES][SH_MAX_ARGS][SH_EXPAND_MAX];
-    char in_paths[SH_MAX_STAGES][SH_EXPAND_MAX];
-    char out_paths[SH_MAX_STAGES][SH_EXPAND_MAX];
+    sh_expand_t* exp = malloc(sizeof(sh_expand_t));
+    if (!exp) {
+        io_write_str("sh: out of memory\n");
+        return -1;
+    }
 
-    expand_stages(stages, stage_count, expanded, in_paths, out_paths);
+    expand_stages(stages, stage_count, exp->expanded, exp->in_paths, exp->out_paths);
 
     bool simple_builtin =
         stage_count == 1 && !background && !stages[0].in_path && !stages[0].out_path;
 
-    if (simple_builtin && handle_builtin(stages[0].argc, stages[0].argv))
+    if (simple_builtin && handle_builtin(stages[0].argc, stages[0].argv)) {
+        free(exp);
         return 0;
+    }
 
-    return run_pipeline(stages, stage_count, background, cmdline);
+    int ret = run_pipeline(stages, stage_count, background, cmdline);
+    free(exp);
+    return ret;
 }
 
 static int run_script(const char* path) {

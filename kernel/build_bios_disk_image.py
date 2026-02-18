@@ -48,7 +48,7 @@ def main() -> None:
         ext2_img = td_path / "rootfs.ext2"
 
         prepare_root_tree(rootfs_dir, root_tree)
-        build_ext2_image(root_tree, ext2_img, block_size=1024)
+        build_ext2_image(root_tree, ext2_img, block_size=4096)
 
         ext2_bytes = ext2_img.stat().st_size
         ext2_sectors = div_round_up(ext2_bytes, SECTOR_SIZE)

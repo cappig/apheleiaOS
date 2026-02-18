@@ -35,6 +35,12 @@ static bool _x86_console_probe(void* arch_boot_info, console_hw_desc_t* out) {
             out->height = info->video.height;
             out->pitch = pitch;
             out->bytes_per_pixel = (u8)info->video.bytes_per_pixel;
+            out->red_shift = info->video.red_shift;
+            out->green_shift = info->video.green_shift;
+            out->blue_shift = info->video.blue_shift;
+            out->red_size = info->video.red_size;
+            out->green_size = info->video.green_size;
+            out->blue_size = info->video.blue_size;
             x86_fb_base = NULL;
             x86_fb_phys = info->video.framebuffer;
             x86_fb_use_phys_window = true;
@@ -51,6 +57,12 @@ static bool _x86_console_probe(void* arch_boot_info, console_hw_desc_t* out) {
             out->height = info->video.height;
             out->pitch = pitch;
             out->bytes_per_pixel = (u8)info->video.bytes_per_pixel;
+            out->red_shift = info->video.red_shift;
+            out->green_shift = info->video.green_shift;
+            out->blue_shift = info->video.blue_shift;
+            out->red_size = info->video.red_size;
+            out->green_size = info->video.green_size;
+            out->blue_size = info->video.blue_size;
             x86_fb_base = mapped;
             x86_fb_phys = info->video.framebuffer;
             x86_fb_use_phys_window = false;

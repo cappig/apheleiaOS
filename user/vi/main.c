@@ -4,6 +4,7 @@
 #include <io.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -11,7 +12,7 @@
 
 #define CTRL(k) ((k) & 0x1f)
 
-#define VI_FILE_MAX (128 * 1024)
+#define VI_INIT_CAP 4096
 #define VI_CMD_MAX  64
 #define VI_MSG_MAX  128
 #define VI_OUT_MAX  (192 * 1024)
@@ -36,8 +37,9 @@ typedef struct {
     const char* path;
     char path_buf[128];
 
-    char buf[VI_FILE_MAX + 1];
+    char* buf;
     size_t len;
+    size_t cap;
     size_t cursor;
     bool dirty;
 
@@ -59,8 +61,9 @@ typedef struct {
 } vi_t;
 
 typedef struct {
-    char data[VI_OUT_MAX];
+    char* data;
     size_t len;
+    size_t cap;
 } vi_out_t;
 
 static vi_t vi;
@@ -70,7 +73,7 @@ static bool out_addn(const char* text, size_t n) {
     if (!text || !n)
         return true;
 
-    if (out.len + n > sizeof(out.data))
+    if (out.len + n > out.cap)
         return false;
 
     memcpy(out.data + out.len, text, n);
@@ -293,8 +296,25 @@ static void keep_cursor_visible(void) {
         vi.coloff = col - vi.cols + 1;
 }
 
+static bool vi_grow(size_t needed) {
+    if (needed <= vi.cap)
+        return true;
+
+    size_t new_cap = vi.cap;
+    while (new_cap < needed)
+        new_cap = new_cap < 4096 ? 4096 : new_cap * 2;
+
+    char* p = realloc(vi.buf, new_cap);
+    if (!p)
+        return false;
+
+    vi.buf = p;
+    vi.cap = new_cap;
+    return true;
+}
+
 static bool insert_char(size_t at, char ch) {
-    if (vi.len >= VI_FILE_MAX)
+    if (!vi_grow(vi.len + 2))
         return false;
 
     if (at > vi.len)
@@ -425,8 +445,14 @@ static bool load_file(void) {
         return false;
     }
 
-    while (vi.len < VI_FILE_MAX) {
-        ssize_t n = read(fd, vi.buf + vi.len, VI_FILE_MAX - vi.len);
+    for (;;) {
+        if (!vi_grow(vi.len + 4096)) {
+            close(fd);
+            set_msg("out of memory");
+            return false;
+        }
+
+        ssize_t n = read(fd, vi.buf + vi.len, vi.cap - vi.len - 1);
         if (!n)
             break;
         if (n < 0) {
@@ -440,11 +466,6 @@ static bool load_file(void) {
 
     close(fd);
     vi.buf[vi.len] = '\0';
-
-    if (vi.len == VI_FILE_MAX) {
-        set_msg("file too large");
-        return false;
-    }
 
     clear_msg();
     return true;
@@ -772,6 +793,16 @@ static void handle_command_mode(int key) {
 int main(int argc, char* argv[]) {
     memset(&vi, 0, sizeof(vi));
 
+    vi.buf = malloc(VI_INIT_CAP);
+    out.data = malloc(VI_OUT_MAX);
+    if (!vi.buf || !out.data) {
+        io_write_str("vi: out of memory\n");
+        return 1;
+    }
+    vi.cap = VI_INIT_CAP;
+    vi.buf[0] = '\0';
+    out.cap = VI_OUT_MAX;
+
     vi.running = true;
     vi.mode = VI_NORMAL;
     vi.redraw = true;
@@ -779,8 +810,11 @@ int main(int argc, char* argv[]) {
     if (argc > 1)
         vi.path = argv[1];
 
-    if (!load_file())
+    if (!load_file()) {
+        free(vi.buf);
+        free(out.data);
         return 1;
+    }
 
     if (!raw_mode_on()) {
         io_write_str("vi: failed to enter raw mode\n");
@@ -813,5 +847,7 @@ int main(int argc, char* argv[]) {
     raw_mode_off();
     write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
 
+    free(vi.buf);
+    free(out.data);
     return 0;
 }

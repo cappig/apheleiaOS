@@ -5,6 +5,7 @@
 #include <base/types.h>
 #include <base/utf8.h>
 #include <errno.h>
+#include <gui/pixel.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,6 +44,12 @@ typedef struct {
     u32 height;
     u32 pitch;
     u8 bytes_per_pixel;
+    u8 red_shift;
+    u8 green_shift;
+    u8 blue_shift;
+    u8 red_size;
+    u8 green_size;
+    u8 blue_size;
     size_t cols;
     size_t rows;
     const font_t* font;
@@ -368,25 +375,16 @@ static void _maybe_flush_dirty(void) {
 }
 
 static void _write_pixel(u8* dst, u32 color) {
-    switch (console_state.bytes_per_pixel) {
-    case 4:
-        *(u32*)dst = color;
-        break;
-    case 3:
-        dst[0] = (u8)(color & 0xff);
-        dst[1] = (u8)((color >> 8) & 0xff);
-        dst[2] = (u8)((color >> 16) & 0xff);
-        break;
-    case 2:
-        u8 r = (u8)((color >> 16) & 0xff);
-        u8 g = (u8)((color >> 8) & 0xff);
-        u8 b = (u8)(color & 0xff);
-        u16 rgb565 = (u16)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
-        *(u16*)dst = rgb565;
-        break;
-    default:
-        break;
-    }
+    u32 packed = pixel_pack_rgb888(
+        color,
+        console_state.red_shift,
+        console_state.green_shift,
+        console_state.blue_shift,
+        console_state.red_size,
+        console_state.green_size,
+        console_state.blue_size
+    );
+    pixel_store_packed(dst, console_state.bytes_per_pixel, packed);
 }
 
 static void _fill_rect(size_t x, size_t y, size_t width, size_t height, u32 color) {
@@ -1408,8 +1406,24 @@ void console_init(void* arch_boot_info) {
     console_state.height = hw.height;
     console_state.pitch = hw.pitch;
     console_state.bytes_per_pixel = hw.bytes_per_pixel;
+    console_state.red_shift = hw.red_shift;
+    console_state.green_shift = hw.green_shift;
+    console_state.blue_shift = hw.blue_shift;
+    console_state.red_size = hw.red_size;
+    console_state.green_size = hw.green_size;
+    console_state.blue_size = hw.blue_size;
 
     if (console_state.mode == CONSOLE_FRAMEBUFFER) {
+        pixel_apply_legacy_defaults(
+            console_state.bytes_per_pixel,
+            &console_state.red_shift,
+            &console_state.green_shift,
+            &console_state.blue_shift,
+            &console_state.red_size,
+            &console_state.green_size,
+            &console_state.blue_size
+        );
+
         console_state.cols = console_state.width / console_state.font_width;
         console_state.rows = console_state.height / console_state.font_height;
 

@@ -3,6 +3,7 @@
 
 #include <io.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -11,7 +12,7 @@
 #define SH_HISTORY_MAX 64
 
 static volatile sig_atomic_t* sh_sigint = NULL;
-static char sh_history[SH_HISTORY_MAX][SH_INPUT_LINE_MAX];
+static char* sh_history[SH_HISTORY_MAX];
 static size_t sh_history_count = 0;
 static termios_t sh_tty_saved = {0};
 static bool sh_tty_saved_valid = false;
@@ -288,15 +289,14 @@ void history_add(const char* line) {
         return;
 
     if (sh_history_count < SH_HISTORY_MAX) {
-        snprintf(sh_history[sh_history_count], sizeof(sh_history[sh_history_count]), "%s", line);
+        sh_history[sh_history_count] = strdup(line);
         sh_history_count++;
         return;
     }
 
-    for (size_t i = 1; i < SH_HISTORY_MAX; i++)
-        memcpy(sh_history[i - 1], sh_history[i], sizeof(sh_history[i - 1]));
-
-    snprintf(sh_history[SH_HISTORY_MAX - 1], sizeof(sh_history[SH_HISTORY_MAX - 1]), "%s", line);
+    free(sh_history[0]);
+    memmove(&sh_history[0], &sh_history[1], (SH_HISTORY_MAX - 1) * sizeof(char*));
+    sh_history[SH_HISTORY_MAX - 1] = strdup(line);
 }
 
 void history_print(void) {

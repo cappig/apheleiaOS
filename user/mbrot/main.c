@@ -88,7 +88,7 @@ static u32 palette_color(u32 iter, u32 max_iter) {
         break;
     }
 
-    u32 shade = 64U + (u32)(((u64)iter * 191ULL) / (u64)max_iter);
+    u32 shade = 96U + (u32)(((u64)iter * 159ULL) / (u64)max_iter);
     r = (r * shade) / 255U;
     g = (g * shade) / 255U;
     b = (b * shade) / 255U;

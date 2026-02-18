@@ -357,16 +357,16 @@ static uintptr_t _pick_mmap_base(sched_thread_t* thread, size_t size) {
     if (!stack_base)
         stack_base = (uintptr_t)arch_user_stack_top();
 
+    uintptr_t stack_end = stack_base + thread->user_stack_size;
+
     for (sched_user_region_t* region = thread->regions; region; region = region->next) {
-        if (region->vaddr == thread->user_stack_base &&
-            region->pages == thread->user_stack_size / PAGE_4KIB) {
+        uintptr_t region_end = region->vaddr + region->pages * PAGE_4KIB;
+
+        if (stack_base && region->vaddr >= stack_base && region_end <= stack_end)
             continue;
-        }
 
-        uintptr_t end = region->vaddr + region->pages * PAGE_4KIB;
-
-        if (end > base)
-            base = end;
+        if (region_end > base)
+            base = region_end;
     }
 
     base = ALIGN(base, PAGE_4KIB);

@@ -3,14 +3,16 @@
 #include <fcntl.h>
 #include <psf.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #include "wm.h"
+#include "wm_background.h"
 
 #define BORDER_COLOR   0x00c0c0c0U
-#define TITLE_COLOR    0x00306090U
-#define TITLE_FOCUS    0x0060a0d0U
+#define TITLE_COLOR    0x0020364aU
+#define TITLE_FOCUS    0x005fa9d8U
 #define CLIENT_BG      0x00101010U
 #define TITLE_TEXT     0x00f0f0f0U
 #define CLOSE_BG       0x00b04040U
@@ -18,9 +20,9 @@
 #define FONT_BUF_SIZE  (256 * 1024)
 #define MAX_TITLE_CHARS 48
 
-static wm_window_t windows[WS_MAX_WINDOWS];
+static vector_t* windows;
 static u32 row_store[WM_MAX_FB_W];
-static u8 font_buf[FONT_BUF_SIZE];
+static u8* font_buf;
 static psf_font_t title_font = {0};
 
 static int _open_ws_fb(u32 id) {
@@ -30,10 +32,16 @@ static int _open_ws_fb(u32 id) {
 }
 
 static bool _load_font_file(const char* path) {
-    return psf_load_file(path, font_buf, sizeof(font_buf), &title_font);
+    return psf_load_file(path, font_buf, FONT_BUF_SIZE, &title_font);
 }
 
 static void _init_font(void) {
+    if (!font_buf) {
+        font_buf = malloc(FONT_BUF_SIZE);
+        if (!font_buf)
+            return;
+    }
+
     if (_load_font_file("/boot/font.psf"))
         return;
 
@@ -105,9 +113,6 @@ static void _cleanup_window(wm_window_t* window) {
 
     if (window->fb_fd >= 0)
         close(window->fb_fd);
-
-    memset(window, 0, sizeof(*window));
-    window->fb_fd = -1;
 }
 
 static bool _point_in_rect(i32 px, i32 py, i32 x, i32 y, i32 w, i32 h) {
@@ -115,31 +120,31 @@ static bool _point_in_rect(i32 px, i32 py, i32 x, i32 y, i32 w, i32 h) {
 }
 
 static bool _point_in_window(const wm_window_t* window, i32 px, i32 py) {
-    if (!window || !window->used)
+    if (!window)
         return false;
 
     return _point_in_rect(px, py, window->x, window->y, (i32)window->width, (i32)window->height + TITLE_H);
 }
 
-static void _sort_by_z(u32* ids, size_t count) {
-    if (!ids || count < 2)
+static void _sort_by_z(wm_window_t** arr, size_t count) {
+    if (!arr || count < 2)
         return;
 
     for (size_t i = 1; i < count; i++) {
-        u32 value = ids[i];
+        wm_window_t* value = arr[i];
         size_t j = i;
 
-        while (j > 0 && windows[ids[j - 1]].z > windows[value].z) {
-            ids[j] = ids[j - 1];
+        while (j > 0 && arr[j - 1]->z > value->z) {
+            arr[j] = arr[j - 1];
             j--;
         }
 
-        ids[j] = value;
+        arr[j] = value;
     }
 }
 
 static void _blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* window) {
-    if (!frame || !window || !window->used)
+    if (!frame || !window)
         return;
 
     i32 x = window->x;
@@ -148,8 +153,6 @@ static void _blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* w
     u32 h = window->height;
 
     draw_fill_rect(frame, fb_width, fb_height, x, y, w, TITLE_H, window->focused ? TITLE_FOCUS : TITLE_COLOR);
-    draw_fill_rect(frame, fb_width, fb_height, x, y, w, BORDER_W, BORDER_COLOR);
-    draw_fill_rect(frame, fb_width, fb_height, x, y + TITLE_H - BORDER_W, w, BORDER_W, BORDER_COLOR);
     draw_fill_rect(frame, fb_width, fb_height, x, y + TITLE_H, BORDER_W, h, BORDER_COLOR);
     draw_fill_rect(frame, fb_width, fb_height, x + (i32)w - BORDER_W, y + TITLE_H, BORDER_W, h, BORDER_COLOR);
     draw_fill_rect(
@@ -212,26 +215,41 @@ static void _blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* w
 
 void wm_init(void) {
     _init_font();
-    for (u32 i = 0; i < WS_MAX_WINDOWS; i++)
-        windows[i].fb_fd = -1;
+    windows = vec_create(sizeof(wm_window_t));
+}
+
+void wm_destroy(void) {
+    vec_destroy(windows);
+    windows = NULL;
+
+    if (font_buf) {
+        free(font_buf);
+        font_buf = NULL;
+    }
 }
 
 wm_window_t* wm_window_by_id(u32 id) {
-    if (id >= WS_MAX_WINDOWS)
+    if (!windows)
         return NULL;
 
-    return &windows[id];
+    for (size_t i = 0; i < windows->size; i++) {
+        wm_window_t* window = vec_at(windows, i);
+        if (window->id == id)
+            return window;
+    }
+
+    return NULL;
 }
 
 bool wm_point_in_title(const wm_window_t* window, i32 px, i32 py) {
-    if (!window || !window->used)
+    if (!window)
         return false;
 
     return _point_in_rect(px, py, window->x, window->y, (i32)window->width, TITLE_H);
 }
 
 bool wm_point_in_close(const wm_window_t* window, i32 px, i32 py) {
-    if (!window || !window->used)
+    if (!window)
         return false;
 
     i32 bx = window->x + (i32)window->width - CLOSE_BTN_SIZE - 3;
@@ -243,8 +261,8 @@ bool wm_point_in_close(const wm_window_t* window, i32 px, i32 py) {
 wm_window_t* wm_top_window_at(i32 px, i32 py) {
     wm_window_t* top = NULL;
 
-    for (u32 i = 0; i < WS_MAX_WINDOWS; i++) {
-        wm_window_t* window = &windows[i];
+    for (size_t i = 0; i < windows->size; i++) {
+        wm_window_t* window = vec_at(windows, i);
 
         if (!_point_in_window(window, px, py))
             continue;
@@ -259,11 +277,8 @@ wm_window_t* wm_top_window_at(i32 px, i32 py) {
 wm_window_t* wm_top_window(void) {
     wm_window_t* top = NULL;
 
-    for (u32 i = 0; i < WS_MAX_WINDOWS; i++) {
-        wm_window_t* window = &windows[i];
-
-        if (!window->used)
-            continue;
+    for (size_t i = 0; i < windows->size; i++) {
+        wm_window_t* window = vec_at(windows, i);
 
         if (!top || window->z >= top->z)
             top = window;
@@ -283,66 +298,98 @@ void wm_set_focus(ui_t* ui, wm_window_t* window, u32* z_counter) {
         ui_mgr_raise(ui, window->id, window->z);
     }
 
-    for (u32 i = 0; i < WS_MAX_WINDOWS; i++)
-        windows[i].focused = false;
+    for (size_t i = 0; i < windows->size; i++) {
+        wm_window_t* w = vec_at(windows, i);
+        w->focused = false;
+    }
 
     window->focused = true;
 }
 
 void wm_handle_ws_event(const ws_event_t* event) {
-    if (!event || event->id >= WS_MAX_WINDOWS)
+    if (!event)
         return;
 
     wm_window_t* window = wm_window_by_id(event->id);
-    if (!window)
-        return;
 
     if (event->type == WS_EVT_WINDOW_CLOSED) {
+        if (!window)
+            return;
+
         _cleanup_window(window);
+
+        // swap with last element and pop
+        size_t idx = ((u8*)window - (u8*)windows->data) / windows->elem_size;
+        if (idx + 1 < windows->size) {
+            wm_window_t* last = vec_at(windows, windows->size - 1);
+            memcpy(window, last, sizeof(wm_window_t));
+        }
+
+        windows->size--;
         return;
     }
 
     if (event->type != WS_EVT_WINDOW_NEW)
         return;
 
-    _cleanup_window(window);
+    // if a window with this id already exists, clean it first
+    if (window) {
+        _cleanup_window(window);
 
-    window->used = true;
-    window->id = event->id;
-    window->x = event->x;
-    window->y = event->y;
-    window->width = event->width;
-    window->height = event->height;
-    window->z = event->id;
-    window->focused = false;
-    strncpy(window->title, event->title, sizeof(window->title) - 1);
-    window->title[sizeof(window->title) - 1] = '\0';
-    window->fb_fd = _open_ws_fb(window->id);
+        size_t idx = ((u8*)window - (u8*)windows->data) / windows->elem_size;
+        if (idx + 1 < windows->size) {
+            wm_window_t* last = vec_at(windows, windows->size - 1);
+            memcpy(window, last, sizeof(wm_window_t));
+        }
+
+        windows->size--;
+    }
+
+    wm_window_t new_window = {
+        .id = event->id,
+        .x = event->x,
+        .y = event->y,
+        .width = event->width,
+        .height = event->height,
+        .z = event->id,
+        .focused = false,
+        .fb_fd = _open_ws_fb(event->id),
+        .title = {0},
+    };
+
+    strncpy(new_window.title, event->title, sizeof(new_window.title) - 1);
+    vec_push(windows, &new_window);
 }
 
 void wm_render_frame(u32* frame, u32 fb_width, u32 fb_height) {
     if (!frame)
         return;
 
-    draw_fill_rect(frame, fb_width, fb_height, 0, 0, fb_width, fb_height, BG_COLOR);
+    if (!wm_background_draw(frame, fb_width, fb_height))
+        draw_fill_rect(frame, fb_width, fb_height, 0, 0, fb_width, fb_height, BG_COLOR);
 
-    u32 order[WS_MAX_WINDOWS];
-    size_t active = 0;
+    size_t count = windows->size;
 
-    for (u32 i = 0; i < WS_MAX_WINDOWS; i++) {
-        if (!windows[i].used)
-            continue;
+    wm_window_t** order = malloc(count * sizeof(wm_window_t*));
+    if (!order)
+        return;
 
-        order[active++] = i;
-    }
+    for (size_t i = 0; i < count; i++)
+        order[i] = vec_at(windows, i);
 
-    _sort_by_z(order, active);
+    _sort_by_z(order, count);
 
-    for (size_t i = 0; i < active; i++)
-        _blit_window(frame, fb_width, fb_height, &windows[order[i]]);
+    for (size_t i = 0; i < count; i++)
+        _blit_window(frame, fb_width, fb_height, order[i]);
+
+    free(order);
 }
 
 void wm_cleanup_all_windows(void) {
-    for (u32 i = 0; i < WS_MAX_WINDOWS; i++)
-        _cleanup_window(&windows[i]);
+    for (size_t i = 0; i < windows->size; i++) {
+        wm_window_t* window = vec_at(windows, i);
+        _cleanup_window(window);
+    }
+
+    vec_clear(windows);
 }
