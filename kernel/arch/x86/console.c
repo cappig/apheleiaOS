@@ -48,7 +48,7 @@ static bool _x86_console_probe(void* arch_boot_info, console_hw_desc_t* out) {
             return true;
         }
 #else
-        u8* mapped = arch_phys_map(info->video.framebuffer, size);
+        u8* mapped = arch_phys_map(info->video.framebuffer, size, PHYS_MAP_WC);
         if (mapped) {
             out->mode = CONSOLE_FRAMEBUFFER;
             out->fb = mapped;
@@ -87,7 +87,7 @@ static bool _x86_console_probe(void* arch_boot_info, console_hw_desc_t* out) {
 #if defined(__i386__)
     out->fb = (u8*)(uintptr_t)VGA_ADDR;
 #else
-    out->fb = arch_phys_map(VGA_ADDR, vga_size);
+    out->fb = arch_phys_map(VGA_ADDR, vga_size, 0);
     if (!out->fb) {
         memset(out, 0, sizeof(*out));
         return false;
@@ -107,7 +107,7 @@ static u8* _x86_fb_map(size_t offset, size_t size) {
 
 #if defined(__i386__)
     if (x86_fb_use_phys_window)
-        return arch_phys_map(x86_fb_phys + (u64)offset, size);
+        return arch_phys_map(x86_fb_phys + (u64)offset, size, PHYS_MAP_WC);
 #endif
 
     if (!x86_fb_base)

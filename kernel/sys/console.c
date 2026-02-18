@@ -13,6 +13,10 @@
 #include <sys/tty.h>
 #include <term/ansi.h>
 
+// Forward-declare from kernel ws module (can't #include <sys/ws.h> because
+// libs/libc/sys/ws.h shadows it on the include path).
+void ws_notify_screen_active(void);
+
 typedef struct {
     size_t cursor_x;
     size_t cursor_y;
@@ -860,6 +864,15 @@ bool console_set_active(size_t index) {
         return true;
 
     console_state.active_screen = index;
+
+    // When switching to the fb owner's screen (e.g. WM), the console's
+    // _flush_dirty is blocked — we must not redraw.  Instead, notify the
+    // window server so the WM wakes up and presents a fresh frame.
+    if (console_state.fb_owned && index == console_state.fb_owner_screen) {
+        ws_notify_screen_active();
+        return true;
+    }
+
     _redraw_screen(index);
 
     return true;

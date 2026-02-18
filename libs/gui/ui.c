@@ -238,6 +238,10 @@ int ui_mgr_close(ui_t* ui, u32 id) {
     return ui_simple(ui, WS_OP_CLOSE, id, 0, 0, 0);
 }
 
+int ui_mgr_clear_dirty(ui_t* ui) {
+    return ui_simple(ui, WS_OP_CLEAR_DIRTY, 0, 0, 0, 0);
+}
+
 int ui_mgr_send(ui_t* ui, u32 id, const input_event_t* event) {
     if (!ui || !event) {
         errno = EINVAL;
@@ -508,6 +512,15 @@ int window_flush_rect(window_t* window, u32 x, u32 y, u32 width, u32 height) {
 
     if (y + clip_h > window->height)
         clip_h = window->height - y;
+
+    // Fast path: full-width rect with matching stride — single pwrite
+    if (x == 0 && clip_w == window->width && window->stride == window->width * sizeof(u32)) {
+        const u8* src = (const u8*)(window->pixels + (size_t)y * window->width);
+        size_t total = (size_t)clip_h * (size_t)window->width * sizeof(u32);
+        off_t dst_off = (off_t)((size_t)y * window->stride);
+
+        return window_flush_row(window, src, total, dst_off);
+    }
 
     size_t row_bytes = (size_t)clip_w * sizeof(u32);
 

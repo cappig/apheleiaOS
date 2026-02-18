@@ -21,7 +21,8 @@
 #define MAX_TITLE_CHARS 48
 
 static vector_t* windows;
-static u32 row_store[WM_MAX_FB_W];
+static u32* blit_buf;
+static size_t blit_buf_cap;
 static u8* font_buf;
 static psf_font_t title_font = {0};
 
@@ -143,6 +144,19 @@ static void _sort_by_z(wm_window_t** arr, size_t count) {
     }
 }
 
+static bool _ensure_blit_buf(size_t pixels) {
+    if (pixels <= blit_buf_cap)
+        return true;
+
+    u32* buf = realloc(blit_buf, pixels * sizeof(u32));
+    if (!buf)
+        return false;
+
+    blit_buf = buf;
+    blit_buf_cap = pixels;
+    return true;
+}
+
 static void _blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* window) {
     if (!frame || !window)
         return;
@@ -155,29 +169,38 @@ static void _blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* w
     draw_fill_rect(frame, fb_width, fb_height, x, y, w, TITLE_H, window->focused ? TITLE_FOCUS : TITLE_COLOR);
     draw_fill_rect(frame, fb_width, fb_height, x, y + TITLE_H, BORDER_W, h, BORDER_COLOR);
     draw_fill_rect(frame, fb_width, fb_height, x + (i32)w - BORDER_W, y + TITLE_H, BORDER_W, h, BORDER_COLOR);
-    draw_fill_rect(
-        frame, fb_width, fb_height,
-        x + BORDER_W, y + TITLE_H + BORDER_W,
-        w - 2 * BORDER_W, h - 2 * BORDER_W, CLIENT_BG
-    );
 
     _draw_close_button(frame, fb_width, fb_height, window, window->focused);
 
     if (window->title[0])
         _draw_text(frame, fb_width, fb_height, x + 6, y + 1, window->title, TITLE_TEXT);
 
-    if (window->fb_fd < 0)
+    if (window->fb_fd < 0) {
+        draw_fill_rect(
+            frame, fb_width, fb_height,
+            x + BORDER_W, y + TITLE_H + BORDER_W,
+            w - 2 * BORDER_W, h - 2 * BORDER_W, CLIENT_BG
+        );
         return;
+    }
 
-    u32 copy_cols = w;
-    if (copy_cols > WM_MAX_FB_W)
-        copy_cols = WM_MAX_FB_W;
+    size_t total_pixels = (size_t)w * (size_t)h;
 
-    for (u32 row = 0; row < h; row++) {
-        off_t row_off = (off_t)((size_t)row * (size_t)w * 4);
-        size_t row_bytes = copy_cols * 4;
+    if (!_ensure_blit_buf(total_pixels)) {
+        draw_fill_rect(
+            frame, fb_width, fb_height,
+            x + BORDER_W, y + TITLE_H + BORDER_W,
+            w - 2 * BORDER_W, h - 2 * BORDER_W, CLIENT_BG
+        );
+        return;
+    }
 
-        ssize_t n = pread(window->fb_fd, row_store, row_bytes, row_off);
+    // Single pread for entire window framebuffer
+    size_t total_bytes = total_pixels * sizeof(u32);
+    size_t read_total = 0;
+
+    while (read_total < total_bytes) {
+        ssize_t n = pread(window->fb_fd, (u8*)blit_buf + read_total, total_bytes - read_total, (off_t)read_total);
 
         if (n < 0) {
             if (errno == EINTR)
@@ -186,16 +209,23 @@ static void _blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* w
             break;
         }
 
-        if ((size_t)n != row_bytes)
-            continue;
+        if (!n)
+            break;
 
+        read_total += (size_t)n;
+    }
+
+    if (read_total < total_bytes)
+        memset((u8*)blit_buf + read_total, 0, total_bytes - read_total);
+
+    for (u32 row = 0; row < h; row++) {
         i32 dst_y = y + TITLE_H + (i32)row;
 
         if (dst_y < 0 || dst_y >= (i32)fb_height)
             continue;
 
         i32 col_start = 0;
-        i32 col_end = (i32)copy_cols;
+        i32 col_end = (i32)w;
 
         if (x < 0)
             col_start = -x;
@@ -206,7 +236,7 @@ static void _blit_window(u32* frame, u32 fb_width, u32 fb_height, wm_window_t* w
         if (col_start < col_end) {
             memcpy(
                 &frame[(size_t)dst_y * fb_width + (size_t)(x + col_start)],
-                &row_store[col_start],
+                &blit_buf[(size_t)row * w + (size_t)col_start],
                 (size_t)(col_end - col_start) * 4
             );
         }
@@ -225,6 +255,12 @@ void wm_destroy(void) {
     if (font_buf) {
         free(font_buf);
         font_buf = NULL;
+    }
+
+    if (blit_buf) {
+        free(blit_buf);
+        blit_buf = NULL;
+        blit_buf_cap = 0;
     }
 }
 
@@ -369,10 +405,13 @@ void wm_render_frame(u32* frame, u32 fb_width, u32 fb_height) {
         draw_fill_rect(frame, fb_width, fb_height, 0, 0, fb_width, fb_height, BG_COLOR);
 
     size_t count = windows->size;
-
-    wm_window_t** order = malloc(count * sizeof(wm_window_t*));
-    if (!order)
+    if (!count)
         return;
+
+    if (count > WS_MAX_WINDOWS)
+        count = WS_MAX_WINDOWS;
+
+    wm_window_t* order[WS_MAX_WINDOWS];
 
     for (size_t i = 0; i < count; i++)
         order[i] = vec_at(windows, i);
@@ -381,8 +420,6 @@ void wm_render_frame(u32* frame, u32 fb_width, u32 fb_height) {
 
     for (size_t i = 0; i < count; i++)
         _blit_window(frame, fb_width, fb_height, order[i]);
-
-    free(order);
 }
 
 void wm_cleanup_all_windows(void) {

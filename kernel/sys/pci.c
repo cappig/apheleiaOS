@@ -25,7 +25,7 @@ static bool _ecam_read_header(u64 base, u8 bus, u8 slot, u8 func, pci_header_t* 
         return false;
 
     u64 phys = _ecam_addr(base, bus, slot, func);
-    void* map = arch_phys_map(phys, sizeof(pci_header_t));
+    void* map = arch_phys_map(phys, sizeof(pci_header_t), 0);
 
     if (!map)
         return false;
@@ -185,7 +185,7 @@ pci_device_t* pci_find_device(u8 class, u8 subclass, pci_device_t* from) {
 
             if (dev->base != (u64)-1) {
                 u64 phys = _ecam_addr(dev->base, dev->bus, dev->slot, dev->func);
-                void* map = arch_phys_map(phys, 256);
+                void* map = arch_phys_map(phys, 256, 0);
 
                 if (!map) {
                     free(ret);
@@ -230,7 +230,7 @@ static void _write_legacy(u8 bus, u8 slot, u8 func, u8 offset, u32 value, u8 siz
 
 static u32 _ecam_read(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u8 size) {
     u64 phys = _ecam_addr(base, bus, slot, func);
-    void* map = arch_phys_map(phys, 4096);
+    void* map = arch_phys_map(phys, 4096, 0);
 
     if (!map)
         return 0xffffffffU;
@@ -259,7 +259,7 @@ static u32 _ecam_read(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u8 size) {
 
 static void _ecam_write(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size) {
     u64 phys = _ecam_addr(base, bus, slot, func);
-    void* map = arch_phys_map(phys, 4096);
+    void* map = arch_phys_map(phys, 4096, 0);
 
     if (!map)
         return;

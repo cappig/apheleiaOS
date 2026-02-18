@@ -522,7 +522,7 @@ static ssize_t _boot_rootfs_read(disk_dev_t* dev, void* dest, size_t offset, siz
     if (!bytes)
         return 0;
 
-    void* src = arch_phys_map(rootfs->paddr + offset, bytes);
+    void* src = arch_phys_map(rootfs->paddr + offset, bytes, 0);
     if (!src)
         return -1;
 
@@ -547,7 +547,7 @@ static ssize_t _boot_rootfs_write(disk_dev_t* dev, void* src, size_t offset, siz
     if (!bytes)
         return 0;
 
-    void* dest = arch_phys_map(rootfs->paddr + offset, bytes);
+    void* dest = arch_phys_map(rootfs->paddr + offset, bytes, 0);
     if (!dest)
         return -1;
 
@@ -646,6 +646,7 @@ const kernel_args_t* arch_init(void* boot_info) {
     gdt_init();
     tss_init(_read_stack_ptr());
     cpu_init_boot();
+    pat_init();
     pic_init();
     idt_init();
 

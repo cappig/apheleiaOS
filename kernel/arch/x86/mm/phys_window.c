@@ -8,8 +8,9 @@
 #include <x86/boot.h>
 
 #if defined(__x86_64__)
-void* arch_phys_map(u64 paddr, size_t size) {
+void* arch_phys_map(u64 paddr, size_t size, u32 flags) {
     (void)size;
+    (void)flags; // WC is handled by the page tables set up during boot
     return (void*)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
 }
 
@@ -22,8 +23,8 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
     if (!size)
         return true;
 
-    void* dst = arch_phys_map(dst_paddr, size);
-    void* src = arch_phys_map(src_paddr, size);
+    void* dst = arch_phys_map(dst_paddr, size, 0);
+    void* src = arch_phys_map(src_paddr, size, 0);
 
     if (!dst || !src)
         return false;
@@ -100,7 +101,7 @@ static void _clear_window_range(size_t pages) {
         _clear_window_page(vaddr + (u32)(i * PAGE_4KIB));
 }
 
-void* arch_phys_map(u64 paddr, size_t size) {
+void* arch_phys_map(u64 paddr, size_t size, u32 flags) {
     if (!size)
         return NULL;
 
@@ -112,7 +113,7 @@ void* arch_phys_map(u64 paddr, size_t size) {
     if (pages > window_pages)
         panic("phys window map too large");
 
-    // single sliding window -- new mappings invalidate any previous one
+    // single sliding window, new mappings invalidate any previous one
     if (window_pages_mapped) {
         if (window_stack_depth >= PHYS_WINDOW_STACK_MAX)
             panic("phys window map stack overflow");
@@ -126,11 +127,14 @@ void* arch_phys_map(u64 paddr, size_t size) {
     window_pages_mapped = pages;
     window_paddr_base = start;
 
+    u64 pt_flags = PT_WRITE;
+    if (flags & PHYS_MAP_WC)
+        pt_flags |= PT_PAT_4K;
+
     u32 vaddr = PHYS_WINDOW_BASE_32;
 
-    for (size_t i = 0; i < pages; i++) {
-        _map_window_page(vaddr + (u32)(i * PAGE_4KIB), start + i * PAGE_4KIB, PT_WRITE);
-    }
+    for (size_t i = 0; i < pages; i++)
+        _map_window_page(vaddr + (u32)(i * PAGE_4KIB), start + i * PAGE_4KIB, pt_flags);
 
     return (void*)(uintptr_t)(PHYS_WINDOW_BASE_32 + (u32)(paddr - start));
 }
@@ -177,14 +181,14 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
         if (chunk > kChunk)
             chunk = kChunk;
 
-        void* src = arch_phys_map(src_paddr + offset, chunk);
+        void* src = arch_phys_map(src_paddr + offset, chunk, 0);
         if (!src)
             return false;
 
         memcpy(bounce, src, chunk);
         arch_phys_unmap(src, chunk);
 
-        void* dst = arch_phys_map(dst_paddr + offset, chunk);
+        void* dst = arch_phys_map(dst_paddr + offset, chunk, 0);
         if (!dst)
             return false;
 

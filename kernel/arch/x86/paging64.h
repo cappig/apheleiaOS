@@ -39,6 +39,8 @@ typedef u64 page_t;
 #define PT_DIRTY         (1 << 6)
 #define PT_HUGE          (1 << 7)
 #define PT_GLOBAL        (1 << 8)
+#define PT_PAT_4K        (1 << 7)       // PAT bit for 4KB PTEs (same position as PT_HUGE)
+#define PT_PAT_HUGE      (1ULL << 12)   // PAT bit for 2MB / 1GB pages
 #define PT_NO_EXECUTE    (1ULL << 63)
 
 static inline page_t page_get_paddr(page_t* page) {

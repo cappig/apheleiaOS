@@ -20,7 +20,6 @@ extern char** environ;
 
 #define WM_POLL_DRAG_MS   16
 #define WM_POLL_FRAME_MS  16
-#define WM_POLL_IDLE_MS   33
 
 typedef struct {
     i32 mouse_x;
@@ -286,8 +285,6 @@ void wm_loop(ui_t* ui, int fb_fd, const fb_info_t* fb_info, u32* frame_store, si
             timeout_ms = WM_POLL_DRAG_MS;
         else if (needs_redraw)
             timeout_ms = WM_POLL_FRAME_MS;
-        else if (has_windows)
-            timeout_ms = WM_POLL_IDLE_MS;
 
         int pr = poll(pfds, 2, timeout_ms);
 
@@ -298,15 +295,18 @@ void wm_loop(ui_t* ui, int fb_fd, const fb_info_t* fb_info, u32* frame_store, si
             return;
         }
 
-        if (!pr && has_windows)
-            needs_redraw = true;
-
         if (pfds[1].revents & POLLIN) {
-            if (_handle_ws_events(ui, &rt) < 0)
+            int ws_rc = _handle_ws_events(ui, &rt);
+            if (ws_rc < 0)
                 return;
 
+            // ctl_fd is pollable for ws events AND window fb dirty
             needs_redraw = true;
         }
+
+        // ctl_fd polls readable when window content is dirty too
+        if (!pr && !needs_redraw && has_windows)
+            continue;
 
         if (pfds[0].revents & POLLIN) {
             bool changed = false;
@@ -340,6 +340,7 @@ void wm_loop(ui_t* ui, int fb_fd, const fb_info_t* fb_info, u32* frame_store, si
         if (present < 0)
             return;
 
+        ui_mgr_clear_dirty(ui);
         needs_redraw = false;
     }
 }

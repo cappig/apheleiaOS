@@ -128,6 +128,30 @@ void load_kerenel(boot_info_t* info) {
         identity_map_64(PROTECTED_MODE_TOP, 0, false);
         identity_map_64(PROTECTED_MODE_TOP, LINEAR_MAP_OFFSET_64, true);
 
+        // Remap framebuffer pages as write-combining (2MiB granularity).
+        // PT_WRITE = (1<<1), PT_PAT_HUGE = (1<<12) — can't include
+        // x86/paging64.h here because of 32/64 mutual exclusion.
+        if (info->video.mode == VIDEO_GRAPHICS && info->video.framebuffer) {
+            u64 pitch = info->video.bytes_per_line;
+            if (!pitch)
+                pitch = (u64)info->video.width * info->video.bytes_per_pixel;
+
+            u64 fb_size = pitch * info->video.height;
+            if (fb_size) {
+                u64 page_2m = 2 * MIB;
+                u64 wc_flags = (1 << 1) | (1ULL << 12); // PT_WRITE | PT_PAT_HUGE
+                u64 fb_base = ALIGN_DOWN(info->video.framebuffer, page_2m);
+                u64 fb_end  = ALIGN(info->video.framebuffer + fb_size, page_2m);
+
+                for (u64 addr = fb_base; addr < fb_end && addr < PROTECTED_MODE_TOP; addr += page_2m) {
+                    map_page_64(page_2m, addr, addr, wc_flags, false);
+                    map_page_64(page_2m, addr + LINEAR_MAP_OFFSET_64, addr, wc_flags, true);
+                }
+            }
+        }
+
+        pat_init();
+
         init_paging_64();
 
         u64 stack_paddr = (u64)(uintptr_t)mmap_alloc(KERNEL_STACK_SIZE, E820_KERNEL, 0);

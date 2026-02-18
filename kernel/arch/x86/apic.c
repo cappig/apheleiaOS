@@ -183,7 +183,7 @@ static void* _map_mmio(u64 paddr) {
 }
 #else
 static void* _map_mmio(u64 paddr) {
-    return arch_phys_map(paddr, PAGE_4KIB);
+    return arch_phys_map(paddr, PAGE_4KIB, 0);
 }
 #endif
 

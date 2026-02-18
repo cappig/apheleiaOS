@@ -48,7 +48,7 @@ static inline u32 hi32(u64 v) {
 }
 
 static bool ahci_zero_phys(u64 paddr, size_t size) {
-    void* map = arch_phys_map(paddr, size);
+    void* map = arch_phys_map(paddr, size, 0);
     if (!map)
         return false;
 
@@ -321,7 +321,7 @@ ahci_exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, 
     if (!dev || !dev->irq_enabled || !sectors || !bytes)
         return false;
 
-    void* cl_map = arch_phys_map(dev->clb_paddr, PAGE_4KIB);
+    void* cl_map = arch_phys_map(dev->clb_paddr, PAGE_4KIB, 0);
     if (!cl_map)
         return false;
 
@@ -341,7 +341,7 @@ ahci_exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, 
 
     arch_phys_unmap(cl_map, PAGE_4KIB);
 
-    void* ct_map = arch_phys_map(dev->ct_paddr, PAGE_4KIB);
+    void* ct_map = arch_phys_map(dev->ct_paddr, PAGE_4KIB, 0);
     if (!ct_map)
         return false;
 
@@ -377,7 +377,7 @@ ahci_exec_cmd(ahci_device_t* dev, u8 command, u64 lba, u16 sectors, bool write, 
 
     arch_phys_unmap(ct_map, PAGE_4KIB);
 
-    void* mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE);
+    void* mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, 0);
     if (!mmio_map)
         return false;
 
@@ -465,7 +465,7 @@ static bool ahci_identify(ahci_device_t* dev, u16* identify) {
     if (!ahci_exec_cmd(dev, ATA_CMD_IDENTIFY, 0, 1, false, AHCI_SECTOR_SIZE))
         return false;
 
-    void* dma = arch_phys_map(dev->dma_paddr, AHCI_SECTOR_SIZE);
+    void* dma = arch_phys_map(dev->dma_paddr, AHCI_SECTOR_SIZE, 0);
     if (!dma)
         return false;
 
@@ -482,7 +482,7 @@ static bool ahci_transfer(ahci_device_t* dev, u64 lba, u16 sectors, void* buf, b
     size_t bytes = (size_t)sectors * AHCI_SECTOR_SIZE;
 
     if (write) {
-        void* dma = arch_phys_map(dev->dma_paddr, bytes);
+        void* dma = arch_phys_map(dev->dma_paddr, bytes, 0);
         if (!dma)
             return false;
 
@@ -495,7 +495,7 @@ static bool ahci_transfer(ahci_device_t* dev, u64 lba, u16 sectors, void* buf, b
         return false;
 
     if (!write) {
-        void* dma = arch_phys_map(dev->dma_paddr, bytes);
+        void* dma = arch_phys_map(dev->dma_paddr, bytes, 0);
         if (!dma)
             return false;
 
@@ -671,7 +671,7 @@ static bool ahci_setup_port(ahci_device_t* dev) {
         return false;
     }
 
-    void* mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE);
+    void* mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, 0);
     if (!mmio_map)
         return false;
 
@@ -747,7 +747,7 @@ static bool ahci_find_controller(ahci_device_t* dev) {
         dev->slot = node->slot;
         dev->func = node->func;
 
-        void* mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE);
+        void* mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, 0);
         if (!mmio_map)
             continue;
 

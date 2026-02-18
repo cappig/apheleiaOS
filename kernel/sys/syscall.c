@@ -1155,7 +1155,7 @@ static uintptr_t sys_mmap(const mmap_args_t* args) {
         return (uintptr_t)-ENOMEM;
     }
 
-    void* dst = arch_phys_map(paddr, pages * PAGE_4KIB);
+    void* dst = arch_phys_map(paddr, pages * PAGE_4KIB, 0);
     if (!dst) {
         sched_user_region_t* prev = NULL;
         sched_user_region_t* region = _find_region_exact(thread, addr, pages, &prev);

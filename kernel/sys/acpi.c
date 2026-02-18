@@ -21,7 +21,7 @@ static bool _checksum(const void* table, size_t length) {
 
 static sdt_header_t* _copy_table(u64 phys_addr) {
     sdt_header_t header = {0};
-    void* header_map = arch_phys_map(phys_addr, sizeof(sdt_header_t));
+    void* header_map = arch_phys_map(phys_addr, sizeof(sdt_header_t), 0);
 
     if (!header_map)
         return NULL;
@@ -32,7 +32,7 @@ static sdt_header_t* _copy_table(u64 phys_addr) {
     if (header.length < sizeof(sdt_header_t))
         return NULL;
 
-    void* table_map = arch_phys_map(phys_addr, header.length);
+    void* table_map = arch_phys_map(phys_addr, header.length, 0);
     if (!table_map)
         return NULL;
 
@@ -131,7 +131,7 @@ void acpi_init(u64 rsdp_ptr) {
         return;
 
     rsdp_t rsdp = {0};
-    void* rsdp_map = arch_phys_map(rsdp_ptr, sizeof(rsdp_t));
+    void* rsdp_map = arch_phys_map(rsdp_ptr, sizeof(rsdp_t), 0);
 
     if (!rsdp_map)
         return;

@@ -142,7 +142,9 @@ static EFI_STATUS _map_page_2m(u64 vaddr, u64 paddr, u64 flags) {
         return status;
 
     size_t index = GET_LVL2_INDEX(vaddr);
-    lvl2[index] = (paddr & ADDR_MASK) | (flags & FLAGS_MASK) | PT_PRESENT | PT_HUGE;
+    // For 2MiB pages, the PAT bit is at position 12 (outside FLAGS_MASK).
+    u64 pat_huge = flags & PT_PAT_HUGE;
+    lvl2[index] = (paddr & ADDR_MASK) | (flags & FLAGS_MASK) | pat_huge | PT_PRESENT | PT_HUGE;
     return EFI_SUCCESS;
 }
 
@@ -240,21 +242,43 @@ static EFI_STATUS _map_framebuffer_linear(const boot_info_t* info) {
     if (!fb_size)
         return EFI_SUCCESS;
 
-    u64 fb_base = ALIGN_DOWN(info->video.framebuffer, PAGE_4KIB);
-    u64 fb_end = ALIGN(info->video.framebuffer + fb_size, PAGE_4KIB);
+    u64 fb_start = info->video.framebuffer;
+    u64 fb_end = fb_start + fb_size;
 
-    if (fb_end <= PROTECTED_MODE_TOP)
-        return EFI_SUCCESS;
+    // Remap the 2MiB-aligned region covering the framebuffer as write-combining.
+    // For the portion below PROTECTED_MODE_TOP the pages were already mapped WB
+    // by _map_identity_and_linear; overwrite them with WC using 2MiB pages.
+    u64 base_2m = ALIGN_DOWN(fb_start, PAGE_2MIB);
+    u64 end_2m  = ALIGN(fb_end, PAGE_2MIB);
 
-    if (fb_base < PROTECTED_MODE_TOP)
-        fb_base = PROTECTED_MODE_TOP;
+    for (u64 addr = base_2m; addr < end_2m; addr += PAGE_2MIB) {
+        if (addr < PROTECTED_MODE_TOP) {
+            EFI_STATUS s = _map_page_2m(addr, addr, PT_WRITE | PT_PAT_HUGE);
+            if (efi_error(s))
+                return s;
 
-    return _map_region_4k(
-        fb_base + LINEAR_MAP_OFFSET_64,
-        fb_base,
-        fb_end - fb_base,
-        PT_WRITE | PT_NO_CACHE
-    );
+            s = _map_page_2m(addr + LINEAR_MAP_OFFSET_64, addr, PT_WRITE | PT_PAT_HUGE);
+            if (efi_error(s))
+                return s;
+        } else {
+            // Above 4 GiB — no pre-existing mapping; use 4KB WC pages.
+            u64 chunk_base = ALIGN_DOWN(addr, PAGE_4KIB);
+            u64 chunk_end  = addr + PAGE_2MIB;
+            if (chunk_end > end_2m)
+                chunk_end = end_2m;
+
+            EFI_STATUS s = _map_region_4k(
+                chunk_base + LINEAR_MAP_OFFSET_64,
+                chunk_base,
+                chunk_end - chunk_base,
+                PT_WRITE | PT_PAT_4K
+            );
+            if (efi_error(s))
+                return s;
+        }
+    }
+
+    return EFI_SUCCESS;
 }
 
 
@@ -488,6 +512,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE* system_table) {
 
     if (efi_error(status))
         return _uefi_fail((const CHAR16*)L"apheleiaOS: ExitBootServices failed: ", status);
+
+    pat_init();
 
     write_cr3((u64)(uintptr_t)g_lvl4);
 

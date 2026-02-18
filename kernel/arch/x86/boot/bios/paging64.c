@@ -82,7 +82,9 @@ finalize:
     page_set_paddr(entry, paddr);
 
     flags |= PT_PRESENT;
-    *entry |= flags & FLAGS_MASK;
+    // For 2MiB/1GiB pages the PAT bit lives at position 12, outside FLAGS_MASK.
+    u64 pat_huge = (flags & PT_HUGE) ? (flags & PT_PAT_HUGE) : 0;
+    *entry |= (flags & FLAGS_MASK) | pat_huge;
 }
 
 // TODO: we should try to use larger pages if possible

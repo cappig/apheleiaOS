@@ -1489,7 +1489,7 @@ pid_t sched_fork(arch_int_state_t* state) {
             arch_map_region(root, pages, region->vaddr, new_paddr, region->flags);
             sched_add_user_region(child, region->vaddr, new_paddr, pages, region->flags);
 
-            void* dst = arch_phys_map(new_paddr, size);
+            void* dst = arch_phys_map(new_paddr, size, 0);
             if (!dst) {
                 sched_discard_thread(child);
                 return -1;

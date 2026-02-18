@@ -17,6 +17,7 @@ enum ws_op {
     WS_OP_ALLOC = 8,
     WS_OP_FREE = 9,
     WS_OP_QUERY = 10,
+    WS_OP_CLEAR_DIRTY = 11,
 };
 
 enum ws_event_type {

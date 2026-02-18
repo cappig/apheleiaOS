@@ -43,6 +43,7 @@ int ui_mgr_focus(ui_t* ui, u32 id);
 int ui_mgr_move(ui_t* ui, u32 id, i32 x, i32 y);
 int ui_mgr_raise(ui_t* ui, u32 id, u32 z);
 int ui_mgr_close(ui_t* ui, u32 id);
+int ui_mgr_clear_dirty(ui_t* ui);
 int ui_mgr_send(ui_t* ui, u32 id, const input_event_t* event);
 
 int window_alloc(ui_t* ui, window_t* window, u32 width, u32 height, const char* title);

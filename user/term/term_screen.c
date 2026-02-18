@@ -156,7 +156,30 @@ static void scroll_up(void) {
     for (size_t x = 0; x < term_screen.cols; x++)
         term_screen.cells[term_screen.rows - 1][x].ch = ' ';
 
-    mark_dirty_all();
+    // Shift the pixel buffer up by one text row and clear the last row,
+    // avoiding a full-screen re-render of every glyph.
+    u32 row_h = term_screen.font.height;
+
+    if (term_screen.pixels && row_h && term_screen.rows > 1) {
+        size_t shift_pixels = (size_t)(term_screen.rows - 1) * row_h * term_screen.width;
+        size_t row_pixels = (size_t)row_h * term_screen.width;
+
+        memmove(
+            term_screen.pixels,
+            term_screen.pixels + row_pixels,
+            shift_pixels * sizeof(u32)
+        );
+
+        // Clear the bottom row of pixels
+        u32* bottom = term_screen.pixels + shift_pixels;
+        for (size_t i = 0; i < row_pixels; i++)
+            bottom[i] = TERM_BG;
+
+        // Only the last text row needs re-rendering
+        mark_dirty_rect(0, term_screen.rows - 1, term_screen.cols, term_screen.rows);
+    } else {
+        mark_dirty_all();
+    }
 }
 
 static void newline(void) {

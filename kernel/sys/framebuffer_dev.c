@@ -44,7 +44,8 @@ static ssize_t _dev_fb_transfer(const framebuffer_info_t* fb, void* buf, size_t 
         if (chunk > FB_MAP_CHUNK)
             chunk = FB_MAP_CHUNK;
 
-        void* map = arch_phys_map(fb->paddr + off + done, chunk);
+        void* map = arch_phys_map(fb->paddr + off + done, chunk,
+                                   write ? PHYS_MAP_WC : 0);
         if (!map)
             break;
 
@@ -109,13 +110,11 @@ static ssize_t _dev_fb_present(const framebuffer_info_t* fb, const void* frame) 
         (u8)bpp_bytes, &red_shift, &green_shift, &blue_shift, &red_size, &green_size, &blue_size
     );
 
-    if (pixel_is_fast_bgrx8888(
-            (u8)bpp_bytes, red_shift, green_shift, blue_shift, red_size, green_size, blue_size
-        )) {
+    if (pixel_is_fast_bgrx8888((u8)bpp_bytes, red_shift, green_shift, blue_shift, red_size, green_size, blue_size)) {
         size_t src_row_bytes = (size_t)width * sizeof(u32);
-        for (u32 y = 0; y < height; y++) {
+
+        for (u32 y = 0; y < height; y++)
             memcpy(_back_buf + (size_t)y * row_bytes, src + (size_t)y * width, src_row_bytes);
-        }
     } else {
         for (u32 y = 0; y < height; y++) {
             const u32* src_row = src + (size_t)y * width;
@@ -130,8 +129,8 @@ static ssize_t _dev_fb_present(const framebuffer_info_t* fb, const void* frame) 
         }
     }
 
-    // Copy back buffer to VRAM in one shot
-    void* vram = arch_phys_map(fb->paddr, fb->size);
+    // Copy back buffer to VRAM in one shot (write-combining for speed)
+    void* vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
     if (!vram)
         return -EIO;
 

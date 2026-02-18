@@ -17,3 +17,5 @@ short ws_fb_poll(u32 id, short events, u32 flags);
 
 ssize_t ws_ev_read(u32 id, void* buf, size_t offset, size_t len, u32 flags);
 short ws_ev_poll(u32 id, short events, u32 flags);
+
+void ws_notify_screen_active(void);

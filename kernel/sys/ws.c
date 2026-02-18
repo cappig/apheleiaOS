@@ -29,6 +29,7 @@ typedef struct {
     u8* fb;
     size_t fb_size;
     u32 io_refs;
+    bool fb_dirty;
     bool pending_free;
     bool pending_notify_manager;
     ws_input_event_t ev_queue[WS_EV_QUEUE_CAP];
@@ -55,6 +56,7 @@ typedef struct {
     size_t mgr_count;
     sched_wait_queue_t mgr_wait;
     ws_resp_slot_t resp_slots[WS_RESP_SLOT_CAP];
+    bool mgr_fb_dirty;
 } ws_state_t;
 
 static ws_state_t ws_state = {0};
@@ -649,6 +651,13 @@ ssize_t ws_ctl_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32
     case WS_OP_QUERY:
         status = _handle_query(caller_pid, &req, &resp);
         break;
+    case WS_OP_CLEAR_DIRTY:
+        if (_is_manager(caller_pid)) {
+            ws_state.mgr_fb_dirty = false;
+            for (u32 i = 0; i < WS_MAX_WINDOWS; i++)
+                ws_state.windows[i].fb_dirty = false;
+        }
+        break;
     default:
         status = _handle_manager_op(caller_pid, &req, &resp);
         break;
@@ -766,7 +775,7 @@ short ws_ctl_poll(vfs_node_t* node, short events, u32 flags) {
             revents |= POLLIN;
 
         if (_is_manager(caller_pid)) {
-            if (ws_state.mgr_count)
+            if (ws_state.mgr_count || ws_state.mgr_fb_dirty)
                 revents |= POLLIN;
         } else {
             if (!slot)
@@ -789,7 +798,6 @@ ssize_t ws_fb_read(u32 id, void* buf, size_t offset, size_t len, u32 flags) {
         return -EPERM;
 
     _lock_acquire();
-    _reap_dead_owners();
 
     ws_window_t* window = NULL;
     int status = _window_lookup(id, caller_pid, &window);
@@ -828,7 +836,6 @@ ssize_t ws_fb_write(u32 id, const void* buf, size_t offset, size_t len, u32 flag
         return -EPERM;
 
     _lock_acquire();
-    _reap_dead_owners();
 
     ws_window_t* window = NULL;
     int status = _window_lookup(id, caller_pid, &window);
@@ -850,10 +857,22 @@ ssize_t ws_fb_write(u32 id, const void* buf, size_t offset, size_t len, u32 flag
     memcpy(dst, buf, copy_len);
 
     _lock_acquire();
+    window->fb_dirty = true;
+    ws_state.mgr_fb_dirty = true;
+    if (ws_state.manager_pid)
+        sched_wake_all(&ws_state.mgr_wait);
     _window_release_io(id, window);
     _lock_release();
 
     return (ssize_t)copy_len;
+}
+
+void ws_notify_screen_active(void) {
+    _lock_acquire();
+    ws_state.mgr_fb_dirty = true;
+    if (ws_state.manager_pid)
+        sched_wake_all(&ws_state.mgr_wait);
+    _lock_release();
 }
 
 short ws_fb_poll(u32 id, short events, u32 flags) {
@@ -867,7 +886,6 @@ short ws_fb_poll(u32 id, short events, u32 flags) {
         return POLLNVAL;
 
     _lock_acquire();
-    _reap_dead_owners();
 
     ws_window_t* window = NULL;
     int status = _window_lookup(id, caller_pid, &window);

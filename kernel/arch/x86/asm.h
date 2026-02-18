@@ -242,6 +242,15 @@ static inline void cpuid(u32 leaf, cpuid_regs_t* r) {
 #define EFER_NX  (1 << 11)
 #define EFER_LME (1 << 8)
 
+#define MSR_PAT 0x277
+
+// PAT memory types
+#define PAT_TYPE_UC  0x00
+#define PAT_TYPE_WC  0x01
+#define PAT_TYPE_WT  0x04
+#define PAT_TYPE_WB  0x06
+#define PAT_TYPE_UCM 0x07  // UC-
+
 static inline u64 read_msr(u32 msr) {
     u32 edx = 0, eax = 0;
     asm volatile("rdmsr" : "=a"(eax), "=d"(edx) : "c"(msr));
@@ -254,6 +263,21 @@ static inline void write_msr(u32 msr, u64 value) {
     u32 eax = value & 0xffffffff;
 
     asm volatile("wrmsr" : : "a"(eax), "d"(edx), "c"(msr));
+}
+
+// Program PAT MSR: entry 4 = WC, rest = defaults.
+// After this, setting the PAT bit in a PTE (bit 7 for 4K, bit 12 for 2M/1G)
+// with PCD=0, PWT=0 selects WC from PAT entry 4.
+static inline void pat_init(void) {
+    u64 pat = (u64)PAT_TYPE_WB          // PAT0: WB  (PCD=0 PWT=0 PAT=0)
+            | ((u64)PAT_TYPE_WT  << 8)  // PAT1: WT  (PCD=0 PWT=1 PAT=0)
+            | ((u64)PAT_TYPE_UCM << 16) // PAT2: UC- (PCD=1 PWT=0 PAT=0)
+            | ((u64)PAT_TYPE_UC  << 24) // PAT3: UC  (PCD=1 PWT=1 PAT=0)
+            | ((u64)PAT_TYPE_WC  << 32) // PAT4: WC  (PCD=0 PWT=0 PAT=1)
+            | ((u64)PAT_TYPE_WT  << 40) // PAT5: WT  (PCD=0 PWT=1 PAT=1)
+            | ((u64)PAT_TYPE_UCM << 48) // PAT6: UC- (PCD=1 PWT=0 PAT=1)
+            | ((u64)PAT_TYPE_UC  << 56);// PAT7: UC  (PCD=1 PWT=1 PAT=1)
+    write_msr(MSR_PAT, pat);
 }
 
 // https://wiki.osdev.org/SWAPGS

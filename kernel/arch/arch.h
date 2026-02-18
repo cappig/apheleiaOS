@@ -13,7 +13,10 @@ const kernel_args_t* arch_init(void* boot_info);
 void arch_storage_init(void);
 void arch_register_devices(void);
 
-void* arch_phys_map(u64 paddr, size_t size);
+#define PHYS_MAP_DEFAULT 0
+#define PHYS_MAP_WC      (1U << 0) // write-combining
+
+void* arch_phys_map(u64 paddr, size_t size, u32 flags);
 void arch_phys_unmap(void* vaddr, size_t size);
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size);
 

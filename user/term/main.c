@@ -32,18 +32,26 @@ static bool read_pty(int master_fd) {
     if (master_fd < 0)
         return false;
 
-    u8 buf[256];
-    ssize_t n = read(master_fd, buf, sizeof(buf));
+    u8 buf[4096];
+    bool got_data = false;
 
-    if (n > 0) {
-        term_screen_feed(buf, (size_t)n);
-        return true;
-    }
+    for (;;) {
+        ssize_t n = read(master_fd, buf, sizeof(buf));
 
-    if (!n)
+        if (n > 0) {
+            term_screen_feed(buf, (size_t)n);
+            got_data = true;
+            continue;
+        }
+
+        if (!n)
+            return got_data;
+
+        if (errno == EAGAIN || errno == EINTR)
+            return got_data || (errno == EAGAIN);
+
         return false;
-
-    return errno == EAGAIN || errno == EINTR;
+    }
 }
 
 static bool read_window(window_t* window, int master_fd) {
@@ -90,7 +98,7 @@ int main(void) {
         return 1;
     }
 
-    int master_fd = open("/dev/ptmx", O_RDWR, 0);
+    int master_fd = open("/dev/ptmx", O_RDWR | O_NONBLOCK, 0);
     if (master_fd < 0) {
         window_deinit(&window);
         return 1;

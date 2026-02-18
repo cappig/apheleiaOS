@@ -21,7 +21,7 @@ static struct arch_vm_space kernel_space = {0};
 
 #if defined(__x86_64__)
 static void* _phys_map(page_t* paddr) {
-    return arch_phys_map((u64)(uintptr_t)paddr, PAGE_4KIB);
+    return arch_phys_map((u64)(uintptr_t)paddr, PAGE_4KIB, 0);
 }
 
 static void _phys_unmap(void* vaddr) {

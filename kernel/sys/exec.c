@@ -191,7 +191,7 @@ static bool _load_segments_64(sched_thread_t* thread, const u8* image, size_t si
         size_t copy_off = (size_t)(ph->vaddr - map_base);
         size_t copy_len = (size_t)ph->file_size;
 
-        void* dst = arch_phys_map(paddr, pages * PAGE_4KIB);
+        void* dst = arch_phys_map(paddr, pages * PAGE_4KIB, 0);
         if (!dst)
             return false;
 
@@ -255,7 +255,7 @@ static bool _load_segments_32(sched_thread_t* thread, const u8* image, size_t si
         size_t copy_off = (size_t)(ph->vaddr - map_base);
         size_t copy_len = (size_t)ph->file_size;
 
-        void* dst = arch_phys_map(paddr, pages * PAGE_4KIB);
+        void* dst = arch_phys_map(paddr, pages * PAGE_4KIB, 0);
         if (!dst)
             return false;
 
