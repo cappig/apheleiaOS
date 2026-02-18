@@ -1,5 +1,3 @@
-#include "serial.h"
-
 #include <arch/arch.h>
 #include <errno.h>
 #include <log/log.h>
@@ -7,6 +5,8 @@
 #include <sched/scheduler.h>
 #include <sched/signal.h>
 #include <sys/vfs.h>
+
+#include "serial.h"
 
 #define SERIAL_RX_QUEUE_CAP 1024
 
@@ -29,18 +29,16 @@ static serial_dev_t serial_devices[] = {
 
 static bool serial_nodes_ready = false;
 
-static bool _create_node(
-    vfs_node_t* parent,
-    const char* name,
-    vfs_interface_t* interface,
-    void* priv
-) {
-    vfs_node_t* node = vfs_lookup_from(parent, name);
-    if (!node)
-        node = vfs_create(parent, (char*)name, VFS_CHARDEV, 0666);
+static bool
+_create_node(vfs_node_t *parent, const char *name, vfs_interface_t *interface, void *priv) {
+    vfs_node_t *node = vfs_lookup_from(parent, name);
+    if (!node) {
+        node = vfs_create(parent, (char *)name, VFS_CHARDEV, 0666);
+    }
 
-    if (!node)
+    if (!node) {
         return false;
+    }
 
     node->type = VFS_CHARDEV;
     node->mode = 0666;
@@ -50,17 +48,19 @@ static bool _create_node(
     return true;
 }
 
-static ssize_t _read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
 
-    if (!node || !node->private || !buf)
+    if (!node || !node->private || !buf) {
         return -EINVAL;
+    }
 
-    if (!len)
+    if (!len) {
         return 0;
+    }
 
-    serial_dev_t* serial = node->private;
-    char* out = buf;
+    serial_dev_t *serial = node->private;
+    char *out = buf;
 
     for (;;) {
         size_t copied = 0;
@@ -74,71 +74,81 @@ static ssize_t _read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32
 
         arch_irq_restore(irq_flags);
 
-        if (copied)
+        if (copied) {
             return (ssize_t)copied;
+        }
 
-        if (flags & VFS_NONBLOCK)
+        if (flags & VFS_NONBLOCK) {
             return -EAGAIN;
+        }
 
-        if (!sched_is_running())
+        if (!sched_is_running()) {
             continue;
+        }
 
-        sched_thread_t* current = sched_current();
-        if (current && sched_signal_has_pending(current))
+        sched_thread_t *current = sched_current();
+        if (current && sched_signal_has_pending(current)) {
             return -EINTR;
+        }
 
         sched_block(&serial->rx_wait);
     }
 }
 
-static ssize_t _write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
     (void)flags;
 
-    if (!node || !node->private || !buf)
+    if (!node || !node->private || !buf) {
         return -EINVAL;
+    }
 
-    serial_dev_t* serial = node->private;
+    serial_dev_t *serial = node->private;
 
-    if (!len)
+    if (!len) {
         return 0;
+    }
 
     send_serial_sized_string(serial->port, buf, len);
     return (ssize_t)len;
 }
 
-static short _poll(vfs_node_t* node, short events, u32 flags) {
+static short _poll(vfs_node_t *node, short events, u32 flags) {
     (void)flags;
 
-    if (!node || !node->private)
+    if (!node || !node->private) {
         return POLLNVAL;
+    }
 
-    serial_dev_t* serial = node->private;
+    serial_dev_t *serial = node->private;
     short ready = 0;
 
     unsigned long irq_flags = arch_irq_save();
 
-    if ((events & POLLIN) && serial->rx_count)
+    if ((events & POLLIN) && serial->rx_count) {
         ready |= POLLIN;
+    }
 
-    if (events & POLLOUT)
+    if (events & POLLOUT) {
         ready |= POLLOUT;
+    }
 
     arch_irq_restore(irq_flags);
     return ready;
 }
 
 void serial_devfs_init(void) {
-    if (serial_nodes_ready)
+    if (serial_nodes_ready) {
         return;
+    }
 
-    vfs_node_t* dev_dir = vfs_lookup("/dev");
+    vfs_node_t *dev_dir = vfs_lookup("/dev");
     if (!dev_dir) {
         log_warn("serial: /dev missing");
         return;
     }
 
-    vfs_interface_t* serial_if = vfs_create_interface(_read, _write, NULL);
+    vfs_interface_t *serial_if = vfs_create_interface(_read, _write, NULL);
     if (!serial_if) {
         log_warn("serial: interface alloc failed");
         return;
@@ -168,10 +178,11 @@ void serial_devfs_init(void) {
 }
 
 void serial_dev_push_rx(size_t index, char ch) {
-    if (!ch || index >= sizeof(serial_devices) / sizeof(serial_devices[0]))
+    if (!ch || index >= sizeof(serial_devices) / sizeof(serial_devices[0])) {
         return;
+    }
 
-    serial_dev_t* serial = &serial_devices[index];
+    serial_dev_t *serial = &serial_devices[index];
 
     unsigned long irq_flags = arch_irq_save();
 
@@ -186,6 +197,7 @@ void serial_dev_push_rx(size_t index, char ch) {
 
     arch_irq_restore(irq_flags);
 
-    if (sched_is_running())
+    if (sched_is_running()) {
         sched_wake_one(&serial->rx_wait);
+    }
 }

@@ -4,24 +4,24 @@
 #include <x86/asm.h>
 #include <x86/rtc.h>
 
-#define CMOS_ADDR_PORT    0x70
-#define CMOS_DATA_PORT    0x71
-#define CMOS_NMI_DISABLE  0x80
+#define CMOS_ADDR_PORT   0x70
+#define CMOS_DATA_PORT   0x71
+#define CMOS_NMI_DISABLE 0x80
 
-#define RTC_REG_SECONDS   0x00
-#define RTC_REG_MINUTES   0x02
-#define RTC_REG_HOURS     0x04
-#define RTC_REG_WEEKDAY   0x06
-#define RTC_REG_DAY       0x07
-#define RTC_REG_MONTH     0x08
-#define RTC_REG_YEAR      0x09
-#define RTC_REG_STATUS_A  0x0A
-#define RTC_REG_STATUS_B  0x0B
-#define RTC_REG_CENTURY   0x32
+#define RTC_REG_SECONDS  0x00
+#define RTC_REG_MINUTES  0x02
+#define RTC_REG_HOURS    0x04
+#define RTC_REG_WEEKDAY  0x06
+#define RTC_REG_DAY      0x07
+#define RTC_REG_MONTH    0x08
+#define RTC_REG_YEAR     0x09
+#define RTC_REG_STATUS_A 0x0A
+#define RTC_REG_STATUS_B 0x0B
+#define RTC_REG_CENTURY  0x32
 
-#define RTC_A_UIP         0x80
-#define RTC_B_BINARY      0x04
-#define RTC_B_HOUR_24     0x02
+#define RTC_A_UIP     0x80
+#define RTC_B_BINARY  0x04
+#define RTC_B_HOUR_24 0x02
 
 typedef struct {
     u8 sec;
@@ -48,9 +48,10 @@ static u8 _bcd_to_bin(u8 value) {
     return (u8)(((value >> 4) * 10) + (value & 0x0F));
 }
 
-static void _read_sample(rtc_sample_t* sample) {
-    if (!sample)
+static void _read_sample(rtc_sample_t *sample) {
+    if (!sample) {
         return;
+    }
 
     sample->sec = _cmos_read(RTC_REG_SECONDS);
     sample->min = _cmos_read(RTC_REG_MINUTES);
@@ -63,9 +64,10 @@ static void _read_sample(rtc_sample_t* sample) {
     sample->status_b = _cmos_read(RTC_REG_STATUS_B);
 }
 
-static void _normalize_sample(rtc_sample_t* sample) {
-    if (!sample)
+static void _normalize_sample(rtc_sample_t *sample) {
+    if (!sample) {
         return;
+    }
 
     bool binary_mode = sample->status_b & RTC_B_BINARY;
     bool hour_24 = sample->status_b & RTC_B_HOUR_24;
@@ -90,38 +92,47 @@ static void _normalize_sample(rtc_sample_t* sample) {
         bool is_pm = sample->hour & 0x80;
         sample->hour &= 0x7F;
 
-        if (is_pm && sample->hour < 12)
+        if (is_pm && sample->hour < 12) {
             sample->hour = (u8)(sample->hour + 12);
-        if (!is_pm && sample->hour == 12)
+        }
+        if (!is_pm && sample->hour == 12) {
             sample->hour = 0;
+        }
     }
 }
 
-static int _full_year(const rtc_sample_t* sample) {
-    if (!sample)
+static int _full_year(const rtc_sample_t *sample) {
+    if (!sample) {
         return 0;
+    }
 
-    if (sample->century)
+    if (sample->century) {
         return (int)sample->century * 100 + (int)sample->year;
+    }
 
-    if (sample->year >= 70)
+    if (sample->year >= 70) {
         return 1900 + sample->year;
+    }
 
     return 2000 + sample->year;
 }
 
-static bool _sample_valid(const rtc_sample_t* sample) {
-    if (!sample)
+static bool _sample_valid(const rtc_sample_t *sample) {
+    if (!sample) {
         return false;
+    }
 
-    if (sample->sec > 59 || sample->min > 59 || sample->hour > 23)
+    if (sample->sec > 59 || sample->min > 59 || sample->hour > 23) {
         return false;
+    }
 
-    if (!sample->mday || sample->mday > 31)
+    if (!sample->mday || sample->mday > 31) {
         return false;
+    }
 
-    if (!sample->mon || sample->mon > 12)
+    if (!sample->mon || sample->mon > 12) {
         return false;
+    }
 
     return true;
 }
@@ -130,27 +141,32 @@ u64 x86_rtc_unix_seconds(void) {
     rtc_sample_t first = {0};
     rtc_sample_t second = {0};
 
-    while (_update_in_progress())
+    while (_update_in_progress()) {
         cpu_pause();
+    }
 
     _read_sample(&first);
 
-    while (_update_in_progress())
+    while (_update_in_progress()) {
         cpu_pause();
+    }
 
     _read_sample(&second);
 
-    if (memcmp(&first, &second, sizeof(first)))
+    if (memcmp(&first, &second, sizeof(first))) {
         _read_sample(&second);
+    }
 
     _normalize_sample(&second);
 
-    if (!_sample_valid(&second))
+    if (!_sample_valid(&second)) {
         return 0;
+    }
 
     int year = _full_year(&second);
-    if (year < 1970)
+    if (year < 1970) {
         return 0;
+    }
 
     struct tm tm_val = {0};
     tm_val.tm_sec = second.sec;
@@ -162,8 +178,9 @@ u64 x86_rtc_unix_seconds(void) {
     tm_val.tm_isdst = 0;
 
     time_t unix_time = mktime(&tm_val);
-    if (unix_time < 0)
+    if (unix_time < 0) {
         return 0;
+    }
 
     return (u64)unix_time;
 }

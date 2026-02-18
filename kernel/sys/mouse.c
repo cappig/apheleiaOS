@@ -11,57 +11,39 @@
 
 #include "input.h"
 
-static vector_t* mice = NULL;
-static ring_buffer_t* buffer = NULL;
+static vector_t *mice = NULL;
+static ring_buffer_t *buffer = NULL;
 
 static i32 mouse_x = 0;
 static i32 mouse_y = 0;
 
-
-static bool _vec_push_ptr(vector_t* vec, void* ptr) {
-    return vec_push(vec, &ptr);
-}
-
-static char* _strdup(const char* src) {
-    if (!src)
-        return NULL;
-
-    size_t len = strlen(src);
-    char* out = malloc(len + 1);
-
-    if (!out)
-        return NULL;
-
-    memcpy(out, src, len);
-    out[len] = '\0';
-
-    return out;
-}
-
 static i32 _clamp_i32(i32 value, i32 min, i32 max) {
-    if (value < min)
+    if (value < min) {
         return min;
+    }
 
-    if (value > max)
+    if (value > max) {
         return max;
+    }
 
     return value;
 }
 
-ssize_t mouse_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+ssize_t mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
     (void)flags;
 
-    if (!buf || !buffer)
+    if (!buf || !buffer) {
         return -1;
+    }
 
     size_t popped = ring_buffer_pop_array(buffer, buf, len);
     return popped ? (ssize_t)popped : 0;
 }
 
 void mouse_handle_event(mouse_event event) {
-    const framebuffer_info_t* fb = framebuffer_get_info();
+    const framebuffer_info_t *fb = framebuffer_get_info();
 
     if (fb && fb->available && fb->width && fb->height) {
         mouse_x = _clamp_i32(mouse_x + event.delta_x, 0, (i32)fb->width - 1);
@@ -71,28 +53,32 @@ void mouse_handle_event(mouse_event event) {
         mouse_y += event.delta_y;
     }
 
-    if (buffer)
-        ring_buffer_push_array(buffer, (u8*)&event, sizeof(event));
+    if (buffer) {
+        ring_buffer_push_array(buffer, (u8 *)&event, sizeof(event));
+    }
 
     input_push_mouse_event(&event);
 }
 
-u8 mouse_register(const char* name) {
-    if (!mice || !buffer)
+u8 mouse_register(const char *name) {
+    if (!mice || !buffer) {
         mouse_init();
+    }
 
-    if (!mice || !buffer)
+    if (!mice || !buffer) {
         return 0;
+    }
 
-    mouse_dev_t* mse = calloc(1, sizeof(mouse_dev_t));
+    mouse_dev_t *mse = calloc(1, sizeof(mouse_dev_t));
 
-    if (!mse)
+    if (!mse) {
         return 0;
+    }
 
-    mse->name = _strdup(name);
+    mse->name = strdup(name);
 
-    if (!_vec_push_ptr(mice, mse)) {
-        free((void*)mse->name);
+    if (!vec_push(mice, &mse)) {
+        free((void *)mse->name);
         free(mse);
         return 0;
     }
@@ -101,16 +87,17 @@ u8 mouse_register(const char* name) {
     return (u8)(mice->size - 1);
 }
 
-static bool mouse_register_devfs(vfs_node_t* dev_dir) {
-    if (!dev_dir)
+static bool mouse_register_devfs(vfs_node_t *dev_dir) {
+    if (!dev_dir) {
         return false;
+    }
 
     if (!mice || !buffer) {
         log_warn("mouse: state not initialized");
         return false;
     }
 
-    vfs_interface_t* mouse_if = vfs_create_interface(mouse_read, NULL, NULL);
+    vfs_interface_t *mouse_if = vfs_create_interface(mouse_read, NULL, NULL);
     if (!mouse_if) {
         log_warn("mouse: failed to allocate /dev interface");
         return false;
@@ -125,25 +112,30 @@ static bool mouse_register_devfs(vfs_node_t* dev_dir) {
 }
 
 bool mouse_init(void) {
-    if (!devfs_register_device("mouse", mouse_register_devfs))
+    if (!devfs_register_device("mouse", mouse_register_devfs)) {
         log_warn("mouse: failed to register devfs init callback");
+    }
 
     bool first_init = (mice == NULL || buffer == NULL);
 
-    if (!mice)
-        mice = vec_create(sizeof(mouse_dev_t*));
+    if (!mice) {
+        mice = vec_create(sizeof(mouse_dev_t *));
+    }
 
-    if (!mice)
+    if (!mice) {
         return false;
+    }
 
-    if (!buffer)
+    if (!buffer) {
         buffer = ring_buffer_create(MOUSE_DEV_BUFFER_SIZE);
+    }
 
-    if (!buffer)
+    if (!buffer) {
         return false;
+    }
 
     if (first_init) {
-        const framebuffer_info_t* fb = framebuffer_get_info();
+        const framebuffer_info_t *fb = framebuffer_get_info();
         if (fb && fb->available) {
             mouse_x = (i32)(fb->width / 2);
             mouse_y = (i32)(fb->height / 2);

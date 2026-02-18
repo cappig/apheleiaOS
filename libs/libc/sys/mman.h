@@ -13,10 +13,10 @@
 #define MAP_FIXED   0x10
 #define MAP_ANON    0x20
 
-#define MAP_FAILED ((void*)-1)
+#define MAP_FAILED ((void *)-1)
 
 typedef struct mmap_args {
-    void* addr;
+    void *addr;
     size_t len;
     int prot;
     int flags;
@@ -25,6 +25,6 @@ typedef struct mmap_args {
 } mmap_args_t;
 
 #ifndef _KERNEL
-void* mmap(void* addr, size_t len, int prot, int flags, int fd, off_t offset);
-int munmap(void* addr, size_t len);
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
+int munmap(void *addr, size_t len);
 #endif

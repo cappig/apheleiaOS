@@ -8,31 +8,33 @@
 
 #define SYSCALL_RET(type, expr) ((type)__SYSCALL_ERRNO(expr))
 
-ssize_t read(int fd, void* buf, size_t count) {
-    return SYSCALL_RET(ssize_t, syscall3(SYS_READ, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count));
+ssize_t read(int fd, void *buf, size_t count) {
+    return SYSCALL_RET(
+        ssize_t, syscall3(SYS_READ, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count)
+    );
 }
 
-ssize_t write(int fd, const void* buf, size_t count) {
+ssize_t write(int fd, const void *buf, size_t count) {
     return SYSCALL_RET(
         ssize_t, syscall3(SYS_WRITE, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count)
     );
 }
 
-ssize_t pread(int fd, void* buf, size_t count, off_t offset) {
+ssize_t pread(int fd, void *buf, size_t count, off_t offset) {
     return SYSCALL_RET(
         ssize_t,
         syscall4(SYS_PREAD, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset)
     );
 }
 
-ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset) {
+ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset) {
     return SYSCALL_RET(
         ssize_t,
         syscall4(SYS_PWRITE, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset)
     );
 }
 
-int open(const char* path, int flags, mode_t mode) {
+int open(const char *path, int flags, mode_t mode) {
     return SYSCALL_RET(int, syscall3(SYS_OPEN, (uintptr_t)path, (uintptr_t)flags, (uintptr_t)mode));
 }
 
@@ -48,15 +50,15 @@ int dup(int oldfd, int newfd) {
     return SYSCALL_RET(int, syscall2(SYS_DUP, (uintptr_t)oldfd, (uintptr_t)newfd));
 }
 
-int mkdir(const char* path, mode_t mode) {
+int mkdir(const char *path, mode_t mode) {
     return SYSCALL_RET(int, syscall2(SYS_MKDIR, (uintptr_t)path, (uintptr_t)mode));
 }
 
-int rmdir(const char* path) {
+int rmdir(const char *path) {
     return SYSCALL_RET(int, syscall1(SYS_RMDIR, (uintptr_t)path));
 }
 
-int access(const char* path, int mode) {
+int access(const char *path, int mode) {
     return SYSCALL_RET(int, syscall2(SYS_ACCESS, (uintptr_t)path, (uintptr_t)mode));
 }
 
@@ -82,13 +84,14 @@ unsigned int sleep(unsigned int seconds) {
     return (unsigned int)ret;
 }
 
-int chdir(const char* path) {
+int chdir(const char *path) {
     return SYSCALL_RET(int, syscall1(SYS_CHDIR, (uintptr_t)path));
 }
 
-char* getcwd(char* buf, size_t size) {
-    if (!buf || !size)
+char *getcwd(char *buf, size_t size) {
+    if (!buf || !size) {
         return NULL;
+    }
 
     long ret = __SYSCALL_ERRNO(syscall2(SYS_GETCWD, (uintptr_t)buf, (uintptr_t)size));
     return !ret ? buf : NULL;
@@ -99,15 +102,15 @@ int isatty(int fd) {
     return tcgetattr(fd, &tos) ? 0 : 1;
 }
 
-int link(const char* oldpath, const char* newpath) {
+int link(const char *oldpath, const char *newpath) {
     return SYSCALL_RET(int, syscall2(SYS_LINK, (uintptr_t)oldpath, (uintptr_t)newpath));
 }
 
-int unlink(const char* path) {
+int unlink(const char *path) {
     return SYSCALL_RET(int, syscall1(SYS_UNLINK, (uintptr_t)path));
 }
 
-int rename(const char* oldpath, const char* newpath) {
+int rename(const char *oldpath, const char *newpath) {
     return SYSCALL_RET(int, syscall2(SYS_RENAME, (uintptr_t)oldpath, (uintptr_t)newpath));
 }
 
@@ -115,18 +118,20 @@ pid_t fork(void) {
     return SYSCALL_RET(pid_t, syscall0(SYS_FORK));
 }
 
-pid_t wait(pid_t pid, int* status) {
+pid_t wait(pid_t pid, int *status) {
     return SYSCALL_RET(pid_t, syscall2(SYS_WAIT, (uintptr_t)pid, (uintptr_t)status));
 }
 
-pid_t waitpid(pid_t pid, int* status, int options) {
+pid_t waitpid(pid_t pid, int *status, int options) {
     return SYSCALL_RET(
         pid_t, syscall3(SYS_WAITPID, (uintptr_t)pid, (uintptr_t)status, (uintptr_t)options)
     );
 }
 
-int execve(const char* path, char* const argv[], char* const envp[]) {
-    return SYSCALL_RET(int, syscall3(SYS_EXECVE, (uintptr_t)path, (uintptr_t)argv, (uintptr_t)envp));
+int execve(const char *path, char *const argv[], char *const envp[]) {
+    return SYSCALL_RET(
+        int, syscall3(SYS_EXECVE, (uintptr_t)path, (uintptr_t)argv, (uintptr_t)envp)
+    );
 }
 
 pid_t getpid(void) {
@@ -165,13 +170,14 @@ int setgid(gid_t gid) {
     return SYSCALL_RET(int, syscall1(SYS_SETGID, (uintptr_t)gid));
 }
 
-ssize_t getprocs(proc_info_t* out, size_t capacity) {
+ssize_t getprocs(proc_info_t *out, size_t capacity) {
     return SYSCALL_RET(ssize_t, syscall2(SYS_GETPROCS, (uintptr_t)out, (uintptr_t)capacity));
 }
 
 void _exit(int status) {
     syscall1(SYS_EXIT, (uintptr_t)status);
 
-    for (;;)
+    for (;;) {
         ;
+    }
 }

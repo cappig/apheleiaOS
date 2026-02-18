@@ -28,29 +28,33 @@ typedef struct PACKED {
     u32 width;
 } psf2_header_t;
 
-static u32 read_u32_le(const u8* ptr) {
+static u32 read_u32_le(const u8 *ptr) {
     return (u32)ptr[0] | ((u32)ptr[1] << 8) | ((u32)ptr[2] << 16) | ((u32)ptr[3] << 24);
 }
 
-bool psf_parse_blob(const void* data, size_t size, psf_blob_t* out) {
-    if (!data || !out || size < sizeof(psf1_header_t))
+bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out) {
+    if (!data || !out || size < sizeof(psf1_header_t)) {
         return false;
+    }
 
     memset(out, 0, sizeof(*out));
 
-    const u8* bytes = data;
+    const u8 *bytes = data;
 
     if (size >= sizeof(psf2_header_t) && read_u32_le(bytes) == PSF2_MAGIC) {
-        const psf2_header_t* psf2 = data;
-        if (psf2->header_size < sizeof(psf2_header_t))
+        const psf2_header_t *psf2 = data;
+        if (psf2->header_size < sizeof(psf2_header_t)) {
             return false;
-        if (!psf2->glyph_count || !psf2->glyph_bytes || !psf2->width || !psf2->height)
+        }
+        if (!psf2->glyph_count || !psf2->glyph_bytes || !psf2->width || !psf2->height) {
             return false;
+        }
 
         size_t glyphs_size = (size_t)psf2->glyph_count * (size_t)psf2->glyph_bytes;
         size_t need = (size_t)psf2->header_size + glyphs_size;
-        if (need > size)
+        if (need > size) {
             return false;
+        }
 
         out->type = PSF_TYPE_2;
         out->width = psf2->width;
@@ -69,16 +73,18 @@ bool psf_parse_blob(const void* data, size_t size, psf_blob_t* out) {
         return true;
     }
 
-    const psf1_header_t* psf1 = data;
-    if (psf1->magic != PSF1_MAGIC || !psf1->char_size)
+    const psf1_header_t *psf1 = data;
+    if (psf1->magic != PSF1_MAGIC || !psf1->char_size) {
         return false;
+    }
 
     u32 glyph_count = (psf1->mode & PSF1_MODE_512) ? 512U : 256U;
     size_t glyphs_size = (size_t)glyph_count * psf1->char_size;
     size_t header_size = sizeof(psf1_header_t);
     size_t need = header_size + glyphs_size;
-    if (need > size)
+    if (need > size) {
         return false;
+    }
 
     out->type = PSF_TYPE_1;
     out->width = 8;

@@ -3,7 +3,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-void* mmap(void* addr, size_t len, int prot, int flags, int fd, off_t offset) {
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
     mmap_args_t args = {
         .addr = addr,
         .len = len,
@@ -18,9 +18,9 @@ void* mmap(void* addr, size_t len, int prot, int flags, int fd, off_t offset) {
         errno = (int)-ret;
         return MAP_FAILED;
     }
-    return (void*)ret;
+    return (void *)ret;
 }
 
-int munmap(void* addr, size_t len) {
+int munmap(void *addr, size_t len) {
     return (int)__SYSCALL_ERRNO(syscall2(SYS_MUNMAP, (uintptr_t)addr, (uintptr_t)len));
 }

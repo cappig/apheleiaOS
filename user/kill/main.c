@@ -4,24 +4,27 @@
 #include <string.h>
 #include <unistd.h>
 
-static int parse_signal(const char* arg) {
-    if (!arg || !*arg)
+static int parse_signal(const char *arg) {
+    if (!arg || !*arg) {
         return -1;
+    }
 
     if (arg[0] == '-') {
         arg++;
-        if (!*arg)
+        if (!*arg) {
             return -1;
+        }
     }
 
     int sig = atoi(arg);
-    if (sig > 0)
+    if (sig > 0) {
         return sig;
+    }
 
     return -1;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     if (argc < 2) {
         write(STDOUT_FILENO, "usage: kill [-s SIG] pid\n", 25);
         return 1;

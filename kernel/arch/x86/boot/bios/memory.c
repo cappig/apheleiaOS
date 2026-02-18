@@ -17,10 +17,10 @@
 
 #define SMAP 0x534d4150
 
-static e820_map_t* e820_mmap = NULL;
+static e820_map_t *e820_mmap = NULL;
 
 // http://www.uruk.org/orig-grub/mem64mb.html
-void get_e820(e820_map_t* mmap) {
+void get_e820(e820_map_t *mmap) {
     regs32_t out_regs = {0};
     regs32_t in_regs = {
         .eax = 0xe820,
@@ -39,18 +39,21 @@ void get_e820(e820_map_t* mmap) {
         in_regs.ebx = out_regs.ebx;
 
         // End of chain, or error
-        if (out_regs.eflags & FLAG_CF || out_regs.eax != SMAP)
+        if (out_regs.eflags & FLAG_CF || out_regs.eax != SMAP) {
             break;
+        }
 
-        if (out_regs.ecx < 20 || out_regs.ecx > sizeof(e820_entry_t))
+        if (out_regs.ecx < 20 || out_regs.ecx > sizeof(e820_entry_t)) {
             break;
+        }
 
         mmap->entries[mmap->count] = entry;
         mmap->count++;
 
         // End of chain
-        if (!out_regs.ebx)
+        if (!out_regs.ebx) {
             break;
+        }
     }
 
     e820_mmap = mmap;
@@ -60,7 +63,7 @@ void get_e820(e820_map_t* mmap) {
 
 
 // https://wiki.osdev.org/RSDP#Detecting_the_RSDP
-void get_rsdp(u64* rsdp) {
+void get_rsdp(u64 *rsdp) {
     u16 ebda_seg = 0;
     asm volatile("movw 0x40e, %0" : "=r"(ebda_seg));
     u64 ebda = ((u64)ebda_seg) << 4;
@@ -68,10 +71,11 @@ void get_rsdp(u64* rsdp) {
     for (u64 addr = ebda; addr <= 0xfffff; addr += 16) {
         // No RSDP found in the EBDA
         // Start searching the other possible memory region
-        if (addr == ebda + 1024)
+        if (addr == ebda + 1024) {
             addr = 0xe0000;
+        }
 
-        if (!strncmp((char*)(uintptr_t)addr, "RSD PTR ", 8)) {
+        if (!strncmp((char *)(uintptr_t)addr, "RSD PTR ", 8)) {
             printf("RSDP is at %#p\n\r", addr);
             *rsdp = addr;
 
@@ -83,37 +87,42 @@ void get_rsdp(u64* rsdp) {
 }
 
 
-void* mmap_alloc(size_t size, int type, size_t alignment) {
-    if (!size)
+void *mmap_alloc(size_t size, int type, size_t alignment) {
+    if (!size) {
         panic("Attempetd to allocate zero bytes!");
+    }
 
-    void* ret = mmap_alloc_inner(e820_mmap, size, type, alignment, (size_t)-1);
+    void *ret = mmap_alloc_inner(e820_mmap, size, type, alignment, (size_t)-1);
 
-    if (!ret)
+    if (!ret) {
         panic("Out of memory!");
+    }
 
     return ret;
 }
 
-void* mmap_alloc_top(size_t size, int type, size_t alignment, u64 top) {
-    if (!size)
+void *mmap_alloc_top(size_t size, int type, size_t alignment, u64 top) {
+    if (!size) {
         panic("Attempetd to allocate zero bytes!");
+    }
 
-    void* ret = mmap_alloc_inner(e820_mmap, size, type, alignment, top);
+    void *ret = mmap_alloc_inner(e820_mmap, size, type, alignment, top);
 
-    if (!ret)
+    if (!ret) {
         panic("Out of memory!");
+    }
 
     return ret;
 }
 
-static void* _balloc(size_t size) {
+static void *_balloc(size_t size) {
     return mmap_alloc(size, E820_ALLOC, 1);
 }
 
-static void _bfree(void* ptr) {
-    if (mmap_free_inner(e820_mmap, ptr))
+static void _bfree(void *ptr) {
+    if (mmap_free_inner(e820_mmap, ptr)) {
         panic("Attempted to free non allocated memory!");
+    }
 }
 
 

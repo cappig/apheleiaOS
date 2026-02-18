@@ -7,7 +7,7 @@
 
 void init_spawn(void) {
     log_info("init: spawning /bin/init");
-    sched_thread_t* init = user_spawn("/bin/init");
+    sched_thread_t *init = user_spawn("/bin/init");
 
     if (!init) {
         log_warn("init: failed to spawn /bin/init");

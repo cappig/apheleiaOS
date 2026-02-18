@@ -21,40 +21,44 @@ static bool _cpu_has_long_mode(void) {
     cpuid_regs_t regs = {0};
     cpuid(0x80000000, &regs);
 
-    if (regs.eax < CPUID_EXTENDED_INFO)
+    if (regs.eax < CPUID_EXTENDED_INFO) {
         return false;
+    }
 
     cpuid(CPUID_EXTENDED_INFO, &regs);
     return (regs.edx & CPUID_EI_LM) != 0;
 }
 
-static u64 _get_usable_top(const e820_map_t* map) {
+static u64 _get_usable_top(const e820_map_t *map) {
     u64 top = 0;
 
     for (size_t i = 0; i < map->count; i++) {
-        const e820_entry_t* entry = &map->entries[i];
+        const e820_entry_t *entry = &map->entries[i];
 
-        if (entry->type != E820_AVAILABLE)
+        if (entry->type != E820_AVAILABLE) {
             continue;
+        }
 
         u64 end = entry->address + entry->size;
-        if (end > top)
+        if (end > top) {
             top = end;
+        }
     }
 
     return top;
 }
 
-static elf_header_t* _load_kernel_image(bool want_64, bool* is_64) {
-    const char* paths64[] = {"/boot/kernel64.elf", "/boot/kernel32.elf"};
-    const char* paths32[] = {"/boot/kernel32.elf", "/boot/kernel64.elf"};
-    const char** paths = want_64 ? paths64 : paths32;
+static elf_header_t *_load_kernel_image(bool want_64, bool *is_64) {
+    const char *paths64[] = {"/boot/kernel64.elf", "/boot/kernel32.elf"};
+    const char *paths32[] = {"/boot/kernel32.elf", "/boot/kernel64.elf"};
+    const char **paths = want_64 ? paths64 : paths32;
 
     for (size_t i = 0; i < ARRAY_LEN(paths64); i++) {
-        elf_header_t* kernel = read_rootfs(paths[i]);
+        elf_header_t *kernel = read_rootfs(paths[i]);
 
-        if (!kernel)
+        if (!kernel) {
             continue;
+        }
 
         elf_validity_t validity = elf_verify(kernel);
         if (validity) {
@@ -86,13 +90,14 @@ static elf_header_t* _load_kernel_image(bool want_64, bool* is_64) {
     return NULL;
 }
 
-void load_kerenel(boot_info_t* info) {
+void load_kerenel(boot_info_t *info) {
     bool want_64 = _cpu_has_long_mode();
     bool is_64 = false;
-    elf_header_t* kernel = _load_kernel_image(want_64, &is_64);
+    elf_header_t *kernel = _load_kernel_image(want_64, &is_64);
 
-    if (!kernel)
+    if (!kernel) {
         panic("No suitable kernel image found!");
+    }
 
     if (!is_64) {
         printf("Loading 32 bit kernel...\n\r");
@@ -133,17 +138,19 @@ void load_kerenel(boot_info_t* info) {
         // x86/paging64.h here because of 32/64 mutual exclusion.
         if (info->video.mode == VIDEO_GRAPHICS && info->video.framebuffer) {
             u64 pitch = info->video.bytes_per_line;
-            if (!pitch)
+            if (!pitch) {
                 pitch = (u64)info->video.width * info->video.bytes_per_pixel;
+            }
 
             u64 fb_size = pitch * info->video.height;
             if (fb_size) {
                 u64 page_2m = 2 * MIB;
                 u64 wc_flags = (1 << 1) | (1ULL << 12); // PT_WRITE | PT_PAT_HUGE
                 u64 fb_base = ALIGN_DOWN(info->video.framebuffer, page_2m);
-                u64 fb_end  = ALIGN(info->video.framebuffer + fb_size, page_2m);
+                u64 fb_end = ALIGN(info->video.framebuffer + fb_size, page_2m);
 
-                for (u64 addr = fb_base; addr < fb_end && addr < PROTECTED_MODE_TOP; addr += page_2m) {
+                for (u64 addr = fb_base; addr < fb_end && addr < PROTECTED_MODE_TOP;
+                     addr += page_2m) {
                     map_page_64(page_2m, addr, addr, wc_flags, false);
                     map_page_64(page_2m, addr + LINEAR_MAP_OFFSET_64, addr, wc_flags, true);
                 }

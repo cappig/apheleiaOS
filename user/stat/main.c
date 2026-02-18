@@ -1,6 +1,6 @@
 #include <account.h>
-#include <io.h>
 #include <fsutil.h>
+#include <io.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,7 +11,7 @@ static void usage(void) {
     io_write_str("usage: stat FILE...\n");
 }
 
-static int print_one(const char* path) {
+static int print_one(const char *path) {
     stat_t st;
 
     if (lstat(path, &st) < 0) {
@@ -62,7 +62,7 @@ static int print_one(const char* path) {
     return 0;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     if (argc < 2) {
         usage();
         return 1;
@@ -71,11 +71,13 @@ int main(int argc, char** argv) {
     int rc = 0;
 
     for (int i = 1; i < argc; i++) {
-        if (argc > 2 && i > 1)
+        if (argc > 2 && i > 1) {
             io_write_str("\n");
+        }
 
-        if (print_one(argv[i]) != 0)
+        if (print_one(argv[i]) != 0) {
             rc = 1;
+        }
     }
 
     return rc;

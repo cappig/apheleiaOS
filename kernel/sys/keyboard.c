@@ -13,55 +13,39 @@
 
 #include "input.h"
 
-static vector_t* kbds = NULL;
-static ring_buffer_t* buffer = NULL;
+static vector_t *kbds = NULL;
+static ring_buffer_t *buffer = NULL;
 static sched_wait_queue_t kbd_wait = {0};
 
-
-static bool _vec_push_ptr(vector_t* vec, void* ptr) {
-    return vec_push(vec, &ptr);
-}
-
-static keyboard_dev_t* _get(size_t index) {
-    keyboard_dev_t** slot = vec_at(kbds, index);
-    if (!slot)
+static keyboard_dev_t *_get(size_t index) {
+    keyboard_dev_t **slot = vec_at(kbds, index);
+    if (!slot) {
         return NULL;
+    }
 
     return *slot;
 }
 
-static char* _strdup(const char* src) {
-    if (!src)
-        return NULL;
-
-    size_t len = strlen(src);
-    char* out = malloc(len + 1);
-
-    if (!out)
-        return NULL;
-
-    memcpy(out, src, len);
-    out[len] = '\0';
-
-    return out;
-}
-
-static void _update_modifiers(keyboard_dev_t* kbd, bool action, u8 code) {
-    if (code == KBD_LEFT_SHIFT || code == KBD_RIGHT_SHIFT)
+static void _update_modifiers(keyboard_dev_t *kbd, bool action, u8 code) {
+    if (code == KBD_LEFT_SHIFT || code == KBD_RIGHT_SHIFT) {
         kbd->shift = (action == KEY_DOWN);
+    }
 
-    if (code == KBD_LEFT_CTRL || code == KBD_RIGHT_CTRL)
+    if (code == KBD_LEFT_CTRL || code == KBD_RIGHT_CTRL) {
         kbd->ctrl = (action == KEY_DOWN);
+    }
 
-    if (code == KBD_LEFT_ALT || code == KBD_RIGHT_ALT)
+    if (code == KBD_LEFT_ALT || code == KBD_RIGHT_ALT) {
         kbd->alt = (action == KEY_DOWN);
+    }
 
-    if ((code == KBD_CAPSLOCK) && (action == KEY_DOWN))
+    if ((code == KBD_CAPSLOCK) && (action == KEY_DOWN)) {
         kbd->capslock = !kbd->capslock;
+    }
 }
 
 static bool _push_ansi_key(u8 code) {
-    const char* seq = NULL;
+    const char *seq = NULL;
 
     switch (code) {
     case KBD_UP:
@@ -106,34 +90,38 @@ static bool _push_ansi_key(u8 code) {
     return true;
 }
 
-ssize_t keyboard_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+ssize_t keyboard_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
     (void)flags;
 
-    if (!buf || !buffer || !len)
+    if (!buf || !buffer || !len) {
         return -1;
+    }
 
     for (;;) {
         unsigned long irq_flags = arch_irq_save();
         size_t popped = ring_buffer_pop_array(buffer, buf, len);
         arch_irq_restore(irq_flags);
 
-        if (popped)
+        if (popped) {
             return (ssize_t)popped;
+        }
 
-        if (!sched_is_running())
+        if (!sched_is_running()) {
             continue;
+        }
 
         sched_block(&kbd_wait);
     }
 }
 
 void keyboard_handle_key(key_event event) {
-    if (!kbds || !buffer)
+    if (!kbds || !buffer) {
         return;
+    }
 
-    keyboard_dev_t* kbd = _get(event.source);
+    keyboard_dev_t *kbd = _get(event.source);
 
     if (!kbd) {
         log_warn("keyboard: input from unknown source");
@@ -141,14 +129,15 @@ void keyboard_handle_key(key_event event) {
     }
 
     bool action = (event.type & KEY_ACTION) != 0;
-    ring_buffer_push_array(buffer, (u8*)&event, sizeof(event));
+    ring_buffer_push_array(buffer, (u8 *)&event, sizeof(event));
     sched_wake_all(&kbd_wait);
 
     _update_modifiers(kbd, action, event.code);
     input_push_key_event(&event, kbd->shift, kbd->ctrl, kbd->alt, kbd->capslock);
 
-    if (!action)
+    if (!action) {
         return;
+    }
 
     if (kbd->alt) {
         if (event.code == KBD_F1) {
@@ -159,53 +148,61 @@ void keyboard_handle_key(key_event event) {
         if (event.code >= KBD_F2 && event.code <= (KBD_F2 + TTY_COUNT - 1)) {
             size_t index = (size_t)(event.code - KBD_F2);
 
-            if (index < TTY_COUNT)
+            if (index < TTY_COUNT) {
                 tty_set_current(TTY_USER_TO_SCREEN(index));
+            }
 
             return;
         }
     }
 
-    if (input_capture_screen(tty_current_screen()))
+    if (input_capture_screen(tty_current_screen())) {
         return;
+    }
 
-    if (_push_ansi_key(event.code))
+    if (_push_ansi_key(event.code)) {
         return;
+    }
 
     bool is_alpha = (event.code >= KBD_A && event.code <= KBD_Z);
     bool shift = kbd->shift ^ (kbd->capslock && is_alpha);
     char ch = kbd_to_ascii(event, kbd->keymap, shift);
 
-    if (!ch)
+    if (!ch) {
         return;
+    }
 
     if (kbd->ctrl) {
-        if (ch >= 'a' && ch <= 'z')
+        if (ch >= 'a' && ch <= 'z') {
             ch = (char)(ch - 'a' + 1);
-        else if (ch >= 'A' && ch <= 'Z')
+        } else if (ch >= 'A' && ch <= 'Z') {
             ch = (char)(ch - 'A' + 1);
+        }
     }
 
     tty_input_push(ch);
 }
 
-u8 keyboard_register(const char* name, ascii_keymap* keymap) {
-    if (!kbds || !buffer)
+u8 keyboard_register(const char *name, ascii_keymap *keymap) {
+    if (!kbds || !buffer) {
         keyboard_init();
+    }
 
-    if (!kbds || !buffer)
+    if (!kbds || !buffer) {
         return 0;
+    }
 
-    keyboard_dev_t* kbd = calloc(1, sizeof(keyboard_dev_t));
+    keyboard_dev_t *kbd = calloc(1, sizeof(keyboard_dev_t));
 
-    if (!kbd)
+    if (!kbd) {
         return 0;
+    }
 
-    kbd->name = _strdup(name);
+    kbd->name = strdup(name);
     kbd->keymap = keymap ? keymap : &us_keymap;
 
-    if (!_vec_push_ptr(kbds, kbd)) {
-        free((void*)kbd->name);
+    if (!vec_push(kbds, &kbd)) {
+        free((void *)kbd->name);
         free(kbd);
         return 0;
     }
@@ -214,16 +211,17 @@ u8 keyboard_register(const char* name, ascii_keymap* keymap) {
     return (u8)(kbds->size - 1);
 }
 
-static bool keyboard_register_devfs(vfs_node_t* dev_dir) {
-    if (!dev_dir)
+static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
+    if (!dev_dir) {
         return false;
+    }
 
     if (!kbds || !buffer) {
         log_warn("keyboard: state not initialized");
         return false;
     }
 
-    vfs_interface_t* kbd_if = vfs_create_interface(keyboard_read, NULL, NULL);
+    vfs_interface_t *kbd_if = vfs_create_interface(keyboard_read, NULL, NULL);
     if (!kbd_if) {
         log_warn("keyboard: failed to allocate /dev interface");
         return false;
@@ -238,23 +236,29 @@ static bool keyboard_register_devfs(vfs_node_t* dev_dir) {
 }
 
 bool keyboard_init(void) {
-    if (!devfs_register_device("keyboard", keyboard_register_devfs))
+    if (!devfs_register_device("keyboard", keyboard_register_devfs)) {
         log_warn("keyboard: failed to register devfs init callback");
+    }
 
-    if (!kbds)
-        kbds = vec_create(sizeof(keyboard_dev_t*));
+    if (!kbds) {
+        kbds = vec_create(sizeof(keyboard_dev_t *));
+    }
 
-    if (!kbds)
+    if (!kbds) {
         return false;
+    }
 
-    if (!buffer)
+    if (!buffer) {
         buffer = ring_buffer_create(KBD_DEV_BUFFER_SIZE);
+    }
 
-    if (!buffer)
+    if (!buffer) {
         return false;
+    }
 
-    if (!kbd_wait.list)
+    if (!kbd_wait.list) {
         sched_wait_queue_init(&kbd_wait);
+    }
 
     return true;
 }

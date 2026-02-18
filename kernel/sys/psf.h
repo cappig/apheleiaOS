@@ -2,4 +2,4 @@
 
 #include <stdbool.h>
 
-bool psf_load(const char* path);
+bool psf_load(const char *path);

@@ -196,8 +196,9 @@ static bool _wait_input_clear(void) {
     for (size_t timeout = PS2_WAIT_LIMIT; timeout > 0; timeout--) {
         u8 status = inb(PS2_REG_STATUS);
 
-        if (!(status & PS2_STA_IN_BUFFER))
+        if (!(status & PS2_STA_IN_BUFFER)) {
             return true;
+        }
     }
 
     return false;
@@ -207,16 +208,18 @@ static bool _wait_output_full(void) {
     for (size_t timeout = PS2_WAIT_LIMIT; timeout > 0; timeout--) {
         u8 status = inb(PS2_REG_STATUS);
 
-        if (status & PS2_STA_OUT_BUFFER)
+        if (status & PS2_STA_OUT_BUFFER) {
             return true;
+        }
     }
 
     return false;
 }
 
 static bool _write_cmd(u8 cmd) {
-    if (!_wait_input_clear())
+    if (!_wait_input_clear()) {
         return false;
+    }
 
     outb(PS2_REG_COMMAND, cmd);
 
@@ -224,20 +227,23 @@ static bool _write_cmd(u8 cmd) {
 }
 
 static bool _write_data(u8 data) {
-    if (!_wait_input_clear())
+    if (!_wait_input_clear()) {
         return false;
+    }
 
     outb(PS2_REG_DATA, data);
 
     return true;
 }
 
-static bool _read_data(u8* out) {
-    if (!out)
+static bool _read_data(u8 *out) {
+    if (!out) {
         return false;
+    }
 
-    if (!_wait_output_full())
+    if (!_wait_output_full()) {
         return false;
+    }
 
     *out = inb(PS2_REG_DATA);
     return true;
@@ -247,8 +253,9 @@ static void _flush_output(void) {
     for (;;) {
         u8 status = inb(PS2_REG_STATUS);
 
-        if (!(status & PS2_STA_OUT_BUFFER))
+        if (!(status & PS2_STA_OUT_BUFFER)) {
             break;
+        }
 
         (void)inb(PS2_REG_DATA);
     }
@@ -256,80 +263,95 @@ static void _flush_output(void) {
 
 static bool _expect_ack(void) {
     u8 resp = 0;
-    if (!_read_data(&resp))
+    if (!_read_data(&resp)) {
         return false;
+    }
 
     return resp == PS2_ACK;
 }
 
 static bool _kbd_command(u8 cmd) {
-    if (!_write_data(cmd))
+    if (!_write_data(cmd)) {
         return false;
+    }
 
     return _expect_ack();
 }
 
 static bool _mouse_command(u8 cmd) {
-    if (!_write_cmd(0xd4))
+    if (!_write_cmd(0xd4)) {
         return false;
+    }
 
-    if (!_write_data(cmd))
+    if (!_write_data(cmd)) {
         return false;
+    }
 
     return _expect_ack();
 }
 
 static bool _controller_init(void) {
-    if (!_write_cmd(PS2_COM_DISABLE_PORT1))
+    if (!_write_cmd(PS2_COM_DISABLE_PORT1)) {
         return false;
+    }
 
-    if (!_write_cmd(PS2_COM_DISABLE_PORT2))
+    if (!_write_cmd(PS2_COM_DISABLE_PORT2)) {
         return false;
+    }
 
     _flush_output();
 
-    if (!_write_cmd(PS2_COM_READ_CONFIG))
+    if (!_write_cmd(PS2_COM_READ_CONFIG)) {
         return false;
+    }
 
     u8 config = 0;
-    if (!_read_data(&config))
+    if (!_read_data(&config)) {
         return false;
+    }
 
     config &= ~(PS2_CON_PORT1_IRQ | PS2_CON_PORT2_IRQ);
     config |= PS2_CON_PORT1_TRANSLATE;
 
-    if (!_write_cmd(PS2_COM_WRITE_CONFIG))
+    if (!_write_cmd(PS2_COM_WRITE_CONFIG)) {
         return false;
+    }
 
-    if (!_write_data(config))
+    if (!_write_data(config)) {
         return false;
+    }
 
     if (_write_cmd(PS2_COM_TEST_CONTROLLER)) {
         u8 resp = 0;
 
-        if (!_read_data(&resp) || resp != PS2_SELFTEST_OK)
+        if (!_read_data(&resp) || resp != PS2_SELFTEST_OK) {
             log_warn("ps2: controller self-test failed");
+        }
     }
 
     if (_write_cmd(PS2_COM_TEST_PORT1)) {
         u8 resp = 0;
 
-        if (_read_data(&resp))
+        if (_read_data(&resp)) {
             has_port1 = (resp == PS2_TEST_OK);
+        }
     }
 
     if (_write_cmd(PS2_COM_TEST_PORT2)) {
         u8 resp = 0;
 
-        if (_read_data(&resp))
+        if (_read_data(&resp)) {
             has_port2 = (resp == PS2_TEST_OK);
+        }
     }
 
-    if (has_port1)
+    if (has_port1) {
         _write_cmd(PS2_COM_ENABLE_PORT1);
+    }
 
-    if (has_port2)
+    if (has_port2) {
         _write_cmd(PS2_COM_ENABLE_PORT2);
+    }
 
     if (has_port1) {
         config |= PS2_CON_PORT1_IRQ;
@@ -345,11 +367,13 @@ static bool _controller_init(void) {
         config |= PS2_CON_PORT2_CLOCK;
     }
 
-    if (!_write_cmd(PS2_COM_WRITE_CONFIG))
+    if (!_write_cmd(PS2_COM_WRITE_CONFIG)) {
         return false;
+    }
 
-    if (!_write_data(config))
+    if (!_write_data(config)) {
         return false;
+    }
 
     return true;
 }
@@ -357,7 +381,7 @@ static bool _controller_init(void) {
 static u8 kbd_index = 0;
 static bool kbd_extended = false;
 
-static void _kbd_irq(UNUSED int_state_t* s) {
+static void _kbd_irq(UNUSED int_state_t *s) {
     u8 scancode = inb(PS2_REG_DATA);
 
     if (scancode == PS2_EXTENDED) {
@@ -380,8 +404,9 @@ static void _kbd_irq(UNUSED int_state_t* s) {
 
     keyboard_handle_key(event);
 
-    if (kbd_extended)
+    if (kbd_extended) {
         kbd_extended = false;
+    }
 
 done:
     irq_ack(IRQ_PS2_KEYBOARD);
@@ -392,15 +417,17 @@ static u8 mouse_byte = 0;
 static u8 mouse_packet[4];
 static u8 mouse_packet_size = 3;
 
-static void _mouse_irq(UNUSED int_state_t* s) {
+static void _mouse_irq(UNUSED int_state_t *s) {
     u8 status = inb(PS2_REG_STATUS);
     u8 packet = inb(PS2_REG_DATA);
 
-    if (!(status & PS2_STA_AUX))
+    if (!(status & PS2_STA_AUX)) {
         goto done;
+    }
 
-    if (!mouse_byte && !(packet & 0x08))
+    if (!mouse_byte && !(packet & 0x08)) {
         goto done;
+    }
 
     mouse_packet[mouse_byte++] = packet;
 
@@ -409,28 +436,34 @@ static void _mouse_irq(UNUSED int_state_t* s) {
 
         u8 flags = mouse_packet[0];
 
-        if (flags & (PS2_MOUSE_XOVERFLOW | PS2_MOUSE_YOVERFLOW))
+        if (flags & (PS2_MOUSE_XOVERFLOW | PS2_MOUSE_YOVERFLOW)) {
             goto done;
+        }
 
         i16 x = mouse_packet[1];
         i16 y = mouse_packet[2];
 
-        if (flags & PS2_MOUSE_XSIGN)
+        if (flags & PS2_MOUSE_XSIGN) {
             x -= 0x100;
+        }
 
-        if (flags & PS2_MOUSE_YSIGN)
+        if (flags & PS2_MOUSE_YSIGN) {
             y -= 0x100;
+        }
 
         u8 buttons = 0;
 
-        if (flags & PS2_MOUSE_LEFT)
+        if (flags & PS2_MOUSE_LEFT) {
             buttons |= MOUSE_LEFT_CLICK;
+        }
 
-        if (flags & PS2_MOUSE_RIGHT)
+        if (flags & PS2_MOUSE_RIGHT) {
             buttons |= MOUSE_RIGHT_CLICK;
+        }
 
-        if (flags & PS2_MOUSE_MIDDLE)
+        if (flags & PS2_MOUSE_MIDDLE) {
             buttons |= MOUSE_MIDDLE_CLICK;
+        }
 
         mouse_event event = {
             .delta_x = x,

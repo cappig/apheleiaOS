@@ -7,36 +7,42 @@
 #define SYSTEM_MAX_ARGS 16
 #define SYSTEM_MAX_CMD  256
 
-static int split_command(char* buf, char** argv, int max) {
-    if (!buf || !argv || max <= 0)
+static int split_command(char *buf, char **argv, int max) {
+    if (!buf || !argv || max <= 0) {
         return 0;
+    }
 
     int argc = 0;
-    char* cursor = buf;
+    char *cursor = buf;
 
     while (*cursor && argc < max - 1) {
-        while (*cursor && isspace((unsigned char)*cursor))
+        while (*cursor && isspace((unsigned char)*cursor)) {
             cursor++;
+        }
 
-        if (!*cursor)
+        if (!*cursor) {
             break;
+        }
 
         argv[argc++] = cursor;
 
-        while (*cursor && !isspace((unsigned char)*cursor))
+        while (*cursor && !isspace((unsigned char)*cursor)) {
             cursor++;
+        }
 
-        if (*cursor)
+        if (*cursor) {
             *cursor++ = '\0';
+        }
     }
 
     argv[argc] = NULL;
     return argc;
 }
 
-int system(const char* command) {
-    if (!command)
+int system(const char *command) {
+    if (!command) {
         return 1;
+    }
 
     char cmdline[SYSTEM_MAX_CMD];
 
@@ -44,11 +50,12 @@ int system(const char* command) {
     memcpy(cmdline, command, len);
     cmdline[len] = '\0';
 
-    char* argv[SYSTEM_MAX_ARGS];
+    char *argv[SYSTEM_MAX_ARGS];
     int argc = split_command(cmdline, argv, SYSTEM_MAX_ARGS);
 
-    if (!argc)
+    if (!argc) {
         return 0;
+    }
 
     pid_t pid = fork();
 
@@ -65,13 +72,15 @@ int system(const char* command) {
         _exit(127);
     }
 
-    if (pid < 0)
+    if (pid < 0) {
         return -1;
+    }
 
     int status = 0;
 
-    if (wait(pid, &status) < 0)
+    if (wait(pid, &status) < 0) {
         return -1;
+    }
 
     return status;
 }

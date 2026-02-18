@@ -5,7 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
-static void print_error(const char* target, const char* link_path) {
+static void print_error(const char *target, const char *link_path) {
     char line[320];
     snprintf(
         line,
@@ -18,7 +18,7 @@ static void print_error(const char* target, const char* link_path) {
     io_write_str(line);
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     bool force = false;
     int argi = 1;
 
@@ -43,15 +43,17 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const char* target = argv[argi];
-    const char* link_path = argv[argi + 1];
+    const char *target = argv[argi];
+    const char *link_path = argv[argi + 1];
 
-    if (!link(target, link_path))
+    if (!link(target, link_path)) {
         return 0;
+    }
 
     if (force && errno == EEXIST) {
-        if (!unlink(link_path) && !link(target, link_path))
+        if (!unlink(link_path) && !link(target, link_path)) {
             return 0;
+        }
     }
 
     print_error(target, link_path);

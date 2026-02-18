@@ -4,14 +4,15 @@
 #include <unistd.h>
 
 static void format_identity(
-    char* out,
+    char *out,
     size_t out_len,
-    const char* label,
+    const char *label,
     unsigned long long value,
-    const char* name
+    const char *name
 ) {
-    if (!out || !out_len || !label)
+    if (!out || !out_len || !label) {
         return;
+    }
 
     if (name && name[0]) {
         snprintf(out, out_len, "%s=%llu(%s)", label, value, name);
@@ -21,7 +22,7 @@ static void format_identity(
     snprintf(out, out_len, "%s=%llu", label, value);
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
@@ -55,8 +56,9 @@ int main(int argc, char** argv) {
     if (written > 0) {
         size_t len = (size_t)written;
 
-        if (len >= sizeof(line))
+        if (len >= sizeof(line)) {
             len = sizeof(line) - 1;
+        }
 
         write(STDOUT_FILENO, line, len);
     }

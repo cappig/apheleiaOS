@@ -6,29 +6,32 @@
 #include <string.h>
 #include <unistd.h>
 
-static void print_error(const char* path) {
+static void print_error(const char *path) {
     char line[256];
     snprintf(line, sizeof(line), "rmdir: %s: %d\n", path ? path : "(null)", errno);
     io_write_str(line);
 }
 
-static int remove_with_parents(const char* path, bool parents) {
+static int remove_with_parents(const char *path, bool parents) {
     if (!path || !path[0]) {
         errno = EINVAL;
         return -1;
     }
 
-    if (rmdir(path) < 0)
+    if (rmdir(path) < 0) {
         return -1;
+    }
 
-    if (!parents)
+    if (!parents) {
         return 0;
+    }
 
     char buf[PATH_MAX];
     size_t len = strnlen(path, sizeof(buf));
 
-    if (!len || len >= sizeof(buf))
+    if (!len || len >= sizeof(buf)) {
         return 0;
+    }
 
     memcpy(buf, path, len);
     buf[len] = '\0';
@@ -39,20 +42,24 @@ static int remove_with_parents(const char* path, bool parents) {
     }
 
     while (true) {
-        char* slash = strrchr(buf, '/');
-        if (!slash)
+        char *slash = strrchr(buf, '/');
+        if (!slash) {
             break;
+        }
 
-        if (slash == buf)
+        if (slash == buf) {
             break;
+        }
 
         *slash = '\0';
-        if (buf[0] == '\0')
+        if (buf[0] == '\0') {
             break;
+        }
 
         if (rmdir(buf) < 0) {
-            if (errno == ENOTEMPTY || errno == ENOENT)
+            if (errno == ENOTEMPTY || errno == ENOENT) {
                 break;
+            }
             return -1;
         }
     }
@@ -60,7 +67,7 @@ static int remove_with_parents(const char* path, bool parents) {
     return 0;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     bool parents = false;
     int argi = 1;
 

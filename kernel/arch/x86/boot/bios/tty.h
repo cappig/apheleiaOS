@@ -5,12 +5,12 @@
 
 #define PRINTF_BUF_SIZE 256
 
-int printf(char* fmt, ...);
+int printf(char *fmt, ...);
 
-void puts(const char* str);
+void puts(const char *str);
 
-int serial_printf(char* fmt, ...);
+int serial_printf(char *fmt, ...);
 
-void serial_puts(const char* str);
+void serial_puts(const char *str);
 
-NORETURN void panic(const char* msg);
+NORETURN void panic(const char *msg);

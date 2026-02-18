@@ -1,6 +1,6 @@
 #include <errno.h>
-#include <io.h>
 #include <fsutil.h>
+#include <io.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -8,19 +8,21 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static void print_error(const char* src, const char* dst) {
+static void print_error(const char *src, const char *dst) {
     char line[320];
-    snprintf(line, sizeof(line), "mv: %s -> %s: %d\n", src ? src : "(null)", dst ? dst : "(null)", errno);
+    snprintf(
+        line, sizeof(line), "mv: %s -> %s: %d\n", src ? src : "(null)", dst ? dst : "(null)", errno
+    );
     io_write_str(line);
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     if (argc < 3) {
         io_write_str("usage: mv SOURCE... DEST\n");
         return 1;
     }
 
-    const char* dest = argv[argc - 1];
+    const char *dest = argv[argc - 1];
     stat_t st_dest = {0};
 
     bool dest_exists = (!stat(dest, &st_dest));
@@ -33,13 +35,14 @@ int main(int argc, char** argv) {
 
     int rc = 0;
     for (int i = 1; i < argc - 1; i++) {
-        const char* src = argv[i];
+        const char *src = argv[i];
         char target[PATH_MAX];
 
-        if (dest_is_dir)
+        if (dest_is_dir) {
             fs_join_path(target, sizeof(target), dest, fs_path_basename(src));
-        else
+        } else {
             snprintf(target, sizeof(target), "%s", dest);
+        }
 
         if (rename(src, target) < 0) {
             print_error(src, target);

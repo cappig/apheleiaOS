@@ -39,20 +39,20 @@ typedef u64 page_t;
 #define PT_DIRTY         (1 << 6)
 #define PT_HUGE          (1 << 7)
 #define PT_GLOBAL        (1 << 8)
-#define PT_PAT_4K        (1 << 7)       // PAT bit for 4KB PTEs (same position as PT_HUGE)
-#define PT_PAT_HUGE      (1ULL << 12)   // PAT bit for 2MB / 1GB pages
+#define PT_PAT_4K        (1 << 7) // PAT bit for 4KB PTEs (same position as PT_HUGE)
+#define PT_PAT_HUGE      (1ULL << 12) // PAT bit for 2MB / 1GB pages
 #define PT_NO_EXECUTE    (1ULL << 63)
 
-static inline page_t page_get_paddr(page_t* page) {
+static inline page_t page_get_paddr(page_t *page) {
     return *page & ADDR_MASK;
 }
 
-static inline void* page_get_vaddr(page_t* page) {
+static inline void *page_get_vaddr(page_t *page) {
     page_t paddr = page_get_paddr(page);
-    return (void*)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
+    return (void *)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
 }
 
-static inline void page_set_paddr(page_t* page, page_t addr) {
+static inline void page_set_paddr(page_t *page, page_t addr) {
     addr = ALIGN_DOWN(addr, PAGE_4KIB);
     addr &= ADDR_MASK;
     *page = addr;

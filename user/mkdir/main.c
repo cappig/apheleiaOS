@@ -7,13 +7,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static void print_error(const char* path) {
+static void print_error(const char *path) {
     char line[256];
     snprintf(line, sizeof(line), "mkdir: %s: %d\n", path ? path : "(null)", errno);
     io_write_str(line);
 }
 
-static int mkdir_parents(const char* path, mode_t mode) {
+static int mkdir_parents(const char *path, mode_t mode) {
     if (!path || !path[0]) {
         errno = EINVAL;
         return -1;
@@ -35,9 +35,10 @@ static int mkdir_parents(const char* path, mode_t mode) {
         len--;
     }
 
-    char* pos = tmp;
-    if (tmp[0] == '/')
+    char *pos = tmp;
+    if (tmp[0] == '/') {
         pos++;
+    }
 
     while (*pos) {
         if (*pos != '/') {
@@ -52,20 +53,22 @@ static int mkdir_parents(const char* path, mode_t mode) {
 
         *pos = '\0';
 
-        if (mkdir(tmp, mode) < 0 && errno != EEXIST)
+        if (mkdir(tmp, mode) < 0 && errno != EEXIST) {
             return -1;
+        }
 
         *pos = '/';
         pos++;
     }
 
-    if (mkdir(tmp, mode) < 0 && errno != EEXIST)
+    if (mkdir(tmp, mode) < 0 && errno != EEXIST) {
         return -1;
+    }
 
     return 0;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     bool parents = false;
     int argi = 1;
 

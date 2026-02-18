@@ -12,5 +12,5 @@
 #define WEXITSTATUS(status) (((status) >> 8) & 0xff)
 
 #ifndef _KERNEL
-pid_t waitpid(pid_t pid, int* status, int options);
+pid_t waitpid(pid_t pid, int *status, int options);
 #endif

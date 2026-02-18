@@ -6,15 +6,16 @@
 #include <time.h>
 #include <unistd.h>
 
-static bool parse_u64(const char* text, const char* key, unsigned long long* out) {
-    if (!text || !key || !out)
+static bool parse_u64(const char *text, const char *key, unsigned long long *out) {
+    if (!text || !key || !out) {
         return false;
+    }
 
     size_t key_len = strlen(key);
-    const char* line = text;
+    const char *line = text;
 
     while (*line) {
-        const char* next = strchr(line, '\n');
+        const char *next = strchr(line, '\n');
         size_t line_len = next ? (size_t)(next - line) : strlen(line);
 
         if (line_len > key_len && !strncmp(line, key, key_len)) {
@@ -22,8 +23,9 @@ static bool parse_u64(const char* text, const char* key, unsigned long long* out
             return sscanf(line, "%llu", out) == 1;
         }
 
-        if (!next)
+        if (!next) {
             break;
+        }
 
         line = next + 1;
     }
@@ -31,7 +33,7 @@ static bool parse_u64(const char* text, const char* key, unsigned long long* out
     return false;
 }
 
-time_t time(time_t* timer) {
+time_t time(time_t *timer) {
     int fd = open("/dev/clock", O_RDONLY, 0);
 
     if (fd < 0) {
@@ -58,8 +60,9 @@ time_t time(time_t* timer) {
 
     time_t value = (time_t)now;
 
-    if (timer)
+    if (timer) {
         *timer = value;
+    }
 
     return value;
 }

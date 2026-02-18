@@ -143,7 +143,7 @@ typedef struct {
     u8 code;
 } key_event;
 
-char kbd_to_ascii(key_event event, ascii_keymap* map, bool shift);
+char kbd_to_ascii(key_event event, ascii_keymap *map, bool shift);
 char kbd_to_ascii_default(key_event event);
 
 // Convert ASCII control codes to caret notation: ^X

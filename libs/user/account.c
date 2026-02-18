@@ -4,9 +4,10 @@
 #include <pwd.h>
 #include <stdio.h>
 
-const char* account_uid_name(uid_t uid, char* buf, size_t len) {
-    if (!buf || !len)
+const char *account_uid_name(uid_t uid, char *buf, size_t len) {
+    if (!buf || !len) {
         return "";
+    }
 
     passwd_t pwd = {0};
 
@@ -20,9 +21,10 @@ const char* account_uid_name(uid_t uid, char* buf, size_t len) {
     return buf;
 }
 
-const char* account_gid_name(gid_t gid, char* buf, size_t len) {
-    if (!buf || !len)
+const char *account_gid_name(gid_t gid, char *buf, size_t len) {
+    if (!buf || !len) {
         return "";
+    }
 
     group_t grp = {0};
 

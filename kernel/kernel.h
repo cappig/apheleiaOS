@@ -2,4 +2,4 @@
 
 #include <base/attributes.h>
 
-NORETURN void kernel_main(void* boot_info);
+NORETURN void kernel_main(void *boot_info);

@@ -11,24 +11,28 @@ typedef struct {
     double scale;
 } mandelbrot_view_t;
 
-static void view_reset(mandelbrot_view_t* view) {
-    if (!view)
+static void view_reset(mandelbrot_view_t *view) {
+    if (!view) {
         return;
+    }
 
     view->center_x = -0.5;
     view->center_y = 0.0;
     view->scale = 1.6;
 }
 
-static void view_clamp(mandelbrot_view_t* view) {
-    if (!view)
+static void view_clamp(mandelbrot_view_t *view) {
+    if (!view) {
         return;
+    }
 
-    if (view->scale < 0.000000000001)
+    if (view->scale < 0.000000000001) {
         view->scale = 0.000000000001;
+    }
 
-    if (view->scale > 8.0)
+    if (view->scale > 8.0) {
         view->scale = 8.0;
+    }
 }
 
 static u32 compute_max_iter(double scale) {
@@ -44,8 +48,9 @@ static u32 compute_max_iter(double scale) {
 }
 
 static u32 palette_color(u32 iter, u32 max_iter) {
-    if (iter >= max_iter)
+    if (iter >= max_iter) {
         return 0x00000000U;
+    }
 
     u32 t = (u32)(((u64)iter * 1536ULL) / (u64)max_iter);
     u32 seg = t >> 8;
@@ -101,56 +106,57 @@ static bool point_inside_main_body(double cx, double cy) {
     double y2 = cy * cy;
     double q = x * x + y2;
 
-    if (q * (q + x) <= 0.25 * y2)
+    if (q * (q + x) <= 0.25 * y2) {
         return true;
+    }
 
     double bx = cx + 1.0;
-    if (bx * bx + y2 <= 0.0625)
+    if (bx * bx + y2 <= 0.0625) {
         return true;
+    }
 
     return false;
 }
 
-static void fill_block(
-    u32* pixels,
-    u32 width,
-    u32 height,
-    u32 x,
-    u32 y,
-    u32 step,
-    u32 color
-) {
-    if (!pixels || !width || !height || !step)
+static void fill_block(u32 *pixels, u32 width, u32 height, u32 x, u32 y, u32 step, u32 color) {
+    if (!pixels || !width || !height || !step) {
         return;
+    }
 
     u32 y_end = y + step;
     u32 x_end = x + step;
 
-    if (y_end > height)
+    if (y_end > height) {
         y_end = height;
+    }
 
-    if (x_end > width)
+    if (x_end > width) {
         x_end = width;
+    }
 
     for (u32 yy = y; yy < y_end; yy++) {
         size_t row = (size_t)yy * width;
-        for (u32 xx = x; xx < x_end; xx++)
+        for (u32 xx = x; xx < x_end; xx++) {
             pixels[row + xx] = color;
+        }
     }
 }
 
-static void render_mandelbrot(window_t* window, const mandelbrot_view_t* view) {
-    if (!window || !view)
+static void render_mandelbrot(window_t *window, const mandelbrot_view_t *view) {
+    if (!window || !view) {
         return;
+    }
 
-    u32* pixels = window_buffer(window);
-    if (!pixels)
+    u32 *pixels = window_buffer(window);
+    if (!pixels) {
         return;
+    }
 
     u32 width = window->width;
     u32 height = window->height;
-    if (!width || !height)
+    if (!width || !height) {
         return;
+    }
 
     u32 max_iter = compute_max_iter(view->scale);
     u32 step = (width * height >= 260000U) ? 2U : 1U;
@@ -166,8 +172,9 @@ static void render_mandelbrot(window_t* window, const mandelbrot_view_t* view) {
         double cx = x_min;
 
         for (u32 x = 0; x < width; x += step) {
-            if (x)
+            if (x) {
                 cx += dx * (double)step;
+            }
 
             u32 color = 0;
 
@@ -180,8 +187,9 @@ static void render_mandelbrot(window_t* window, const mandelbrot_view_t* view) {
                     double zx2 = zx * zx;
                     double zy2 = zy * zy;
 
-                    if (zx2 + zy2 > 4.0)
+                    if (zx2 + zy2 > 4.0) {
                         break;
+                    }
 
                     double zxy = zx * zy;
                     zy = zxy + zxy + cy;
@@ -197,12 +205,14 @@ static void render_mandelbrot(window_t* window, const mandelbrot_view_t* view) {
     }
 }
 
-static int handle_event(mandelbrot_view_t* view, const ws_input_event_t* event) {
-    if (!view || !event)
+static int handle_event(mandelbrot_view_t *view, const ws_input_event_t *event) {
+    if (!view || !event) {
         return 0;
+    }
 
-    if (event->type != INPUT_EVENT_KEY || !event->action)
+    if (event->type != INPUT_EVENT_KEY || !event->action) {
         return 0;
+    }
 
     double pan_step = view->scale * 0.18;
 
@@ -243,8 +253,9 @@ static int handle_event(mandelbrot_view_t* view, const ws_input_event_t* event) 
 
 int main(void) {
     window_t window = {0};
-    if (window_init(&window, 760, 500, "mbrot"))
+    if (window_init(&window, 760, 500, "mbrot")) {
         return 1;
+    }
 
     printf("+/- zoom, arrows pan, r reset, q/esc quit\n");
 
@@ -261,23 +272,28 @@ int main(void) {
         ws_input_event_t event = {0};
         int ret = window_wait_event(&window, &event, -1);
 
-        if (ret < 0)
+        if (ret < 0) {
             break;
+        }
 
-        if (ret == 0)
+        if (ret == 0) {
             continue;
+        }
 
         int action = handle_event(&view, &event);
 
-        if (action < 0)
+        if (action < 0) {
             break;
+        }
 
-        if (!action)
+        if (!action) {
             continue;
+        }
 
         render_mandelbrot(&window, &view);
-        if (window_flush(&window))
+        if (window_flush(&window)) {
             break;
+        }
     }
 
     window_deinit(&window);

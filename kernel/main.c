@@ -10,8 +10,8 @@
 #include <sys/keyboard.h>
 #include <sys/logsink.h>
 #include <sys/mouse.h>
-#include <sys/pty.h>
 #include <sys/psf.h>
+#include <sys/pty.h>
 #include <sys/symbols.h>
 #include <sys/syscall.h>
 #include <sys/tty.h>
@@ -20,8 +20,8 @@
 #include "sys/input.h"
 #include "sys/ws.h"
 
-NORETURN void kernel_main(void* boot_info) {
-    const kernel_args_t* args = arch_init(boot_info);
+NORETURN void kernel_main(void *boot_info) {
+    const kernel_args_t *args = arch_init(boot_info);
     scheduler_init();
     syscall_init();
     vfs_init();
@@ -32,10 +32,11 @@ NORETURN void kernel_main(void* boot_info) {
     bool mounted = false;
 
     for (size_t id = 1; !mounted; id++) {
-        disk_dev_t* dev = disk_lookup(id);
+        disk_dev_t *dev = disk_lookup(id);
 
-        if (!dev)
+        if (!dev) {
             break;
+        }
 
         mounted = mount_rootfs(dev);
     }
@@ -46,27 +47,32 @@ NORETURN void kernel_main(void* boot_info) {
         load_symbols();
     }
 
-    const char* font_path = args ? args->font : NULL;
+    const char *font_path = args ? args->font : NULL;
 
     if (font_path && font_path[0]) {
-        if (!psf_load(font_path))
+        if (!psf_load(font_path)) {
             log_warn("kernel: failed to load console font '%s'", font_path);
+        }
     }
 
     tty_init();
     pty_init();
 
-    if (!input_init())
+    if (!input_init()) {
         log_warn("kernel: input init failed");
+    }
 
-    if (!keyboard_init())
+    if (!keyboard_init()) {
         log_warn("kernel: keyboard init failed");
+    }
 
-    if (!mouse_init())
+    if (!mouse_init()) {
         log_warn("kernel: mouse init failed");
+    }
 
-    if (!ws_init())
+    if (!ws_init()) {
         log_warn("kernel: ws init failed");
+    }
 
     framebuffer_devfs_init();
     devfs_init();
@@ -78,6 +84,7 @@ NORETURN void kernel_main(void* boot_info) {
     init_spawn();
     scheduler_start();
 
-    for (;;)
+    for (;;) {
         ;
+    }
 }

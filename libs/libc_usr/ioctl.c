@@ -7,10 +7,10 @@
 
 int ioctl(int fd, unsigned long request, ...) {
     va_list args;
-    void* argp = NULL;
+    void *argp = NULL;
 
     va_start(args, request);
-    argp = va_arg(args, void*);
+    argp = va_arg(args, void *);
     va_end(args);
 
     return (int)__SYSCALL_ERRNO(

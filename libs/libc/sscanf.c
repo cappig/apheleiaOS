@@ -5,11 +5,11 @@
 #include "stdlib.h"
 
 
-static int _get_width(const char* format, size_t* index) {
+static int _get_width(const char *format, size_t *index) {
     int width = -1;
 
     if (isdigit(format[*index])) {
-        char* end;
+        char *end;
         width = strtol(&format[*index], &end, 10);
 
         *index += (size_t)(end - &format[*index]);
@@ -18,18 +18,20 @@ static int _get_width(const char* format, size_t* index) {
     return width;
 }
 
-static void _consume_size(const char* format, size_t* index) {
+static void _consume_size(const char *format, size_t *index) {
     switch (format[*index]) {
     case 'h':
         (*index)++;
-        if (format[*index] == 'h')
+        if (format[*index] == 'h') {
             (*index)++;
+        }
         break;
 
     case 'l':
         (*index)++;
-        if (format[*index] == 'l')
+        if (format[*index] == 'l') {
             (*index)++;
+        }
         break;
 
     case 'z':
@@ -77,25 +79,28 @@ static int _get_base(char type) {
     }
 }
 
-static void _adjust_width(int base, const char* restrict str, int* width) {
+static void _adjust_width(int base, const char *restrict str, int *width) {
     if (base == BASE_STRING) {
         int len = 0;
-        while (!isspace(str[len]) && str[len])
+        while (!isspace(str[len]) && str[len]) {
             len++;
+        }
 
-        if (*width == -1)
+        if (*width == -1) {
             *width = len;
-        else
+        } else {
             *width = min(*width, len);
+        }
 
     } else if (base == BASE_CHAR) {
-        if (*width == -1)
+        if (*width == -1) {
             *width = 1;
+        }
     }
 }
 
 
-int vsnscanf(const char* restrict str, size_t max, const char* restrict format, va_list vlist) {
+int vsnscanf(const char *restrict str, size_t max, const char *restrict format, va_list vlist) {
     size_t filled = 0;
     size_t j = 0;
 
@@ -117,15 +122,16 @@ int vsnscanf(const char* restrict str, size_t max, const char* restrict format, 
 
             // Number
             if (base > 0) {
-                char* end;
+                char *end;
                 unsigned long long number = strtoll(&str[j], &end, base);
 
                 j += (size_t)(end - &str[j]);
 
-                if (ignore)
+                if (ignore) {
                     continue;
+                }
 
-                unsigned long long* ptr = va_arg(vlist, void*);
+                unsigned long long *ptr = va_arg(vlist, void *);
                 *ptr = number;
                 filled++;
             }
@@ -138,25 +144,29 @@ int vsnscanf(const char* restrict str, size_t max, const char* restrict format, 
                     continue;
                 }
 
-                char* ptr = va_arg(vlist, char*);
+                char *ptr = va_arg(vlist, char *);
                 filled++;
 
-                for (int c = 0; c < width; c++)
+                for (int c = 0; c < width; c++) {
                     ptr[c] = str[j++];
+                }
 
-                if (base == BASE_STRING)
+                if (base == BASE_STRING) {
                     ptr[j] = '\0';
+                }
             }
         }
         // Handle spaces
         else if (format[i] == ' ') {
-            while (isspace(str[j]) && str[j])
+            while (isspace(str[j]) && str[j]) {
                 j++;
+            }
         }
         // Check str against format
         else {
-            if (format[i] != str[j])
+            if (format[i] != str[j]) {
                 break;
+            }
 
             j++;
         }

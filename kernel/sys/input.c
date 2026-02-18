@@ -26,21 +26,24 @@ static input_state_t input_state = {0};
 
 
 bool input_capture_screen(size_t screen) {
-    if (screen >= TTY_SCREEN_COUNT)
+    if (screen >= TTY_SCREEN_COUNT) {
         return false;
+    }
 
     ssize_t owner_screen = console_fb_owner_screen();
 
-    if (owner_screen == TTY_NONE)
+    if (owner_screen == TTY_NONE) {
         return false;
+    }
 
     return screen == (size_t)owner_screen;
 }
 
 static u64 _timestamp_ms(void) {
     u32 hz = arch_timer_hz();
-    if (!hz)
+    if (!hz) {
         return 0;
+    }
 
     return (arch_timer_ticks() * 1000ULL) / hz;
 }
@@ -53,9 +56,10 @@ static bool _has_events(void) {
     return has_events;
 }
 
-static void _push_event(const input_event_t* event) {
-    if (!event || !input_state.ready)
+static void _push_event(const input_event_t *event) {
+    if (!event || !input_state.ready) {
         return;
+    }
 
     unsigned long irq_flags = arch_irq_save();
 
@@ -73,16 +77,17 @@ static void _push_event(const input_event_t* event) {
     sched_wake_all(&input_state.wait_queue);
 }
 
-static bool input_register_devfs(vfs_node_t* dev_dir) {
-    if (!dev_dir)
+static bool input_register_devfs(vfs_node_t *dev_dir) {
+    if (!dev_dir) {
         return false;
+    }
 
     if (!input_state.ready) {
         log_warn("input: state not initialized");
         return false;
     }
 
-    vfs_interface_t* input_if = vfs_create_interface(input_read, NULL, NULL);
+    vfs_interface_t *input_if = vfs_create_interface(input_read, NULL, NULL);
     if (!input_if) {
         log_warn("input: failed to allocate /dev interface");
         return false;
@@ -99,11 +104,13 @@ static bool input_register_devfs(vfs_node_t* dev_dir) {
 }
 
 bool input_init(void) {
-    if (!devfs_register_device("input", input_register_devfs))
+    if (!devfs_register_device("input", input_register_devfs)) {
         log_warn("input: failed to register devfs init callback");
+    }
 
-    if (input_state.ready)
+    if (input_state.ready) {
         return true;
+    }
 
     memset(&input_state, 0, sizeof(input_state));
     sched_wait_queue_init(&input_state.wait_queue);
@@ -112,18 +119,14 @@ bool input_init(void) {
     return true;
 }
 
-void input_push_key_event(
-    const key_event* event,
-    bool shift,
-    bool ctrl,
-    bool alt,
-    bool capslock
-) {
-    if (!event || !input_state.ready)
+void input_push_key_event(const key_event *event, bool shift, bool ctrl, bool alt, bool capslock) {
+    if (!event || !input_state.ready) {
         return;
+    }
 
-    if (!input_capture_screen(tty_current_screen()))
+    if (!input_capture_screen(tty_current_screen())) {
         return;
+    }
 
     input_event_t input = {0};
 
@@ -133,27 +136,33 @@ void input_push_key_event(
     input.keycode = event->code;
     input.action = (event->type & KEY_ACTION) ? 1 : 0;
 
-    if (shift)
+    if (shift) {
         input.modifiers |= INPUT_MOD_SHIFT;
+    }
 
-    if (ctrl)
+    if (ctrl) {
         input.modifiers |= INPUT_MOD_CTRL;
+    }
 
-    if (alt)
+    if (alt) {
         input.modifiers |= INPUT_MOD_ALT;
+    }
 
-    if (capslock)
+    if (capslock) {
         input.modifiers |= INPUT_MOD_CAPS;
+    }
 
     _push_event(&input);
 }
 
-void input_push_mouse_event(const mouse_event* event) {
-    if (!event || !input_state.ready)
+void input_push_mouse_event(const mouse_event *event) {
+    if (!event || !input_state.ready) {
         return;
+    }
 
-    if (!input_capture_screen(tty_current_screen()))
+    if (!input_capture_screen(tty_current_screen())) {
         return;
+    }
 
     if (event->delta_x || event->delta_y) {
         input_event_t move = {0};
@@ -171,8 +180,9 @@ void input_push_mouse_event(const mouse_event* event) {
     u8 source = event->source;
     u8 prev_buttons = input_state.mouse_buttons[source];
 
-    if (prev_buttons == event->buttons)
+    if (prev_buttons == event->buttons) {
         return;
+    }
 
     input_state.mouse_buttons[source] = event->buttons;
 
@@ -186,27 +196,31 @@ void input_push_mouse_event(const mouse_event* event) {
     _push_event(&buttons);
 }
 
-ssize_t input_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+ssize_t input_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
 
-    if (!buf)
+    if (!buf) {
         return -EFAULT;
+    }
 
-    if (len < sizeof(input_event_t))
+    if (len < sizeof(input_event_t)) {
         return -EINVAL;
+    }
 
     size_t max_events = len / sizeof(input_event_t);
-    if (!max_events)
+    if (!max_events) {
         return -EINVAL;
+    }
 
     for (;;) {
         size_t copied = 0;
+        input_event_t *out_events = (input_event_t *)buf;
 
         unsigned long irq_flags = arch_irq_save();
 
         while (copied < max_events && input_state.count > 0) {
-            ((input_event_t*)buf)[copied] = input_state.events[input_state.head];
+            out_events[copied] = input_state.events[input_state.head];
             input_state.head = (input_state.head + 1) % INPUT_QUEUE_CAPACITY;
             input_state.count--;
             copied++;
@@ -214,32 +228,37 @@ ssize_t input_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 f
 
         arch_irq_restore(irq_flags);
 
-        if (copied)
+        if (copied) {
             return (ssize_t)(copied * sizeof(input_event_t));
+        }
 
-        if (flags & VFS_NONBLOCK)
+        if (flags & VFS_NONBLOCK) {
             return -EAGAIN;
+        }
 
-        if (!sched_is_running())
+        if (!sched_is_running()) {
             continue;
+        }
 
-        sched_thread_t* current = sched_current();
+        sched_thread_t *current = sched_current();
 
-        if (current && sched_signal_has_pending(current))
+        if (current && sched_signal_has_pending(current)) {
             return -EINTR;
+        }
 
         sched_block(&input_state.wait_queue);
     }
 }
 
-short input_poll(vfs_node_t* node, short events, u32 flags) {
+short input_poll(vfs_node_t *node, short events, u32 flags) {
     (void)node;
     (void)flags;
 
     short revents = 0;
 
-    if ((events & POLLIN) && _has_events())
+    if ((events & POLLIN) && _has_events()) {
         revents |= POLLIN;
+    }
 
     return revents;
 }

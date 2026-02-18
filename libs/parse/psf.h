@@ -22,9 +22,9 @@ typedef struct {
     u32 glyph_count;
     u32 glyph_size;
     u32 row_bytes;
-    const u8* glyphs;
-    const u8* unicode_table;
+    const u8 *glyphs;
+    const u8 *unicode_table;
     size_t unicode_size;
 } psf_blob_t;
 
-bool psf_parse_blob(const void* data, size_t size, psf_blob_t* out);
+bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out);

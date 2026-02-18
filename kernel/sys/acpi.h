@@ -80,6 +80,6 @@ typedef struct PACKED {
 
 void acpi_init(u64 rsdp_ptr);
 
-sdt_header_t* acpi_find_table(char id[4]);
+sdt_header_t *acpi_find_table(char id[4]);
 
 void dump_acpi_tables(void);

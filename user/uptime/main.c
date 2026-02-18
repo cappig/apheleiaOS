@@ -3,22 +3,26 @@
 #include <string.h>
 #include <unistd.h>
 
-static bool read_uptime(unsigned long long* sec_out) {
-    if (!sec_out)
+static bool read_uptime(unsigned long long *sec_out) {
+    if (!sec_out) {
         return false;
+    }
 
     char buf[256] = {0};
-    if (kv_read_file("/dev/clock", buf, sizeof(buf)) <= 0)
+    if (kv_read_file("/dev/clock", buf, sizeof(buf)) <= 0) {
         return false;
+    }
 
     unsigned long long now = 0;
     unsigned long long boot = 0;
 
-    if (!kv_read_u64(buf, "now", &now))
+    if (!kv_read_u64(buf, "now", &now)) {
         return false;
+    }
 
-    if (!kv_read_u64(buf, "boot", &boot))
+    if (!kv_read_u64(buf, "boot", &boot)) {
         return false;
+    }
 
     *sec_out = now >= boot ? now - boot : 0;
     return true;

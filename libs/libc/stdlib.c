@@ -9,21 +9,23 @@
 #include "stdbool.h"
 
 
-long long strtoll(char const* restrict str, char** restrict endptr, int base) {
-    const char* pos = str;
+long long strtoll(char const *restrict str, char **restrict endptr, int base) {
+    const char *pos = str;
     unsigned long long ret = 0;
 
     if (base < 0 || base == 1 || base > 36) {
         errno = EINVAL;
 
-        if (endptr)
-            *endptr = (char*)str;
+        if (endptr) {
+            *endptr = (char *)str;
+        }
 
         return 0;
     }
 
-    while (isspace(*pos))
+    while (isspace(*pos)) {
         pos++;
+    }
 
     bool negative = false;
     if (*pos == '-') {
@@ -56,15 +58,17 @@ long long strtoll(char const* restrict str, char** restrict endptr, int base) {
     for (;;) {
         int dig = tolower(*pos++);
 
-        if (isdigit(dig))
+        if (isdigit(dig)) {
             dig -= '0';
-        else if (isalpha(dig))
+        } else if (isalpha(dig)) {
             dig -= 'a' - 10;
-        else
+        } else {
             break;
+        }
 
-        if (dig >= base)
+        if (dig >= base) {
             break;
+        }
 
         if (out_of_range || ret > cutoff || (ret == cutoff && dig > (int)cutlim)) {
             out_of_range = true;
@@ -75,8 +79,9 @@ long long strtoll(char const* restrict str, char** restrict endptr, int base) {
         }
     }
 
-    if (endptr)
-        *endptr = (char*)(has_converted ? pos - 1 : str);
+    if (endptr) {
+        *endptr = (char *)(has_converted ? pos - 1 : str);
+    }
 
     if (out_of_range) {
         errno = ERANGE;
@@ -86,20 +91,20 @@ long long strtoll(char const* restrict str, char** restrict endptr, int base) {
     return negative ? -ret : ret;
 }
 
-long strtol(char const* restrict str, char** restrict endptr, int base) {
+long strtol(char const *restrict str, char **restrict endptr, int base) {
     return (long)strtoll(str, endptr, base);
 }
 
 
-long long atoll(char const* str) {
+long long atoll(char const *str) {
     return strtoll(str, NULL, 10);
 }
 
-long atol(char const* str) {
+long atol(char const *str) {
     return (long)strtoll(str, NULL, 10);
 }
 
-int atoi(char const* str) {
+int atoi(char const *str) {
     return (int)strtoll(str, NULL, 10);
 }
 
@@ -120,7 +125,7 @@ int abs(int n) {
 #ifdef EXTERNAL_ALLOC
 static libc_alloc_ops_t alloc_ops = {0};
 
-void __libc_init_alloc(const libc_alloc_ops_t* ops) {
+void __libc_init_alloc(const libc_alloc_ops_t *ops) {
     if (!ops) {
         alloc_ops.malloc_fn = NULL;
         alloc_ops.free_fn = NULL;
@@ -130,7 +135,7 @@ void __libc_init_alloc(const libc_alloc_ops_t* ops) {
     alloc_ops = *ops;
 }
 
-void* malloc(size_t size) {
+void *malloc(size_t size) {
     if (!size)
         return NULL;
 
@@ -140,11 +145,11 @@ void* malloc(size_t size) {
     return alloc_ops.malloc_fn(size);
 }
 
-void* calloc(size_t num, size_t size) {
+void *calloc(size_t num, size_t size) {
     if (!num)
         return NULL;
 
-    void* ret = malloc(size * num);
+    void *ret = malloc(size * num);
 
     if (ret)
         memset(ret, 0, size * num);
@@ -152,7 +157,7 @@ void* calloc(size_t num, size_t size) {
     return ret;
 }
 
-void free(void* ptr) {
+void free(void *ptr) {
     if (!ptr)
         return;
 

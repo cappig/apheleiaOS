@@ -11,7 +11,7 @@
 
 static idt_register_t idtr = {0};
 
-extern void* isr_stub_table[ISR_COUNT];
+extern void *isr_stub_table[ISR_COUNT];
 static int_handler_t int_handlers[ISR_COUNT] = {0};
 
 ALIGNED(0x10)
@@ -29,7 +29,7 @@ static bool _pic_irq_in_service(u8 irq) {
 }
 #endif
 
-static void _default_int_handler(int_state_t* state) {
+static void _default_int_handler(int_state_t *state) {
     if (state) {
         u32 int_num = state->int_num;
 
@@ -62,17 +62,19 @@ static void _default_int_handler(int_state_t* state) {
 }
 
 void set_int_handler(size_t int_num, int_handler_t handler) {
-    if (int_num >= ISR_COUNT || handler == NULL)
+    if (int_num >= ISR_COUNT || handler == NULL) {
         return;
+    }
 
     int_handlers[int_num] = handler;
 }
 
 void configure_int(size_t int_num, u16 selector, u8 ist, u8 attribs) {
-    if (int_num >= ISR_COUNT)
+    if (int_num >= ISR_COUNT) {
         return;
+    }
 
-    idt_entry_t* descriptor = &idt_entries[int_num];
+    idt_entry_t *descriptor = &idt_entries[int_num];
 
     descriptor->selector = selector;
     descriptor->attributes = attribs;
@@ -88,7 +90,7 @@ void configure_int(size_t int_num, u16 selector, u8 ist, u8 attribs) {
 void idt_init(void) {
     log_debug("initializing IDT");
     for (size_t entry = 0; entry < ISR_COUNT; entry++) {
-        idt_entry_t* descriptor = &idt_entries[entry];
+        idt_entry_t *descriptor = &idt_entries[entry];
 
         uintptr_t stub_ptr = (uintptr_t)isr_stub_table[entry];
 
@@ -114,14 +116,15 @@ void idt_init(void) {
     idtr.base = (u32)(uintptr_t)idt_entries;
 #endif
 
-    for (size_t i = 0; i < ISR_COUNT; i++)
+    for (size_t i = 0; i < ISR_COUNT; i++) {
         set_int_handler(i, _default_int_handler);
+    }
 
     asm volatile("lidt %0" : : "m"(idtr) : "memory");
 }
 
 // Called by isr_common_stub in idt_stubsXX.asm
-void isr_handler(int_state_t* state) {
+void isr_handler(int_state_t *state) {
     if (state == NULL) {
         disable_interrupts();
         halt();

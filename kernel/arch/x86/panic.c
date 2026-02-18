@@ -1,4 +1,5 @@
 #include <arch/arch.h>
+
 #include "x86/asm.h"
 
 void panic_prepare(void) {

@@ -38,8 +38,9 @@ void pic_init(void) {
 }
 
 void pic_end_int(size_t irq) {
-    if (irq >= 8)
+    if (irq >= 8) {
         outb(PIC2_COMMAND, PIC_EOI);
+    }
 
     outb(PIC1_COMMAND, PIC_EOI);
 }

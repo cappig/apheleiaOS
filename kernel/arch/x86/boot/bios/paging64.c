@@ -11,30 +11,31 @@
 #include "x86/asm.h"
 #include "x86/paging64.h"
 
-static page_t* lvl4;
+static page_t *lvl4;
 static bool nx_supported = false;
 
 static bool _cpu_has_nx(void) {
     cpuid_regs_t regs = {0};
     cpuid(0x80000000, &regs);
 
-    if (regs.eax < CPUID_EXTENDED_INFO)
+    if (regs.eax < CPUID_EXTENDED_INFO) {
         return false;
+    }
 
     cpuid(CPUID_EXTENDED_INFO, &regs);
     return (regs.edx & CPUID_EI_NX) != 0;
 }
 
 
-static page_t* _walk_table_once(page_t* table, size_t index, bool is_kernel) {
-    page_t* next_table;
+static page_t *_walk_table_once(page_t *table, size_t index, bool is_kernel) {
+    page_t *next_table;
 
     if (table[index] & PT_PRESENT) {
-        next_table = (page_t*)(uintptr_t)page_get_paddr(&table[index]);
+        next_table = (page_t *)(uintptr_t)page_get_paddr(&table[index]);
     } else {
         u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
 
-        next_table = (page_t*)mmap_alloc(PAGE_4KIB, type, PAGE_4KIB);
+        next_table = (page_t *)mmap_alloc(PAGE_4KIB, type, PAGE_4KIB);
         memset(next_table, 0, PAGE_4KIB);
 
         page_set_paddr(&table[index], (u64)(uintptr_t)next_table);
@@ -50,9 +51,9 @@ void map_page_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     size_t lvl4_index = GET_LVL4_INDEX(vaddr);
 
     size_t lvl3_index = GET_LVL3_INDEX(vaddr);
-    page_t* lvl3 = _walk_table_once(lvl4, lvl4_index, is_kernel);
+    page_t *lvl3 = _walk_table_once(lvl4, lvl4_index, is_kernel);
 
-    page_t* entry;
+    page_t *entry;
 
     if (size == PAGE_1GIB) {
         entry = &lvl3[lvl3_index];
@@ -63,7 +64,7 @@ void map_page_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     }
 
     size_t lvl2_index = GET_LVL2_INDEX(vaddr);
-    page_t* lvl2 = _walk_table_once(lvl3, lvl3_index, is_kernel);
+    page_t *lvl2 = _walk_table_once(lvl3, lvl3_index, is_kernel);
 
     if (size == PAGE_2MIB) {
         entry = &lvl2[lvl2_index];
@@ -74,7 +75,7 @@ void map_page_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     }
 
     size_t lvl1_index = GET_LVL1_INDEX(vaddr);
-    page_t* lvl1 = _walk_table_once(lvl2, lvl2_index, is_kernel);
+    page_t *lvl1 = _walk_table_once(lvl2, lvl2_index, is_kernel);
 
     entry = &lvl1[lvl1_index];
 
@@ -99,13 +100,14 @@ void map_region_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel)
 
 // Should we be assuming the existence of huge pages?
 void identity_map_64(u64 top_address, u64 offset, bool is_kernel) {
-    for (u64 i = 0; i < top_address; i += PAGE_2MIB)
+    for (u64 i = 0; i < top_address; i += PAGE_2MIB) {
         map_page_64(PAGE_2MIB, i + offset, i, PT_WRITE, is_kernel);
+    }
 }
 
 void setup_paging_64(void) {
     // Allocate the root table
-    lvl4 = (page_t*)mmap_alloc(PAGE_4KIB, E820_KERNEL, PAGE_4KIB);
+    lvl4 = (page_t *)mmap_alloc(PAGE_4KIB, E820_KERNEL, PAGE_4KIB);
     memset(lvl4, 0, PAGE_4KIB);
     write_cr3((u32)(uintptr_t)lvl4);
 
@@ -140,26 +142,30 @@ void init_paging_64(void) {
 static page_t _elf_to_page_flags(u32 elf_flags) {
     u64 flags = PT_PRESENT;
 
-    if (elf_flags & PF_W)
+    if (elf_flags & PF_W) {
         flags |= PT_WRITE;
+    }
 
-    if (nx_supported && !(elf_flags & PF_X))
+    if (nx_supported && !(elf_flags & PF_X)) {
         flags |= PT_NO_EXECUTE;
+    }
 
     return flags;
 }
 
-u64 load_elf_sections_64(void* elf_file) {
-    elf_header_t* header = elf_file;
+u64 load_elf_sections_64(void *elf_file) {
+    elf_header_t *header = elf_file;
 
     for (size_t i = 0; i < header->ph_num; i++) {
-        elf_prog_header_t* p_header = elf_file + header->phoff + i * header->phent_size;
+        elf_prog_header_t *p_header = elf_file + header->phoff + i * header->phent_size;
 
-        if (p_header->type != PT_LOAD)
+        if (p_header->type != PT_LOAD) {
             continue;
+        }
 
-        if (!p_header->file_size && !p_header->mem_size)
+        if (!p_header->file_size && !p_header->mem_size) {
             continue;
+        }
 
         u64 size = ALIGN(p_header->mem_size, PAGE_4KIB);
 
@@ -172,11 +178,11 @@ u64 load_elf_sections_64(void* elf_file) {
         map_region_64(size, vbase, pbase, flags, true);
 
         // Copy all loadable data from the file
-        memcpy((void*)(uintptr_t)pbase, elf_file + p_header->offset, p_header->file_size);
+        memcpy((void *)(uintptr_t)pbase, elf_file + p_header->offset, p_header->file_size);
 
         // Zero out any additional space
         size_t zero_len = p_header->mem_size - p_header->file_size;
-        memset((void*)(uintptr_t)pbase + p_header->file_size, 0, zero_len);
+        memset((void *)(uintptr_t)pbase + p_header->file_size, 0, zero_len);
     }
 
     return header->entry;

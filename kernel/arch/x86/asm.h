@@ -33,51 +33,43 @@ static inline void cpu_pause(void) {
 static inline u64 irq_save(void) {
     u64 flags = 0;
 
-    asm volatile(
-        "pushfq\n"
-        "popq %0\n"
-        "cli"
-        : "=r"(flags)
-        :
-        : "memory", "cc"
-    );
+    asm volatile("pushfq\n"
+                 "popq %0\n"
+                 "cli"
+                 : "=r"(flags)
+                 :
+                 : "memory", "cc");
 
     return flags;
 }
 
 static inline void irq_restore(u64 flags) {
-    asm volatile(
-        "pushq %0\n"
-        "popfq"
-        :
-        : "r"(flags)
-        : "memory", "cc"
-    );
+    asm volatile("pushq %0\n"
+                 "popfq"
+                 :
+                 : "r"(flags)
+                 : "memory", "cc");
 }
 #else
 static inline u32 irq_save(void) {
     u32 flags = 0;
 
-    asm volatile(
-        "pushf\n"
-        "pop %0\n"
-        "cli"
-        : "=r"(flags)
-        :
-        : "memory", "cc"
-    );
+    asm volatile("pushf\n"
+                 "pop %0\n"
+                 "cli"
+                 : "=r"(flags)
+                 :
+                 : "memory", "cc");
 
     return flags;
 }
 
 static inline void irq_restore(u32 flags) {
-    asm volatile(
-        "push %0\n"
-        "popf"
-        :
-        : "r"(flags)
-        : "memory", "cc"
-    );
+    asm volatile("push %0\n"
+                 "popf"
+                 :
+                 : "r"(flags)
+                 : "memory", "cc");
 }
 #endif
 
@@ -191,9 +183,9 @@ static inline void write_cr3(u32 value) {
 }
 #endif
 
-#define CR4_PSE     (1 << 4)
-#define CR4_PAE     (1 << 5)
-#define CR4_OSFXSR  (1 << 9)
+#define CR4_PSE    (1 << 4)
+#define CR4_PAE    (1 << 5)
+#define CR4_OSFXSR (1 << 9)
 
 #if defined(__x86_64__)
 static inline u64 read_cr4(void) {
@@ -229,7 +221,7 @@ typedef struct {
     u32 eax, ebx, ecx, edx;
 } cpuid_regs_t;
 
-static inline void cpuid(u32 leaf, cpuid_regs_t* r) {
+static inline void cpuid(u32 leaf, cpuid_regs_t *r) {
     asm volatile( // ecx holds the subleaf number
         "cpuid"
         : "=a"(r->eax), "=b"(r->ebx), "=c"(r->ecx), "=d"(r->edx)
@@ -249,7 +241,7 @@ static inline void cpuid(u32 leaf, cpuid_regs_t* r) {
 #define PAT_TYPE_WC  0x01
 #define PAT_TYPE_WT  0x04
 #define PAT_TYPE_WB  0x06
-#define PAT_TYPE_UCM 0x07  // UC-
+#define PAT_TYPE_UCM 0x07 // UC-
 
 static inline u64 read_msr(u32 msr) {
     u32 edx = 0, eax = 0;
@@ -269,14 +261,14 @@ static inline void write_msr(u32 msr, u64 value) {
 // After this, setting the PAT bit in a PTE (bit 7 for 4K, bit 12 for 2M/1G)
 // with PCD=0, PWT=0 selects WC from PAT entry 4.
 static inline void pat_init(void) {
-    u64 pat = (u64)PAT_TYPE_WB          // PAT0: WB  (PCD=0 PWT=0 PAT=0)
-            | ((u64)PAT_TYPE_WT  << 8)  // PAT1: WT  (PCD=0 PWT=1 PAT=0)
-            | ((u64)PAT_TYPE_UCM << 16) // PAT2: UC- (PCD=1 PWT=0 PAT=0)
-            | ((u64)PAT_TYPE_UC  << 24) // PAT3: UC  (PCD=1 PWT=1 PAT=0)
-            | ((u64)PAT_TYPE_WC  << 32) // PAT4: WC  (PCD=0 PWT=0 PAT=1)
-            | ((u64)PAT_TYPE_WT  << 40) // PAT5: WT  (PCD=0 PWT=1 PAT=1)
-            | ((u64)PAT_TYPE_UCM << 48) // PAT6: UC- (PCD=1 PWT=0 PAT=1)
-            | ((u64)PAT_TYPE_UC  << 56);// PAT7: UC  (PCD=1 PWT=1 PAT=1)
+    u64 pat = (u64)PAT_TYPE_WB // PAT0: WB  (PCD=0 PWT=0 PAT=0)
+              | ((u64)PAT_TYPE_WT << 8) // PAT1: WT  (PCD=0 PWT=1 PAT=0)
+              | ((u64)PAT_TYPE_UCM << 16) // PAT2: UC- (PCD=1 PWT=0 PAT=0)
+              | ((u64)PAT_TYPE_UC << 24) // PAT3: UC  (PCD=1 PWT=1 PAT=0)
+              | ((u64)PAT_TYPE_WC << 32) // PAT4: WC  (PCD=0 PWT=0 PAT=1)
+              | ((u64)PAT_TYPE_WT << 40) // PAT5: WT  (PCD=0 PWT=1 PAT=1)
+              | ((u64)PAT_TYPE_UCM << 48) // PAT6: UC- (PCD=1 PWT=0 PAT=1)
+              | ((u64)PAT_TYPE_UC << 56); // PAT7: UC  (PCD=1 PWT=1 PAT=1)
     write_msr(MSR_PAT, pat);
 }
 

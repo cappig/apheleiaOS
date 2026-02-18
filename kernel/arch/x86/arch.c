@@ -35,7 +35,7 @@
 #include <x86/serial.h>
 #include <x86/tsc.h>
 
-#define LOG_BOOT_HISTORY_CAP (64 * 512)
+#define LOG_BOOT_HISTORY_CAP    (64 * 512)
 #define BOOT_ROOTFS_SECTOR_SIZE 512
 
 static bool log_console_ready = false;
@@ -53,9 +53,10 @@ typedef struct {
 } boot_rootfs_t;
 
 
-static void _log_history_append(const char* s, size_t len) {
-    if (!s || !len || !LOG_BOOT_HISTORY_CAP)
+static void _log_history_append(const char *s, size_t len) {
+    if (!s || !len || !LOG_BOOT_HISTORY_CAP) {
         return;
+    }
 
     if (len >= LOG_BOOT_HISTORY_CAP) {
         memcpy(boot_log_history, s + (len - LOG_BOOT_HISTORY_CAP), LOG_BOOT_HISTORY_CAP);
@@ -75,29 +76,34 @@ static void _log_history_append(const char* s, size_t len) {
 }
 
 static void _log_history_replay_console(void) {
-    if (!log_console_ready || !boot_log_history_len)
+    if (!log_console_ready || !boot_log_history_len) {
         return;
+    }
 
     console_write_screen(TTY_CONSOLE, boot_log_history, boot_log_history_len);
 }
 
-static void _log_write_early(const char* s, size_t len) {
-    if (!s || !len)
+static void _log_write_early(const char *s, size_t len) {
+    if (!s || !len) {
         return;
+    }
 
     send_serial_sized_string(SERIAL_COM1, s, len);
 
-    if (log_console_ready)
+    if (log_console_ready) {
         console_write_screen(TTY_CONSOLE, s, len);
+    }
 }
 
-static void _log_puts(const char* s) {
-    if (!s)
+static void _log_puts(const char *s) {
+    if (!s) {
         return;
+    }
 
     size_t len = strlen(s);
-    if (!len)
+    if (!len) {
         return;
+    }
 
     _log_history_append(s, len);
 
@@ -149,40 +155,45 @@ bool arch_supports_nx(void) {
 }
 
 
-void arch_fpu_init(void* buf) {
-    if (!buf)
+void arch_fpu_init(void *buf) {
+    if (!buf) {
         return;
+    }
 
     asm volatile("fninit");
-    asm volatile("fnsave %0" : "=m"(*(u8*)buf));
+    asm volatile("fnsave %0" : "=m"(*(u8 *)buf));
     asm volatile("fninit");
 }
 
-void arch_fpu_save(void* buf) {
-    if (!buf)
+void arch_fpu_save(void *buf) {
+    if (!buf) {
         return;
+    }
 
-    asm volatile("fnsave %0" : "=m"(*(u8*)buf));
+    asm volatile("fnsave %0" : "=m"(*(u8 *)buf));
 }
 
-void arch_fpu_restore(const void* buf) {
-    if (!buf)
+void arch_fpu_restore(const void *buf) {
+    if (!buf) {
         return;
+    }
 
-    asm volatile("frstor %0" : : "m"(*(const u8*)buf));
+    asm volatile("frstor %0" : : "m"(*(const u8 *)buf));
 }
 
 static char cpu_name[64] = "x86";
 
-static void _trim_cpu_name(char* name) {
-    if (!name || !name[0])
+static void _trim_cpu_name(char *name) {
+    if (!name || !name[0]) {
         return;
+    }
 
-    char* trimmed = strtrim(name);
+    char *trimmed = strtrim(name);
     strtrunc(trimmed);
 
-    if (trimmed != name)
+    if (trimmed != name) {
         memmove(name, trimmed, strlen(trimmed) + 1);
+    }
 }
 
 static void _detect_cpu_name(void) {
@@ -215,8 +226,9 @@ static void _detect_cpu_name(void) {
         cpu_name[sizeof(cpu_name) - 1] = '\0';
         _trim_cpu_name(cpu_name);
 
-        if (cpu_name[0])
+        if (cpu_name[0]) {
             return;
+        }
     }
 
     cpuid(0x00000000, &regs);
@@ -226,9 +238,10 @@ static void _detect_cpu_name(void) {
     cpu_name[sizeof(vendor)] = '\0';
 }
 
-static void _select_log_level(const boot_info_t* info) {
-    if (!info)
+static void _select_log_level(const boot_info_t *info) {
+    if (!info) {
         return;
+    }
 
     switch (info->args.debug) {
     case DEBUG_NONE:
@@ -263,9 +276,10 @@ static void _route_irqs_to_pic(void) {
     outb(0x23, (u8)(imcr & ~0x01));
 }
 
-static void _configure_log_sinks(const boot_info_t* info) {
-    if (!info)
+static void _configure_log_sinks(const boot_info_t *info) {
+    if (!info) {
         return;
+    }
 
     logsink_reset();
 
@@ -278,42 +292,50 @@ static void _configure_log_sinks(const boot_info_t* info) {
     strncpy(devices, info->args.console, sizeof(devices) - 1);
     devices[sizeof(devices) - 1] = '\0';
 
-    char* cursor = devices;
+    char *cursor = devices;
 
     while (cursor && *cursor) {
-        char* next = strchr(cursor, ',');
-        if (next)
+        char *next = strchr(cursor, ',');
+        if (next) {
             *next = '\0';
+        }
 
-        char* token = strtrim(cursor);
+        char *token = strtrim(cursor);
         strtrunc(token);
 
-        if (token[0])
+        if (token[0]) {
             logsink_add_target(token);
+        }
 
-        if (!next)
+        if (!next) {
             break;
+        }
 
         cursor = next + 1;
     }
 
-    if (!logsink_has_targets())
+    if (!logsink_has_targets()) {
         logsink_add_target("/dev/console");
+    }
 }
 
-static bool _handle_user_signal(int signum, int_state_t* state) {
-    if (!state)
+static bool _handle_user_signal(int signum, int_state_t *state) {
+    if (!state) {
         return false;
+    }
 
-    if ((state->s_regs.cs & 0x3) != 3)
+    if ((state->s_regs.cs & 0x3) != 3) {
         return false;
+    }
 
-    if (!sched_is_running())
+    if (!sched_is_running()) {
         return false;
+    }
 
-    sched_thread_t* thread = sched_current();
-    if (!thread || !thread->user_thread)
+    sched_thread_t *thread = sched_current();
+    if (!thread || !thread->user_thread) {
         return false;
+    }
 
     sched_signal_send_thread(thread, signum);
     sched_signal_deliver_current(state);
@@ -330,7 +352,7 @@ static bool _page_fault_is_user_addr(u64 addr, bool user) {
     return user || (user_top && addr < (u64)user_top);
 }
 
-static void _page_fault_handler(int_state_t* state) {
+static void _page_fault_handler(int_state_t *state) {
     u64 addr = read_cr2();
     u64 code = state ? (u64)state->error_code : 0;
     u64 cr3 = read_cr3();
@@ -340,15 +362,17 @@ static void _page_fault_handler(int_state_t* state) {
     bool user = code & PF_ERR_USER;
 
     if (present && write) {
-        sched_thread_t* thread = sched_current();
+        sched_thread_t *thread = sched_current();
 
         if (thread && thread->user_thread && _page_fault_is_user_addr(addr, user) &&
-            sched_handle_cow_fault(thread, (uintptr_t)addr, true))
+            sched_handle_cow_fault(thread, (uintptr_t)addr, true)) {
             return;
+        }
     }
 
-    if (_handle_user_signal(SIGSEGV, state))
+    if (_handle_user_signal(SIGSEGV, state)) {
         return;
+    }
 
     panic_prepare();
 
@@ -361,7 +385,12 @@ static void _page_fault_handler(int_state_t* state) {
         log_fatal(
             "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " rip=%#" PRIx64
             " rsp=%#" PRIx64 " cs=%#" PRIx64,
-            addr, code, cr3, rip, rsp, cs
+            addr,
+            code,
+            cr3,
+            rip,
+            rsp,
+            cs
         );
     } else {
         log_fatal("page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
@@ -375,7 +404,12 @@ static void _page_fault_handler(int_state_t* state) {
         log_fatal(
             "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " eip=%#" PRIx64
             " esp=%#" PRIx64 " cs=%#" PRIx64,
-            addr, code, cr3, eip, esp, cs
+            addr,
+            code,
+            cr3,
+            eip,
+            esp,
+            cs
         );
     } else {
         log_fatal("page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
@@ -386,11 +420,12 @@ static void _page_fault_handler(int_state_t* state) {
     halt();
 }
 
-static void _gp_fault_handler(int_state_t* state) {
+static void _gp_fault_handler(int_state_t *state) {
     u64 code = state ? (u64)state->error_code : 0;
 
-    if (_handle_user_signal(SIGSEGV, state))
+    if (_handle_user_signal(SIGSEGV, state)) {
         return;
+    }
 
     panic_prepare();
 
@@ -400,7 +435,10 @@ static void _gp_fault_handler(int_state_t* state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "general protection fault: err=%#" PRIx64 " rip=%#" PRIx64 " cs=%#" PRIx64, code, rip, cs
+            "general protection fault: err=%#" PRIx64 " rip=%#" PRIx64 " cs=%#" PRIx64,
+            code,
+            rip,
+            cs
         );
     } else {
         log_fatal("general protection fault: err=%#" PRIx64, code);
@@ -411,7 +449,10 @@ static void _gp_fault_handler(int_state_t* state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "general protection fault: err=%#" PRIx64 " eip=%#" PRIx64 " cs=%#" PRIx64, code, eip, cs
+            "general protection fault: err=%#" PRIx64 " eip=%#" PRIx64 " cs=%#" PRIx64,
+            code,
+            eip,
+            cs
         );
     } else {
         log_fatal("general protection fault: err=%#" PRIx64, code);
@@ -422,17 +463,18 @@ static void _gp_fault_handler(int_state_t* state) {
     halt();
 }
 
-static void _double_fault_handler(UNUSED int_state_t* state) {
+static void _double_fault_handler(UNUSED int_state_t *state) {
     panic_prepare();
     log_fatal("double fault (unrecoverable)");
     disable_interrupts();
     halt();
 }
 
-static void _invalid_opcode_handler(int_state_t* state) {
+static void _invalid_opcode_handler(int_state_t *state) {
 #if defined(__x86_64__)
-    if (_handle_user_signal(SIGILL, state))
+    if (_handle_user_signal(SIGILL, state)) {
         return;
+    }
 #else
     if (_handle_user_signal(SIGILL, state))
         return;
@@ -464,7 +506,7 @@ static void _invalid_opcode_handler(int_state_t* state) {
     halt();
 }
 
-static void _publish_framebuffer(const boot_info_t* info) {
+static void _publish_framebuffer(const boot_info_t *info) {
     framebuffer_info_t fb = {0};
 
     if (!info || info->video.mode != VIDEO_GRAPHICS || !info->video.framebuffer) {
@@ -473,8 +515,9 @@ static void _publish_framebuffer(const boot_info_t* info) {
     }
 
     u32 pitch = info->video.bytes_per_line;
-    if (!pitch)
+    if (!pitch) {
         pitch = info->video.width * info->video.bytes_per_pixel;
+    }
 
     fb.paddr = info->video.framebuffer;
     fb.width = info->video.width;
@@ -507,24 +550,29 @@ static void _publish_framebuffer(const boot_info_t* info) {
     framebuffer_set_info(&fb);
 }
 
-static ssize_t _boot_rootfs_read(disk_dev_t* dev, void* dest, size_t offset, size_t bytes) {
-    if (!dev || !dest || !dev->private)
+static ssize_t _boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, size_t bytes) {
+    if (!dev || !dest || !dev->private) {
         return -1;
+    }
 
-    boot_rootfs_t* rootfs = dev->private;
+    boot_rootfs_t *rootfs = dev->private;
 
-    if (offset >= rootfs->size)
+    if (offset >= rootfs->size) {
         return 0;
+    }
 
-    if (bytes > rootfs->size - offset)
+    if (bytes > rootfs->size - offset) {
         bytes = rootfs->size - offset;
+    }
 
-    if (!bytes)
+    if (!bytes) {
         return 0;
+    }
 
-    void* src = arch_phys_map(rootfs->paddr + offset, bytes, 0);
-    if (!src)
+    void *src = arch_phys_map(rootfs->paddr + offset, bytes, 0);
+    if (!src) {
         return -1;
+    }
 
     memcpy(dest, src, bytes);
     arch_phys_unmap(src, bytes);
@@ -532,24 +580,29 @@ static ssize_t _boot_rootfs_read(disk_dev_t* dev, void* dest, size_t offset, siz
     return (ssize_t)bytes;
 }
 
-static ssize_t _boot_rootfs_write(disk_dev_t* dev, void* src, size_t offset, size_t bytes) {
-    if (!dev || !src || !dev->private)
+static ssize_t _boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, size_t bytes) {
+    if (!dev || !src || !dev->private) {
         return -1;
+    }
 
-    boot_rootfs_t* rootfs = dev->private;
+    boot_rootfs_t *rootfs = dev->private;
 
-    if (offset >= rootfs->size)
+    if (offset >= rootfs->size) {
         return 0;
+    }
 
-    if (bytes > rootfs->size - offset)
+    if (bytes > rootfs->size - offset) {
         bytes = rootfs->size - offset;
+    }
 
-    if (!bytes)
+    if (!bytes) {
         return 0;
+    }
 
-    void* dest = arch_phys_map(rootfs->paddr + offset, bytes, 0);
-    if (!dest)
+    void *dest = arch_phys_map(rootfs->paddr + offset, bytes, 0);
+    if (!dest) {
         return -1;
+    }
 
     memcpy(dest, src, bytes);
     arch_phys_unmap(dest, bytes);
@@ -558,11 +611,12 @@ static ssize_t _boot_rootfs_write(disk_dev_t* dev, void* src, size_t offset, siz
 }
 
 static bool _register_boot_rootfs(void) {
-    if (!boot_rootfs_paddr || !boot_rootfs_size || boot_rootfs_registered)
+    if (!boot_rootfs_paddr || !boot_rootfs_size || boot_rootfs_registered) {
         return false;
+    }
 
-    boot_rootfs_t* rootfs = calloc(1, sizeof(boot_rootfs_t));
-    disk_dev_t* disk = calloc(1, sizeof(disk_dev_t));
+    boot_rootfs_t *rootfs = calloc(1, sizeof(boot_rootfs_t));
+    disk_dev_t *disk = calloc(1, sizeof(disk_dev_t));
 
     if (!rootfs || !disk) {
         free(rootfs);
@@ -594,22 +648,21 @@ static bool _register_boot_rootfs(void) {
 
     boot_rootfs_registered = true;
     log_info(
-        "bootdisk: registered /dev/%s from boot image (%zu KiB)",
-        disk->name,
-        rootfs->size / 1024
+        "bootdisk: registered /dev/%s from boot image (%zu KiB)", disk->name, rootfs->size / 1024
     );
 
     return true;
 }
 
-const kernel_args_t* arch_init(void* boot_info) {
-    boot_info_t* info = boot_info;
+const kernel_args_t *arch_init(void *boot_info) {
+    boot_info_t *info = boot_info;
 
     init_serial(SERIAL_COM1, SERAIL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
     asm volatile("cld");
 
-    if (!info)
+    if (!info) {
         panic("boot info missing");
+    }
 
     memcpy(&boot_args, &info->args, sizeof(boot_args));
 
@@ -674,8 +727,9 @@ const kernel_args_t* arch_init(void* boot_info) {
     irq_init();
     ps2_init();
     pci_init();
-    if (info->args.debug == DEBUG_ALL)
+    if (info->args.debug == DEBUG_ALL) {
         dump_pci_devices();
+    }
     console_init(info);
     _publish_framebuffer(info);
     enable_interrupts();
@@ -710,10 +764,11 @@ void arch_tlb_flush(uintptr_t addr) {
 #endif
 }
 
-void arch_cpu_set_local(void* ptr) {
+void arch_cpu_set_local(void *ptr) {
 #if defined(__x86_64__)
-    if (ptr)
+    if (ptr) {
         set_gs_base((u64)(uintptr_t)ptr);
+    }
 #else
     (void)ptr;
 #endif
@@ -750,17 +805,19 @@ u32 arch_timer_hz(void) {
 u64 arch_wallclock_seconds(void) {
     u64 seconds = x86_rtc_unix_seconds();
 
-    if (seconds)
+    if (seconds) {
         return seconds;
+    }
 
     u64 hz = irq_timer_hz();
-    if (!hz)
+    if (!hz) {
         return 0;
+    }
 
     return irq_ticks() / hz;
 }
 
-const char* arch_name(void) {
+const char *arch_name(void) {
 #if defined(__x86_64__)
     return "x86_64";
 #else
@@ -768,7 +825,7 @@ const char* arch_name(void) {
 #endif
 }
 
-const char* arch_cpu_name(void) {
+const char *arch_cpu_name(void) {
     return cpu_name;
 }
 

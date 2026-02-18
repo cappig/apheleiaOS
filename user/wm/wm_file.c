@@ -5,16 +5,18 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-bool wm_file_read_all(const char* path, size_t max_bytes, u8** data_out, size_t* len_out) {
-    if (!path || !data_out || !len_out || !max_bytes)
+bool wm_file_read_all(const char *path, size_t max_bytes, u8 **data_out, size_t *len_out) {
+    if (!path || !data_out || !len_out || !max_bytes) {
         return false;
+    }
 
     *data_out = NULL;
     *len_out = 0;
 
     int fd = open(path, O_RDONLY, 0);
-    if (fd < 0)
+    if (fd < 0) {
         return false;
+    }
 
     stat_t st = {0};
     if (fstat(fd, &st) < 0) {
@@ -33,7 +35,7 @@ bool wm_file_read_all(const char* path, size_t max_bytes, u8** data_out, size_t*
         return false;
     }
 
-    u8* data = malloc(len);
+    u8 *data = malloc(len);
     if (!data) {
         close(fd);
         return false;
@@ -42,14 +44,16 @@ bool wm_file_read_all(const char* path, size_t max_bytes, u8** data_out, size_t*
     size_t read_total = 0;
     while (read_total < len) {
         ssize_t n = read(fd, data + read_total, len - read_total);
+
         if (n < 0) {
             free(data);
             close(fd);
             return false;
         }
 
-        if (!n)
+        if (!n) {
             break;
+        }
 
         read_total += (size_t)n;
     }

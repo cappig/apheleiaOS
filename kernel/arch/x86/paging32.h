@@ -41,16 +41,16 @@ typedef u64 page_t;
 #define PT_PAT_HUGE      (1ULL << 12)
 #define PT_NO_EXECUTE    (1ULL << 63)
 
-static inline page_t page_get_paddr(page_t* page) {
+static inline page_t page_get_paddr(page_t *page) {
     return *page & ADDR_MASK;
 }
 
-static inline void* page_get_vaddr(page_t* page) {
+static inline void *page_get_vaddr(page_t *page) {
     page_t paddr = page_get_paddr(page);
-    return (void*)(uintptr_t)paddr;
+    return (void *)(uintptr_t)paddr;
 }
 
-static inline void page_set_paddr(page_t* page, page_t addr) {
+static inline void page_set_paddr(page_t *page, page_t addr) {
     addr = ALIGN_DOWN(addr, PAGE_4KIB);
     addr &= ADDR_MASK;
     *page = addr;

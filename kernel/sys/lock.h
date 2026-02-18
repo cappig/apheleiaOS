@@ -2,7 +2,7 @@
 
 #include <arch/arch.h>
 
-static inline void lock(volatile int* state) {
+static inline void lock(volatile int *state) {
     if (!state)
         return;
 
@@ -12,7 +12,7 @@ static inline void lock(volatile int* state) {
     }
 }
 
-static inline void unlock(volatile int* state) {
+static inline void unlock(volatile int *state) {
     if (!state)
         return;
 

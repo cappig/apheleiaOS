@@ -11,7 +11,7 @@ enum log_levels {
     LOG_FATAL = 5,
 };
 
-typedef void (*puts_fn)(const char*);
+typedef void (*puts_fn)(const char *);
 
 #define LOG_BUF_SIZE 256
 
@@ -22,11 +22,11 @@ typedef void (*puts_fn)(const char*);
 #define log_fatal(...) log(LOG_FATAL, __FILE__, __LINE__, __VA_ARGS__)
 
 
-void vslog(char* restrict buf, int lvl, char* file, int line, char* fmt, va_list args);
+void vslog(char *restrict buf, int lvl, char *file, int line, char *fmt, va_list args);
 
-void slog(char* restrict buf, int lvl, char* file, int line, char* fmt, ...)
+void slog(char *restrict buf, int lvl, char *file, int line, char *fmt, ...)
     __attribute__((format(printf, 5, 6)));
-void log(int lvl, char* file, int line, char* fmt, ...) __attribute__((format(printf, 4, 5)));
+void log(int lvl, char *file, int line, char *fmt, ...) __attribute__((format(printf, 4, 5)));
 
 void log_init(puts_fn puts);
 void log_set_lvl(int lvl);

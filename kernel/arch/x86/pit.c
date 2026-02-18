@@ -5,8 +5,9 @@
 static u32 pit_hz = PIT_DEFAULT_HZ;
 
 static void _program(u32 hz) {
-    if (!hz)
+    if (!hz) {
         hz = 1;
+    }
 
     u16 divisor = (u16)(PIT_BASE_FREQ / hz);
 

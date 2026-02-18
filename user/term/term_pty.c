@@ -13,15 +13,16 @@
 #include <termios.h>
 #include <unistd.h>
 
-extern char** environ;
+extern char **environ;
 
 static const u8 ctrl_ascii[6] = {'\n', '\n', '\b', '\t', '\e', 0x7f};
 
-static bool write_retry(int fd, const void* data, size_t len) {
-    if (fd < 0 || !data || !len)
+static bool write_retry(int fd, const void *data, size_t len) {
+    if (fd < 0 || !data || !len) {
         return false;
+    }
 
-    const u8* cursor = data;
+    const u8 *cursor = data;
     size_t left = len;
 
     while (left > 0) {
@@ -32,8 +33,9 @@ static bool write_retry(int fd, const void* data, size_t len) {
             continue;
         }
 
-        if (n < 0 && errno == EINTR)
+        if (n < 0 && errno == EINTR) {
             continue;
+        }
 
         return false;
     }
@@ -41,20 +43,23 @@ static bool write_retry(int fd, const void* data, size_t len) {
     return true;
 }
 
-static void send_bytes(int fd, const char* bytes) {
-    if (fd < 0 || !bytes)
+static void send_bytes(int fd, const char *bytes) {
+    if (fd < 0 || !bytes) {
         return;
+    }
 
     write_retry(fd, bytes, strlen(bytes));
 }
 
 static bool send_foreground_signal(int master_fd, int signum) {
-    if (master_fd < 0 || signum <= 0)
+    if (master_fd < 0 || signum <= 0) {
         return false;
+    }
 
     pid_t pgrp = 0;
-    if (ioctl(master_fd, TIOCGPGRP, &pgrp) || pgrp <= 0)
+    if (ioctl(master_fd, TIOCGPGRP, &pgrp) || pgrp <= 0) {
         return false;
+    }
 
     return kill(-pgrp, signum) >= 0;
 }
@@ -70,12 +75,14 @@ static char key_to_ascii(u8 code, bool shift) {
     }
 }
 
-void term_handle_key_event(int master_fd, const ws_input_event_t* event) {
-    if (!event)
+void term_handle_key_event(int master_fd, const ws_input_event_t *event) {
+    if (!event) {
         return;
+    }
 
-    if (!event->action)
+    if (!event->action) {
         return;
+    }
 
     bool ctrl = (event->modifiers & INPUT_MOD_CTRL) != 0;
     if (ctrl && event->keycode == KBD_C) {
@@ -124,30 +131,35 @@ void term_handle_key_event(int master_fd, const ws_input_event_t* event) {
     bool caps = (event->modifiers & INPUT_MOD_CAPS) != 0;
 
     char ch = key_to_ascii((u8)event->keycode, shift);
-    if (!ch)
+    if (!ch) {
         return;
-
-    if (caps && ch >= 'a' && ch <= 'z')
-        ch = (char)(ch - 'a' + 'A');
-    else if (caps && ch >= 'A' && ch <= 'Z')
-        ch = (char)(ch - 'A' + 'a');
-
-    if (ctrl) {
-        if (ch >= 'a' && ch <= 'z')
-            ch = (char)(ch - 'a' + 1);
-        else if (ch >= 'A' && ch <= 'Z')
-            ch = (char)(ch - 'A' + 1);
     }
 
-    if (ch == '\r')
+    if (caps && ch >= 'a' && ch <= 'z') {
+        ch = (char)(ch - 'a' + 'A');
+    } else if (caps && ch >= 'A' && ch <= 'Z') {
+        ch = (char)(ch - 'A' + 'a');
+    }
+
+    if (ctrl) {
+        if (ch >= 'a' && ch <= 'z') {
+            ch = (char)(ch - 'a' + 1);
+        } else if (ch >= 'A' && ch <= 'Z') {
+            ch = (char)(ch - 'A' + 1);
+        }
+    }
+
+    if (ch == '\r') {
         ch = '\n';
+    }
 
     write_retry(master_fd, &ch, 1);
 }
 
 pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 height) {
-    if (master_fd < 0 || !cols || !rows || !width || !height)
+    if (master_fd < 0 || !cols || !rows || !width || !height) {
         return -1;
+    }
 
     winsize_t ws = {
         .ws_col = (u16)cols,
@@ -158,23 +170,26 @@ pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 h
     ioctl(master_fd, TIOCSWINSZ, &ws);
 
     int ptn = -1;
-    if (ioctl(master_fd, TIOCGPTN, &ptn) || ptn < 0)
+    if (ioctl(master_fd, TIOCGPTN, &ptn) || ptn < 0) {
         return -1;
+    }
 
     char path[64];
     snprintf(path, sizeof(path), "/dev/pts%d", ptn);
 
     pid_t pid = fork();
-    if (pid < 0)
+    if (pid < 0) {
         return -1;
+    }
 
     if (!pid) {
         setsid();
         setpgid(0, 0);
 
         int slave_fd = open(path, O_RDWR, 0);
-        if (slave_fd < 0)
+        if (slave_fd < 0) {
             _exit(127);
+        }
 
         pid_t pgrp = getpid();
         ioctl(slave_fd, TIOCSPGRP, &pgrp);
@@ -186,7 +201,7 @@ pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 h
         close(slave_fd);
         close(master_fd);
 
-        char* argv[] = {"/bin/sh", NULL};
+        char *argv[] = {"/bin/sh", NULL};
         execve("/bin/sh", argv, environ);
         _exit(127);
     }

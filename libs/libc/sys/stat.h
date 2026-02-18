@@ -59,9 +59,9 @@ typedef struct stat {
 } stat_t;
 
 #ifndef _KERNEL
-int stat(const char* path, stat_t* st);
-int lstat(const char* path, stat_t* st);
-int fstat(int fd, stat_t* st);
-int chmod(const char* path, mode_t mode);
-int chown(const char* path, uid_t uid, gid_t gid);
+int stat(const char *path, stat_t *st);
+int lstat(const char *path, stat_t *st);
+int fstat(int fd, stat_t *st);
+int chmod(const char *path, mode_t mode);
+int chown(const char *path, uid_t uid, gid_t gid);
 #endif

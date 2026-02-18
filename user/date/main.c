@@ -8,15 +8,17 @@ static int usage(void) {
     return 1;
 }
 
-int main(int argc, char** argv) {
-    const char* format = "%a %b %e %H:%M:%S UTC %Y";
+int main(int argc, char **argv) {
+    const char *format = "%a %b %e %H:%M:%S UTC %Y";
 
-    if (argc > 2)
+    if (argc > 2) {
         return usage();
+    }
 
     if (argc == 2) {
-        if (argv[1][0] != '+')
+        if (argv[1][0] != '+') {
             return usage();
+        }
 
         format = argv[1] + 1;
     }

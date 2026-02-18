@@ -33,7 +33,7 @@ static void _set_gdt_entry(size_t index, u64 base, u32 limit, u8 access, u8 flag
 
 #if defined(__x86_64__)
 static void _set_gdt_high_entry(size_t index, u64 base) {
-    gdt_entry_high_t* high = (gdt_entry_high_t*)&gdt_entries[index + 1];
+    gdt_entry_high_t *high = (gdt_entry_high_t *)&gdt_entries[index + 1];
     high->base_higher = (base >> 32) & 0xffffffff;
 }
 #endif
@@ -70,35 +70,31 @@ void gdt_init(void) {
     asm volatile("lgdt %0" : : "m"(gdtd) : "memory");
 
 #if defined(__i386__)
-    asm volatile(
-        "ljmp %0, $1f\n"
-        "1:\n"
-        "mov %1, %%ds\n"
-        "mov %1, %%es\n"
-        "mov %1, %%fs\n"
-        "mov %1, %%gs\n"
-        "mov %1, %%ss\n"
-        :
-        : "i"(GDT_KERNEL_CODE), "r"(GDT_KERNEL_DATA)
-        : "memory"
-    );
+    asm volatile("ljmp %0, $1f\n"
+                 "1:\n"
+                 "mov %1, %%ds\n"
+                 "mov %1, %%es\n"
+                 "mov %1, %%fs\n"
+                 "mov %1, %%gs\n"
+                 "mov %1, %%ss\n"
+                 :
+                 : "i"(GDT_KERNEL_CODE), "r"(GDT_KERNEL_DATA)
+                 : "memory");
 #else
-    asm volatile(
-        "pushq %0\n"
-        "lea 1f(%%rip), %%rax\n"
-        "pushq %%rax\n"
-        "lretq\n"
-        "1:\n"
-        "movw %1, %%ax\n"
-        "movw %%ax, %%ds\n"
-        "movw %%ax, %%es\n"
-        "movw %%ax, %%fs\n"
-        "movw %%ax, %%gs\n"
-        "movw %%ax, %%ss\n"
-        :
-        : "i"((u64)GDT_KERNEL_CODE), "i"(GDT_KERNEL_DATA)
-        : "rax", "memory"
-    );
+    asm volatile("pushq %0\n"
+                 "lea 1f(%%rip), %%rax\n"
+                 "pushq %%rax\n"
+                 "lretq\n"
+                 "1:\n"
+                 "movw %1, %%ax\n"
+                 "movw %%ax, %%ds\n"
+                 "movw %%ax, %%es\n"
+                 "movw %%ax, %%fs\n"
+                 "movw %%ax, %%gs\n"
+                 "movw %%ax, %%ss\n"
+                 :
+                 : "i"((u64)GDT_KERNEL_CODE), "i"(GDT_KERNEL_DATA)
+                 : "rax", "memory");
 #endif
 }
 

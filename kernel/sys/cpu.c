@@ -7,23 +7,24 @@
 size_t core_count = 1;
 cpu_core_t cores_local[MAX_CORES] = {0};
 
-static cpu_core_t* cpu_local = NULL;
+static cpu_core_t *cpu_local = NULL;
 
-cpu_core_t* cpu_current(void) {
+cpu_core_t *cpu_current(void) {
     return cpu_local;
 }
 
-void cpu_set_current(cpu_core_t* core) {
+void cpu_set_current(cpu_core_t *core) {
     cpu_local = core;
 
-    if (core)
+    if (core) {
         arch_cpu_set_local(core);
+    }
 }
 
 void cpu_init_core(size_t id) {
     assert(id < MAX_CORES);
 
-    cpu_core_t* core = &cores_local[id];
+    cpu_core_t *core = &cores_local[id];
 
     memset(core, 0, sizeof(*core));
 

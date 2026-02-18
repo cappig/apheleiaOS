@@ -15,7 +15,7 @@ static inline size_t utf8_sequence_len(u8 lead) {
     return 0;
 }
 
-static inline size_t utf8_decode(const u8* data, size_t len, u32* out) {
+static inline size_t utf8_decode(const u8 *data, size_t len, u32 *out) {
     if (!data || !len || !out)
         return 0;
 

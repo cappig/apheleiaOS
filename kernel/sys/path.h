@@ -8,4 +8,4 @@
 #define PATH_MAX 256
 #endif
 
-bool path_resolve(const char* cwd, const char* path, char* out, size_t out_len);
+bool path_resolve(const char *cwd, const char *path, char *out, size_t out_len);

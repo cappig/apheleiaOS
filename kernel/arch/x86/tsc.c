@@ -41,16 +41,18 @@ retry:
     u64 begin = read_tsc();
 
     size_t count = 0;
-    while (!(inb(0x61) & (1u << 5)))
+    while (!(inb(0x61) & (1u << 5))) {
         count++;
+    }
 
     u64 end = read_tsc();
 
     retry_counter++;
 
     if (count < CAL_LOOPS) {
-        if (retry_counter <= RETRY_COUNT)
+        if (retry_counter <= RETRY_COUNT) {
             goto retry;
+        }
 
         return 0;
     }
@@ -58,14 +60,16 @@ retry:
     return end - begin;
 }
 
-static int _cmp_u64(const void* a, const void* b) {
-    u64 va = *(const u64*)a;
-    u64 vb = *(const u64*)b;
+static int _cmp_u64(const void *a, const void *b) {
+    u64 va = *(const u64 *)a;
+    u64 vb = *(const u64 *)b;
 
-    if (va < vb)
+    if (va < vb) {
         return -1;
-    if (va > vb)
+    }
+    if (va > vb) {
         return 1;
+    }
     return 0;
 }
 
@@ -82,8 +86,9 @@ bool tsc_init(void) {
 
     for (size_t i = 0; i < CAL_SAMPLES; i++) {
         u64 delta = _measure_once();
-        if (delta)
+        if (delta) {
             samples[good++] = delta;
+        }
     }
 
     if (!good) {
@@ -96,8 +101,12 @@ bool tsc_init(void) {
     u64 median = samples[good / 2];
     tsc_rate_khz = median / CAL_MILLIS;
 
-    log_info("tsc: calibrated at %llu MHz (%zu/%d samples)",
-             (unsigned long long)(tsc_rate_khz / 1000), good, CAL_SAMPLES);
+    log_info(
+        "tsc: calibrated at %llu MHz (%zu/%d samples)",
+        (unsigned long long)(tsc_rate_khz / 1000),
+        good,
+        CAL_SAMPLES
+    );
 
     return true;
 }
@@ -112,6 +121,7 @@ void tsc_spin(size_t ms) {
     u64 delta = tsc_rate_khz * (u64)ms;
     u64 target = read_tsc() + delta;
 
-    while (read_tsc() < target)
+    while (read_tsc() < target) {
         continue;
+    }
 }

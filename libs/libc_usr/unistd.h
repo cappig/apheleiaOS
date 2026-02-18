@@ -4,33 +4,33 @@
 #include <sys/proc.h>
 #include <sys/types.h>
 
-extern char** environ;
+extern char **environ;
 
-ssize_t read(int fd, void* buf, size_t count);
-ssize_t write(int fd, const void* buf, size_t count);
-ssize_t pread(int fd, void* buf, size_t count, off_t offset);
-ssize_t pwrite(int fd, const void* buf, size_t count, off_t offset);
-int open(const char* path, int flags, mode_t mode);
+ssize_t read(int fd, void *buf, size_t count);
+ssize_t write(int fd, const void *buf, size_t count);
+ssize_t pread(int fd, void *buf, size_t count, off_t offset);
+ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
+int open(const char *path, int flags, mode_t mode);
 int close(int fd);
 int pipe(int pipefd[2]);
 int dup(int oldfd, int newfd);
-int mkdir(const char* path, mode_t mode);
-int rmdir(const char* path);
-int access(const char* path, int mode);
+int mkdir(const char *path, mode_t mode);
+int rmdir(const char *path);
+int access(const char *path, int mode);
 off_t lseek(int fd, off_t offset, int whence);
 mode_t umask(mode_t mask);
 unsigned int sleep(unsigned int seconds);
-int chdir(const char* path);
-char* getcwd(char* buf, size_t size);
+int chdir(const char *path);
+char *getcwd(char *buf, size_t size);
 int isatty(int fd);
-int link(const char* oldpath, const char* newpath);
-int unlink(const char* path);
-int rename(const char* oldpath, const char* newpath);
+int link(const char *oldpath, const char *newpath);
+int unlink(const char *path);
+int rename(const char *oldpath, const char *newpath);
 
 pid_t fork(void);
-pid_t wait(pid_t pid, int* status);
-pid_t waitpid(pid_t pid, int* status, int options);
-int execve(const char* path, char* const argv[], char* const envp[]);
+pid_t wait(pid_t pid, int *status);
+pid_t waitpid(pid_t pid, int *status, int options);
+int execve(const char *path, char *const argv[], char *const envp[]);
 
 pid_t getpid(void);
 pid_t getppid(void);

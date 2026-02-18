@@ -1,6 +1,5 @@
 #include "irq.h"
 
-#include <x86/serial.h>
 #include <base/attributes.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
@@ -8,6 +7,7 @@
 #include <x86/asm.h>
 #include <x86/pic.h>
 #include <x86/pit.h>
+#include <x86/serial.h>
 
 static volatile u64 irq_tick_count = 0;
 static bool use_apic_timer = false;
@@ -37,28 +37,31 @@ static void _register_legacy(size_t irq, int_handler_t handler) {
 #endif
 }
 
-static void _timer_handler(int_state_t* state) {
+static void _timer_handler(int_state_t *state) {
     irq_tick_count++;
     irq_ack(IRQ_SYSTEM_TIMER);
 
     for (size_t i = 0; i < 64; i++) {
         char ch = 0;
-        if (!serial_try_receive(SERIAL_COM1, &ch))
+        if (!serial_try_receive(SERIAL_COM1, &ch)) {
             break;
-        if (ch)
+        }
+        if (ch) {
             serial_dev_push_rx(0, ch);
+        }
     }
 
     sched_tick(state);
 }
 
-static void _spurious_handler(UNUSED int_state_t* state) {
+static void _spurious_handler(UNUSED int_state_t *state) {
 }
 
 bool irq_init(void) {
     bool apic_ok = apic_init();
-    if (apic_ok)
+    if (apic_ok) {
         set_int_handler(INT_SPURIOUS, _spurious_handler);
+    }
 
     if (apic_ok && ioapic_available()) {
         use_ioapic = true;
@@ -70,27 +73,31 @@ bool irq_init(void) {
         _route_irqs_to_pic();
     }
 
-    if (apic_ok && apic_timer_init(PIT_DEFAULT_HZ))
+    if (apic_ok && apic_timer_init(PIT_DEFAULT_HZ)) {
         use_apic_timer = true;
+    }
 
-    if (!use_apic_timer)
+    if (!use_apic_timer) {
         pit_init();
+    }
 
     irq_register(IRQ_SYSTEM_TIMER, _timer_handler);
 
     if (use_apic_timer) {
-        if (use_ioapic)
+        if (use_ioapic) {
             ioapic_mask_irq(IRQ_SYSTEM_TIMER, true);
-        else
+        } else {
             pic_set_mask(IRQ_SYSTEM_TIMER);
+        }
 
         apic_timer_enable();
         log_info("irq: APIC timer initialized at %u Hz", apic_timer_hz());
         return true;
     }
 
-    if (apic_ok)
+    if (apic_ok) {
         log_warn("irq: APIC timer calibration failed, falling back to PIT");
+    }
 
     log_info("irq: PIT timer initialized at %u Hz", pit_get_frequency());
     return true;
@@ -99,8 +106,9 @@ bool irq_init(void) {
 void irq_register(size_t irq, int_handler_t handler) {
     size_t vec = IRQ_INT(irq);
 
-    if (!handler || vec >= ISR_COUNT)
+    if (!handler || vec >= ISR_COUNT) {
         return;
+    }
 
     set_int_handler(vec, handler);
     _register_legacy(irq, handler);
@@ -108,14 +116,16 @@ void irq_register(size_t irq, int_handler_t handler) {
     if (use_ioapic) {
         if (irq != IRQ_SYSTEM_TIMER || !use_apic_timer) {
             u32 dest = lapic_id();
-            if (!ioapic_route_irq((u8)irq, (u8)vec, dest))
+            if (!ioapic_route_irq((u8)irq, (u8)vec, dest)) {
                 log_warn("irq: failed to route irq %u via IOAPIC", (u32)irq);
+            }
         }
         return;
     }
 
-    if (!use_apic_timer || irq != IRQ_SYSTEM_TIMER)
+    if (!use_apic_timer || irq != IRQ_SYSTEM_TIMER) {
         pic_clear_mask((u8)irq);
+    }
 }
 
 void irq_ack(size_t irq) {
@@ -141,8 +151,9 @@ u64 irq_ticks(void) {
 }
 
 u32 irq_timer_hz(void) {
-    if (use_apic_timer)
+    if (use_apic_timer) {
         return apic_timer_hz();
+    }
     return pit_get_frequency();
 }
 
@@ -152,10 +163,11 @@ void timer_enable(void) {
         return;
     }
 
-    if (use_ioapic)
+    if (use_ioapic) {
         ioapic_mask_irq(IRQ_SYSTEM_TIMER, false);
-    else
+    } else {
         pic_clear_mask(IRQ_SYSTEM_TIMER);
+    }
 }
 
 void timer_disable(void) {
@@ -164,8 +176,9 @@ void timer_disable(void) {
         return;
     }
 
-    if (use_ioapic)
+    if (use_ioapic) {
         ioapic_mask_irq(IRQ_SYSTEM_TIMER, true);
-    else
+    } else {
         pic_set_mask(IRQ_SYSTEM_TIMER);
+    }
 }

@@ -1,3 +1,3 @@
 #pragma once
 
-int system(const char* command);
+int system(const char *command);

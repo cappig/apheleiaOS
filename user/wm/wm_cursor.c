@@ -1,11 +1,12 @@
 #include "wm_cursor.h"
-#include "wm_file.h"
 
 #include <parse/ppm.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "wm_file.h"
 
 #define WM_CURSOR_MAX_FILE_BYTES (1U * 1024U * 1024U)
 #define WM_CURSOR_WIDTH          16U
@@ -15,30 +16,33 @@
 typedef struct {
     u32 width;
     u32 height;
-    u32* pixels;
+    u32 *pixels;
 } wm_cursor_t;
 
 static wm_cursor_t cursor = {0};
 
 
 void wm_cursor_unload(void) {
-    if (cursor.pixels)
+    if (cursor.pixels) {
         free(cursor.pixels);
+    }
 
     memset(&cursor, 0, sizeof(cursor));
 }
 
-bool wm_cursor_load(const char* path) {
+bool wm_cursor_load(const char *path) {
     wm_cursor_unload();
 
-    if (!path || !path[0])
+    if (!path || !path[0]) {
         return false;
+    }
 
-    u8* file_data = NULL;
+    u8 *file_data = NULL;
     size_t file_len = 0;
 
-    if (!wm_file_read_all(path, WM_CURSOR_MAX_FILE_BYTES, &file_data, &file_len))
+    if (!wm_file_read_all(path, WM_CURSOR_MAX_FILE_BYTES, &file_data, &file_len)) {
         return false;
+    }
 
     ppm_p6_blob_t ppm_blob = {0};
     if (!ppm_parse_p6_blob(file_data, file_len, &ppm_blob)) {
@@ -66,13 +70,13 @@ bool wm_cursor_load(const char* path) {
         return false;
     }
 
-    u32* pixels = malloc(pixel_count * sizeof(u32));
+    u32 *pixels = malloc(pixel_count * sizeof(u32));
     if (!pixels) {
         free(file_data);
         return false;
     }
 
-    const u8* raster = ppm_blob.raster;
+    const u8 *raster = ppm_blob.raster;
     for (size_t i = 0; i < pixel_count; i++) {
         u8 r = raster[i * 3 + 0];
         u8 g = raster[i * 3 + 1];
@@ -91,26 +95,30 @@ bool wm_cursor_load(const char* path) {
     return true;
 }
 
-bool wm_cursor_draw(u32* frame, u32 fb_width, u32 fb_height, i32 x, i32 y) {
-    if (!frame || !cursor.pixels || !cursor.width || !cursor.height || !fb_width || !fb_height)
+bool wm_cursor_draw(u32 *frame, u32 fb_width, u32 fb_height, i32 x, i32 y) {
+    if (!frame || !cursor.pixels || !cursor.width || !cursor.height || !fb_width || !fb_height) {
         return false;
+    }
 
     for (u32 cy = 0; cy < cursor.height; cy++) {
         i32 dst_y = y + (i32)cy;
-        if (dst_y < 0 || (u32)dst_y >= fb_height)
+        if (dst_y < 0 || (u32)dst_y >= fb_height) {
             continue;
+        }
 
         size_t src_row = (size_t)cy * (size_t)cursor.width;
         size_t dst_row = (size_t)dst_y * (size_t)fb_width;
 
         for (u32 cx = 0; cx < cursor.width; cx++) {
             u32 color = cursor.pixels[src_row + cx];
-            if (color == WM_CURSOR_KEY_COLOR)
+            if (color == WM_CURSOR_KEY_COLOR) {
                 continue;
+            }
 
             i32 dst_x = x + (i32)cx;
-            if (dst_x < 0 || (u32)dst_x >= fb_width)
+            if (dst_x < 0 || (u32)dst_x >= fb_width) {
                 continue;
+            }
 
             frame[dst_row + (size_t)dst_x] = color;
         }

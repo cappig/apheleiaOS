@@ -8,26 +8,28 @@
 #include <x86/boot.h>
 
 #if defined(__x86_64__)
-void* arch_phys_map(u64 paddr, size_t size, u32 flags) {
+void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     (void)size;
     (void)flags; // WC is handled by the page tables set up during boot
-    return (void*)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
+    return (void *)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
 }
 
-void arch_phys_unmap(void* vaddr, size_t size) {
+void arch_phys_unmap(void *vaddr, size_t size) {
     (void)vaddr;
     (void)size;
 }
 
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
-    if (!size)
+    if (!size) {
         return true;
+    }
 
-    void* dst = arch_phys_map(dst_paddr, size, 0);
-    void* src = arch_phys_map(src_paddr, size, 0);
+    void *dst = arch_phys_map(dst_paddr, size, 0);
+    void *src = arch_phys_map(src_paddr, size, 0);
 
-    if (!dst || !src)
+    if (!dst || !src) {
         return false;
+    }
 
     memcpy(dst, src, size);
     arch_phys_unmap(src, size);
@@ -52,32 +54,32 @@ typedef struct {
 static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
 static size_t window_stack_depth = 0;
 
-static page_t* _get_pdpt(void) {
+static page_t *_get_pdpt(void) {
     u64 cr3 = read_cr3();
-    return (page_t*)(uintptr_t)(cr3 & ~0x1fULL);
+    return (page_t *)(uintptr_t)(cr3 & ~0x1fULL);
 }
 
-static page_t* _get_window_pt(u32 vaddr) {
-    page_t* pdpt = _get_pdpt();
+static page_t *_get_window_pt(u32 vaddr) {
+    page_t *pdpt = _get_pdpt();
     size_t pdpt_index = GET_LVL3_INDEX(vaddr);
 
     if (!(pdpt[pdpt_index] & PT_PRESENT))
         panic("PAE PDPT entry missing for phys window");
 
-    page_t* pd = (page_t*)(uintptr_t)page_get_paddr(&pdpt[pdpt_index]);
+    page_t *pd = (page_t *)(uintptr_t)page_get_paddr(&pdpt[pdpt_index]);
     size_t pd_index = GET_LVL2_INDEX(vaddr);
     page_t pde = pd[pd_index];
 
     if (!(pde & PT_PRESENT) || (pde & PT_HUGE))
         panic("PAE PDE missing for phys window");
 
-    return (page_t*)(uintptr_t)page_get_paddr(&pd[pd_index]);
+    return (page_t *)(uintptr_t)page_get_paddr(&pd[pd_index]);
 }
 
 static void _map_window_page(u32 vaddr, u64 paddr, u64 flags) {
-    page_t* pt = _get_window_pt(vaddr);
+    page_t *pt = _get_window_pt(vaddr);
     size_t pt_index = GET_LVL1_INDEX(vaddr);
-    page_t* entry = &pt[pt_index];
+    page_t *entry = &pt[pt_index];
 
     *entry = 0;
     page_set_paddr(entry, paddr);
@@ -87,7 +89,7 @@ static void _map_window_page(u32 vaddr, u64 paddr, u64 flags) {
 }
 
 static void _clear_window_page(u32 vaddr) {
-    page_t* pt = _get_window_pt(vaddr);
+    page_t *pt = _get_window_pt(vaddr);
     size_t pt_index = GET_LVL1_INDEX(vaddr);
 
     pt[pt_index] = 0;
@@ -101,7 +103,7 @@ static void _clear_window_range(size_t pages) {
         _clear_window_page(vaddr + (u32)(i * PAGE_4KIB));
 }
 
-void* arch_phys_map(u64 paddr, size_t size, u32 flags) {
+void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     if (!size)
         return NULL;
 
@@ -136,10 +138,10 @@ void* arch_phys_map(u64 paddr, size_t size, u32 flags) {
     for (size_t i = 0; i < pages; i++)
         _map_window_page(vaddr + (u32)(i * PAGE_4KIB), start + i * PAGE_4KIB, pt_flags);
 
-    return (void*)(uintptr_t)(PHYS_WINDOW_BASE_32 + (u32)(paddr - start));
+    return (void *)(uintptr_t)(PHYS_WINDOW_BASE_32 + (u32)(paddr - start));
 }
 
-void arch_phys_unmap(void* vaddr, size_t size) {
+void arch_phys_unmap(void *vaddr, size_t size) {
     (void)vaddr;
     (void)size;
 
@@ -162,7 +164,9 @@ void arch_phys_unmap(void* vaddr, size_t size) {
     u32 map_base = PHYS_WINDOW_BASE_32;
 
     for (size_t i = 0; i < prev.pages; i++) {
-        _map_window_page(map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, PT_WRITE);
+        _map_window_page(
+            map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, PT_WRITE
+        );
     }
 }
 
@@ -181,14 +185,14 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
         if (chunk > kChunk)
             chunk = kChunk;
 
-        void* src = arch_phys_map(src_paddr + offset, chunk, 0);
+        void *src = arch_phys_map(src_paddr + offset, chunk, 0);
         if (!src)
             return false;
 
         memcpy(bounce, src, chunk);
         arch_phys_unmap(src, chunk);
 
-        void* dst = arch_phys_map(dst_paddr + offset, chunk, 0);
+        void *dst = arch_phys_map(dst_paddr + offset, chunk, 0);
         if (!dst)
             return false;
 

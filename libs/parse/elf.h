@@ -195,14 +195,14 @@ typedef struct {
 } elf_attributes_t;
 
 
-bool elf_is_executable(elf_header_t* eheader);
-elf_validity_t elf_verify(elf_header_t* header);
+bool elf_is_executable(elf_header_t *eheader);
+elf_validity_t elf_verify(elf_header_t *header);
 
 // u64 elf_to_page_flags(u32 elf_flags);
 u64 elf_to_mmap_prot(u32 elf_flags);
 
-bool elf_parse_header(elf_attributes_t* attribs, elf_header_t* header);
+bool elf_parse_header(elf_attributes_t *attribs, elf_header_t *header);
 
-elf_sect_header_t* elf_locate_section(elf_header_t* header, const char* name);
-elf_symbol_t*
-elf_locate_symbol(elf_symbol_t* symtab, size_t symtab_size, char* strtab, const char* name);
+elf_sect_header_t *elf_locate_section(elf_header_t *header, const char *name);
+elf_symbol_t *
+elf_locate_symbol(elf_symbol_t *symtab, size_t symtab_size, char *strtab, const char *name);

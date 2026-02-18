@@ -52,11 +52,11 @@
 #define AHCI_PRDT_DBC_MASK 0x003fffffU
 #define AHCI_PRDT_I        (1U << 31)
 
-#define AHCI_DMA_PAGES         16
-#define AHCI_PAGE_SIZE         4096U
-#define AHCI_DMA_SIZE_BYTES    (AHCI_DMA_PAGES * AHCI_PAGE_SIZE)
-#define AHCI_MAX_SECTORS       (AHCI_DMA_SIZE_BYTES / AHCI_SECTOR_SIZE)
-#define AHCI_IRQ_TIMEOUT_MS    100
+#define AHCI_DMA_PAGES      16
+#define AHCI_PAGE_SIZE      4096U
+#define AHCI_DMA_SIZE_BYTES (AHCI_DMA_PAGES * AHCI_PAGE_SIZE)
+#define AHCI_MAX_SECTORS    (AHCI_DMA_SIZE_BYTES / AHCI_SECTOR_SIZE)
+#define AHCI_IRQ_TIMEOUT_MS 100
 
 typedef volatile struct {
     u32 clb;

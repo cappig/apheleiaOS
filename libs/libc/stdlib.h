@@ -27,34 +27,34 @@ typedef struct {
 #endif
 
 #ifdef EXTERNAL_ALLOC
-typedef void* (*libc_malloc_fn_t)(size_t size);
-typedef void (*libc_free_fn_t)(void* ptr);
+typedef void *(*libc_malloc_fn_t)(size_t size);
+typedef void (*libc_free_fn_t)(void *ptr);
 
 typedef struct {
     libc_malloc_fn_t malloc_fn;
     libc_free_fn_t free_fn;
 } libc_alloc_ops_t;
 
-void __libc_init_alloc(const libc_alloc_ops_t* ops);
+void __libc_init_alloc(const libc_alloc_ops_t *ops);
 #endif
 
-void* malloc(size_t size);
-void* calloc(size_t num, size_t size);
-void* realloc(void* ptr, size_t size);
-void free(void* ptr);
+void *malloc(size_t size);
+void *calloc(size_t num, size_t size);
+void *realloc(void *ptr, size_t size);
+void free(void *ptr);
 
-long long strtoll(char const* restrict str, char** restrict endptr, int base);
-long strtol(char const* restrict str, char** restrict endptr, int base);
+long long strtoll(char const *restrict str, char **restrict endptr, int base);
+long strtol(char const *restrict str, char **restrict endptr, int base);
 // unsigned long int strtoul(char const* restrict str, char** restrict endptr, int base);
 // double strtod(char const* restrict str, char** restrict endptr);
 
 // double atof(char const* str);
-long long atoll(char const* str);
-long atol(char const* str);
-int atoi(char const* str);
+long long atoll(char const *str);
+long atol(char const *str);
+int atoi(char const *str);
 
 long long llabs(long long n);
 long labs(long n);
 int abs(int n);
 
-void qsort(void* base, size_t num, size_t size, int (*comp)(const void*, const void*));
+void qsort(void *base, size_t num, size_t size, int (*comp)(const void *, const void *));

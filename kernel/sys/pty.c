@@ -37,18 +37,20 @@ static pty_handle_t pty_slave_handles[PTY_COUNT];
 static pty_handle_t pty_master_default = {.index = 0, .is_master = true};
 
 
-static void _queue_reset(pty_queue_t* queue) {
-    if (!queue)
+static void _queue_reset(pty_queue_t *queue) {
+    if (!queue) {
         return;
+    }
 
     queue->read_pos = 0;
     queue->write_pos = 0;
     queue->size = 0;
 }
 
-static void _reset_state(pty_t* pty) {
-    if (!pty)
+static void _reset_state(pty_t *pty) {
+    if (!pty) {
         return;
+    }
 
     _queue_reset(&pty->master_rx);
     _queue_reset(&pty->slave_rx);
@@ -62,43 +64,50 @@ static void _reset_state(pty_t* pty) {
     pty->refs = 0;
 }
 
-static bool _handle_valid(const pty_handle_t* handle) {
-    if (!handle)
+static bool _handle_valid(const pty_handle_t *handle) {
+    if (!handle) {
         return false;
+    }
 
     return handle->index < PTY_COUNT;
 }
 
-static pty_t* _handle_pty(const pty_handle_t* handle) {
-    if (!_handle_valid(handle))
+static pty_t *_handle_pty(const pty_handle_t *handle) {
+    if (!_handle_valid(handle)) {
         return NULL;
+    }
 
     return &ptys[handle->index];
 }
 
-static pty_queue_t* _handle_rx_queue(pty_t* pty, const pty_handle_t* handle) {
-    if (!pty || !handle)
+static pty_queue_t *_handle_rx_queue(pty_t *pty, const pty_handle_t *handle) {
+    if (!pty || !handle) {
         return NULL;
+    }
 
-    if (handle->is_master)
+    if (handle->is_master) {
         return &pty->master_rx;
+    }
 
     return &pty->slave_rx;
 }
 
-static pty_queue_t* _handle_tx_queue(pty_t* pty, const pty_handle_t* handle) {
-    if (!pty || !handle)
+static pty_queue_t *_handle_tx_queue(pty_t *pty, const pty_handle_t *handle) {
+    if (!pty || !handle) {
         return NULL;
+    }
 
-    if (handle->is_master)
+    if (handle->is_master) {
         return &pty->slave_rx;
+    }
 
     return &pty->master_rx;
 }
 
-static void _queue_init(pty_queue_t* queue) {
-    if (!queue || queue->ready)
+static void _queue_init(pty_queue_t *queue) {
+    if (!queue || queue->ready) {
         return;
+    }
 
     queue->read_pos = 0;
     queue->write_pos = 0;
@@ -110,22 +119,26 @@ static void _queue_init(pty_queue_t* queue) {
     queue->ready = true;
 }
 
-static size_t _queue_read_once(pty_queue_t* queue, void* buf, size_t len) {
-    if (!queue || !buf || !len || !queue->size)
+static size_t _queue_read_once(pty_queue_t *queue, void *buf, size_t len) {
+    if (!queue || !buf || !len || !queue->size) {
         return 0;
+    }
 
     size_t chunk = len;
-    if (chunk > queue->size)
+    if (chunk > queue->size) {
         chunk = queue->size;
+    }
 
     size_t first = chunk;
-    if (first > PTY_BUFFER_SIZE - queue->read_pos)
+    if (first > PTY_BUFFER_SIZE - queue->read_pos) {
         first = PTY_BUFFER_SIZE - queue->read_pos;
+    }
 
     memcpy(buf, queue->data + queue->read_pos, first);
 
-    if (chunk > first)
-        memcpy((u8*)buf + first, queue->data, chunk - first);
+    if (chunk > first) {
+        memcpy((u8 *)buf + first, queue->data, chunk - first);
+    }
 
     queue->read_pos = (queue->read_pos + chunk) % PTY_BUFFER_SIZE;
     queue->size -= chunk;
@@ -133,26 +146,31 @@ static size_t _queue_read_once(pty_queue_t* queue, void* buf, size_t len) {
     return chunk;
 }
 
-static size_t _queue_write_once(pty_queue_t* queue, const void* buf, size_t len) {
-    if (!queue || !buf || !len)
+static size_t _queue_write_once(pty_queue_t *queue, const void *buf, size_t len) {
+    if (!queue || !buf || !len) {
         return 0;
+    }
 
     size_t free_space = PTY_BUFFER_SIZE - queue->size;
-    if (!free_space)
+    if (!free_space) {
         return 0;
+    }
 
     size_t chunk = len;
-    if (chunk > free_space)
+    if (chunk > free_space) {
         chunk = free_space;
+    }
 
     size_t first = chunk;
-    if (first > PTY_BUFFER_SIZE - queue->write_pos)
+    if (first > PTY_BUFFER_SIZE - queue->write_pos) {
         first = PTY_BUFFER_SIZE - queue->write_pos;
+    }
 
     memcpy(queue->data + queue->write_pos, buf, first);
 
-    if (chunk > first)
-        memcpy(queue->data, (const u8*)buf + first, chunk - first);
+    if (chunk > first) {
+        memcpy(queue->data, (const u8 *)buf + first, chunk - first);
+    }
 
     queue->write_pos = (queue->write_pos + chunk) % PTY_BUFFER_SIZE;
     queue->size += chunk;
@@ -160,9 +178,10 @@ static size_t _queue_write_once(pty_queue_t* queue, const void* buf, size_t len)
     return chunk;
 }
 
-static size_t _queue_size(pty_queue_t* queue) {
-    if (!queue)
+static size_t _queue_size(pty_queue_t *queue) {
+    if (!queue) {
         return 0;
+    }
 
     unsigned long irq_flags = arch_irq_save();
     size_t used = queue->size;
@@ -171,9 +190,10 @@ static size_t _queue_size(pty_queue_t* queue) {
     return used;
 }
 
-static size_t _queue_free_space(pty_queue_t* queue) {
-    if (!queue)
+static size_t _queue_free_space(pty_queue_t *queue) {
+    if (!queue) {
         return 0;
+    }
 
     unsigned long irq_flags = arch_irq_save();
     size_t free_space = PTY_BUFFER_SIZE - queue->size;
@@ -191,27 +211,28 @@ static void _seed_handles(void) {
     }
 }
 
-static ssize_t _dev_pty_read(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _dev_pty_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
     return pty_read_handle(node ? node->private : NULL, buf, len, flags);
 }
 
-static ssize_t _dev_pty_write(vfs_node_t* node, void* buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _dev_pty_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
     return pty_write_handle(node ? node->private : NULL, buf, len, flags);
 }
 
-static ssize_t _dev_pty_ioctl(vfs_node_t* node, u64 request, void* args) {
+static ssize_t _dev_pty_ioctl(vfs_node_t *node, u64 request, void *args) {
     return pty_ioctl_handle(node ? node->private : NULL, request, args);
 }
 
-static short _dev_pty_poll(vfs_node_t* node, short events, u32 flags) {
+static short _dev_pty_poll(vfs_node_t *node, short events, u32 flags) {
     return pty_poll_handle(node ? node->private : NULL, events, flags);
 }
 
-static void _queue_clear(pty_queue_t* queue) {
-    if (!queue)
+static void _queue_clear(pty_queue_t *queue) {
+    if (!queue) {
         return;
+    }
 
     unsigned long irq_flags = arch_irq_save();
 
@@ -222,88 +243,103 @@ static void _queue_clear(pty_queue_t* queue) {
     arch_irq_restore(irq_flags);
 }
 
-static ssize_t _queue_read(pty_queue_t* queue, void* buf, size_t len, bool nonblock) {
-    if (!queue || !buf)
+static ssize_t _queue_read(pty_queue_t *queue, void *buf, size_t len, bool nonblock) {
+    if (!queue || !buf) {
         return -EINVAL;
+    }
 
-    if (!len)
+    if (!len) {
         return 0;
+    }
 
     size_t total = 0;
 
     for (;;) {
         unsigned long irq_flags = arch_irq_save();
-        size_t read_now = _queue_read_once(queue, (u8*)buf + total, len - total);
+        size_t read_now = _queue_read_once(queue, (u8 *)buf + total, len - total);
         arch_irq_restore(irq_flags);
 
         if (read_now) {
             total += read_now;
             sched_wake_one(&queue->write_wait);
 
-            if (total == len)
+            if (total == len) {
                 return (ssize_t)total;
+            }
         }
 
-        if (total)
+        if (total) {
             return (ssize_t)total;
+        }
 
-        if (nonblock)
+        if (nonblock) {
             return -EAGAIN;
+        }
 
-        if (!sched_is_running())
+        if (!sched_is_running()) {
             continue;
+        }
 
-        sched_thread_t* current = sched_current();
+        sched_thread_t *current = sched_current();
 
-        if (current && sched_signal_has_pending(current))
+        if (current && sched_signal_has_pending(current)) {
             return -EINTR;
+        }
 
         sched_block(&queue->read_wait);
     }
 }
 
-static ssize_t _queue_write(pty_queue_t* queue, const void* buf, size_t len, bool nonblock) {
-    if (!queue || !buf)
+static ssize_t _queue_write(pty_queue_t *queue, const void *buf, size_t len, bool nonblock) {
+    if (!queue || !buf) {
         return -EINVAL;
+    }
 
-    if (!len)
+    if (!len) {
         return 0;
+    }
 
     size_t total = 0;
 
     for (;;) {
         unsigned long irq_flags = arch_irq_save();
-        size_t wrote_now = _queue_write_once(queue, (const u8*)buf + total, len - total);
+        size_t wrote_now = _queue_write_once(queue, (const u8 *)buf + total, len - total);
         arch_irq_restore(irq_flags);
 
         if (wrote_now) {
             total += wrote_now;
             sched_wake_one(&queue->read_wait);
 
-            if (total == len)
+            if (total == len) {
                 return (ssize_t)total;
+            }
         }
 
-        if (total == len)
+        if (total == len) {
             return (ssize_t)total;
+        }
 
-        if (nonblock)
+        if (nonblock) {
             return total ? (ssize_t)total : -EAGAIN;
+        }
 
-        if (!sched_is_running())
+        if (!sched_is_running()) {
             continue;
+        }
 
-        sched_thread_t* current = sched_current();
-        if (current && sched_signal_has_pending(current))
+        sched_thread_t *current = sched_current();
+        if (current && sched_signal_has_pending(current)) {
             return total ? (ssize_t)total : -EINTR;
+        }
 
         sched_block(&queue->write_wait);
     }
 }
 
-static bool pty_register_devfs(vfs_node_t* dev_dir) {
-    if (!dev_dir)
+static bool pty_register_devfs(vfs_node_t *dev_dir) {
+    if (!dev_dir) {
         return false;
+    }
 
     if (PTY_COUNT && !ptys[0].master_rx.ready) {
         log_warn("pty: state not initialized");
@@ -312,7 +348,7 @@ static bool pty_register_devfs(vfs_node_t* dev_dir) {
 
     _seed_handles();
 
-    vfs_interface_t* pty_if = vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
+    vfs_interface_t *pty_if = vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
     if (!pty_if) {
         log_warn("pty: failed to allocate /dev interface");
         return false;
@@ -335,12 +371,16 @@ static bool pty_register_devfs(vfs_node_t* dev_dir) {
         pty_name[3] = (char)('0' + i);
         pts_name[3] = (char)('0' + i);
 
-        if (!devfs_register_node(dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, &pty_master_handles[i])) {
+        if (!devfs_register_node(
+                dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, &pty_master_handles[i]
+            )) {
             log_warn("pty: failed to create /dev/%s", pty_name);
             ok = false;
         }
 
-        if (!devfs_register_node(dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, &pty_slave_handles[i])) {
+        if (!devfs_register_node(
+                dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, &pty_slave_handles[i]
+            )) {
             log_warn("pty: failed to create /dev/%s", pts_name);
             ok = false;
         }
@@ -350,14 +390,16 @@ static bool pty_register_devfs(vfs_node_t* dev_dir) {
 }
 
 void pty_init(void) {
-    if (!devfs_register_device("pty", pty_register_devfs))
+    if (!devfs_register_device("pty", pty_register_devfs)) {
         log_warn("pty: failed to register devfs init callback");
+    }
 
-    if (PTY_COUNT && ptys[0].master_rx.ready)
+    if (PTY_COUNT && ptys[0].master_rx.ready) {
         return;
+    }
 
     for (size_t i = 0; i < PTY_COUNT; i++) {
-        pty_t* pty = &ptys[i];
+        pty_t *pty = &ptys[i];
 
         _queue_init(&pty->master_rx);
         _queue_init(&pty->slave_rx);
@@ -366,17 +408,19 @@ void pty_init(void) {
     }
 }
 
-bool pty_reserve(size_t* index_out) {
-    if (!index_out)
+bool pty_reserve(size_t *index_out) {
+    if (!index_out) {
         return false;
+    }
 
     unsigned long irq_flags = arch_irq_save();
 
     for (size_t i = 0; i < PTY_COUNT; i++) {
-        pty_t* pty = &ptys[i];
+        pty_t *pty = &ptys[i];
 
-        if (pty->allocated)
+        if (pty->allocated) {
             continue;
+        }
 
         _reset_state(pty);
         pty->allocated = true;
@@ -391,11 +435,12 @@ bool pty_reserve(size_t* index_out) {
 }
 
 void pty_unreserve(size_t index) {
-    if (index >= PTY_COUNT)
+    if (index >= PTY_COUNT) {
         return;
+    }
 
     unsigned long irq_flags = arch_irq_save();
-    pty_t* pty = &ptys[index];
+    pty_t *pty = &ptys[index];
 
     if (pty->allocated && !pty->refs) {
         _reset_state(pty);
@@ -406,25 +451,28 @@ void pty_unreserve(size_t index) {
 }
 
 void pty_hold(size_t index) {
-    if (index >= PTY_COUNT)
+    if (index >= PTY_COUNT) {
         return;
+    }
 
     unsigned long irq_flags = arch_irq_save();
 
-    pty_t* pty = &ptys[index];
+    pty_t *pty = &ptys[index];
 
-    if (pty->allocated)
+    if (pty->allocated) {
         pty->refs++;
+    }
 
     arch_irq_restore(irq_flags);
 }
 
 void pty_put(size_t index) {
-    if (index >= PTY_COUNT)
+    if (index >= PTY_COUNT) {
         return;
+    }
 
     unsigned long irq_flags = arch_irq_save();
-    pty_t* pty = &ptys[index];
+    pty_t *pty = &ptys[index];
 
     if (pty->allocated && pty->refs) {
         pty->refs--;
@@ -438,53 +486,60 @@ void pty_put(size_t index) {
     arch_irq_restore(irq_flags);
 }
 
-ssize_t pty_read_handle(const pty_handle_t* handle, void* buf, size_t len, u32 flags) {
-    pty_t* pty = _handle_pty(handle);
-    pty_queue_t* rx = _handle_rx_queue(pty, handle);
+ssize_t pty_read_handle(const pty_handle_t *handle, void *buf, size_t len, u32 flags) {
+    pty_t *pty = _handle_pty(handle);
+    pty_queue_t *rx = _handle_rx_queue(pty, handle);
 
-    if (!rx)
+    if (!rx) {
         return -EINVAL;
+    }
 
     return _queue_read(rx, buf, len, (flags & VFS_NONBLOCK) != 0);
 }
 
-ssize_t pty_write_handle(const pty_handle_t* handle, const void* buf, size_t len, u32 flags) {
-    pty_t* pty = _handle_pty(handle);
-    pty_queue_t* tx = _handle_tx_queue(pty, handle);
+ssize_t pty_write_handle(const pty_handle_t *handle, const void *buf, size_t len, u32 flags) {
+    pty_t *pty = _handle_pty(handle);
+    pty_queue_t *tx = _handle_tx_queue(pty, handle);
 
-    if (!tx)
+    if (!tx) {
         return -EINVAL;
+    }
 
     return _queue_write(tx, buf, len, (flags & VFS_NONBLOCK) != 0);
 }
 
-ssize_t pty_ioctl_handle(const pty_handle_t* handle, u64 request, void* args) {
-    pty_t* pty = _handle_pty(handle);
-    if (!pty)
+ssize_t pty_ioctl_handle(const pty_handle_t *handle, u64 request, void *args) {
+    pty_t *pty = _handle_pty(handle);
+    if (!pty) {
         return -EINVAL;
+    }
 
     switch (request) {
     case TCGETS:
-        if (!args)
+        if (!args) {
             return -EINVAL;
+        }
 
         memcpy(args, &pty->termios, sizeof(pty->termios));
         return 0;
     case TCSETS:
-        if (!args)
+        if (!args) {
             return -EINVAL;
+        }
 
         memcpy(&pty->termios, args, sizeof(pty->termios));
         return 0;
     case TCSETSW:
-        if (!args)
+        if (!args) {
             return -EINVAL;
+        }
 
         memcpy(&pty->termios, args, sizeof(pty->termios));
         return 0;
     case TCSETSF:
-        if (!args)
+        if (!args) {
             return -EINVAL;
+        }
 
         memcpy(&pty->termios, args, sizeof(pty->termios));
         _queue_clear(&pty->master_rx);
@@ -493,73 +548,86 @@ ssize_t pty_ioctl_handle(const pty_handle_t* handle, u64 request, void* args) {
         sched_wake_all(&pty->slave_rx.write_wait);
         return 0;
     case TIOCGWINSZ:
-        if (!args)
+        if (!args) {
             return -EINVAL;
+        }
 
         memcpy(args, &pty->winsize, sizeof(pty->winsize));
         return 0;
     case TIOCSWINSZ:
-        if (!args)
+        if (!args) {
             return -EINVAL;
+        }
 
         memcpy(&pty->winsize, args, sizeof(pty->winsize));
         return 0;
     case TIOCSPGRP:
-        if (!args)
+        if (!args) {
             return -EINVAL;
+        }
 
-        if (*(pid_t*)args <= 0)
+        if (*(pid_t *)args <= 0) {
             return -EINVAL;
+        }
 
-        sched_thread_t* current = sched_current();
-        if (!current || !current->user_thread)
+        sched_thread_t *current = sched_current();
+        if (!current || !current->user_thread) {
             return -EPERM;
+        }
 
-        if (!sched_pgrp_in_session(*(pid_t*)args, current->sid))
+        if (!sched_pgrp_in_session(*(pid_t *)args, current->sid)) {
             return -EPERM;
+        }
 
-        pty->pgrp = *(pid_t*)args;
+        pty->pgrp = *(pid_t *)args;
         return 0;
     case TIOCGPGRP:
-        if (!args)
+        if (!args) {
             return -EINVAL;
+        }
 
-        *(pid_t*)args = pty->pgrp;
+        *(pid_t *)args = pty->pgrp;
         return 0;
     case TIOCGPTN:
-        if (!args || !handle)
+        if (!args || !handle) {
             return -EINVAL;
+        }
 
-        *(int*)args = (int)handle->index;
+        *(int *)args = (int)handle->index;
         return 0;
     default:
         return -ENOTTY;
     }
 }
 
-short pty_poll_handle(const pty_handle_t* handle, short events, u32 flags) {
+short pty_poll_handle(const pty_handle_t *handle, short events, u32 flags) {
     (void)flags;
 
-    pty_t* pty = _handle_pty(handle);
-    if (!pty)
+    pty_t *pty = _handle_pty(handle);
+    if (!pty) {
         return POLLNVAL;
+    }
 
-    pty_queue_t* rx = _handle_rx_queue(pty, handle);
-    pty_queue_t* tx = _handle_tx_queue(pty, handle);
+    pty_queue_t *rx = _handle_rx_queue(pty, handle);
+    pty_queue_t *tx = _handle_tx_queue(pty, handle);
 
-    if (!rx || !tx)
+    if (!rx || !tx) {
         return POLLNVAL;
+    }
 
     short revents = 0;
 
-    if ((events & POLLIN) && _queue_size(rx))
+    if ((events & POLLIN) && _queue_size(rx)) {
         revents |= POLLIN;
+    }
 
-    if ((events & POLLOUT) && _queue_free_space(tx))
+    if ((events & POLLOUT) && _queue_free_space(tx)) {
         revents |= POLLOUT;
+    }
 
-    if (!pty->allocated)
+    if (!pty->allocated) {
         revents |= POLLHUP;
+    }
 
     return revents;
 }

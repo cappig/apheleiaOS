@@ -16,16 +16,16 @@ struct tm {
     int tm_isdst;
 };
 
-time_t time(time_t* timer);
+time_t time(time_t *timer);
 
-time_t mktime(struct tm* tm);
+time_t mktime(struct tm *tm);
 
-struct tm* gmtime_r(const time_t* timer, struct tm* result);
-struct tm* gmtime(const time_t* timer);
-struct tm* localtime_r(const time_t* timer, struct tm* result);
-struct tm* localtime(const time_t* timer);
+struct tm *gmtime_r(const time_t *timer, struct tm *result);
+struct tm *gmtime(const time_t *timer);
+struct tm *localtime_r(const time_t *timer, struct tm *result);
+struct tm *localtime(const time_t *timer);
 
-size_t strftime(char* str, size_t max, const char* format, const struct tm* tm);
+size_t strftime(char *str, size_t max, const char *format, const struct tm *tm);
 
-char* asctime(const struct tm* time);
-char* ctime(const time_t* timer);
+char *asctime(const struct tm *time);
+char *ctime(const time_t *timer);

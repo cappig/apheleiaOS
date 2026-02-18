@@ -2,7 +2,7 @@
 #include <io.h>
 #include <unistd.h>
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     if (argc < 2) {
         io_write_str("touch: missing file operand\n");
         return 1;

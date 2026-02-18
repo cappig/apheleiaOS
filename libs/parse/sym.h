@@ -15,7 +15,7 @@
 typedef struct {
     u64 addr;
     u8 type;
-    char* name;
+    char *name;
 } symbol_entry_t;
 
 enum symbol_type {
@@ -37,10 +37,10 @@ enum symbol_type {
 
 typedef struct {
     size_t len;
-    symbol_entry_t* map;
+    symbol_entry_t *map;
 } symbol_table_t;
 
 
-size_t sym_count(const char* sym_file, size_t sym_file_len);
+size_t sym_count(const char *sym_file, size_t sym_file_len);
 
-bool sym_parse(char* sym_file, symbol_table_t* table);
+bool sym_parse(char *sym_file, symbol_table_t *table);

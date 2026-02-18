@@ -7,25 +7,27 @@
 #define INIT_TTY_COUNT 4
 
 typedef struct {
-    const char* tty_path;
+    const char *tty_path;
     pid_t pid;
 } getty_slot_t;
 
-static void write_str(const char* str) {
-    if (!str)
+static void write_str(const char *str) {
+    if (!str) {
         return;
+    }
 
     write(STDOUT_FILENO, str, strlen(str));
 }
 
-static pid_t spawn_getty(const char* tty_path) {
-    if (!tty_path || !tty_path[0])
+static pid_t spawn_getty(const char *tty_path) {
+    if (!tty_path || !tty_path[0]) {
         return -1;
+    }
 
     pid_t pid = fork();
 
     if (!pid) {
-        char* args[] = {"getty", (char*)tty_path, "/bin/login", NULL};
+        char *args[] = {"getty", (char *)tty_path, "/bin/login", NULL};
 
         if (execve("/bin/getty", args, NULL) < 0) {
             write_str("init: exec failed\n");
@@ -36,7 +38,7 @@ static pid_t spawn_getty(const char* tty_path) {
     return pid;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
@@ -68,8 +70,9 @@ int main(int argc, char** argv) {
         }
 
         for (size_t i = 0; i < INIT_TTY_COUNT; i++) {
-            if (slots[i].pid != pid)
+            if (slots[i].pid != pid) {
                 continue;
+            }
 
             slots[i].pid = spawn_getty(slots[i].tty_path);
 

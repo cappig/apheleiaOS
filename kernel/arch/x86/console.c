@@ -6,23 +6,25 @@
 #include <x86/console.h>
 #include <x86/vga.h>
 
-static u8* x86_fb_base = NULL;
+static u8 *x86_fb_base = NULL;
 static u64 x86_fb_phys = 0;
 static bool x86_fb_use_phys_window = false;
 
-static bool _x86_console_probe(void* arch_boot_info, console_hw_desc_t* out) {
-    if (!arch_boot_info || !out)
+static bool _x86_console_probe(void *arch_boot_info, console_hw_desc_t *out) {
+    if (!arch_boot_info || !out) {
         return false;
+    }
 
-    boot_info_t* info = arch_boot_info;
+    boot_info_t *info = arch_boot_info;
     memset(out, 0, sizeof(*out));
 
     if (info->video.mode == VIDEO_GRAPHICS && info->video.framebuffer && info->video.width &&
         info->video.height && info->video.bytes_per_pixel) {
 
         u32 pitch = info->video.bytes_per_line;
-        if (!pitch)
+        if (!pitch) {
             pitch = info->video.width * info->video.bytes_per_pixel;
+        }
 
         size_t size = (size_t)pitch * (size_t)info->video.height;
 
@@ -48,7 +50,7 @@ static bool _x86_console_probe(void* arch_boot_info, console_hw_desc_t* out) {
             return true;
         }
 #else
-        u8* mapped = arch_phys_map(info->video.framebuffer, size, PHYS_MAP_WC);
+        u8 *mapped = arch_phys_map(info->video.framebuffer, size, PHYS_MAP_WC);
         if (mapped) {
             out->mode = CONSOLE_FRAMEBUFFER;
             out->fb = mapped;
@@ -72,8 +74,9 @@ static bool _x86_console_probe(void* arch_boot_info, console_hw_desc_t* out) {
 #endif
     }
 
-    if (info->video.mode == VIDEO_NONE)
+    if (info->video.mode == VIDEO_NONE) {
         return false;
+    }
 
     size_t vga_size = VGA_WIDTH * VGA_HEIGHT * sizeof(u16);
 
@@ -85,7 +88,7 @@ static bool _x86_console_probe(void* arch_boot_info, console_hw_desc_t* out) {
     out->bytes_per_pixel = 2;
 
 #if defined(__i386__)
-    out->fb = (u8*)(uintptr_t)VGA_ADDR;
+    out->fb = (u8 *)(uintptr_t)VGA_ADDR;
 #else
     out->fb = arch_phys_map(VGA_ADDR, vga_size, 0);
     if (!out->fb) {
@@ -101,22 +104,24 @@ static bool _x86_console_probe(void* arch_boot_info, console_hw_desc_t* out) {
     return true;
 }
 
-static u8* _x86_fb_map(size_t offset, size_t size) {
-    if (!size)
+static u8 *_x86_fb_map(size_t offset, size_t size) {
+    if (!size) {
         return NULL;
+    }
 
 #if defined(__i386__)
     if (x86_fb_use_phys_window)
         return arch_phys_map(x86_fb_phys + (u64)offset, size, PHYS_MAP_WC);
 #endif
 
-    if (!x86_fb_base)
+    if (!x86_fb_base) {
         return NULL;
+    }
 
     return x86_fb_base + offset;
 }
 
-static void _x86_fb_unmap(void* ptr, size_t size) {
+static void _x86_fb_unmap(void *ptr, size_t size) {
 #if defined(__i386__)
     if (x86_fb_use_phys_window)
         arch_phys_unmap(ptr, size);
@@ -141,39 +146,45 @@ static u16 _x86_text_cell(u32 codepoint, u8 fg, u8 bg) {
     return ((u16)attr << 8) | ch;
 }
 
-static void _x86_text_put(u8* fb, size_t cols, size_t col, size_t row, u32 codepoint, u8 fg, u8 bg) {
-    if (!fb)
+static void
+_x86_text_put(u8 *fb, size_t cols, size_t col, size_t row, u32 codepoint, u8 fg, u8 bg) {
+    if (!fb) {
         return;
+    }
 
-    u16* text = (u16*)fb;
+    u16 *text = (u16 *)fb;
     text[row * cols + col] = _x86_text_cell(codepoint, fg, bg);
 }
 
-static void _x86_text_clear(u8* fb, size_t cols, size_t rows, u8 fg, u8 bg) {
-    if (!fb)
+static void _x86_text_clear(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
+    if (!fb) {
         return;
+    }
 
-    u16* text = (u16*)fb;
+    u16 *text = (u16 *)fb;
     u16 blank_cell = _x86_text_cell(' ', fg, bg);
     size_t count = cols * rows;
 
-    for (size_t i = 0; i < count; i++)
+    for (size_t i = 0; i < count; i++) {
         text[i] = blank_cell;
+    }
 }
 
-static void _x86_text_scroll_up(u8* fb, size_t cols, size_t rows, u8 fg, u8 bg) {
-    if (!fb || !cols || !rows)
+static void _x86_text_scroll_up(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
+    if (!fb || !cols || !rows) {
         return;
+    }
 
-    u16* text = (u16*)fb;
+    u16 *text = (u16 *)fb;
     u16 blank_cell = _x86_text_cell(' ', fg, bg);
 
     memmove(text, text + cols, (rows - 1) * cols * sizeof(*text));
 
     size_t last_row = rows - 1;
 
-    for (size_t col = 0; col < cols; col++)
+    for (size_t col = 0; col < cols; col++) {
         text[last_row * cols + col] = blank_cell;
+    }
 }
 
 static const console_backend_ops_t x86_console_ops = {

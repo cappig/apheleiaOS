@@ -1,8 +1,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <io.h>
 #include <fsutil.h>
+#include <io.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,17 +10,18 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static void print_error(const char* path) {
+static void print_error(const char *path) {
     char line[256];
     snprintf(line, sizeof(line), "rm: %s: %d\n", path ? path : "(null)", errno);
     io_write_str(line);
 }
 
-static int rm_dir_recursive(const char* path, bool force) {
+static int rm_dir_recursive(const char *path, bool force) {
     int fd = open(path, O_RDONLY, 0);
     if (fd < 0) {
-        if (force)
+        if (force) {
             return 0;
+        }
 
         print_error(path);
         return 1;
@@ -30,8 +31,9 @@ static int rm_dir_recursive(const char* path, bool force) {
     dirent_t ent;
 
     while (getdents(fd, &ent) > 0) {
-        if (!strcmp(ent.d_name, ".") || !strcmp(ent.d_name, ".."))
+        if (!strcmp(ent.d_name, ".") || !strcmp(ent.d_name, "..")) {
             continue;
+        }
 
         char child[PATH_MAX];
         fs_join_path(child, sizeof(child), path, ent.d_name);
@@ -47,8 +49,9 @@ static int rm_dir_recursive(const char* path, bool force) {
         }
 
         if (fs_is_dir_mode(child_st.st_mode)) {
-            if (rm_dir_recursive(child, force) != 0)
+            if (rm_dir_recursive(child, force) != 0) {
                 rc = 1;
+            }
 
             continue;
         }
@@ -71,11 +74,12 @@ static int rm_dir_recursive(const char* path, bool force) {
     return rc;
 }
 
-static int rm_path(const char* path, bool recursive, bool force) {
+static int rm_path(const char *path, bool recursive, bool force) {
     stat_t st;
     if (lstat(path, &st) < 0) {
-        if (force && errno == ENOENT)
+        if (force && errno == ENOENT) {
             return 0;
+        }
 
         print_error(path);
         return 1;
@@ -92,8 +96,9 @@ static int rm_path(const char* path, bool recursive, bool force) {
     }
 
     if (unlink(path) < 0) {
-        if (force && errno == ENOENT)
+        if (force && errno == ENOENT) {
             return 0;
+        }
 
         print_error(path);
         return 1;
@@ -102,7 +107,7 @@ static int rm_path(const char* path, bool recursive, bool force) {
     return 0;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     bool recursive = false;
     bool force = false;
     int argi = 1;
@@ -113,7 +118,7 @@ int main(int argc, char** argv) {
             break;
         }
 
-        const char* opt = argv[argi] + 1;
+        const char *opt = argv[argi] + 1;
         if (!opt[0]) {
             io_write_str("usage: rm [-f] [-r] FILE...\n");
             return 1;
@@ -136,8 +141,9 @@ int main(int argc, char** argv) {
     }
 
     if (argi >= argc) {
-        if (force)
+        if (force) {
             return 0;
+        }
 
         io_write_str("usage: rm [-f] [-r] FILE...\n");
         return 1;
@@ -145,8 +151,9 @@ int main(int argc, char** argv) {
 
     int rc = 0;
     for (int i = argi; i < argc; i++) {
-        if (rm_path(argv[i], recursive, force) != 0)
+        if (rm_path(argv[i], recursive, force) != 0) {
             rc = 1;
+        }
     }
 
     return rc;

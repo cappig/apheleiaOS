@@ -90,7 +90,7 @@ typedef struct PACKED {
     spec_regs_t s_regs;
 } int_state_t;
 
-typedef void (*int_handler_t)(int_state_t* state);
+typedef void (*int_handler_t)(int_state_t *state);
 
 
 void set_int_handler(size_t int_num, int_handler_t handler);

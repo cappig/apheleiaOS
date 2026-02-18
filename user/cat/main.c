@@ -10,14 +10,16 @@ static void copy_fd(int fd) {
 
     for (;;) {
         ssize_t read_len = read(fd, buf, sizeof(buf));
-        if (read_len <= 0)
+        if (read_len <= 0) {
             break;
+        }
 
         size_t off = 0;
         while (off < (size_t)read_len) {
             ssize_t wrote = write(STDOUT_FILENO, buf + off, (size_t)read_len - off);
-            if (wrote <= 0)
+            if (wrote <= 0) {
                 return;
+            }
             off += (size_t)wrote;
         }
     }
@@ -26,13 +28,14 @@ static void copy_fd(int fd) {
 static bool is_dir_fd(int fd) {
     stat_t st = {0};
 
-    if (fstat(fd, &st) < 0)
+    if (fstat(fd, &st) < 0) {
         return false;
+    }
 
     return (st.st_mode & S_IFMT) == S_IFDIR;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     if (argc < 2) {
         copy_fd(STDIN_FILENO);
         return 0;

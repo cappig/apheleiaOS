@@ -3,7 +3,7 @@
 // x86 syscall register accessors
 // Requires arch_int_state_t and arch_syscall_t to be defined before inclusion
 
-static inline arch_syscall_t arch_syscall_num(const arch_int_state_t* state) {
+static inline arch_syscall_t arch_syscall_num(const arch_int_state_t *state) {
 #if defined(__x86_64__)
     return (arch_syscall_t)state->g_regs.rax;
 #else
@@ -11,7 +11,7 @@ static inline arch_syscall_t arch_syscall_num(const arch_int_state_t* state) {
 #endif
 }
 
-static inline arch_syscall_t arch_syscall_arg1(const arch_int_state_t* state) {
+static inline arch_syscall_t arch_syscall_arg1(const arch_int_state_t *state) {
 #if defined(__x86_64__)
     return (arch_syscall_t)state->g_regs.rdi;
 #else
@@ -19,7 +19,7 @@ static inline arch_syscall_t arch_syscall_arg1(const arch_int_state_t* state) {
 #endif
 }
 
-static inline arch_syscall_t arch_syscall_arg2(const arch_int_state_t* state) {
+static inline arch_syscall_t arch_syscall_arg2(const arch_int_state_t *state) {
 #if defined(__x86_64__)
     return (arch_syscall_t)state->g_regs.rsi;
 #else
@@ -27,7 +27,7 @@ static inline arch_syscall_t arch_syscall_arg2(const arch_int_state_t* state) {
 #endif
 }
 
-static inline arch_syscall_t arch_syscall_arg3(const arch_int_state_t* state) {
+static inline arch_syscall_t arch_syscall_arg3(const arch_int_state_t *state) {
 #if defined(__x86_64__)
     return (arch_syscall_t)state->g_regs.rdx;
 #else
@@ -35,7 +35,7 @@ static inline arch_syscall_t arch_syscall_arg3(const arch_int_state_t* state) {
 #endif
 }
 
-static inline arch_syscall_t arch_syscall_arg4(const arch_int_state_t* state) {
+static inline arch_syscall_t arch_syscall_arg4(const arch_int_state_t *state) {
 #if defined(__x86_64__)
     return (arch_syscall_t)state->g_regs.r10;
 #else
@@ -43,7 +43,7 @@ static inline arch_syscall_t arch_syscall_arg4(const arch_int_state_t* state) {
 #endif
 }
 
-static inline void arch_syscall_set_ret(arch_int_state_t* state, arch_syscall_t value) {
+static inline void arch_syscall_set_ret(arch_int_state_t *state, arch_syscall_t value) {
 #if defined(__x86_64__)
     state->g_regs.rax = (u64)value;
 #else

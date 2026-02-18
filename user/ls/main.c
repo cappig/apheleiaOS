@@ -1,8 +1,8 @@
 #include <account.h>
 #include <dirent.h>
 #include <fcntl.h>
-#include <io.h>
 #include <fsutil.h>
+#include <io.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,32 +11,37 @@
 #include <termios.h>
 #include <unistd.h>
 
-static bool want_name(const char* name, bool opt_all, bool opt_almost) {
-    if (!name || !name[0])
+static bool want_name(const char *name, bool opt_all, bool opt_almost) {
+    if (!name || !name[0]) {
         return false;
+    }
 
-    if (opt_all)
+    if (opt_all) {
         return true;
+    }
 
-    if (name[0] != '.')
+    if (name[0] != '.') {
         return true;
+    }
 
-    if (opt_almost)
+    if (opt_almost) {
         return strcmp(name, ".") != 0 && strcmp(name, "..") != 0;
+    }
 
     return false;
 }
 
 static size_t term_width(void) {
     winsize_t ws;
-    if (!ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) && ws.ws_col)
+    if (!ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) && ws.ws_col) {
         return ws.ws_col;
+    }
 
     return 80;
 }
 
 static int
-list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool opt_single) {
+list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool opt_single) {
     int fd = open(path, O_RDONLY, 0);
 
     if (fd < 0) {
@@ -56,13 +61,15 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
         strncpy(name, ent.d_name, sizeof(name) - 1);
         name[sizeof(name) - 1] = '\0';
 
-        if (!want_name(name, opt_all, opt_almost))
+        if (!want_name(name, opt_all, opt_almost)) {
             continue;
+        }
 
         size_t len = strlen(name);
 
-        if (len > max_len)
+        if (len > max_len) {
             max_len = len;
+        }
 
         if (opt_long) {
             char full[256];
@@ -70,33 +77,38 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
 
             fs_join_path(full, sizeof(full), path, name);
 
-            if (stat(full, &st) < 0)
+            if (stat(full, &st) < 0) {
                 memset(&st, 0, sizeof(st));
+            }
 
             char uid_buf[16];
             char gid_buf[16];
-            const char* uname = account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
-            const char* gname = account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
+            const char *uname = account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
+            const char *gname = account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
 
             size_t uname_len = strlen(uname);
             size_t gname_len = strlen(gname);
-            if (uname_len > width_uname)
+            if (uname_len > width_uname) {
 
                 width_uname = uname_len;
+            }
 
-            if (gname_len > width_gname)
+            if (gname_len > width_gname) {
                 width_gname = gname_len;
+            }
 
             char num_buf[32];
             int num_len = snprintf(num_buf, sizeof(num_buf), "%lu", (unsigned long)st.st_nlink);
 
-            if (num_len > 0 && (size_t)num_len > width_links)
+            if (num_len > 0 && (size_t)num_len > width_links) {
                 width_links = (size_t)num_len;
+            }
 
             num_len = snprintf(num_buf, sizeof(num_buf), "%llu", (unsigned long long)st.st_size);
 
-            if (num_len > 0 && (size_t)num_len > width_size)
+            if (num_len > 0 && (size_t)num_len > width_size) {
                 width_size = (size_t)num_len;
+            }
         }
     }
 
@@ -111,8 +123,9 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
     if (!opt_long && !opt_single && col_width) {
         cols = term_width() / col_width;
 
-        if (!cols)
+        if (!cols) {
             cols = 1;
+        }
     }
 
     size_t col = 0;
@@ -121,8 +134,9 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
         strncpy(name, ent.d_name, sizeof(name) - 1);
         name[sizeof(name) - 1] = '\0';
 
-        if (!want_name(name, opt_all, opt_almost))
+        if (!want_name(name, opt_all, opt_almost)) {
             continue;
+        }
 
         if (opt_long) {
             char full[256];
@@ -130,8 +144,9 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
 
             fs_join_path(full, sizeof(full), path, name);
 
-            if (stat(full, &st) < 0)
+            if (stat(full, &st) < 0) {
                 memset(&st, 0, sizeof(st));
+            }
 
             char mode[11];
             fs_format_mode(st.st_mode, mode);
@@ -142,8 +157,8 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
 
             char uid_buf[16];
             char gid_buf[16];
-            const char* uname = account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
-            const char* gname = account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
+            const char *uname = account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
+            const char *gname = account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
 
             snprintf(
                 line,
@@ -178,8 +193,9 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
         }
 
         size_t pad = col_width > name_len ? col_width - name_len : 1;
-        for (size_t i = 0; i < pad; i++)
+        for (size_t i = 0; i < pad; i++) {
             io_write_char(' ');
+        }
 
         col++;
 
@@ -189,14 +205,15 @@ list_dir(const char* path, bool opt_all, bool opt_almost, bool opt_long, bool op
         }
     }
 
-    if (!opt_long && !opt_single && col != 0)
+    if (!opt_long && !opt_single && col != 0) {
         io_write_char('\n');
+    }
 
     close(fd);
     return 0;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     bool opt_all = false;
     bool opt_almost = false;
     bool opt_long = false;
@@ -204,10 +221,11 @@ int main(int argc, char** argv) {
 
     int argi = 1;
     for (; argi < argc; argi++) {
-        const char* arg = argv[argi];
+        const char *arg = argv[argi];
 
-        if (!arg || arg[0] != '-' || !arg[1])
+        if (!arg || arg[0] != '-' || !arg[1]) {
             break;
+        }
 
         if (!strcmp(arg, "--")) {
             argi++;
@@ -236,8 +254,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (opt_long)
+    if (opt_long) {
         opt_single = true;
+    }
 
     int paths = argc - argi;
     if (paths <= 0) {
@@ -251,11 +270,13 @@ int main(int argc, char** argv) {
             io_write_str(":\n");
         }
 
-        if (list_dir(argv[i], opt_all, opt_almost, opt_long, opt_single) != 0)
+        if (list_dir(argv[i], opt_all, opt_almost, opt_long, opt_single) != 0) {
             status = 1;
+        }
 
-        if (paths > 1 && i + 1 < argc)
+        if (paths > 1 && i + 1 < argc) {
             io_write_char('\n');
+        }
     }
 
     return status;

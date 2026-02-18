@@ -7,13 +7,14 @@
 static const char digits[36] __attribute__((nonstring)) = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 
-size_t ulltoa(unsigned long long value, char* buf, int base) {
-    if (base < 2 || base > 36)
+size_t ulltoa(unsigned long long value, char *buf, int base) {
+    if (base < 2 || base > 36) {
         return 0;
+    }
 
     char buffer[sizeof(value) * CHAR_BIT + 1 + 1];
 
-    char* pos = &buffer[sizeof(buffer) - 1];
+    char *pos = &buffer[sizeof(buffer) - 1];
     *pos = '\0';
 
     do {
@@ -31,16 +32,16 @@ size_t ulltoa(unsigned long long value, char* buf, int base) {
     return size_used - 1;
 }
 
-size_t ultoa(unsigned long value, char* buf, int base) {
+size_t ultoa(unsigned long value, char *buf, int base) {
     return ulltoa((unsigned long long)value, buf, base);
 }
 
-size_t uitoa(unsigned int value, char* buf, int base) {
+size_t uitoa(unsigned int value, char *buf, int base) {
     return ulltoa((unsigned long long)value, buf, base);
 }
 
 
-size_t lltoa(long long value, char* buf, int base) {
+size_t lltoa(long long value, char *buf, int base) {
     unsigned long long neg_val;
 
     if (value < 0) {
@@ -53,11 +54,11 @@ size_t lltoa(long long value, char* buf, int base) {
     return ulltoa(neg_val, buf, base) + (value < 0);
 }
 
-size_t ltoa(long value, char* buf, int base) {
+size_t ltoa(long value, char *buf, int base) {
     return lltoa((long long)value, buf, base);
 }
 
-size_t itoa(int value, char* buf, int base) {
+size_t itoa(int value, char *buf, int base) {
     return lltoa((long long)value, buf, base);
 }
 

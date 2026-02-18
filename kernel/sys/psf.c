@@ -13,10 +13,10 @@
 
 #include "vfs.h"
 
-static void* loaded_blob = NULL;
+static void *loaded_blob = NULL;
 static size_t loaded_blob_size = 0;
 static font_t loaded_font = {0};
-static font_map_t* loaded_map = NULL;
+static font_map_t *loaded_map = NULL;
 static size_t loaded_map_count = 0;
 static size_t loaded_map_capacity = 0;
 
@@ -38,18 +38,21 @@ static void _discard(void) {
     memset(&loaded_font, 0, sizeof(loaded_font));
 }
 
-static bool _font_map_reserve(font_map_t** map, size_t* count, size_t* capacity, size_t needed) {
-    if (*capacity >= needed)
+static bool _font_map_reserve(font_map_t **map, size_t *count, size_t *capacity, size_t needed) {
+    if (*capacity >= needed) {
         return true;
+    }
 
     size_t new_cap = *capacity ? *capacity * 2 : 128;
 
-    while (new_cap < needed)
+    while (new_cap < needed) {
         new_cap *= 2;
+    }
 
-    font_map_t* next = malloc(new_cap * sizeof(*next));
-    if (!next)
+    font_map_t *next = malloc(new_cap * sizeof(*next));
+    if (!next) {
         return false;
+    }
 
     if (*map) {
         memcpy(next, *map, *count * sizeof(*next));
@@ -63,12 +66,14 @@ static bool _font_map_reserve(font_map_t** map, size_t* count, size_t* capacity,
 }
 
 static bool
-_font_map_push(font_map_t** map, size_t* count, size_t* capacity, u32 codepoint, u32 glyph) {
-    if (codepoint == 0xffff || codepoint == 0xfffe)
+_font_map_push(font_map_t **map, size_t *count, size_t *capacity, u32 codepoint, u32 glyph) {
+    if (codepoint == 0xffff || codepoint == 0xfffe) {
         return true;
+    }
 
-    if (!_font_map_reserve(map, count, capacity, *count + 1))
+    if (!_font_map_reserve(map, count, capacity, *count + 1)) {
         return false;
+    }
 
     (*map)[(*count)++] = (font_map_t){
         .codepoint = codepoint,
@@ -78,13 +83,18 @@ _font_map_push(font_map_t** map, size_t* count, size_t* capacity, u32 codepoint,
     return true;
 }
 
-static bool
-_parse_psf2_unicode(const psf_blob_t* blob, font_map_t** map, size_t* map_count, size_t* map_capacity) {
-    if (!blob || !blob->unicode_table || !blob->unicode_size)
+static bool _parse_psf2_unicode(
+    const psf_blob_t *blob,
+    font_map_t **map,
+    size_t *map_count,
+    size_t *map_capacity
+) {
+    if (!blob || !blob->unicode_table || !blob->unicode_size) {
         return true;
+    }
 
-    const u8* table = blob->unicode_table;
-    const u8* end = table + blob->unicode_size;
+    const u8 *table = blob->unicode_table;
+    const u8 *end = table + blob->unicode_size;
 
     for (u32 glyph = 0; glyph < blob->glyph_count && table < end; glyph++) {
         while (table < end && *table != 0xffU) {
@@ -100,50 +110,61 @@ _parse_psf2_unicode(const psf_blob_t* blob, font_map_t** map, size_t* map_count,
                 continue;
             }
 
-            if (!_font_map_push(map, map_count, map_capacity, cp, glyph))
+            if (!_font_map_push(map, map_count, map_capacity, cp, glyph)) {
                 return false;
+            }
 
             table += consumed;
         }
 
-        if (table < end && *table == 0xffU)
+        if (table < end && *table == 0xffU) {
             table++;
+        }
     }
 
     return true;
 }
 
-static bool
-_parse_psf1_unicode(const psf_blob_t* blob, font_map_t** map, size_t* map_count, size_t* map_capacity) {
-    if (!blob || !blob->unicode_table || !blob->unicode_size)
+static bool _parse_psf1_unicode(
+    const psf_blob_t *blob,
+    font_map_t **map,
+    size_t *map_count,
+    size_t *map_capacity
+) {
+    if (!blob || !blob->unicode_table || !blob->unicode_size) {
         return true;
+    }
 
-    const u8* table = blob->unicode_table;
-    const u8* end = table + blob->unicode_size;
+    const u8 *table = blob->unicode_table;
+    const u8 *end = table + blob->unicode_size;
 
     for (u32 glyph = 0; glyph < blob->glyph_count && table + 1 < end; glyph++) {
         while (table + 1 < end) {
             u16 code = (u16)(table[0] | ((u16)table[1] << 8));
             table += 2;
 
-            if (code == 0xffffU)
+            if (code == 0xffffU) {
                 break;
-            if (code == 0xfffeU)
+            }
+            if (code == 0xfffeU) {
                 continue;
+            }
 
-            if (!_font_map_push(map, map_count, map_capacity, code, glyph))
+            if (!_font_map_push(map, map_count, map_capacity, code, glyph)) {
                 return false;
+            }
         }
     }
 
     return true;
 }
 
-bool psf_load(const char* path) {
-    if (!path || !path[0])
+bool psf_load(const char *path) {
+    if (!path || !path[0]) {
         return false;
+    }
 
-    vfs_node_t* node = vfs_lookup(path);
+    vfs_node_t *node = vfs_lookup(path);
     if (!node) {
         log_warn("console: font '%s' not found", path);
         return false;
@@ -154,10 +175,11 @@ bool psf_load(const char* path) {
         return false;
     }
 
-    void* blob = malloc((size_t)node->size);
+    void *blob = malloc((size_t)node->size);
 
-    if (!blob)
+    if (!blob) {
         return false;
+    }
 
     ssize_t read = vfs_read(node, blob, 0, (size_t)node->size, 0);
 
@@ -167,29 +189,29 @@ bool psf_load(const char* path) {
     }
 
     psf_blob_t blob_info = {0};
-    font_map_t* map = NULL;
+    font_map_t *map = NULL;
     size_t map_count = 0;
     size_t map_capacity = 0;
 
     if (!psf_parse_blob(blob, (size_t)node->size, &blob_info)) {
         free(blob);
-
         log_warn("console: failed to parse font '%s'", path);
-
         return false;
     }
 
     if (blob_info.flags & PSF_BLOB_UNICODE) {
         bool ok = true;
-        if (blob_info.type == PSF_TYPE_2)
+        if (blob_info.type == PSF_TYPE_2) {
             ok = _parse_psf2_unicode(&blob_info, &map, &map_count, &map_capacity);
-        else if (blob_info.type == PSF_TYPE_1)
+        } else if (blob_info.type == PSF_TYPE_1) {
             ok = _parse_psf1_unicode(&blob_info, &map, &map_count, &map_capacity);
+        }
 
         if (!ok) {
             free(blob);
-            if (map)
+            if (map) {
                 free(map);
+            }
             return false;
         }
     }

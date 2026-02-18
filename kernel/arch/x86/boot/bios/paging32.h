@@ -11,4 +11,4 @@ void identity_map_32(u32 top_address, u32 offset, bool is_kernel);
 void setup_paging_32(void);
 void init_paging_32(void);
 
-u32 load_elf_sections_32(void* elf_file);
+u32 load_elf_sections_32(void *elf_file);

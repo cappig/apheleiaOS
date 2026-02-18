@@ -50,7 +50,7 @@ typedef struct PACKED {
     u16 signature;
 } mbr_t;
 
-inline const char* mbr_type_string(enum mbr_partition_type type) {
+inline const char *mbr_type_string(enum mbr_partition_type type) {
     switch (type) {
     case MBR_EMPTY:
         return "empty";

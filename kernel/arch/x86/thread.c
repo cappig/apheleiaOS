@@ -22,9 +22,10 @@ bool arch_is_64bit(void) {
 #endif
 }
 
-void arch_state_set_return(arch_int_state_t* state, arch_word_t value) {
-    if (!state)
+void arch_state_set_return(arch_int_state_t *state, arch_word_t value) {
+    if (!state) {
         return;
+    }
 
 #if defined(__x86_64__)
     state->g_regs.rax = value;
@@ -33,9 +34,10 @@ void arch_state_set_return(arch_int_state_t* state, arch_word_t value) {
 #endif
 }
 
-void arch_state_set_user_entry(arch_int_state_t* state, arch_word_t entry, arch_word_t stack_top) {
-    if (!state)
+void arch_state_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top) {
+    if (!state) {
         return;
+    }
 
 #if defined(__x86_64__)
     state->s_regs.rip = entry;
@@ -52,9 +54,10 @@ void arch_state_set_user_entry(arch_int_state_t* state, arch_word_t entry, arch_
 #endif
 }
 
-uintptr_t arch_build_kernel_stack(sched_thread_t* thread, uintptr_t entry_point) {
-    if (!thread)
+uintptr_t arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
+    if (!thread) {
         return 0;
+    }
 
     uintptr_t sp = (uintptr_t)thread->stack + thread->stack_size;
     sp = ALIGN_DOWN(sp, 16);
@@ -64,58 +67,58 @@ uintptr_t arch_build_kernel_stack(sched_thread_t* thread, uintptr_t entry_point)
     uintptr_t entry_rsp = stack_top - 24;
 
     sp -= sizeof(u64);
-    *(u64*)sp = 0; // padding
+    *(u64 *)sp = 0; // padding
     sp -= sizeof(u64);
-    *(u64*)sp = GDT_KERNEL_DATA; // ss
+    *(u64 *)sp = GDT_KERNEL_DATA; // ss
     sp -= sizeof(u64);
-    *(u64*)sp = (u64)entry_rsp; // rsp
+    *(u64 *)sp = (u64)entry_rsp; // rsp
     sp -= sizeof(u64);
-    *(u64*)sp = 0x202; // RFLAGS with IF set
+    *(u64 *)sp = 0x202; // RFLAGS with IF set
     sp -= sizeof(u64);
-    *(u64*)sp = GDT_KERNEL_CODE;
+    *(u64 *)sp = GDT_KERNEL_CODE;
     sp -= sizeof(u64);
-    *(u64*)sp = (u64)entry_point;
+    *(u64 *)sp = (u64)entry_point;
 
     // Error code and vector.
     sp -= sizeof(u64);
-    *(u64*)sp = 0;
+    *(u64 *)sp = 0;
     sp -= sizeof(u64);
-    *(u64*)sp = 0;
+    *(u64 *)sp = 0;
 
     // General registers in push order
     u64 regs[15] = {0};
 
     for (size_t i = 0; i < ARRAY_LEN(regs); i++) {
         sp -= sizeof(u64);
-        *(u64*)sp = regs[i];
+        *(u64 *)sp = regs[i];
     }
 #else
     sp -= sizeof(u32);
-    *(u32*)sp = (u32)(uintptr_t)thread->arg;
+    *(u32 *)sp = (u32)(uintptr_t)thread->arg;
     sp -= sizeof(u32);
-    *(u32*)sp = (u32)(uintptr_t)thread->entry;
+    *(u32 *)sp = (u32)(uintptr_t)thread->entry;
     sp -= sizeof(u32);
-    *(u32*)sp = (u32)(uintptr_t)sched_exit;
+    *(u32 *)sp = (u32)(uintptr_t)sched_exit;
 
     sp -= sizeof(u32);
-    *(u32*)sp = 0x202; // EFLAGS with IF set
+    *(u32 *)sp = 0x202; // EFLAGS with IF set
     sp -= sizeof(u32);
-    *(u32*)sp = GDT_KERNEL_CODE;
+    *(u32 *)sp = GDT_KERNEL_CODE;
     sp -= sizeof(u32);
-    *(u32*)sp = (u32)entry_point;
+    *(u32 *)sp = (u32)entry_point;
 
     // Error code and vector.
     sp -= sizeof(u32);
-    *(u32*)sp = 0;
+    *(u32 *)sp = 0;
     sp -= sizeof(u32);
-    *(u32*)sp = 0;
+    *(u32 *)sp = 0;
 
     // General registers in push order
     u32 regs[7] = {0};
 
     for (size_t i = 0; i < ARRAY_LEN(regs); i++) {
         sp -= sizeof(u32);
-        *(u32*)sp = regs[i];
+        *(u32 *)sp = regs[i];
     }
 #endif
 

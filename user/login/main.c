@@ -8,25 +8,29 @@
 #include <termios.h>
 #include <unistd.h>
 
-static ssize_t write_str(const char* str) {
-    if (!str)
+static ssize_t write_str(const char *str) {
+    if (!str) {
         return 0;
+    }
 
     return write(STDOUT_FILENO, str, strlen(str));
 }
 
-static void strip_newline(char* buf) {
+static void strip_newline(char *buf) {
     size_t len = strlen(buf);
-    if (!len)
+    if (!len) {
         return;
+    }
 
-    if (buf[len - 1] == '\n')
+    if (buf[len - 1] == '\n') {
         buf[len - 1] = '\0';
+    }
 }
 
-static int read_line(char* buf, size_t len) {
-    if (!buf || !len)
+static int read_line(char *buf, size_t len) {
+    if (!buf || !len) {
         return -1;
+    }
 
     size_t pos = 0;
     bool cr_seen = false;
@@ -35,8 +39,9 @@ static int read_line(char* buf, size_t len) {
         char ch = 0;
         ssize_t count = read(STDIN_FILENO, &ch, 1);
 
-        if (count <= 0)
+        if (count <= 0) {
             continue;
+        }
 
         if (ch == '\r') {
             ch = '\n';
@@ -49,8 +54,9 @@ static int read_line(char* buf, size_t len) {
         }
 
         buf[pos++] = ch;
-        if (ch == '\n')
+        if (ch == '\n') {
             break;
+        }
     }
 
     buf[pos] = '\0';
@@ -60,18 +66,20 @@ static int read_line(char* buf, size_t len) {
 static bool tty_set_echo(bool enable) {
     termios_t tos;
 
-    if (ioctl(STDIN_FILENO, TCGETS, &tos) < 0)
+    if (ioctl(STDIN_FILENO, TCGETS, &tos) < 0) {
         return false;
+    }
 
-    if (enable)
+    if (enable) {
         tos.c_lflag |= ECHO;
-    else
+    } else {
         tos.c_lflag &= ~ECHO;
+    }
 
     return !ioctl(STDIN_FILENO, TCSETS, &tos);
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
@@ -83,13 +91,15 @@ int main(int argc, char** argv) {
         ioctl(STDIN_FILENO, TIOCSPGRP, &pid);
 
         write_str("login: ");
-        if (read_line(name, sizeof(name)) < 0)
+        if (read_line(name, sizeof(name)) < 0) {
             continue;
+        }
 
         strip_newline(name);
 
-        if (!name[0])
+        if (!name[0]) {
             continue;
+        }
 
         passwd_t pwd = {0};
         if (getpwnam(name, &pwd) < 0) {
@@ -117,7 +127,7 @@ int main(int argc, char** argv) {
 
         strip_newline(pass);
 
-        const char* hashed = crypt(pass, shadow.sp_pwd);
+        const char *hashed = crypt(pass, shadow.sp_pwd);
 
         if (!hashed || strcmp(hashed, shadow.sp_pwd)) {
             write_str("login: authentication failed\n");
@@ -129,11 +139,12 @@ int main(int argc, char** argv) {
             continue;
         }
 
-        if (pwd.pw_dir[0])
+        if (pwd.pw_dir[0]) {
             chdir(pwd.pw_dir);
+        }
 
-        const char* shell = pwd.pw_shell[0] ? pwd.pw_shell : "/bin/sh";
-        char* args[] = {(char*)shell, NULL};
+        const char *shell = pwd.pw_shell[0] ? pwd.pw_shell : "/bin/sh";
+        char *args[] = {(char *)shell, NULL};
         execve(shell, args, NULL);
 
         write_str("login: exec failed\n");

@@ -10,4 +10,4 @@ typedef struct dirent {
     char d_name[DIRENT_NAME_MAX];
 } dirent_t;
 
-int getdents(int fd, dirent_t* out);
+int getdents(int fd, dirent_t *out);

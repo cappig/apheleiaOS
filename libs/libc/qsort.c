@@ -2,14 +2,14 @@
 #include "stdlib.h"
 #include "string.h"
 
-#define ELEM_PTR(base, size, i) ((void*)((size_t)base + size * i))
+#define ELEM_PTR(base, size, i) ((void *)((size_t)base + size * i))
 
-typedef int (*comp_fn)(const void*, const void*);
+typedef int (*comp_fn)(const void *, const void *);
 
 
-static size_t _partition(void* base, size_t low, size_t high, size_t size, comp_fn comp) {
+static size_t _partition(void *base, size_t low, size_t high, size_t size, comp_fn comp) {
     size_t pivot_index = ((high - low) / 2) + low;
-    void* pivot = ELEM_PTR(base, size, pivot_index);
+    void *pivot = ELEM_PTR(base, size, pivot_index);
 
     size_t i = low - 1;
     size_t j = high + 1;
@@ -23,8 +23,9 @@ static size_t _partition(void* base, size_t low, size_t high, size_t size, comp_
             j--;
         } while (comp(ELEM_PTR(base, size, j), pivot) > 0);
 
-        if (i >= j)
+        if (i >= j) {
             return j;
+        }
 
         memswap(ELEM_PTR(base, size, i), ELEM_PTR(base, size, j), size);
     }
@@ -32,7 +33,7 @@ static size_t _partition(void* base, size_t low, size_t high, size_t size, comp_
 
 // A quicksort algorithm based on the pseudocode from wikipedia:
 // https://en.wikipedia.org/wiki/Quicksort#algorithm (Hoare partition scheme)
-static void _quick_sort(void* base, size_t low, size_t high, size_t size, comp_fn comp) {
+static void _quick_sort(void *base, size_t low, size_t high, size_t size, comp_fn comp) {
     if (low < high) {
         size_t pivot = _partition(base, low, high, size, comp);
 
@@ -41,6 +42,6 @@ static void _quick_sort(void* base, size_t low, size_t high, size_t size, comp_f
     }
 }
 
-void qsort(void* base, size_t num, size_t size, comp_fn comp) {
+void qsort(void *base, size_t num, size_t size, comp_fn comp) {
     _quick_sort(base, 0, num - 1, size, comp);
 }

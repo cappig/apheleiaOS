@@ -36,5 +36,5 @@ typedef struct proc_info {
 } proc_info_t;
 
 #ifndef _KERNEL
-ssize_t getprocs(proc_info_t* out, size_t capacity);
+ssize_t getprocs(proc_info_t *out, size_t capacity);
 #endif

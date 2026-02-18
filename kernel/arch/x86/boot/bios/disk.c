@@ -27,9 +27,10 @@ static size_t rootfs_size = 0;
 static ext2_superblock_t superblock = {0};
 static u8 bounce[BOUNCE_SIZE] = {0};
 
-static bool _bios_read_lba(void* dest, size_t lba, u16 sectors) {
-    if (!dest || !sectors)
+static bool _bios_read_lba(void *dest, size_t lba, u16 sectors) {
+    if (!dest || !sectors) {
         return false;
+    }
 
     u32 real_dest = (u32)REAL_OFF(dest) | ((u32)REAL_SEG(dest) << 16);
 
@@ -49,7 +50,7 @@ static bool _bios_read_lba(void* dest, size_t lba, u16 sectors) {
     return !(r.flags & FLAG_CF);
 }
 
-int read_disk(void* dest, size_t offset, size_t bytes) {
+int read_disk(void *dest, size_t offset, size_t bytes) {
     size_t ss = disk_sector_size;
     size_t lba = offset / ss;
     size_t sector_off = offset % ss;
@@ -57,15 +58,16 @@ int read_disk(void* dest, size_t offset, size_t bytes) {
     u16 bounce_sectors = BOUNCE_SIZE / ss;
     u16 max_sectors = (u16)min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)bounce_sectors);
 
-    uint8_t* out = dest;
+    uint8_t *out = dest;
 
     while (bytes > 0) {
         size_t bytes_window = bytes + sector_off;
         size_t sectors_window = DIV_ROUND_UP(bytes_window, ss);
         u16 sectors = (u16)min(sectors_window, (size_t)max_sectors);
 
-        if (!_bios_read_lba(bounce, lba, sectors))
+        if (!_bios_read_lba(bounce, lba, sectors)) {
             panic("Disk read error!");
+        }
 
         size_t available = (size_t)sectors * ss - sector_off;
         size_t to_copy = min(bytes, available);
@@ -81,25 +83,28 @@ int read_disk(void* dest, size_t offset, size_t bytes) {
     return 0;
 }
 
-static bool _find_rootfs(mbr_partition_t* rootfs) {
+static bool _find_rootfs(mbr_partition_t *rootfs) {
     mbr_t mbr;
 
     // Read the mbr and find the ext2 partition
     read_disk(&mbr, 0, sizeof(mbr_t));
 
-    if (mbr.signature != MBR_SIGNATURE)
+    if (mbr.signature != MBR_SIGNATURE) {
         panic("MBR has invalid signature!");
+    }
 
     for (size_t i = 0; i < 4; i++) {
-        mbr_partition_t* partition = &mbr.table.partitions[i];
+        mbr_partition_t *partition = &mbr.table.partitions[i];
 
         // We are looking for a ext2 partition
-        if (partition->type != MBR_LINUX)
+        if (partition->type != MBR_LINUX) {
             continue;
+        }
 
         // ignore the bootable partition
-        if (partition->status == MBR_BOOTABLE)
+        if (partition->status == MBR_BOOTABLE) {
             continue;
+        }
 
         // We found our partition
         memcpy(rootfs, partition, sizeof(mbr_partition_t));
@@ -122,8 +127,9 @@ static void _detect_sector_size(void) {
 
     bios_call(0x13, &r, &r);
 
-    if (!(r.flags & FLAG_CF) && params.bytes_per_sector >= 512)
+    if (!(r.flags & FLAG_CF) && params.bytes_per_sector >= 512) {
         disk_sector_size = params.bytes_per_sector;
+    }
 }
 
 void disk_init(u16 disk) {
@@ -134,14 +140,17 @@ void disk_init(u16 disk) {
 
     mbr_partition_t rootfs = {0};
 
-    if (!_find_rootfs(&rootfs))
+    if (!_find_rootfs(&rootfs)) {
         panic("Rootfs partition not found!");
+    }
 
-    if (rootfs.lba_first > ((size_t)-1 / MBR_SECTOR_SIZE))
+    if (rootfs.lba_first > ((size_t)-1 / MBR_SECTOR_SIZE)) {
         panic("Rootfs offset too large!");
+    }
 
-    if (rootfs.sector_count > ((size_t)-1 / MBR_SECTOR_SIZE))
+    if (rootfs.sector_count > ((size_t)-1 / MBR_SECTOR_SIZE)) {
         panic("Rootfs partition too large!");
+    }
 
     rootfs_base = rootfs.lba_first * MBR_SECTOR_SIZE;
     rootfs_size = rootfs.sector_count * MBR_SECTOR_SIZE;
@@ -156,32 +165,40 @@ void disk_init(u16 disk) {
     // Read the superblock at offset 1024
     read_disk(&superblock, rootfs_base + 1024, sizeof(ext2_superblock_t));
 
-    if (superblock.signature != EXT2_SIGNATURE)
+    if (superblock.signature != EXT2_SIGNATURE) {
         panic("Not an EXT2 filesystem!");
+    }
 
     // Verify filesystem state
-    if (superblock.fs_state != EXT2_FS_CLEAN)
+    if (superblock.fs_state != EXT2_FS_CLEAN) {
         panic("Filesystem has errors!");
+    }
 
-    printf("boot: ext2 blocks=%u block_size=%u\n\r",
-           superblock.block_count, ext2_block_size(&superblock));
+    printf(
+        "boot: ext2 blocks=%u block_size=%u\n\r",
+        superblock.block_count,
+        ext2_block_size(&superblock)
+    );
 }
 
-bool stage_rootfs_image(u64* paddr, u64* size) {
-    if (!paddr || !size || !rootfs_size)
+bool stage_rootfs_image(u64 *paddr, u64 *size) {
+    if (!paddr || !size || !rootfs_size) {
         return false;
+    }
 
     size_t alloc_size = ALIGN(rootfs_size, 0x1000);
 
-    if (alloc_size < rootfs_size)
+    if (alloc_size < rootfs_size) {
         return false;
+    }
 
-    void* image = mmap_alloc_top(alloc_size, E820_KERNEL, 0x1000, PROTECTED_MODE_TOP);
+    void *image = mmap_alloc_top(alloc_size, E820_KERNEL, 0x1000, PROTECTED_MODE_TOP);
 
     read_disk(image, rootfs_base, rootfs_size);
 
-    if (alloc_size > rootfs_size)
-        memset((u8*)image + rootfs_size, 0, alloc_size - rootfs_size);
+    if (alloc_size > rootfs_size) {
+        memset((u8 *)image + rootfs_size, 0, alloc_size - rootfs_size);
+    }
 
     *paddr = (u64)(uintptr_t)image;
     *size = (u64)rootfs_size;
@@ -194,8 +211,9 @@ static size_t _indirect_capacity(u32 entries_per_block, size_t indirection, size
     size_t capacity = 1;
 
     for (size_t i = 0; i < indirection; i++) {
-        if (capacity > max / entries_per_block)
+        if (capacity > max / entries_per_block) {
             return max;
+        }
 
         capacity *= entries_per_block;
     }
@@ -203,9 +221,10 @@ static size_t _indirect_capacity(u32 entries_per_block, size_t indirection, size
     return capacity;
 }
 
-static void _push_zero_blocks(u32* blocks, size_t* n, size_t max, size_t count) {
-    if (*n >= max)
+static void _push_zero_blocks(u32 *blocks, size_t *n, size_t max, size_t count) {
+    if (*n >= max) {
         return;
+    }
 
     size_t remaining = max - *n;
     size_t to_add = (count < remaining) ? count : remaining;
@@ -214,9 +233,10 @@ static void _push_zero_blocks(u32* blocks, size_t* n, size_t max, size_t count) 
     *n += to_add;
 }
 
-static void _flatten_blocks(u32* blocks, u32 block_num, size_t indirection, size_t* n, size_t max) {
-    if (*n >= max)
+static void _flatten_blocks(u32 *blocks, u32 block_num, size_t indirection, size_t *n, size_t max) {
+    if (*n >= max) {
         return;
+    }
 
     u32 block_size = ext2_block_size(&superblock);
     u32 entries_per_block = block_size / sizeof(u32);
@@ -232,21 +252,23 @@ static void _flatten_blocks(u32* blocks, u32 block_num, size_t indirection, size
         return;
     }
 
-    u32* indirect_blocks = (u32*)malloc(block_size);
+    u32 *indirect_blocks = (u32 *)malloc(block_size);
 
-    if (!indirect_blocks)
+    if (!indirect_blocks) {
         panic("Failed to allocate memory for indirect blocks!");
+    }
 
     read_disk(indirect_blocks, rootfs_base + (block_num * block_size), block_size);
 
-    for (u32 i = 0; i < entries_per_block && *n < max; i++)
+    for (u32 i = 0; i < entries_per_block && *n < max; i++) {
         _flatten_blocks(blocks, indirect_blocks[i], indirection - 1, n, max);
+    }
 
     free(indirect_blocks);
 }
 
 
-static void _get_inode(u32 num, ext2_inode_t* inode) {
+static void _get_inode(u32 num, ext2_inode_t *inode) {
     u32 block_size = ext2_block_size(&superblock);
     u32 group = (num - 1) / superblock.inodes_in_group;
     u32 index = (num - 1) % superblock.inodes_in_group;
@@ -265,12 +287,13 @@ static void _get_inode(u32 num, ext2_inode_t* inode) {
     read_disk(inode, inode_offset, sizeof(ext2_inode_t));
 }
 
-static void* _read_inode(ext2_inode_t* inode) {
+static void *_read_inode(ext2_inode_t *inode) {
     u32 block_size = ext2_block_size(&superblock);
     u64 file_size_u64 = ext2_file_size(inode);
 
-    if (file_size_u64 > (u64)(size_t)-1 - 1)
+    if (file_size_u64 > (u64)(size_t)-1 - 1) {
         panic("File too large for bootloader!");
+    }
 
     size_t file_size = (size_t)file_size_u64;
 
@@ -278,19 +301,21 @@ static void* _read_inode(ext2_inode_t* inode) {
     size_t inode_blocks = DIV_ROUND_UP(file_size, block_size);
 
     if (!inode_blocks) {
-        char* buffer = malloc(1);
+        char *buffer = malloc(1);
 
-        if (!buffer)
+        if (!buffer) {
             panic("Failed to allocate memory for inode buffer!");
+        }
 
         buffer[0] = '\0';
         return buffer;
     }
 
-    u32* blocks = (u32*)malloc(inode_blocks * sizeof(u32));
+    u32 *blocks = (u32 *)malloc(inode_blocks * sizeof(u32));
 
-    if (!blocks)
+    if (!blocks) {
         panic("Failed to allocate memory for block list!");
+    }
 
     size_t n = 0;
 
@@ -308,18 +333,20 @@ static void* _read_inode(ext2_inode_t* inode) {
     // Triply indirect block
     _flatten_blocks(blocks, inode->indirect_block_ptr[2], 3, &n, inode_blocks);
 
-    if (n != inode_blocks)
+    if (n != inode_blocks) {
         panic("Inode block count mismatch!");
+    }
 
     size_t buffer_size = inode_blocks * block_size;
-    void* buffer = malloc(buffer_size + 1);
+    void *buffer = malloc(buffer_size + 1);
 
-    if (!buffer)
+    if (!buffer) {
         panic("Failed to allocate memory for inode buffer!");
+    }
 
     for (size_t i = 0; i < inode_blocks; i++) {
         size_t block_offset = blocks[i] * block_size;
-        void* out = buffer + (i * block_size);
+        void *out = buffer + (i * block_size);
 
         if (!blocks[i]) {
             memset(out, 0, block_size);
@@ -332,38 +359,42 @@ static void* _read_inode(ext2_inode_t* inode) {
     free(blocks);
 
     // Ensure text consumers never read past EOF.
-    ((u8*)buffer)[file_size] = '\0';
+    u8 *bytes = (u8 *)buffer;
+    bytes[file_size] = '\0';
 
     return buffer;
 }
 
-static u32 _find_file(const char* path) {
-    if (!path || path[0] != '/')
+static u32 _find_file(const char *path) {
+    if (!path || path[0] != '/') {
         return 0;
+    }
 
     u32 current_inode = EXT2_ROOT_INODE;
-    const char* current = path + 1; // drop the leading '/'
+    const char *current = path + 1; // drop the leading '/'
 
     while (*current) {
         ext2_inode_t inode;
         _get_inode(current_inode, &inode);
 
-        if (!ext2_is_type(&inode, EXT2_IT_DIR))
+        if (!ext2_is_type(&inode, EXT2_IT_DIR)) {
             return 0;
+        }
 
         size_t name_len = strnlend(current, '/', 255);
 
-        void* inode_buffer = _read_inode(&inode);
+        void *inode_buffer = _read_inode(&inode);
 
         bool found = false;
         size_t offset = 0;
         u64 dir_size = ext2_file_size(&inode);
 
         while (offset < dir_size) {
-            ext2_directory_t* dir = (ext2_directory_t*)(inode_buffer + offset);
+            ext2_directory_t *dir = (ext2_directory_t *)(inode_buffer + offset);
 
-            if (!dir->inode || !dir->size)
+            if (!dir->inode || !dir->size) {
                 break;
+            }
 
             if (name_len == dir->name_size && !memcmp(dir->name, current, name_len)) {
                 current_inode = dir->inode;
@@ -383,19 +414,21 @@ static u32 _find_file(const char* path) {
         }
 
         current += name_len;
-        if (*current == '/')
+        if (*current == '/') {
             current++;
+        }
     }
 
     return current_inode;
 }
 
 
-void* read_rootfs(const char* path) {
+void *read_rootfs(const char *path) {
     u32 inode_num = _find_file(path);
 
-    if (!inode_num)
+    if (!inode_num) {
         return NULL;
+    }
 
     ext2_inode_t inode;
     _get_inode(inode_num, &inode);

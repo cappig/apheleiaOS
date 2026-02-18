@@ -9,8 +9,8 @@
 
 
 bool bitmap_alloc_init(
-    bitmap_allocator_t* alloc,
-    void* chunk_start,
+    bitmap_allocator_t *alloc,
+    void *chunk_start,
     size_t chunk_size,
     size_t block_size
 ) {
@@ -24,8 +24,9 @@ bool bitmap_alloc_init(
     size_t bitmap_bytes = DIV_ROUND_UP(alloc->block_count, CHAR_BIT);
     size_t bitmap_blocks = DIV_ROUND_UP(bitmap_bytes, block_size);
 
-    if (chunk_size <= bitmap_bytes)
+    if (chunk_size <= bitmap_bytes) {
         return false;
+    }
 
     // Place the bitmap at the start of the chunk
     alloc->bitmap = chunk_start;
@@ -41,9 +42,10 @@ bool bitmap_alloc_init(
     return true;
 }
 
-static int first_fit_in_range(bitmap_allocator_t* alloc, size_t blocks, size_t begin, size_t end) {
-    if (!alloc || !blocks || begin >= end)
+static int first_fit_in_range(bitmap_allocator_t *alloc, size_t blocks, size_t begin, size_t end) {
+    if (!alloc || !blocks || begin >= end) {
         return -1;
+    }
 
     size_t region_bottom = 0;
     size_t region_size = 0;
@@ -64,36 +66,42 @@ static int first_fit_in_range(bitmap_allocator_t* alloc, size_t blocks, size_t b
             continue;
         }
 
-        if (!region_size)
+        if (!region_size) {
             region_bottom = block;
+        }
 
         region_size++;
 
-        if (region_size == blocks)
+        if (region_size == blocks) {
             return (int)region_bottom;
+        }
     }
 
     return -1;
 }
 
-static int _first_fit(bitmap_allocator_t* alloc, size_t blocks) {
-    if (!alloc || !blocks)
+static int _first_fit(bitmap_allocator_t *alloc, size_t blocks) {
+    if (!alloc || !blocks) {
         return -1;
+    }
 
     size_t start = alloc->next_fit_block;
-    if (start >= alloc->block_count)
+    if (start >= alloc->block_count) {
         start = 0;
+    }
 
     int block = first_fit_in_range(alloc, blocks, start, alloc->block_count);
-    if (block < 0 && start)
+    if (block < 0 && start) {
         block = first_fit_in_range(alloc, blocks, 0, start);
+    }
 
     return block;
 }
 
-static int _last_fit(bitmap_allocator_t* alloc, size_t blocks) {
-    if (!alloc || !blocks)
+static int _last_fit(bitmap_allocator_t *alloc, size_t blocks) {
+    if (!alloc || !blocks) {
         return -1;
+    }
 
     size_t region_size = 0;
     size_t region_top = alloc->block_count;
@@ -125,40 +133,48 @@ static int _last_fit(bitmap_allocator_t* alloc, size_t blocks) {
 
             region_size++;
 
-            if (region_size == blocks)
+            if (region_size == blocks) {
                 return (int)(region_top - blocks);
+            }
         }
     }
 
     return -1;
 }
 
-void* bitmap_alloc_reserve(bitmap_allocator_t* alloc, size_t blocks) {
-    if (!blocks || blocks > alloc->free_blocks)
+void *bitmap_alloc_reserve(bitmap_allocator_t *alloc, size_t blocks) {
+    if (!blocks || blocks > alloc->free_blocks) {
         return NULL;
+    }
 
     int first_block = _first_fit(alloc, blocks);
 
-    if (first_block == -1)
+    if (first_block == -1) {
         return NULL;
+    }
 
     bitmap_set_region(alloc->bitmap, first_block, blocks);
     alloc->next_fit_block = (size_t)first_block + blocks;
-    if (alloc->next_fit_block >= alloc->block_count)
+
+    if (alloc->next_fit_block >= alloc->block_count) {
         alloc->next_fit_block = 0;
+    }
+
     alloc->free_blocks -= blocks;
 
     return bitmap_alloc_to_ptr(alloc, first_block);
 }
 
-void* bitmap_alloc_reserve_high(bitmap_allocator_t* alloc, size_t blocks) {
-    if (!blocks || blocks > alloc->free_blocks)
+void *bitmap_alloc_reserve_high(bitmap_allocator_t *alloc, size_t blocks) {
+    if (!blocks || blocks > alloc->free_blocks) {
         return NULL;
+    }
 
     int first_block = _last_fit(alloc, blocks);
 
-    if (first_block == -1)
+    if (first_block == -1) {
         return NULL;
+    }
 
     bitmap_set_region(alloc->bitmap, (size_t)first_block, blocks);
 
@@ -167,15 +183,18 @@ void* bitmap_alloc_reserve_high(bitmap_allocator_t* alloc, size_t blocks) {
     return bitmap_alloc_to_ptr(alloc, (size_t)first_block);
 }
 
-bool bitmap_alloc_free(bitmap_allocator_t* alloc, void* ptr, size_t blocks) {
-    if (!ptr || !blocks)
+bool bitmap_alloc_free(bitmap_allocator_t *alloc, void *ptr, size_t blocks) {
+    if (!ptr || !blocks) {
         return false;
+    }
 
     size_t first_block = bitmap_alloc_to_block(alloc, ptr);
 
     bitmap_clear_region(alloc->bitmap, first_block, blocks);
-    if (first_block < alloc->next_fit_block)
+
+    if (first_block < alloc->next_fit_block) {
         alloc->next_fit_block = first_block;
+    }
 
     alloc->free_blocks += blocks;
 

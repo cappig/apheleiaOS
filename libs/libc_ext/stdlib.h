@@ -28,13 +28,13 @@
     })
 
 
-size_t uitoa(unsigned int value, char* buf, int base);
-size_t ultoa(unsigned long value, char* buf, int base);
-size_t ulltoa(unsigned long long value, char* buf, int base);
+size_t uitoa(unsigned int value, char *buf, int base);
+size_t ultoa(unsigned long value, char *buf, int base);
+size_t ulltoa(unsigned long long value, char *buf, int base);
 
-size_t itoa(int value, char* buf, int base);
-size_t ltoa(long value, char* buf, int base);
-size_t lltoa(long long value, char* buf, int base);
+size_t itoa(int value, char *buf, int base);
+size_t ltoa(long value, char *buf, int base);
+size_t lltoa(long long value, char *buf, int base);
 
 lldiv_t ulldiv(unsigned long long num, unsigned long den);
 

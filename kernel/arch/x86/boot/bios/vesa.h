@@ -113,4 +113,4 @@ typedef struct PACKED {
 } edid_data_t;
 
 
-void init_graphics(boot_info_t* info);
+void init_graphics(boot_info_t *info);

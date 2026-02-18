@@ -10,44 +10,49 @@
 #define ARCH_NAME "unknown"
 #endif
 
-static const char* owl[] = {
+static const char *owl[] = {
     "    ,___,   ",
     "    (o,o)   ",
     "    /)_)    ",
     "     \" \"    ",
 };
 
-static void print_row(const char* left, const char* right) {
+static void print_row(const char *left, const char *right) {
     char line[256];
     snprintf(line, sizeof(line), "%-12s %s\n", left ? left : "", right ? right : "");
     write(STDOUT_FILENO, line, strlen(line));
 }
 
-static void resolve_user(char* user, size_t user_len, char* shell, size_t shell_len) {
-    if (!user || !user_len || !shell || !shell_len)
+static void resolve_user(char *user, size_t user_len, char *shell, size_t shell_len) {
+    if (!user || !user_len || !shell || !shell_len) {
         return;
+    }
 
     uid_t uid = getuid();
     passwd_t pwd = {0};
     bool have_pwd = !getpwuid(uid, &pwd);
 
-    if (have_pwd && pwd.pw_name[0])
+    if (have_pwd && pwd.pw_name[0]) {
         snprintf(user, user_len, "%s", pwd.pw_name);
-    else
+    } else {
         snprintf(user, user_len, "%llu", (unsigned long long)uid);
+    }
 
-    if (have_pwd && pwd.pw_shell[0])
+    if (have_pwd && pwd.pw_shell[0]) {
         snprintf(shell, shell_len, "%s", pwd.pw_shell);
-    else
+    } else {
         snprintf(shell, shell_len, "/bin/sh");
+    }
 }
 
-static void fill_separator(char* out, size_t out_len, size_t width) {
-    if (!out || !out_len)
+static void fill_separator(char *out, size_t out_len, size_t width) {
+    if (!out || !out_len) {
         return;
+    }
 
-    if (width >= out_len)
+    if (width >= out_len) {
         width = out_len - 1;
+    }
 
     memset(out, '-', width);
     out[width] = '\0';
@@ -56,7 +61,7 @@ static void fill_separator(char* out, size_t out_len, size_t width) {
 static void format_ram_line(
     unsigned long long used_kib,
     unsigned long long total_kib,
-    char* out,
+    char *out,
     size_t out_len
 ) {
     if (!out || !out_len) {
@@ -70,7 +75,7 @@ static void format_ram_line(
 
     static const struct {
         unsigned long long kib;
-        const char* name;
+        const char *name;
     } units[] = {
         {1024ULL * 1024ULL, "GiB"},
         {1024ULL, "MiB"},
@@ -81,12 +86,12 @@ static void format_ram_line(
     char total_buf[32];
 
     const unsigned long long values[] = {used_kib, total_kib};
-    char* outputs[] = {used_buf, total_buf};
+    char *outputs[] = {used_buf, total_buf};
 
     for (size_t i = 0; i < 2; i++) {
         unsigned long long value = values[i];
         unsigned long long unit_kib = units[2].kib;
-        const char* unit = units[2].name;
+        const char *unit = units[2].name;
 
         for (size_t u = 0; u < 3; u++) {
             if (value >= units[u].kib) {
@@ -105,22 +110,23 @@ static void format_ram_line(
             tenths = 0;
         }
 
-        if (tenths && whole < 10ULL)
+        if (tenths && whole < 10ULL) {
             snprintf(outputs[i], 32, "%llu.%llu %s", whole, tenths, unit);
-        else
+        } else {
             snprintf(outputs[i], 32, "%llu %s", whole, unit);
+        }
     }
 
     snprintf(out, out_len, "ram: %s / %s", used_buf, total_buf);
 }
 
 static void print_fetch_rows(
-    const char* user_at,
-    const char* sep,
-    const char* os_line,
-    const char* shell_line,
-    const char* ram_line,
-    const char* cpu_line
+    const char *user_at,
+    const char *sep,
+    const char *os_line,
+    const char *shell_line,
+    const char *ram_line,
+    const char *cpu_line
 ) {
     print_row("", user_at);
     print_row(owl[0], sep);
@@ -178,15 +184,16 @@ int main(void) {
         char model_clean[sizeof(cpu_model)];
         snprintf(model_clean, sizeof(model_clean), "%s", cpu_model);
 
-        char* at = NULL;
-        for (char* p = model_clean; p[0]; p++) {
+        char *at = NULL;
+        for (char *p = model_clean; p[0]; p++) {
             if (p[0] == ' ' && p[1] == '@' && p[2] == ' ') {
                 at = p;
                 break;
             }
         }
-        if (at)
+        if (at) {
             *at = '\0';
+        }
 
         snprintf(cpu_line, sizeof(cpu_line), "cpu: %s @ %llu MHz", model_clean, freq_khz / 1000);
     } else {

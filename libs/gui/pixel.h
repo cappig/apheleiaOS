@@ -26,12 +26,12 @@ static inline u32 pixel_scale_u8(u8 value, u8 bits) {
 
 static inline void pixel_apply_legacy_defaults(
     u8 bytes_per_pixel,
-    u8* red_shift,
-    u8* green_shift,
-    u8* blue_shift,
-    u8* red_size,
-    u8* green_size,
-    u8* blue_size
+    u8 *red_shift,
+    u8 *green_shift,
+    u8 *blue_shift,
+    u8 *red_size,
+    u8 *green_size,
+    u8 *blue_size
 ) {
     if (!red_shift || !green_shift || !blue_shift || !red_size || !green_size || !blue_size)
         return;
@@ -107,15 +107,15 @@ static inline u32 pixel_pack_rgb888(
     return out;
 }
 
-static inline void pixel_store_packed(void* dst, u8 bytes_per_pixel, u32 packed) {
+static inline void pixel_store_packed(void *dst, u8 bytes_per_pixel, u32 packed) {
     if (!dst)
         return;
 
-    u8* out = dst;
+    u8 *out = dst;
 
     switch (bytes_per_pixel) {
     case 4:
-        *(u32*)out = packed;
+        *(u32 *)out = packed;
         break;
     case 3:
         out[0] = (u8)(packed & 0xffU);
@@ -123,7 +123,7 @@ static inline void pixel_store_packed(void* dst, u8 bytes_per_pixel, u32 packed)
         out[2] = (u8)((packed >> 16) & 0xffU);
         break;
     case 2:
-        *(u16*)out = (u16)(packed & 0xffffU);
+        *(u16 *)out = (u16)(packed & 0xffffU);
         break;
     case 1:
         out[0] = (u8)(packed & 0xffU);

@@ -12,57 +12,64 @@
 #include "x86/boot.h"
 
 
-void mmap_remove_entry(e820_map_t* map, size_t index) {
+void mmap_remove_entry(e820_map_t *map, size_t index) {
     map->count--;
 
-    for (size_t i = index; i < map->count; i++)
+    for (size_t i = index; i < map->count; i++) {
         map->entries[i] = map->entries[i + 1];
+    }
 
     map->entries[map->count] = (e820_entry_t){0};
 }
 
-void mmap_add_entry(e820_map_t* map, u64 address, u64 size, u32 type) {
+void mmap_add_entry(e820_map_t *map, u64 address, u64 size, u32 type) {
     map->entries[map->count] = (e820_entry_t){address, size, type, 0};
 
     map->count++;
 }
 
-static int _comp_mmap(const void* a, const void* b) {
-    e820_entry_t* a_elem = (e820_entry_t*)a;
-    e820_entry_t* b_elem = (e820_entry_t*)b;
+static int _comp_mmap(const void *a, const void *b) {
+    e820_entry_t *a_elem = (e820_entry_t *)a;
+    e820_entry_t *b_elem = (e820_entry_t *)b;
 
-    if (a_elem->address < b_elem->address)
+    if (a_elem->address < b_elem->address) {
         return -1;
-    if (a_elem->address > b_elem->address)
+    }
+    if (a_elem->address > b_elem->address) {
         return 1;
+    }
 
     return 0;
 }
 
 // Should be called every time the map is altered
-void clean_mmap(e820_map_t* map) {
-    e820_entry_t* entries = (e820_entry_t*)&map->entries;
+void clean_mmap(e820_map_t *map) {
+    e820_entry_t *entries = (e820_entry_t *)&map->entries;
 
     qsort(entries, map->count, sizeof(e820_entry_t), _comp_mmap);
 
     for (size_t i = 0; i < map->count; i++) {
-        if (!entries[i].size)
+        if (!entries[i].size) {
             mmap_remove_entry(map, i--);
+        }
 
-        if (i + 1 >= map->count)
+        if (i + 1 >= map->count) {
             continue;
+        }
 
         u64 top = entries[i].address + entries[i].size;
 
         // Not touching or overlapping, skip
-        if (top < entries[i + 1].address)
+        if (top < entries[i + 1].address) {
             continue;
+        }
 
         // Neighboring regions have the same type, merge them
         if (entries[i].type == entries[i + 1].type) {
             // Don't merge allocations so that we can free individual blocks
-            if (entries[i].type == E820_ALLOC)
+            if (entries[i].type == E820_ALLOC) {
                 continue;
+            }
 
             entries[i + 1].address = entries[i].address;
 
@@ -72,8 +79,9 @@ void clean_mmap(e820_map_t* map) {
             u64 overlap = top - entries[i + 1].address;
 
             // We don't care if they're touching
-            if (!overlap)
+            if (!overlap) {
                 continue;
+            }
 
             // Prioritize blocks with the largest `type` value
             if (entries[i].type > entries[i + 1].type) {
@@ -86,18 +94,21 @@ void clean_mmap(e820_map_t* map) {
     }
 }
 
-void* mmap_alloc_inner(e820_map_t* mmap, size_t bytes, u32 type, u32 alignment, u64 top) {
-    if (!bytes)
+void *mmap_alloc_inner(e820_map_t *mmap, size_t bytes, u32 type, u32 alignment, u64 top) {
+    if (!bytes) {
         return NULL;
+    }
 
-    e820_entry_t* entries = (e820_entry_t*)&mmap->entries;
+    e820_entry_t *entries = (e820_entry_t *)&mmap->entries;
 
     // An alignment of 0 means 'do not align'
-    if (!alignment)
+    if (!alignment) {
         alignment = 1;
+    }
 
-    if (!top)
+    if (!top) {
         top = (u64)-1;
+    }
 
     // Protected mode can't handle addresses larger than 4 Gib
 #if defined(__i386__)
@@ -105,29 +116,35 @@ void* mmap_alloc_inner(e820_map_t* mmap, size_t bytes, u32 type, u32 alignment, 
 #endif
 
     for (size_t i = 0; i < mmap->count; i++) {
-        if (entries[i].type != E820_AVAILABLE)
+        if (entries[i].type != E820_AVAILABLE) {
             continue;
+        }
 
-        if (entries[i].size < bytes)
+        if (entries[i].size < bytes) {
             continue;
+        }
 
-        if (entries[i].address >= top)
+        if (entries[i].address >= top) {
             continue;
+        }
 
         u64 entry_top = entries[i].address + entries[i].size;
-        if (entry_top > top)
+        if (entry_top > top) {
             entry_top = top;
+        }
 
         // Only map conventional memory if asked explicitly to do so
         // This is a comparatively small slice of memory that is known be unreliable,
         // for instance writing to it caused a triple fault in VmWare
-        if (top > 0xfffff && entry_top <= 0xfffff)
+        if (top > 0xfffff && entry_top <= 0xfffff) {
             continue;
+        }
 
         u64 base = ALIGN_DOWN(entry_top - bytes, alignment);
 
-        if (base < entries[i].address)
+        if (base < entries[i].address) {
             continue;
+        }
 
         // Shrink current entry
         u64 size = entry_top - base;
@@ -139,15 +156,15 @@ void* mmap_alloc_inner(e820_map_t* mmap, size_t bytes, u32 type, u32 alignment, 
 
         clean_mmap(mmap);
 
-        return (void*)(uintptr_t)base;
+        return (void *)(uintptr_t)base;
     }
 
     return NULL;
 }
 
-bool mmap_free_inner(e820_map_t* mmap, void* ptr) {
+bool mmap_free_inner(e820_map_t *mmap, void *ptr) {
     for (size_t i = 0; i < mmap->count; i++) {
-        e820_entry_t* current = &mmap->entries[i];
+        e820_entry_t *current = &mmap->entries[i];
 
         if (current->address == (u64)(uintptr_t)ptr) {
             mmap_remove_entry(mmap, i);
@@ -160,7 +177,7 @@ bool mmap_free_inner(e820_map_t* mmap, void* ptr) {
     return 1;
 }
 
-char* mem_map_type_string(e820_type_t type) {
+char *mem_map_type_string(e820_type_t type) {
     switch (type) {
     case E820_AVAILABLE:
         return "available";
@@ -196,47 +213,55 @@ char* mem_map_type_string(e820_type_t type) {
 //     }
 // }
 
-bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t block_size) {
+bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t block_size) {
     u64 mem_base = (u64)-1;
     u64 mem_top = 0;
     u64 max_addr = PROTECTED_MODE_TOP;
 
     for (size_t i = 0; i < mmap->count; i++) {
-        e820_entry_t* current = &mmap->entries[i];
+        e820_entry_t *current = &mmap->entries[i];
 
-        if (current->type != E820_AVAILABLE)
+        if (current->type != E820_AVAILABLE) {
             continue;
+        }
 
         u64 top = current->address + current->size;
         u64 base = current->address;
 
         // We only map the low 4 GiB in the current setup.
-        if (base >= max_addr)
+        if (base >= max_addr) {
             continue;
-        if (top > max_addr)
+        }
+        if (top > max_addr) {
             top = max_addr;
+        }
 
-        if (mem_base > base)
+        if (mem_base > base) {
             mem_base = base;
+        }
 
-        if (mem_top < top)
+        if (mem_top < top) {
             mem_top = top;
+        }
     }
 
-    if (mem_base == (u64)-1 || mem_top <= mem_base)
+    if (mem_base == (u64)-1 || mem_top <= mem_base) {
         return false;
+    }
 
-    if (mem_base < MIB)
+    if (mem_base < MIB) {
         mem_base = MIB;
+    }
 
-    if (mem_top <= mem_base)
+    if (mem_top <= mem_base) {
         return false;
+    }
 
     // Shift the base up so that the addresses end up aligned to the size of the block
     mem_base = ALIGN(mem_base, block_size);
     u64 mem_size = mem_top - mem_base;
 
-    alloc->chuck_start = (void*)(uintptr_t)mem_base;
+    alloc->chuck_start = (void *)(uintptr_t)mem_base;
     alloc->chunk_size = (size_t)mem_size;
 
     alloc->block_size = block_size;
@@ -246,36 +271,42 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
     size_t bitmap_bytes = DIV_ROUND_UP(alloc->block_count, CHAR_BIT);
     size_t bitmap_size = ALIGN(bitmap_bytes, block_size);
 
-    if (mem_size <= bitmap_size)
+    if (mem_size <= bitmap_size) {
         return false;
+    }
 
     // Find some space for the bitmap (low to avoid clobbering high allocations)
-    void* bitmap_addr = NULL;
+    void *bitmap_addr = NULL;
 
     for (size_t i = 0; i < mmap->count; i++) {
-        e820_entry_t* current = &mmap->entries[i];
+        e820_entry_t *current = &mmap->entries[i];
 
-        if (current->type != E820_AVAILABLE)
+        if (current->type != E820_AVAILABLE) {
             continue;
+        }
 
         u64 base = current->address;
         u64 top = current->address + current->size;
 
-        if (base < MIB)
+        if (base < MIB) {
             base = MIB;
+        }
 
-        if (base >= max_addr)
+        if (base >= max_addr) {
             continue;
+        }
 
-        if (top > max_addr)
+        if (top > max_addr) {
             top = max_addr;
+        }
 
         u64 aligned = ALIGN(base, block_size);
 
-        if (aligned + bitmap_size > top)
+        if (aligned + bitmap_size > top) {
             continue;
+        }
 
-        bitmap_addr = (void*)(uintptr_t)aligned;
+        bitmap_addr = (void *)(uintptr_t)aligned;
 
         // Shrink the current entry to account for the bitmap allocation
         u64 used_end = aligned + bitmap_size;
@@ -287,15 +318,16 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
         break;
     }
 
-    if (!bitmap_addr)
+    if (!bitmap_addr) {
         return false;
+    }
 
     // The allocator tracks physical addresses, but the bitmap itself must be accessed via a
     // valid virtual mapping.
 #if defined(__x86_64__)
-    alloc->bitmap = (bitmap_word_t*)((uintptr_t)bitmap_addr + LINEAR_MAP_OFFSET_64);
+    alloc->bitmap = (bitmap_word_t *)((uintptr_t)bitmap_addr + LINEAR_MAP_OFFSET_64);
 #else
-    alloc->bitmap = (bitmap_word_t*)(bitmap_addr);
+    alloc->bitmap = (bitmap_word_t *)(bitmap_addr);
 #endif
 
     // Mark the whole bitmap as used
@@ -304,31 +336,37 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t* alloc, e820_map_t* mmap, size_t 
     alloc->usable_blocks = 0;
 
     for (size_t i = 0; i < mmap->count; i++) {
-        e820_entry_t* current = &mmap->entries[i];
+        e820_entry_t *current = &mmap->entries[i];
 
         u64 top = current->address + current->size;
         u64 base = current->address;
 
-        if (base >= max_addr)
+        if (base >= max_addr) {
             continue;
+        }
 
-        if (top > max_addr)
+        if (top > max_addr) {
             top = max_addr;
+        }
 
-        if (top <= mem_base || base >= mem_top)
+        if (top <= mem_base || base >= mem_top) {
             continue;
+        }
 
-        if (base < mem_base)
+        if (base < mem_base) {
             base = mem_base;
+        }
 
-        if (top > mem_top)
+        if (top > mem_top) {
             top = mem_top;
+        }
 
         size_t blocks = (size_t)((top - base) / block_size);
-        if (!blocks)
+        if (!blocks) {
             continue;
+        }
 
-        size_t start_block = bitmap_alloc_to_block(alloc, (void*)(uintptr_t)base);
+        size_t start_block = bitmap_alloc_to_block(alloc, (void *)(uintptr_t)base);
 
         if (current->type == E820_AVAILABLE) {
             alloc->free_blocks += blocks;

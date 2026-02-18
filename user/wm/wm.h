@@ -30,13 +30,13 @@ typedef struct {
 void wm_init(void);
 void wm_destroy(void);
 
-wm_window_t* wm_window_by_id(u32 id);
-wm_window_t* wm_top_window_at(i32 px, i32 py);
-wm_window_t* wm_top_window(void);
-bool wm_point_in_title(const wm_window_t* window, i32 px, i32 py);
-bool wm_point_in_close(const wm_window_t* window, i32 px, i32 py);
+wm_window_t *wm_window_by_id(u32 id);
+wm_window_t *wm_top_window_at(i32 px, i32 py);
+wm_window_t *wm_top_window(void);
+bool wm_point_in_title(const wm_window_t *window, i32 px, i32 py);
+bool wm_point_in_close(const wm_window_t *window, i32 px, i32 py);
 
-void wm_set_focus(ui_t* ui, wm_window_t* window, u32* z_counter);
-void wm_handle_ws_event(const ws_event_t* event);
-void wm_render_frame(u32* frame, u32 fb_width, u32 fb_height);
+void wm_set_focus(ui_t *ui, wm_window_t *window, u32 *z_counter);
+void wm_handle_ws_event(const ws_event_t *event);
+void wm_render_frame(u32 *frame, u32 fb_width, u32 fb_height);
 void wm_cleanup_all_windows(void);

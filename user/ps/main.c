@@ -3,14 +3,15 @@
 #include <sys/proc.h>
 #include <unistd.h>
 
-static void write_cstr(const char* text) {
-    if (!text)
+static void write_cstr(const char *text) {
+    if (!text) {
         return;
+    }
 
     write(STDOUT_FILENO, text, strlen(text));
 }
 
-static const char* state_name(proc_state_t state) {
+static const char *state_name(proc_state_t state) {
     switch (state) {
     case PROC_STATE_READY:
         return "R";
@@ -27,20 +28,23 @@ static const char* state_name(proc_state_t state) {
     }
 }
 
-static const char* tty_name(const proc_info_t* info, char* buf, size_t buf_len) {
-    if (!info)
+static const char *tty_name(const proc_info_t *info, char *buf, size_t buf_len) {
+    if (!info) {
         return "??";
+    }
 
     if (PROC_TTY_IS_PTS(info->tty_index)) {
         snprintf(buf, buf_len, "pts%d", PROC_TTY_PTS_INDEX(info->tty_index));
         return buf;
     }
 
-    if (info->tty_index == PROC_TTY_NONE)
+    if (info->tty_index == PROC_TTY_NONE) {
         return "??";
+    }
 
-    if (info->tty_index == PROC_TTY_CONSOLE)
+    if (info->tty_index == PROC_TTY_CONSOLE) {
         return "console";
+    }
 
     snprintf(buf, buf_len, "tty%d", info->tty_index - 1);
 
@@ -59,12 +63,12 @@ int main(void) {
     write_cstr("PID   TTY     STAT TIME COMMAND\n");
 
     for (ssize_t i = 0; i < count; i++) {
-        proc_info_t* info = &procs[i];
+        proc_info_t *info = &procs[i];
 
-        const char* cmd = info->name[0] ? info->name : "thread";
+        const char *cmd = info->name[0] ? info->name : "thread";
 
         char tty_buf[8];
-        const char* tty = tty_name(info, tty_buf, sizeof(tty_buf));
+        const char *tty = tty_name(info, tty_buf, sizeof(tty_buf));
 
         char line[160];
         snprintf(

@@ -111,7 +111,7 @@ enum pci_class {
 };
 
 UNUSED
-static const char* pci_class_strings[] = {
+static const char *pci_class_strings[] = {
     "Unclassified",
     "Mass Storage Controller",
     "Network Controller",
@@ -161,12 +161,12 @@ typedef struct {
 size_t pci_init(void);
 
 void dump_pci_devices(void);
-const char* pci_stringify_class(u8 class);
+const char *pci_stringify_class(u8 class);
 
-pci_device_t* pci_find_device(u8 class, u8 subclass, pci_device_t* from);
-void pci_destroy_device(pci_device_t* dev);
+pci_device_t *pci_find_device(u8 class, u8 subclass, pci_device_t *from);
+void pci_destroy_device(pci_device_t *dev);
 
-pci_found_t* pci_find_node(u8 class, u8 subclass, pci_found_t* from);
+pci_found_t *pci_find_node(u8 class, u8 subclass, pci_found_t *from);
 
 u32 pci_read_config(u8 bus, u8 slot, u8 func, u16 offset, u8 size);
 void pci_write_config(u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size);

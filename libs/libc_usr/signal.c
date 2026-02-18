@@ -6,8 +6,9 @@
 static void signal_trampoline(void) {
     syscall0(SYS_SIGRETURN);
 
-    for (;;)
+    for (;;) {
         ;
+    }
 }
 
 sighandler_t signal(int signum, sighandler_t handler) {

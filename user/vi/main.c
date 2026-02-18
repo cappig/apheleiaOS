@@ -34,10 +34,10 @@ typedef enum {
 } vi_mode_t;
 
 typedef struct {
-    const char* path;
+    const char *path;
     char path_buf[128];
 
-    char* buf;
+    char *buf;
     size_t len;
     size_t cap;
     size_t cursor;
@@ -61,7 +61,7 @@ typedef struct {
 } vi_t;
 
 typedef struct {
-    char* data;
+    char *data;
     size_t len;
     size_t cap;
 } vi_out_t;
@@ -69,21 +69,24 @@ typedef struct {
 static vi_t vi;
 static vi_out_t out;
 
-static bool out_addn(const char* text, size_t n) {
-    if (!text || !n)
+static bool out_addn(const char *text, size_t n) {
+    if (!text || !n) {
         return true;
+    }
 
-    if (out.len + n > out.cap)
+    if (out.len + n > out.cap) {
         return false;
+    }
 
     memcpy(out.data + out.len, text, n);
     out.len += n;
     return true;
 }
 
-static bool out_add(const char* text) {
-    if (!text)
+static bool out_add(const char *text) {
+    if (!text) {
         return true;
+    }
 
     return out_addn(text, strlen(text));
 }
@@ -92,16 +95,18 @@ static bool out_flush(void) {
     size_t off = 0;
     while (off < out.len) {
         ssize_t n = write(STDOUT_FILENO, out.data + off, out.len - off);
-        if (n <= 0)
+        if (n <= 0) {
             return false;
+        }
         off += (size_t)n;
     }
     return true;
 }
 
-static void set_msg(const char* text) {
-    if (!text)
+static void set_msg(const char *text) {
+    if (!text) {
         return;
+    }
 
     snprintf(vi.msg, sizeof(vi.msg), "%s", text);
 }
@@ -110,7 +115,7 @@ static void clear_msg(void) {
     vi.msg[0] = '\0';
 }
 
-static void set_errno_msg(const char* op) {
+static void set_errno_msg(const char *op) {
     char msg[VI_MSG_MAX];
     snprintf(msg, sizeof(msg), "%s failed: %s", op, strerror(errno));
     set_msg(msg);
@@ -131,20 +136,23 @@ static void enter_mode(vi_mode_t mode) {
     vi.redraw = true;
 }
 
-static bool get_winsize(size_t* cols, size_t* rows) {
-    if (!cols || !rows)
+static bool get_winsize(size_t *cols, size_t *rows) {
+    if (!cols || !rows) {
         return false;
+    }
 
     winsize_t ws = {0};
 
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws)) {
         memset(&ws, 0, sizeof(ws));
-        if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws))
+        if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws)) {
             return false;
+        }
     }
 
-    if (!ws.ws_col || !ws.ws_row)
+    if (!ws.ws_col || !ws.ws_row) {
         return false;
+    }
 
     *cols = ws.ws_col;
     *rows = ws.ws_row;
@@ -157,10 +165,12 @@ static void update_screen_size(void) {
 
     get_winsize(&cols, &rows);
 
-    if (cols < 20 || cols > 512)
+    if (cols < 20 || cols > 512) {
         cols = 80;
-    if (rows < 2 || rows > 256)
+    }
+    if (rows < 2 || rows > 256) {
         rows = 25;
+    }
 
     vi.cols = cols;
     vi.edit_rows = rows > 1 ? rows - 1 : 1;
@@ -168,8 +178,9 @@ static void update_screen_size(void) {
 
 static bool raw_mode_on(void) {
     termios_t tos = {0};
-    if (ioctl(STDIN_FILENO, TCGETS, &tos))
+    if (ioctl(STDIN_FILENO, TCGETS, &tos)) {
         return false;
+    }
 
     vi.saved_tty = tos;
     vi.saved_tty_valid = true;
@@ -185,8 +196,9 @@ static bool raw_mode_on(void) {
 }
 
 static void raw_mode_off(void) {
-    if (!vi.saved_tty_valid)
+    if (!vi.saved_tty_valid) {
         return;
+    }
 
     ioctl(STDIN_FILENO, TCSETS, &vi.saved_tty);
 }
@@ -195,36 +207,47 @@ static int read_key(void) {
     char ch = 0;
     for (;;) {
         ssize_t n = read(STDIN_FILENO, &ch, 1);
-        if (n == 1)
+        if (n == 1) {
             break;
+        }
     }
 
-    if (ch != '\x1b')
+    if (ch != '\x1b') {
         return (unsigned char)ch;
+    }
 
     char seq[3] = {0};
-    if (read(STDIN_FILENO, &seq[0], 1) != 1)
+    if (read(STDIN_FILENO, &seq[0], 1) != 1) {
         return '\x1b';
-    if (read(STDIN_FILENO, &seq[1], 1) != 1)
+    }
+    if (read(STDIN_FILENO, &seq[1], 1) != 1) {
         return '\x1b';
+    }
 
     if (seq[0] == '[') {
-        if (seq[1] == 'A')
+        if (seq[1] == 'A') {
             return VI_KEY_UP;
-        if (seq[1] == 'B')
+        }
+        if (seq[1] == 'B') {
             return VI_KEY_DOWN;
-        if (seq[1] == 'C')
+        }
+        if (seq[1] == 'C') {
             return VI_KEY_RIGHT;
-        if (seq[1] == 'D')
+        }
+        if (seq[1] == 'D') {
             return VI_KEY_LEFT;
-        if (seq[1] == 'H')
+        }
+        if (seq[1] == 'H') {
             return VI_KEY_HOME;
-        if (seq[1] == 'F')
+        }
+        if (seq[1] == 'F') {
             return VI_KEY_END;
+        }
 
         if (seq[1] == '3') {
-            if (read(STDIN_FILENO, &seq[2], 1) == 1 && seq[2] == '~')
+            if (read(STDIN_FILENO, &seq[2], 1) == 1 && seq[2] == '~') {
                 return VI_KEY_DEL;
+            }
         }
     }
 
@@ -232,28 +255,33 @@ static int read_key(void) {
 }
 
 static size_t line_start(size_t idx) {
-    if (idx > vi.len)
+    if (idx > vi.len) {
         idx = vi.len;
+    }
 
-    while (idx > 0 && vi.buf[idx - 1] != '\n')
+    while (idx > 0 && vi.buf[idx - 1] != '\n') {
         idx--;
+    }
 
     return idx;
 }
 
 static size_t line_end(size_t idx) {
-    while (idx < vi.len && vi.buf[idx] != '\n')
+    while (idx < vi.len && vi.buf[idx] != '\n') {
         idx++;
+    }
 
     return idx;
 }
 
-static void index_to_rowcol(size_t idx, size_t* row, size_t* col) {
-    if (!row || !col)
+static void index_to_rowcol(size_t idx, size_t *row, size_t *col) {
+    if (!row || !col) {
         return;
+    }
 
-    if (idx > vi.len)
+    if (idx > vi.len) {
         idx = vi.len;
+    }
 
     *row = 0;
     *col = 0;
@@ -272,8 +300,9 @@ static size_t row_to_index(size_t row) {
     size_t idx = 0;
 
     while (idx < vi.len && row) {
-        if (vi.buf[idx] == '\n')
+        if (vi.buf[idx] == '\n') {
             row--;
+        }
         idx++;
     }
 
@@ -285,28 +314,35 @@ static void keep_cursor_visible(void) {
     size_t col = 0;
     index_to_rowcol(vi.cursor, &row, &col);
 
-    if (row < vi.rowoff)
+    if (row < vi.rowoff) {
         vi.rowoff = row;
-    if (row >= vi.rowoff + vi.edit_rows)
+    }
+    if (row >= vi.rowoff + vi.edit_rows) {
         vi.rowoff = row - vi.edit_rows + 1;
+    }
 
-    if (col < vi.coloff)
+    if (col < vi.coloff) {
         vi.coloff = col;
-    if (vi.cols && col >= vi.coloff + vi.cols)
+    }
+    if (vi.cols && col >= vi.coloff + vi.cols) {
         vi.coloff = col - vi.cols + 1;
+    }
 }
 
 static bool vi_grow(size_t needed) {
-    if (needed <= vi.cap)
+    if (needed <= vi.cap) {
         return true;
+    }
 
     size_t new_cap = vi.cap;
-    while (new_cap < needed)
+    while (new_cap < needed) {
         new_cap = new_cap < 4096 ? 4096 : new_cap * 2;
+    }
 
-    char* p = realloc(vi.buf, new_cap);
-    if (!p)
+    char *p = realloc(vi.buf, new_cap);
+    if (!p) {
         return false;
+    }
 
     vi.buf = p;
     vi.cap = new_cap;
@@ -314,11 +350,13 @@ static bool vi_grow(size_t needed) {
 }
 
 static bool insert_char(size_t at, char ch) {
-    if (!vi_grow(vi.len + 2))
+    if (!vi_grow(vi.len + 2)) {
         return false;
+    }
 
-    if (at > vi.len)
+    if (at > vi.len) {
         at = vi.len;
+    }
 
     memmove(vi.buf + at + 1, vi.buf + at, vi.len - at);
     vi.buf[at] = ch;
@@ -330,13 +368,15 @@ static bool insert_char(size_t at, char ch) {
 }
 
 static void insert_and_advance(char ch) {
-    if (insert_char(vi.cursor, ch))
+    if (insert_char(vi.cursor, ch)) {
         vi.cursor++;
+    }
 }
 
 static bool delete_char(size_t at) {
-    if (at >= vi.len)
+    if (at >= vi.len) {
         return false;
+    }
 
     memmove(vi.buf + at, vi.buf + at + 1, vi.len - at - 1);
     vi.len--;
@@ -353,12 +393,14 @@ static void move_cursor(int key) {
 
     switch (key) {
     case VI_KEY_LEFT:
-        if (vi.cursor > start)
+        if (vi.cursor > start) {
             vi.cursor--;
+        }
         break;
     case VI_KEY_RIGHT:
-        if (vi.cursor < end)
+        if (vi.cursor < end) {
             vi.cursor++;
+        }
         break;
     case VI_KEY_HOME:
         vi.cursor = start;
@@ -453,8 +495,9 @@ static bool load_file(void) {
         }
 
         ssize_t n = read(fd, vi.buf + vi.len, vi.cap - vi.len - 1);
-        if (!n)
+        if (!n) {
             break;
+        }
         if (n < 0) {
             close(fd);
             set_errno_msg("read");
@@ -471,11 +514,13 @@ static bool load_file(void) {
     return true;
 }
 
-static const char* mode_name(void) {
-    if (vi.mode == VI_INSERT)
+static const char *mode_name(void) {
+    if (vi.mode == VI_INSERT) {
         return "INSERT";
-    if (vi.mode == VI_COMMAND)
+    }
+    if (vi.mode == VI_COMMAND) {
         return "COMMAND";
+    }
     return "NORMAL";
 }
 
@@ -483,52 +528,63 @@ static bool draw_editor_rows(void) {
     size_t idx = row_to_index(vi.rowoff);
 
     for (size_t row = 0; row < vi.edit_rows; row++) {
-        if (!out_add("\x1b[K"))
+        if (!out_add("\x1b[K")) {
             return false;
+        }
 
         if (idx < vi.len) {
             size_t end = line_end(idx);
             size_t start = idx;
-            if (vi.coloff < end - idx)
+            if (vi.coloff < end - idx) {
                 start += vi.coloff;
-            else
+            } else {
                 start = end;
+            }
 
             size_t n = end - start;
-            if (n > vi.cols)
+            if (n > vi.cols) {
                 n = vi.cols;
+            }
 
             for (size_t i = 0; i < n; i++) {
                 char c = vi.buf[start + i];
-                if (c == '\t')
+                if (c == '\t') {
                     c = ' ';
-                if ((unsigned char)c < 0x20)
+                }
+                if ((unsigned char)c < 0x20) {
                     c = '?';
+                }
 
-                if (!out_addn(&c, 1))
+                if (!out_addn(&c, 1)) {
                     return false;
+                }
             }
 
             idx = end < vi.len ? end + 1 : end;
         } else {
-            if (!out_add("~"))
+            if (!out_add("~")) {
                 return false;
+            }
         }
 
-        if (row + 1 < vi.edit_rows && !out_add("\r\n"))
+        if (row + 1 < vi.edit_rows && !out_add("\r\n")) {
             return false;
+        }
     }
 
     return true;
 }
 
-static bool draw_status_row(size_t row, size_t col, size_t* cmd_limit_out) {
+static bool draw_status_row(size_t row, size_t col, size_t *cmd_limit_out) {
     char right[64];
-    snprintf(right, sizeof(right), "%s %u:%u", mode_name(), (unsigned)(row + 1), (unsigned)(col + 1));
+    snprintf(
+        right, sizeof(right), "%s %u:%u", mode_name(), (unsigned)(row + 1), (unsigned)(col + 1)
+    );
 
     size_t right_len = strlen(right);
-    if (right_len > vi.cols)
+    if (right_len > vi.cols) {
         right_len = vi.cols;
+    }
 
     char left[256] = {0};
     if (vi.mode == VI_COMMAND) {
@@ -539,26 +595,32 @@ static bool draw_status_row(size_t row, size_t col, size_t* cmd_limit_out) {
 
     size_t left_max = vi.cols > right_len ? vi.cols - right_len : 0;
     size_t left_len = strlen(left);
-    if (left_len > left_max)
+    if (left_len > left_max) {
         left_len = left_max;
+    }
 
-    if (!out_add("\r\n\x1b[K"))
+    if (!out_add("\r\n\x1b[K")) {
         return false;
+    }
 
-    if (left_len && !out_addn(left, left_len))
+    if (left_len && !out_addn(left, left_len)) {
         return false;
+    }
 
     size_t pad = vi.cols > left_len + right_len ? vi.cols - left_len - right_len : 0;
     for (size_t i = 0; i < pad; i++) {
-        if (!out_addn(" ", 1))
+        if (!out_addn(" ", 1)) {
             return false;
+        }
     }
 
-    if (right_len && !out_addn(right, right_len))
+    if (right_len && !out_addn(right, right_len)) {
         return false;
+    }
 
-    if (cmd_limit_out)
+    if (cmd_limit_out) {
         *cmd_limit_out = left_max;
+    }
 
     return true;
 }
@@ -568,19 +630,22 @@ static bool redraw_screen(void) {
     keep_cursor_visible();
 
     out.len = 0;
-    if (!out_add("\x1b[?25l\x1b[H"))
+    if (!out_add("\x1b[?25l\x1b[H")) {
         return false;
+    }
 
-    if (!draw_editor_rows())
+    if (!draw_editor_rows()) {
         return false;
+    }
 
     size_t row = 0;
     size_t col = 0;
     index_to_rowcol(vi.cursor, &row, &col);
 
     size_t command_limit = 1;
-    if (!draw_status_row(row, col, &command_limit))
+    if (!draw_status_row(row, col, &command_limit)) {
         return false;
+    }
 
     size_t x = 1;
     size_t y = 1;
@@ -588,35 +653,45 @@ static bool redraw_screen(void) {
     if (vi.mode == VI_COMMAND) {
         y = vi.edit_rows + 1;
         x = vi.cmd_len + 2;
-        if (x > command_limit)
+        if (x > command_limit) {
             x = command_limit;
-        if (x < 2)
+        }
+        if (x < 2) {
             x = 2;
+        }
     } else {
-        if (row >= vi.rowoff)
+        if (row >= vi.rowoff) {
             y = (row - vi.rowoff) + 1;
-        if (col < vi.coloff)
+        }
+        if (col < vi.coloff) {
             x = 1;
-        else
+        } else {
             x = (col - vi.coloff) + 1;
+        }
     }
 
-    if (x < 1)
+    if (x < 1) {
         x = 1;
-    if (y < 1)
+    }
+    if (y < 1) {
         y = 1;
-    if (x > vi.cols)
+    }
+    if (x > vi.cols) {
         x = vi.cols;
-    if (y > vi.edit_rows + 1)
+    }
+    if (y > vi.edit_rows + 1) {
         y = vi.edit_rows + 1;
+    }
 
     char seq[32];
     snprintf(seq, sizeof(seq), "\x1b[%u;%uH", (unsigned)y, (unsigned)x);
-    if (!out_add(seq) || !out_add("\x1b[?25h"))
+    if (!out_add(seq) || !out_add("\x1b[?25h")) {
         return false;
+    }
 
-    if (!out_flush())
+    if (!out_flush()) {
         return false;
+    }
 
     vi.redraw = false;
     return true;
@@ -628,19 +703,22 @@ static void run_command(void) {
     if (!strcmp(vi.cmd, "w")) {
         save_file();
     } else if (!strcmp(vi.cmd, "q")) {
-        if (vi.dirty)
+        if (vi.dirty) {
             set_msg("No write since last change (use :q!)");
-        else
+        } else {
             vi.running = false;
+        }
     } else if (!strcmp(vi.cmd, "q!")) {
         vi.running = false;
     } else if (!strcmp(vi.cmd, "wq") || !strcmp(vi.cmd, "x")) {
-        if (save_file())
+        if (save_file()) {
             vi.running = false;
+        }
     } else if (!strncmp(vi.cmd, "w ", 2)) {
-        const char* name = vi.cmd + 2;
-        while (*name == ' ')
+        const char *name = vi.cmd + 2;
+        while (*name == ' ') {
             name++;
+        }
 
         if (!name[0]) {
             set_msg("missing file name");
@@ -669,8 +747,9 @@ static void handle_insert(int key) {
     }
 
     if (key == '\b' || key == 0x7f) {
-        if (vi.cursor > line_start(vi.cursor) && delete_char(vi.cursor - 1))
+        if (vi.cursor > line_start(vi.cursor) && delete_char(vi.cursor - 1)) {
             vi.cursor--;
+        }
         return;
     }
 
@@ -689,8 +768,9 @@ static void handle_insert(int key) {
         return;
     }
 
-    if (key >= 0x20 && key <= 0x7e)
+    if (key >= 0x20 && key <= 0x7e) {
         insert_and_advance((char)key);
+    }
 }
 
 static void handle_normal(int key) {
@@ -703,14 +783,16 @@ static void handle_normal(int key) {
         enter_mode(VI_INSERT);
         return;
     case 'a':
-        if (vi.cursor < line_end(line_start(vi.cursor)))
+        if (vi.cursor < line_end(line_start(vi.cursor))) {
             vi.cursor++;
+        }
         enter_mode(VI_INSERT);
         return;
     case 'o': {
         size_t end = line_end(line_start(vi.cursor));
-        if (end < vi.len)
+        if (end < vi.len) {
             end++;
+        }
 
         if (insert_char(end, '\n')) {
             vi.cursor = end + 1;
@@ -749,15 +831,17 @@ static void handle_normal(int key) {
         save_file();
         return;
     case CTRL('q'):
-        if (vi.dirty)
+        if (vi.dirty) {
             set_msg("unsaved changes (use :q!)");
-        else
+        } else {
             vi.running = false;
+        }
         vi.redraw = true;
         return;
     default:
-        if (is_nav_key(key))
+        if (is_nav_key(key)) {
             move_cursor(key);
+        }
         return;
     }
 }
@@ -790,7 +874,7 @@ static void handle_command_mode(int key) {
     }
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[]) {
     memset(&vi, 0, sizeof(vi));
 
     vi.buf = malloc(VI_INIT_CAP);
@@ -807,8 +891,9 @@ int main(int argc, char* argv[]) {
     vi.mode = VI_NORMAL;
     vi.redraw = true;
 
-    if (argc > 1)
+    if (argc > 1) {
         vi.path = argv[1];
+    }
 
     if (!load_file()) {
         free(vi.buf);
