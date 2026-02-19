@@ -342,22 +342,19 @@ static bool ahci_port_present(ahci_hba_port_t *port) {
 
     u32 ssts = port->ssts;
     u8 det = (u8)(ssts & AHCI_SSTS_DET_MASK);
-    u8 ipm = (u8)((ssts >> 8) & AHCI_SSTS_IPM_MASK);
 
     if (det != AHCI_SSTS_DET_PRESENT) {
         return false;
     }
 
-    if (ipm != AHCI_SSTS_IPM_ACTIVE) {
-        return false;
-    }
+    u32 sig = port->sig;
 
-    return port->sig == AHCI_SIG_ATA;
+    return sig == AHCI_SIG_ATA || sig == 0;
 }
 
 static bool
 ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, bool write, size_t bytes) {
-    if (!dev || !dev->irq_enabled || !sectors || !bytes) {
+    if (!dev || !sectors || !bytes) {
         return false;
     }
 
@@ -789,69 +786,113 @@ static bool ahci_find_controller(ahci_device_t *dev) {
         return false;
     }
 
-    pci_found_t *cursor = NULL;
+    static const u8 subclasses[] = {PCI_MS_SATA, PCI_MS_RAID, PCI_MS_ATA};
 
-    for (;;) {
-        pci_found_t *node = pci_find_node(PCI_MASS_STORAGE, PCI_MS_SATA, cursor);
+    for (size_t s = 0; s < ARRAY_LEN(subclasses); s++) {
+        pci_found_t *cursor = NULL;
 
-        if (!node) {
-            return false;
-        }
+        for (;;) {
+            pci_found_t *node = pci_find_node(PCI_MASS_STORAGE, subclasses[s], cursor);
 
-        cursor = node;
+            if (!node) {
+                break;
+            }
 
-        if (node->header.prog_if != 0x01) {
-            continue;
-        }
+            cursor = node;
 
-        u32 bar5 = pci_read_config(node->bus, node->slot, node->func, PCI_CFG_BAR5, 4);
-        u8 int_line = (u8)pci_read_config(node->bus, node->slot, node->func, PCI_CFG_INT_LINE, 1);
+            u32 bar5_lo = pci_read_config(node->bus, node->slot, node->func, PCI_CFG_BAR5, 4);
+            u8 int_line =
+                (u8)pci_read_config(node->bus, node->slot, node->func, PCI_CFG_INT_LINE, 1);
 
-        log_debug(
-            "PCI command=%#x status=%#x int_line=%u",
-            node->header.command,
-            node->header.status,
-            int_line
-        );
+            log_debug(
+                "PCI command=%#x status=%#x int_line=%u",
+                node->header.command,
+                node->header.status,
+                int_line
+            );
 
-        u32 abar = bar5 & ~0x0fU;
-        if (!abar) {
-            continue;
-        }
-
-        dev->abar_paddr = abar;
-        dev->irq_line = int_line;
-        dev->bus = node->bus;
-        dev->slot = node->slot;
-        dev->func = node->func;
-
-        void *mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, 0);
-        if (!mmio_map) {
-            continue;
-        }
-
-        ahci_hba_mem_t *hba = mmio_map;
-        u32 pi = hba->pi;
-
-        bool found_port = false;
-
-        for (u32 i = 0; i < AHCI_PORT_COUNT; i++) {
-            if (!(pi & (1U << i))) {
+            if (!bar5_lo || bar5_lo == 0xffffffffU || (bar5_lo & 1U)) {
                 continue;
             }
 
-            if (ahci_port_present(&hba->ports[i])) {
-                dev->port_index = i;
-                found_port = true;
-                break;
+            u64 abar = (u64)(bar5_lo & ~0x0fU);
+
+            if ((bar5_lo & 0x6U) == 0x4U) {
+                u32 bar5_hi = pci_read_config(node->bus, node->slot, node->func, PCI_CFG_BAR5 + 4, 4);
+                abar |= ((u64)bar5_hi << 32);
+            }
+
+            // FIXME: we should not have this limit!
+            if (!abar || abar > 0xffffffffULL) {
+                continue;
+            }
+
+            dev->abar_paddr = abar;
+            dev->irq_line = int_line;
+            dev->bus = node->bus;
+            dev->slot = node->slot;
+            dev->func = node->func;
+
+            void *mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, 0);
+            if (!mmio_map) {
+                continue;
+            }
+
+            ahci_hba_mem_t *hba = mmio_map;
+            if (!hba->cap || hba->cap == 0xffffffffU) {
+                arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
+                continue;
+            }
+
+            ahci_request_bios_handoff(hba);
+            hba->ghc |= AHCI_HBA_AE;
+
+            u32 pi = hba->pi;
+
+            bool found_port = false;
+            u32 fallback_port = AHCI_PORT_COUNT;
+            u32 first_impl_port = AHCI_PORT_COUNT;
+
+            for (u32 i = 0; i < AHCI_PORT_COUNT; i++) {
+                if (!(pi & (1U << i))) {
+                    continue;
+                }
+
+                if (first_impl_port == AHCI_PORT_COUNT) {
+                    first_impl_port = i;
+                }
+
+                if (ahci_port_present(&hba->ports[i])) {
+                    dev->port_index = i;
+                    found_port = true;
+                    break;
+                }
+
+                u32 ssts = hba->ports[i].ssts;
+                u8 det = (u8)(ssts & AHCI_SSTS_DET_MASK);
+                if (det == AHCI_SSTS_DET_PRESENT && fallback_port == AHCI_PORT_COUNT) {
+                    fallback_port = i;
+                }
+            }
+
+            if (!found_port) {
+                if (fallback_port != AHCI_PORT_COUNT) {
+                    dev->port_index = fallback_port;
+                    found_port = true;
+                } else if (first_impl_port != AHCI_PORT_COUNT) {
+                    dev->port_index = first_impl_port;
+                    found_port = true;
+                }
+            }
+
+            arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
+            if (found_port) {
+                return true;
             }
         }
-
-        arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
-        if (found_port) {
-            return true;
-        }
     }
+
+    return false;
 }
 
 bool ahci_disk_init(void) {

@@ -68,24 +68,15 @@ $(KERNEL_OBJ_DIR)/%.c.o: %.c
 $(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS))
 	@mkdir -p $(@D)
 	$(call ld, $(KERNEL_LD_FLAGS), $@, $^)
-
-
-SYMBOL_MAP := $(dir $(KERNEL_ELF))sym.map
-
-$(SYMBOL_MAP): $(KERNEL_ELF)
-	@mkdir -p $(@D)
-ifeq ($(TRACEABLE_KERNEL),true)
-	$(call nm, -n $<, $@)
-else
-	@rm -f $@
-	@touch $@
-endif
+	@if [ "$(STRIP_KERNEL)" = "true" ]; then \
+		$(ST) --strip-debug $@; \
+	fi
 
 
 ifeq ($(ARCH_VARIANT), 64)
-IMAGE_BOOT_DEPS := bin/boot/bios.bin bin/boot/mbr.bin bin/boot/BOOTX64.EFI $(KERNEL_ELF) $(SYMBOL_MAP)
+IMAGE_BOOT_DEPS := bin/boot/bios.bin bin/boot/mbr.bin bin/boot/BOOTX64.EFI $(KERNEL_ELF)
 else
-IMAGE_BOOT_DEPS := bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF) $(SYMBOL_MAP)
+IMAGE_BOOT_DEPS := bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF)
 endif
 
 IMAGE_SCRIPT_DEPS := \
@@ -102,7 +93,6 @@ define stage_image
 	@rm -rf $(IMAGE_STAGE_DIR)
 	@mkdir -p $(IMAGE_BOOT_DIR)
 	@cp -f $(KERNEL_ELF) $(IMAGE_BOOT_DIR)/
-	@cp -f $(SYMBOL_MAP) $(IMAGE_BOOT_DIR)/sym.map
 	@cp -r root/* $(IMAGE_STAGE_DIR)
 	@mkdir -p $(IMAGE_BIN_DIR)
 	@cp -f bin/user/$(ARCH_VARIANT)/root/bin/* $(IMAGE_BIN_DIR)/

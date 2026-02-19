@@ -13,6 +13,7 @@
 #include <sys/psf.h>
 #include <sys/pty.h>
 #include <sys/procfs.h>
+#include <sys/panic.h>
 #include <sys/symbols.h>
 #include <sys/syscall.h>
 #include <sys/tty.h>
@@ -42,10 +43,10 @@ NORETURN void kernel_main(void *boot_info) {
     }
 
     if (!mounted) {
-        log_warn("failed to mount rootfs");
-    } else {
-        load_symbols();
+        panic("failed to mount rootfs");
     }
+
+    load_symbols();
 
     if (!procfs_init()) {
         log_warn("procfs init failed");

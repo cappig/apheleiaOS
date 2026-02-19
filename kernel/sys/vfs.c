@@ -15,12 +15,7 @@
 static vfs_t *vfs = NULL;
 
 static time_t _time_now(void) {
-    u32 hz = arch_timer_hz();
-    if (!hz) {
-        return 0;
-    }
-
-    return (time_t)(arch_timer_ticks() / hz);
+    return (time_t)arch_wallclock_seconds();
 }
 
 static vfs_node_t *_resolve_link(vfs_node_t *node) {

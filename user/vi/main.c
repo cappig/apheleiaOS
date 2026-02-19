@@ -68,6 +68,64 @@ typedef struct {
 
 static vi_t vi;
 static vi_out_t out;
+static char *frame_cache = NULL;
+static size_t frame_cache_cols = 0;
+static size_t frame_cache_rows = 0;
+static char *row_scratch = NULL;
+static size_t row_scratch_cap = 0;
+
+
+static bool ensure_row_scratch(size_t cols) {
+    size_t need = cols + 1;
+    if (row_scratch_cap >= need) {
+        return true;
+    }
+
+    char *p = realloc(row_scratch, need);
+    if (!p) {
+        return false;
+    }
+
+    row_scratch = p;
+    row_scratch_cap = need;
+    return true;
+}
+
+static bool ensure_frame_cache(size_t cols, size_t rows, bool *resized_out) {
+    if (resized_out) {
+        *resized_out = false;
+    }
+
+    if (frame_cache && frame_cache_cols == cols && frame_cache_rows == rows) {
+        return true;
+    }
+
+    if (!cols || !rows) {
+        free(frame_cache);
+        frame_cache = NULL;
+        frame_cache_cols = 0;
+        frame_cache_rows = 0;
+        if (resized_out) {
+            *resized_out = true;
+        }
+        return true;
+    }
+
+    size_t total = cols * rows;
+    char *p = realloc(frame_cache, total);
+    if (!p) {
+        return false;
+    }
+
+    frame_cache = p;
+    frame_cache_cols = cols;
+    frame_cache_rows = rows;
+    memset(frame_cache, 0xff, total);
+    if (resized_out) {
+        *resized_out = true;
+    }
+    return true;
+}
 
 static bool out_addn(const char *text, size_t n) {
     if (!text || !n) {
@@ -89,6 +147,26 @@ static bool out_add(const char *text) {
     }
 
     return out_addn(text, strlen(text));
+}
+
+static bool draw_row_if_changed(size_t row, const char *data) {
+    if (!data || !frame_cache || row >= frame_cache_rows || vi.cols != frame_cache_cols) {
+        return false;
+    }
+
+    char *cached = frame_cache + (row * frame_cache_cols);
+    if (!memcmp(cached, data, vi.cols)) {
+        return true;
+    }
+
+    char seq[32];
+    snprintf(seq, sizeof(seq), "\x1b[%u;1H", (unsigned)(row + 1));
+    if (!out_add(seq) || !out_addn(data, vi.cols)) {
+        return false;
+    }
+
+    memcpy(cached, data, vi.cols);
+    return true;
 }
 
 static bool out_flush(void) {
@@ -210,6 +288,10 @@ static int read_key(void) {
         if (n == 1) {
             break;
         }
+
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
     }
 
     if (ch != '\x1b') {
@@ -225,29 +307,26 @@ static int read_key(void) {
     }
 
     if (seq[0] == '[') {
-        if (seq[1] == 'A') {
+        switch (seq[1]) {
+        case 'A':
             return VI_KEY_UP;
-        }
-        if (seq[1] == 'B') {
+        case 'B':
             return VI_KEY_DOWN;
-        }
-        if (seq[1] == 'C') {
+        case 'C':
             return VI_KEY_RIGHT;
-        }
-        if (seq[1] == 'D') {
+        case 'D':
             return VI_KEY_LEFT;
-        }
-        if (seq[1] == 'H') {
+        case 'H':
             return VI_KEY_HOME;
-        }
-        if (seq[1] == 'F') {
+        case 'F':
             return VI_KEY_END;
-        }
-
-        if (seq[1] == '3') {
+        case '3':
             if (read(STDIN_FILENO, &seq[2], 1) == 1 && seq[2] == '~') {
                 return VI_KEY_DEL;
             }
+            break;
+        default:
+            break;
         }
     }
 
@@ -317,6 +396,7 @@ static void keep_cursor_visible(void) {
     if (row < vi.rowoff) {
         vi.rowoff = row;
     }
+
     if (row >= vi.rowoff + vi.edit_rows) {
         vi.rowoff = row - vi.edit_rows + 1;
     }
@@ -324,6 +404,7 @@ static void keep_cursor_visible(void) {
     if (col < vi.coloff) {
         vi.coloff = col;
     }
+
     if (vi.cols && col >= vi.coloff + vi.cols) {
         vi.coloff = col - vi.cols + 1;
     }
@@ -367,9 +448,30 @@ static bool insert_char(size_t at, char ch) {
     return true;
 }
 
+static void wrap_insert_line_if_needed(void) {
+    if (!vi.cols || vi.mode != VI_INSERT) {
+        return;
+    }
+
+    size_t start = line_start(vi.cursor);
+    size_t col = vi.cursor - start;
+
+    if (col < vi.cols) {
+        return;
+    }
+
+    if (insert_char(vi.cursor, '\n')) {
+        vi.cursor++;
+    }
+}
+
 static void insert_and_advance(char ch) {
     if (insert_char(vi.cursor, ch)) {
         vi.cursor++;
+
+        if (ch != '\n') {
+            wrap_insert_line_if_needed();
+        }
     }
 }
 
@@ -498,6 +600,7 @@ static bool load_file(void) {
         if (!n) {
             break;
         }
+
         if (n < 0) {
             close(fd);
             set_errno_msg("read");
@@ -524,61 +627,49 @@ static const char *mode_name(void) {
     return "NORMAL";
 }
 
-static bool draw_editor_rows(void) {
-    size_t idx = row_to_index(vi.rowoff);
-
-    for (size_t row = 0; row < vi.edit_rows; row++) {
-        if (!out_add("\x1b[K")) {
-            return false;
+static void build_editor_row(size_t *idx, char *dst) {
+    memset(dst, ' ', vi.cols);
+    if (!idx || *idx >= vi.len) {
+        if (vi.cols) {
+            dst[0] = '~';
         }
-
-        if (idx < vi.len) {
-            size_t end = line_end(idx);
-            size_t start = idx;
-            if (vi.coloff < end - idx) {
-                start += vi.coloff;
-            } else {
-                start = end;
-            }
-
-            size_t n = end - start;
-            if (n > vi.cols) {
-                n = vi.cols;
-            }
-
-            for (size_t i = 0; i < n; i++) {
-                char c = vi.buf[start + i];
-                if (c == '\t') {
-                    c = ' ';
-                }
-                if ((unsigned char)c < 0x20) {
-                    c = '?';
-                }
-
-                if (!out_addn(&c, 1)) {
-                    return false;
-                }
-            }
-
-            idx = end < vi.len ? end + 1 : end;
-        } else {
-            if (!out_add("~")) {
-                return false;
-            }
-        }
-
-        if (row + 1 < vi.edit_rows && !out_add("\r\n")) {
-            return false;
-        }
+        return;
     }
 
-    return true;
+    size_t end = line_end(*idx);
+    size_t start = *idx;
+
+    if (vi.coloff < end - *idx) {
+        start += vi.coloff;
+    } else {
+        start = end;
+    }
+
+    size_t n = end - start;
+    if (n > vi.cols) {
+        n = vi.cols;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        char c = vi.buf[start + i];
+        if (c == '\t') {
+            c = ' ';
+        }
+        if ((unsigned char)c < 0x20) {
+            c = '?';
+        }
+        dst[i] = c;
+    }
+
+    *idx = end < vi.len ? end + 1 : end;
 }
 
-static bool draw_status_row(size_t row, size_t col, size_t *cmd_limit_out) {
+static size_t build_status_row(size_t row, size_t col, char *dst) {
+    memset(dst, ' ', vi.cols);
+
     char right[64];
     snprintf(
-        right, sizeof(right), "%s %u:%u", mode_name(), (unsigned)(row + 1), (unsigned)(col + 1)
+        right, sizeof(right), "%s %u:%u ", mode_name(), (unsigned)(row + 1), (unsigned)(col + 1)
     );
 
     size_t right_len = strlen(right);
@@ -595,46 +686,37 @@ static bool draw_status_row(size_t row, size_t col, size_t *cmd_limit_out) {
 
     size_t left_max = vi.cols > right_len ? vi.cols - right_len : 0;
     size_t left_len = strlen(left);
+
     if (left_len > left_max) {
         left_len = left_max;
     }
 
-    if (!out_add("\r\n\x1b[K")) {
-        return false;
+    if (left_len) {
+        memcpy(dst, left, left_len);
     }
 
-    if (left_len && !out_addn(left, left_len)) {
-        return false;
+    if (right_len) {
+        memcpy(dst + (vi.cols - right_len), right, right_len);
     }
 
-    size_t pad = vi.cols > left_len + right_len ? vi.cols - left_len - right_len : 0;
-    for (size_t i = 0; i < pad; i++) {
-        if (!out_addn(" ", 1)) {
-            return false;
-        }
-    }
-
-    if (right_len && !out_addn(right, right_len)) {
-        return false;
-    }
-
-    if (cmd_limit_out) {
-        *cmd_limit_out = left_max;
-    }
-
-    return true;
+    return left_max;
 }
 
 static bool redraw_screen(void) {
     update_screen_size();
     keep_cursor_visible();
 
-    out.len = 0;
-    if (!out_add("\x1b[?25l\x1b[H")) {
+    bool resized = false;
+    if (!ensure_row_scratch(vi.cols) || !ensure_frame_cache(vi.cols, vi.edit_rows + 1, &resized)) {
         return false;
     }
 
-    if (!draw_editor_rows()) {
+    out.len = 0;
+    if (!out_add("\x1b[?25l")) {
+        return false;
+    }
+
+    if (resized && !out_add("\x1b[2J")) {
         return false;
     }
 
@@ -642,8 +724,17 @@ static bool redraw_screen(void) {
     size_t col = 0;
     index_to_rowcol(vi.cursor, &row, &col);
 
-    size_t command_limit = 1;
-    if (!draw_status_row(row, col, &command_limit)) {
+    size_t idx = row_to_index(vi.rowoff);
+    for (size_t screen_row = 0; screen_row < vi.edit_rows; screen_row++) {
+        build_editor_row(&idx, row_scratch);
+
+        if (!draw_row_if_changed(screen_row, row_scratch)) {
+            return false;
+        }
+    }
+
+    size_t command_limit = build_status_row(row, col, row_scratch);
+    if (!draw_row_if_changed(vi.edit_rows, row_scratch)) {
         return false;
     }
 
@@ -653,9 +744,11 @@ static bool redraw_screen(void) {
     if (vi.mode == VI_COMMAND) {
         y = vi.edit_rows + 1;
         x = vi.cmd_len + 2;
+
         if (x > command_limit) {
             x = command_limit;
         }
+
         if (x < 2) {
             x = 2;
         }
@@ -663,6 +756,7 @@ static bool redraw_screen(void) {
         if (row >= vi.rowoff) {
             y = (row - vi.rowoff) + 1;
         }
+
         if (col < vi.coloff) {
             x = 1;
         } else {
@@ -673,12 +767,15 @@ static bool redraw_screen(void) {
     if (x < 1) {
         x = 1;
     }
+
     if (y < 1) {
         y = 1;
     }
+
     if (x > vi.cols) {
         x = vi.cols;
     }
+
     if (y > vi.edit_rows + 1) {
         y = vi.edit_rows + 1;
     }
@@ -898,20 +995,28 @@ int main(int argc, char *argv[]) {
     if (!load_file()) {
         free(vi.buf);
         free(out.data);
+        free(row_scratch);
+        free(frame_cache);
         return 1;
     }
 
     if (!raw_mode_on()) {
         io_write_str("vi: failed to enter raw mode\n");
+        free(vi.buf);
+        free(out.data);
+        free(row_scratch);
+        free(frame_cache);
         return 1;
     }
 
     write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
 
     while (vi.running) {
-        if (vi.redraw && !redraw_screen()) {
-            set_msg("draw failed");
-            vi.redraw = true;
+        if (vi.redraw) {
+            if (!redraw_screen()) {
+                set_msg("draw failed");
+                vi.redraw = true;
+            }
         }
 
         int key = read_key();
@@ -934,5 +1039,8 @@ int main(int argc, char *argv[]) {
 
     free(vi.buf);
     free(out.data);
+    free(row_scratch);
+    free(frame_cache);
+
     return 0;
 }

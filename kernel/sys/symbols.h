@@ -1,7 +1,16 @@
 #pragma once
 
 #include <base/types.h>
-#include <parse/sym.h>
+
+typedef struct {
+    u64 addr;
+    char *name;
+} symbol_entry_t;
+
+typedef struct {
+    size_t len;
+    symbol_entry_t *map;
+} symbol_table_t;
 
 void load_symbols(void);
 

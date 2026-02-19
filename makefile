@@ -54,7 +54,7 @@ include user/build.mk
 .DEFAULT_GOAL := all
 .PHONY: all clean
 
-all: bin/$(IMAGE_NAME).$(IMAGE_FORMAT) $(SYMBOL_MAP)
+all: bin/$(IMAGE_NAME).$(IMAGE_FORMAT)
 	@echo "Build completed successfully!"
 
 clean:

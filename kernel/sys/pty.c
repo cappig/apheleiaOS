@@ -243,6 +243,24 @@ static void _queue_clear(pty_queue_t *queue) {
     arch_irq_restore(irq_flags);
 }
 
+static u64 _vtime_to_ticks(cc_t vtime) {
+    if (!vtime) {
+        return 0;
+    }
+
+    u32 hz = arch_timer_hz();
+    if (!hz) {
+        return 1;
+    }
+
+    u64 ticks = ((u64)vtime * (u64)hz + 9ULL) / 10ULL;
+    if (!ticks) {
+        ticks = 1;
+    }
+
+    return ticks;
+}
+
 static ssize_t _queue_read(pty_queue_t *queue, void *buf, size_t len, bool nonblock) {
     if (!queue || !buf) {
         return -EINVAL;
@@ -284,6 +302,111 @@ static ssize_t _queue_read(pty_queue_t *queue, void *buf, size_t len, bool nonbl
 
         if (current && sched_signal_has_pending(current)) {
             return -EINTR;
+        }
+
+        sched_block(&queue->read_wait);
+    }
+}
+
+static ssize_t
+_queue_read_termios(pty_queue_t *queue, void *buf, size_t len, bool nonblock, const termios_t *tos) {
+    if (!queue || !buf || !tos) {
+        return -EINVAL;
+    }
+
+    if (!len) {
+        return 0;
+    }
+
+    if (tos->c_lflag & ICANON) {
+        return _queue_read(queue, buf, len, nonblock);
+    }
+
+    size_t vmin = (size_t)tos->c_cc[VMIN];
+    size_t target = vmin ? (vmin < len ? vmin : len) : 1;
+    u64 timeout_ticks = _vtime_to_ticks(tos->c_cc[VTIME]);
+
+    size_t total = 0;
+    bool first_byte_seen = false;
+    u64 deadline = 0;
+
+    for (;;) {
+        unsigned long irq_flags = arch_irq_save();
+        size_t read_now = _queue_read_once(queue, (u8 *)buf + total, len - total);
+        arch_irq_restore(irq_flags);
+
+        if (read_now) {
+            total += read_now;
+            first_byte_seen = true;
+            sched_wake_one(&queue->write_wait);
+
+            if (total == len) {
+                return (ssize_t)total;
+            }
+
+            if (!vmin) {
+                return (ssize_t)total;
+            }
+
+            if (total >= target) {
+                return (ssize_t)total;
+            }
+
+            if (timeout_ticks) {
+                deadline = arch_timer_ticks() + timeout_ticks;
+            }
+
+            continue;
+        }
+
+        if (total) {
+            if (!vmin) {
+                return (ssize_t)total;
+            }
+
+            if (timeout_ticks && arch_timer_ticks() >= deadline) {
+                return (ssize_t)total;
+            }
+        } else {
+            if (!vmin && !timeout_ticks) {
+                return 0;
+            }
+
+            if (!vmin && timeout_ticks) {
+                if (!deadline) {
+                    deadline = arch_timer_ticks() + timeout_ticks;
+                }
+
+                if (arch_timer_ticks() >= deadline) {
+                    return 0;
+                }
+            }
+        }
+
+        if (nonblock) {
+            return total ? (ssize_t)total : -EAGAIN;
+        }
+
+        if (!sched_is_running()) {
+            arch_cpu_wait();
+            continue;
+        }
+
+        sched_thread_t *current = sched_current();
+        if (current && sched_signal_has_pending(current)) {
+            return total ? (ssize_t)total : -EINTR;
+        }
+
+        bool use_timeout = false;
+        if (!vmin && timeout_ticks) {
+            use_timeout = true;
+        } else if (vmin && timeout_ticks && first_byte_seen) {
+            use_timeout = true;
+        }
+
+        if (use_timeout) {
+            sched_sleep(1);
+            continue;
         }
 
         sched_block(&queue->read_wait);
@@ -492,11 +615,17 @@ ssize_t pty_read_handle(const pty_handle_t *handle, void *buf, size_t len, u32 f
     pty_t *pty = _handle_pty(handle);
     pty_queue_t *rx = _handle_rx_queue(pty, handle);
 
-    if (!rx) {
+    if (!rx || !pty || !handle) {
         return -EINVAL;
     }
 
-    return _queue_read(rx, buf, len, (flags & VFS_NONBLOCK) != 0);
+    bool nonblock = (flags & VFS_NONBLOCK) != 0;
+
+    if (handle->is_master) {
+        return _queue_read(rx, buf, len, nonblock);
+    }
+
+    return _queue_read_termios(rx, buf, len, nonblock, &pty->termios);
 }
 
 ssize_t pty_write_handle(const pty_handle_t *handle, const void *buf, size_t len, u32 flags) {

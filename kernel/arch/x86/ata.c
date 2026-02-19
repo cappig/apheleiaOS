@@ -11,6 +11,7 @@
 #include <x86/irq.h>
 
 #include "sys/disk.h"
+#include "sys/pci.h"
 
 #define ATA_PRIMARY_BASE   0x1f0
 #define ATA_PRIMARY_CTRL   0x3f6
@@ -49,6 +50,11 @@
 #define ATA_CTRL_IRQ_ENABLE 0x00
 #define ATA_MAX_PIO_SECTORS 255
 #define ATA_IRQ_TIMEOUT_MS  100
+
+#define ATA_PCI_BAR0 0x10
+#define ATA_PCI_BAR1 0x14
+#define ATA_PCI_BAR2 0x18
+#define ATA_PCI_BAR3 0x1c
 
 typedef struct {
     u16 io_base;
@@ -883,7 +889,7 @@ static bool ata_probe_device(ata_channel_t *ch, bool is_master, size_t dev_index
     return true;
 }
 
-static bool ata_probe_channel(u16 io_base, u16 ctrl_base, bool is_primary) {
+static bool ata_probe_channel(u16 io_base, u16 ctrl_base, bool is_primary, bool use_irq) {
     if (!ata_channel_present(io_base)) {
         return false;
     }
@@ -893,7 +899,7 @@ static bool ata_probe_channel(u16 io_base, u16 ctrl_base, bool is_primary) {
 
     ch->io_base = io_base;
     ch->ctrl_base = ctrl_base;
-    ch->irq_enabled = true;
+    ch->irq_enabled = use_irq;
     ch->irq_error = false;
     ch->irq_seq = 0;
     ch->io_busy = false;
@@ -903,7 +909,7 @@ static bool ata_probe_channel(u16 io_base, u16 ctrl_base, bool is_primary) {
 
     outb(ctrl_base, ATA_CTRL_IRQ_ENABLE);
 
-    if (!ata_channel_irq_done[ch_index]) {
+    if (use_irq && !ata_channel_irq_done[ch_index]) {
         if (is_primary) {
             irq_register(IRQ_PRIMARY_ATA, ata_primary_irq);
         } else {
@@ -922,14 +928,105 @@ static bool ata_probe_channel(u16 io_base, u16 ctrl_base, bool is_primary) {
     return found_master || found_slave;
 }
 
-bool ata_disk_init(void) {
-    bool found = false;
+static u16 ata_pci_read_io_bar(u8 bus, u8 slot, u8 func, u16 offset) {
+    u32 bar = pci_read_config(bus, slot, func, offset, 4);
 
-    if (ata_probe_channel(ATA_PRIMARY_BASE, ATA_PRIMARY_CTRL, true)) {
+    if (!bar || bar == 0xffffffffU) {
+        return 0;
+    }
+
+    if (!(bar & 1U)) {
+        return 0;
+    }
+
+    return (u16)(bar & ~0x3U);
+}
+
+static bool ata_probe_pci_ide(void) {
+    bool found = false;
+    pci_found_t *cursor = NULL;
+
+    for (;;) {
+        pci_found_t *node = pci_find_node(PCI_MASS_STORAGE, PCI_MS_IDE, cursor);
+        if (!node) {
+            break;
+        }
+
+        cursor = node;
+
+        u8 prog_if = node->header.prog_if;
+        bool pri_native = (prog_if & 0x01) != 0;
+        bool sec_native = (prog_if & 0x04) != 0;
+
+        u16 pri_io = ATA_PRIMARY_BASE;
+        u16 pri_ctrl = ATA_PRIMARY_CTRL;
+        u16 sec_io = ATA_SECONDARY_BASE;
+        u16 sec_ctrl = ATA_SECONDARY_CTRL;
+
+        if (pri_native) {
+            u16 bar0 = ata_pci_read_io_bar(node->bus, node->slot, node->func, ATA_PCI_BAR0);
+            u16 bar1 = ata_pci_read_io_bar(node->bus, node->slot, node->func, ATA_PCI_BAR1);
+
+            if (bar0) {
+                pri_io = bar0;
+            }
+
+            if (bar1) {
+                pri_ctrl = (u16)(bar1 + 2);
+            }
+        }
+
+        if (sec_native) {
+            u16 bar2 = ata_pci_read_io_bar(node->bus, node->slot, node->func, ATA_PCI_BAR2);
+            u16 bar3 = ata_pci_read_io_bar(node->bus, node->slot, node->func, ATA_PCI_BAR3);
+
+            if (bar2) {
+                sec_io = bar2;
+            }
+
+            if (bar3) {
+                sec_ctrl = (u16)(bar3 + 2);
+            }
+        }
+
+        pci_enable_bus_mastering(node->bus, node->slot, node->func);
+
+        log_debug(
+            "IDE controller %u:%u.%u prog_if=%#x pri=%#x/%#x sec=%#x/%#x",
+            node->bus,
+            node->slot,
+            node->func,
+            prog_if,
+            pri_io,
+            pri_ctrl,
+            sec_io,
+            sec_ctrl
+        );
+
+        if (ata_probe_channel(pri_io, pri_ctrl, true, !pri_native)) {
+            found = true;
+        }
+
+        if (ata_probe_channel(sec_io, sec_ctrl, false, !sec_native)) {
+            found = true;
+        }
+
+        if (found) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool ata_disk_init(void) {
+    bool found = ata_probe_pci_ide();
+
+    if (!found && ata_probe_channel(ATA_PRIMARY_BASE, ATA_PRIMARY_CTRL, true, true)) {
         found = true;
     }
 
-    if (ata_probe_channel(ATA_SECONDARY_BASE, ATA_SECONDARY_CTRL, false)) {
+    if (!found && ata_probe_channel(ATA_SECONDARY_BASE, ATA_SECONDARY_CTRL, false, true)) {
         found = true;
     }
 

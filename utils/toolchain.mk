@@ -1,7 +1,6 @@
 AS := nasm
 OC := objcopy
 ST := strip
-NM := nm
 
 GNU_CC        ?= gcc
 GNU_CC_x86_64 ?= x86_64-linux-gnu-gcc
@@ -57,11 +56,6 @@ define st
 	@echo "ST $(1)"
 endef
 
-define nm
-	@$(NM) $(1) > $(2)
-	@echo "NM $(2)"
-endef
-
 
 LIBGCC = $(shell $(CC) $(CC_BASE) $(1) -print-libgcc-file-name)
 
@@ -104,15 +98,7 @@ endif
 endif
 
 
-STRIP_KERNEL ?= false
-
-CC_BASE_TRACE :=
-ifeq ($(TRACEABLE_KERNEL), true)
-CC_BASE_TRACE := \
-	-g \
-	-fno-omit-frame-pointer
-	STRIP_KERNEL = false
-endif
+STRIP_KERNEL ?= true
 
 CC_BASE_PROFILE :=
 ifeq ($(PROFILE), debug)
@@ -134,6 +120,13 @@ else ifeq ($(PROFILE), normal)
 else ifeq ($(PROFILE), fast)
 	CC_BASE_PROFILE := \
 		-O3
+endif
+
+CC_BASE_TRACE :=
+ifeq ($(TRACEABLE_KERNEL), true)
+CC_BASE_TRACE := \
+	-g \
+	-fno-omit-frame-pointer
 endif
 
 CC_BASE := \
