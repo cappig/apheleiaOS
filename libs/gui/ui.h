@@ -8,6 +8,7 @@
 
 typedef struct {
     int ctl_fd;
+    int mgr_fd;
     int input_fd;
 } ui_t;
 
@@ -32,8 +33,6 @@ enum ui_open_flags {
 int ui_open(ui_t *ui, u32 flags);
 void ui_close(ui_t *ui);
 
-int ui_rpc(ui_t *ui, const ws_req_t *req, ws_resp_t *resp);
-
 ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count);
 
 int ui_mgr_claim(ui_t *ui);
@@ -43,7 +42,6 @@ int ui_mgr_focus(ui_t *ui, u32 id);
 int ui_mgr_move(ui_t *ui, u32 id, i32 x, i32 y);
 int ui_mgr_raise(ui_t *ui, u32 id, u32 z);
 int ui_mgr_close(ui_t *ui, u32 id);
-int ui_mgr_clear_dirty(ui_t *ui);
 int ui_mgr_send(ui_t *ui, u32 id, const input_event_t *event);
 
 int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const char *title);

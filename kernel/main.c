@@ -85,6 +85,6 @@ NORETURN void kernel_main(void *boot_info) {
     scheduler_start();
 
     for (;;) {
-        ;
+        arch_cpu_wait();
     }
 }

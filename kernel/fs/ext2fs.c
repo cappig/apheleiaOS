@@ -14,6 +14,16 @@
 
 #define EXT2_BLOCK_CACHE_SIZE 64
 
+#define EXT2_ATIME_NOATIME 0
+#define EXT2_ATIME_RELATIME 1
+#define EXT2_ATIME_STRICT 2
+
+#ifndef EXT2_ATIME_POLICY
+#define EXT2_ATIME_POLICY EXT2_ATIME_NOATIME
+#endif
+
+#define EXT2_RELATIME_WINDOW_SECS (24U * 60U * 60U)
+
 typedef struct {
     bool valid;
     u32 block;
@@ -343,6 +353,30 @@ static u32 _now(ext2_private_t *priv) {
     u64 delta_secs = delta_ticks / hz;
 
     return priv->time_base + (u32)delta_secs;
+}
+
+static bool _should_update_atime(const ext2_inode_t *inode, u32 now) {
+    if (!inode) {
+        return false;
+    }
+
+#if EXT2_ATIME_POLICY == EXT2_ATIME_STRICT
+    (void)now;
+    return true;
+#elif EXT2_ATIME_POLICY == EXT2_ATIME_RELATIME
+    if (inode->last_access_time <= inode->last_modification_time) {
+        return true;
+    }
+
+    if (inode->last_access_time <= inode->creation_time) {
+        return true;
+    }
+
+    return now - inode->last_access_time >= EXT2_RELATIME_WINDOW_SECS;
+#else
+    (void)now;
+    return false;
+#endif
 }
 
 static bool _update_super_write_time(ext2_private_t *priv, disk_partition_t *part, u32 now) {
@@ -1311,10 +1345,12 @@ static ssize_t _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len
     free(bounce);
 
     u32 now = _now(priv);
-    info->inode.last_access_time = now;
+    if (_should_update_atime(&info->inode, now)) {
+        info->inode.last_access_time = now;
 
-    if (_write_inode(priv, part, info->inode_num, &info->inode)) {
-        _sync_vnode(node, &info->inode);
+        if (_write_inode(priv, part, info->inode_num, &info->inode)) {
+            _sync_vnode(node, &info->inode);
+        }
     }
 
     return (ssize_t)(to_read - remaining);

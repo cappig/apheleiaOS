@@ -249,3 +249,49 @@ bool wm_background_draw(u32 *frame, u32 fb_width, u32 fb_height) {
     memcpy(frame, bg_pixels, pixels * sizeof(u32));
     return true;
 }
+
+bool wm_background_draw_rect(
+    u32 *frame,
+    u32 fb_width,
+    u32 fb_height,
+    i32 x,
+    i32 y,
+    u32 width,
+    u32 height
+) {
+    if (!frame || !bg_pixels || bg_width != fb_width || bg_height != fb_height || !width || !height) {
+        return false;
+    }
+
+    i32 x0 = x;
+    i32 y0 = y;
+    i32 x1 = x + (i32)width;
+    i32 y1 = y + (i32)height;
+
+    if (x0 < 0) {
+        x0 = 0;
+    }
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (x1 > (i32)fb_width) {
+        x1 = (i32)fb_width;
+    }
+    if (y1 > (i32)fb_height) {
+        y1 = (i32)fb_height;
+    }
+
+    if (x0 >= x1 || y0 >= y1) {
+        return true;
+    }
+
+    size_t row_pixels = (size_t)(x1 - x0);
+    size_t row_bytes = row_pixels * sizeof(u32);
+
+    for (i32 row = y0; row < y1; row++) {
+        size_t off = (size_t)row * fb_width + (size_t)x0;
+        memcpy(frame + off, bg_pixels + off, row_bytes);
+    }
+
+    return true;
+}

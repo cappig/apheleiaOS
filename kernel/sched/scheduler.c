@@ -16,13 +16,17 @@
 #include <sys/cpu.h>
 #include <sys/lock.h>
 #include <sys/panic.h>
+#include <sys/stats.h>
 #include <sys/proc.h>
 #include <sys/pty.h>
 #include <sys/tty.h>
 #include <sys/wait.h>
 
 #define SCHED_STACK_SIZE (16 * KIB)
-#define SCHED_SLICE      2
+
+#ifndef SCHED_SLICE
+#define SCHED_SLICE 2
+#endif
 
 static linked_list_t *run_queue = NULL;
 static linked_list_t *zombie_list = NULL;
@@ -1922,6 +1926,7 @@ void sched_tick(arch_int_state_t *state) {
         arch_fpu_restore(next->fpu_state);
     }
 
+    stats_inc_sched_switch_count();
     arch_context_switch(next->context);
 }
 
@@ -2075,6 +2080,7 @@ void sched_exit(void) {
     next->state = THREAD_RUNNING;
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);
+    stats_inc_sched_switch_count();
     arch_context_switch(next->context);
 }
 

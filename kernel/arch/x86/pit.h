@@ -11,7 +11,9 @@
 #define PIT_SET 0x36
 
 #define PIT_BASE_FREQ  1193180
+#ifndef PIT_DEFAULT_HZ
 #define PIT_DEFAULT_HZ 100
+#endif
 
 void pit_init(void);
 void pit_set_frequency(u32 hz);

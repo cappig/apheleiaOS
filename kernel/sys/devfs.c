@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/cpu.h>
+#include <sys/stats.h>
 #include <sys/stat.h>
 
 #include "vfs.h"
@@ -211,6 +212,34 @@ static ssize_t _dev_swap_read(vfs_node_t *node, void *buf, size_t offset, size_t
     return _dev_text_read(text, buf, offset, len);
 }
 
+static ssize_t _dev_stats_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    stats_snapshot_t snapshot = {0};
+    stats_take_snapshot(&snapshot);
+
+    char text[SYSINFO_TEXT_MAX * 2];
+    snprintf(
+        text,
+        sizeof(text),
+        "timer_irq_ns=%" PRIu64 "\n"
+        "sched_switch_count=%" PRIu64 "\n"
+        "poll_sleep_loops=%" PRIu64 "\n"
+        "ws_fb_write_bytes=%" PRIu64 "\n"
+        "fb_present_bytes=%" PRIu64 "\n"
+        "wm_dirty_pixels=%" PRIu64 "\n",
+        snapshot.timer_irq_ns,
+        snapshot.sched_switch_count,
+        snapshot.poll_sleep_loops,
+        snapshot.ws_fb_write_bytes,
+        snapshot.fb_present_bytes,
+        snapshot.wm_dirty_pixels
+    );
+
+    return _dev_text_read(text, buf, offset, len);
+}
+
 bool devfs_register_node(
     vfs_node_t *parent,
     const char *name,
@@ -358,6 +387,12 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
     vfs_interface_t *cpu_if = vfs_create_interface(_dev_cpu_read, NULL, NULL);
     if (!cpu_if || !devfs_register_node(dev_dir, "cpu", VFS_CHARDEV, 0444, cpu_if, NULL)) {
         log_warn("failed to create /dev/cpu");
+        ok = false;
+    }
+
+    vfs_interface_t *stats_if = vfs_create_interface(_dev_stats_read, NULL, NULL);
+    if (!stats_if || !devfs_register_node(dev_dir, "stats", VFS_CHARDEV, 0444, stats_if, NULL)) {
+        log_warn("failed to create /dev/stats");
         ok = false;
     }
 

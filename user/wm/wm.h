@@ -16,6 +16,13 @@
 #define WM_MAX_FB_PIX (WM_MAX_FB_W * WM_MAX_FB_H)
 
 typedef struct {
+    i32 x;
+    i32 y;
+    i32 width;
+    i32 height;
+} wm_rect_t;
+
+typedef struct {
     u32 id;
     i32 x;
     i32 y;
@@ -24,6 +31,13 @@ typedef struct {
     u32 z;
     bool focused;
     int fb_fd;
+    u32 *surface;
+    size_t surface_pixels;
+    bool surface_dirty;
+    u32 dirty_x;
+    u32 dirty_y;
+    u32 dirty_width;
+    u32 dirty_height;
     char title[WS_TITLE_MAX];
 } wm_window_t;
 
@@ -35,8 +49,11 @@ wm_window_t *wm_top_window_at(i32 px, i32 py);
 wm_window_t *wm_top_window(void);
 bool wm_point_in_title(const wm_window_t *window, i32 px, i32 py);
 bool wm_point_in_close(const wm_window_t *window, i32 px, i32 py);
+bool wm_window_bounds_rect(const wm_window_t *window, wm_rect_t *rect);
+void wm_collect_raise_damage(const wm_window_t *window, u32 old_z, wm_rect_t *damage);
 
 void wm_set_focus(ui_t *ui, wm_window_t *window, u32 *z_counter);
-void wm_handle_ws_event(const ws_event_t *event);
+bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage);
+void wm_render_damage(u32 *frame, u32 fb_width, u32 fb_height, const wm_rect_t *damage);
 void wm_render_frame(u32 *frame, u32 fb_width, u32 fb_height);
 void wm_cleanup_all_windows(void);

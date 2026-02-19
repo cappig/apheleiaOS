@@ -177,6 +177,35 @@ static bool _split_path(const char *path, char **dir_out, char **base_out) {
     return true;
 }
 
+static bool _resolve_parent_base(const char *path, vfs_node_t **parent_out, char **base_out) {
+    if (!path || !parent_out || !base_out) {
+        return false;
+    }
+
+    char *dir_name = NULL;
+    char *base_name = NULL;
+
+    if (!_split_path(path, &dir_name, &base_name)) {
+        return false;
+    }
+
+    vfs_node_t *parent = vfs_lookup(dir_name);
+    free(dir_name);
+
+    if (parent && VFS_IS_LINK(parent->type)) {
+        parent = parent->link;
+    }
+
+    if (!parent || parent->type != VFS_DIR) {
+        free(base_name);
+        return false;
+    }
+
+    *parent_out = parent;
+    *base_out = base_name;
+    return true;
+}
+
 
 vfs_t *vfs_init(void) {
     vfs = calloc(1, sizeof(vfs_t));
@@ -387,17 +416,14 @@ vfs_node_t *vfs_open(const char *path, u32 type, bool create, mode_t mode) {
         return NULL;
     }
 
-    char *dir_name = NULL;
+    vfs_node_t *parent = NULL;
     char *base_name = NULL;
 
-    if (!_split_path(path, &dir_name, &base_name)) {
+    if (!_resolve_parent_base(path, &parent, &base_name)) {
         return NULL;
     }
 
-    vfs_node_t *parent = vfs_lookup(dir_name);
     vfs_node_t *child = vfs_create(parent, base_name, type, mode);
-
-    free(dir_name);
     free(base_name);
 
     return child;
@@ -565,23 +591,9 @@ bool vfs_link(const char *target, const char *link_path) {
         return false;
     }
 
-    char *dir_name = NULL;
+    vfs_node_t *parent = NULL;
     char *base_name = NULL;
-
-    if (!_split_path(link_path, &dir_name, &base_name)) {
-        return false;
-    }
-
-    vfs_node_t *parent = vfs_lookup(dir_name);
-
-    if (parent && VFS_IS_LINK(parent->type)) {
-        parent = parent->link;
-    }
-
-    free(dir_name);
-
-    if (!parent || parent->type != VFS_DIR) {
-        free(base_name);
+    if (!_resolve_parent_base(link_path, &parent, &base_name)) {
         return false;
     }
 
@@ -618,23 +630,9 @@ bool vfs_unlink(const char *path) {
         return false;
     }
 
-    char *dir_name = NULL;
+    vfs_node_t *parent = NULL;
     char *base_name = NULL;
-
-    if (!_split_path(path, &dir_name, &base_name)) {
-        return false;
-    }
-
-    vfs_node_t *parent = vfs_lookup(dir_name);
-
-    if (parent && VFS_IS_LINK(parent->type)) {
-        parent = parent->link;
-    }
-
-    free(dir_name);
-
-    if (!parent || parent->type != VFS_DIR) {
-        free(base_name);
+    if (!_resolve_parent_base(path, &parent, &base_name)) {
         return false;
     }
 
@@ -664,23 +662,9 @@ bool vfs_rmdir(const char *path) {
         return false;
     }
 
-    char *dir_name = NULL;
+    vfs_node_t *parent = NULL;
     char *base_name = NULL;
-
-    if (!_split_path(path, &dir_name, &base_name)) {
-        return false;
-    }
-
-    vfs_node_t *parent = vfs_lookup(dir_name);
-
-    if (parent && VFS_IS_LINK(parent->type)) {
-        parent = parent->link;
-    }
-
-    free(dir_name);
-
-    if (!parent || parent->type != VFS_DIR) {
-        free(base_name);
+    if (!_resolve_parent_base(path, &parent, &base_name)) {
         return false;
     }
 
@@ -715,37 +699,17 @@ bool vfs_rename(const char *old_path, const char *new_path) {
         return false;
     }
 
-    char *old_dir = NULL;
+    vfs_node_t *old_parent = NULL;
     char *old_base = NULL;
-    char *new_dir = NULL;
+    vfs_node_t *new_parent = NULL;
     char *new_base = NULL;
 
-    if (!_split_path(old_path, &old_dir, &old_base)) {
+    if (!_resolve_parent_base(old_path, &old_parent, &old_base)) {
         return false;
     }
 
-    if (!_split_path(new_path, &new_dir, &new_base)) {
-        free(old_dir);
+    if (!_resolve_parent_base(new_path, &new_parent, &new_base)) {
         free(old_base);
-        return false;
-    }
-
-    vfs_node_t *old_parent = vfs_lookup(old_dir);
-    vfs_node_t *new_parent = vfs_lookup(new_dir);
-
-    if (old_parent && VFS_IS_LINK(old_parent->type)) {
-        old_parent = old_parent->link;
-    }
-    if (new_parent && VFS_IS_LINK(new_parent->type)) {
-        new_parent = new_parent->link;
-    }
-
-    free(old_dir);
-    free(new_dir);
-
-    if (!old_parent || !new_parent || old_parent->type != VFS_DIR || new_parent->type != VFS_DIR) {
-        free(old_base);
-        free(new_base);
         return false;
     }
 

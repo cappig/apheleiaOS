@@ -23,6 +23,7 @@
 #include <sys/lock.h>
 #include <sys/mman.h>
 #include <sys/path.h>
+#include <sys/stats.h>
 #include <sys/proc.h>
 #include <sys/pty.h>
 #include <sys/stat.h>
@@ -543,6 +544,75 @@ static uintptr_t _region_end(const sched_user_region_t *region) {
     return region->vaddr + region->pages * PAGE_4KIB;
 }
 
+static size_t _fd_vfs_io_flags(const sched_fd_t *entry) {
+    if (!entry) {
+        return 0;
+    }
+
+    return (entry->flags & O_NONBLOCK) ? VFS_NONBLOCK : 0;
+}
+
+static ssize_t _fd_read_vfs(
+    sched_fd_t *entry,
+    void *buf,
+    size_t len,
+    size_t offset,
+    bool advance_offset,
+    int bad_kind_error
+) {
+    if (!entry || entry->kind != SCHED_FD_VFS || !entry->node) {
+        return bad_kind_error;
+    }
+
+    if (!_open_has_read(entry->flags)) {
+        return -EBADF;
+    }
+
+    ssize_t ret = vfs_read(entry->node, buf, offset, len, _fd_vfs_io_flags(entry));
+    if (ret == VFS_EOF) {
+        return 0;
+    }
+
+    if (ret > 0 && advance_offset) {
+        entry->offset = offset + (size_t)ret;
+    }
+
+    return ret;
+}
+
+static ssize_t _fd_write_vfs(
+    sched_thread_t *thread,
+    sched_fd_t *entry,
+    const void *buf,
+    size_t len,
+    size_t offset,
+    bool append_mode,
+    bool advance_offset,
+    int bad_kind_error
+) {
+    if (!entry || entry->kind != SCHED_FD_VFS || !entry->node) {
+        return bad_kind_error;
+    }
+
+    if (!_open_has_write(entry->flags)) {
+        return -EBADF;
+    }
+
+    if (append_mode && (entry->flags & O_APPEND)) {
+        offset = (size_t)entry->node->size;
+    }
+
+    ssize_t ret = vfs_write(entry->node, (void *)buf, offset, len, _fd_vfs_io_flags(entry));
+    if (ret > 0) {
+        if (advance_offset) {
+            entry->offset = offset + (size_t)ret;
+        }
+        _maybe_clear_setid(thread, entry->node);
+    }
+
+    return ret;
+}
+
 static ssize_t sys_read(int fd, void *buf, size_t len) {
     if (!buf) {
         return -EFAULT;
@@ -563,32 +633,7 @@ static ssize_t sys_read(int fd, void *buf, size_t len) {
             return _pipe_read(entry->pipe, buf, len, nonblock);
         }
 
-        if (entry->kind != SCHED_FD_VFS || !entry->node) {
-            return -EBADF;
-        }
-
-        if (!_open_has_read(entry->flags)) {
-            return -EBADF;
-        }
-
-        size_t vfs_flags = 0;
-
-        if (entry->flags & O_NONBLOCK) {
-            vfs_flags |= VFS_NONBLOCK;
-        }
-
-        size_t offset = entry->offset;
-        ssize_t ret = vfs_read(entry->node, buf, offset, len, vfs_flags);
-
-        if (ret == VFS_EOF) {
-            return 0;
-        }
-
-        if (ret > 0) {
-            entry->offset = offset + (size_t)ret;
-        }
-
-        return ret;
+        return _fd_read_vfs(entry, buf, len, entry->offset, true, -EBADF);
     }
 
     if (fd == STDIN_FILENO) {
@@ -626,27 +671,7 @@ static ssize_t sys_pread(int fd, void *buf, size_t len, off_t offset) {
 
     _sync_thread_tty(thread, entry);
 
-    if (entry->kind != SCHED_FD_VFS || !entry->node) {
-        return -ESPIPE;
-    }
-
-    if (!_open_has_read(entry->flags)) {
-        return -EBADF;
-    }
-
-    size_t vfs_flags = 0;
-
-    if (entry->flags & O_NONBLOCK) {
-        vfs_flags |= VFS_NONBLOCK;
-    }
-
-    ssize_t ret = vfs_read(entry->node, buf, (size_t)offset, len, vfs_flags);
-
-    if (ret == VFS_EOF) {
-        return 0;
-    }
-
-    return ret;
+    return _fd_read_vfs(entry, buf, len, (size_t)offset, false, -ESPIPE);
 }
 
 static ssize_t sys_write(int fd, const void *buf, size_t len) {
@@ -669,34 +694,7 @@ static ssize_t sys_write(int fd, const void *buf, size_t len) {
             return _pipe_write(entry->pipe, buf, len, nonblock);
         }
 
-        if (entry->kind != SCHED_FD_VFS || !entry->node) {
-            return -EBADF;
-        }
-
-        if (!_open_has_write(entry->flags)) {
-            return -EBADF;
-        }
-
-        size_t vfs_flags = 0;
-
-        if (entry->flags & O_NONBLOCK) {
-            vfs_flags |= VFS_NONBLOCK;
-        }
-
-        size_t offset = entry->offset;
-
-        if (entry->flags & O_APPEND) {
-            offset = (size_t)entry->node->size;
-        }
-
-        ssize_t ret = vfs_write(entry->node, (void *)buf, offset, len, vfs_flags);
-
-        if (ret > 0) {
-            entry->offset = offset + (size_t)ret;
-            _maybe_clear_setid(thread, entry->node);
-        }
-
-        return ret;
+        return _fd_write_vfs(thread, entry, buf, len, entry->offset, true, true, -EBADF);
     }
 
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO || fd == STDIN_FILENO) {
@@ -734,26 +732,7 @@ static ssize_t sys_pwrite(int fd, const void *buf, size_t len, off_t offset) {
 
     _sync_thread_tty(thread, entry);
 
-    if (entry->kind != SCHED_FD_VFS || !entry->node) {
-        return -ESPIPE;
-    }
-
-    if (!_open_has_write(entry->flags)) {
-        return -EBADF;
-    }
-
-    size_t vfs_flags = 0;
-
-    if (entry->flags & O_NONBLOCK) {
-        vfs_flags |= VFS_NONBLOCK;
-    }
-
-    ssize_t ret = vfs_write(entry->node, (void *)buf, (size_t)offset, len, vfs_flags);
-    if (ret > 0) {
-        _maybe_clear_setid(thread, entry->node);
-    }
-
-    return ret;
+    return _fd_write_vfs(thread, entry, buf, len, (size_t)offset, false, false, -ESPIPE);
 }
 
 static ssize_t sys_ioctl(int fd, u64 request, void *args) {
@@ -2230,6 +2209,7 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
             continue;
         }
 
+        stats_inc_poll_sleep_loops();
         sched_sleep(1);
     }
 }

@@ -726,8 +726,6 @@ const kernel_args_t *arch_init(void *boot_info) {
     if (info->args.debug == DEBUG_ALL) {
         dump_pci_devices();
     }
-    console_init(info);
-    _publish_framebuffer(info);
     enable_interrupts();
 
 #if defined(__x86_64__)

@@ -3,11 +3,17 @@
 #include <base/attributes.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
+#include <sys/stats.h>
 #include <x86/apic.h>
 #include <x86/asm.h>
 #include <x86/pic.h>
 #include <x86/pit.h>
 #include <x86/serial.h>
+#include <x86/tsc.h>
+
+#ifndef LEGACY_TIMER_SERIAL_RX
+#define LEGACY_TIMER_SERIAL_RX 1
+#endif
 
 static volatile u64 irq_tick_count = 0;
 static bool use_apic_timer = false;
@@ -38,9 +44,11 @@ static void _register_legacy(size_t irq, int_handler_t handler) {
 }
 
 static void _timer_handler(int_state_t *state) {
+    u64 begin_tsc = read_tsc();
     irq_tick_count++;
     irq_ack(IRQ_SYSTEM_TIMER);
 
+#if LEGACY_TIMER_SERIAL_RX
     for (size_t i = 0; i < 64; i++) {
         char ch = 0;
         if (!serial_try_receive(SERIAL_COM1, &ch)) {
@@ -50,9 +58,34 @@ static void _timer_handler(int_state_t *state) {
             serial_dev_push_rx(0, ch);
         }
     }
+#endif
 
     sched_tick(state);
+
+    u64 khz = tsc_khz();
+    if (khz) {
+        u64 delta_tsc = read_tsc() - begin_tsc;
+        u64 ns = (delta_tsc * 1000000ULL) / khz;
+        stats_add_timer_irq_ns(ns);
+    }
 }
+
+#if !LEGACY_TIMER_SERIAL_RX
+static void _com1_handler(UNUSED int_state_t *state) {
+    irq_ack(IRQ_COM1);
+
+    for (size_t i = 0; i < 128; i++) {
+        char ch = 0;
+        if (!serial_try_receive(SERIAL_COM1, &ch)) {
+            break;
+        }
+
+        if (ch) {
+            serial_dev_push_rx(0, ch);
+        }
+    }
+}
+#endif
 
 static void _spurious_handler(UNUSED int_state_t *state) {
 }
@@ -82,6 +115,13 @@ bool irq_init(void) {
     }
 
     irq_register(IRQ_SYSTEM_TIMER, _timer_handler);
+
+#if LEGACY_TIMER_SERIAL_RX
+    serial_set_rx_interrupt(SERIAL_COM1, false);
+#else
+    irq_register(IRQ_COM1, _com1_handler);
+    serial_set_rx_interrupt(SERIAL_COM1, true);
+#endif
 
     if (use_apic_timer) {
         if (use_ioapic) {

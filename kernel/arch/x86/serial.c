@@ -78,3 +78,15 @@ bool serial_try_receive(size_t port, char *out) {
     *out = inb(port);
     return true;
 }
+
+void serial_set_rx_interrupt(size_t port, bool enabled) {
+    u8 mask = inb(port + SERIAL_INTERRUPT_ENABLE);
+
+    if (enabled) {
+        mask |= 0x01;
+    } else {
+        mask &= (u8)~0x01;
+    }
+
+    outb(port + SERIAL_INTERRUPT_ENABLE, mask);
+}

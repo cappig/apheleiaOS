@@ -12,6 +12,7 @@
 #include <sys/devfs.h>
 #include <sys/framebuffer.h>
 #include <sys/ioctl.h>
+#include <sys/stats.h>
 #include <sys/tty.h>
 
 #define FB_MAP_CHUNK (4 * MIB)
@@ -91,22 +92,65 @@ static ssize_t _dev_fb_write(vfs_node_t *node, void *buf, size_t offset, size_t 
     return _dev_fb_transfer(fb, buf, offset, len, true);
 }
 
-static ssize_t _dev_fb_present(const framebuffer_info_t *fb, const void *frame) {
-    if (!fb || !fb->available || !frame || !_back_buf) {
+static bool _clip_present_rect(
+    const framebuffer_info_t *fb,
+    const fb_present_rect_t *req,
+    u32 *x,
+    u32 *y,
+    u32 *width,
+    u32 *height
+) {
+    if (!fb || !req || !x || !y || !width || !height) {
+        return false;
+    }
+
+    if (!req->width || !req->height) {
+        return false;
+    }
+
+    if (req->x >= fb->width || req->y >= fb->height) {
+        return false;
+    }
+
+    *x = req->x;
+    *y = req->y;
+    *width = req->width;
+    *height = req->height;
+
+    if (*x + *width > fb->width) {
+        *width = fb->width - *x;
+    }
+
+    if (*y + *height > fb->height) {
+        *height = fb->height - *y;
+    }
+
+    return *width && *height;
+}
+
+static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_present_rect_t *req) {
+    if (!fb || !fb->available || !req || !req->frame || !_back_buf) {
         return -EINVAL;
     }
 
-    u32 width = fb->width;
-    u32 height = fb->height;
+    u32 x = 0;
+    u32 y = 0;
+    u32 width = 0;
+    u32 height = 0;
+    if (!_clip_present_rect(fb, req, &x, &y, &width, &height)) {
+        return 0;
+    }
+
+    u32 fb_width = fb->width;
     u32 pitch = fb->pitch;
     u32 bpp_bytes = fb->bpp / 8;
     if (!bpp_bytes) {
         return -EINVAL;
     }
 
-    u32 row_bytes = width * bpp_bytes;
-    size_t hw_frame_size = (size_t)height * row_bytes;
-    const u32 *src = frame;
+    u32 full_row_bytes = fb_width * bpp_bytes;
+    u32 rect_row_bytes = width * bpp_bytes;
+    const u32 *src = req->frame;
 
     u8 red_shift = fb->red_shift;
     u8 green_shift = fb->green_shift;
@@ -118,44 +162,72 @@ static ssize_t _dev_fb_present(const framebuffer_info_t *fb, const void *frame) 
         (u8)bpp_bytes, &red_shift, &green_shift, &blue_shift, &red_size, &green_size, &blue_size
     );
 
+    sched_preempt_disable();
+
     if (pixel_is_fast_bgrx8888(
             (u8)bpp_bytes, red_shift, green_shift, blue_shift, red_size, green_size, blue_size
         )) {
         size_t src_row_bytes = (size_t)width * sizeof(u32);
 
-        for (u32 y = 0; y < height; y++) {
-            memcpy(_back_buf + (size_t)y * row_bytes, src + (size_t)y * width, src_row_bytes);
+        for (u32 row = 0; row < height; row++) {
+            const u32 *src_row = src + (size_t)(y + row) * fb_width + x;
+            u8 *dst_row = _back_buf + (size_t)(y + row) * full_row_bytes + (size_t)x * bpp_bytes;
+            memcpy(dst_row, src_row, src_row_bytes);
         }
     } else {
-        for (u32 y = 0; y < height; y++) {
-            const u32 *src_row = src + (size_t)y * width;
-            u8 *dst_row = _back_buf + (size_t)y * row_bytes;
+        for (u32 row = 0; row < height; row++) {
+            const u32 *src_row = src + (size_t)(y + row) * fb_width + x;
+            u8 *dst_row = _back_buf + (size_t)(y + row) * full_row_bytes + (size_t)x * bpp_bytes;
 
-            for (u32 x = 0; x < width; x++) {
+            for (u32 col = 0; col < width; col++) {
                 u32 packed = pixel_pack_rgb888(
-                    src_row[x], red_shift, green_shift, blue_shift, red_size, green_size, blue_size
+                    src_row[col],
+                    red_shift,
+                    green_shift,
+                    blue_shift,
+                    red_size,
+                    green_size,
+                    blue_size
                 );
-                pixel_store_packed(dst_row + (size_t)x * bpp_bytes, (u8)bpp_bytes, packed);
+                pixel_store_packed(dst_row + (size_t)col * bpp_bytes, (u8)bpp_bytes, packed);
             }
         }
     }
 
-    // Copy back buffer to VRAM in one shot (write-combining for speed)
+    // Copy only the updated rows/columns into VRAM.
     void *vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
     if (!vram) {
+        sched_preempt_enable();
         return -EIO;
     }
 
-    if (pitch == row_bytes) {
-        memcpy(vram, _back_buf, hw_frame_size);
-    } else {
-        for (u32 y = 0; y < height; y++) {
-            memcpy((u8 *)vram + (size_t)y * pitch, _back_buf + (size_t)y * row_bytes, row_bytes);
-        }
+    for (u32 row = 0; row < height; row++) {
+        u8 *dst_row = (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
+        const u8 *src_row = _back_buf + (size_t)(y + row) * full_row_bytes + (size_t)x * bpp_bytes;
+        memcpy(dst_row, src_row, rect_row_bytes);
     }
 
+    stats_add_fb_present_bytes((u64)rect_row_bytes * (u64)height);
+
     arch_phys_unmap(vram, fb->size);
+    sched_preempt_enable();
     return 0;
+}
+
+static ssize_t _dev_fb_present(const framebuffer_info_t *fb, const void *frame) {
+    if (!frame) {
+        return -EINVAL;
+    }
+
+    fb_present_rect_t req = {
+        .frame = frame,
+        .x = 0,
+        .y = 0,
+        .width = fb ? fb->width : 0,
+        .height = fb ? fb->height : 0,
+    };
+
+    return _dev_fb_present_rect(fb, &req);
 }
 
 static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
@@ -219,6 +291,18 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
         }
 
         return _dev_fb_present(fb, args);
+    }
+    case FBIOPRESENT_RECT: {
+        if (!args) {
+            return -EINVAL;
+        }
+
+        ssize_t owner_screen = console_fb_owner_screen();
+        if (owner_screen != TTY_NONE && tty_current_screen() != (size_t)owner_screen) {
+            return -EAGAIN;
+        }
+
+        return _dev_fb_present_rect(fb, (const fb_present_rect_t *)args);
     }
     default:
         return -ENOTTY;

@@ -47,3 +47,4 @@ void serial_devfs_init(void);
 void serial_dev_push_rx(size_t index, char ch);
 bool serial_has_data(size_t port);
 bool serial_try_receive(size_t port, char *out);
+void serial_set_rx_interrupt(size_t port, bool enabled);

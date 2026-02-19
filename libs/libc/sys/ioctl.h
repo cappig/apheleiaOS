@@ -16,5 +16,17 @@
 #define FBIOACQUIRE 11
 #define FBIORELEASE 12
 #define FBIOPRESENT 13
+#define FBIOPRESENT_RECT 14
+
+#define WSIOC_CLAIM_MANAGER   64
+#define WSIOC_RELEASE_MANAGER 65
+#define WSIOC_SET_FOCUS       66
+#define WSIOC_SET_POS         67
+#define WSIOC_SET_Z           68
+#define WSIOC_SEND_INPUT      69
+#define WSIOC_CLOSE           70
+#define WSIOC_ALLOC           71
+#define WSIOC_FREE            72
+#define WSIOC_QUERY           73
 
 int ioctl(int fd, unsigned long request, ...);

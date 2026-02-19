@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -68,17 +69,19 @@ static void close_fd(int *fd) {
     *fd = -1;
 }
 
-static int ui_simple(ui_t *ui, u32 op, u32 id, i32 x, i32 y, u32 flags) {
-    ws_req_t req = {0};
-    ws_resp_t resp = {0};
+static int ui_simple(ui_t *ui, unsigned long request, u32 id, i32 x, i32 y, u32 flags) {
+    if (!ui || ui->ctl_fd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
 
-    req.op = op;
-    req.id = id;
-    req.x = x;
-    req.y = y;
-    req.flags = flags;
+    ws_cmd_t cmd = {0};
+    cmd.id = id;
+    cmd.x = x;
+    cmd.y = y;
+    cmd.flags = flags;
 
-    return ui_rpc(ui, &req, &resp);
+    return ioctl(ui->ctl_fd, request, &cmd);
 }
 
 static void window_reset_runtime(window_t *window) {
@@ -154,6 +157,7 @@ int ui_open(ui_t *ui, u32 flags) {
     }
 
     ui->ctl_fd = -1;
+    ui->mgr_fd = -1;
     ui->input_fd = -1;
 
     ui->ctl_fd = open("/dev/wsctl", O_RDWR | O_NONBLOCK, 0);
@@ -182,34 +186,8 @@ void ui_close(ui_t *ui) {
     }
 
     close_fd(&ui->input_fd);
+    close_fd(&ui->mgr_fd);
     close_fd(&ui->ctl_fd);
-}
-
-int ui_rpc(ui_t *ui, const ws_req_t *req, ws_resp_t *resp) {
-    if (!ui || ui->ctl_fd < 0 || !req || !resp) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    if (write(ui->ctl_fd, req, sizeof(*req)) != (ssize_t)sizeof(*req)) {
-        return -1;
-    }
-
-    ssize_t n = read(ui->ctl_fd, resp, sizeof(*resp));
-    if (n != (ssize_t)sizeof(*resp)) {
-        if (n >= 0) {
-            errno = EIO;
-        }
-
-        return -1;
-    }
-
-    if (resp->status < 0) {
-        errno = -resp->status;
-        return -1;
-    }
-
-    return 0;
 }
 
 ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
@@ -222,65 +200,76 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
 }
 
 int ui_mgr_claim(ui_t *ui) {
-    return ui_simple(ui, WS_OP_CLAIM_MANAGER, 0, 0, 0, 0);
+    if (!ui) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (ui_simple(ui, WSIOC_CLAIM_MANAGER, 0, 0, 0, 0) < 0) {
+        return -1;
+    }
+
+    if (ui->mgr_fd >= 0) {
+        return 0;
+    }
+
+    ui->mgr_fd = open("/dev/wsmgr", O_RDONLY | O_NONBLOCK, 0);
+    if (ui->mgr_fd >= 0) {
+        return 0;
+    }
+
+    int saved = errno;
+    ui_simple(ui, WSIOC_RELEASE_MANAGER, 0, 0, 0, 0);
+    errno = saved;
+    return -1;
 }
 
 int ui_mgr_release(ui_t *ui) {
-    return ui_simple(ui, WS_OP_RELEASE_MANAGER, 0, 0, 0, 0);
+    if (!ui) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    close_fd(&ui->mgr_fd);
+    return ui_simple(ui, WSIOC_RELEASE_MANAGER, 0, 0, 0, 0);
 }
 
 ssize_t ui_mgr_events(ui_t *ui, ws_event_t *events, size_t count) {
-    if (!ui || ui->ctl_fd < 0 || !events || !count) {
+    if (!ui || ui->mgr_fd < 0 || !events || !count) {
         errno = EINVAL;
         return -1;
     }
 
-    return read(ui->ctl_fd, events, count * sizeof(*events));
+    return read(ui->mgr_fd, events, count * sizeof(*events));
 }
 
 int ui_mgr_focus(ui_t *ui, u32 id) {
-    return ui_simple(ui, WS_OP_SET_FOCUS, id, 0, 0, 0);
+    return ui_simple(ui, WSIOC_SET_FOCUS, id, 0, 0, 0);
 }
 
 int ui_mgr_move(ui_t *ui, u32 id, i32 x, i32 y) {
-    return ui_simple(ui, WS_OP_SET_POS, id, x, y, 0);
+    return ui_simple(ui, WSIOC_SET_POS, id, x, y, 0);
 }
 
 int ui_mgr_raise(ui_t *ui, u32 id, u32 z) {
-    return ui_simple(ui, WS_OP_SET_Z, id, 0, 0, z);
+    return ui_simple(ui, WSIOC_SET_Z, id, 0, 0, z);
 }
 
 int ui_mgr_close(ui_t *ui, u32 id) {
-    return ui_simple(ui, WS_OP_CLOSE, id, 0, 0, 0);
-}
-
-int ui_mgr_clear_dirty(ui_t *ui) {
-    return ui_simple(ui, WS_OP_CLEAR_DIRTY, 0, 0, 0, 0);
+    return ui_simple(ui, WSIOC_CLOSE, id, 0, 0, 0);
 }
 
 int ui_mgr_send(ui_t *ui, u32 id, const input_event_t *event) {
-    if (!ui || !event) {
+    if (!ui || ui->ctl_fd < 0 || !event) {
         errno = EINVAL;
         return -1;
     }
 
-    ws_req_t req = {0};
-    ws_resp_t resp = {0};
+    ws_cmd_t cmd = {0};
+    cmd.id = id;
+    memcpy(&cmd.input, event, sizeof(cmd.input));
 
-    req.op = WS_OP_SEND_INPUT;
-    req.id = id;
-    req.input.timestamp_ms = event->timestamp_ms;
-    req.input.type = event->type;
-    req.input.source = event->source;
-    req.input.keycode = event->keycode;
-    req.input.action = event->action;
-    req.input.buttons = event->buttons;
-    req.input.modifiers = event->modifiers;
-    req.input.dx = event->dx;
-    req.input.dy = event->dy;
-    req.input.wheel = event->wheel;
-
-    return ui_rpc(ui, &req, &resp);
+    return ioctl(ui->ctl_fd, WSIOC_SEND_INPUT, &cmd);
 }
 
 int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const char *title) {
@@ -291,32 +280,32 @@ int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const char *
 
     window_reset(window, ui);
 
-    ws_req_t req = {0};
-    ws_resp_t resp = {0};
-
-    req.op = WS_OP_ALLOC;
-    req.width = width;
-    req.height = height;
+    ws_cmd_t cmd = {0};
+    cmd.width = width;
+    cmd.height = height;
 
     if (title) {
-        snprintf(req.title, sizeof(req.title), "%s", title);
+        snprintf(cmd.title, sizeof(cmd.title), "%s", title);
     }
 
-    if (ui_rpc(ui, &req, &resp)) {
+    if (ioctl(ui->ctl_fd, WSIOC_ALLOC, &cmd) < 0) {
+        if (errno == EPIPE) {
+            errno = ENOENT;
+        }
         return -1;
     }
 
-    window->id = resp.id;
-    window->width = resp.width;
-    window->height = resp.height;
-    window->stride = resp.stride;
+    window->id = cmd.id;
+    window->width = cmd.width;
+    window->height = cmd.height;
+    window->stride = cmd.stride;
 
     if (!window_open_fds(window)) {
         return 0;
     }
 
     int saved = errno;
-    ui_simple(ui, WS_OP_FREE, window->id, 0, 0, 0);
+    ui_simple(ui, WSIOC_FREE, window->id, 0, 0, 0);
     window_reset(window, ui);
     errno = saved;
     return -1;
@@ -352,7 +341,7 @@ int window_free(window_t *window) {
         return -1;
     }
 
-    int ret = ui_simple(window->ui, WS_OP_FREE, window->id, 0, 0, 0);
+    int ret = ui_simple(window->ui, WSIOC_FREE, window->id, 0, 0, 0);
     window_close(window);
     return ret;
 }

@@ -17,7 +17,9 @@ void init_spawn(void) {
     log_debug("spawned pid %ld", (long)init->pid);
 
     init->tty_index = (int)TTY_USER_TO_SCREEN(0);
-    tty_set_current(TTY_USER_TO_SCREEN(0));
+    if (!tty_set_current(TTY_USER_TO_SCREEN(0))) {
+        log_warn("failed to switch active tty to user screen 0");
+    }
     sched_make_runnable(init);
 
     // log_debug("marked pid %ld runnable", (long)init->pid);
