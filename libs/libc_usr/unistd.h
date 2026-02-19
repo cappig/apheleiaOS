@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stddef.h>
-#include <sys/proc.h>
 #include <sys/types.h>
 
 extern char **environ;

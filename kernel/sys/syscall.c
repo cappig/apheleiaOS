@@ -1488,131 +1488,6 @@ static int sys_munmap(void *addr, size_t len) {
     return 0;
 }
 
-static long sys_getuid(void) {
-    sched_thread_t *thread = sched_current();
-    if (!thread) {
-        return -EINVAL;
-    }
-
-    return thread->uid;
-}
-
-static long sys_getgid(void) {
-    sched_thread_t *thread = sched_current();
-    if (!thread) {
-        return -EINVAL;
-    }
-
-    return thread->gid;
-}
-
-static int sys_setuid(uid_t uid) {
-    sched_thread_t *thread = sched_current();
-    if (!thread) {
-        return -EINVAL;
-    }
-
-    if (thread->uid != 0 && uid != thread->uid) {
-        return -EPERM;
-    }
-
-    thread->uid = uid;
-    return 0;
-}
-
-static int sys_setgid(gid_t gid) {
-    sched_thread_t *thread = sched_current();
-    if (!thread) {
-        return -EINVAL;
-    }
-
-    if (thread->uid != 0 && gid != thread->gid) {
-        return -EPERM;
-    }
-
-    thread->gid = gid;
-    return 0;
-}
-
-static pid_t sys_getpgid(pid_t pid) {
-    sched_thread_t *thread = sched_current();
-    if (!thread) {
-        return -EINVAL;
-    }
-
-    if (!pid) {
-        return thread->pgid;
-    }
-
-    sched_thread_t *target = sched_find_thread(pid);
-    if (!target) {
-        return -ESRCH;
-    }
-
-    return target->pgid;
-}
-
-static int sys_setpgid(pid_t pid, pid_t pgid) {
-    sched_thread_t *thread = sched_current();
-    if (!thread || !thread->user_thread) {
-        return -EINVAL;
-    }
-
-    if (pid < 0 || pgid < 0) {
-        return -EINVAL;
-    }
-
-    sched_thread_t *target = thread;
-
-    if (pid) {
-        target = sched_find_thread(pid);
-
-        if (!target || !target->user_thread) {
-            return -ESRCH;
-        }
-
-        if (target->pid != thread->pid && !sched_process_is_child(target->pid, thread->pid)) {
-            return -ESRCH;
-        }
-    }
-
-    if (target->sid != thread->sid) {
-        return -EPERM;
-    }
-
-    if (target->sid == target->pid) {
-        return -EPERM;
-    }
-
-    if (!pgid) {
-        pgid = target->pid;
-    }
-
-    if (pgid != target->pid && !sched_pgrp_in_session(pgid, thread->sid)) {
-        return -EPERM;
-    }
-
-    target->pgid = pgid;
-    return 0;
-}
-
-static pid_t sys_setsid(void) {
-    sched_thread_t *thread = sched_current();
-    if (!thread || !thread->user_thread) {
-        return -EINVAL;
-    }
-
-    if (sched_pgrp_exists(thread->pid)) {
-        return -EPERM;
-    }
-
-    thread->sid = thread->pid;
-    thread->pgid = thread->pid;
-    thread->tty_index = TTY_NONE;
-
-    return thread->sid;
-}
-
 static pid_t sys_waitpid(pid_t pid, int *status, int options) {
     return sched_waitpid(pid, status, options);
 }
@@ -2046,14 +1921,6 @@ static u64 sys_kill(pid_t pid, int signum) {
     return ret < 0 ? (u64)-ESRCH : (u64)ret;
 }
 
-static ssize_t sys_getprocs(proc_info_t *out, size_t capacity) {
-    if (!out || !capacity) {
-        return -EINVAL;
-    }
-
-    return (ssize_t)sched_list_procs(out, capacity);
-}
-
 static short _pipe_poll(sched_pipe_t *pipe, bool read_end, short events) {
     if (!pipe) {
         return POLLERR;
@@ -2359,28 +2226,6 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (int *)arch_syscall_arg2(state),
             (int)arch_syscall_arg3(state)
         );
-    case SYS_GETPID: {
-        sched_thread_t *thread = sched_current();
-        return thread ? (u64)thread->pid : (u64)-ESRCH;
-    }
-    case SYS_GETPPID: {
-        sched_thread_t *thread = sched_current();
-        return thread ? (u64)thread->ppid : (u64)-ESRCH;
-    }
-    case SYS_GETUID:
-        return (u64)sys_getuid();
-    case SYS_GETGID:
-        return (u64)sys_getgid();
-    case SYS_SETUID:
-        return (u64)sys_setuid((uid_t)arch_syscall_arg1(state));
-    case SYS_SETGID:
-        return (u64)sys_setgid((gid_t)arch_syscall_arg1(state));
-    case SYS_SETPGID:
-        return (u64)sys_setpgid((pid_t)arch_syscall_arg1(state), (pid_t)arch_syscall_arg2(state));
-    case SYS_GETPGID:
-        return (u64)sys_getpgid((pid_t)arch_syscall_arg1(state));
-    case SYS_SETSID:
-        return (u64)sys_setsid();
     case SYS_SLEEP:
         return (u64)sys_sleep((unsigned int)arch_syscall_arg1(state));
     case SYS_SIGNAL:
@@ -2393,10 +2238,6 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
         return sys_sigreturn(state);
     case SYS_KILL:
         return sys_kill((pid_t)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
-    case SYS_GETPROCS:
-        return (u64)sys_getprocs(
-            (proc_info_t *)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state)
-        );
     default:
         return (u64)-ENOSYS;
     }

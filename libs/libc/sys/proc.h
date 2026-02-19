@@ -1,18 +1,11 @@
 #pragma once
 
+#include <stdbool.h>
 #include <sys/types.h>
 
 #define PROC_NAME_MAX 32
 
-typedef enum {
-    PROC_STATE_READY,
-    PROC_STATE_RUNNING,
-    PROC_STATE_SLEEPING,
-    PROC_STATE_STOPPED,
-    PROC_STATE_ZOMBIE,
-} proc_state_t;
-
-// Controlling terminal encoding in proc_info::tty_index.
+// Controlling terminal encoding in procfs stat `tty_index`.
 //  -1: no controlling terminal
 //   0: console
 //   1..N: virtual tty screen index
@@ -23,18 +16,29 @@ typedef enum {
 #define PROC_TTY_IS_PTS(value)    ((value) <= -2)
 #define PROC_TTY_PTS_INDEX(value) (-(value) - 2)
 
-typedef struct proc_info {
+#ifndef _KERNEL
+typedef enum {
+    PROC_STATE_RUNNING = 'R',
+    PROC_STATE_SLEEPING = 'S',
+    PROC_STATE_STOPPED = 'T',
+    PROC_STATE_ZOMBIE = 'Z',
+    PROC_STATE_UNKNOWN = '?',
+} proc_state_t;
+
+typedef struct {
     pid_t pid;
     pid_t ppid;
     pid_t pgid;
     pid_t sid;
     uid_t uid;
     gid_t gid;
-    proc_state_t state;
+    char state;
     int tty_index;
+    uint64_t cpu_time_ms;
     char name[PROC_NAME_MAX];
-} proc_info_t;
+} proc_stat_t;
 
-#ifndef _KERNEL
-ssize_t getprocs(proc_info_t *out, size_t capacity);
+int proc_stat_parse(const char *text, proc_stat_t *out);
+ssize_t proc_stat_read(pid_t pid, proc_stat_t *out);
+ssize_t proc_stat_read_path(const char *path, proc_stat_t *out);
 #endif

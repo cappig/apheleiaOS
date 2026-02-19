@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
@@ -129,12 +130,31 @@ static job_t *job_add(pid_t pid, const char *cmd, job_state_t state) {
     return job;
 }
 
-static bool pgrp_state(pid_t pgid, const proc_info_t *list, ssize_t count, bool *stopped_out) {
+static bool is_pid_dir_name(const char *name) {
+    if (!name || !name[0]) {
+        return false;
+    }
+
+    for (const char *p = name; *p; p++) {
+        if (!isdigit((unsigned char)*p)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool pgrp_state(pid_t pgid, bool *stopped_out) {
     if (stopped_out) {
         *stopped_out = false;
     }
 
-    if (!list || count <= 0 || pgid <= 0) {
+    if (pgid <= 0) {
+        return false;
+    }
+
+    int fd = open("/proc", O_RDONLY, 0);
+    if (fd < 0) {
         return false;
     }
 
@@ -142,23 +162,38 @@ static bool pgrp_state(pid_t pgid, const proc_info_t *list, ssize_t count, bool 
     bool any_running = false;
     bool any_stopped = false;
 
-    for (ssize_t i = 0; i < count; i++) {
-        if (list[i].pgid != pgid) {
+    dirent_t ent;
+    while (getdents(fd, &ent) > 0) {
+        if (!is_pid_dir_name(ent.d_name)) {
             continue;
         }
 
-        if (list[i].state == PROC_STATE_ZOMBIE) {
+        char stat_path[80];
+        snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent.d_name);
+
+        proc_stat_t stat = {0};
+        if (proc_stat_read_path(stat_path, &stat) < 0) {
+            continue;
+        }
+
+        if (stat.pgid != pgid) {
+            continue;
+        }
+
+        if (stat.state == PROC_STATE_ZOMBIE) {
             continue;
         }
 
         any_alive = true;
 
-        if (list[i].state == PROC_STATE_STOPPED) {
+        if (stat.state == PROC_STATE_STOPPED) {
             any_stopped = true;
         } else {
             any_running = true;
         }
     }
+
+    close(fd);
 
     if (stopped_out && any_alive && any_stopped && !any_running) {
         *stopped_out = true;
@@ -168,16 +203,10 @@ static bool pgrp_state(pid_t pgid, const proc_info_t *list, ssize_t count, bool 
 }
 
 static void reap_jobs(bool report) {
-    proc_info_t procs[128];
-    ssize_t count = getprocs(procs, sizeof(procs) / sizeof(procs[0]));
-    if (count < 0) {
-        return;
-    }
-
     for (size_t i = 0; i < sh_job_count;) {
         job_t *job = &sh_jobs[i];
         bool stopped = false;
-        bool alive = pgrp_state(job->pid, procs, count, &stopped);
+        bool alive = pgrp_state(job->pid, &stopped);
 
         if (!alive) {
             int status = 0;

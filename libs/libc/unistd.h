@@ -1,7 +1,5 @@
 #pragma once
 
-// FIXME: this should be arch generic
-
 #define SYS_EXIT      0
 #define SYS_READ      1
 #define SYS_WRITE     2
@@ -29,26 +27,16 @@
 #define SYS_FORK      24
 #define SYS_EXECVE    25
 #define SYS_WAIT      26
-#define SYS_GETPID    27
-#define SYS_GETPPID   28
-#define SYS_GETUID    29
-#define SYS_GETGID    30
-#define SYS_SETUID    31
-#define SYS_SETGID    32
-#define SYS_SETPGID   33
-#define SYS_GETPGID   34
-#define SYS_SETSID    35
-#define SYS_SLEEP     36
-#define SYS_SIGNAL    37
-#define SYS_SIGRETURN 38
-#define SYS_KILL      39
-#define SYS_GETPROCS  40
-#define SYS_WAITPID   41
-#define SYS_PIPE      42
-#define SYS_DUP       43
-#define SYS_RMDIR     44
-#define SYS_UMASK     45
-#define SYS_POLL      46
+#define SYS_SLEEP     27
+#define SYS_SIGNAL    28
+#define SYS_SIGRETURN 29
+#define SYS_KILL      30
+#define SYS_WAITPID   31
+#define SYS_PIPE      32
+#define SYS_DUP       33
+#define SYS_RMDIR     34
+#define SYS_UMASK     35
+#define SYS_POLL      36
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1

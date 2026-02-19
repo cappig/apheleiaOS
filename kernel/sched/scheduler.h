@@ -135,10 +135,24 @@ typedef struct sched_thread {
     sighandler_t signal_handlers[NSIG];
 
     int tty_index;
+    u64 cpu_time_ticks;
 
     u8 fpu_state[512] ALIGNED(16);
     bool fpu_initialized;
 } sched_thread_t;
+
+typedef struct {
+    pid_t pid;
+    pid_t ppid;
+    pid_t pgid;
+    pid_t sid;
+    uid_t uid;
+    gid_t gid;
+    thread_state_t state;
+    int tty_index;
+    u64 cpu_time_ms;
+    char name[PROC_NAME_MAX];
+} sched_proc_snapshot_t;
 
 void scheduler_init(void);
 void scheduler_start(void);
@@ -147,6 +161,15 @@ bool sched_is_running(void);
 
 sched_thread_t *sched_current(void);
 sched_thread_t *sched_find_thread(pid_t pid);
+pid_t sched_getpid(void);
+pid_t sched_getppid(void);
+uid_t sched_getuid(void);
+gid_t sched_getgid(void);
+int sched_setuid(uid_t uid);
+int sched_setgid(gid_t gid);
+pid_t sched_getpgid(pid_t pid);
+int sched_setpgid(pid_t pid, pid_t pgid);
+pid_t sched_setsid(void);
 bool sched_process_is_child(pid_t child_pid, pid_t parent_pid);
 bool sched_pid_is_group_leader(pid_t pid);
 bool sched_pgrp_exists(pid_t pgid);
@@ -188,7 +211,7 @@ void sched_tick(arch_int_state_t *state);
 void sched_yield(void);
 void sched_sleep(u64 ticks);
 void sched_exit(void) NORETURN;
-size_t sched_list_procs(proc_info_t *out, size_t capacity);
+bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
 
 bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write);

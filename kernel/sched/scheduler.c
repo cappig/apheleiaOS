@@ -16,9 +16,9 @@
 #include <sys/cpu.h>
 #include <sys/lock.h>
 #include <sys/panic.h>
-#include <sys/stats.h>
-#include <sys/proc.h>
+#include <sys/procfs.h>
 #include <sys/pty.h>
+#include <sys/stats.h>
 #include <sys/tty.h>
 #include <sys/wait.h>
 
@@ -308,23 +308,6 @@ static inline void sched_local_dec_preempt_depth(void) {
 
 static inline bool sched_local_preempt_disabled(void) {
     return sched_local()->preempt_depth != 0;
-}
-
-static proc_state_t sched_state_to_proc(thread_state_t state) {
-    switch (state) {
-    case THREAD_READY:
-        return PROC_STATE_READY;
-    case THREAD_RUNNING:
-        return PROC_STATE_RUNNING;
-    case THREAD_SLEEPING:
-        return PROC_STATE_SLEEPING;
-    case THREAD_STOPPED:
-        return PROC_STATE_STOPPED;
-    case THREAD_ZOMBIE:
-        return PROC_STATE_ZOMBIE;
-    default:
-        return PROC_STATE_READY;
-    }
 }
 
 static void add_all_thread(sched_thread_t *thread) {
@@ -950,6 +933,8 @@ static void destroy_thread(sched_thread_t *thread) {
         return;
     }
 
+    procfs_unregister_pid(thread->pid);
+
     sched_fd_close_all(thread);
 
     sched_clear_user_regions(thread);
@@ -1382,6 +1367,7 @@ create_thread(const char *name, thread_entry_t entry, void *arg, bool enqueue, b
     thread->fpu_initialized = true;
 
     add_all_thread(thread);
+    procfs_register_pid(thread->pid);
 
     if (enqueue) {
         enqueue_thread(thread);
@@ -1396,6 +1382,153 @@ sched_thread_t *sched_current(void) {
 
 sched_thread_t *sched_find_thread(pid_t pid) {
     return find_thread_by_pid(pid);
+}
+
+pid_t sched_getpid(void) {
+    sched_thread_t *thread = sched_local_current();
+
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    return thread->pid;
+}
+
+pid_t sched_getppid(void) {
+    sched_thread_t *thread = sched_local_current();
+
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    return thread->ppid;
+}
+
+uid_t sched_getuid(void) {
+    sched_thread_t *thread = sched_local_current();
+
+    if (!thread) {
+        return (uid_t)-EINVAL;
+    }
+
+    return thread->uid;
+}
+
+gid_t sched_getgid(void) {
+    sched_thread_t *thread = sched_local_current();
+
+    if (!thread) {
+        return (gid_t)-EINVAL;
+    }
+
+    return thread->gid;
+}
+
+int sched_setuid(uid_t uid) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    if (thread->uid != 0 && uid != thread->uid) {
+        return -EPERM;
+    }
+
+    thread->uid = uid;
+    return 0;
+}
+
+int sched_setgid(gid_t gid) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    if (thread->uid != 0 && gid != thread->gid) {
+        return -EPERM;
+    }
+
+    thread->gid = gid;
+    return 0;
+}
+
+pid_t sched_getpgid(pid_t pid) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    if (!pid) {
+        return thread->pgid;
+    }
+
+    sched_thread_t *target = sched_find_thread(pid);
+    if (!target) {
+        return -ESRCH;
+    }
+
+    return target->pgid;
+}
+
+int sched_setpgid(pid_t pid, pid_t pgid) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread || !thread->user_thread) {
+        return -EINVAL;
+    }
+
+    if (pid < 0 || pgid < 0) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *target = thread;
+
+    if (pid) {
+        target = sched_find_thread(pid);
+
+        if (!target || !target->user_thread) {
+            return -ESRCH;
+        }
+
+        if (target->pid != thread->pid && !sched_process_is_child(target->pid, thread->pid)) {
+            return -ESRCH;
+        }
+    }
+
+    if (target->sid != thread->sid) {
+        return -EPERM;
+    }
+
+    if (target->sid == target->pid) {
+        return -EPERM;
+    }
+
+    if (!pgid) {
+        pgid = target->pid;
+    }
+
+    if (pgid != target->pid && !sched_pgrp_in_session(pgid, thread->sid)) {
+        return -EPERM;
+    }
+
+    target->pgid = pgid;
+    return 0;
+}
+
+pid_t sched_setsid(void) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread || !thread->user_thread) {
+        return -EINVAL;
+    }
+
+    if (sched_pgrp_exists(thread->pid)) {
+        return -EPERM;
+    }
+
+    thread->sid = thread->pid;
+    thread->pgid = thread->pid;
+    thread->tty_index = TTY_NONE;
+
+    return thread->sid;
 }
 
 bool sched_process_is_child(pid_t child_pid, pid_t parent_pid) {
@@ -1886,6 +2019,10 @@ void sched_tick(arch_int_state_t *state) {
     sched_reap();
     sched_wake_sleepers(arch_timer_ticks());
 
+    if (thread != sched_local_idle()) {
+        __atomic_fetch_add(&thread->cpu_time_ticks, 1, __ATOMIC_RELAXED);
+    }
+
     thread->context = (uintptr_t)state;
     sched_signal_deliver_current(state);
 
@@ -2096,41 +2233,42 @@ bool sched_preempt_disabled(void) {
     return sched_local_preempt_disabled();
 }
 
-size_t sched_list_procs(proc_info_t *out, size_t capacity) {
-    if (!out || !capacity || !all_list) {
-        return 0;
+bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
+    if (!out || pid < 0 || !all_list) {
+        return false;
     }
 
+    u64 hz = arch_timer_hz();
+    bool found = false;
     unsigned long flags = sched_lock_save();
-    size_t count = 0;
 
     ll_foreach(node, all_list) {
-        if (count >= capacity) {
-            break;
-        }
-
         sched_thread_t *thread = node->data;
-        if (!thread) {
+        if (!thread || thread->pid != pid) {
             continue;
         }
 
-        proc_info_t *info = &out[count++];
+        out->pid = thread->pid;
+        out->ppid = thread->ppid;
+        out->pgid = thread->pgid;
+        out->sid = thread->sid;
+        out->uid = thread->uid;
+        out->gid = thread->gid;
+        out->state = thread->state;
+        out->tty_index = thread->tty_index;
 
-        info->pid = thread->pid;
-        info->ppid = thread->ppid;
-        info->pgid = thread->pgid;
-        info->sid = thread->sid;
-        info->uid = thread->uid;
-        info->gid = thread->gid;
-        info->state = sched_state_to_proc(thread->state);
-        info->tty_index = thread->tty_index;
+        u64 cpu_ticks = __atomic_load_n(&thread->cpu_time_ticks, __ATOMIC_RELAXED);
+        out->cpu_time_ms = hz ? ((cpu_ticks * 1000ULL) / hz) : 0;
 
-        memset(info->name, 0, sizeof(info->name));
-        strncpy(info->name, thread->name, sizeof(info->name) - 1);
+        memset(out->name, 0, sizeof(out->name));
+        strncpy(out->name, thread->name, sizeof(out->name) - 1);
+
+        found = true;
+        break;
     }
 
     sched_lock_restore(flags);
-    return count;
+    return found;
 }
 
 int sched_signal_send_pgrp(pid_t pgid, int signum) {

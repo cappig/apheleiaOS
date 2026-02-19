@@ -12,6 +12,7 @@
 #include <sys/mouse.h>
 #include <sys/psf.h>
 #include <sys/pty.h>
+#include <sys/procfs.h>
 #include <sys/symbols.h>
 #include <sys/syscall.h>
 #include <sys/tty.h>
@@ -45,6 +46,10 @@ NORETURN void kernel_main(void *boot_info) {
         log_warn("failed to mount rootfs");
     } else {
         load_symbols();
+    }
+
+    if (!procfs_init()) {
+        log_warn("procfs init failed");
     }
 
     const char *font_path = args ? args->font : NULL;

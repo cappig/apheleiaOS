@@ -1,8 +1,12 @@
 #include <arch/sys.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libc_usr/unistd.h>
 #include <limits.h>
+#include <stdio.h>
 #include <stdint.h>
+#include <string.h>
+#include <sys/proc.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -134,44 +138,149 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
     );
 }
 
+static int _read_self_stat(proc_stat_t *stat_out) {
+    if (!stat_out) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (proc_stat_read_path("/proc/self/stat", stat_out) < 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int _write_proc_value_path(const char *path, long long value) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = open(path, O_WRONLY, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    char text[32];
+    int len = snprintf(text, sizeof(text), "%lld\n", value);
+    if (len <= 0 || (size_t)len >= sizeof(text)) {
+        close(fd);
+        errno = EINVAL;
+        return -1;
+    }
+
+    ssize_t written = write(fd, text, (size_t)len);
+    int saved = errno;
+
+    close(fd);
+
+    if (written < 0) {
+        errno = saved;
+        return -1;
+    }
+
+    if ((size_t)written != (size_t)len) {
+        errno = EIO;
+        return -1;
+    }
+
+    return 0;
+}
+
 pid_t getpid(void) {
-    return SYSCALL_RET(pid_t, syscall0(SYS_GETPID));
+    proc_stat_t stat = {0};
+    if (_read_self_stat(&stat) < 0) {
+        return (pid_t)-1;
+    }
+
+    return stat.pid;
 }
 
 pid_t getppid(void) {
-    return SYSCALL_RET(pid_t, syscall0(SYS_GETPPID));
+    proc_stat_t stat = {0};
+    if (_read_self_stat(&stat) < 0) {
+        return (pid_t)-1;
+    }
+
+    return stat.ppid;
 }
 
 pid_t getpgid(pid_t pid) {
-    return SYSCALL_RET(pid_t, syscall1(SYS_GETPGID, (uintptr_t)pid));
+    if (pid < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    proc_stat_t stat = {0};
+
+    if (!pid) {
+        if (_read_self_stat(&stat) < 0) {
+            return -1;
+        }
+
+        return stat.pgid;
+    }
+
+    if (proc_stat_read(pid, &stat) < 0) {
+        return -1;
+    }
+
+    return stat.pgid;
 }
 
 int setpgid(pid_t pid, pid_t pgid) {
-    return SYSCALL_RET(int, syscall2(SYS_SETPGID, (uintptr_t)pid, (uintptr_t)pgid));
+    if (pid < 0 || pgid < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (!pid) {
+        return _write_proc_value_path("/proc/self/pgid", (long long)pgid);
+    }
+
+    char path[48];
+    snprintf(path, sizeof(path), "/proc/%lld/pgid", (long long)pid);
+    return _write_proc_value_path(path, (long long)pgid);
 }
 
 pid_t setsid(void) {
-    return SYSCALL_RET(pid_t, syscall0(SYS_SETSID));
+    if (_write_proc_value_path("/proc/self/sid", 1) < 0) {
+        return -1;
+    }
+
+    proc_stat_t stat = {0};
+    if (_read_self_stat(&stat) < 0) {
+        return -1;
+    }
+
+    return stat.sid;
 }
 
 uid_t getuid(void) {
-    return SYSCALL_RET(uid_t, syscall0(SYS_GETUID));
+    proc_stat_t stat = {0};
+    if (_read_self_stat(&stat) < 0) {
+        return (uid_t)-1;
+    }
+
+    return stat.uid;
 }
 
 gid_t getgid(void) {
-    return SYSCALL_RET(gid_t, syscall0(SYS_GETGID));
+    proc_stat_t stat = {0};
+    if (_read_self_stat(&stat) < 0) {
+        return (gid_t)-1;
+    }
+
+    return stat.gid;
 }
 
 int setuid(uid_t uid) {
-    return SYSCALL_RET(int, syscall1(SYS_SETUID, (uintptr_t)uid));
+    return _write_proc_value_path("/proc/self/uid", (long long)uid);
 }
 
 int setgid(gid_t gid) {
-    return SYSCALL_RET(int, syscall1(SYS_SETGID, (uintptr_t)gid));
-}
-
-ssize_t getprocs(proc_info_t *out, size_t capacity) {
-    return SYSCALL_RET(ssize_t, syscall2(SYS_GETPROCS, (uintptr_t)out, (uintptr_t)capacity));
+    return _write_proc_value_path("/proc/self/gid", (long long)gid);
 }
 
 void _exit(int status) {
