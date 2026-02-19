@@ -153,6 +153,100 @@ static bool _proc_snapshot_from_key(uintptr_t key, sched_proc_snapshot_t *snapsh
     return true;
 }
 
+static bool _parse_pid_name(const char *name, pid_t *pid_out) {
+    if (!name || !name[0] || !pid_out) {
+        return false;
+    }
+
+    long long value = 0;
+
+    for (const char *p = name; *p; p++) {
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+
+        value = value * 10 + (*p - '0');
+    }
+
+    if (value <= 0) {
+        return false;
+    }
+
+    *pid_out = (pid_t)value;
+    return true;
+}
+
+static bool _owner_for_pid(pid_t pid, uid_t *uid_out, gid_t *gid_out) {
+    if (!uid_out || !gid_out) {
+        return false;
+    }
+
+    if (!pid) {
+        pid = sched_getpid();
+        if (pid <= 0) {
+            return false;
+        }
+    }
+
+    sched_proc_snapshot_t snapshot = {0};
+
+    if (!sched_proc_snapshot(pid, &snapshot)) {
+        return false;
+    }
+
+    *uid_out = snapshot.uid;
+    *gid_out = snapshot.gid;
+    return true;
+}
+
+bool procfs_stat_owner(vfs_node_t *node, uid_t *uid_out, gid_t *gid_out) {
+    if (!node || !uid_out || !gid_out || !proc_root) {
+        return false;
+    }
+
+    if (!node->tree_entry || !node->tree_entry->parent) {
+        return false;
+    }
+
+    tree_node_t *parent_tnode = node->tree_entry->parent;
+    vfs_node_t *parent = parent_tnode ? parent_tnode->data : NULL;
+
+    if (!parent || !parent->tree_entry || !parent->tree_entry->parent) {
+        if (parent == proc_root && node->name && !strcmp(node->name, "self")) {
+            return _owner_for_pid(0, uid_out, gid_out);
+        }
+
+        return false;
+    }
+
+    tree_node_t *grand_tnode = parent->tree_entry->parent;
+    vfs_node_t *grand = grand_tnode ? grand_tnode->data : NULL;
+
+    pid_t pid = 0;
+
+    // /proc/self/<entry>
+    if (parent == proc_root && node->name && !strcmp(node->name, "self")) {
+        return _owner_for_pid(0, uid_out, gid_out);
+    }
+
+    // /proc/<pid>
+    if (parent == proc_root && _parse_pid_name(node->name, &pid)) {
+        return _owner_for_pid(pid, uid_out, gid_out);
+    }
+
+    // /proc/self/<entry>
+    if (grand == proc_root && parent->name && !strcmp(parent->name, "self")) {
+        return _owner_for_pid(0, uid_out, gid_out);
+    }
+
+    // /proc/<pid>/<entry>
+    if (grand == proc_root && _parse_pid_name(parent->name, &pid)) {
+        return _owner_for_pid(pid, uid_out, gid_out);
+    }
+
+    return false;
+}
+
 static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 

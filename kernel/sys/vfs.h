@@ -110,6 +110,7 @@ vfs_node_t *vfs_lookup_relative(const char *root, const char *path);
 vfs_node_t *vfs_open(const char *path, u32 type, bool create, mode_t mode);
 
 bool vfs_access(vfs_node_t *vnode, uid_t uid, gid_t gid, int mode);
+int vfs_check_search(const char *path, uid_t uid, gid_t gid, bool allow_missing_leaf);
 bool vfs_stat_node(vfs_node_t *node, stat_t *out, bool follow_links);
 bool vfs_chmod(vfs_node_t *node, mode_t mode);
 bool vfs_chown(vfs_node_t *node, uid_t uid, gid_t gid);

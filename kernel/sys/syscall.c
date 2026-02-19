@@ -25,6 +25,7 @@
 #include <sys/path.h>
 #include <sys/stats.h>
 #include <sys/proc.h>
+#include <sys/procfs.h>
 #include <sys/pty.h>
 #include <sys/stat.h>
 #include <sys/tty.h>
@@ -196,6 +197,11 @@ _resolve_user_path(const sched_thread_t *thread, const char *path, char *out, si
 
     if (!path_resolve(thread->cwd, path, out, out_len)) {
         return -ENOENT;
+    }
+
+    int search_err = vfs_check_search(out, thread->uid, thread->gid, true);
+    if (search_err < 0) {
+        return search_err;
     }
 
     return 0;
@@ -413,6 +419,11 @@ static int _resolve_writable_parent(
 
     if (!_split_parent(path, parent_path, parent_path_len, base, base_len)) {
         return -EINVAL;
+    }
+
+    int search_err = vfs_check_search(parent_path, thread->uid, thread->gid, false);
+    if (search_err < 0) {
+        return search_err;
     }
 
     vfs_node_t *parent = _resolve_link_node(vfs_lookup(parent_path));
@@ -781,8 +792,9 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     }
 
     char resolved[PATH_MAX];
-    if (!path_resolve(thread->cwd, path, resolved, sizeof(resolved))) {
-        return -ENOENT;
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    if (resolve_err < 0) {
+        return resolve_err;
     }
 
     bool ptmx_open = false;
@@ -802,6 +814,11 @@ static int sys_open(const char *path, int flags, mode_t mode) {
             snprintf(resolved, sizeof(resolved), "%s", master_path);
             ptmx_open = true;
             dev = resolved + 5;
+
+            int search_err = vfs_check_search(resolved, thread->uid, thread->gid, true);
+            if (search_err < 0) {
+                return _open_fail(ptmx_open, ptmx_index, search_err);
+            }
         }
 
         fd_tty_index = _tty_binding_from_dev_name(dev);
@@ -1099,6 +1116,10 @@ static int sys_chdir(const char *path) {
 
     if (!node || node->type != VFS_DIR) {
         return -ENOTDIR;
+    }
+
+    if (!vfs_access(node, thread->uid, thread->gid, X_OK)) {
+        return -EACCES;
     }
 
     strncpy(thread->cwd, resolved, sizeof(thread->cwd) - 1);
@@ -1510,7 +1531,18 @@ static int sys_stat_path(const char *path, stat_t *st, bool follow_links) {
         return -ENOENT;
     }
 
-    return vfs_stat_node(node, st, follow_links) ? 0 : -EIO;
+    if (!vfs_stat_node(node, st, follow_links)) {
+        return -EIO;
+    }
+
+    uid_t owner_uid = 0;
+    gid_t owner_gid = 0;
+    if (procfs_stat_owner(node, &owner_uid, &owner_gid)) {
+        st->st_uid = owner_uid;
+        st->st_gid = owner_gid;
+    }
+
+    return 0;
 }
 
 static int sys_fstat(int fd, stat_t *st) {
@@ -1538,7 +1570,18 @@ static int sys_fstat(int fd, stat_t *st) {
         return -EBADF;
     }
 
-    return vfs_stat_node(entry->node, st, true) ? 0 : -EIO;
+    if (!vfs_stat_node(entry->node, st, true)) {
+        return -EIO;
+    }
+
+    uid_t owner_uid = 0;
+    gid_t owner_gid = 0;
+    if (procfs_stat_owner(entry->node, &owner_uid, &owner_gid)) {
+        st->st_uid = owner_uid;
+        st->st_gid = owner_gid;
+    }
+
+    return 0;
 }
 
 static int sys_chmod(const char *path, mode_t mode) {

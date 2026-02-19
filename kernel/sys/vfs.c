@@ -481,6 +481,71 @@ bool vfs_access(vfs_node_t *vnode, uid_t uid, gid_t gid, int mode) {
     return (perm & mode) == mode;
 }
 
+int vfs_check_search(const char *path, uid_t uid, gid_t gid, bool allow_missing_leaf) {
+    if (!path || !path[0]) {
+        return -EINVAL;
+    }
+
+    vfs_node_t *current = vfs_lookup("/");
+    current = _resolve_link(current);
+    if (!current) {
+        return -ENOENT;
+    }
+
+    if (!strcmp(path, "/")) {
+        if (current->type != VFS_DIR) {
+            return -ENOTDIR;
+        }
+
+        return vfs_access(current, uid, gid, X_OK) ? 0 : -EACCES;
+    }
+
+    char *copy = strdup(path);
+    if (!copy) {
+        return -ENOMEM;
+    }
+
+    int ret = 0;
+    char *save = NULL;
+    char *segment = strtok_r(copy, "/", &save);
+
+    while (segment) {
+        char *next_segment = strtok_r(NULL, "/", &save);
+        current = _resolve_link(current);
+
+        if (!current) {
+            ret = -ENOENT;
+            break;
+        }
+
+        if (current->type != VFS_DIR) {
+            ret = -ENOTDIR;
+            break;
+        }
+
+        if (!vfs_access(current, uid, gid, X_OK)) {
+            ret = -EACCES;
+            break;
+        }
+
+        vfs_node_t *next = _find_child(current, segment, NULL);
+        if (!next) {
+            if (allow_missing_leaf && !next_segment) {
+                ret = 0;
+            } else {
+                ret = -ENOENT;
+            }
+            break;
+        }
+
+        current = next;
+        segment = next_segment;
+    }
+
+    free(copy);
+    return ret;
+}
+
 bool vfs_stat_node(vfs_node_t *node, stat_t *out, bool follow_links) {
     if (!node || !out) {
         return false;

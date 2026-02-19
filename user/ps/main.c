@@ -6,6 +6,11 @@
 #include <sys/proc.h>
 #include <unistd.h>
 
+#define PS_COL_PID   5
+#define PS_COL_TTY   5
+#define PS_COL_STAT  4
+#define PS_COL_TIME  5
+
 static void write_cstr(const char *text) {
     if (!text) {
         return;
@@ -104,7 +109,22 @@ int main(void) {
         return 1;
     }
 
-    write_cstr("PID   TTY     STAT TIME COMMAND\n");
+    char line[192];
+    snprintf(
+        line,
+        sizeof(line),
+        "%-*s  %-*s  %-*s  %-*s  %s\n",
+        PS_COL_PID,
+        "PID",
+        PS_COL_TTY,
+        "TTY",
+        PS_COL_STAT,
+        "STAT",
+        PS_COL_TIME,
+        "TIME",
+        "COMMAND"
+    );
+    write_cstr(line);
 
     dirent_t ent;
     while (getdents(proc_fd, &ent) > 0) {
@@ -127,14 +147,20 @@ int main(void) {
         char time_buf[16];
         format_cpu_time_ms(info.cpu_time_ms, time_buf, sizeof(time_buf));
 
-        char line[160];
         snprintf(
             line,
             sizeof(line),
-            "%-5lld %-7s %-4s %-8s %s\n",
+            "%-*lld  %-*.*s  %-*.*s  %-*.*s  %s\n",
+            PS_COL_PID,
             (long long)info.pid,
+            PS_COL_TTY,
+            PS_COL_TTY,
             tty,
+            PS_COL_STAT,
+            PS_COL_STAT,
             state_name(info.state),
+            PS_COL_TIME,
+            PS_COL_TIME,
             time_buf,
             cmd
         );

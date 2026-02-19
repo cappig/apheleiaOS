@@ -655,6 +655,11 @@ _open_file(sched_thread_t *thread, const char *path, exec_file_t *out, bool requ
         return -ENOENT;
     }
 
+    int search_err = vfs_check_search(out->resolved, thread->uid, thread->gid, false);
+    if (search_err < 0) {
+        return search_err;
+    }
+
     out->node = vfs_lookup(out->resolved);
     if (!out->node) {
         // log_warn("'%s' not found", out->resolved);
