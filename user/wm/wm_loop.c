@@ -442,8 +442,9 @@ void wm_loop(
         .term_hotkey_down = false,
     };
 
-    struct pollfd pfds[2] = {
-        {.fd = ui->input_fd, .events = POLLIN, .revents = 0},
+    struct pollfd pfds[3] = {
+        {.fd = ui->keyboard_fd, .events = POLLIN, .revents = 0},
+        {.fd = ui->mouse_fd, .events = POLLIN, .revents = 0},
         {.fd = ui->mgr_fd, .events = POLLIN, .revents = 0},
     };
 
@@ -469,7 +470,7 @@ void wm_loop(
             timeout_ms = WM_POLL_FRAME_MS;
         }
 
-        int pr = poll(pfds, 2, timeout_ms);
+        int pr = poll(pfds, 3, timeout_ms);
 
         if (pr < 0) {
             if (errno == EINTR) {
@@ -479,13 +480,13 @@ void wm_loop(
             return;
         }
 
-        if (pfds[1].revents & POLLIN) {
+        if (pfds[2].revents & POLLIN) {
             if (_handle_ws_events(ui, &rt, &damage) < 0) {
                 return;
             }
         }
 
-        if (pfds[0].revents & POLLIN) {
+        if ((pfds[0].revents & POLLIN) || (pfds[1].revents & POLLIN)) {
             bool changed = false;
             if (_handle_input_events(ui, &rt, fb_info, exit_requested, &changed, &damage) < 0) {
                 return;

@@ -148,6 +148,7 @@ typedef struct {
     pid_t sid;
     uid_t uid;
     gid_t gid;
+    mode_t umask;
     thread_state_t state;
     int tty_index;
     u64 cpu_time_ms;
@@ -165,8 +166,10 @@ pid_t sched_getpid(void);
 pid_t sched_getppid(void);
 uid_t sched_getuid(void);
 gid_t sched_getgid(void);
+mode_t sched_getumask(void);
 int sched_setuid(uid_t uid);
 int sched_setgid(gid_t gid);
+int sched_setumask(mode_t mask);
 pid_t sched_getpgid(pid_t pid);
 int sched_setpgid(pid_t pid, pid_t pgid);
 pid_t sched_setsid(void);
@@ -215,6 +218,7 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
 
 bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write);
+bool sched_proc_cwd(pid_t pid, char *out, size_t out_len);
 
 int sched_fd_alloc(sched_thread_t *thread, const sched_fd_t *fd, int min_fd);
 int sched_fd_install(sched_thread_t *thread, int target_fd, const sched_fd_t *fd);

@@ -18,7 +18,6 @@
 #include <sys/tty.h>
 #include <sys/vfs.h>
 
-#include "sys/input.h"
 #include "sys/ws.h"
 
 NORETURN void kernel_main(void *boot_info) {
@@ -62,10 +61,6 @@ NORETURN void kernel_main(void *boot_info) {
 
     tty_init();
     pty_init();
-
-    if (!input_init()) {
-        log_warn("input init failed");
-    }
 
     if (!keyboard_init()) {
         log_warn("keyboard init failed");

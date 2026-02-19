@@ -3,15 +3,17 @@
 #include <arch/arch.h>
 #include <data/ring.h>
 #include <data/vector.h>
+#include <errno.h>
 #include <log/log.h>
+#include <poll.h>
 #include <sched/scheduler.h>
+#include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/console.h>
 #include <sys/devfs.h>
 #include <sys/tty.h>
 #include <sys/tty_input.h>
-
-#include "input.h"
 
 static vector_t *kbds = NULL;
 static ring_buffer_t *buffer = NULL;
@@ -24,6 +26,24 @@ static keyboard_dev_t *_get(size_t index) {
     }
 
     return *slot;
+}
+
+static bool _screen_captured(void) {
+    ssize_t owner_screen = console_fb_owner_screen();
+
+    if (owner_screen == TTY_NONE) {
+        return false;
+    }
+
+    return tty_current_screen() == (size_t)owner_screen;
+}
+
+static bool _has_events(void) {
+    unsigned long irq_flags = arch_irq_save();
+    bool has_events = buffer && !ring_buffer_is_empty(buffer);
+    arch_irq_restore(irq_flags);
+
+    return has_events;
 }
 
 static void _update_modifiers(keyboard_dev_t *kbd, bool action, u8 code) {
@@ -93,10 +113,9 @@ static bool _push_ansi_key(u8 code) {
 ssize_t keyboard_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
-    (void)flags;
 
     if (!buf || !buffer || !len) {
-        return -1;
+        return -EINVAL;
     }
 
     for (;;) {
@@ -108,12 +127,34 @@ ssize_t keyboard_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u3
             return (ssize_t)popped;
         }
 
+        if (flags & VFS_NONBLOCK) {
+            return -EAGAIN;
+        }
+
         if (!sched_is_running()) {
             continue;
         }
 
+        sched_thread_t *current = sched_current();
+        if (current && sched_signal_has_pending(current)) {
+            return -EINTR;
+        }
+
         sched_block(&kbd_wait);
     }
+}
+
+static short keyboard_poll(vfs_node_t *node, short events, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    short revents = 0;
+
+    if ((events & POLLIN) && _has_events()) {
+        revents |= POLLIN;
+    }
+
+    return revents;
 }
 
 void keyboard_handle_key(key_event event) {
@@ -129,11 +170,12 @@ void keyboard_handle_key(key_event event) {
     }
 
     bool action = (event.type & KEY_ACTION) != 0;
+    unsigned long irq_flags = arch_irq_save();
     ring_buffer_push_array(buffer, (u8 *)&event, sizeof(event));
+    arch_irq_restore(irq_flags);
     sched_wake_all(&kbd_wait);
 
     _update_modifiers(kbd, action, event.code);
-    input_push_key_event(&event, kbd->shift, kbd->ctrl, kbd->alt, kbd->capslock);
 
     if (!action) {
         return;
@@ -156,7 +198,7 @@ void keyboard_handle_key(key_event event) {
         }
     }
 
-    if (input_capture_screen(tty_current_screen())) {
+    if (_screen_captured()) {
         return;
     }
 
@@ -227,8 +269,10 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
         return false;
     }
 
-    if (!devfs_register_node(dev_dir, "kbd", VFS_CHARDEV, 0666, kbd_if, NULL)) {
-        log_warn("failed to create /dev/kbd");
+    kbd_if->poll = keyboard_poll;
+
+    if (!devfs_register_node(dev_dir, "keyboard", VFS_CHARDEV, 0666, kbd_if, NULL)) {
+        log_warn("failed to create /dev/keyboard");
         return false;
     }
 

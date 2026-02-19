@@ -3,7 +3,9 @@
 #include <fcntl.h>
 #include <libc_usr/unistd.h>
 #include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/proc.h>
@@ -72,8 +74,88 @@ off_t lseek(int fd, off_t offset, int whence) {
     );
 }
 
+static int _read_proc_value_path(const char *path, long long *out) {
+    if (!path || !out) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    char text[32];
+    ssize_t n = read(fd, text, sizeof(text) - 1);
+    int saved = errno;
+    close(fd);
+
+    if (n < 0) {
+        errno = saved;
+        return -1;
+    }
+
+    text[n] = '\0';
+
+    char *end = NULL;
+    long long parsed = strtoll(text, &end, 10);
+    if (end == text) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *out = parsed;
+    return 0;
+}
+
+static int _write_proc_value_path(const char *path, long long value) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = open(path, O_WRONLY, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    char text[32];
+    int len = snprintf(text, sizeof(text), "%lld\n", value);
+    if (len <= 0 || (size_t)len >= sizeof(text)) {
+        close(fd);
+        errno = EINVAL;
+        return -1;
+    }
+
+    ssize_t written = write(fd, text, (size_t)len);
+    int saved = errno;
+
+    close(fd);
+
+    if (written < 0) {
+        errno = saved;
+        return -1;
+    }
+
+    if ((size_t)written != (size_t)len) {
+        errno = EIO;
+        return -1;
+    }
+
+    return 0;
+}
+
 mode_t umask(mode_t mask) {
-    return SYSCALL_RET(mode_t, syscall1(SYS_UMASK, (uintptr_t)mask));
+    long long old = 0;
+    if (_read_proc_value_path("/proc/self/umask", &old) < 0) {
+        return (mode_t)-1;
+    }
+
+    if (_write_proc_value_path("/proc/self/umask", (long long)(mask & 0777)) < 0) {
+        return (mode_t)-1;
+    }
+
+    return (mode_t)((unsigned long long)old & 0777ULL);
 }
 
 unsigned int sleep(unsigned int seconds) {
@@ -94,11 +176,51 @@ int chdir(const char *path) {
 
 char *getcwd(char *buf, size_t size) {
     if (!buf || !size) {
+        errno = EINVAL;
         return NULL;
     }
 
-    long ret = __SYSCALL_ERRNO(syscall2(SYS_GETCWD, (uintptr_t)buf, (uintptr_t)size));
-    return !ret ? buf : NULL;
+    if (size < 2) {
+        errno = ERANGE;
+        return NULL;
+    }
+
+    int fd = open("/proc/self/cwd", O_RDONLY, 0);
+    if (fd < 0) {
+        return NULL;
+    }
+
+    ssize_t n = read(fd, buf, size - 1);
+    if (n < 0) {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return NULL;
+    }
+
+    bool overflow = false;
+    if (n == (ssize_t)(size - 1)) {
+        char extra = '\0';
+        ssize_t extra_n = read(fd, &extra, 1);
+        if (extra_n > 0) {
+            overflow = true;
+        } else if (extra_n < 0) {
+            int saved = errno;
+            close(fd);
+            errno = saved;
+            return NULL;
+        }
+    }
+
+    close(fd);
+
+    if (overflow) {
+        errno = ERANGE;
+        return NULL;
+    }
+
+    buf[n] = '\0';
+    return buf;
 }
 
 int isatty(int fd) {
@@ -145,43 +267,6 @@ static int _read_self_stat(proc_stat_t *stat_out) {
     }
 
     if (proc_stat_read_path("/proc/self/stat", stat_out) < 0) {
-        return -1;
-    }
-
-    return 0;
-}
-
-static int _write_proc_value_path(const char *path, long long value) {
-    if (!path) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    int fd = open(path, O_WRONLY, 0);
-    if (fd < 0) {
-        return -1;
-    }
-
-    char text[32];
-    int len = snprintf(text, sizeof(text), "%lld\n", value);
-    if (len <= 0 || (size_t)len >= sizeof(text)) {
-        close(fd);
-        errno = EINVAL;
-        return -1;
-    }
-
-    ssize_t written = write(fd, text, (size_t)len);
-    int saved = errno;
-
-    close(fd);
-
-    if (written < 0) {
-        errno = saved;
-        return -1;
-    }
-
-    if ((size_t)written != (size_t)len) {
-        errno = EIO;
         return -1;
     }
 

@@ -2,12 +2,15 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <input/kbd.h>
+#include <input/mouse.h>
 #include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -67,6 +70,112 @@ static void close_fd(int *fd) {
 
     close(*fd);
     *fd = -1;
+}
+
+static u64 _input_timestamp_ms(void) {
+    time_t now = time(NULL);
+    if (now <= 0) {
+        return 0;
+    }
+
+    return (u64)now * 1000ULL;
+}
+
+static void _update_key_modifiers(ui_t *ui, const key_event *event) {
+    if (!ui || !event) {
+        return;
+    }
+
+    bool down = (event->type & KEY_ACTION) != 0;
+
+    switch (event->code) {
+    case KBD_LEFT_SHIFT:
+    case KBD_RIGHT_SHIFT:
+        if (down) {
+            ui->key_modifiers |= INPUT_MOD_SHIFT;
+        } else {
+            ui->key_modifiers &= ~INPUT_MOD_SHIFT;
+        }
+        break;
+    case KBD_LEFT_CTRL:
+    case KBD_RIGHT_CTRL:
+        if (down) {
+            ui->key_modifiers |= INPUT_MOD_CTRL;
+        } else {
+            ui->key_modifiers &= ~INPUT_MOD_CTRL;
+        }
+        break;
+    case KBD_LEFT_ALT:
+    case KBD_RIGHT_ALT:
+        if (down) {
+            ui->key_modifiers |= INPUT_MOD_ALT;
+        } else {
+            ui->key_modifiers &= ~INPUT_MOD_ALT;
+        }
+        break;
+    case KBD_CAPSLOCK:
+        if (down) {
+            ui->key_modifiers ^= INPUT_MOD_CAPS;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+static void _translate_key_event(ui_t *ui, const key_event *raw, input_event_t *out) {
+    if (!ui || !raw || !out) {
+        return;
+    }
+
+    _update_key_modifiers(ui, raw);
+
+    memset(out, 0, sizeof(*out));
+    out->timestamp_ms = _input_timestamp_ms();
+    out->type = INPUT_EVENT_KEY;
+    out->source = raw->source;
+    out->keycode = raw->code;
+    out->action = (raw->type & KEY_ACTION) ? 1U : 0U;
+    out->modifiers = ui->key_modifiers;
+}
+
+static size_t _translate_mouse_event(ui_t *ui, const mouse_event *raw, input_event_t *out, size_t out_cap) {
+    if (!ui || !raw || !out || !out_cap) {
+        return 0;
+    }
+
+    size_t produced = 0;
+    u64 timestamp = _input_timestamp_ms();
+
+    if ((raw->delta_x || raw->delta_y) && produced < out_cap) {
+        input_event_t *move = &out[produced++];
+        memset(move, 0, sizeof(*move));
+        move->timestamp_ms = timestamp;
+        move->type = INPUT_EVENT_MOUSE_MOVE;
+        move->source = raw->source;
+        move->dx = raw->delta_x;
+        move->dy = raw->delta_y;
+        move->buttons = raw->buttons;
+    }
+
+    if (ui->mouse_buttons == raw->buttons) {
+        return produced;
+    }
+
+    ui->mouse_buttons = raw->buttons;
+
+    if (produced >= out_cap) {
+        return produced;
+    }
+
+    input_event_t *buttons = &out[produced++];
+    memset(buttons, 0, sizeof(*buttons));
+    buttons->timestamp_ms = timestamp;
+    buttons->type = INPUT_EVENT_MOUSE_BUTTON;
+    buttons->source = raw->source;
+    buttons->buttons = raw->buttons;
+
+    return produced;
 }
 
 static int ui_simple(ui_t *ui, unsigned long request, u32 id, i32 x, i32 y, u32 flags) {
@@ -158,7 +267,13 @@ int ui_open(ui_t *ui, u32 flags) {
 
     ui->ctl_fd = -1;
     ui->mgr_fd = -1;
-    ui->input_fd = -1;
+    ui->keyboard_fd = -1;
+    ui->mouse_fd = -1;
+    ui->key_modifiers = 0;
+    ui->mouse_buttons = 0;
+    ui->input_round_robin = false;
+    ui->pending_valid = false;
+    memset(&ui->pending_event, 0, sizeof(ui->pending_event));
 
     ui->ctl_fd = open("/dev/wsctl", O_RDWR | O_NONBLOCK, 0);
     if (ui->ctl_fd < 0) {
@@ -169,8 +284,16 @@ int ui_open(ui_t *ui, u32 flags) {
         return 0;
     }
 
-    ui->input_fd = open("/dev/input", O_RDONLY | O_NONBLOCK, 0);
-    if (ui->input_fd >= 0) {
+    ui->keyboard_fd = open("/dev/keyboard", O_RDONLY | O_NONBLOCK, 0);
+    if (ui->keyboard_fd < 0) {
+        int saved = errno;
+        ui_close(ui);
+        errno = saved;
+        return -1;
+    }
+
+    ui->mouse_fd = open("/dev/mouse", O_RDONLY | O_NONBLOCK, 0);
+    if (ui->mouse_fd >= 0) {
         return 0;
     }
 
@@ -185,18 +308,117 @@ void ui_close(ui_t *ui) {
         return;
     }
 
-    close_fd(&ui->input_fd);
+    close_fd(&ui->mouse_fd);
+    close_fd(&ui->keyboard_fd);
     close_fd(&ui->mgr_fd);
     close_fd(&ui->ctl_fd);
+    ui->pending_valid = false;
 }
 
 ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
-    if (!ui || ui->input_fd < 0 || !events || !count) {
+    if (!ui || !events || !count || ui->keyboard_fd < 0 || ui->mouse_fd < 0) {
         errno = EINVAL;
         return -1;
     }
 
-    return read(ui->input_fd, events, count * sizeof(*events));
+    size_t produced = 0;
+
+    if (ui->pending_valid) {
+        events[produced++] = ui->pending_event;
+        ui->pending_valid = false;
+
+        if (produced >= count) {
+            return (ssize_t)(produced * sizeof(*events));
+        }
+    }
+
+    for (;;) {
+        if (produced >= count) {
+            break;
+        }
+
+        bool consumed = false;
+        bool keyboard_first = !ui->input_round_robin;
+
+        for (int pass = 0; pass < 2; pass++) {
+            bool read_keyboard = (pass == 0) ? keyboard_first : !keyboard_first;
+
+            if (read_keyboard) {
+                key_event raw = {0};
+                ssize_t n = read(ui->keyboard_fd, &raw, sizeof(raw));
+
+                if (n == (ssize_t)sizeof(raw)) {
+                    _translate_key_event(ui, &raw, &events[produced++]);
+                    ui->input_round_robin = true;
+                    consumed = true;
+                    break;
+                }
+
+                if (n > 0) {
+                    errno = EIO;
+                    return produced ? (ssize_t)(produced * sizeof(*events)) : -1;
+                }
+
+                if (n < 0 && errno != EAGAIN) {
+                    return produced ? (ssize_t)(produced * sizeof(*events)) : -1;
+                }
+
+                continue;
+            }
+
+            mouse_event raw = {0};
+            ssize_t n = read(ui->mouse_fd, &raw, sizeof(raw));
+
+            if (n == (ssize_t)sizeof(raw)) {
+                input_event_t converted[2];
+                size_t event_count = _translate_mouse_event(ui, &raw, converted, 2);
+
+                if (event_count) {
+                    events[produced++] = converted[0];
+
+                    if (event_count > 1) {
+                        if (produced < count) {
+                            events[produced++] = converted[1];
+                        } else {
+                            ui->pending_event = converted[1];
+                            ui->pending_valid = true;
+                        }
+                    }
+
+                    ui->input_round_robin = false;
+                    consumed = true;
+                    break;
+                }
+
+                continue;
+            }
+
+            if (n > 0) {
+                errno = EIO;
+                return produced ? (ssize_t)(produced * sizeof(*events)) : -1;
+            }
+
+            if (n < 0 && errno != EAGAIN) {
+                return produced ? (ssize_t)(produced * sizeof(*events)) : -1;
+            }
+        }
+
+        if (!consumed) {
+            break;
+        }
+
+        if (ui->pending_valid && produced < count) {
+            events[produced++] = ui->pending_event;
+            ui->pending_valid = false;
+        }
+    }
+
+    if (produced) {
+        return (ssize_t)(produced * sizeof(*events));
+    }
+
+    errno = EAGAIN;
+    return -1;
 }
 
 int ui_mgr_claim(ui_t *ui) {

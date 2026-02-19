@@ -1424,6 +1424,16 @@ gid_t sched_getgid(void) {
     return thread->gid;
 }
 
+mode_t sched_getumask(void) {
+    sched_thread_t *thread = sched_local_current();
+
+    if (!thread) {
+        return (mode_t)-EINVAL;
+    }
+
+    return thread->umask & 0777;
+}
+
 int sched_setuid(uid_t uid) {
     sched_thread_t *thread = sched_local_current();
     if (!thread) {
@@ -1449,6 +1459,16 @@ int sched_setgid(gid_t gid) {
     }
 
     thread->gid = gid;
+    return 0;
+}
+
+int sched_setumask(mode_t mask) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    thread->umask = mask & 0777;
     return 0;
 }
 
@@ -2254,6 +2274,7 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         out->sid = thread->sid;
         out->uid = thread->uid;
         out->gid = thread->gid;
+        out->umask = thread->umask & 0777;
         out->state = thread->state;
         out->tty_index = thread->tty_index;
 
@@ -2263,6 +2284,35 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         memset(out->name, 0, sizeof(out->name));
         strncpy(out->name, thread->name, sizeof(out->name) - 1);
 
+        found = true;
+        break;
+    }
+
+    sched_lock_restore(flags);
+    return found;
+}
+
+bool sched_proc_cwd(pid_t pid, char *out, size_t out_len) {
+    if (!out || !out_len || pid <= 0 || !all_list) {
+        return false;
+    }
+
+    bool found = false;
+    unsigned long flags = sched_lock_save();
+
+    ll_foreach(node, all_list) {
+        sched_thread_t *thread = node->data;
+        if (!thread || thread->pid != pid) {
+            continue;
+        }
+
+        size_t len = strnlen(thread->cwd, sizeof(thread->cwd));
+        if (len + 1 > out_len) {
+            break;
+        }
+
+        memcpy(out, thread->cwd, len);
+        out[len] = '\0';
         found = true;
         break;
     }

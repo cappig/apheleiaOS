@@ -15,10 +15,12 @@
 
 typedef enum {
     PROC_FIELD_STAT = 1,
+    PROC_FIELD_CWD,
     PROC_FIELD_PID,
     PROC_FIELD_PPID,
     PROC_FIELD_UID,
     PROC_FIELD_GID,
+    PROC_FIELD_UMASK,
     PROC_FIELD_PGID,
     PROC_FIELD_SID,
 } proc_field_t;
@@ -269,6 +271,7 @@ static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_
         "sid=%lld\n"
         "uid=%lld\n"
         "gid=%lld\n"
+        "umask=%o\n"
         "state=%c\n"
         "tty_index=%d\n"
         "cpu_time_ms=%llu\n"
@@ -279,11 +282,32 @@ static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_
         (long long)snapshot.sid,
         (long long)snapshot.uid,
         (long long)snapshot.gid,
+        (unsigned int)(snapshot.umask & 0777),
         _state_char(snapshot.state),
         snapshot.tty_index,
         (unsigned long long)snapshot.cpu_time_ms,
         snapshot.name
     );
+
+    return _text_read(text, buf, offset, len);
+}
+
+static ssize_t _proc_cwd_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+    (void)flags;
+
+    if (!node || !buf) {
+        return -EINVAL;
+    }
+
+    pid_t pid = 0;
+    if (!_resolve_pid(_proc_key_pid((uintptr_t)node->private), &pid)) {
+        return -ENOENT;
+    }
+
+    char text[PATH_MAX];
+    if (!sched_proc_cwd(pid, text, sizeof(text))) {
+        return -ENOENT;
+    }
 
     return _text_read(text, buf, offset, len);
 }
@@ -317,6 +341,9 @@ static ssize_t _proc_value_read(vfs_node_t *node, void *buf, size_t offset, size
         break;
     case PROC_FIELD_GID:
         value = (long long)snapshot.gid;
+        break;
+    case PROC_FIELD_UMASK:
+        value = (long long)(snapshot.umask & 0777);
         break;
     case PROC_FIELD_PGID:
         value = (long long)snapshot.pgid;
@@ -371,6 +398,13 @@ static ssize_t _proc_value_write(vfs_node_t *node, void *buf, size_t offset, siz
         }
 
         ret = sched_setgid((gid_t)value);
+        break;
+    case PROC_FIELD_UMASK:
+        if (path_pid != 0 || value < 0) {
+            return -EPERM;
+        }
+
+        ret = sched_setumask((mode_t)value & 0777);
         break;
     case PROC_FIELD_PGID:
         if (value < 0) {
@@ -447,6 +481,8 @@ static bool _upsert_file(vfs_node_t *parent, const char *name, mode_t mode, proc
     if (!node->interface) {
         if (field == PROC_FIELD_STAT) {
             node->interface = vfs_create_interface(_proc_stat_read, NULL, NULL);
+        } else if (field == PROC_FIELD_CWD) {
+            node->interface = vfs_create_interface(_proc_cwd_read, NULL, NULL);
         } else {
             node->interface = vfs_create_interface(_proc_value_read, _proc_value_write, NULL);
         }
@@ -470,13 +506,16 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     bool ok = true;
     mode_t uid_mode = self ? 0666 : 0444;
     mode_t gid_mode = self ? 0666 : 0444;
+    mode_t umask_mode = self ? 0666 : 0444;
     mode_t sid_mode = self ? 0666 : 0444;
 
     ok &= _upsert_file(dir, "stat", 0444, PROC_FIELD_STAT, pid);
+    ok &= _upsert_file(dir, "cwd", 0444, PROC_FIELD_CWD, pid);
     ok &= _upsert_file(dir, "pid", 0444, PROC_FIELD_PID, pid);
     ok &= _upsert_file(dir, "ppid", 0444, PROC_FIELD_PPID, pid);
     ok &= _upsert_file(dir, "uid", uid_mode, PROC_FIELD_UID, pid);
     ok &= _upsert_file(dir, "gid", gid_mode, PROC_FIELD_GID, pid);
+    ok &= _upsert_file(dir, "umask", umask_mode, PROC_FIELD_UMASK, pid);
     ok &= _upsert_file(dir, "pgid", 0666, PROC_FIELD_PGID, pid);
     ok &= _upsert_file(dir, "sid", sid_mode, PROC_FIELD_SID, pid);
 
@@ -549,7 +588,7 @@ void procfs_unregister_pid(pid_t pid) {
         return;
     }
 
-    const char *names[] = {"stat", "pid", "ppid", "uid", "gid", "pgid", "sid"};
+    const char *names[] = {"stat", "cwd", "pid", "ppid", "uid", "gid", "umask", "pgid", "sid"};
     char path[56];
 
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {

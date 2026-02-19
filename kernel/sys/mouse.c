@@ -1,18 +1,22 @@
 #include "mouse.h"
 
+#include <arch/arch.h>
 #include <base/types.h>
 #include <data/ring.h>
 #include <data/vector.h>
+#include <errno.h>
 #include <log/log.h>
+#include <poll.h>
+#include <sched/scheduler.h>
+#include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/devfs.h>
 #include <sys/framebuffer.h>
 
-#include "input.h"
-
 static vector_t *mice = NULL;
 static ring_buffer_t *buffer = NULL;
+static sched_wait_queue_t mouse_wait = {0};
 
 static i32 mouse_x = 0;
 static i32 mouse_y = 0;
@@ -29,17 +33,59 @@ static i32 _clamp_i32(i32 value, i32 min, i32 max) {
     return value;
 }
 
+static bool _has_events(void) {
+    unsigned long irq_flags = arch_irq_save();
+    bool has_events = buffer && !ring_buffer_is_empty(buffer);
+    arch_irq_restore(irq_flags);
+
+    return has_events;
+}
+
 ssize_t mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
-    (void)flags;
 
-    if (!buf || !buffer) {
-        return -1;
+    if (!buf || !buffer || !len) {
+        return -EINVAL;
     }
 
-    size_t popped = ring_buffer_pop_array(buffer, buf, len);
-    return popped ? (ssize_t)popped : 0;
+    for (;;) {
+        unsigned long irq_flags = arch_irq_save();
+        size_t popped = ring_buffer_pop_array(buffer, buf, len);
+        arch_irq_restore(irq_flags);
+
+        if (popped) {
+            return (ssize_t)popped;
+        }
+
+        if (flags & VFS_NONBLOCK) {
+            return -EAGAIN;
+        }
+
+        if (!sched_is_running()) {
+            continue;
+        }
+
+        sched_thread_t *current = sched_current();
+        if (current && sched_signal_has_pending(current)) {
+            return -EINTR;
+        }
+
+        sched_block(&mouse_wait);
+    }
+}
+
+static short mouse_poll(vfs_node_t *node, short events, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    short revents = 0;
+
+    if ((events & POLLIN) && _has_events()) {
+        revents |= POLLIN;
+    }
+
+    return revents;
 }
 
 void mouse_handle_event(mouse_event event) {
@@ -54,10 +100,11 @@ void mouse_handle_event(mouse_event event) {
     }
 
     if (buffer) {
+        unsigned long irq_flags = arch_irq_save();
         ring_buffer_push_array(buffer, (u8 *)&event, sizeof(event));
+        arch_irq_restore(irq_flags);
+        sched_wake_all(&mouse_wait);
     }
-
-    input_push_mouse_event(&event);
 }
 
 u8 mouse_register(const char *name) {
@@ -103,6 +150,8 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
         return false;
     }
 
+    mouse_if->poll = mouse_poll;
+
     if (!devfs_register_node(dev_dir, "mouse", VFS_CHARDEV, 0666, mouse_if, NULL)) {
         log_warn("failed to create /dev/mouse");
         return false;
@@ -132,6 +181,10 @@ bool mouse_init(void) {
 
     if (!buffer) {
         return false;
+    }
+
+    if (!mouse_wait.list) {
+        sched_wait_queue_init(&mouse_wait);
     }
 
     if (first_init) {

@@ -1036,18 +1036,6 @@ static int sys_mkdir(const char *path, mode_t mode) {
     return 0;
 }
 
-static mode_t sys_umask(mode_t mask) {
-    sched_thread_t *thread = sched_current();
-    if (!thread) {
-        return (mode_t)-EINVAL;
-    }
-
-    mode_t old = thread->umask & 0777;
-    thread->umask = mask & 0777;
-
-    return old;
-}
-
 static int sys_rmdir(const char *path) {
     sched_thread_t *thread = sched_current();
 
@@ -1125,29 +1113,6 @@ static int sys_chdir(const char *path) {
     strncpy(thread->cwd, resolved, sizeof(thread->cwd) - 1);
     thread->cwd[sizeof(thread->cwd) - 1] = '\0';
 
-    return 0;
-}
-
-static int sys_getcwd(char *buf, size_t size) {
-    if (!buf) {
-        return -EFAULT;
-    }
-
-    if (!size) {
-        return -EINVAL;
-    }
-
-    sched_thread_t *thread = sched_current();
-    if (!thread) {
-        return -EINVAL;
-    }
-
-    size_t len = strnlen(thread->cwd, sizeof(thread->cwd));
-    if (len + 1 > size) {
-        return -ERANGE;
-    }
-
-    memcpy(buf, thread->cwd, len + 1);
     return 0;
 }
 
@@ -2201,14 +2166,10 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
         );
     case SYS_CHDIR:
         return (u64)sys_chdir((const char *)arch_syscall_arg1(state));
-    case SYS_GETCWD:
-        return (u64)sys_getcwd((char *)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_MKDIR:
         return (u64)sys_mkdir(
             (const char *)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state)
         );
-    case SYS_UMASK:
-        return (u64)sys_umask((mode_t)arch_syscall_arg1(state));
     case SYS_POLL:
         return (u64)sys_poll(
             (struct pollfd *)arch_syscall_arg1(state),

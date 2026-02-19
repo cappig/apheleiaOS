@@ -9,7 +9,13 @@
 typedef struct {
     int ctl_fd;
     int mgr_fd;
-    int input_fd;
+    int keyboard_fd;
+    int mouse_fd;
+    u32 key_modifiers;
+    u32 mouse_buttons;
+    bool input_round_robin;
+    bool pending_valid;
+    input_event_t pending_event;
 } ui_t;
 
 typedef struct {

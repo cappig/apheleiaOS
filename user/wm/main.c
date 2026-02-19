@@ -225,7 +225,7 @@ int main(int argc, char **argv) {
     fb_acquired = true;
 
     if (ui_open(&ui, UI_OPEN_INPUT)) {
-        io_write_str("wm: failed to open input/wsctl\n");
+        io_write_str("wm: failed to open wsctl/keyboard/mouse\n");
         goto out;
     }
 
