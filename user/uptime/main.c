@@ -59,7 +59,9 @@ int main(void) {
             secs
         );
     } else {
-        snprintf(out, sizeof(out), "up %02llu:%02llu:%02llu\n", hrs, mins, secs);
+        snprintf(
+            out, sizeof(out), "up %02llu:%02llu:%02llu\n", hrs, mins, secs
+        );
     }
 
     write(STDOUT_FILENO, out, strlen(out));

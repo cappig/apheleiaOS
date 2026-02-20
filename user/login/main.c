@@ -143,7 +143,9 @@ int main(int argc, char **argv) {
             chdir(pwd->pw_dir);
         }
 
-        const char *shell = (pwd->pw_shell && pwd->pw_shell[0]) ? pwd->pw_shell : "/bin/sh";
+        const char *shell =
+            (pwd->pw_shell && pwd->pw_shell[0]) ? pwd->pw_shell : "/bin/sh";
+
         char *args[] = {(char *)shell, NULL};
         execve(shell, args, NULL);
 

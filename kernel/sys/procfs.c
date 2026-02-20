@@ -27,6 +27,7 @@ typedef enum {
 
 static vfs_node_t *proc_root = NULL;
 
+
 static uintptr_t _proc_key(pid_t pid, proc_field_t field) {
     return ((((uintptr_t)(u32)pid) & 0xffffffffULL) << 8) | (uintptr_t)field;
 }
@@ -55,7 +56,8 @@ static char _state_char(thread_state_t state) {
     }
 }
 
-static ssize_t _text_read(const char *text, void *buf, size_t offset, size_t len) {
+static ssize_t
+_text_read(const char *text, void *buf, size_t offset, size_t len) {
     if (!text || !buf) {
         return -EINVAL;
     }
@@ -94,9 +96,15 @@ static bool _parse_i64(const void *buf, size_t len, long long *out) {
     }
 
     char *end_trim = start + strlen(start);
-    while (end_trim > start &&
-           (end_trim[-1] == ' ' || end_trim[-1] == '\t' || end_trim[-1] == '\r' ||
-            end_trim[-1] == '\n')) {
+    while (
+        end_trim > start &&
+        (
+            end_trim[-1] == ' ' || 
+            end_trim[-1] == '\t' ||
+            end_trim[-1] == '\r' ||
+            end_trim[-1] == '\n'
+        )
+    ) {
         end_trim--;
     }
 
@@ -134,7 +142,11 @@ static bool _resolve_pid(pid_t encoded_pid, pid_t *out_pid) {
     return true;
 }
 
-static bool _proc_snapshot_from_key(uintptr_t key, sched_proc_snapshot_t *snapshot, pid_t *pid_out) {
+static bool _proc_snapshot_from_key(
+    uintptr_t key,
+    sched_proc_snapshot_t *snapshot,
+    pid_t *pid_out
+) {
     if (!snapshot) {
         return false;
     }
@@ -249,7 +261,13 @@ bool procfs_stat_owner(vfs_node_t *node, uid_t *uid_out, gid_t *gid_out) {
     return false;
 }
 
-static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _proc_stat_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
     (void)flags;
 
     if (!node || !buf) {
@@ -292,7 +310,13 @@ static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_
     return _text_read(text, buf, offset, len);
 }
 
-static ssize_t _proc_cwd_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _proc_cwd_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
     (void)flags;
 
     if (!node || !buf) {
@@ -312,7 +336,13 @@ static ssize_t _proc_cwd_read(vfs_node_t *node, void *buf, size_t offset, size_t
     return _text_read(text, buf, offset, len);
 }
 
-static ssize_t _proc_value_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _proc_value_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
     (void)flags;
 
     if (!node || !buf) {
@@ -360,7 +390,13 @@ static ssize_t _proc_value_read(vfs_node_t *node, void *buf, size_t offset, size
     return _text_read(text, buf, offset, len);
 }
 
-static ssize_t _proc_value_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _proc_value_write(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
     (void)flags;
 
     if (!node || !buf || !len) {
@@ -434,7 +470,12 @@ static ssize_t _proc_value_write(vfs_node_t *node, void *buf, size_t offset, siz
     return (ssize_t)len;
 }
 
-static bool _upsert_dir(vfs_node_t *parent, const char *name, mode_t mode, vfs_node_t **out) {
+static bool _upsert_dir(
+    vfs_node_t *parent,
+    const char *name,
+    mode_t mode,
+    vfs_node_t **out
+) {
     if (!parent || !name) {
         return false;
     }
@@ -464,7 +505,13 @@ static bool _upsert_dir(vfs_node_t *parent, const char *name, mode_t mode, vfs_n
     return true;
 }
 
-static bool _upsert_file(vfs_node_t *parent, const char *name, mode_t mode, proc_field_t field, pid_t pid) {
+static bool _upsert_file(
+    vfs_node_t *parent,
+    const char *name,
+    mode_t mode,
+    proc_field_t field,
+    pid_t pid
+) {
     if (!parent || !name) {
         return false;
     }
@@ -484,7 +531,8 @@ static bool _upsert_file(vfs_node_t *parent, const char *name, mode_t mode, proc
         } else if (field == PROC_FIELD_CWD) {
             node->interface = vfs_create_interface(_proc_cwd_read, NULL, NULL);
         } else {
-            node->interface = vfs_create_interface(_proc_value_read, _proc_value_write, NULL);
+            node->interface =
+                vfs_create_interface(_proc_value_read, _proc_value_write, NULL);
         }
 
         if (!node->interface) {
@@ -588,7 +636,9 @@ void procfs_unregister_pid(pid_t pid) {
         return;
     }
 
-    const char *names[] = {"stat", "cwd", "pid", "ppid", "uid", "gid", "umask", "pgid", "sid"};
+    const char *names[] = {
+        "stat", "cwd", "pid", "ppid", "uid", "gid", "umask", "pgid", "sid"
+    };
     char path[56];
 
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {

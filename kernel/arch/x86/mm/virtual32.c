@@ -16,7 +16,9 @@ static page_t *_walk_pdpt(page_t *pdpt, size_t index, u64 flags) {
 
     page_set_paddr(&pdpt[index], (page_t)(uintptr_t)pd);
 
-    u64 pdpt_flags = flags & (PT_PRESENT | PT_WRITE_THROUGH | PT_NO_CACHE | PT_NO_EXECUTE);
+    u64 pdpt_flags =
+        flags & (PT_PRESENT | PT_WRITE_THROUGH | PT_NO_CACHE | PT_NO_EXECUTE);
+
     pdpt[index] |= (pdpt_flags | PT_PRESENT) & FLAGS_MASK;
 
     return pd;
@@ -124,7 +126,14 @@ void map_region(page_t *pdpt, size_t pages, u64 vaddr, u64 paddr, u64 flags) {
     }
 }
 
-void identity_map(page_t *pdpt, u64 from, u64 to, u64 map_offset, u64 flags, bool remap) {
+void identity_map(
+    page_t *pdpt,
+    u64 from,
+    u64 to,
+    u64 map_offset,
+    u64 flags,
+    bool remap
+) {
     (void)remap;
 
     from = ALIGN_DOWN(from, PAGE_4KIB);

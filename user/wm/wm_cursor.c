@@ -21,6 +21,7 @@ typedef struct {
 
 static wm_cursor_t cursors[WM_CURSOR_KIND_COUNT];
 
+
 static void _cursor_release(wm_cursor_t *cursor) {
     if (!cursor) {
         return;
@@ -47,7 +48,14 @@ static bool _cursor_load_into(wm_cursor_t *cursor, const char *path) {
     u8 *file_data = NULL;
     size_t file_len = 0;
 
-    if (!wm_file_read_all(path, WM_CURSOR_MAX_FILE_BYTES, &file_data, &file_len)) {
+    bool read_ok = wm_file_read_all(
+        path,
+        WM_CURSOR_MAX_FILE_BYTES,
+        &file_data,
+        &file_len
+    );
+
+    if (!read_ok) {
         return false;
     }
 
@@ -142,15 +150,24 @@ bool wm_cursor_draw_kind(
 ) {
     const wm_cursor_t *cursor = _cursor_pick(kind);
 
-    if (!frame || !cursor || !cursor->pixels || !cursor->width || !cursor->height || !fb_width ||
-        !fb_height) {
+    if (
+        !frame ||
+        !cursor ||
+        !cursor->pixels ||
+        !cursor->width ||
+        !cursor->height ||
+        !fb_width ||
+        !fb_height
+    ) {
         return false;
     }
 
     bool has_exact_cursor =
         kind < WM_CURSOR_KIND_COUNT && cursors[kind].pixels != NULL;
+
     i32 hot_x = 0;
     i32 hot_y = 0;
+
     if (kind != WM_CURSOR_NORMAL && has_exact_cursor) {
         hot_x = (i32)(cursor->width / 2);
         hot_y = (i32)(cursor->height / 2);
@@ -158,6 +175,7 @@ bool wm_cursor_draw_kind(
 
     for (u32 cy = 0; cy < cursor->height; cy++) {
         i32 dst_y = (y - hot_y) + (i32)cy;
+
         if (dst_y < 0 || (u32)dst_y >= fb_height) {
             continue;
         }
@@ -184,5 +202,7 @@ bool wm_cursor_draw_kind(
 }
 
 bool wm_cursor_draw(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32 y) {
-    return wm_cursor_draw_kind(frame, fb_width, fb_height, x, y, WM_CURSOR_NORMAL);
+    return wm_cursor_draw_kind(
+        frame, fb_width, fb_height, x, y, WM_CURSOR_NORMAL
+    );
 }

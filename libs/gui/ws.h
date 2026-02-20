@@ -3,7 +3,7 @@
 #include <base/types.h>
 #include <sys/types.h>
 
-#define WS_TITLE_MAX   64
+#define WS_TITLE_MAX 64
 
 enum ws_event_type {
     WS_EVT_WINDOW_NEW = 1,

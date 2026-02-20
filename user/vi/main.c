@@ -105,12 +105,15 @@ static bool ensure_frame_cache(size_t cols, size_t rows, bool *resized_out) {
 
     if (!cols || !rows) {
         free(frame_cache);
+
         frame_cache = NULL;
         frame_cache_cols = 0;
         frame_cache_rows = 0;
+
         if (resized_out) {
             *resized_out = true;
         }
+
         return true;
     }
 
@@ -123,10 +126,13 @@ static bool ensure_frame_cache(size_t cols, size_t rows, bool *resized_out) {
     frame_cache = p;
     frame_cache_cols = cols;
     frame_cache_rows = rows;
+
     memset(frame_cache, 0xff, total);
+
     if (resized_out) {
         *resized_out = true;
     }
+
     return true;
 }
 
@@ -164,6 +170,7 @@ static bool draw_row_if_changed(size_t row, const char *data) {
 
     char seq[32];
     snprintf(seq, sizeof(seq), "\x1b[%u;1H", (unsigned)(row + 1));
+
     if (!out_add(seq) || !out_addn(data, vi.cols)) {
         return false;
     }
@@ -203,8 +210,14 @@ static void set_errno_msg(const char *op) {
 }
 
 static bool is_nav_key(int key) {
-    return key == VI_KEY_LEFT || key == VI_KEY_RIGHT || key == VI_KEY_UP || key == VI_KEY_DOWN ||
-           key == VI_KEY_HOME || key == VI_KEY_END;
+    return (
+        key == VI_KEY_LEFT ||
+        key == VI_KEY_RIGHT || 
+        key == VI_KEY_UP ||
+        key == VI_KEY_DOWN || 
+        key == VI_KEY_HOME || 
+        key == VI_KEY_END
+    );
 }
 
 static void clear_cmd(void) {
@@ -226,6 +239,8 @@ static bool get_winsize(size_t *cols, size_t *rows) {
 
     if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws)) {
         memset(&ws, 0, sizeof(ws));
+
+
         if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws)) {
             return false;
         }
@@ -574,7 +589,9 @@ static bool save_file(void) {
     vi.dirty = false;
 
     char msg[VI_MSG_MAX];
-    snprintf(msg, sizeof(msg), "\"%s\" %u bytes written", vi.path, (unsigned)vi.len);
+    snprintf(
+        msg, sizeof(msg), "\"%s\" %u bytes written", vi.path, (unsigned)vi.len
+    );
     set_msg(msg);
     vi.redraw = true;
     return true;
@@ -677,7 +694,12 @@ static size_t build_status_row(size_t row, size_t col, char *dst) {
 
     char right[64];
     snprintf(
-        right, sizeof(right), "%s %u:%u ", mode_name(), (unsigned)(row + 1), (unsigned)(col + 1)
+        right,
+        sizeof(right),
+        "%s %u:%u ",
+        mode_name(),
+        (unsigned)(row + 1),
+        (unsigned)(col + 1)
     );
 
     size_t right_len = strlen(right);

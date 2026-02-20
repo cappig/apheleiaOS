@@ -3,8 +3,8 @@
 #include <string.h>
 #include <sys/mman.h>
 
-// Simple first-fit free-list allocator backed by mmap, should probabily be improved in the
-// future...
+// Simple first-fit free-list allocator backed by mmap,
+// should probabily be improved in the future...
 
 #define ARENA_SIZE     (64U * 1024U)
 #define MMAP_THRESHOLD (ARENA_SIZE / 2U)
@@ -32,10 +32,14 @@ static size_t _page_align(size_t n) {
 }
 
 static void *_mmap_pages(size_t bytes) {
-    void *p = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    void *p = mmap(
+        NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0
+    );
+
     if (p == MAP_FAILED) {
         return NULL;
     }
+
     return p;
 }
 
@@ -89,6 +93,7 @@ void *malloc(size_t size) {
     if (size >= MMAP_THRESHOLD) {
         size_t total = _page_align(HEADER_SIZE + size);
         void *mem = _mmap_pages(total);
+
         if (!mem) {
             return NULL;
         }

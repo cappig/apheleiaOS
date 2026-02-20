@@ -50,12 +50,30 @@ struct vfs_interface {
     u32 refcount;
 
     // Operations on the node itself
-    ssize_t (*read)(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags);
-    ssize_t (*write)(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags);
+    ssize_t (*read)(
+        vfs_node_t *node,
+        void *buf,
+        size_t offset,
+        size_t len,
+        u32 flags
+    );
+    ssize_t (*write)(
+        vfs_node_t *node,
+        void *buf,
+        size_t offset,
+        size_t len,
+        u32 flags
+    );
     ssize_t (*truncate)(vfs_node_t *node, size_t len);
     short (*poll)(vfs_node_t *node, short events, u32 flags);
 
-    ssize_t (*mmap)(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags);
+    ssize_t (*mmap)(
+        vfs_node_t *node,
+        void *buf,
+        size_t offset,
+        size_t len,
+        u32 flags
+    );
     ssize_t (*ioctl)(vfs_node_t *node, u64 request, void *args);
 
     // Operations on children
@@ -98,8 +116,20 @@ vfs_node_t *vfs_create_node(char *name, u32 type);
 void vfs_destroy_node(vfs_node_t *node);
 
 vfs_interface_t *vfs_create_interface(
-    ssize_t (*read)(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags),
-    ssize_t (*write)(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags),
+    ssize_t (*read)(
+        vfs_node_t *node,
+        void *buf,
+        size_t offset,
+        size_t len,
+        u32 flags
+    ),
+    ssize_t (*write)(
+        vfs_node_t *node,
+        void *buf,
+        size_t offset,
+        size_t len,
+        u32 flags
+    ),
     ssize_t (*truncate)(vfs_node_t *node, size_t len)
 );
 void vfs_destroy_interface(vfs_interface_t *interface);
@@ -112,7 +142,12 @@ vfs_node_t *vfs_lookup_relative(const char *root, const char *path);
 vfs_node_t *vfs_open(const char *path, u32 type, bool create, mode_t mode);
 
 bool vfs_access(vfs_node_t *vnode, uid_t uid, gid_t gid, int mode);
-int vfs_check_search(const char *path, uid_t uid, gid_t gid, bool allow_missing_leaf);
+int vfs_check_search(
+    const char *path,
+    uid_t uid,
+    gid_t gid,
+    bool allow_missing_leaf
+);
 bool vfs_stat_node(vfs_node_t *node, stat_t *out, bool follow_links);
 bool vfs_chmod(vfs_node_t *node, mode_t mode);
 bool vfs_chown(vfs_node_t *node, uid_t uid, gid_t gid);
@@ -127,10 +162,13 @@ vfs_node_t *vfs_create(vfs_node_t *parent, char *name, u32 type, mode_t mode);
 bool vfs_mount(fs_instance_t *fs, vfs_node_t *mount);
 bool vfs_unmount(vfs_node_t *mount, bool destroy_tree);
 
-ssize_t vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
-ssize_t vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
+ssize_t
+vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
+ssize_t
+vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_truncate(vfs_node_t *node, size_t len);
-ssize_t vfs_mmap(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
+ssize_t
+vfs_mmap(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_ioctl(vfs_node_t *node, u64 request, void *args);
 short vfs_poll(vfs_node_t *node, short events, size_t flags);
 

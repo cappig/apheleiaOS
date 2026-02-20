@@ -48,7 +48,9 @@ int clock_gettime(clockid_t clock_id, struct timespec *tp) {
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem) {
-    return (int)__SYSCALL_ERRNO(syscall2(SYS_SLEEP, (uintptr_t)req, (uintptr_t)rem));
+    return (int)__SYSCALL_ERRNO(
+        syscall2(SYS_SLEEP, (uintptr_t)req, (uintptr_t)rem)
+    );
 }
 
 time_t time(time_t *timer) {

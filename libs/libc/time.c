@@ -5,7 +5,9 @@
 #include "stdio.h"
 #include "string.h"
 
-static const char days_str[7][4] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+static const char days_str[7][4] =
+    {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+
 static const char months_str[12][4] = {
     "Jan",
     "Feb",
@@ -27,6 +29,7 @@ static const char months_str[12][4] = {
 #define SECS_PER_HOUR (60LL * SECS_PER_MIN)
 #define SECS_PER_DAY  (24LL * SECS_PER_HOUR)
 
+
 static int is_leap(int year) {
     return ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
 }
@@ -36,7 +39,9 @@ static int days_in_year(int year) {
 }
 
 static int days_in_month(int year, int month) {
-    static const int days_norm[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    static const int days_norm[12] = {
+        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+    };
 
     if (month == 1 && is_leap(year)) {
         return 29;
@@ -72,8 +77,14 @@ static bool append_str(char *out, size_t max, size_t *pos, const char *str) {
     return true;
 }
 
-static bool
-append_number(char *out, size_t max, size_t *pos, long long value, int width, char pad) {
+static bool append_number(
+    char *out,
+    size_t max,
+    size_t *pos,
+    long long value,
+    int width,
+    char pad
+) {
     char buf[16];
     int len = snprintf(buf, sizeof(buf), "%lld", value);
 
@@ -120,7 +131,8 @@ static bool append_hm(char *out, size_t max, size_t *pos, const struct tm *tm) {
     return append_number(out, max, pos, tm->tm_min, 2, '0');
 }
 
-static bool append_hms(char *out, size_t max, size_t *pos, const struct tm *tm) {
+static bool
+append_hms(char *out, size_t max, size_t *pos, const struct tm *tm) {
     if (!append_hm(out, max, pos, tm)) {
         return false;
     }
@@ -132,7 +144,8 @@ static bool append_hms(char *out, size_t max, size_t *pos, const struct tm *tm) 
     return append_number(out, max, pos, tm->tm_sec, 2, '0');
 }
 
-static bool append_ymd(char *out, size_t max, size_t *pos, const struct tm *tm) {
+static bool
+append_ymd(char *out, size_t max, size_t *pos, const struct tm *tm) {
     if (!append_number(out, max, pos, tm->tm_year + 1900, 4, '0')) {
         return false;
     }
@@ -152,7 +165,8 @@ static bool append_ymd(char *out, size_t max, size_t *pos, const struct tm *tm) 
     return append_number(out, max, pos, tm->tm_mday, 2, '0');
 }
 
-static bool append_ctime_layout(char *out, size_t max, size_t *pos, const struct tm *tm) {
+static bool
+append_ctime_layout(char *out, size_t max, size_t *pos, const struct tm *tm) {
     if (!append_str(out, max, pos, weekday_name(tm->tm_wday))) {
         return false;
     }
@@ -319,7 +333,8 @@ struct tm *localtime(const time_t *timer) {
     return gmtime(timer);
 }
 
-size_t strftime(char *str, size_t max, const char *format, const struct tm *tm) {
+size_t
+strftime(char *str, size_t max, const char *format, const struct tm *tm) {
     if (!str || !max || !format || !tm) {
         return 0;
     }

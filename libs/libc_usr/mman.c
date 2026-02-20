@@ -23,5 +23,7 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
 }
 
 int munmap(void *addr, size_t len) {
-    return (int)__SYSCALL_ERRNO(syscall2(SYS_MUNMAP, (uintptr_t)addr, (uintptr_t)len));
+    return (int)__SYSCALL_ERRNO(
+        syscall2(SYS_MUNMAP, (uintptr_t)addr, (uintptr_t)len)
+    );
 }

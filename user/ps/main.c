@@ -5,10 +5,10 @@
 #include <sys/proc.h>
 #include <unistd.h>
 
-#define PS_COL_PID   5
-#define PS_COL_TTY   5
-#define PS_COL_STAT  4
-#define PS_COL_TIME  5
+#define PS_COL_PID  5
+#define PS_COL_TTY  5
+#define PS_COL_STAT 4
+#define PS_COL_TIME 5
 
 static void write_cstr(const char *text) {
     if (!text) {
@@ -33,7 +33,8 @@ static const char *state_name(char state) {
     }
 }
 
-static const char *tty_name(const proc_stat_t *info, char *buf, size_t buf_len) {
+static const char *
+tty_name(const proc_stat_t *info, char *buf, size_t buf_len) {
     if (!info) {
         return "??";
     }

@@ -10,7 +10,7 @@
 #if defined(__x86_64__)
 void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     (void)size;
-    (void)flags; // WC is handled by the page tables set up during boot
+    (void)flags;
     return (void *)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
 }
 
@@ -115,9 +115,6 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     if (pages > window_pages)
         panic("phys window map too large");
 
-    // The 32-bit phys window is a single shared virtual range!
-    // Hold preemption from first map to final unmap so the current
-    // thread cannot be switched out while using the returned pointer
     if (!window_pages_mapped) {
         sched_preempt_disable();
     }
@@ -127,8 +124,10 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
         if (window_stack_depth >= PHYS_WINDOW_STACK_MAX)
             panic("phys window map stack overflow");
 
-        window_stack[window_stack_depth++] =
-            (window_map_t){.paddr_base = window_paddr_base, .pages = window_pages_mapped};
+        window_stack[window_stack_depth++] = (window_map_t){
+            .paddr_base = window_paddr_base,
+            .pages = window_pages_mapped
+        };
 
         _clear_window_range(window_pages_mapped);
     }
@@ -143,7 +142,9 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     u32 vaddr = PHYS_WINDOW_BASE_32;
 
     for (size_t i = 0; i < pages; i++)
-        _map_window_page(vaddr + (u32)(i * PAGE_4KIB), start + i * PAGE_4KIB, pt_flags);
+        _map_window_page(
+            vaddr + (u32)(i * PAGE_4KIB), start + i * PAGE_4KIB, pt_flags
+        );
 
     return (void *)(uintptr_t)(PHYS_WINDOW_BASE_32 + (u32)(paddr - start));
 }
@@ -172,7 +173,9 @@ void arch_phys_unmap(void *vaddr, size_t size) {
 
     for (size_t i = 0; i < prev.pages; i++) {
         _map_window_page(
-            map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, PT_WRITE
+            map_base + (u32)(i * PAGE_4KIB),
+            prev.paddr_base + i * PAGE_4KIB,
+            PT_WRITE
         );
     }
 }

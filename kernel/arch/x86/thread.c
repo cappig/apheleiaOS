@@ -34,7 +34,11 @@ void arch_state_set_return(arch_int_state_t *state, arch_word_t value) {
 #endif
 }
 
-void arch_state_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top) {
+void arch_state_set_user_entry(
+    arch_int_state_t *state,
+    arch_word_t entry,
+    arch_word_t stack_top
+) {
     if (!state) {
         return;
     }
@@ -54,7 +58,8 @@ void arch_state_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_
 #endif
 }
 
-uintptr_t arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
+uintptr_t
+arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     if (!thread) {
         return 0;
     }

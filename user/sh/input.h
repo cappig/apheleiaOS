@@ -12,4 +12,9 @@ void input_set_sigwinch_flag(volatile sig_atomic_t *flag);
 void history_add(const char *line);
 void history_print(void);
 
-int read_line_interactive(const char *prompt, char *buf, size_t len, bool use_history);
+int read_line_interactive(
+    const char *prompt,
+    char *buf,
+    size_t len,
+    bool use_history
+);

@@ -7,7 +7,12 @@ bool psf_parse(const void *data, size_t len, psf_font_t *out) {
     return psf_parse_blob(data, len, out);
 }
 
-bool psf_load_file(const char *path, void *storage, size_t storage_len, psf_font_t *out) {
+bool psf_load_file(
+    const char *path,
+    void *storage,
+    size_t storage_len,
+    psf_font_t *out
+) {
     if (!path || !path[0] || !storage || !storage_len || !out) {
         return false;
     }

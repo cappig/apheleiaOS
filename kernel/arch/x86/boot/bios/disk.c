@@ -24,8 +24,10 @@ static u16 disk_code = 0;
 static u16 disk_sector_size = MBR_SECTOR_SIZE;
 static size_t rootfs_base = 0;
 static size_t rootfs_size = 0;
+
 static ext2_superblock_t superblock = {0};
 static u8 bounce[BOUNCE_SIZE] = {0};
+
 
 static bool _bios_read_lba(void *dest, size_t lba, u16 sectors) {
     if (!dest || !sectors) {
@@ -56,7 +58,8 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
     size_t sector_off = offset % ss;
 
     u16 bounce_sectors = BOUNCE_SIZE / ss;
-    u16 max_sectors = (u16)min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)bounce_sectors);
+    u16 max_sectors =
+        (u16)min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)bounce_sectors);
 
     uint8_t *out = dest;
 
@@ -86,7 +89,6 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
 static bool _find_rootfs(mbr_partition_t *rootfs) {
     mbr_t mbr;
 
-    // Read the mbr and find the ext2 partition
     read_disk(&mbr, 0, sizeof(mbr_t));
 
     if (mbr.signature != MBR_SIGNATURE) {
@@ -96,17 +98,14 @@ static bool _find_rootfs(mbr_partition_t *rootfs) {
     for (size_t i = 0; i < 4; i++) {
         mbr_partition_t *partition = &mbr.table.partitions[i];
 
-        // We are looking for a ext2 partition
         if (partition->type != MBR_LINUX) {
             continue;
         }
 
-        // ignore the bootable partition
         if (partition->status == MBR_BOOTABLE) {
             continue;
         }
 
-        // We found our partition
         memcpy(rootfs, partition, sizeof(mbr_partition_t));
 
         return true;
@@ -162,14 +161,12 @@ void disk_init(u16 disk) {
         (unsigned)rootfs_size
     );
 
-    // Read the superblock at offset 1024
     read_disk(&superblock, rootfs_base + 1024, sizeof(ext2_superblock_t));
 
     if (superblock.signature != EXT2_SIGNATURE) {
         panic("Not an EXT2 filesystem!");
     }
 
-    // Verify filesystem state
     if (superblock.fs_state != EXT2_FS_CLEAN) {
         panic("Filesystem has errors!");
     }
@@ -192,7 +189,8 @@ bool stage_rootfs_image(u64 *paddr, u64 *size) {
         return false;
     }
 
-    void *image = mmap_alloc_top(alloc_size, E820_KERNEL, 0x1000, PROTECTED_MODE_TOP);
+    void *image =
+        mmap_alloc_top(alloc_size, E820_KERNEL, 0x1000, PROTECTED_MODE_TOP);
 
     read_disk(image, rootfs_base, rootfs_size);
 
@@ -207,7 +205,8 @@ bool stage_rootfs_image(u64 *paddr, u64 *size) {
 }
 
 
-static size_t _indirect_capacity(u32 entries_per_block, size_t indirection, size_t max) {
+static size_t
+_indirect_capacity(u32 entries_per_block, size_t indirection, size_t max) {
     size_t capacity = 1;
 
     for (size_t i = 0; i < indirection; i++) {
@@ -221,7 +220,8 @@ static size_t _indirect_capacity(u32 entries_per_block, size_t indirection, size
     return capacity;
 }
 
-static void _push_zero_blocks(u32 *blocks, size_t *n, size_t max, size_t count) {
+static void
+_push_zero_blocks(u32 *blocks, size_t *n, size_t max, size_t count) {
     if (*n >= max) {
         return;
     }
@@ -233,7 +233,13 @@ static void _push_zero_blocks(u32 *blocks, size_t *n, size_t max, size_t count) 
     *n += to_add;
 }
 
-static void _flatten_blocks(u32 *blocks, u32 block_num, size_t indirection, size_t *n, size_t max) {
+static void _flatten_blocks(
+    u32 *blocks,
+    u32 block_num,
+    size_t indirection,
+    size_t *n,
+    size_t max
+) {
     if (*n >= max) {
         return;
     }
@@ -247,7 +253,8 @@ static void _flatten_blocks(u32 *blocks, u32 block_num, size_t indirection, size
     }
 
     if (!block_num) {
-        size_t capacity = _indirect_capacity(entries_per_block, indirection, max - *n);
+        size_t capacity =
+            _indirect_capacity(entries_per_block, indirection, max - *n);
         _push_zero_blocks(blocks, n, max, capacity);
         return;
     }
@@ -258,7 +265,9 @@ static void _flatten_blocks(u32 *blocks, u32 block_num, size_t indirection, size
         panic("Failed to allocate memory for indirect blocks!");
     }
 
-    read_disk(indirect_blocks, rootfs_base + (block_num * block_size), block_size);
+    read_disk(
+        indirect_blocks, rootfs_base + (block_num * block_size), block_size
+    );
 
     for (u32 i = 0; i < entries_per_block && *n < max; i++) {
         _flatten_blocks(blocks, indirect_blocks[i], indirection - 1, n, max);
@@ -274,7 +283,8 @@ static void _get_inode(u32 num, ext2_inode_t *inode) {
     u32 index = (num - 1) % superblock.inodes_in_group;
 
     // Read the group descriptor
-    size_t gdt_offset = rootfs_base + block_size * (superblock.superblock_offset + 1);
+    size_t gdt_offset =
+        rootfs_base + block_size * (superblock.superblock_offset + 1);
     size_t group_offset = gdt_offset + group * sizeof(ext2_group_descriptor_t);
 
     ext2_group_descriptor_t gd;
@@ -282,7 +292,8 @@ static void _get_inode(u32 num, ext2_inode_t *inode) {
 
     // Calculate inode location
     u32 inode_size = ext2_inode_size(&superblock);
-    u32 inode_offset = rootfs_base + (gd.inode_table_offset * block_size) + (index * inode_size);
+    u32 inode_offset = 
+        rootfs_base + (gd.inode_table_offset * block_size) + (index * inode_size);
 
     read_disk(inode, inode_offset, sizeof(ext2_inode_t));
 }

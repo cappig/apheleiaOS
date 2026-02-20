@@ -18,10 +18,14 @@ static bool _x86_console_probe(void *arch_boot_info, console_hw_desc_t *out) {
     boot_info_t *info = arch_boot_info;
     memset(out, 0, sizeof(*out));
 
-    if (info->video.mode == VIDEO_GRAPHICS && info->video.framebuffer && info->video.width &&
-        info->video.height && info->video.bytes_per_pixel) {
+    bool has_graphics_mode = info->video.mode == VIDEO_GRAPHICS;
+    bool has_framebuffer = info->video.framebuffer != 0;
+    bool has_dimensions = info->video.width && info->video.height;
+    bool has_bpp = info->video.bytes_per_pixel != 0;
 
+    if (has_graphics_mode && has_framebuffer && has_dimensions && has_bpp) {
         u32 pitch = info->video.bytes_per_line;
+
         if (!pitch) {
             pitch = info->video.width * info->video.bytes_per_pixel;
         }
@@ -43,6 +47,7 @@ static bool _x86_console_probe(void *arch_boot_info, console_hw_desc_t *out) {
             out->red_size = info->video.red_size;
             out->green_size = info->video.green_size;
             out->blue_size = info->video.blue_size;
+
             x86_fb_base = NULL;
             x86_fb_phys = info->video.framebuffer;
             x86_fb_use_phys_window = true;
@@ -65,6 +70,7 @@ static bool _x86_console_probe(void *arch_boot_info, console_hw_desc_t *out) {
             out->red_size = info->video.red_size;
             out->green_size = info->video.green_size;
             out->blue_size = info->video.blue_size;
+
             x86_fb_base = mapped;
             x86_fb_phys = info->video.framebuffer;
             x86_fb_use_phys_window = false;
@@ -146,8 +152,15 @@ static u16 _x86_text_cell(u32 codepoint, u8 fg, u8 bg) {
     return ((u16)attr << 8) | ch;
 }
 
-static void
-_x86_text_put(u8 *fb, size_t cols, size_t col, size_t row, u32 codepoint, u8 fg, u8 bg) {
+static void _x86_text_put(
+    u8 *fb,
+    size_t cols,
+    size_t col,
+    size_t row,
+    u32 codepoint,
+    u8 fg,
+    u8 bg
+) {
     if (!fb) {
         return;
     }
@@ -170,7 +183,8 @@ static void _x86_text_clear(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
     }
 }
 
-static void _x86_text_scroll_up(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
+static void
+_x86_text_scroll_up(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
     if (!fb || !cols || !rows) {
         return;
     }

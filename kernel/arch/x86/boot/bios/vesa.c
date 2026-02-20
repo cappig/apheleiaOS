@@ -68,8 +68,11 @@ static bool _fetch_edid_info(edid_data_t *buffer) {
 }
 
 static void _edid_resolution(u8 *edid_data, edid_info_t *edid_info) {
-    edid_info->monitor_width = edid_data[0x38] | ((int)(edid_data[0x3a] & 0xf0) << 4);
-    edid_info->monitor_height = edid_data[0x3b] | ((int)(edid_data[0x3d] & 0xf0) << 4);
+    edid_info->monitor_width =
+        edid_data[0x38] | ((int)(edid_data[0x3a] & 0xf0) << 4);
+
+    edid_info->monitor_height =
+        edid_data[0x3b] | ((int)(edid_data[0x3d] & 0xf0) << 4);
 }
 
 static bool _set_vesa_mode(u16 mode_index) {
@@ -92,7 +95,8 @@ static vesa_mode_t _init_vesa(u16 max_width, u16 max_height, u16 max_bpp) {
         return current_mode;
     }
 
-    uintptr_t mode_list = REAL_FLATTEN(info_buffer.video_mode_seg, info_buffer.video_mode_off);
+    uintptr_t mode_list =
+        REAL_FLATTEN(info_buffer.video_mode_seg, info_buffer.video_mode_off);
 
     // Guard against buggy firmware returning a junk mode_list pointer
     if (mode_list < 0x0500 || mode_list > 0x10fff0) {
@@ -137,13 +141,19 @@ static vesa_mode_t _init_vesa(u16 max_width, u16 max_height, u16 max_bpp) {
         }
 
         // Ignore modes that are too large
-        if (current_mode.width > max_width || current_mode.height > max_height ||
-            current_mode.bits_per_pixel > max_bpp) {
+        if (
+            current_mode.width > max_width || 
+            current_mode.height > max_height ||
+            current_mode.bits_per_pixel > max_bpp
+        ) {
             continue;
         }
 
-        if (current_mode.width > best_mode.width || current_mode.height > best_mode.height ||
-            current_mode.bits_per_pixel > best_mode.bits_per_pixel) {
+        if (
+            current_mode.width > best_mode.width ||
+            current_mode.height > best_mode.height ||
+            current_mode.bits_per_pixel > best_mode.bits_per_pixel
+        ) {
             best_mode_i = mode;
             best_mode = current_mode;
         }
@@ -196,19 +206,16 @@ void init_graphics(boot_info_t *info) {
     }
 
     if (info->args.video == VIDEO_GRAPHICS) {
-        vesa_mode_t vesa = _init_vesa(video->width, video->height, info->args.vesa_bpp);
+        vesa_mode_t vesa =
+            _init_vesa(video->width, video->height, info->args.vesa_bpp);
 
         if (vesa.bits_per_pixel) {
             video->mode = VIDEO_GRAPHICS;
-
             video->framebuffer = (u64)vesa.framebuffer;
-
             video->width = vesa.width;
             video->height = vesa.height;
-
             video->bytes_per_pixel = (u32)vesa.bits_per_pixel / 8;
             video->bytes_per_line = (u32)vesa.bytes_per_line;
-
             video->red_shift = vesa.red.position;
             video->green_shift = vesa.green.position;
             video->blue_shift = vesa.blue.position;
@@ -216,7 +223,11 @@ void init_graphics(boot_info_t *info) {
             video->green_size = vesa.green.mask;
             video->blue_size = vesa.blue.mask;
 
-            printf("video output: graphics %hdx%hd\n\r", video->width, video->height);
+            printf(
+                "video output: graphics %hdx%hd\n\r",
+                video->width,
+                video->height
+            );
 
             return;
         }

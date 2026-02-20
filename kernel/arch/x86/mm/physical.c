@@ -103,7 +103,9 @@ void *alloc_frames(size_t count) {
     }
 
 #ifdef MMU_DEBUG
-    log_debug("[MMU DEBUG] allocated %zu new frames: paddr = %#lx", count, (u64)ret);
+    log_debug(
+        "[MMU DEBUG] allocated %zu new frames: paddr = %#lx", count, (u64)ret
+    );
 #endif
 
     _pmm_ref_set_range(ret, count, 1);
@@ -120,7 +122,11 @@ void *alloc_frames_high(size_t count) {
     }
 
 #ifdef MMU_DEBUG
-    log_debug("[MMU DEBUG] allocated %zu new frames (high): paddr = %#lx", count, (u64)ret);
+    log_debug(
+        "[MMU DEBUG] allocated %zu new frames (high): paddr = %#lx",
+        count,
+        (u64)ret
+    );
 #endif
 
     _pmm_ref_set_range(ret, count, 1);
@@ -159,7 +165,9 @@ void free_frames(void *ptr, size_t size) {
         }
 
         if (!frame_refs[index]) {
-            bitmap_alloc_free(&frame_alloc, bitmap_alloc_to_ptr(&frame_alloc, index), 1);
+            bitmap_alloc_free(
+                &frame_alloc, bitmap_alloc_to_ptr(&frame_alloc, index), 1
+            );
         }
     }
 

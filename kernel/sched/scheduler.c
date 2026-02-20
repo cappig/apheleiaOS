@@ -54,6 +54,7 @@ static sched_thread_t **sleep_heap = NULL;
 static size_t sleep_heap_count = 0;
 static size_t sleep_heap_capacity = 0;
 
+
 static size_t sched_cpu_id(void) {
     cpu_core_t *core = cpu_current();
 
@@ -189,7 +190,9 @@ static bool sleep_heap_reserve(size_t needed) {
     }
 
     if (sleep_heap && sleep_heap_count) {
-        memcpy(resized, sleep_heap, sleep_heap_count * sizeof(sched_thread_t *));
+        memcpy(
+            resized, sleep_heap, sleep_heap_count * sizeof(sched_thread_t *)
+        );
     }
 
     for (size_t i = sleep_heap_count; i < new_capacity; i++) {
@@ -229,6 +232,7 @@ static void sleep_heap_remove_at(size_t index) {
 
     if (index != sleep_heap_count) {
         sleep_heap[index] = sleep_heap[sleep_heap_count];
+
         if (sleep_heap[index]) {
             sleep_heap[index]->sleep_index = index;
         }
@@ -340,7 +344,9 @@ static void _pid_index_set_locked(sched_thread_t *thread) {
         return;
     }
 
-    (void)hashmap_set(pid_index, _pid_index_key(thread->pid), (u64)(uintptr_t)thread);
+    (void)hashmap_set(
+        pid_index, _pid_index_key(thread->pid), (u64)(uintptr_t)thread
+    );
 }
 
 static void _pid_index_remove_locked(pid_t pid) {
@@ -435,6 +441,7 @@ static void sched_pipe_try_destroy(sched_pipe_t *pipe) {
     if (pipe->read_wait_owned && pipe->read_wait_queue) {
         sched_wait_queue_destroy(pipe->read_wait_queue);
     }
+
     if (pipe->write_wait_owned && pipe->write_wait_queue) {
         sched_wait_queue_destroy(pipe->write_wait_queue);
     }
@@ -581,7 +588,11 @@ int sched_fd_close(sched_thread_t *thread, int fd) {
     return 0;
 }
 
-int sched_fd_install(sched_thread_t *thread, int target_fd, const sched_fd_t *fd) {
+int sched_fd_install(
+    sched_thread_t *thread,
+    int target_fd,
+    const sched_fd_t *fd
+) {
     if (!thread || !fd || fd->kind == SCHED_FD_NONE) {
         return -EINVAL;
     }
@@ -767,7 +778,8 @@ void sched_clear_user_regions(sched_thread_t *thread) {
     thread->regions = NULL;
 }
 
-static sched_user_region_t *find_user_region(sched_thread_t *thread, uintptr_t addr) {
+static sched_user_region_t *
+find_user_region(sched_thread_t *thread, uintptr_t addr) {
     if (!thread) {
         return NULL;
     }
@@ -787,7 +799,8 @@ static sched_user_region_t *find_user_region(sched_thread_t *thread, uintptr_t a
     return NULL;
 }
 
-static void mark_cow_range(sched_thread_t *thread, sched_user_region_t *region) {
+static void
+mark_cow_range(sched_thread_t *thread, sched_user_region_t *region) {
     if (!thread || !region || !region->pages) {
         return;
     }
@@ -903,7 +916,11 @@ static bool split_region_for_page(
     return false;
 }
 
-bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write) {
+bool sched_handle_cow_fault(
+    sched_thread_t *thread,
+    uintptr_t addr,
+    bool write
+) {
     if (!thread || !thread->user_thread || !write) {
         return false;
     }
@@ -952,7 +969,9 @@ bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write) 
             return false;
         }
 
-        bool split_ok = split_region_for_page(region, page_index, new_paddr, new_flags);
+        bool split_ok =
+            split_region_for_page(region, page_index, new_paddr, new_flags);
+
         if (!split_ok) {
             arch_free_frames((void *)new_paddr, 1);
             return false;
@@ -963,7 +982,10 @@ bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write) 
         *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
         arch_free_frames((void *)(uintptr_t)old_paddr, 1);
     } else {
-        bool split_ok = split_region_for_page(region, page_index, (uintptr_t)old_paddr, new_flags);
+        bool split_ok = split_region_for_page(
+            region, page_index, (uintptr_t)old_paddr, new_flags
+        );
+
         if (!split_ok) {
             return false;
         }
@@ -1044,8 +1066,11 @@ static uintptr_t build_initial_stack(sched_thread_t *thread) {
     return arch_build_kernel_stack(thread, (uintptr_t)thread_trampoline);
 }
 
-static uintptr_t
-build_user_stack(sched_thread_t *thread, uintptr_t entry, uintptr_t user_stack_top) {
+static uintptr_t build_user_stack(
+    sched_thread_t *thread,
+    uintptr_t entry,
+    uintptr_t user_stack_top
+) {
     uintptr_t sp = (uintptr_t)thread->stack + thread->stack_size;
     sp = ALIGN_DOWN(sp, 16);
 
@@ -1059,7 +1084,8 @@ build_user_stack(sched_thread_t *thread, uintptr_t entry, uintptr_t user_stack_t
     return sp;
 }
 
-static uintptr_t build_fork_stack(sched_thread_t *thread, arch_int_state_t *state) {
+static uintptr_t
+build_fork_stack(sched_thread_t *thread, arch_int_state_t *state) {
     if (!thread || !state) {
         return 0;
     }
@@ -1077,7 +1103,11 @@ static uintptr_t build_fork_stack(sched_thread_t *thread, arch_int_state_t *stat
     return sp;
 }
 
-void sched_prepare_user_thread(sched_thread_t *thread, uintptr_t entry, uintptr_t user_stack_top) {
+void sched_prepare_user_thread(
+    sched_thread_t *thread,
+    uintptr_t entry,
+    uintptr_t user_stack_top
+) {
     if (!thread) {
         return;
     }
@@ -1165,7 +1195,8 @@ static void wait_queue_remove(sched_thread_t *thread) {
     sched_lock_restore(flags);
 }
 
-static void wait_queue_append(sched_wait_queue_t *queue, sched_thread_t *thread) {
+static void
+wait_queue_append(sched_wait_queue_t *queue, sched_thread_t *thread) {
     if (!queue || !queue->list || !thread || thread->in_wait_queue) {
         return;
     }
@@ -1351,8 +1382,13 @@ static sched_thread_t *pick_next_thread(void) {
     return sched_local_current();
 }
 
-static sched_thread_t *
-create_thread(const char *name, thread_entry_t entry, void *arg, bool enqueue, bool user_thread) {
+static sched_thread_t *create_thread(
+    const char *name,
+    thread_entry_t entry,
+    void *arg,
+    bool enqueue,
+    bool user_thread
+) {
     sched_thread_t *thread = calloc(1, sizeof(*thread));
     if (!thread) {
         return NULL;
@@ -1691,8 +1727,11 @@ void scheduler_init(void) {
     assert(kernel_vm);
 
     next_pid = 0;
-    sched_thread_t *idle = create_thread("idle", idle_entry, NULL, false, false);
+    sched_thread_t *idle =
+        create_thread("idle", idle_entry, NULL, false, false);
+
     assert(idle);
+
     idle->state = THREAD_RUNNING;
     idle->tty_index = TTY_NONE;
 
@@ -1737,7 +1776,8 @@ bool sched_is_running(void) {
     return sched_running;
 }
 
-sched_thread_t *sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg) {
+sched_thread_t *
+sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg) {
     return create_thread(name, entry, arg, true, false);
 }
 
@@ -1770,7 +1810,11 @@ pid_t sched_fork(arch_int_state_t *state) {
     }
 
     memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
-    memcpy(child->signal_handlers, parent->signal_handlers, sizeof(child->signal_handlers));
+    memcpy(
+        child->signal_handlers,
+        parent->signal_handlers,
+        sizeof(child->signal_handlers)
+    );
 
     child->signal_mask = parent->signal_mask;
     child->signal_trampoline = parent->signal_trampoline;
@@ -1800,8 +1844,12 @@ pid_t sched_fork(arch_int_state_t *state) {
             size_t size = pages * PAGE_4KIB;
             uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(pages);
 
-            arch_map_region(root, pages, region->vaddr, new_paddr, region->flags);
-            sched_add_user_region(child, region->vaddr, new_paddr, pages, region->flags);
+            arch_map_region(
+                root, pages, region->vaddr, new_paddr, region->flags
+            );
+            sched_add_user_region(
+                child, region->vaddr, new_paddr, pages, region->flags
+            );
 
             void *dst = arch_phys_map(new_paddr, size, 0);
             if (!dst) {
@@ -1831,7 +1879,9 @@ pid_t sched_fork(arch_int_state_t *state) {
         }
 
         arch_map_region(root, pages, region->vaddr, region->paddr, map_flags);
-        sched_add_user_region(child, region->vaddr, region->paddr, pages, region_flags);
+        sched_add_user_region(
+            child, region->vaddr, region->paddr, pages, region_flags
+        );
 
         pmm_ref_hold((void *)(uintptr_t)region->paddr, pages);
 
@@ -1852,8 +1902,11 @@ pid_t sched_wait(pid_t pid, int *status) {
     return sched_waitpid(pid, status, 0);
 }
 
-static bool
-waitpid_target_matches(const sched_thread_t *parent, const sched_thread_t *child, pid_t pid) {
+static bool waitpid_target_matches(
+    const sched_thread_t *parent,
+    const sched_thread_t *child,
+    pid_t pid
+) {
     if (!parent || !child || !child->user_thread) {
         return false;
     }
@@ -2158,18 +2211,23 @@ void sched_sleep(u64 ticks) {
     }
 
     u64 deadline = arch_timer_ticks() + ticks;
+
     unsigned long flags = sched_lock_save();
+
     self->wake_tick = deadline;
     self->state = THREAD_SLEEPING;
+
     if (!sleep_heap_insert(self)) {
         self->state = THREAD_READY;
         self->wake_tick = 0;
+
         sched_lock_restore(flags);
 
         u64 start = arch_timer_ticks();
         while ((arch_timer_ticks() - start) < ticks) {
             arch_cpu_wait();
         }
+
         return;
     }
     sched_lock_restore(flags);
@@ -2311,6 +2369,7 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
 
     ll_foreach(node, all_list) {
         sched_thread_t *thread = node->data;
+
         if (!thread || thread->pid != pid) {
             continue;
         }
@@ -2325,7 +2384,9 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         out->state = thread->state;
         out->tty_index = thread->tty_index;
 
-        u64 cpu_ticks = __atomic_load_n(&thread->cpu_time_ticks, __ATOMIC_RELAXED);
+        u64 cpu_ticks =
+            __atomic_load_n(&thread->cpu_time_ticks, __ATOMIC_RELAXED);
+
         out->cpu_time_ms = hz ? ((cpu_ticks * 1000ULL) / hz) : 0;
 
         memset(out->name, 0, sizeof(out->name));

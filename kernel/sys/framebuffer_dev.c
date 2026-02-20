@@ -19,8 +19,13 @@
 
 static void *_present_vram;
 
-static ssize_t
-_dev_fb_transfer(const framebuffer_info_t *fb, void *buf, size_t offset, size_t len, bool write) {
+static ssize_t _dev_fb_transfer(
+    const framebuffer_info_t *fb,
+    void *buf,
+    size_t offset,
+    size_t len,
+    bool write
+) {
     if (!fb || !fb->available || !buf) {
         return -1;
     }
@@ -47,7 +52,10 @@ _dev_fb_transfer(const framebuffer_info_t *fb, void *buf, size_t offset, size_t 
             chunk = FB_MAP_CHUNK;
         }
 
-        void *map = arch_phys_map(fb->paddr + off + done, chunk, write ? PHYS_MAP_WC : 0);
+        void *map = arch_phys_map(
+            fb->paddr + off + done, chunk, write ? PHYS_MAP_WC : 0
+        );
+
         if (!map) {
             break;
         }
@@ -70,7 +78,13 @@ _dev_fb_transfer(const framebuffer_info_t *fb, void *buf, size_t offset, size_t 
     return (ssize_t)done;
 }
 
-static ssize_t _dev_fb_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _dev_fb_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
     (void)node;
     (void)flags;
 
@@ -78,7 +92,13 @@ static ssize_t _dev_fb_read(vfs_node_t *node, void *buf, size_t offset, size_t l
     return _dev_fb_transfer(fb, buf, offset, len, false);
 }
 
-static ssize_t _dev_fb_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _dev_fb_write(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
     (void)node;
     (void)flags;
 
@@ -127,7 +147,10 @@ static bool _clip_present_rect(
     return *width && *height;
 }
 
-static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_present_rect_t *req) {
+static ssize_t _dev_fb_present_rect(
+    const framebuffer_info_t *fb,
+    const fb_present_rect_t *req
+) {
     if (!fb || !fb->available || !req || !req->frame) {
         return -EINVAL;
     }
@@ -136,6 +159,7 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
     u32 y = 0;
     u32 width = 0;
     u32 height = 0;
+
     if (!_clip_present_rect(fb, req, &x, &y, &width, &height)) {
         return 0;
     }
@@ -143,6 +167,7 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
     u32 fb_width = fb->width;
     u32 pitch = fb->pitch;
     u32 bpp_bytes = fb->bpp / 8;
+
     if (!bpp_bytes) {
         return -EINVAL;
     }
@@ -156,8 +181,15 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
     u8 red_size = fb->red_size;
     u8 green_size = fb->green_size;
     u8 blue_size = fb->blue_size;
+
     pixel_apply_legacy_defaults(
-        (u8)bpp_bytes, &red_shift, &green_shift, &blue_shift, &red_size, &green_size, &blue_size
+        (u8)bpp_bytes,
+        &red_shift,
+        &green_shift,
+        &blue_shift,
+        &red_size,
+        &green_size,
+        &blue_size
     );
 
     sched_preempt_disable();
@@ -174,20 +206,33 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
         return -EIO;
     }
 
-    if (pixel_is_fast_bgrx8888(
-            (u8)bpp_bytes, red_shift, green_shift, blue_shift, red_size, green_size, blue_size
-        )) {
+    bool fast_bgrx = pixel_is_fast_bgrx8888(
+        (u8)bpp_bytes,
+        red_shift,
+        green_shift,
+        blue_shift,
+        red_size,
+        green_size,
+        blue_size
+    );
+
+    if (fast_bgrx) {
         size_t src_row_bytes = (size_t)width * sizeof(u32);
 
         for (u32 row = 0; row < height; row++) {
             const u32 *src_row = src + (size_t)(y + row) * fb_width + x;
-            u8 *dst_row = (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
+
+            u8 *dst_row =
+                (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
+
             memcpy(dst_row, src_row, src_row_bytes);
         }
     } else {
         for (u32 row = 0; row < height; row++) {
             const u32 *src_row = src + (size_t)(y + row) * fb_width + x;
-            u8 *dst_row = (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
+
+            u8 *dst_row =
+                (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
 
             for (u32 col = 0; col < width; col++) {
                 u32 packed = pixel_pack_rgb888(
@@ -199,7 +244,10 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
                     green_size,
                     blue_size
                 );
-                pixel_store_packed(dst_row + (size_t)col * bpp_bytes, (u8)bpp_bytes, packed);
+
+                pixel_store_packed(
+                    dst_row + (size_t)col * bpp_bytes, (u8)bpp_bytes, packed
+                );
             }
         }
     }
@@ -214,7 +262,8 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
     return 0;
 }
 
-static ssize_t _dev_fb_present(const framebuffer_info_t *fb, const void *frame) {
+static ssize_t
+_dev_fb_present(const framebuffer_info_t *fb, const void *frame) {
     if (!frame) {
         return -EINVAL;
     }
@@ -327,7 +376,9 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
         }
     }
 
-    vfs_interface_t *fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);
+    vfs_interface_t *fb_if =
+        vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);
+
     if (!fb_if) {
         log_warn("failed to allocate /dev interface");
         return false;

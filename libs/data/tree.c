@@ -91,7 +91,8 @@ bool tree_remove_child(tree_node_t *parent, tree_node_t *child) {
     return removed;
 }
 
-static tree_node_t *_findc(tree_node_t *root, tree_comp_fn comp, void *private) {
+static tree_node_t *
+_findc(tree_node_t *root, tree_comp_fn comp, void *private) {
     ll_foreach(node, root->children) {
         tree_node_t *child = node->data;
 
@@ -136,8 +137,11 @@ tree_node_t *tree_find(tree_t *root, void *data) {
 }
 
 
-// depth first iteration over all nodes in the three, if the callback returns 1 the itteration stops
-int tree_foreach_node(tree_node_t *node, tree_foreach_fn callback, void *private) {
+int tree_foreach_node(
+    tree_node_t *node,
+    tree_foreach_fn callback,
+    void *private
+) {
     if (!node || !callback) {
         return -1;
     }

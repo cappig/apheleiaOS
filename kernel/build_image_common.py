@@ -45,7 +45,12 @@ def append_file(path: Path, data: bytes) -> int:
     return old_size
 
 
-def write_file_to_lba(dst_image: Path, src_file: Path, lba: int, sector_size: int = SECTOR_SIZE) -> None:
+def write_file_to_lba(
+    dst_image: Path,
+    src_file: Path,
+    lba: int,
+    sector_size: int = SECTOR_SIZE,
+) -> None:
     with src_file.open("rb") as src, dst_image.open("r+b") as dst:
         dst.seek(lba * sector_size)
         shutil.copyfileobj(src, dst)
@@ -93,7 +98,15 @@ def prepare_root_tree(src_root: Path, dst_root: Path) -> None:
         except (PermissionError, OSError):
             pass
 
-    for rel in ("etc/passwd", "etc/group", "etc/font.psf", "boot/loader.conf", "etc/shadow", "dev", "home"):
+    for rel in (
+        "etc/passwd",
+        "etc/group",
+        "etc/font.psf",
+        "boot/loader.conf",
+        "etc/shadow",
+        "dev",
+        "home",
+    ):
         chown_if_exists(rel, 0, 0)
 
     chown_if_exists("home/user", 1000, 1000)
@@ -520,7 +533,10 @@ def build_ext2_image(
             off = (ino - 1) * inode_size
             inode_table[off : off + len(raw)] = raw
 
-        alloc.image[inode_table_block * block_size : (inode_table_block + inode_table_blocks) * block_size] = inode_table
+        alloc.image[
+            inode_table_block * block_size
+            : (inode_table_block + inode_table_blocks) * block_size
+        ] = inode_table
 
         # Bitmaps
         block_bitmap = bytearray(block_size)
@@ -536,8 +552,12 @@ def build_ext2_image(
                 continue
             inode_bitmap[idx // 8] |= 1 << (idx % 8)
 
-        alloc.image[block_bitmap_block * block_size : (block_bitmap_block + 1) * block_size] = block_bitmap
-        alloc.image[inode_bitmap_block * block_size : (inode_bitmap_block + 1) * block_size] = inode_bitmap
+        alloc.image[
+            block_bitmap_block * block_size : (block_bitmap_block + 1) * block_size
+        ] = block_bitmap
+        alloc.image[
+            inode_bitmap_block * block_size : (inode_bitmap_block + 1) * block_size
+        ] = inode_bitmap
 
         free_blocks = total_blocks - len(alloc.used_blocks)
         free_inodes = inode_count - len(used_inodes)
@@ -765,7 +785,11 @@ def build_esp_fat16_image(
         off = cluster_off(cluster)
         image[off : off + len(blob)] = blob
 
-    root_entries_blob = _dir_entry("EFI", 0x10, c_efi) + _dir_entry("BOOT", 0x10, c_boot) + b"\x00" * 32
+    root_entries_blob = (
+        _dir_entry("EFI", 0x10, c_efi)
+        + _dir_entry("BOOT", 0x10, c_boot)
+        + b"\x00" * 32
+    )
     image[root_dir_off : root_dir_off + len(root_entries_blob)] = root_entries_blob
 
     write_dir(

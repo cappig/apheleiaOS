@@ -19,25 +19,28 @@ static page_t *_walk_table_once(page_t *table, size_t index, u64 flags) {
         next_table = (page_t *)(uintptr_t)page_get_paddr(&table[index]);
     } else {
         next_table = alloc_frames(1);
-        memset((void *)((uintptr_t)next_table + LINEAR_MAP_OFFSET_64), 0, PAGE_4KIB);
+        memset(
+            (void *)((uintptr_t)next_table + LINEAR_MAP_OFFSET_64), 0, PAGE_4KIB
+        );
 
         page_set_paddr(&table[index], (u64)(uintptr_t)next_table);
         table[index] |= PT_PRESENT;
     }
 
     table[index] |= flags & FLAGS_MASK;
-
-    // If we ever map a writable child all the parents must have the write flag set
     table[index] |= PT_WRITE;
-
-    // All parent pages will have nx set to 0 and write set to 1 leaves may set it to 1/0
-    // later in map_page(), this ensures no conflict between parent and children pages
     table[index] &= ~PT_NO_EXECUTE;
 
     return (page_t *)((uintptr_t)next_table + LINEAR_MAP_OFFSET_64);
 }
 
-void map_page(page_t *lvl4_paddr, size_t size, u64 vaddr, u64 paddr, u64 flags) {
+void map_page(
+    page_t *lvl4_paddr,
+    size_t size,
+    u64 vaddr,
+    u64 paddr,
+    u64 flags
+) {
     size_t lvl4_index = GET_LVL4_INDEX(vaddr);
     page_t *lvl4 = (page_t *)((uintptr_t)lvl4_paddr + LINEAR_MAP_OFFSET_64);
 
@@ -89,7 +92,13 @@ void unmap_page(page_t *lvl4_paddr, u64 vaddr) {
 }
 
 
-void map_region(page_t *lvl4_paddr, size_t pages, u64 vaddr, u64 paddr, u64 flags) {
+void map_region(
+    page_t *lvl4_paddr,
+    size_t pages,
+    u64 vaddr,
+    u64 paddr,
+    u64 flags
+) {
     for (size_t i = 0; i < pages; i++) {
         u64 page_vaddr = vaddr + i * PAGE_4KIB;
         u64 page_paddr = paddr + i * PAGE_4KIB;
@@ -98,7 +107,14 @@ void map_region(page_t *lvl4_paddr, size_t pages, u64 vaddr, u64 paddr, u64 flag
     }
 }
 
-void identity_map(page_t *lvl4_paddr, u64 from, u64 to, u64 map_offset, u64 flags, bool remap) {
+void identity_map(
+    page_t *lvl4_paddr,
+    u64 from,
+    u64 to,
+    u64 map_offset,
+    u64 flags,
+    bool remap
+) {
     from = ALIGN_DOWN(from, PAGE_4KIB);
     to = ALIGN(to, PAGE_4KIB);
 

@@ -6,7 +6,8 @@ section .text
 
 %macro generate_int_stub 1
 isr_stub_%+%1:
-%if (%1 == 8) || (%1 == 10) || (%1 == 11) || (%1 == 12) || (%1 == 13) || (%1 == 14) || (%1 == 17) || %1 == 21 || %1 == 29 ||%1 == 30
+%if (%1 == 8) || (%1 == 10) || (%1 == 11) || (%1 == 12) || (%1 == 13) \
+   || (%1 == 14) || (%1 == 17) || %1 == 21 || %1 == 29 || %1 == 30
     ; CPU will already have pushed the hardware error code for these vectors,
     ; our stub should not push another. We still push the vector number.
     push qword %1

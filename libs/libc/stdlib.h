@@ -58,4 +58,9 @@ long long llabs(long long n);
 long labs(long n);
 int abs(int n);
 
-void qsort(void *base, size_t num, size_t size, int (*comp)(const void *, const void *));
+void qsort(
+    void *base,
+    size_t num,
+    size_t size,
+    int (*comp)(const void *, const void *)
+);

@@ -8,7 +8,8 @@
 
 #define PASSWD_PATH "/etc/passwd"
 
-static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
+static int
+copy_field(char **cursor, size_t *left, char **out, const char *src) {
     size_t n = strlen(src) + 1;
     if (!cursor || !left || !out || !src || n > *left) {
         return ERANGE;
@@ -21,7 +22,12 @@ static int copy_field(char **cursor, size_t *left, char **out, const char *src) 
     return 0;
 }
 
-static int parse_passwd_line(const char *line, struct passwd *pwd, char *buf, size_t buflen) {
+static int parse_passwd_line(
+    const char *line,
+    struct passwd *pwd,
+    char *buf,
+    size_t buflen
+) {
     if (!line || !pwd || !buf || !buflen) {
         return EINVAL;
     }
@@ -35,6 +41,7 @@ static int parse_passwd_line(const char *line, struct passwd *pwd, char *buf, si
     char pw_shell[128] = {0};
 
     const char *cursor = line;
+
     cursor = textdb_next_field(cursor, pw_name, sizeof(pw_name));
     cursor = textdb_next_field(cursor, pw_passwd, sizeof(pw_passwd));
     cursor = textdb_next_field(cursor, uid_buf, sizeof(uid_buf));
@@ -42,16 +49,19 @@ static int parse_passwd_line(const char *line, struct passwd *pwd, char *buf, si
     cursor = textdb_next_field(cursor, pw_gecos, sizeof(pw_gecos));
     cursor = textdb_next_field(cursor, pw_dir, sizeof(pw_dir));
     cursor = textdb_next_field(cursor, pw_shell, sizeof(pw_shell));
+
     (void)cursor;
 
     char *end = NULL;
     long uid = strtol(uid_buf, &end, 10);
+
     if (end == uid_buf || *end != '\0' || uid < 0) {
         return EINVAL;
     }
 
     end = NULL;
     long gid = strtol(gid_buf, &end, 10);
+
     if (end == gid_buf || *end != '\0' || gid < 0) {
         return EINVAL;
     }
@@ -62,7 +72,9 @@ static int parse_passwd_line(const char *line, struct passwd *pwd, char *buf, si
 
     char *dst = buf;
     size_t left = buflen;
+
     int rc = copy_field(&dst, &left, &pwd->pw_name, pw_name);
+
     if (!rc) {
         rc = copy_field(&dst, &left, &pwd->pw_passwd, pw_passwd);
     }
@@ -157,7 +169,13 @@ int getpwnam_r(
     return find_passwd(name, 0, true, pwd, buf, buflen, result);
 }
 
-int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen, struct passwd **result) {
+int getpwuid_r(
+    uid_t uid,
+    struct passwd *pwd,
+    char *buf,
+    size_t buflen,
+    struct passwd **result
+) {
     if (!pwd || !buf || !buflen || !result) {
         return EINVAL;
     }
@@ -168,8 +186,11 @@ int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen, struct p
 struct passwd *getpwnam(const char *name) {
     static struct passwd pwd;
     static char buf[512];
+
     struct passwd *result = NULL;
+
     int rc = getpwnam_r(name, &pwd, buf, sizeof(buf), &result);
+
     if (rc || !result) {
         errno = rc ? rc : ENOENT;
         return NULL;
@@ -181,8 +202,11 @@ struct passwd *getpwnam(const char *name) {
 struct passwd *getpwuid(uid_t uid) {
     static struct passwd pwd;
     static char buf[512];
+
     struct passwd *result = NULL;
+
     int rc = getpwuid_r(uid, &pwd, buf, sizeof(buf), &result);
+
     if (rc || !result) {
         errno = rc ? rc : ENOENT;
         return NULL;

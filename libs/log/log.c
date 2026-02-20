@@ -3,7 +3,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-static const char *lvl_strings[6] = {"NONE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
+static const char *lvl_strings[6] =
+    {"NONE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
 static const char *lvl_colors[6] = {"37", "36", "32", "33", "31", "41;97"};
 
 static int min_log_lvl = LOG_DEBUG;
@@ -11,7 +12,14 @@ static int min_log_lvl = LOG_DEBUG;
 static puts_fn puts_ptr = NULL;
 
 
-void vslog(char *restrict buf, int lvl, char *file, int line, char *fmt, va_list args) {
+void vslog(
+    char *restrict buf,
+    int lvl,
+    char *file,
+    int line,
+    char *fmt,
+    va_list args
+) {
     if (buf == NULL) {
         return;
     }
@@ -41,7 +49,8 @@ void vslog(char *restrict buf, int lvl, char *file, int line, char *fmt, va_list
     }
 
     int printed = vsnprintf(&buf[prefix], avail, fmt, args);
-    size_t end = (printed < 0) ? (size_t)prefix : (size_t)prefix + (size_t)printed;
+    size_t end =
+        (printed < 0) ? (size_t)prefix : (size_t)prefix + (size_t)printed;
 
     if (end >= LOG_BUF_SIZE - 1) {
         end = LOG_BUF_SIZE - 2;

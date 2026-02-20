@@ -25,7 +25,8 @@ static i32 max3(i32 a, i32 b, i32 c) {
 }
 
 static i64 edge(draw_point_t a, draw_point_t b, i32 px, i32 py) {
-    return (i64)(px - a.x) * (i64)(b.y - a.y) - (i64)(py - a.y) * (i64)(b.x - a.x);
+    return (i64)(px - a.x) * (i64)(b.y - a.y) -
+           (i64)(py - a.y) * (i64)(b.x - a.x);
 }
 
 static size_t _stride_pixels(const framebuffer_t *fb) {
@@ -45,7 +46,14 @@ static size_t _stride_pixels(const framebuffer_t *fb) {
     return stride;
 }
 
-void draw_rect(framebuffer_t *fb, i32 x, i32 y, u32 width, u32 height, pixel_t color) {
+void draw_rect(
+    framebuffer_t *fb,
+    i32 x,
+    i32 y,
+    u32 width,
+    u32 height,
+    pixel_t color
+) {
     if (!fb || !fb->pixels || !fb->width || !fb->height || !width || !height) {
         return;
     }
@@ -87,7 +95,11 @@ void draw_rect(framebuffer_t *fb, i32 x, i32 y, u32 width, u32 height, pixel_t c
 
     if (byte_fill) {
         for (i32 row = y0; row < y1; row++) {
-            memset(fb->pixels + (size_t)row * stride_pixels + (size_t)x0, (int)b0, span_bytes);
+            memset(
+                fb->pixels + (size_t)row * stride_pixels + (size_t)x0,
+                (int)b0,
+                span_bytes
+            );
         }
         return;
     }
@@ -100,11 +112,21 @@ void draw_rect(framebuffer_t *fb, i32 x, i32 y, u32 width, u32 height, pixel_t c
     }
 
     for (i32 row = y0 + 1; row < y1; row++) {
-        memcpy(fb->pixels + (size_t)row * stride_pixels + (size_t)x0, first_row, span_bytes);
+        memcpy(
+            fb->pixels + (size_t)row * stride_pixels + (size_t)x0,
+            first_row,
+            span_bytes
+        );
     }
 }
 
-void draw_triangle(framebuffer_t *fb, draw_point_t p0, draw_point_t p1, draw_point_t p2, pixel_t color) {
+void draw_triangle(
+    framebuffer_t *fb,
+    draw_point_t p0,
+    draw_point_t p1,
+    draw_point_t p2,
+    pixel_t color
+) {
     if (!fb || !fb->pixels || !fb->width || !fb->height) {
         return;
     }
@@ -147,7 +169,12 @@ void draw_triangle(framebuffer_t *fb, draw_point_t p0, draw_point_t p1, draw_poi
     }
 }
 
-void draw_polygon(framebuffer_t *fb, const draw_point_t *points, size_t count, pixel_t color) {
+void draw_polygon(
+    framebuffer_t *fb,
+    const draw_point_t *points,
+    size_t count,
+    pixel_t color
+) {
     if (!fb || !fb->pixels || !points || count < 3) {
         return;
     }

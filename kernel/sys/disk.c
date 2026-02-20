@@ -14,6 +14,7 @@ static vector_t *file_systems = NULL;
 static size_t next_disk_id = 1;
 static size_t next_fs_id = 1;
 
+
 static void *_vec_get_ptr(vector_t *vec, size_t index) {
     void **slot = vec_at(vec, index);
     if (!slot) {
@@ -104,16 +105,21 @@ static bool _parse_mbr(disk_dev_t *dev) {
         u8 status = mbr[entry + 0];
         u8 type = mbr[entry + 4];
 
-        u32 lba_first = (u32)mbr[entry + 8] | ((u32)mbr[entry + 9] << 8) |
-                        ((u32)mbr[entry + 10] << 16) | ((u32)mbr[entry + 11] << 24);
-        u32 sector_count = (u32)mbr[entry + 12] | ((u32)mbr[entry + 13] << 8) |
-                           ((u32)mbr[entry + 14] << 16) | ((u32)mbr[entry + 15] << 24);
+        u32 lba_first =
+            (u32)mbr[entry + 8] | ((u32)mbr[entry + 9] << 8) |
+            ((u32)mbr[entry + 10] << 16) | ((u32)mbr[entry + 11] << 24);
+
+        u32 sector_count =
+            (u32)mbr[entry + 12] | ((u32)mbr[entry + 13] << 8) |
+            ((u32)mbr[entry + 14] << 16) | ((u32)mbr[entry + 15] << 24);
 
         if (!type || !sector_count) {
             continue;
         }
 
-        _create_partition(dev, (ssize_t)i, status, type, lba_first, sector_count);
+        _create_partition(
+            dev, (ssize_t)i, status, type, lba_first, sector_count
+        );
     }
 
     return true;
@@ -236,7 +242,9 @@ static bool _parse_gpt(disk_dev_t *dev) {
     }
 
     u8 header_buf[512] = {0};
-    ssize_t read = dev->interface->read(dev, header_buf, dev->sector_size, sizeof(header_buf));
+    ssize_t read = dev->interface->read(
+        dev, header_buf, dev->sector_size, sizeof(header_buf)
+    );
 
     if (read < (ssize_t)sizeof(header_buf)) {
         return false;
@@ -292,7 +300,9 @@ static bool _parse_gpt(disk_dev_t *dev) {
         size_t last_lba = (size_t)entry->last_lba;
         size_t sectors = last_lba - first_lba + 1;
 
-        _create_partition(dev, part_num++, MBR_INACTIVE, mbr_type, first_lba, sectors);
+        _create_partition(
+            dev, part_num++, MBR_INACTIVE, mbr_type, first_lba, sectors
+        );
     }
 
     free(entries);
@@ -383,7 +393,8 @@ static bool _probe_disk(disk_dev_t *dev) {
     return true;
 }
 
-static ssize_t _vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t
+_vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !node->private) {
@@ -406,10 +417,13 @@ static ssize_t _vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len,
         }
     }
 
-    return part->disk->interface->read(part->disk, buf, part->offset + offset, len);
+    return part->disk->interface->read(
+        part->disk, buf, part->offset + offset, len
+    );
 }
 
-static ssize_t _vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t
+_vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !node->private) {
@@ -432,7 +446,9 @@ static ssize_t _vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len
         }
     }
 
-    return part->disk->interface->write(part->disk, buf, part->offset + offset, len);
+    return part->disk->interface->write(
+        part->disk, buf, part->offset + offset, len
+    );
 }
 
 static void _publish_partition_nodes(disk_dev_t *dev) {
@@ -461,14 +477,17 @@ static void _publish_partition_nodes(disk_dev_t *dev) {
             continue;
         }
 
-        vfs_node_t *node = vfs_create(dev_dir, part->name, VFS_BLOCKDEV, KFILE_MODE);
+        vfs_node_t *node =
+            vfs_create(dev_dir, part->name, VFS_BLOCKDEV, KFILE_MODE);
 
         if (!node) {
             log_warn("failed to create /dev/%s", part->name);
             continue;
         }
 
-        node->fs = part->fs_instance ? part->fs_instance : _probe_partition(part);
+        node->fs =
+            part->fs_instance ? part->fs_instance : _probe_partition(part);
+
         node->private = part;
         node->interface = vfs_create_interface(_vfs_read, _vfs_write, NULL);
     }
@@ -567,7 +586,9 @@ bool file_system_register(fs_t *fs) {
     fs->id = next_fs_id++;
 
     vec_push(file_systems, &fs);
-    log_debug("registered file system %s (%zu)", fs->name ? fs->name : "fs", fs->id);
+    log_debug(
+        "registered file system %s (%zu)", fs->name ? fs->name : "fs", fs->id
+    );
     return true;
 }
 
@@ -613,12 +634,17 @@ bool mount_rootfs(disk_dev_t *dev) {
     fs_instance_t *instance = _probe_partition(preferred);
 
     if (instance && vfs_mount(instance, root)) {
-        log_info("mounted %s at /", preferred->name ? preferred->name : "rootfs");
+        log_info(
+            "mounted %s at /", preferred->name ? preferred->name : "rootfs"
+        );
         return true;
     }
 
     if (!instance) {
-        log_warn("no filesystem for %s", preferred->name ? preferred->name : "partition");
+        log_warn(
+            "no filesystem for %s",
+            preferred->name ? preferred->name : "partition"
+        );
     }
 
     for (size_t i = 0; i < dev->partitions->size; i++) {
@@ -681,7 +707,11 @@ void dump_partitions(disk_dev_t *dev) {
         unsigned long long end = start + (unsigned long long)part->size;
         unsigned int type = (unsigned int)part->type;
         log_debug(
-            "[ %s | %llu - %llu | type=0x%02x ]", part->name ? part->name : "-", start, end, type
+            "[ %s | %llu - %llu | type=0x%02x ]",
+            part->name ? part->name : "-",
+            start,
+            end,
+            type
         );
     }
 }

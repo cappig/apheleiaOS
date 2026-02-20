@@ -15,6 +15,7 @@ static void _pop(char *out, size_t *len, size_t *seg_pos, size_t *seg_count) {
     }
 
     size_t pos = seg_pos[*seg_count - 1];
+
     if (pos > 1) {
         *len = pos - 1;
     } else {
@@ -102,7 +103,18 @@ static bool _apply(
             continue;
         }
 
-        if (!_push(out, out_len, len, start, seg_len, seg_pos, seg_count, seg_cap)) {
+        bool pushed = _push(
+            out,
+            out_len,
+            len,
+            start,
+            seg_len,
+            seg_pos,
+            seg_count,
+            seg_cap
+        );
+
+        if (!pushed) {
             return false;
         }
     }
@@ -110,7 +122,12 @@ static bool _apply(
     return true;
 }
 
-bool path_resolve(const char *cwd, const char *path, char *out, size_t out_len) {
+bool path_resolve(
+    const char *cwd,
+    const char *path,
+    char *out,
+    size_t out_len
+) {
     if (!out || out_len < 2 || !path || !path[0]) {
         return false;
     }
@@ -125,7 +142,17 @@ bool path_resolve(const char *cwd, const char *path, char *out, size_t out_len) 
     if (path[0] != '/') {
         const char *base = (cwd && cwd[0]) ? cwd : "/";
 
-        if (!_apply(base, out, out_len, seg_pos, &seg_count, ARRAY_LEN(seg_pos), &len)) {
+        bool applied_base = _apply(
+            base,
+            out,
+            out_len,
+            seg_pos,
+            &seg_count,
+            ARRAY_LEN(seg_pos),
+            &len
+        );
+
+        if (!applied_base) {
             return false;
         }
     } else {
@@ -135,7 +162,17 @@ bool path_resolve(const char *cwd, const char *path, char *out, size_t out_len) 
         out[1] = '\0';
     }
 
-    if (!_apply(path, out, out_len, seg_pos, &seg_count, ARRAY_LEN(seg_pos), &len)) {
+    bool applied_path = _apply(
+        path,
+        out,
+        out_len,
+        seg_pos,
+        &seg_count,
+        ARRAY_LEN(seg_pos),
+        &len
+    );
+
+    if (!applied_path) {
         return false;
     }
 

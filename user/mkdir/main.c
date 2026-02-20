@@ -9,7 +9,9 @@
 
 static void print_error(const char *path) {
     char line[256];
-    snprintf(line, sizeof(line), "mkdir: %s: %d\n", path ? path : "(null)", errno);
+    snprintf(
+        line, sizeof(line), "mkdir: %s: %d\n", path ? path : "(null)", errno
+    );
     io_write_str(line);
 }
 

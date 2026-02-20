@@ -2,8 +2,6 @@
 
 #include <base/types.h>
 
-// A C++ style dynamic array. Not the ideal name for such a structure but it stuck I guess
-
 #define VEC_GROWTH_RATE      2
 #define VEC_INITIAL_CAPACITY 4
 

@@ -41,7 +41,9 @@ static inline size_t utf8_decode(const u8 *data, size_t len, u32 *out) {
         if (len < 3 || (data[1] & 0xc0) != 0x80 || (data[2] & 0xc0) != 0x80)
             return 0;
 
-        u32 cp = ((u32)(b0 & 0x0f) << 12) | ((u32)(data[1] & 0x3f) << 6) | (u32)(data[2] & 0x3f);
+        u32 cp =
+            ((u32)(b0 & 0x0f) << 12) | ((u32)(data[1] & 0x3f) << 6) | (u32)(data[2] & 0x3f);
+
         if (cp < 0x800 || (cp >= 0xd800 && cp <= 0xdfff))
             return 0;
 
@@ -50,12 +52,18 @@ static inline size_t utf8_decode(const u8 *data, size_t len, u32 *out) {
     }
 
     if ((b0 & 0xf8) == 0xf0) {
-        if (len < 4 || (data[1] & 0xc0) != 0x80 || (data[2] & 0xc0) != 0x80 ||
-            (data[3] & 0xc0) != 0x80)
+        if (
+            len < 4 ||
+            (data[1] & 0xc0) != 0x80 ||
+            (data[2] & 0xc0) != 0x80 ||
+            (data[3] & 0xc0) != 0x80
+        )
             return 0;
 
-        u32 cp = ((u32)(b0 & 0x07) << 18) | ((u32)(data[1] & 0x3f) << 12) |
-                 ((u32)(data[2] & 0x3f) << 6) | (u32)(data[3] & 0x3f);
+        u32 cp =
+            ((u32)(b0 & 0x07) << 18) | ((u32)(data[1] & 0x3f) << 12) |
+            ((u32)(data[2] & 0x3f) << 6) | (u32)(data[3] & 0x3f);
+
         if (cp < 0x10000 || cp > 0x10ffff)
             return 0;
 

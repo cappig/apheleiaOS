@@ -38,8 +38,10 @@ FILE *stdin = &std_in;
 FILE *stdout = &std_out;
 FILE *stderr = &std_err;
 
+
 static int write_all_fd(int fd, const char *buf, size_t len) {
     size_t off = 0;
+
     while (off < len) {
         ssize_t n = write(fd, buf + off, len - off);
         if (n <= 0) {
@@ -92,7 +94,8 @@ static int mode_to_flags(const char *mode, int *open_flags, int *stream_flags) {
         return 0;
     case 'a':
         *open_flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND;
-        *stream_flags = FILE_FLAG_APPEND | FILE_FLAG_WRITE | (plus ? FILE_FLAG_READ : 0);
+        *stream_flags =
+            FILE_FLAG_APPEND | FILE_FLAG_WRITE | (plus ? FILE_FLAG_READ : 0);
         return 0;
     default:
         return -1;
@@ -107,7 +110,9 @@ FILE *fopen(const char *path, const char *mode) {
         return NULL;
     }
 
-    int fd = (open_flags & O_CREAT) ? open(path, open_flags, 0666) : open(path, open_flags);
+    int fd = 
+        (open_flags & O_CREAT) ? open(path, open_flags, 0666) : open(path, open_flags);
+
     if (fd < 0) {
         return NULL;
     }

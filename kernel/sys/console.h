@@ -33,7 +33,15 @@ typedef struct console_backend_ops {
     u8 *(*fb_map)(size_t offset, size_t size);
     void (*fb_unmap)(void *ptr, size_t size);
     void (*text_cursor_set)(size_t col, size_t row);
-    void (*text_put)(u8 *fb, size_t cols, size_t col, size_t row, u32 codepoint, u8 fg, u8 bg);
+    void (*text_put)(
+        u8 *fb,
+        size_t cols,
+        size_t col,
+        size_t row,
+        u32 codepoint,
+        u8 fg,
+        u8 bg
+    );
     void (*text_clear)(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg);
     void (*text_scroll_up)(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg);
 } console_backend_ops_t;

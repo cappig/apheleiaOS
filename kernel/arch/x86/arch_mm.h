@@ -16,7 +16,8 @@ static inline void arch_free_frames(void *ptr, size_t count) {
     free_frames(ptr, count);
 }
 
-static inline void arch_map_region(void *root, size_t pages, u64 vaddr, u64 paddr, u64 flags) {
+static inline void
+arch_map_region(void *root, size_t pages, u64 vaddr, u64 paddr, u64 flags) {
     map_region(root, pages, vaddr, paddr, flags);
 }
 

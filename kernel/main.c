@@ -56,7 +56,8 @@ NORETURN void kernel_main(void *boot_info) {
     const char *font_path = args ? args->font : NULL;
     size_t text_cols = 0;
     size_t text_rows = 0;
-    bool had_text_grid = console_get_size(&text_cols, &text_rows) && text_cols && text_rows;
+    bool had_text_grid =
+        console_get_size(&text_cols, &text_rows) && text_cols && text_rows;
 
     if (font_path && font_path[0]) {
         if (!psf_load(font_path)) {

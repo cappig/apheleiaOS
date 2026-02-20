@@ -156,7 +156,13 @@ void term_handle_key_event(int master_fd, const ws_input_event_t *event) {
     write_retry(master_fd, &ch, 1);
 }
 
-bool term_set_winsize(int master_fd, size_t cols, size_t rows, u32 width, u32 height) {
+bool term_set_winsize(
+    int master_fd,
+    size_t cols,
+    size_t rows,
+    u32 width,
+    u32 height
+) {
     if (master_fd < 0 || !cols || !rows || !width || !height) {
         return false;
     }
@@ -171,7 +177,13 @@ bool term_set_winsize(int master_fd, size_t cols, size_t rows, u32 width, u32 he
     return ioctl(master_fd, TIOCSWINSZ, &ws) == 0;
 }
 
-pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 height) {
+pid_t term_spawn_shell(
+    int master_fd,
+    size_t cols,
+    size_t rows,
+    u32 width,
+    u32 height
+) {
     if (master_fd < 0 || !cols || !rows || !width || !height) {
         return -1;
     }

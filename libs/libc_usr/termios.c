@@ -76,7 +76,8 @@ void cfmakeraw(struct termios *tos) {
         return;
     }
 
-    tos->c_iflag &= (tcflag_t) ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
+    tos->c_iflag &= 
+        (tcflag_t) ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
     tos->c_oflag &= (tcflag_t)~OPOST;
     tos->c_lflag &= (tcflag_t) ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
     tos->c_cflag &= (tcflag_t) ~(CSIZE | PARENB);

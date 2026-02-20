@@ -118,7 +118,10 @@ typedef EFI_STATUS(EFIAPI *EFI_ALLOCATE_PAGES)(
     UINTN Pages,
     EFI_PHYSICAL_ADDRESS *Memory
 );
-typedef EFI_STATUS(EFIAPI *EFI_FREE_PAGES)(EFI_PHYSICAL_ADDRESS Memory, UINTN Pages);
+typedef EFI_STATUS(EFIAPI *EFI_FREE_PAGES)(
+    EFI_PHYSICAL_ADDRESS Memory,
+    UINTN Pages
+);
 typedef EFI_STATUS(EFIAPI *EFI_GET_MEMORY_MAP)(
     UINTN *MemoryMapSize,
     EFI_MEMORY_DESCRIPTOR *MemoryMap,
@@ -126,14 +129,21 @@ typedef EFI_STATUS(EFIAPI *EFI_GET_MEMORY_MAP)(
     UINTN *DescriptorSize,
     UINT32 *DescriptorVersion
 );
-typedef EFI_STATUS(EFIAPI *EFI_ALLOCATE_POOL)(EFI_MEMORY_TYPE PoolType, UINTN Size, void **Buffer);
+typedef EFI_STATUS(EFIAPI *EFI_ALLOCATE_POOL)(
+    EFI_MEMORY_TYPE PoolType,
+    UINTN Size,
+    void **Buffer
+);
 typedef EFI_STATUS(EFIAPI *EFI_FREE_POOL)(void *Buffer);
 typedef EFI_STATUS(EFIAPI *EFI_HANDLE_PROTOCOL)(
     EFI_HANDLE Handle,
     EFI_GUID *Protocol,
     void **Interface
 );
-typedef EFI_STATUS(EFIAPI *EFI_EXIT_BOOT_SERVICES)(EFI_HANDLE ImageHandle, UINTN MapKey);
+typedef EFI_STATUS(EFIAPI *EFI_EXIT_BOOT_SERVICES)(
+    EFI_HANDLE ImageHandle,
+    UINTN MapKey
+);
 typedef EFI_STATUS(EFIAPI *EFI_LOCATE_PROTOCOL)(
     EFI_GUID *Protocol,
     void *Registration,
@@ -220,7 +230,11 @@ typedef EFI_STATUS(EFIAPI *EFI_FILE_OPEN)(
     u64 Attributes
 );
 typedef EFI_STATUS(EFIAPI *EFI_FILE_CLOSE)(EFI_FILE_PROTOCOL *This);
-typedef EFI_STATUS(EFIAPI *EFI_FILE_READ)(EFI_FILE_PROTOCOL *This, UINTN *BufferSize, void *Buffer);
+typedef EFI_STATUS(EFIAPI *EFI_FILE_READ)(
+    EFI_FILE_PROTOCOL *This,
+    UINTN *BufferSize,
+    void *Buffer
+);
 typedef EFI_STATUS(EFIAPI *EFI_FILE_GET_INFO)(
     EFI_FILE_PROTOCOL *This,
     EFI_GUID *InformationType,

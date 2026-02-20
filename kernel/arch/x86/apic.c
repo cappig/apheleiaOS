@@ -161,6 +161,7 @@ static void _map_page(u32 vaddr, u64 paddr, u64 flags) {
     page_t *pt = _walk_pd(pd, lvl2);
 
     page_t *entry = &pt[lvl1];
+
     page_set_paddr(entry, (page_t)paddr);
     *entry |= (flags | PT_PRESENT) & FLAGS_MASK;
 
@@ -193,7 +194,8 @@ static u32 _ioapic_read_reg(const ioapic_info_t *info, u8 reg) {
     }
 
     volatile u32 *regsel = (volatile u32 *)(uintptr_t)info->vaddr;
-    volatile u32 *window = (volatile u32 *)((uintptr_t)info->vaddr + IOAPIC_WINDOW);
+    volatile u32 *window =
+        (volatile u32 *)((uintptr_t)info->vaddr + IOAPIC_WINDOW);
 
     *regsel = reg;
     return *window;
@@ -205,7 +207,8 @@ static void _ioapic_write_reg(const ioapic_info_t *info, u8 reg, u32 value) {
     }
 
     volatile u32 *regsel = (volatile u32 *)(uintptr_t)info->vaddr;
-    volatile u32 *window = (volatile u32 *)((uintptr_t)info->vaddr + IOAPIC_WINDOW);
+    volatile u32 *window =
+        (volatile u32 *)((uintptr_t)info->vaddr + IOAPIC_WINDOW);
 
     *regsel = reg;
     *window = value;
@@ -217,7 +220,10 @@ static void _ioapic_update_info(ioapic_info_t *info) {
     }
 
     u32 ver = _ioapic_read_reg(info, IOAPIC_REG_VER);
-    info->int_count = ((ver >> IOAPIC_VERSION_MAX_REDIR_SHIFT) & IOAPIC_VERSION_MAX_REDIR_MASK) + 1;
+    u32 max_redir =
+        (ver >> IOAPIC_VERSION_MAX_REDIR_SHIFT) & IOAPIC_VERSION_MAX_REDIR_MASK;
+
+    info->int_count = max_redir + 1;
 }
 
 static void _ioapic_resolve_gsi(u8 irq, u32 *gsi, u16 *flags) {
@@ -330,6 +336,7 @@ static void _parse_madt(void) {
 
     while (offset + sizeof(madt_entry_t) <= limit) {
         madt_entry_t *entry = (madt_entry_t *)(madt->entries + offset);
+
         if (!entry->length) {
             break;
         }
@@ -339,7 +346,10 @@ static void _parse_madt(void) {
             if (entry->length >= sizeof(madt_entry_t) + sizeof(madt_lapic_t)) {
                 madt_lapic_t *lapic = (madt_lapic_t *)entry->data;
 
-                if ((lapic->flags & MADT_LAPIC_FLAG_ENABLED) && found_cores < MAX_CORES) {
+                bool lapic_enabled = (lapic->flags & MADT_LAPIC_FLAG_ENABLED) != 0;
+                bool have_core_slot = found_cores < MAX_CORES;
+
+                if (lapic_enabled && have_core_slot) {
                     cpu_init_core(found_cores);
                     cores_local[found_cores].lapic_id = lapic->apic_id;
                     found_cores++;
@@ -351,7 +361,10 @@ static void _parse_madt(void) {
             if (entry->length >= sizeof(madt_entry_t) + sizeof(madt_lapic2_t)) {
                 madt_lapic2_t *lapic = (madt_lapic2_t *)entry->data;
 
-                if ((lapic->flags & MADT_LAPIC_FLAG_ENABLED) && found_cores < MAX_CORES) {
+                bool lapic_enabled = (lapic->flags & MADT_LAPIC_FLAG_ENABLED) != 0;
+                bool have_core_slot = found_cores < MAX_CORES;
+
+                if (lapic_enabled && have_core_slot) {
                     cpu_init_core(found_cores);
                     cores_local[found_cores].lapic_id = lapic->x2apic_id;
                     found_cores++;
@@ -381,7 +394,8 @@ static void _parse_madt(void) {
         }
         case MT_IO_APIC_INT_SRC: {
             if (entry->length >= sizeof(madt_entry_t) + sizeof(madt_int_override_t)) {
-                madt_int_override_t *override = (madt_int_override_t *)entry->data;
+                madt_int_override_t *override =
+                    (madt_int_override_t *)entry->data;
 
                 if (!override->bus && override->source < ARRAY_LEN(ioapic_overrides)) {
                     ioapic_overrides[override->source].source = override->source;
@@ -632,7 +646,9 @@ bool ioapic_route_irq(u8 irq, u8 vector, u32 dest_apic) {
 
     u8 reg = (u8)(IOAPIC_REDTBL_BASE + index * IOAPIC_REDTBL_STEP);
 
-    _ioapic_write_reg(info, (u8)(reg + IOAPIC_REDTBL_HIGH_WORD), (u32)(entry >> 32));
+    _ioapic_write_reg(
+        info, (u8)(reg + IOAPIC_REDTBL_HIGH_WORD), (u32)(entry >> 32)
+    );
     _ioapic_write_reg(info, reg, (u32)(entry & 0xffffffff));
 
     return true;

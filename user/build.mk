@@ -78,7 +78,9 @@ $(USER_OBJ_DIR)/%.asm.o: %.asm
 	$(call as, $(USER_AS), $@, $<)
 
 define USER_LINK_RULE
-$(USER_BIN_DIR)/$(1): $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_COMMON_OBJ) $(USER_DATA_OBJ) $(USER_GUI_OBJ) $(USER_TERM_OBJ) $(USER_PARSE_OBJ) $$(filter $(USER_OBJ_DIR)/user/$(1)/%.c.o,$(USER_APP_OBJ)) $(USER_LIBGCC)
+$(USER_BIN_DIR)/$(1): $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_COMMON_OBJ) \
+	$(USER_DATA_OBJ) $(USER_GUI_OBJ) $(USER_TERM_OBJ) $(USER_PARSE_OBJ) \
+	$$(filter $(USER_OBJ_DIR)/user/$(1)/%.c.o,$(USER_APP_OBJ)) $(USER_LIBGCC)
 	@mkdir -p $$(@D)
 	$$(call ld, $(USER_LD), $$@, $$^)
 endef

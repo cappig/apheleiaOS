@@ -119,7 +119,9 @@ def _safe_extract_tar(data: bytes, dest: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download and extract OVMF files from a Debian package.")
+    parser = argparse.ArgumentParser(
+        description="Download and extract OVMF files from a Debian package.",
+    )
     parser.add_argument("ovmf_dir", type=Path)
     parser.add_argument("ovmf_deb_url", type=str)
     args = parser.parse_args()

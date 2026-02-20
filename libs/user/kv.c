@@ -38,7 +38,12 @@ ssize_t kv_read_file(const char *path, char *out, size_t out_len) {
     return (ssize_t)off;
 }
 
-bool kv_read_string(const char *text, const char *key, char *out, size_t out_len) {
+bool kv_read_string(
+    const char *text,
+    const char *key,
+    char *out,
+    size_t out_len
+) {
     if (!text || !key || !out || out_len < 2) {
         return false;
     }

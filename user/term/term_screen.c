@@ -48,6 +48,7 @@ typedef struct {
 
 static term_screen_state_t term_screen = {0};
 
+
 static framebuffer_t _screen_framebuffer(void) {
     framebuffer_t fb = {
         .pixels = term_screen.pixels,
@@ -69,7 +70,9 @@ static void clear_pixels_full(void) {
 }
 
 static bool load_font_file(const char *path) {
-    return psf_load_file(path, term_screen.font_buf, FONT_BUF_SIZE, &term_screen.font);
+    return psf_load_file(
+        path, term_screen.font_buf, FONT_BUF_SIZE, &term_screen.font
+    );
 }
 
 static bool init_font(void) {
@@ -236,7 +239,9 @@ static void put_char(char ch) {
         newline();
     }
 
-    term_cell_t *cell = &term_screen.cells[term_screen.cursor_y][term_screen.cursor_x];
+    term_cell_t *cell =
+        &term_screen.cells[term_screen.cursor_y][term_screen.cursor_x];
+
     if (cell->ch != ch) {
         cell->ch = ch;
         mark_dirty_cell(term_screen.cursor_x, term_screen.cursor_y);
@@ -291,7 +296,9 @@ static void clear_screen_mode(int mode) {
 
     if (mode == 1) {
         for (size_t y = 0; y <= term_screen.cursor_y && y < term_screen.rows; y++) {
-            size_t end = y == term_screen.cursor_y ? term_screen.cursor_x + 1 : term_screen.cols;
+            size_t end = 
+                y == term_screen.cursor_y ? term_screen.cursor_x + 1 : term_screen.cols;
+
             if (end > term_screen.cols) {
                 end = term_screen.cols;
             }
@@ -312,7 +319,9 @@ static void clear_screen_mode(int mode) {
         }
     }
 
-    mark_dirty_rect(0, term_screen.cursor_y, term_screen.cols, term_screen.rows);
+    mark_dirty_rect(
+        0, term_screen.cursor_y, term_screen.cols, term_screen.rows
+    );
 }
 
 static void ansi_on_print(void *ctx, u8 ch) {
@@ -325,7 +334,13 @@ static void ansi_on_control(void *ctx, u8 ch) {
     put_char((char)ch);
 }
 
-static void ansi_on_csi(void *ctx, char op, const int *params, size_t count, bool private_mode) {
+static void ansi_on_csi(
+    void *ctx,
+    char op,
+    const int *params,
+    size_t count,
+    bool private_mode
+) {
     (void)ctx;
 
     size_t old_x = term_screen.cursor_x;
@@ -411,10 +426,11 @@ static void ansi_on_csi(void *ctx, char op, const int *params, size_t count, boo
         term_screen.saved_y = term_screen.cursor_y;
         break;
     case 'u':
-        term_screen.cursor_x =
-            term_screen.saved_x < term_screen.cols ? term_screen.saved_x : term_screen.cols - 1;
-        term_screen.cursor_y =
-            term_screen.saved_y < term_screen.rows ? term_screen.saved_y : term_screen.rows - 1;
+        bool xfit = term_screen.saved_x < term_screen.cols;
+        term_screen.cursor_x = xfit ? term_screen.saved_x : term_screen.cols - 1;
+
+        bool yfit = term_screen.saved_y < term_screen.rows;
+        term_screen.cursor_y = yfit ? term_screen.saved_y : term_screen.rows - 1;
         break;
     case 'h':
         if (private_mode && ansi_param(params, count, 0, 0) == 25) {
@@ -535,7 +551,15 @@ bool term_screen_init(const framebuffer_t *fb) {
 
     size_t cols = 0;
     size_t rows = 0;
-    if (!term_screen_layout(fb->width, fb->height, fb->pixel_count, &cols, &rows)) {
+    bool layout_ok = term_screen_layout(
+        fb->width,
+        fb->height,
+        fb->pixel_count,
+        &cols,
+        &rows
+    );
+
+    if (!layout_ok) {
         return false;
     }
 
@@ -569,7 +593,15 @@ bool term_screen_resize(const framebuffer_t *fb) {
 
     size_t cols = 0;
     size_t rows = 0;
-    if (!term_screen_layout(fb->width, fb->height, fb->pixel_count, &cols, &rows)) {
+    bool layout_ok = term_screen_layout(
+        fb->width,
+        fb->height,
+        fb->pixel_count,
+        &cols,
+        &rows
+    );
+
+    if (!layout_ok) {
         return false;
     }
 
@@ -653,7 +685,9 @@ void term_screen_feed(const u8 *bytes, size_t len) {
     }
 
     for (size_t i = 0; i < len; i++) {
-        ansi_parser_feed(&term_screen.ansi, bytes[i], &term_ansi_callbacks, NULL);
+        ansi_parser_feed(
+            &term_screen.ansi, bytes[i], &term_ansi_callbacks, NULL
+        );
     }
 }
 
@@ -666,8 +700,11 @@ bool term_screen_render_rect(u32 *x, u32 *y, u32 *width, u32 *height) {
         mark_dirty_cell(term_screen.cursor_prev_x, term_screen.cursor_prev_y);
     }
 
-    if (term_screen.cursor_visible && term_screen.cursor_x < term_screen.cols &&
-        term_screen.cursor_y < term_screen.rows) {
+    if (
+        term_screen.cursor_visible &&
+        term_screen.cursor_x < term_screen.cols &&
+        term_screen.cursor_y < term_screen.rows
+    ) {
         mark_dirty_cell(term_screen.cursor_x, term_screen.cursor_y);
     }
 
@@ -684,17 +721,30 @@ bool term_screen_render_rect(u32 *x, u32 *y, u32 *width, u32 *height) {
         for (size_t col = x0; col < x1; col++) {
             size_t px = col * term_screen.font.width;
             size_t py = row * term_screen.font.height;
-            draw_glyph(px, py, term_screen.cells[row][col].ch, TERM_FG, TERM_BG);
+
+            draw_glyph(
+                px, py, term_screen.cells[row][col].ch, TERM_FG, TERM_BG
+            );
         }
     }
 
-    if (term_screen.cursor_visible && term_screen.cursor_x < term_screen.cols &&
-        term_screen.cursor_y < term_screen.rows) {
+    if (
+        term_screen.cursor_visible &&
+        term_screen.cursor_x < term_screen.cols &&
+        term_screen.cursor_y < term_screen.rows
+    ) {
         size_t px = term_screen.cursor_x * term_screen.font.width;
         size_t py = term_screen.cursor_y * term_screen.font.height;
 
         framebuffer_t fb = _screen_framebuffer();
-        draw_rect(&fb, (i32)px, (i32)py, term_screen.font.width, term_screen.font.height, TERM_FG);
+        draw_rect(
+            &fb,
+            (i32)px,
+            (i32)py,
+            term_screen.font.width,
+            term_screen.font.height,
+            TERM_FG
+        );
         draw_glyph(
             px,
             py,
@@ -702,6 +752,7 @@ bool term_screen_render_rect(u32 *x, u32 *y, u32 *width, u32 *height) {
             TERM_BG,
             TERM_FG
         );
+
         term_screen.cursor_prev_x = term_screen.cursor_x;
         term_screen.cursor_prev_y = term_screen.cursor_y;
         term_screen.cursor_prev_valid = true;
@@ -716,8 +767,6 @@ bool term_screen_render_rect(u32 *x, u32 *y, u32 *width, u32 *height) {
     u32 out_width = (u32)((x1 - x0) * term_screen.font.width);
     u32 out_height = (u32)((y1 - y0) * term_screen.font.height);
 
-    // If dirty spans full cell-space extents, include any partial right/bottom
-    // pixel strips so expanded windows do not retain stale/black edges.
     if (x0 == 0 && x1 == term_screen.cols) {
         out_width = term_screen.width;
     }

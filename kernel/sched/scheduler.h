@@ -155,6 +155,7 @@ typedef struct {
     char name[PROC_NAME_MAX];
 } sched_proc_snapshot_t;
 
+
 void scheduler_init(void);
 void scheduler_start(void);
 
@@ -177,12 +178,17 @@ bool sched_process_is_child(pid_t child_pid, pid_t parent_pid);
 bool sched_pid_is_group_leader(pid_t pid);
 bool sched_pgrp_exists(pid_t pgid);
 bool sched_pgrp_in_session(pid_t pgid, pid_t sid);
-sched_thread_t *sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg);
+sched_thread_t *
+sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg);
 sched_thread_t *sched_create_user_thread(const char *name);
 pid_t sched_fork(arch_int_state_t *state);
 pid_t sched_wait(pid_t pid, int *status);
 pid_t sched_waitpid(pid_t pid, int *status, int options);
-void sched_prepare_user_thread(sched_thread_t *thread, uintptr_t entry, uintptr_t user_stack_top);
+void sched_prepare_user_thread(
+    sched_thread_t *thread,
+    uintptr_t entry,
+    uintptr_t user_stack_top
+);
 void sched_discard_thread(sched_thread_t *thread);
 void sched_make_runnable(sched_thread_t *thread);
 void sched_unblock_thread(sched_thread_t *thread);
@@ -221,7 +227,11 @@ bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write);
 bool sched_proc_cwd(pid_t pid, char *out, size_t out_len);
 
 int sched_fd_alloc(sched_thread_t *thread, const sched_fd_t *fd, int min_fd);
-int sched_fd_install(sched_thread_t *thread, int target_fd, const sched_fd_t *fd);
+int sched_fd_install(
+    sched_thread_t *thread,
+    int target_fd,
+    const sched_fd_t *fd
+);
 int sched_fd_close(sched_thread_t *thread, int fd);
 int sched_fd_dup(sched_thread_t *thread, int oldfd, int newfd);
 bool sched_fd_clone_table(sched_thread_t *dst, const sched_thread_t *src);

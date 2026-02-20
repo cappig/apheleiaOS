@@ -43,15 +43,20 @@ bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out) {
 
     if (size >= sizeof(psf2_header_t) && read_u32_le(bytes) == PSF2_MAGIC) {
         const psf2_header_t *psf2 = data;
+
         if (psf2->header_size < sizeof(psf2_header_t)) {
             return false;
         }
+
         if (!psf2->glyph_count || !psf2->glyph_bytes || !psf2->width || !psf2->height) {
             return false;
         }
 
-        size_t glyphs_size = (size_t)psf2->glyph_count * (size_t)psf2->glyph_bytes;
+        size_t glyphs_size =
+            (size_t)psf2->glyph_count * (size_t)psf2->glyph_bytes;
+
         size_t need = (size_t)psf2->header_size + glyphs_size;
+
         if (need > size) {
             return false;
         }
@@ -82,6 +87,7 @@ bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out) {
     size_t glyphs_size = (size_t)glyph_count * psf1->char_size;
     size_t header_size = sizeof(psf1_header_t);
     size_t need = header_size + glyphs_size;
+
     if (need > size) {
         return false;
     }

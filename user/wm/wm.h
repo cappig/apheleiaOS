@@ -68,10 +68,19 @@ wm_window_t *wm_top_window(void);
 bool wm_point_in_title(const wm_window_t *window, i32 px, i32 py);
 bool wm_point_in_close(const wm_window_t *window, i32 px, i32 py);
 bool wm_window_bounds_rect(const wm_window_t *window, wm_rect_t *rect);
-void wm_collect_raise_damage(const wm_window_t *window, u32 old_z, wm_rect_t *damage);
+void wm_collect_raise_damage(
+    const wm_window_t *window,
+    u32 old_z,
+    wm_rect_t *damage
+);
 
 void wm_set_focus(ui_t *ui, wm_window_t *window, u32 *z_counter);
 bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage);
-void wm_render_damage(pixel_t *frame, u32 fb_width, u32 fb_height, const wm_rect_t *damage);
+void wm_render_damage(
+    pixel_t *frame,
+    u32 fb_width,
+    u32 fb_height,
+    const wm_rect_t *damage
+);
 void wm_render_frame(pixel_t *frame, u32 fb_width, u32 fb_height);
 void wm_cleanup_all_windows(void);

@@ -110,7 +110,13 @@ static bool _push_ansi_key(u8 code) {
     return true;
 }
 
-ssize_t keyboard_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+ssize_t keyboard_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
     (void)node;
     (void)offset;
 
@@ -271,7 +277,16 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
 
     kbd_if->poll = keyboard_poll;
 
-    if (!devfs_register_node(dev_dir, "keyboard", VFS_CHARDEV, 0666, kbd_if, NULL)) {
+    bool registered = devfs_register_node(
+        dev_dir,
+        "keyboard",
+        VFS_CHARDEV,
+        0666,
+        kbd_if,
+        NULL
+    );
+
+    if (!registered) {
         log_warn("failed to create /dev/keyboard");
         return false;
     }

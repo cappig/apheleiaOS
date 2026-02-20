@@ -5,7 +5,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-bool wm_file_read_all(const char *path, size_t max_bytes, u8 **data_out, size_t *len_out) {
+bool wm_file_read_all(
+    const char *path,
+    size_t max_bytes,
+    u8 **data_out,
+    size_t *len_out
+) {
     if (!path || !data_out || !len_out || !max_bytes) {
         return false;
     }

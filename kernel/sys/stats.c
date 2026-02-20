@@ -26,11 +26,16 @@ void stats_take_snapshot(stats_snapshot_t *out) {
     memset(out, 0, sizeof(*out));
 
     out->timer_irq_ns = __atomic_load_n(&stats_timer_irq_ns, __ATOMIC_RELAXED);
-    out->sched_switch_count = __atomic_load_n(&stats_sched_switch_count, __ATOMIC_RELAXED);
-    out->poll_sleep_loops = __atomic_load_n(&stats_poll_sleep_loops, __ATOMIC_RELAXED);
-    out->ws_fb_write_bytes = __atomic_load_n(&stats_ws_fb_write_bytes, __ATOMIC_RELAXED);
-    out->fb_present_bytes = __atomic_load_n(&stats_fb_present_bytes, __ATOMIC_RELAXED);
-    out->wm_dirty_pixels = __atomic_load_n(&stats_wm_dirty_pixels, __ATOMIC_RELAXED);
+    out->sched_switch_count =
+        __atomic_load_n(&stats_sched_switch_count, __ATOMIC_RELAXED);
+    out->poll_sleep_loops =
+        __atomic_load_n(&stats_poll_sleep_loops, __ATOMIC_RELAXED);
+    out->ws_fb_write_bytes =
+        __atomic_load_n(&stats_ws_fb_write_bytes, __ATOMIC_RELAXED);
+    out->fb_present_bytes =
+        __atomic_load_n(&stats_fb_present_bytes, __ATOMIC_RELAXED);
+    out->wm_dirty_pixels =
+        __atomic_load_n(&stats_wm_dirty_pixels, __ATOMIC_RELAXED);
 }
 
 void stats_add_timer_irq_ns(u64 ns) {

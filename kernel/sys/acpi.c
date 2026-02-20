@@ -75,7 +75,8 @@ static void _parse_rsdt(u64 rsdt_phys) {
     _append_table(table);
 
     rsdt_t *rsdt = (rsdt_t *)table;
-    size_t entries = (rsdt->header.length - sizeof(sdt_header_t)) / sizeof(rsdt->table_ptrs[0]);
+    size_t entries =
+        (rsdt->header.length - sizeof(sdt_header_t)) / sizeof(rsdt->table_ptrs[0]);
 
     for (size_t i = 0; i < entries; i++) {
         sdt_header_t *entry = _copy_table(rsdt->table_ptrs[i]);
@@ -100,7 +101,8 @@ static void _parse_xsdt(u64 xsdt_phys) {
     _append_table(table);
 
     xsdt_t *xsdt = (xsdt_t *)table;
-    size_t entries = (xsdt->header.length - sizeof(sdt_header_t)) / sizeof(xsdt->table_ptrs[0]);
+    size_t entries =
+        (xsdt->header.length - sizeof(sdt_header_t)) / sizeof(xsdt->table_ptrs[0]);
 
     for (size_t i = 0; i < entries; i++) {
         sdt_header_t *entry = _copy_table(xsdt->table_ptrs[i]);
@@ -162,7 +164,9 @@ void acpi_init(u64 rsdp_ptr) {
         _parse_rsdt(rsdp.rsdt_addr);
     }
 
-    log_info("loaded %zu %s tables", acpi_tables->length, acpi_xsdt ? "XSDT" : "RSDT");
+    log_info(
+        "loaded %zu %s tables", acpi_tables->length, acpi_xsdt ? "XSDT" : "RSDT"
+    );
 }
 
 sdt_header_t *acpi_find_table(char id[4]) {

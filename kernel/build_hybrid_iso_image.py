@@ -470,7 +470,10 @@ def _write_iso(
     now = int(time.time())
     root_record, root_dir_blob, boot_dir_blob = _build_directories(layout, now)
 
-    l_path_raw, m_path_raw, path_table_size = _build_path_tables(layout.root_dir_lba, layout.boot_dir_lba)
+    l_path_raw, m_path_raw, path_table_size = _build_path_tables(
+        layout.root_dir_lba,
+        layout.boot_dir_lba,
+    )
     if path_table_size != layout.path_table_size:
         raise BuildError("internal ISO path table sizing mismatch")
 

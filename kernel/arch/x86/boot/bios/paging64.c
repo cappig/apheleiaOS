@@ -83,13 +83,18 @@ finalize:
     page_set_paddr(entry, paddr);
 
     flags |= PT_PRESENT;
-    // For 2MiB/1GiB pages the PAT bit lives at position 12, outside FLAGS_MASK.
     u64 pat_huge = (flags & PT_HUGE) ? (flags & PT_PAT_HUGE) : 0;
     *entry |= (flags & FLAGS_MASK) | pat_huge;
 }
 
 // TODO: we should try to use larger pages if possible
-void map_region_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
+void map_region_64(
+    size_t size,
+    u64 vaddr,
+    u64 paddr,
+    u64 flags,
+    bool is_kernel
+) {
     for (size_t i = 0; i < DIV_ROUND_UP(size, PAGE_4KIB); i++) {
         u64 page_vaddr = vaddr + i * PAGE_4KIB;
         u64 page_paddr = paddr + i * PAGE_4KIB;
@@ -114,7 +119,6 @@ void setup_paging_64(void) {
     nx_supported = _cpu_has_nx();
 
     if (nx_supported) {
-        // Enable the NX bit only on CPUs that advertise it.
         u64 efer = read_msr(EFER_MSR);
         write_msr(EFER_MSR, efer | EFER_NX);
     }
@@ -157,7 +161,8 @@ u64 load_elf_sections_64(void *elf_file) {
     elf_header_t *header = elf_file;
 
     for (size_t i = 0; i < header->ph_num; i++) {
-        elf_prog_header_t *p_header = elf_file + header->phoff + i * header->phent_size;
+        elf_prog_header_t *p_header =
+            elf_file + header->phoff + i * header->phent_size;
 
         if (p_header->type != PT_LOAD) {
             continue;
@@ -171,14 +176,19 @@ u64 load_elf_sections_64(void *elf_file) {
 
         u64 flags = _elf_to_page_flags(p_header->flags);
 
-        u64 pbase = (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, p_header->align);
+        u64 pbase =
+            (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, p_header->align);
         u64 vbase = p_header->vaddr;
 
         // Map the segment
         map_region_64(size, vbase, pbase, flags, true);
 
         // Copy all loadable data from the file
-        memcpy((void *)(uintptr_t)pbase, elf_file + p_header->offset, p_header->file_size);
+        memcpy(
+            (void *)(uintptr_t)pbase,
+            elf_file + p_header->offset,
+            p_header->file_size
+        );
 
         // Zero out any additional space
         size_t zero_len = p_header->mem_size - p_header->file_size;

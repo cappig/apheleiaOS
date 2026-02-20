@@ -102,7 +102,14 @@ static bool _add_arena(size_t pages) {
     void *start = (void *)((uintptr_t)paddr + _linear_offset());
     heap_arena_t *arena = &heap_arenas[heap_arena_count];
 
-    if (!bitmap_alloc_init(&arena->alloc, start, chunk_size, KERNEL_HEAP_BLOCK_SIZE)) {
+    bool alloc_inited = bitmap_alloc_init(
+        &arena->alloc,
+        start,
+        chunk_size,
+        KERNEL_HEAP_BLOCK_SIZE
+    );
+
+    if (!alloc_inited) {
         free_frames(paddr, pages);
         return false;
     }
@@ -148,7 +155,6 @@ static bool _grow(size_t min_blocks) {
         return false;
     }
 
-    // log_info("added arena %zu (%zu pages)", heap_arena_count - 1, grow_pages);
     return true;
 }
 
@@ -178,7 +184,7 @@ void heap_init() {
     log_debug("initializing heap");
     size_t free_pages = pmm_free_mem() / PAGE_4KIB;
 
-    // Aim to take ~33% of the memory for the kernel heap with some reasonable limits.
+    // Aim to take ~33% of the memory for the kernel heap
     size_t min_heap = min(free_pages, HEAP_MIN);
     size_t max_heap = HEAP_MAX;
 
@@ -198,7 +204,9 @@ static void *_kmalloc(size_t size) {
         return NULL;
     }
 
-    size_t header_blocks = DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
+    size_t header_blocks =
+        DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
+
     size_t blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK_SIZE);
     size_t total_blocks = blocks + header_blocks;
 
@@ -227,7 +235,10 @@ static void *_kmalloc(size_t size) {
     }
 
     if (!space) {
-        panic("kmalloc: out of heap memory after _grow (requested=%zu bytes)", size);
+        panic(
+            "kmalloc: out of heap memory after _grow (requested=%zu bytes)",
+            size
+        );
     }
 
     // Write the header
@@ -239,7 +250,9 @@ static void *_kmalloc(size_t size) {
     void *ret = (u8 *)space + sizeof(kheap_header);
 
 #ifdef KMALLOC_DEBUG
-    log_debug("[KMALLOC_DEBUG] malloc: bytes = %zd, ptr = %#lx", size, (u64)ret);
+    log_debug(
+        "[KMALLOC_DEBUG] malloc: bytes = %zd, ptr = %#lx", size, (u64)ret
+    );
 #endif
 
     return ret;
@@ -259,7 +272,9 @@ static void _kfree(void *ptr) {
         panic("kfree: invalid heap header");
     }
 
-    size_t header_blocks = DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
+    size_t header_blocks =
+        DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
+
     size_t blocks = header->size + header_blocks;
     heap_arena_t *arena = _find_arena_by_ptr(header);
 

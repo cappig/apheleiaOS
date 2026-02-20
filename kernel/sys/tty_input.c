@@ -31,7 +31,9 @@ typedef struct {
 
 static tty_input_state_t tty_state[TTY_SCREEN_COUNT] = {0};
 
-static void _signal_flush(size_t screen, ring_buffer_t *buffer, const termios_t *tos) {
+
+static void
+_signal_flush(size_t screen, ring_buffer_t *buffer, const termios_t *tos) {
     if (!tos || (tos->c_lflag & NOFLSH)) {
         return;
     }
@@ -55,6 +57,7 @@ static void _init_screen_state(size_t screen) {
 
     size_t cols = 80;
     size_t rows = 25;
+
     if (console_get_size(&cols, &rows)) {
         tty_state[screen].winsize.ws_col = (unsigned short)cols;
         tty_state[screen].winsize.ws_row = (unsigned short)rows;
@@ -143,7 +146,8 @@ static bool _is_erase_char(const termios_t *tos, char ch) {
     return c == (u8)tos->c_cc[VERASE] || c == (u8)'\b' || c == 0x7f;
 }
 
-static size_t _line_prev_cp_len(const char *line, size_t line_len, u32 *out_cp) {
+static size_t
+_line_prev_cp_len(const char *line, size_t line_len, u32 *out_cp) {
     if (!line || !line_len) {
         return 0;
     }
@@ -190,7 +194,8 @@ static void _echo_control(size_t screen, char ch) {
     tty_write_screen_output(screen, out, sizeof(out));
 }
 
-static void _echo_char(size_t screen, const termios_t *tos, char ch, bool force_newline) {
+static void
+_echo_char(size_t screen, const termios_t *tos, char ch, bool force_newline) {
     if (!tos) {
         return;
     }
@@ -230,8 +235,12 @@ static size_t _echo_columns_for_cp(const termios_t *tos, u32 cp) {
     return 1;
 }
 
-static bool
-_pop_ansi_sequence(size_t screen, const termios_t *tos, size_t *erase_bytes, size_t *erase_cols) {
+static bool _pop_ansi_sequence(
+    size_t screen,
+    const termios_t *tos,
+    size_t *erase_bytes,
+    size_t *erase_cols
+) {
     if (!tos || !erase_bytes || !erase_cols || screen >= TTY_SCREEN_COUNT) {
         return false;
     }
@@ -325,7 +334,12 @@ static void _reprint_line(size_t screen, const termios_t *tos) {
     }
 }
 
-static void _flush_line(size_t screen, ring_buffer_t *buffer, bool add_newline, bool echo_newline) {
+static void _flush_line(
+    size_t screen,
+    ring_buffer_t *buffer,
+    bool add_newline,
+    bool echo_newline
+) {
     if (!buffer || screen >= TTY_SCREEN_COUNT) {
         return;
     }
@@ -350,8 +364,13 @@ static void _flush_line(size_t screen, ring_buffer_t *buffer, bool add_newline, 
     sched_wake_one(&tty_state[screen].wait);
 }
 
-static ssize_t
-_input_read_raw(size_t screen, ring_buffer_t *buffer, void *buf, size_t len, const termios_t *tos) {
+static ssize_t _input_read_raw(
+    size_t screen,
+    ring_buffer_t *buffer,
+    void *buf,
+    size_t len,
+    const termios_t *tos
+) {
     if (!buffer || !buf || !tos || !len) {
         return 0;
     }
@@ -385,7 +404,8 @@ _input_read_raw(size_t screen, ring_buffer_t *buffer, void *buf, size_t len, con
 
     for (;;) {
         unsigned long flags = arch_irq_save();
-        size_t popped = ring_buffer_pop_array(buffer, (u8 *)buf + total, len - total);
+        size_t popped =
+            ring_buffer_pop_array(buffer, (u8 *)buf + total, len - total);
 
         arch_irq_restore(flags);
 
@@ -547,7 +567,9 @@ static void _input_push_impl(char ch) {
                 u32 cp = 0;
 
                 if (!_pop_ansi_sequence(screen, tos, &erased, &erase_cols)) {
-                    erased = _line_prev_cp_len(tty_state[screen].line_buf, *line_len, &cp);
+                    erased = _line_prev_cp_len(
+                        tty_state[screen].line_buf, *line_len, &cp
+                    );
                     erase_cols = _echo_columns_for_cp(tos, cp);
                 }
 
@@ -573,7 +595,9 @@ static void _input_push_impl(char ch) {
 
                 while (*line_len) {
                     u32 cp = 0;
-                    size_t erased = _line_prev_cp_len(tty_state[screen].line_buf, *line_len, &cp);
+                    size_t erased = _line_prev_cp_len(
+                        tty_state[screen].line_buf, *line_len, &cp
+                    );
 
                     if (!erased) {
                         break;
@@ -608,7 +632,9 @@ static void _input_push_impl(char ch) {
                 u32 cp = 0;
 
                 while (*line_len) {
-                    size_t erased = _line_prev_cp_len(tty_state[screen].line_buf, *line_len, &cp);
+                    size_t erased = _line_prev_cp_len(
+                        tty_state[screen].line_buf, *line_len, &cp
+                    );
 
                     if (!erased || !_cp_isspace(cp)) {
                         break;
@@ -619,7 +645,9 @@ static void _input_push_impl(char ch) {
                 }
 
                 while (*line_len) {
-                    size_t erased = _line_prev_cp_len(tty_state[screen].line_buf, *line_len, &cp);
+                    size_t erased = _line_prev_cp_len(
+                        tty_state[screen].line_buf, *line_len, &cp
+                    );
 
                     if (!erased || _cp_isspace(cp)) {
                         break;
@@ -657,7 +685,9 @@ static void _input_push_impl(char ch) {
         }
 
         if (ch == (char)tos->c_cc[VEOL] || ch == '\n') {
-            bool echo_newline = (tos->c_lflag & ECHO) != 0 || (tos->c_lflag & ECHONL) != 0;
+            bool echo_newline =
+                (tos->c_lflag & ECHO) != 0 || (tos->c_lflag & ECHONL) != 0;
+
             _flush_line(screen, buffer, true, echo_newline);
             return;
         }

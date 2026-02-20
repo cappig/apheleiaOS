@@ -59,7 +59,11 @@ static void _log_history_append(const char *s, size_t len) {
     }
 
     if (len >= LOG_BOOT_HISTORY_CAP) {
-        memcpy(boot_log_history, s + (len - LOG_BOOT_HISTORY_CAP), LOG_BOOT_HISTORY_CAP);
+        memcpy(
+            boot_log_history,
+            s + (len - LOG_BOOT_HISTORY_CAP),
+            LOG_BOOT_HISTORY_CAP
+        );
         boot_log_history_len = LOG_BOOT_HISTORY_CAP;
         return;
     }
@@ -67,7 +71,11 @@ static void _log_history_append(const char *s, size_t len) {
     if (boot_log_history_len + len > LOG_BOOT_HISTORY_CAP) {
         size_t drop = (boot_log_history_len + len) - LOG_BOOT_HISTORY_CAP;
 
-        memmove(boot_log_history, boot_log_history + drop, boot_log_history_len - drop);
+        memmove(
+            boot_log_history,
+            boot_log_history + drop,
+            boot_log_history_len - drop
+        );
         boot_log_history_len -= drop;
     }
 
@@ -293,6 +301,7 @@ static void _configure_log_sinks(const boot_info_t *info) {
     }
 
     char devices[sizeof(info->args.console)];
+
     strncpy(devices, info->args.console, sizeof(devices) - 1);
     devices[sizeof(devices) - 1] = '\0';
 
@@ -368,8 +377,15 @@ static void _page_fault_handler(int_state_t *state) {
     if (present && write) {
         sched_thread_t *thread = sched_current();
 
-        if (thread && thread->user_thread && _page_fault_is_user_addr(addr, user) &&
-            sched_handle_cow_fault(thread, (uintptr_t)addr, true)) {
+        bool is_user_addr = _page_fault_is_user_addr(addr, user);
+        bool can_cow = thread && thread->user_thread && is_user_addr;
+
+        bool cow_handled = false;
+        if (can_cow) {
+            cow_handled = sched_handle_cow_fault(thread, (uintptr_t)addr, true);
+        }
+
+        if (cow_handled) {
             return;
         }
     }
@@ -387,8 +403,8 @@ static void _page_fault_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " rip=%#" PRIx64
-            " rsp=%#" PRIx64 " cs=%#" PRIx64,
+            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
+            " rip=%#" PRIx64 " rsp=%#" PRIx64 " cs=%#" PRIx64,
             addr,
             code,
             cr3,
@@ -397,7 +413,12 @@ static void _page_fault_handler(int_state_t *state) {
             cs
         );
     } else {
-        log_fatal("page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
+        log_fatal(
+            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
+            addr,
+            code,
+            cr3
+        );
     }
 #else
     if (state) {
@@ -406,8 +427,8 @@ static void _page_fault_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " eip=%#" PRIx64
-            " esp=%#" PRIx64 " cs=%#" PRIx64,
+            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
+            " eip=%#" PRIx64 " esp=%#" PRIx64 " cs=%#" PRIx64,
             addr,
             code,
             cr3,
@@ -416,7 +437,12 @@ static void _page_fault_handler(int_state_t *state) {
             cs
         );
     } else {
-        log_fatal("page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
+        log_fatal(
+            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
+            addr,
+            code,
+            cr3
+        );
     }
 #endif
 
@@ -439,7 +465,8 @@ static void _gp_fault_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "general protection fault: err=%#" PRIx64 " rip=%#" PRIx64 " cs=%#" PRIx64,
+            "general protection fault: err=%#" PRIx64 " rip=%#" PRIx64
+            " cs=%#" PRIx64,
             code,
             rip,
             cs
@@ -453,7 +480,8 @@ static void _gp_fault_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "general protection fault: err=%#" PRIx64 " eip=%#" PRIx64 " cs=%#" PRIx64,
+            "general protection fault: err=%#" PRIx64 " eip=%#" PRIx64
+            " cs=%#" PRIx64,
             code,
             eip,
             cs
@@ -554,7 +582,8 @@ static void _publish_framebuffer(const boot_info_t *info) {
     framebuffer_set_info(&fb);
 }
 
-static ssize_t _boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, size_t bytes) {
+static ssize_t
+_boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, size_t bytes) {
     if (!dev || !dest || !dev->private) {
         return -1;
     }
@@ -584,7 +613,8 @@ static ssize_t _boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, siz
     return (ssize_t)bytes;
 }
 
-static ssize_t _boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, size_t bytes) {
+static ssize_t
+_boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, size_t bytes) {
     if (!dev || !src || !dev->private) {
         return -1;
     }
@@ -651,7 +681,11 @@ static bool _register_boot_rootfs(void) {
     }
 
     boot_rootfs_registered = true;
-    log_info("registered /dev/%s from boot image (%zu KiB)", disk->name, rootfs->size / 1024);
+    log_info(
+        "registered /dev/%s from boot image (%zu KiB)",
+        disk->name,
+        rootfs->size / 1024
+    );
 
     return true;
 }
@@ -691,16 +725,22 @@ const kernel_args_t *arch_init(void *boot_info) {
 
     if (boot_rootfs_paddr && boot_rootfs_size) {
         log_info(
-            "staged rootfs at %#" PRIx64 " (%zu KiB)", boot_rootfs_paddr, boot_rootfs_size / 1024
+            "staged rootfs at %#" PRIx64 " (%zu KiB)",
+            boot_rootfs_paddr,
+            boot_rootfs_size / 1024
         );
     }
 
     _route_irqs_to_pic();
+
     gdt_init();
     tss_init(_read_stack_ptr());
+
     cpu_init_boot();
+
     pat_init();
     pic_init();
+
     idt_init();
 
     set_int_handler(INT_PAGE_FAULT, _page_fault_handler);
@@ -719,17 +759,21 @@ const kernel_args_t *arch_init(void *boot_info) {
     x86_console_backend_init();
     console_init(info);
     log_console_ready = true;
+
     _log_history_replay_console();
     _publish_framebuffer(info);
 
     acpi_init(info->acpi_root_ptr);
     tsc_init();
     irq_init();
+
     ps2_init();
+
     pci_init();
     if (info->args.debug == DEBUG_ALL) {
         dump_pci_devices();
     }
+
     enable_interrupts();
 
 #if defined(__x86_64__)

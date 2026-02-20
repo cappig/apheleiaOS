@@ -18,16 +18,14 @@ ALIGNED(0x10)
 static gdt_entry_t gdt_entries[GDT_ENTRY_COUNT] = {0};
 
 
-static void _set_gdt_entry(size_t index, u64 base, u32 limit, u8 access, u8 flags) {
+static void
+_set_gdt_entry(size_t index, u64 base, u32 limit, u8 access, u8 flags) {
     gdt_entries[index].limit_low = (limit & 0xffff);
     gdt_entries[index].flags = (limit >> 16) & 0xf;
-
     gdt_entries[index].base_low = (base & 0xffff);
     gdt_entries[index].base_middle = (base >> 16) & 0xff;
     gdt_entries[index].base_high = (base >> 24) & 0xff;
-
     gdt_entries[index].access = access;
-
     gdt_entries[index].flags |= (flags << 4);
 }
 
@@ -70,31 +68,35 @@ void gdt_init(void) {
     asm volatile("lgdt %0" : : "m"(gdtd) : "memory");
 
 #if defined(__i386__)
-    asm volatile("ljmp %0, $1f\n"
-                 "1:\n"
-                 "mov %1, %%ds\n"
-                 "mov %1, %%es\n"
-                 "mov %1, %%fs\n"
-                 "mov %1, %%gs\n"
-                 "mov %1, %%ss\n"
-                 :
-                 : "i"(GDT_KERNEL_CODE), "r"(GDT_KERNEL_DATA)
-                 : "memory");
+    asm volatile(
+        "ljmp %0, $1f\n"
+        "1:\n"
+        "mov %1, %%ds\n"
+        "mov %1, %%es\n"
+        "mov %1, %%fs\n"
+        "mov %1, %%gs\n"
+        "mov %1, %%ss\n"
+        :
+        : "i"(GDT_KERNEL_CODE), "r"(GDT_KERNEL_DATA)
+        : "memory"
+    );
 #else
-    asm volatile("pushq %0\n"
-                 "lea 1f(%%rip), %%rax\n"
-                 "pushq %%rax\n"
-                 "lretq\n"
-                 "1:\n"
-                 "movw %1, %%ax\n"
-                 "movw %%ax, %%ds\n"
-                 "movw %%ax, %%es\n"
-                 "movw %%ax, %%fs\n"
-                 "movw %%ax, %%gs\n"
-                 "movw %%ax, %%ss\n"
-                 :
-                 : "i"((u64)GDT_KERNEL_CODE), "i"(GDT_KERNEL_DATA)
-                 : "rax", "memory");
+    asm volatile(
+        "pushq %0\n"
+        "lea 1f(%%rip), %%rax\n"
+        "pushq %%rax\n"
+        "lretq\n"
+        "1:\n"
+        "movw %1, %%ax\n"
+        "movw %%ax, %%ds\n"
+        "movw %%ax, %%es\n"
+        "movw %%ax, %%fs\n"
+        "movw %%ax, %%gs\n"
+        "movw %%ax, %%ss\n"
+        :
+        : "i"((u64)GDT_KERNEL_CODE), "i"(GDT_KERNEL_DATA)
+        : "rax", "memory"
+    );
 #endif
 }
 

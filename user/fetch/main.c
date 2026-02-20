@@ -19,11 +19,14 @@ static const char *owl[] = {
 
 static void print_row(const char *left, const char *right) {
     char line[256];
-    snprintf(line, sizeof(line), "%-12s %s\n", left ? left : "", right ? right : "");
+    snprintf(
+        line, sizeof(line), "%-12s %s\n", left ? left : "", right ? right : ""
+    );
     write(STDOUT_FILENO, line, strlen(line));
 }
 
-static void resolve_user(char *user, size_t user_len, char *shell, size_t shell_len) {
+static void
+resolve_user(char *user, size_t user_len, char *shell, size_t shell_len) {
     if (!user || !user_len || !shell || !shell_len) {
         return;
     }
@@ -103,7 +106,8 @@ static void format_ram_line(
 
         unsigned long long whole = value / unit_kib;
         unsigned long long rem = value % unit_kib;
-        unsigned long long tenths = (rem * 10ULL + (unit_kib / 2ULL)) / unit_kib;
+        unsigned long long tenths =
+            (rem * 10ULL + (unit_kib / 2ULL)) / unit_kib;
 
         if (tenths >= 10ULL) {
             whole++;
@@ -195,7 +199,13 @@ int main(void) {
             *at = '\0';
         }
 
-        snprintf(cpu_line, sizeof(cpu_line), "cpu: %s @ %llu MHz", model_clean, freq_khz / 1000);
+        snprintf(
+            cpu_line,
+            sizeof(cpu_line),
+            "cpu: %s @ %llu MHz",
+            model_clean,
+            freq_khz / 1000
+        );
     } else {
         snprintf(cpu_line, sizeof(cpu_line), "cpu: %s", cpu_model);
     }

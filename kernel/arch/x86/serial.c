@@ -12,7 +12,7 @@ void init_serial(size_t port, u8 line, u32 baud) {
     outb(port + 1, (divisor >> 8) & 0xff);
 
     outb(port + SERIAL_LINE_CONTROL, line & 0x8f);
-    outb(port + SERIAL_FIFO_CONTROL, 0xc7); // flush FIFOs, set threshold at 14 bytes
+    outb(port + SERIAL_FIFO_CONTROL, 0xc7); // flush FIFO, threshold at 14 bytes
 
     outb(port + SERIAL_MODEM_CONTROL, 0x0b); // enable RTS/DTR
 }

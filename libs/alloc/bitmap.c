@@ -42,7 +42,12 @@ bool bitmap_alloc_init(
     return true;
 }
 
-static int first_fit_in_range(bitmap_allocator_t *alloc, size_t blocks, size_t begin, size_t end) {
+static int first_fit_in_range(
+    bitmap_allocator_t *alloc,
+    size_t blocks,
+    size_t begin,
+    size_t end
+) {
     if (!alloc || !blocks || begin >= end) {
         return -1;
     }

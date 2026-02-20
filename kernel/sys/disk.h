@@ -71,7 +71,12 @@ struct fs_interface {
     bool (*destroy_tree)(fs_instance_t *instance);
 
     bool (*chmod)(fs_instance_t *instance, vfs_node_t *node, mode_t mode);
-    bool (*chown)(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid);
+    bool (*chown)(
+        fs_instance_t *instance,
+        vfs_node_t *node,
+        uid_t uid,
+        gid_t gid
+    );
 
     // mkdir
     // touch

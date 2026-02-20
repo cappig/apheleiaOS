@@ -7,8 +7,10 @@
 
 #define GROUP_PATH "/etc/group"
 
-static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
+static int
+copy_field(char **cursor, size_t *left, char **out, const char *src) {
     size_t n = strlen(src) + 1;
+
     if (!cursor || !left || !out || !src || n > *left) {
         return ERANGE;
     }
@@ -17,10 +19,16 @@ static int copy_field(char **cursor, size_t *left, char **out, const char *src) 
     *out = *cursor;
     *cursor += n;
     *left -= n;
+
     return 0;
 }
 
-static int parse_group_line(const char *line, struct group *grp, char *buf, size_t buflen) {
+static int parse_group_line(
+    const char *line,
+    struct group *grp,
+    char *buf,
+    size_t buflen
+) {
     if (!line || !grp || !buf || !buflen) {
         return EINVAL;
     }
@@ -47,7 +55,9 @@ static int parse_group_line(const char *line, struct group *grp, char *buf, size
 
     char *dst = buf;
     size_t left = buflen;
+
     int rc = copy_field(&dst, &left, &grp->gr_name, gr_name);
+
     if (!rc) {
         rc = copy_field(&dst, &left, &grp->gr_passwd, gr_passwd);
     }
@@ -55,7 +65,13 @@ static int parse_group_line(const char *line, struct group *grp, char *buf, size
     return rc;
 }
 
-int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen, struct group **result) {
+int getgrgid_r(
+    gid_t gid,
+    struct group *grp,
+    char *buf,
+    size_t buflen,
+    struct group **result
+) {
     if (!grp || !buf || !buflen || !result) {
         return EINVAL;
     }
@@ -106,8 +122,11 @@ int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen, struct gr
 struct group *getgrgid(gid_t gid) {
     static struct group grp;
     static char buf[256];
+
     struct group *result = NULL;
+
     int rc = getgrgid_r(gid, &grp, buf, sizeof(buf), &result);
+
     if (rc || !result) {
         errno = rc ? rc : ENOENT;
         return NULL;

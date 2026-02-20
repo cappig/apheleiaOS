@@ -399,7 +399,8 @@ static void _kbd_irq(UNUSED int_state_t *s) {
     key_event event = {
         .source = kbd_index,
         .type = !released ? KEY_ACTION : 0,
-        .code = kbd_extended ? ps2_codes_extended[scancode] : ps2_codes[scancode],
+        .code =
+            kbd_extended ? ps2_codes_extended[scancode] : ps2_codes[scancode],
     };
 
     keyboard_handle_key(event);

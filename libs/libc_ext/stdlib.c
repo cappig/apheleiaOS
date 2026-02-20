@@ -4,7 +4,8 @@
 #include <stddef.h>
 #include <string.h>
 
-static const char digits[36] __attribute__((nonstring)) = "0123456789abcdefghijklmnopqrstuvwxyz";
+static const char digits[36] __attribute__((nonstring)) =
+    "0123456789abcdefghijklmnopqrstuvwxyz";
 
 
 size_t ulltoa(unsigned long long value, char *buf, int base) {
@@ -19,9 +20,7 @@ size_t ulltoa(unsigned long long value, char *buf, int base) {
 
     do {
         lldiv_t div = ulldiv(value, base);
-
         *(--pos) = digits[div.rem];
-
         value = div.quot;
     } while (value);
 

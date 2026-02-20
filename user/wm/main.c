@@ -38,6 +38,7 @@ enum wm_cfg_palette_mask {
     WM_CFG_PAL_CLOSE_FG = 1u << 7,
 };
 
+
 static void _on_signal(int signum) {
     (void)signum;
     exit_requested = 1;
@@ -73,6 +74,7 @@ static bool _parse_hex_color(const char *text, u32 *color_out) {
 
     u32 value = 0;
     size_t digits = 0;
+
     while (digits < 8) {
         int nib = _hex_nibble(pos[digits]);
         if (nib < 0) {
@@ -100,7 +102,8 @@ static bool _parse_hex_color(const char *text, u32 *color_out) {
     return false;
 }
 
-static bool _cfg_set_palette_color(wm_config_t *cfg, const char *key, const char *value) {
+static bool
+_cfg_set_palette_color(wm_config_t *cfg, const char *key, const char *value) {
     if (!cfg || !key || !value) {
         return false;
     }
@@ -201,6 +204,7 @@ static void _load_wm_config(wm_config_t *cfg) {
 
         char *key_start = line;
         char *key_end = eq;
+
         while (key_end > key_start && isspace((unsigned char)key_end[-1])) {
             key_end--;
         }
@@ -221,9 +225,11 @@ static void _load_wm_config(wm_config_t *cfg) {
 
         size_t key_len = (size_t)(key_end - key_start);
         char key[64];
+
         if (!key_len || key_len >= sizeof(key)) {
             continue;
         }
+
         memcpy(key, key_start, key_len);
         key[key_len] = '\0';
 
@@ -240,6 +246,7 @@ static void _load_wm_config(wm_config_t *cfg) {
         } else if (value_len < sizeof(value_buf)) {
             memcpy(value_buf, value_start, value_len);
             value_buf[value_len] = '\0';
+
             if (_cfg_set_palette_color(cfg, key, value_buf)) {
                 continue;
             }
@@ -256,8 +263,12 @@ static void _load_wm_config(wm_config_t *cfg) {
     }
 }
 
-static bool
-_parse_args(int argc, char **argv, const char **bg_override_out, const char **cursor_override_out) {
+static bool _parse_args(
+    int argc,
+    char **argv,
+    const char **bg_override_out,
+    const char **cursor_override_out
+) {
     if (!bg_override_out || !cursor_override_out) {
         return false;
     }
@@ -305,7 +316,10 @@ static void _warn_background_failed(const char *path) {
 
     char line[PATH_MAX + 96];
     snprintf(
-        line, sizeof(line), "wm: failed to load background '%s', using solid fallback\\n", path
+        line,
+        sizeof(line),
+        "wm: failed to load background '%s', using solid fallback\\n",
+        path
     );
     io_write_str(line);
 }
@@ -320,7 +334,12 @@ static void _warn_cursor_failed(const char *path) {
     io_write_str(line);
 }
 
-static bool _cursor_path_join(char *out, size_t out_len, const char *dir, const char *name) {
+static bool _cursor_path_join(
+    char *out,
+    size_t out_len,
+    const char *dir,
+    const char *name
+) {
     if (!out || !out_len || !dir || !dir[0] || !name || !name[0]) {
         return false;
     }
@@ -457,26 +476,41 @@ int main(int argc, char **argv) {
 
     if (cursor_override && cursor_override[0]) {
         cursor_path = cursor_override;
-    } else if (_cursor_path_join(
-                   cursor_default_path, sizeof(cursor_default_path), cursors_dir, "pointer.ppm"
-               )) {
-        cursor_path = cursor_default_path;
+    } else {
+        bool have_default_cursor = _cursor_path_join(
+            cursor_default_path,
+            sizeof(cursor_default_path),
+            cursors_dir,
+            "pointer.ppm"
+        );
+
+        if (have_default_cursor) {
+            cursor_path = cursor_default_path;
+        }
     }
 
     wm_init();
     wm_inited = true;
 
     if (bg_path && !wm_background_load(fb_info.width, fb_info.height, bg_path)) {
-        _warn_background_failed(bg_path);
+            _warn_background_failed(bg_path);
     }
 
     if (cursor_path && !wm_cursor_load(cursor_path)) {
-        _warn_cursor_failed(cursor_path);
+            _warn_cursor_failed(cursor_path);
     }
 
     char resize_fallback_path[PATH_MAX];
     const char *resize_fallback = NULL;
-    if (_cursor_path_join(resize_fallback_path, sizeof(resize_fallback_path), cursors_dir, "resize.ppm")) {
+
+    bool have_resize_fallback = _cursor_path_join(
+        resize_fallback_path,
+        sizeof(resize_fallback_path),
+        cursors_dir,
+        "resize.ppm"
+    );
+
+    if (have_resize_fallback) {
         resize_fallback = resize_fallback_path;
     }
 
@@ -497,16 +531,21 @@ int main(int argc, char **argv) {
         char cursor_kind_path[PATH_MAX];
         const char *load_path = NULL;
 
-        if (_cursor_path_join(
-                cursor_kind_path, sizeof(cursor_kind_path), cursors_dir, resize_specs[i].name
-            )) {
+        bool have_kind_path = _cursor_path_join(
+            cursor_kind_path,
+            sizeof(cursor_kind_path),
+            cursors_dir,
+            resize_specs[i].name
+        );
+
+        if (have_kind_path) {
             load_path = cursor_kind_path;
         } else {
             load_path = resize_fallback;
         }
 
         if (load_path && !wm_cursor_load_kind(resize_specs[i].kind, load_path)) {
-            _warn_cursor_failed(load_path);
+                _warn_cursor_failed(load_path);
         }
     }
 

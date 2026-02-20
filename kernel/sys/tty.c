@@ -15,11 +15,18 @@
 static ssize_t current_tty = TTY_NONE;
 static pid_t tty_pgrp[TTY_SCREEN_COUNT] = {0};
 static tty_handle_t tty_handles[TTY_COUNT];
-static tty_handle_t tty_current_handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
-static tty_handle_t tty_console_handle = {.kind = TTY_HANDLE_CONSOLE, .index = TTY_CONSOLE};
+static tty_handle_t tty_current_handle = {
+    .kind = TTY_HANDLE_CURRENT,
+    .index = 0
+};
+static tty_handle_t tty_console_handle = {
+    .kind = TTY_HANDLE_CONSOLE,
+    .index = TTY_CONSOLE
+};
 
 
-static bool _is_controlling_screen(const sched_thread_t *thread, size_t screen) {
+static bool
+_is_controlling_screen(const sched_thread_t *thread, size_t screen) {
     if (!thread || !thread->user_thread) {
         return false;
     }
@@ -110,14 +117,26 @@ static void _seed_handles(void) {
     }
 }
 
-static ssize_t _dev_tty_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _dev_tty_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
     (void)offset;
     (void)flags;
 
     return tty_read_handle(node ? node->private : NULL, buf, len);
 }
 
-static ssize_t _dev_tty_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _dev_tty_write(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
     (void)offset;
     (void)flags;
 
@@ -176,7 +195,9 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
     _seed_handles();
 
-    vfs_interface_t *tty_if = vfs_create_interface(_dev_tty_read, _dev_tty_write, NULL);
+    vfs_interface_t *tty_if =
+        vfs_create_interface(_dev_tty_read, _dev_tty_write, NULL);
+
     if (!tty_if) {
         log_warn("TTY failed to allocate /dev interface");
         return false;
@@ -187,12 +208,30 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
     bool ok = true;
 
-    if (!devfs_register_node(dev_dir, "tty", VFS_CHARDEV, 0666, tty_if, &tty_current_handle)) {
+    bool tty_registered = devfs_register_node(
+        dev_dir,
+        "tty",
+        VFS_CHARDEV,
+        0666,
+        tty_if,
+        &tty_current_handle
+    );
+    
+    if (!tty_registered) {
         log_warn("failed to create /dev/tty");
         ok = false;
     }
 
-    if (!devfs_register_node(dev_dir, "console", VFS_CHARDEV, 0666, tty_if, &tty_console_handle)) {
+    bool console_registered = devfs_register_node(
+        dev_dir,
+        "console",
+        VFS_CHARDEV,
+        0666,
+        tty_if,
+        &tty_console_handle
+    );
+
+    if (!console_registered) {
         log_warn("failed to create /dev/console");
         ok = false;
     }
@@ -201,7 +240,16 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
     for (size_t i = 0; i < TTY_COUNT; i++) {
         name[3] = (char)('0' + i);
 
-        if (!devfs_register_node(dev_dir, name, VFS_CHARDEV, 0666, tty_if, &tty_handles[i])) {
+        bool screen_registered = devfs_register_node(
+            dev_dir,
+            name,
+            VFS_CHARDEV,
+            0666,
+            tty_if,
+            &tty_handles[i]
+        );
+
+        if (!screen_registered) {
             log_warn("failed to create /dev/%s", name);
             ok = false;
         }
@@ -249,7 +297,8 @@ static ssize_t _write_screen(size_t index, const void *buf, size_t len) {
     return console_write_screen(index, buf, len);
 }
 
-static ssize_t _write_screen_processed(size_t index, const void *buf, size_t len) {
+static ssize_t
+_write_screen_processed(size_t index, const void *buf, size_t len) {
     if (index >= TTY_SCREEN_COUNT || !buf) {
         return -EINVAL;
     }
@@ -355,7 +404,8 @@ ssize_t tty_read_handle(const tty_handle_t *handle, void *buf, size_t len) {
     }
 }
 
-ssize_t tty_write_handle(const tty_handle_t *handle, const void *buf, size_t len) {
+ssize_t
+tty_write_handle(const tty_handle_t *handle, const void *buf, size_t len) {
     if (!handle) {
         return -EINVAL;
     }
@@ -384,7 +434,9 @@ ssize_t tty_write_handle(const tty_handle_t *handle, const void *buf, size_t len
             return -EINVAL;
         }
 
-        return _write_screen_processed(TTY_USER_TO_SCREEN(handle->index), buf, len);
+        return _write_screen_processed(
+            TTY_USER_TO_SCREEN(handle->index), buf, len
+        );
     default:
         return -EINVAL;
     }
@@ -416,8 +468,10 @@ ssize_t tty_ioctl_handle(const tty_handle_t *handle, u64 request, void *args) {
         }
 
         winsize_t new_ws = *(const winsize_t *)args;
-        if ((old_ws.ws_row != new_ws.ws_row || old_ws.ws_col != new_ws.ws_col) &&
-            tty_pgrp[screen] > 0) {
+        if (
+            (old_ws.ws_row != new_ws.ws_row || old_ws.ws_col != new_ws.ws_col) &&
+            tty_pgrp[screen] > 0
+        ) {
             sched_signal_send_pgrp(tty_pgrp[screen], SIGWINCH);
         }
 
@@ -427,25 +481,21 @@ ssize_t tty_ioctl_handle(const tty_handle_t *handle, u64 request, void *args) {
         if (!args) {
             return -EINVAL;
         }
-
         return tty_input_get_termios(screen, args) ? 0 : -EIO;
     case TCSETS:
         if (!args) {
             return -EINVAL;
         }
-
         return tty_input_set_termios(screen, args, TTY_TERMIOS_SET_NONE) ? 0 : -EIO;
     case TCSETSW:
         if (!args) {
             return -EINVAL;
         }
-
         return tty_input_set_termios(screen, args, TTY_TERMIOS_SET_NONE) ? 0 : -EIO;
     case TCSETSF:
         if (!args) {
             return -EINVAL;
         }
-
         return tty_input_set_termios(screen, args, TTY_TERMIOS_SET_FLUSH) ? 0 : -EIO;
     case TIOCSPGRP:
         if (!args) {

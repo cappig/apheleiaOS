@@ -98,8 +98,12 @@ bool ppm_parse_p6_blob(const void *data, size_t size, ppm_p6_blob_t *out) {
     u32 width = 0;
     u32 height = 0;
     u32 maxval = 0;
-    if (!_parse_u32(&reader, &width) || !_parse_u32(&reader, &height) ||
-        !_parse_u32(&reader, &maxval)) {
+
+    if (
+        !_parse_u32(&reader, &width) ||
+        !_parse_u32(&reader, &height) ||
+        !_parse_u32(&reader, &maxval)
+    ) {
         return false;
     }
 

@@ -11,7 +11,10 @@
 static symbol_table_t sym_table = {0};
 static char *sym_blob = NULL;
 
-static const char *const kernel_elf_paths[] = {"/boot/kernel64.elf", "/boot/kernel32.elf"};
+static const char *const kernel_elf_paths[] = {
+    "/boot/kernel64.elf",
+    "/boot/kernel32.elf"
+};
 
 static void _clear_symbols(void) {
     if (sym_table.map) {
@@ -42,7 +45,10 @@ static bool _name_is_terminated(const char *name, size_t max_len) {
     return name && memchr(name, '\0', max_len);
 }
 
-static bool _symbol_section_to_table(const elf_view_t *view, const elf_section_view_t *sym_sec) {
+static bool _symbol_section_to_table(
+    const elf_view_t *view,
+    const elf_section_view_t *sym_sec
+) {
     if (!view || !sym_sec) {
         return false;
     }
@@ -66,8 +72,11 @@ static bool _symbol_section_to_table(const elf_view_t *view, const elf_section_v
     }
 
     elf_section_view_t str_sec = {0};
-    if (!elf_view_read_section(view, sym_sec->link, &str_sec) || str_sec.type != SHT_STRTAB ||
-        !elf_view_section_data_ok(view, &str_sec)) {
+    if (
+        !elf_view_read_section(view, sym_sec->link, &str_sec) ||
+        str_sec.type != SHT_STRTAB ||
+        !elf_view_section_data_ok(view, &str_sec)
+    ) {
         return false;
     }
 
@@ -129,6 +138,7 @@ static bool _symbol_section_to_table(const elf_view_t *view, const elf_section_v
 
     for (size_t i = 0; i < sym_count && sym_table.len < text_count; i++) {
         size_t off = sym_sec->offset + i * ent_size;
+
         if (!_range_ok(off, ent_size, view->blob_size)) {
             free(sym_table.map);
             sym_table.map = NULL;
@@ -222,7 +232,10 @@ void load_symbols(void) {
 
     size_t total_read = 0;
     while (total_read < blob_size) {
-        ssize_t read = vfs_read(file, buffer + total_read, total_read, blob_size - total_read, 0);
+        ssize_t read = vfs_read(
+            file, buffer + total_read, total_read, blob_size - total_read, 0
+        );
+
         if (read <= 0) {
             break;
         }

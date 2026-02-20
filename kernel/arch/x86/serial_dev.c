@@ -29,8 +29,12 @@ static serial_dev_t serial_devices[] = {
 
 static bool serial_nodes_ready = false;
 
-static bool
-_create_node(vfs_node_t *parent, const char *name, vfs_interface_t *interface, void *priv) {
+static bool _create_node(
+    vfs_node_t *parent,
+    const char *name,
+    vfs_interface_t *interface,
+    void *priv
+) {
     vfs_node_t *node = vfs_lookup_from(parent, name);
     if (!node) {
         node = vfs_create(parent, (char *)name, VFS_CHARDEV, 0666);
@@ -48,7 +52,8 @@ _create_node(vfs_node_t *parent, const char *name, vfs_interface_t *interface, v
     return true;
 }
 
-static ssize_t _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t
+_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
 
     if (!node || !node->private || !buf) {
@@ -95,7 +100,8 @@ static ssize_t _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32
     }
 }
 
-static ssize_t _write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t
+_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
     (void)flags;
 
@@ -158,7 +164,9 @@ void serial_devfs_init(void) {
 
     char name[] = "ttySX";
 
-    for (size_t i = 0; i < sizeof(serial_devices) / sizeof(serial_devices[0]); i++) {
+    size_t count = sizeof(serial_devices) / sizeof(serial_devices[0]);
+
+    for (size_t i = 0; i < count; i++) {
         if (!serial_devices[i].rx_wait_ready) {
             sched_wait_queue_init(&serial_devices[i].rx_wait);
             serial_devices[i].rx_wait_ready = true;

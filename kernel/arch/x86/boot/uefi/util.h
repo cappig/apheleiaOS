@@ -37,4 +37,8 @@ void uefi_detect_acpi(
     const EFI_GUID *acpi_guid
 );
 
-void uefi_detect_video(boot_info_t *info, EFI_BOOT_SERVICES *bs, const EFI_GUID *gop_guid);
+void uefi_detect_video(
+    boot_info_t *info,
+    EFI_BOOT_SERVICES *bs,
+    const EFI_GUID *gop_guid
+);

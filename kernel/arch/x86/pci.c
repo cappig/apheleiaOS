@@ -12,48 +12,65 @@
 
 #define PCI_INVALID_READ_VALUE 0xffffffffU
 
+
 u32 pci_bus_read(u8 bus, u8 slot, u8 func, u8 offset, u8 size) {
-    u32 addr = PCI_CONFIG_ENABLE_BIT;
+    u32 cfg_addr = PCI_CONFIG_ENABLE_BIT;
 
-    addr |= (u32)bus << 16;
-    addr |= (u32)slot << 11;
-    addr |= (u32)func << 8;
-    addr |= (u32)offset & PCI_OFFSET_DWORD_MASK;
+    cfg_addr |= (u32)bus << 16;
+    cfg_addr |= (u32)slot << 11;
+    cfg_addr |= (u32)func << 8;
+    cfg_addr |= (u32)offset & PCI_OFFSET_DWORD_MASK;
 
-    outl(PCI_CONFIG_ADDRESS_PORT, addr);
+    outl(PCI_CONFIG_ADDRESS_PORT, cfg_addr);
 
     switch (size) {
     case 4:
         return inl(PCI_CONFIG_DATA_PORT);
-    case 2:
-        return inw((u16)(PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_WORD_OFFSET_MASK)));
-    case 1:
-        return inb((u16)(PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_BYTE_OFFSET_MASK)));
+    case 2: {
+        u16 data_port =
+            PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_WORD_OFFSET_MASK);
+
+        return inw(data_port);
+    }
+    case 1: {
+        u16 data_port = 
+            PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_BYTE_OFFSET_MASK);
+
+        return inb(data_port);
+    }
     default:
         return PCI_INVALID_READ_VALUE;
     }
 }
 
 void pci_bus_write(u8 bus, u8 slot, u8 func, u8 offset, u32 value, u8 size) {
-    u32 addr = PCI_CONFIG_ENABLE_BIT;
+    u32 cfg_addr = PCI_CONFIG_ENABLE_BIT;
 
-    addr |= (u32)bus << 16;
-    addr |= (u32)slot << 11;
-    addr |= (u32)func << 8;
-    addr |= (u32)offset & PCI_OFFSET_DWORD_MASK;
+    cfg_addr |= (u32)bus << 16;
+    cfg_addr |= (u32)slot << 11;
+    cfg_addr |= (u32)func << 8;
+    cfg_addr |= (u32)offset & PCI_OFFSET_DWORD_MASK;
 
-    outl(PCI_CONFIG_ADDRESS_PORT, addr);
+    outl(PCI_CONFIG_ADDRESS_PORT, cfg_addr);
 
     switch (size) {
     case 4:
         outl(PCI_CONFIG_DATA_PORT, value);
         break;
-    case 2:
-        outw((u16)(PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_WORD_OFFSET_MASK)), (u16)value);
+    case 2: {
+        u16 data_port =
+            PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_WORD_OFFSET_MASK);
+
+        outw(data_port, (u16)value);
         break;
-    case 1:
-        outb((u16)(PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_BYTE_OFFSET_MASK)), (u8)value);
+    }
+    case 1: {
+        u16 data_port =
+            PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_BYTE_OFFSET_MASK);
+
+        outb(data_port, (u8)value);
         break;
+    }
     }
 }
 

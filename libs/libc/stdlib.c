@@ -47,7 +47,8 @@ long long strtoll(char const *restrict str, char **restrict endptr, int base) {
         base = 10;
     }
 
-    unsigned long long cutoff = negative ? -(unsigned long long)LLONG_MIN : LLONG_MAX;
+    unsigned long long cutoff =
+        negative ? -(unsigned long long)LLONG_MIN : LLONG_MAX;
 
     lldiv_t div = ulldiv(cutoff, base);
     unsigned long cutlim = div.rem;

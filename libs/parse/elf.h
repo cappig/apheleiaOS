@@ -41,6 +41,47 @@ typedef struct PACKED {
     u16 shstrndx; // index of the section header table entry
 } elf_header_t;
 
+typedef struct PACKED {
+    u32 magic;
+    u8 arch;
+    u8 endianness;
+    u8 id_version;
+    u8 abi;
+    u8 abi_version;
+    u8 _unused0[7];
+
+    u16 type;
+    u16 machine;
+    u32 version;
+
+    u32 entry;
+
+    u32 phoff;
+    u32 shoff;
+
+    u32 flags;
+    u16 hdr_size;
+
+    u16 phent_size;
+    u16 ph_num;
+
+    u16 shdr_size;
+    u16 sh_num;
+
+    u16 shstrndx;
+} elf32_header_t;
+
+typedef struct PACKED {
+    u32 type;
+    u32 offset;
+    u32 vaddr;
+    u32 paddr;
+    u32 file_size;
+    u32 mem_size;
+    u32 flags;
+    u32 align;
+} elf32_prog_header_t;
+
 enum elf_arch {
     EARCH_32 = 1,
     EARCH_64 = 2,
@@ -233,13 +274,28 @@ u64 elf_to_mmap_prot(u32 elf_flags);
 bool elf_parse_header(elf_attributes_t *attribs, elf_header_t *header);
 
 elf_sect_header_t *elf_locate_section(elf_header_t *header, const char *name);
-elf_symbol_t *
-elf_locate_symbol(elf_symbol_t *symtab, size_t symtab_size, char *strtab, const char *name);
+elf_symbol_t *elf_locate_symbol(
+    elf_symbol_t *symtab,
+    size_t symtab_size,
+    char *strtab,
+    const char *name
+);
 
 bool elf_view_init(elf_view_t *view, const void *blob, size_t blob_size);
-bool elf_view_read_section(const elf_view_t *view, size_t idx, elf_section_view_t *out);
-bool elf_view_section_data_ok(const elf_view_t *view, const elf_section_view_t *section);
-bool elf_view_find_section(const elf_view_t *view, const char *name, elf_section_view_t *out_section);
+bool elf_view_read_section(
+    const elf_view_t *view,
+    size_t idx,
+    elf_section_view_t *out
+);
+bool elf_view_section_data_ok(
+    const elf_view_t *view,
+    const elf_section_view_t *section
+);
+bool elf_view_find_section(
+    const elf_view_t *view,
+    const char *name,
+    elf_section_view_t *out_section
+);
 bool elf_view_read_symbol(
     const elf_view_t *view,
     const u8 *entry,

@@ -16,10 +16,13 @@ static void copy_fd(int fd) {
 
         size_t off = 0;
         while (off < (size_t)read_len) {
-            ssize_t wrote = write(STDOUT_FILENO, buf + off, (size_t)read_len - off);
+            ssize_t wrote =
+                write(STDOUT_FILENO, buf + off, (size_t)read_len - off);
+
             if (wrote <= 0) {
                 return;
             }
+
             off += (size_t)wrote;
         }
     }

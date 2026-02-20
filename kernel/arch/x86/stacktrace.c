@@ -23,7 +23,10 @@ static void _dump_stack_from(stack_frame_t *frame) {
         } else {
             u64 offset = (u64)ret - sym->addr;
             log_info(
-                "<%#llx> %s+%#llx", (unsigned long long)ret, sym->name, (unsigned long long)offset
+                "<%#llx> %s+%#llx",
+                (unsigned long long)ret,
+                sym->name,
+                (unsigned long long)offset
             );
         }
 

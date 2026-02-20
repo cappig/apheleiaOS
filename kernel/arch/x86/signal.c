@@ -4,7 +4,12 @@
 #include <string.h>
 #include <x86/asm.h>
 
-static bool _write_user(sched_thread_t *thread, uintptr_t addr, const void *src, size_t len) {
+static bool _write_user(
+    sched_thread_t *thread,
+    uintptr_t addr,
+    const void *src,
+    size_t len
+) {
     if (!thread || !thread->vm_space || !src || !len) {
         return false;
     }

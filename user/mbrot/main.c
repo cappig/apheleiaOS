@@ -19,6 +19,7 @@ typedef enum {
     MBROT_ACTION_QUIT = -1,
 } mbrot_action_t;
 
+
 static size_t fb_stride_pixels(const framebuffer_t *fb) {
     if (!fb || !fb->width) {
         return 0;
@@ -189,7 +190,11 @@ static bool flush_frame(window_t *window) {
     return false;
 }
 
-static void render_mandelbrot(window_t *window, const mandelbrot_view_t *view, bool fast_preview) {
+static void render_mandelbrot(
+    window_t *window,
+    const mandelbrot_view_t *view,
+    bool fast_preview
+) {
     if (!window || !view) {
         return;
     }
@@ -222,8 +227,10 @@ static void render_mandelbrot(window_t *window, const mandelbrot_view_t *view, b
     }
 
     double aspect = (double)height / (double)width;
+
     double x_min = view->center_x - view->scale;
     double y_max = view->center_y + view->scale * aspect;
+
     double dx = (2.0 * view->scale) / (double)width;
     double dy = (2.0 * view->scale * aspect) / (double)height;
 
@@ -265,7 +272,8 @@ static void render_mandelbrot(window_t *window, const mandelbrot_view_t *view, b
     }
 }
 
-static int handle_event(mandelbrot_view_t *view, const ws_input_event_t *event) {
+static int
+handle_event(mandelbrot_view_t *view, const ws_input_event_t *event) {
     if (!view || !event) {
         return MBROT_ACTION_NONE;
     }
@@ -349,6 +357,7 @@ int main(void) {
         if (ret == 0) {
             if (refine_pending) {
                 render_mandelbrot(&window, &view, false);
+
                 if (!flush_frame(&window)) {
                     if (errno == EAGAIN || errno == EINTR) {
                         refine_pending = true;
@@ -356,6 +365,7 @@ int main(void) {
                     }
                     break;
                 }
+
                 refine_pending = false;
             }
             continue;

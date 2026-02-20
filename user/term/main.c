@@ -65,7 +65,8 @@ static bool read_window(window_t *window, int master_fd) {
     }
 
     ws_input_event_t events[16];
-    ssize_t n = window_events(window, events, sizeof(events) / sizeof(events[0]));
+    ssize_t n =
+        window_events(window, events, sizeof(events) / sizeof(events[0]));
 
     if (n < 0) {
         return errno == EAGAIN || errno == EINTR;
@@ -89,12 +90,16 @@ static bool read_window(window_t *window, int master_fd) {
         pending_resize = true;
         resize_width = events[i].width;
         resize_height = events[i].height;
-        resize_stride = events[i].stride ? events[i].stride : events[i].width * sizeof(pixel_t);
+        resize_stride =
+            events[i].stride ? events[i].stride : events[i].width * sizeof(pixel_t);
     }
 
-    if (pending_resize &&
-        (window->width != resize_width || window->height != resize_height ||
-         window->stride != resize_stride)) {
+    if (
+        pending_resize &&
+        (window->width != resize_width ||
+         window->height != resize_height ||
+         window->stride != resize_stride)
+    ) {
         if (!term_screen_can_resize(resize_width, resize_height)) {
             return true;
         }
@@ -125,7 +130,13 @@ static bool read_window(window_t *window, int master_fd) {
         }
 
         // Winsize signaling failure should not kill terminal rendering.
-        term_set_winsize(master_fd, term_screen_cols(), term_screen_rows(), window->width, window->height);
+        term_set_winsize(
+            master_fd,
+            term_screen_cols(),
+            term_screen_rows(),
+            window->width,
+            window->height
+        );
     }
 
     for (size_t i = 0; i < count; i++) {
@@ -166,7 +177,11 @@ int main(void) {
     }
 
     pid_t child = term_spawn_shell(
-        master_fd, term_screen_cols(), term_screen_rows(), window.width, window.height
+        master_fd,
+        term_screen_cols(),
+        term_screen_rows(),
+        window.width,
+        window.height
     );
     if (child < 0) {
         close(master_fd);
@@ -258,9 +273,6 @@ int main(void) {
 
         pending_flush = false;
 
-        // A resize can mark a new dirty region while an older flush was pending.
-        // Queue the next dirty rect immediately so we do not block in poll() and
-        // leave newly exposed pixels stale/black until later input/output arrives.
         if (term_screen_render_rect(&flush_x, &flush_y, &flush_w, &flush_h)) {
             pending_flush = true;
         }

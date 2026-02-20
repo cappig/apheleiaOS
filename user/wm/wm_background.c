@@ -77,7 +77,14 @@ static void _fill_solid_color(size_t pixels, pixel_t color) {
     }
 }
 
-static void _build_cover_map(u32 src_w, u32 src_h, u32 dst_w, u32 dst_h, u32 *x_map, u32 *y_map) {
+static void _build_cover_map(
+    u32 src_w,
+    u32 src_h,
+    u32 dst_w,
+    u32 dst_h,
+    u32 *x_map,
+    u32 *y_map
+) {
     u32 crop_x = 0;
     u32 crop_y = 0;
     u32 crop_w = src_w;
@@ -259,7 +266,14 @@ bool wm_background_draw_rect(
     u32 width,
     u32 height
 ) {
-    if (!frame || !bg_pixels || bg_width != fb_width || bg_height != fb_height || !width || !height) {
+    if (
+        !frame ||
+        !bg_pixels ||
+        bg_width != fb_width ||
+        bg_height != fb_height ||
+        !width ||
+        !height
+    ) {
         return false;
     }
 

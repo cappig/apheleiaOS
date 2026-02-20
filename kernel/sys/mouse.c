@@ -21,6 +21,7 @@ static sched_wait_queue_t mouse_wait = {0};
 static i32 mouse_x = 0;
 static i32 mouse_y = 0;
 
+
 static i32 _clamp_i32(i32 value, i32 min, i32 max) {
     if (value < min) {
         return min;
@@ -41,7 +42,8 @@ static bool _has_events(void) {
     return has_events;
 }
 
-ssize_t mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+ssize_t
+mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
 
@@ -152,7 +154,16 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
 
     mouse_if->poll = mouse_poll;
 
-    if (!devfs_register_node(dev_dir, "mouse", VFS_CHARDEV, 0666, mouse_if, NULL)) {
+    bool registered = devfs_register_node(
+        dev_dir,
+        "mouse",
+        VFS_CHARDEV,
+        0666,
+        mouse_if,
+        NULL
+    );
+
+    if (!registered) {
         log_warn("failed to create /dev/mouse");
         return false;
     }
@@ -189,6 +200,7 @@ bool mouse_init(void) {
 
     if (first_init) {
         const framebuffer_info_t *fb = framebuffer_get_info();
+
         if (fb && fb->available) {
             mouse_x = (i32)(fb->width / 2);
             mouse_y = (i32)(fb->height / 2);

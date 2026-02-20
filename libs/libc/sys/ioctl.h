@@ -2,23 +2,23 @@
 
 #include <sys/types.h>
 
-#define TCGETS      1
-#define TCSETS      2
-#define TCSETSW     3
-#define TCSETSF     4
-#define TIOCGWINSZ  5
-#define TIOCSWINSZ  6
-#define TIOCSPGRP   7
-#define TIOCGPGRP   8
-#define TIOCGPTN    9
+#define TCGETS     1
+#define TCSETS     2
+#define TCSETSW    3
+#define TCSETSF    4
+#define TIOCGWINSZ 5
+#define TIOCSWINSZ 6
+#define TIOCSPGRP  7
+#define TIOCGPGRP  8
+#define TIOCGPTN   9
 
 #ifdef _APHELEIA_SOURCE
 #include <gui/fb.h>
 
-#define FBIOGETINFO 10
-#define FBIOACQUIRE 11
-#define FBIORELEASE 12
-#define FBIOPRESENT 13
+#define FBIOGETINFO      10
+#define FBIOACQUIRE      11
+#define FBIORELEASE      12
+#define FBIOPRESENT      13
 #define FBIOPRESENT_RECT 14
 
 #define WSIOC_CLAIM_MANAGER   64

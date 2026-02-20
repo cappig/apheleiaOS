@@ -99,6 +99,7 @@ typedef struct PACKED {
     u64 size;
 } elf64_sym_t;
 
+
 static bool _range_ok(size_t offset, size_t len, size_t total) {
     if (offset > total) {
         return false;
@@ -116,8 +117,12 @@ static bool _elf_ident_ok(const u8 ident[16]) {
         return false;
     }
 
-    if (ident[EI_MAG0] != 0x7f || ident[EI_MAG1] != 'E' || ident[EI_MAG2] != 'L' ||
-        ident[EI_MAG3] != 'F') {
+    if (
+        ident[EI_MAG0] != 0x7f ||
+        ident[EI_MAG1] != 'E' ||
+        ident[EI_MAG2] != 'L' ||
+        ident[EI_MAG3] != 'F'
+    ) {
         return false;
     }
 
@@ -259,8 +264,12 @@ elf_sect_header_t *elf_locate_section(elf_header_t *header, const char *name) {
     return &compat_section;
 }
 
-elf_symbol_t *
-elf_locate_symbol(elf_symbol_t *symtab, size_t symtab_size, char *strtab, const char *name) {
+elf_symbol_t *elf_locate_symbol(
+    elf_symbol_t *symtab,
+    size_t symtab_size,
+    char *strtab,
+    const char *name
+) {
     if (!symtab || !strtab || !name) {
         return NULL;
     }
@@ -268,9 +277,11 @@ elf_locate_symbol(elf_symbol_t *symtab, size_t symtab_size, char *strtab, const 
     elf_view_t view = {.elf_class = ELFCLASS64};
     size_t ent_size = sizeof(elf_symbol_t);
     size_t count = symtab_size / ent_size;
+
     for (size_t i = 0; i < count; i++) {
         const u8 *entry = (const u8 *)symtab + i * ent_size;
         elf_symbol_view_t symbol = {0};
+
         if (!elf_view_read_symbol(&view, entry, ent_size, &symbol)) {
             return NULL;
         }
@@ -303,6 +314,7 @@ bool elf_view_init(elf_view_t *view, const void *blob, size_t blob_size) {
 
     if (bytes[EI_CLASS] == ELFCLASS32) {
         const elf32_ehdr_t *hdr = blob;
+
         shoff = (size_t)hdr->shoff;
         shent_size = (size_t)hdr->shentsize;
         sh_num = (size_t)hdr->shnum;
@@ -352,7 +364,11 @@ bool elf_view_init(elf_view_t *view, const void *blob, size_t blob_size) {
     return true;
 }
 
-bool elf_view_read_section(const elf_view_t *view, size_t idx, elf_section_view_t *out) {
+bool elf_view_read_section(
+    const elf_view_t *view,
+    size_t idx,
+    elf_section_view_t *out
+) {
     if (!view || !out || idx >= view->sh_num) {
         return false;
     }
@@ -364,6 +380,7 @@ bool elf_view_read_section(const elf_view_t *view, size_t idx, elf_section_view_
 
     if (view->elf_class == ELFCLASS32) {
         const elf32_shdr_t *raw = (const elf32_shdr_t *)(view->blob + shoff);
+
         out->name = raw->name;
         out->type = raw->type;
         out->flags = raw->flags;
@@ -374,12 +391,16 @@ bool elf_view_read_section(const elf_view_t *view, size_t idx, elf_section_view_
         out->info = raw->info;
         out->align = raw->addralign;
         out->ent_size = (size_t)raw->entsize;
+
         return true;
     }
 
     const elf64_shdr_t *raw = (const elf64_shdr_t *)(view->blob + shoff);
-    if (raw->offset > (u64)(size_t)-1 || raw->size > (u64)(size_t)-1 ||
-        raw->entsize > (u64)(size_t)-1) {
+    if (
+        raw->offset > (u64)(size_t)-1 ||
+        raw->size > (u64)(size_t)-1 ||
+        raw->entsize > (u64)(size_t)-1
+    ) {
         return false;
     }
 
@@ -397,7 +418,10 @@ bool elf_view_read_section(const elf_view_t *view, size_t idx, elf_section_view_
     return true;
 }
 
-bool elf_view_section_data_ok(const elf_view_t *view, const elf_section_view_t *section) {
+bool elf_view_section_data_ok(
+    const elf_view_t *view,
+    const elf_section_view_t *section
+) {
     if (!view || !section) {
         return false;
     }
@@ -420,8 +444,10 @@ static bool _find_section_index(
     }
 
     elf_section_view_t shstr = {0};
-    if (!elf_view_read_section(view, view->shstrndx, &shstr) ||
-        !elf_view_section_data_ok(view, &shstr)) {
+    if (
+        !elf_view_read_section(view, view->shstrndx, &shstr) ||
+        !elf_view_section_data_ok(view, &shstr)
+    ) {
         return false;
     }
 

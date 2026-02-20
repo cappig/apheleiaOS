@@ -19,27 +19,41 @@
 
 ssize_t read(int fd, void *buf, size_t count) {
     return SYSCALL_RET(
-        ssize_t, syscall3(SYS_READ, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count)
+        ssize_t,
+        syscall3(SYS_READ, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count)
     );
 }
 
 ssize_t write(int fd, const void *buf, size_t count) {
     return SYSCALL_RET(
-        ssize_t, syscall3(SYS_WRITE, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count)
+        ssize_t,
+        syscall3(SYS_WRITE, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count)
     );
 }
 
 ssize_t pread(int fd, void *buf, size_t count, off_t offset) {
     return SYSCALL_RET(
         ssize_t,
-        syscall4(SYS_PREAD, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset)
+        syscall4(
+            SYS_PREAD,
+            (uintptr_t)fd,
+            (uintptr_t)buf,
+            (uintptr_t)count,
+            (uintptr_t)offset
+        )
     );
 }
 
 ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset) {
     return SYSCALL_RET(
         ssize_t,
-        syscall4(SYS_PWRITE, (uintptr_t)fd, (uintptr_t)buf, (uintptr_t)count, (uintptr_t)offset)
+        syscall4(
+            SYS_PWRITE,
+            (uintptr_t)fd,
+            (uintptr_t)buf,
+            (uintptr_t)count,
+            (uintptr_t)offset
+        )
     );
 }
 
@@ -52,7 +66,10 @@ int open(const char *path, int flags, ...) {
         va_end(args);
     }
 
-    return SYSCALL_RET(int, syscall3(SYS_OPEN, (uintptr_t)path, (uintptr_t)flags, (uintptr_t)mode));
+    return SYSCALL_RET(
+        int,
+        syscall3(SYS_OPEN, (uintptr_t)path, (uintptr_t)flags, (uintptr_t)mode)
+    );
 }
 
 int close(int fd) {
@@ -68,11 +85,15 @@ int dup(int oldfd) {
 }
 
 int dup2(int oldfd, int newfd) {
-    return SYSCALL_RET(int, syscall2(SYS_DUP, (uintptr_t)oldfd, (uintptr_t)newfd));
+    return SYSCALL_RET(
+        int, syscall2(SYS_DUP, (uintptr_t)oldfd, (uintptr_t)newfd)
+    );
 }
 
 int mkdir(const char *path, mode_t mode) {
-    return SYSCALL_RET(int, syscall2(SYS_MKDIR, (uintptr_t)path, (uintptr_t)mode));
+    return SYSCALL_RET(
+        int, syscall2(SYS_MKDIR, (uintptr_t)path, (uintptr_t)mode)
+    );
 }
 
 int rmdir(const char *path) {
@@ -80,12 +101,15 @@ int rmdir(const char *path) {
 }
 
 int access(const char *path, int mode) {
-    return SYSCALL_RET(int, syscall2(SYS_ACCESS, (uintptr_t)path, (uintptr_t)mode));
+    return SYSCALL_RET(
+        int, syscall2(SYS_ACCESS, (uintptr_t)path, (uintptr_t)mode)
+    );
 }
 
 off_t lseek(int fd, off_t offset, int whence) {
     return SYSCALL_RET(
-        off_t, syscall3(SYS_SEEK, (uintptr_t)fd, (uintptr_t)offset, (uintptr_t)whence)
+        off_t,
+        syscall3(SYS_SEEK, (uintptr_t)fd, (uintptr_t)offset, (uintptr_t)whence)
     );
 }
 
@@ -254,7 +278,9 @@ int isatty(int fd) {
 }
 
 int link(const char *oldpath, const char *newpath) {
-    return SYSCALL_RET(int, syscall2(SYS_LINK, (uintptr_t)oldpath, (uintptr_t)newpath));
+    return SYSCALL_RET(
+        int, syscall2(SYS_LINK, (uintptr_t)oldpath, (uintptr_t)newpath)
+    );
 }
 
 int unlink(const char *path) {
@@ -262,7 +288,9 @@ int unlink(const char *path) {
 }
 
 int rename(const char *oldpath, const char *newpath) {
-    return SYSCALL_RET(int, syscall2(SYS_RENAME, (uintptr_t)oldpath, (uintptr_t)newpath));
+    return SYSCALL_RET(
+        int, syscall2(SYS_RENAME, (uintptr_t)oldpath, (uintptr_t)newpath)
+    );
 }
 
 pid_t fork(void) {
@@ -275,13 +303,17 @@ pid_t wait(int *status) {
 
 pid_t waitpid(pid_t pid, int *status, int options) {
     return SYSCALL_RET(
-        pid_t, syscall3(SYS_WAITPID, (uintptr_t)pid, (uintptr_t)status, (uintptr_t)options)
+        pid_t,
+        syscall3(
+            SYS_WAITPID, (uintptr_t)pid, (uintptr_t)status, (uintptr_t)options
+        )
     );
 }
 
 int execve(const char *path, char *const argv[], char *const envp[]) {
     return SYSCALL_RET(
-        int, syscall3(SYS_EXECVE, (uintptr_t)path, (uintptr_t)argv, (uintptr_t)envp)
+        int,
+        syscall3(SYS_EXECVE, (uintptr_t)path, (uintptr_t)argv, (uintptr_t)envp)
     );
 }
 

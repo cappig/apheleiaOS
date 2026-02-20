@@ -13,4 +13,10 @@ int getpwnam_r(
     size_t buflen,
     struct passwd **result
 );
-int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen, struct passwd **result);
+int getpwuid_r(
+    uid_t uid,
+    struct passwd *pwd,
+    char *buf,
+    size_t buflen,
+    struct passwd **result
+);

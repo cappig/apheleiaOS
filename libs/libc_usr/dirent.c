@@ -13,7 +13,9 @@ struct DIR {
 };
 
 static int _getdents_raw(int fd, struct dirent *out) {
-    return (int)__SYSCALL_ERRNO(syscall2(SYS_GETDENTS, (uintptr_t)fd, (uintptr_t)out));
+    return (int)__SYSCALL_ERRNO(
+        syscall2(SYS_GETDENTS, (uintptr_t)fd, (uintptr_t)out)
+    );
 }
 
 #ifdef _APHELEIA_SOURCE

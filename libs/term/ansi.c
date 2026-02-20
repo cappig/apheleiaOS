@@ -23,20 +23,35 @@ static void ansi_reset_escape(ansi_parser_t *parser) {
     parser->current = -1;
 }
 
-static void
-ansi_emit_csi(ansi_parser_t *parser, u8 ch, const ansi_callbacks_t *callbacks, void *ctx) {
+static void ansi_emit_csi(
+    ansi_parser_t *parser,
+    u8 ch,
+    const ansi_callbacks_t *callbacks,
+    void *ctx
+) {
     if (parser->current >= 0 && parser->param_count < ANSI_MAX_PARAMS) {
         parser->params[parser->param_count++] = parser->current;
     }
 
     if (callbacks && callbacks->on_csi) {
-        callbacks->on_csi(ctx, (char)ch, parser->params, parser->param_count, parser->csi_private);
+        callbacks->on_csi(
+            ctx,
+            (char)ch,
+            parser->params,
+            parser->param_count,
+            parser->csi_private
+        );
     }
 
     ansi_reset_escape(parser);
 }
 
-void ansi_parser_feed(ansi_parser_t *parser, u8 ch, const ansi_callbacks_t *callbacks, void *ctx) {
+void ansi_parser_feed(
+    ansi_parser_t *parser,
+    u8 ch,
+    const ansi_callbacks_t *callbacks,
+    void *ctx
+) {
     if (!parser) {
         return;
     }
@@ -58,7 +73,8 @@ void ansi_parser_feed(ansi_parser_t *parser, u8 ch, const ansi_callbacks_t *call
 
         if (ch == ';') {
             if (parser->param_count < ANSI_MAX_PARAMS) {
-                parser->params[parser->param_count++] = parser->current < 0 ? 0 : parser->current;
+                parser->params[parser->param_count++] =
+                    parser->current < 0 ? 0 : parser->current;
             }
 
             parser->current = -1;

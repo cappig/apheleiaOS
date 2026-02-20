@@ -178,7 +178,8 @@ static uintmax_t _get_var_number(int size, va_list *vlist) {
     }
 }
 
-static void _buf_putc(char *buffer, size_t *written, size_t max_size, char value) {
+static void
+_buf_putc(char *buffer, size_t *written, size_t max_size, char value) {
     if (!written) {
         return;
     }
@@ -316,7 +317,12 @@ static int _get_base(char type) {
 
 
 // FIXME: check index bounds inside the loop!
-int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict format, va_list vlist) {
+int vsnprintf(
+    char *restrict buffer,
+    size_t max_size,
+    const char *restrict format,
+    va_list vlist
+) {
     if (!format) {
         return 0;
     }
@@ -394,7 +400,9 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
             int len = (int)strlen(string);
             int padding = (width > len) ? width - len : 0;
 
-            _string_to_buffer(buffer, max_size, &written, string, flags, precision, &padding);
+            _string_to_buffer(
+                buffer, max_size, &written, string, flags, precision, &padding
+            );
         } else {
             uintmax_t number = _get_var_number(size, &args);
             bool negative = (size < 0 && (intmax_t)number < 0);
@@ -405,13 +413,23 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
             }
 
             char num_buffer[66] = {0};
-            uintmax_t absval = negative ? (uintmax_t)(-(intmax_t)number) : number;
+            uintmax_t absval =
+                negative ? (uintmax_t)(-(intmax_t)number) : number;
+
             int len = (int)ulltoa(absval, num_buffer, base);
 
             int padding = (width > len) ? width - len : 0;
 
             _append_num_prefix(
-                buffer, max_size, &written, number, flags, base, size, &padding, uppercase
+                buffer,
+                max_size,
+                &written,
+                number,
+                flags,
+                base,
+                size,
+                &padding,
+                uppercase
             );
 
             if (uppercase) {
@@ -420,7 +438,15 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
                 }
             }
 
-            _string_to_buffer(buffer, max_size, &written, num_buffer, flags, precision, &padding);
+            _string_to_buffer(
+                buffer,
+                max_size,
+                &written,
+                num_buffer,
+                flags,
+                precision,
+                &padding
+            );
         }
     }
 

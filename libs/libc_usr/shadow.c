@@ -6,8 +6,10 @@
 
 #define SHADOW_PATH "/etc/shadow"
 
-static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
+static int
+copy_field(char **cursor, size_t *left, char **out, const char *src) {
     size_t n = strlen(src) + 1;
+
     if (!cursor || !left || !out || !src || n > *left) {
         return ERANGE;
     }
@@ -16,19 +18,28 @@ static int copy_field(char **cursor, size_t *left, char **out, const char *src) 
     *out = *cursor;
     *cursor += n;
     *left -= n;
+
     return 0;
 }
 
-static int parse_shadow_line(const char *line, struct spwd *spbuf, char *buf, size_t buflen) {
+static int parse_shadow_line(
+    const char *line,
+    struct spwd *spbuf,
+    char *buf,
+    size_t buflen
+) {
     if (!line || !spbuf || !buf || !buflen) {
         return EINVAL;
     }
 
     char name[64] = {0};
     char pwd[128] = {0};
+
     const char *cursor = line;
+
     cursor = textdb_next_field(cursor, name, sizeof(name));
     cursor = textdb_next_field(cursor, pwd, sizeof(pwd));
+
     (void)cursor;
 
     memset(spbuf, 0, sizeof(*spbuf));
@@ -42,7 +53,9 @@ static int parse_shadow_line(const char *line, struct spwd *spbuf, char *buf, si
 
     char *dst = buf;
     size_t left = buflen;
+
     int rc = copy_field(&dst, &left, &spbuf->sp_namp, name);
+
     if (!rc) {
         rc = copy_field(&dst, &left, &spbuf->sp_pwdp, pwd);
     }
@@ -83,6 +96,7 @@ int getspnam_r(
 
             struct spwd parsed = {0};
             int rc = parse_shadow_line(tmp, &parsed, buf, buflen);
+
             if (rc && rc != EINVAL) {
                 return rc;
             }
@@ -96,7 +110,8 @@ int getspnam_r(
 
         if (!next) {
             break;
-        }
+        }    
+
         line = next + 1;
     }
 
@@ -108,7 +123,9 @@ struct spwd *getspnam(const char *name) {
     static struct spwd sp;
     static char buf[256];
     struct spwd *result = NULL;
+
     int rc = getspnam_r(name, &sp, buf, sizeof(buf), &result);
+
     if (rc || !result) {
         errno = rc ? rc : ENOENT;
         return NULL;

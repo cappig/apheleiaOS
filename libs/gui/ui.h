@@ -54,17 +54,27 @@ int ui_mgr_raise(ui_t *ui, u32 id, u32 z);
 int ui_mgr_close(ui_t *ui, u32 id);
 int ui_mgr_send(ui_t *ui, u32 id, const input_event_t *event);
 
-int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const char *title);
+int window_alloc(
+    ui_t *ui,
+    window_t *window,
+    u32 width,
+    u32 height,
+    const char *title
+);
 int window_from_env(ui_t *ui, window_t *window);
 int window_free(window_t *window);
 void window_close(window_t *window);
-ssize_t window_blit(window_t *window, const void *pixels, size_t len, size_t offset);
+ssize_t
+window_blit(window_t *window, const void *pixels, size_t len, size_t offset);
 ssize_t window_events(window_t *window, ws_input_event_t *events, size_t count);
 
-// Simple application-facing helpers (open -> draw to window_buffer() -> window_flush -> loop events).
 int window_init(window_t *window, u32 width, u32 height, const char *title);
 void window_deinit(window_t *window);
 framebuffer_t *window_buffer(window_t *window);
 int window_flush(window_t *window);
 int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height);
-int window_wait_event(window_t *window, ws_input_event_t *event, int timeout_ms);
+int window_wait_event(
+    window_t *window,
+    ws_input_event_t *event,
+    int timeout_ms
+);

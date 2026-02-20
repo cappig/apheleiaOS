@@ -37,7 +37,11 @@ NORETURN void _load_entry(u16 boot_disk) {
         info.boot_rootfs_paddr = rootfs_paddr;
         info.boot_rootfs_size = rootfs_size;
 
-        printf("boot: staged rootfs paddr=0x%llx size=%llu\n\r", rootfs_paddr, rootfs_size);
+        printf(
+            "boot: staged rootfs paddr=0x%llx size=%llu\n\r",
+            rootfs_paddr,
+            rootfs_size
+        );
     }
 
     printf("boot: parsing config\n\r");
@@ -55,7 +59,9 @@ NORETURN void _load_entry(u16 boot_disk) {
 
         u64 fb_size = pitch * info.video.height;
         if (fb_size) {
-            mmap_add_entry(&info.memory_map, info.video.framebuffer, fb_size, E820_RESERVED);
+            mmap_add_entry(
+                &info.memory_map, info.video.framebuffer, fb_size, E820_RESERVED
+            );
             clean_mmap(&info.memory_map);
         }
     }

@@ -17,7 +17,8 @@ KERNEL_SRC_DIRS := \
 	libs/term \
 	libs/parse
 
-KERNEL_ALL_SRC := $(foreach dir, $(KERNEL_SRC_DIRS), $(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))
+KERNEL_ALL_SRC := $(foreach dir, $(KERNEL_SRC_DIRS), \
+	$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))
 KERNEL_ALL_SRC := $(filter-out libs/libc/math.c, $(KERNEL_ALL_SRC))
 
 KERNEL_COMMON_SRC := $(filter-out %32.c %64.c %32.asm %64.asm, $(KERNEL_ALL_SRC))
@@ -102,7 +103,12 @@ endef
 bin/$(IMAGE_NAME).img: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
 	$(call stage_image)
 ifeq ($(ARCH_VARIANT), 64)
-	@python3 kernel/build_hybrid_disk_image.py $@ bin/boot/mbr.bin bin/boot/bios.bin bin/boot/BOOTX64.EFI $(KERNEL_ELF) $(IMAGE_STAGE_DIR)
+	@python3 kernel/build_hybrid_disk_image.py $@ \
+		bin/boot/mbr.bin \
+		bin/boot/bios.bin \
+		bin/boot/BOOTX64.EFI \
+		$(KERNEL_ELF) \
+		$(IMAGE_STAGE_DIR)
 else
 	@python3 kernel/build_bios_disk_image.py $@ bin/boot/mbr.bin bin/boot/bios.bin $(IMAGE_STAGE_DIR)
 endif
@@ -110,7 +116,17 @@ endif
 bin/$(IMAGE_NAME).iso: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
 	$(call stage_image)
 ifeq ($(ARCH_VARIANT), 64)
-	@python3 kernel/build_hybrid_iso_image.py $@ bin/boot/mbr.bin bin/boot/bios.bin bin/boot/BOOTX64.EFI $(KERNEL_ELF) $(IMAGE_STAGE_DIR)
+	@python3 kernel/build_hybrid_iso_image.py $@ \
+		bin/boot/mbr.bin \
+		bin/boot/bios.bin \
+		bin/boot/BOOTX64.EFI \
+		$(KERNEL_ELF) \
+		$(IMAGE_STAGE_DIR)
 else
-	@python3 kernel/build_hybrid_iso_image.py $@ bin/boot/mbr.bin bin/boot/bios.bin "" "" $(IMAGE_STAGE_DIR)
+	@python3 kernel/build_hybrid_iso_image.py $@ \
+		bin/boot/mbr.bin \
+		bin/boot/bios.bin \
+		"" \
+		"" \
+		$(IMAGE_STAGE_DIR)
 endif

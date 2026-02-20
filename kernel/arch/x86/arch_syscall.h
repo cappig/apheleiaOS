@@ -43,7 +43,8 @@ static inline arch_syscall_t arch_syscall_arg4(const arch_int_state_t *state) {
 #endif
 }
 
-static inline void arch_syscall_set_ret(arch_int_state_t *state, arch_syscall_t value) {
+static inline void
+arch_syscall_set_ret(arch_int_state_t *state, arch_syscall_t value) {
 #if defined(__x86_64__)
     state->g_regs.rax = (u64)value;
 #else

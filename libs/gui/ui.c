@@ -134,7 +134,8 @@ static void _update_key_modifiers(ui_t *ui, const key_event *event) {
     }
 }
 
-static void _translate_key_event(ui_t *ui, const key_event *raw, input_event_t *out) {
+static void
+_translate_key_event(ui_t *ui, const key_event *raw, input_event_t *out) {
     if (!ui || !raw || !out) {
         return;
     }
@@ -150,7 +151,12 @@ static void _translate_key_event(ui_t *ui, const key_event *raw, input_event_t *
     out->modifiers = ui->key_modifiers;
 }
 
-static size_t _translate_mouse_event(ui_t *ui, const mouse_event *raw, input_event_t *out, size_t out_cap) {
+static size_t _translate_mouse_event(
+    ui_t *ui,
+    const mouse_event *raw,
+    input_event_t *out,
+    size_t out_cap
+) {
     if (!ui || !raw || !out || !out_cap) {
         return 0;
     }
@@ -160,7 +166,9 @@ static size_t _translate_mouse_event(ui_t *ui, const mouse_event *raw, input_eve
 
     if ((raw->delta_x || raw->delta_y) && produced < out_cap) {
         input_event_t *move = &out[produced++];
+
         memset(move, 0, sizeof(*move));
+
         move->timestamp_ms = timestamp;
         move->type = INPUT_EVENT_MOUSE_MOVE;
         move->source = raw->source;
@@ -180,7 +188,9 @@ static size_t _translate_mouse_event(ui_t *ui, const mouse_event *raw, input_eve
     }
 
     input_event_t *buttons = &out[produced++];
+
     memset(buttons, 0, sizeof(*buttons));
+
     buttons->timestamp_ms = timestamp;
     buttons->type = INPUT_EVENT_MOUSE_BUTTON;
     buttons->source = raw->source;
@@ -189,7 +199,8 @@ static size_t _translate_mouse_event(ui_t *ui, const mouse_event *raw, input_eve
     return produced;
 }
 
-static int ui_simple(ui_t *ui, unsigned long request, u32 id, i32 x, i32 y, u32 flags) {
+static int
+ui_simple(ui_t *ui, unsigned long request, u32 id, i32 x, i32 y, u32 flags) {
     if (!ui || ui->ctl_fd < 0) {
         errno = EINVAL;
         return -1;
@@ -386,7 +397,8 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
 
             if (n == (ssize_t)sizeof(raw)) {
                 input_event_t converted[2];
-                size_t event_count = _translate_mouse_event(ui, &raw, converted, 2);
+                size_t event_count =
+                    _translate_mouse_event(ui, &raw, converted, 2);
 
                 if (event_count) {
                     events[produced++] = converted[0];
@@ -523,7 +535,13 @@ int ui_mgr_send(ui_t *ui, u32 id, const input_event_t *event) {
     return ioctl(ui->ctl_fd, WSIOC_SEND_INPUT, &cmd);
 }
 
-int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const char *title) {
+int window_alloc(
+    ui_t *ui,
+    window_t *window,
+    u32 width,
+    u32 height,
+    const char *title
+) {
     if (!ui || !window) {
         errno = EINVAL;
         return -1;
@@ -571,8 +589,11 @@ int window_from_env(ui_t *ui, window_t *window) {
 
     window_reset(window, ui);
 
-    if (!parse_env_u32("WS_ID", &window->id) || !parse_env_u32("WS_WIDTH", &window->width) ||
-        !parse_env_u32("WS_HEIGHT", &window->height)) {
+    if (
+        !parse_env_u32("WS_ID", &window->id) ||
+        !parse_env_u32("WS_WIDTH", &window->width) ||
+        !parse_env_u32("WS_HEIGHT", &window->height)
+    ) {
         return -1;
     }
 
@@ -609,7 +630,8 @@ void window_close(window_t *window) {
     window_reset_runtime(window);
 }
 
-ssize_t window_blit(window_t *window, const void *pixels, size_t len, size_t offset) {
+ssize_t
+window_blit(window_t *window, const void *pixels, size_t len, size_t offset) {
     if (!window || window->fb_fd < 0 || !pixels) {
         errno = EINVAL;
         return -1;
@@ -618,7 +640,8 @@ ssize_t window_blit(window_t *window, const void *pixels, size_t len, size_t off
     return pwrite(window->fb_fd, pixels, len, (off_t)offset);
 }
 
-ssize_t window_events(window_t *window, ws_input_event_t *events, size_t count) {
+ssize_t
+window_events(window_t *window, ws_input_event_t *events, size_t count) {
     if (!window || window->ev_fd < 0 || !events || !count) {
         errno = EINVAL;
         return -1;
@@ -717,8 +740,10 @@ framebuffer_t *window_buffer(window_t *window) {
     size_t capacity = pixels;
     if (window->pixels_capacity) {
         capacity = window->pixels_capacity;
+
         while (capacity < pixels) {
             size_t grown = capacity * 2;
+
             if (grown <= capacity) {
                 capacity = pixels;
                 break;
@@ -748,6 +773,7 @@ framebuffer_t *window_buffer(window_t *window) {
     window->pixels_count = pixels;
     window->pixels_capacity = capacity;
     window_sync_framebuffer(window);
+
     return &window->framebuffer;
 }
 
@@ -770,7 +796,8 @@ int window_flush(window_t *window) {
     return -1;
 }
 
-static int window_flush_row(window_t *window, const u8 *row, size_t bytes, off_t offset) {
+static int
+window_flush_row(window_t *window, const u8 *row, size_t bytes, off_t offset) {
     if (!window || window->fb_fd < 0 || !row || !bytes) {
         errno = EINVAL;
         return -1;
@@ -779,7 +806,13 @@ static int window_flush_row(window_t *window, const u8 *row, size_t bytes, off_t
     size_t written = 0;
 
     while (written < bytes) {
-        ssize_t n = pwrite(window->fb_fd, row + written, bytes - written, offset + (off_t)written);
+        ssize_t n = pwrite(
+            window->fb_fd,
+            row + written,
+            bytes - written,
+            offset + (off_t)written
+        );
+
         if (n < 0) {
             return -1;
         }
@@ -841,21 +874,37 @@ static void _window_resize_preserve(
         size_t src_row = (size_t)(old_height - 1) * new_width;
         for (u32 row = old_height; row < new_height; row++) {
             size_t row_off = (size_t)row * new_width;
-            memcpy(pixels + row_off, pixels + src_row, (size_t)new_width * sizeof(pixel_t));
+            memcpy(
+                pixels + row_off,
+                pixels + src_row,
+                (size_t)new_width * sizeof(pixel_t)
+            );
         }
     }
 }
 
-static void _window_apply_resize_default(window_t *window, const ws_input_event_t *event) {
-    if (!window || !event || event->type != INPUT_EVENT_WINDOW_RESIZE || !event->width || !event->height) {
+static void
+_window_apply_resize_default(window_t *window, const ws_input_event_t *event) {
+    if (
+        !window ||
+        !event ||
+        event->type != INPUT_EVENT_WINDOW_RESIZE ||
+        !event->width ||
+        !event->height
+    ) {
         return;
     }
 
     u32 new_width = event->width;
     u32 new_height = event->height;
-    u32 new_stride = event->stride ? event->stride : event->width * sizeof(pixel_t);
+    u32 new_stride =
+        event->stride ? event->stride : event->width * sizeof(pixel_t);
 
-    if (window->width == new_width && window->height == new_height && window->stride == new_stride) {
+    if (
+        window->width == new_width &&
+        window->height == new_height &&
+        window->stride == new_stride
+    ) {
         return;
     }
 
@@ -863,7 +912,8 @@ static void _window_apply_resize_default(window_t *window, const ws_input_event_
     u32 old_height = window->height;
     u32 old_stride = window->stride;
 
-    bool had_pixels = window->pixels && window->pixels_count && old_width && old_height;
+    bool had_pixels =
+        window->pixels && window->pixels_count && old_width && old_height;
 
     window->width = new_width;
     window->height = new_height;
@@ -879,7 +929,9 @@ static void _window_apply_resize_default(window_t *window, const ws_input_event_
     }
 
     if (had_pixels) {
-        _window_resize_preserve(fb->pixels, old_width, old_height, new_width, new_height);
+        _window_resize_preserve(
+            fb->pixels, old_width, old_height, new_width, new_height
+        );
     } else if (window->pixels_count) {
         memset(fb->pixels, 0, window->pixels_count * sizeof(pixel_t));
     }
@@ -908,9 +960,10 @@ int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height) {
         clip_h = window->height - y;
     }
 
-    // Fast path: full-width rect with matching stride — single pwrite
     if (x == 0 && clip_w == window->width && window->stride == window->width * sizeof(pixel_t)) {
-        const u8 *src = (const u8 *)(window->pixels + (size_t)y * window->width);
+        const u8 *src =
+            (const u8 *)(window->pixels + (size_t)y * window->width);
+
         size_t total = (size_t)clip_h * (size_t)window->width * sizeof(pixel_t);
         off_t dst_off = (off_t)((size_t)y * window->stride);
 
@@ -920,7 +973,9 @@ int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height) {
     size_t row_bytes = (size_t)clip_w * sizeof(pixel_t);
 
     for (u32 row = 0; row < clip_h; row++) {
-        const u8 *src = (const u8 *)(window->pixels + ((size_t)y + row) * window->width + x);
+        const u8 *src = 
+            (const u8 *)(window->pixels + ((size_t)y + row) * window->width + x);
+
         off_t dst_off =
             (off_t)(((size_t)y + row) * window->stride + (size_t)x * sizeof(pixel_t));
 
@@ -932,7 +987,11 @@ int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height) {
     return 0;
 }
 
-int window_wait_event(window_t *window, ws_input_event_t *event, int timeout_ms) {
+int window_wait_event(
+    window_t *window,
+    ws_input_event_t *event,
+    int timeout_ms
+) {
     if (!window || window->ev_fd < 0 || !event) {
         errno = EINVAL;
         return -1;

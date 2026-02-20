@@ -28,7 +28,12 @@ const char *fs_path_basename(const char *path) {
     return slash ? slash + 1 : path;
 }
 
-void fs_join_path(char *out, size_t out_len, const char *left, const char *right) {
+void fs_join_path(
+    char *out,
+    size_t out_len,
+    const char *left,
+    const char *right
+) {
     if (!out || !out_len) {
         return;
     }

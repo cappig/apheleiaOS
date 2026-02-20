@@ -14,7 +14,12 @@ static bool signal_valid(int signum) {
 }
 
 static bool signal_is_stop(int signum) {
-    return signum == SIGTSTP || signum == SIGSTOP || signum == SIGTTIN || signum == SIGTTOU;
+    return (
+        signum == SIGTSTP ||
+        signum == SIGSTOP ||
+        signum == SIGTTIN ||
+        signum == SIGTTOU
+    );
 }
 
 static bool signal_is_continue(int signum) {

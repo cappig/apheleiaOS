@@ -20,6 +20,7 @@ static font_map_t *loaded_map = NULL;
 static size_t loaded_map_count = 0;
 static size_t loaded_map_capacity = 0;
 
+
 static void _discard(void) {
     if (loaded_blob) {
         free(loaded_blob);
@@ -38,7 +39,12 @@ static void _discard(void) {
     memset(&loaded_font, 0, sizeof(loaded_font));
 }
 
-static bool _font_map_reserve(font_map_t **map, size_t *count, size_t *capacity, size_t needed) {
+static bool _font_map_reserve(
+    font_map_t **map,
+    size_t *count,
+    size_t *capacity,
+    size_t needed
+) {
     if (*capacity >= needed) {
         return true;
     }
@@ -65,8 +71,13 @@ static bool _font_map_reserve(font_map_t **map, size_t *count, size_t *capacity,
     return true;
 }
 
-static bool
-_font_map_push(font_map_t **map, size_t *count, size_t *capacity, u32 codepoint, u32 glyph) {
+static bool _font_map_push(
+    font_map_t **map,
+    size_t *count,
+    size_t *capacity,
+    u32 codepoint,
+    u32 glyph
+) {
     if (codepoint == 0xffff || codepoint == 0xfffe) {
         return true;
     }
@@ -146,6 +157,7 @@ static bool _parse_psf1_unicode(
             if (code == 0xffffU) {
                 break;
             }
+
             if (code == 0xfffeU) {
                 continue;
             }
@@ -202,9 +214,13 @@ bool psf_load(const char *path) {
     if (blob_info.flags & PSF_BLOB_UNICODE) {
         bool ok = true;
         if (blob_info.type == PSF_TYPE_2) {
-            ok = _parse_psf2_unicode(&blob_info, &map, &map_count, &map_capacity);
+            ok = _parse_psf2_unicode(
+                &blob_info, &map, &map_count, &map_capacity
+            );
         } else if (blob_info.type == PSF_TYPE_1) {
-            ok = _parse_psf1_unicode(&blob_info, &map, &map_count, &map_capacity);
+            ok = _parse_psf1_unicode(
+                &blob_info, &map, &map_count, &map_capacity
+            );
         }
 
         if (!ok) {

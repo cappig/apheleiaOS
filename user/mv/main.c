@@ -11,7 +11,12 @@
 static void print_error(const char *src, const char *dst) {
     char line[320];
     snprintf(
-        line, sizeof(line), "mv: %s -> %s: %d\n", src ? src : "(null)", dst ? dst : "(null)", errno
+        line,
+        sizeof(line),
+        "mv: %s -> %s: %d\n",
+        src ? src : "(null)",
+        dst ? dst : "(null)",
+        errno
     );
     io_write_str(line);
 }

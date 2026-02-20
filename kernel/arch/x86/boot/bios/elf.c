@@ -133,9 +133,6 @@ void load_kerenel(boot_info_t *info) {
         identity_map_64(PROTECTED_MODE_TOP, 0, false);
         identity_map_64(PROTECTED_MODE_TOP, LINEAR_MAP_OFFSET_64, true);
 
-        // Remap framebuffer pages as write-combining (2MiB granularity).
-        // PT_WRITE = (1<<1), PT_PAT_HUGE = (1<<12) — can't include
-        // x86/paging64.h here because of 32/64 mutual exclusion.
         if (info->video.mode == VIDEO_GRAPHICS && info->video.framebuffer) {
             u64 pitch = info->video.bytes_per_line;
             if (!pitch) {
@@ -144,15 +141,15 @@ void load_kerenel(boot_info_t *info) {
 
             u64 fb_size = pitch * info->video.height;
             if (fb_size) {
-                u64 page_2m = 2 * MIB;
-                u64 wc_flags = (1 << 1) | (1ULL << 12); // PT_WRITE | PT_PAT_HUGE
-                u64 fb_base = ALIGN_DOWN(info->video.framebuffer, page_2m);
-                u64 fb_end = ALIGN(info->video.framebuffer + fb_size, page_2m);
+                // PT_WRITE | PT_PAT_HUGE
+                u64 flags = (1 << 1) | (1ULL << 12);
 
-                for (u64 addr = fb_base; addr < fb_end && addr < PROTECTED_MODE_TOP;
-                     addr += page_2m) {
-                    map_page_64(page_2m, addr, addr, wc_flags, false);
-                    map_page_64(page_2m, addr + LINEAR_MAP_OFFSET_64, addr, wc_flags, true);
+                u64 fb_base = ALIGN_DOWN(info->video.framebuffer, 2*MIB);
+                u64 fb_end = ALIGN(info->video.framebuffer + fb_size, 2*MIB);
+
+                for (u64 a = fb_base; a < fb_end && a < PROTECTED_MODE_TOP; a += 2*MIB) {
+                    map_page_64(2*MIB, a, a, flags, false);
+                    map_page_64(2*MIB, a + LINEAR_MAP_OFFSET_64, a, flags, true);
                 }
             }
         }
@@ -161,7 +158,8 @@ void load_kerenel(boot_info_t *info) {
 
         init_paging_64();
 
-        u64 stack_paddr = (u64)(uintptr_t)mmap_alloc(KERNEL_STACK_SIZE, E820_KERNEL, 0);
+        u64 stack_paddr =
+            (u64)(uintptr_t)mmap_alloc(KERNEL_STACK_SIZE, E820_KERNEL, 0);
         u64 stack = stack_paddr + KERNEL_STACK_SIZE + LINEAR_MAP_OFFSET_64;
 
         u64 boot_info = (uintptr_t)info + LINEAR_MAP_OFFSET_64;

@@ -16,4 +16,5 @@ u8 mouse_register(const char *name);
 
 bool mouse_init(void);
 
-ssize_t mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags);
+ssize_t
+mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags);

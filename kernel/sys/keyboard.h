@@ -24,4 +24,10 @@ u8 keyboard_register(const char *name, ascii_keymap *keymap);
 
 void keyboard_handle_key(key_event event);
 
-ssize_t keyboard_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags);
+ssize_t keyboard_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+);

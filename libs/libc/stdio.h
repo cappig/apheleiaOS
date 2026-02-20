@@ -4,11 +4,11 @@
 #include <stddef.h>
 #include <sys/types.h>
 
-#define EOF      (-1)
-#define BUFSIZ   1024
+#define EOF          (-1)
+#define BUFSIZ       1024
 #define FILENAME_MAX 255
-#define L_tmpnam 20
-#define TMP_MAX  10000
+#define L_tmpnam     20
+#define TMP_MAX      10000
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -44,26 +44,49 @@ int vfprintf(FILE *stream, const char *restrict format, va_list vlist);
 int fprintf(FILE *restrict stream, const char *restrict format, ...)
     __attribute__((format(printf, 2, 3)));
 
-int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict format, va_list vlist);
+int vsnprintf(
+    char *restrict buffer,
+    size_t max_size,
+    const char *restrict format,
+    va_list vlist
+);
 int vsprintf(char *restrict buffer, const char *restrict format, va_list vlist);
 
-int snprintf(char *restrict buffer, size_t max_size, const char *restrict format, ...)
-    __attribute__((format(printf, 3, 4)));
+int snprintf(
+    char *restrict buffer,
+    size_t max_size,
+    const char *restrict format,
+    ...
+) __attribute__((format(printf, 3, 4)));
 int sprintf(char *restrict buffer, const char *restrict format, ...)
     __attribute__((format(printf, 2, 3)));
-int printf(const char *restrict format, ...) __attribute__((format(printf, 1, 2)));
+int printf(const char *restrict format, ...)
+    __attribute__((format(printf, 1, 2)));
 
 int getchar(void);
 int putchar(int ch);
 int puts(const char *str);
 void perror(const char *s);
 
-int vsscanf(const char *restrict str, const char *restrict format, va_list vlist);
+int vsscanf(
+    const char *restrict str,
+    const char *restrict format,
+    va_list vlist
+);
 
 #ifdef _APHELEIA_SOURCE
-int vsnscanf(const char *restrict str, size_t max, const char *restrict format, va_list vlist);
-int snscanf(const char *restrict str, size_t max, const char *restrict format, ...)
-    __attribute__((format(scanf, 3, 4)));
+int vsnscanf(
+    const char *restrict str,
+    size_t max,
+    const char *restrict format,
+    va_list vlist
+);
+int snscanf(
+    const char *restrict str,
+    size_t max,
+    const char *restrict format,
+    ...
+) __attribute__((format(scanf, 3, 4)));
 #endif
 int sscanf(const char *restrict str, const char *restrict format, ...)
     __attribute__((format(scanf, 2, 3)));

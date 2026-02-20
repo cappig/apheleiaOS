@@ -39,8 +39,13 @@ static size_t term_width(void) {
     return 80;
 }
 
-static int
-list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool opt_single) {
+static int list_dir(
+    const char *path,
+    bool opt_all,
+    bool opt_almost,
+    bool opt_long,
+    bool opt_single
+) {
     DIR *dir = opendir(path);
     if (!dir) {
         io_write_str("ls: failed to open\n");
@@ -52,7 +57,9 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
     size_t width_uname = 1;
     size_t width_gname = 1;
     size_t width_size = 1;
+
     struct dirent *ent = NULL;
+
     while ((ent = readdir(dir)) != NULL) {
         const char *name = ent->d_name;
 
@@ -78,13 +85,17 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
 
             char uid_buf[16];
             char gid_buf[16];
-            const char *uname = account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
-            const char *gname = account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
+
+            const char *uname =
+                account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
+
+            const char *gname =
+                account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
 
             size_t uname_len = strlen(uname);
             size_t gname_len = strlen(gname);
-            if (uname_len > width_uname) {
 
+            if (uname_len > width_uname) {
                 width_uname = uname_len;
             }
 
@@ -93,13 +104,17 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
             }
 
             char num_buf[32];
-            int num_len = snprintf(num_buf, sizeof(num_buf), "%lu", (unsigned long)st.st_nlink);
+            int num_len = snprintf(
+                num_buf, sizeof(num_buf), "%lu", (unsigned long)st.st_nlink
+            );
 
             if (num_len > 0 && (size_t)num_len > width_links) {
                 width_links = (size_t)num_len;
             }
 
-            num_len = snprintf(num_buf, sizeof(num_buf), "%llu", (unsigned long long)st.st_size);
+            num_len = snprintf(
+                num_buf, sizeof(num_buf), "%llu", (unsigned long long)st.st_size
+            );
 
             if (num_len > 0 && (size_t)num_len > width_size) {
                 width_size = (size_t)num_len;
@@ -147,8 +162,12 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
 
             char uid_buf[16];
             char gid_buf[16];
-            const char *uname = account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
-            const char *gname = account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
+
+            const char *uname =
+                account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
+
+            const char *gname =
+                account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
 
             snprintf(
                 line,

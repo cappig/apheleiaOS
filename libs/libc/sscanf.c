@@ -100,7 +100,12 @@ static void _adjust_width(int base, const char *restrict str, int *width) {
 }
 
 
-int vsnscanf(const char *restrict str, size_t max, const char *restrict format, va_list vlist) {
+int vsnscanf(
+    const char *restrict str,
+    size_t max,
+    const char *restrict format,
+    va_list vlist
+) {
     size_t filled = 0;
     size_t j = 0;
 
