@@ -1625,6 +1625,8 @@ ssize_t ws_fb_write(u32 id, const void *buf, size_t offset, size_t len, u32 flag
 void ws_notify_screen_active(void) {
     lock(&ws_lock);
 
+    _queue_manager_event(WS_EVT_SCREEN_ACTIVE, 0, NULL);
+
     for (u32 i = 0; i < ws_state.window_capacity; i++) {
         ws_window_t *window = _window_slot(i);
         if (!window || !window->allocated) {

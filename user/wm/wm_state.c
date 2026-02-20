@@ -23,6 +23,8 @@ static wm_window_t **render_order;
 static size_t render_order_capacity;
 static size_t render_order_count;
 static bool render_order_dirty = true;
+static bool focused_window_valid;
+static u32 focused_window_id;
 static wm_palette_t wm_palette = {
     .background = 0x00202020U,
     .border = 0x00c0c0c0U,
@@ -139,6 +141,9 @@ static void _window_remove_at(size_t index) {
 
     windows->size--;
     _window_index_remove(removed_id);
+    if (focused_window_valid && focused_window_id == removed_id) {
+        focused_window_valid = false;
+    }
 }
 
 static framebuffer_t _wrap_framebuffer(pixel_t *pixels, u32 width, u32 height) {
@@ -180,10 +185,6 @@ static void _init_font(void) {
         if (!font_buf) {
             return;
         }
-    }
-
-    if (_load_font_file("/boot/font.psf")) {
-        return;
     }
 
     if (_load_font_file("/etc/font.psf")) {
@@ -301,6 +302,30 @@ static bool _point_in_window(const wm_window_t *window, i32 px, i32 py) {
     );
 }
 
+static bool _window_title_rect(const wm_window_t *window, wm_rect_t *rect) {
+    if (!window || !rect) {
+        return false;
+    }
+
+    rect->x = window->x;
+    rect->y = window->y;
+    rect->width = (i32)window->width;
+    rect->height = TITLE_H;
+    return wm_rect_valid(rect);
+}
+
+static bool _window_client_rect(const wm_window_t *window, wm_rect_t *rect) {
+    if (!window || !rect) {
+        return false;
+    }
+
+    rect->x = window->x;
+    rect->y = window->y + TITLE_H;
+    rect->width = (i32)window->width;
+    rect->height = (i32)window->height;
+    return wm_rect_valid(rect);
+}
+
 static int _compare_window_z(const void *lhs, const void *rhs) {
     if (!lhs || !rhs) {
         return 0;
@@ -362,6 +387,52 @@ static bool _render_order_ensure(size_t needed) {
     render_order = grown;
     render_order_capacity = new_capacity;
     return true;
+}
+
+static bool _render_order_refresh(void) {
+    size_t count = windows ? windows->size : 0;
+    if (!count) {
+        render_order_count = 0;
+        render_order_dirty = false;
+        return true;
+    }
+
+    if (!_render_order_ensure(count)) {
+        return false;
+    }
+
+    if (!render_order_dirty && render_order_count == count) {
+        return true;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        render_order[i] = vec_at(windows, i);
+    }
+
+    _sort_by_z(render_order, count);
+    render_order_count = count;
+    render_order_dirty = false;
+    return true;
+}
+
+static wm_window_t *_top_window_linear(bool at_point, i32 px, i32 py) {
+    wm_window_t *top = NULL;
+    if (!windows) {
+        return NULL;
+    }
+
+    for (size_t i = 0; i < windows->size; i++) {
+        wm_window_t *window = vec_at(windows, i);
+        if (at_point && !_point_in_window(window, px, py)) {
+            continue;
+        }
+
+        if (!top || window->z >= top->z) {
+            top = window;
+        }
+    }
+
+    return top;
 }
 
 static bool _rect_intersect(const wm_rect_t *a, const wm_rect_t *b, wm_rect_t *out) {
@@ -570,19 +641,10 @@ static void _window_mark_dirty(wm_window_t *window, u32 x, u32 y, u32 width, u32
         return;
     }
 
-    u32 x0 = window->dirty_x < x ? window->dirty_x : x;
-    u32 y0 = window->dirty_y < y ? window->dirty_y : y;
-    u32 x1 = window->dirty_x + window->dirty_width;
-    u32 y1 = window->dirty_y + window->dirty_height;
-    u32 nx1 = x + width;
-    u32 ny1 = y + height;
-
-    if (nx1 > x1) {
-        x1 = nx1;
-    }
-    if (ny1 > y1) {
-        y1 = ny1;
-    }
+    u32 x0 = min(window->dirty_x, x);
+    u32 y0 = min(window->dirty_y, y);
+    u32 x1 = max(window->dirty_x + window->dirty_width, x + width);
+    u32 y1 = max(window->dirty_y + window->dirty_height, y + height);
 
     window->dirty_x = x0;
     window->dirty_y = y0;
@@ -695,84 +757,185 @@ static bool _window_refresh_surface(wm_window_t *window) {
     return true;
 }
 
-static void
-_blit_window_region(
+static void _draw_window_title_region(
+    pixel_t *frame,
+    u32 fb_width,
+    u32 fb_height,
+    const wm_window_t *window,
+    const wm_rect_t *clip,
+    const wm_palette_t *palette
+) {
+    if (!frame || !window || !wm_rect_valid(clip) || !palette) {
+        return;
+    }
+
+    wm_rect_t title_rect = {0};
+    if (!_window_title_rect(window, &title_rect)) {
+        return;
+    }
+
+    wm_rect_t clip_title = {0};
+    if (!_rect_intersect(&title_rect, clip, &clip_title)) {
+        return;
+    }
+
+    framebuffer_t fb = _wrap_framebuffer(frame, fb_width, fb_height);
+    draw_rect(
+        &fb, title_rect.x, title_rect.y, (u32)title_rect.width, (u32)title_rect.height,
+        window->focused ? palette->title_focus : palette->title
+    );
+
+    wm_rect_t close_rect = {
+        .x = window->x + (i32)window->width - CLOSE_BTN_SIZE - 3,
+        .y = window->y + 3,
+        .width = CLOSE_BTN_SIZE,
+        .height = CLOSE_BTN_SIZE,
+    };
+    if (_rect_intersect(&close_rect, &clip_title, NULL)) {
+        _draw_close_button(frame, fb_width, fb_height, window, window->focused);
+    }
+
+    if (!window->title[0] || !title_font.width || !title_font.height) {
+        return;
+    }
+
+    size_t title_len = strnlen(window->title, MAX_TITLE_CHARS);
+    if (!title_len) {
+        return;
+    }
+
+    wm_rect_t text_rect = {
+        .x = window->x + 6,
+        .y = window->y + 1,
+        .width = (i32)(title_len * title_font.width),
+        .height = (i32)title_font.height,
+    };
+    if (_rect_intersect(&text_rect, &clip_title, NULL)) {
+        _draw_text(frame, fb_width, fb_height, text_rect.x, text_rect.y, window->title, palette->title_text);
+    }
+}
+
+static bool _copy_window_client_region(
+    pixel_t *frame,
+    u32 fb_width,
+    const wm_window_t *window,
+    const wm_rect_t *client_rect,
+    const wm_rect_t *clip_client,
+    u32 *copy_width_out,
+    u32 *copy_height_out
+) {
+    if (!frame || !window || !window->surface || !client_rect || !clip_client || !copy_width_out || !copy_height_out) {
+        return false;
+    }
+
+    i32 src_x = clip_client->x - client_rect->x;
+    i32 src_y = clip_client->y - client_rect->y;
+    if (src_x < 0 || src_y < 0) {
+        return false;
+    }
+
+    u32 surface_stride = window->surface_width;
+    u32 surface_rows = window->surface_height;
+    if (!surface_stride || !surface_rows) {
+        return false;
+    }
+
+    u32 valid_width = window->fb_width ? window->fb_width : window->width;
+    u32 valid_height = window->fb_height ? window->fb_height : window->height;
+    if (valid_width > surface_stride) {
+        valid_width = surface_stride;
+    }
+    if (valid_height > surface_rows) {
+        valid_height = surface_rows;
+    }
+
+    if ((u64)surface_stride * (u64)surface_rows > window->surface_pixels) {
+        u32 max_rows = (u32)(window->surface_pixels / surface_stride);
+        if (!max_rows) {
+            return false;
+        }
+
+        surface_rows = max_rows;
+        if (valid_height > surface_rows) {
+            valid_height = surface_rows;
+        }
+    }
+
+    u32 copy_width = 0;
+    u32 copy_height = 0;
+    if ((u32)src_x < valid_width && (u32)src_y < valid_height) {
+        copy_width = valid_width - (u32)src_x;
+        if (copy_width > (u32)clip_client->width) {
+            copy_width = (u32)clip_client->width;
+        }
+
+        copy_height = valid_height - (u32)src_y;
+        if (copy_height > (u32)clip_client->height) {
+            copy_height = (u32)clip_client->height;
+        }
+    }
+
+    if (copy_width && copy_height) {
+        size_t copy_bytes = (size_t)copy_width * sizeof(pixel_t);
+        for (u32 row = 0; row < copy_height; row++) {
+            size_t src_off = (size_t)(src_y + (i32)row) * surface_stride + (size_t)src_x;
+            size_t dst_off = (size_t)(clip_client->y + (i32)row) * fb_width + (size_t)clip_client->x;
+            memcpy(frame + dst_off, window->surface + src_off, copy_bytes);
+        }
+    }
+
+    *copy_width_out = copy_width;
+    *copy_height_out = copy_height;
+    return true;
+}
+
+static void _fill_window_client_gap(
+    framebuffer_t *fb,
+    const wm_rect_t *clip_client,
+    u32 copy_width,
+    u32 copy_height,
+    pixel_t color
+) {
+    if (!fb || !clip_client) {
+        return;
+    }
+
+    if (copy_width < (u32)clip_client->width) {
+        draw_rect(
+            fb,
+            clip_client->x + (i32)copy_width,
+            clip_client->y,
+            (u32)clip_client->width - copy_width,
+            (u32)clip_client->height,
+            color
+        );
+    }
+
+    if (copy_height < (u32)clip_client->height) {
+        draw_rect(
+            fb, clip_client->x, clip_client->y + (i32)copy_height, copy_width,
+            (u32)clip_client->height - copy_height, color
+        );
+    }
+}
+
+static void _draw_window_client_region(
     pixel_t *frame,
     u32 fb_width,
     u32 fb_height,
     wm_window_t *window,
-    const wm_rect_t *clip
+    const wm_rect_t *clip,
+    const wm_palette_t *palette
 ) {
-    if (!frame || !window || !wm_rect_valid(clip)) {
+    if (!frame || !window || !wm_rect_valid(clip) || !palette) {
         return;
     }
 
-    const wm_palette_t *palette = wm_palette_get();
     framebuffer_t fb = _wrap_framebuffer(frame, fb_width, fb_height);
-
-    wm_rect_t window_bounds = {0};
-    if (!wm_window_bounds_rect(window, &window_bounds)) {
+    wm_rect_t client_rect = {0};
+    if (!_window_client_rect(window, &client_rect)) {
         return;
     }
-
-    wm_rect_t clip_window = {0};
-    if (!_rect_intersect(&window_bounds, clip, &clip_window)) {
-        return;
-    }
-
-    wm_rect_t title_rect = {
-        .x = window->x,
-        .y = window->y,
-        .width = (i32)window->width,
-        .height = TITLE_H,
-    };
-
-    wm_rect_t clip_title = {0};
-    if (_rect_intersect(&title_rect, clip, &clip_title)) {
-        draw_rect(
-            &fb, window->x, window->y, window->width, TITLE_H, window->focused ? palette->title_focus : palette->title
-        );
-
-        wm_rect_t close_rect = {
-            .x = window->x + (i32)window->width - CLOSE_BTN_SIZE - 3,
-            .y = window->y + 3,
-            .width = CLOSE_BTN_SIZE,
-            .height = CLOSE_BTN_SIZE,
-        };
-        if (_rect_intersect(&close_rect, &clip_title, NULL)) {
-            _draw_close_button(frame, fb_width, fb_height, window, window->focused);
-        }
-
-        if (window->title[0] && title_font.width && title_font.height) {
-            size_t title_len = strnlen(window->title, MAX_TITLE_CHARS);
-            if (title_len) {
-                wm_rect_t text_rect = {
-                    .x = window->x + 6,
-                    .y = window->y + 1,
-                    .width = (i32)(title_len * title_font.width),
-                    .height = (i32)title_font.height,
-                };
-                if (_rect_intersect(&text_rect, &clip_title, NULL)) {
-                    _draw_text(
-                        frame,
-                        fb_width,
-                        fb_height,
-                        text_rect.x,
-                        text_rect.y,
-                        window->title,
-                        palette->title_text
-                    );
-                }
-            }
-        }
-    }
-
-    wm_rect_t client_rect = {
-        .x = window->x,
-        .y = window->y + TITLE_H,
-        .width = (i32)window->width,
-        .height = (i32)window->height,
-    };
 
     wm_rect_t clip_client = {0};
     if (!_rect_intersect(&client_rect, clip, &clip_client)) {
@@ -793,16 +956,11 @@ _blit_window_region(
         return;
     }
 
-    i32 src_x = clip_client.x - client_rect.x;
-    i32 src_y = clip_client.y - client_rect.y;
-
-    if (src_x < 0 || src_y < 0) {
-        return;
-    }
-
-    u32 surface_stride = window->surface_width;
-    u32 surface_rows = window->surface_height;
-    if (!surface_stride || !surface_rows) {
+    u32 copy_width = 0;
+    u32 copy_height = 0;
+    if (!_copy_window_client_region(
+            frame, fb_width, window, &client_rect, &clip_client, &copy_width, &copy_height
+        )) {
         draw_rect(
             &fb, clip_client.x, clip_client.y, (u32)clip_client.width, (u32)clip_client.height,
             palette->client_bg
@@ -810,77 +968,33 @@ _blit_window_region(
         return;
     }
 
-    u32 valid_width = window->fb_width ? window->fb_width : window->width;
-    u32 valid_height = window->fb_height ? window->fb_height : window->height;
-    if (valid_width > surface_stride) {
-        valid_width = surface_stride;
-    }
-    if (valid_height > surface_rows) {
-        valid_height = surface_rows;
-    }
+    _fill_window_client_gap(&fb, &clip_client, copy_width, copy_height, palette->client_bg);
+}
 
-    if ((u64)surface_stride * (u64)surface_rows > window->surface_pixels) {
-        u32 max_rows = (u32)(window->surface_pixels / surface_stride);
-        if (!max_rows) {
-            draw_rect(
-                &fb, clip_client.x, clip_client.y, (u32)clip_client.width, (u32)clip_client.height,
-                palette->client_bg
-            );
-            return;
-        }
-
-        surface_rows = max_rows;
-        if (valid_height > surface_rows) {
-            valid_height = surface_rows;
-        }
+static void
+_blit_window_region(
+    pixel_t *frame,
+    u32 fb_width,
+    u32 fb_height,
+    wm_window_t *window,
+    const wm_rect_t *clip
+) {
+    if (!frame || !window || !wm_rect_valid(clip)) {
+        return;
     }
 
-    u32 copy_width = 0;
-    u32 copy_height = 0;
-
-    if ((u32)src_x < valid_width && (u32)src_y < valid_height) {
-        copy_width = valid_width - (u32)src_x;
-        if (copy_width > (u32)clip_client.width) {
-            copy_width = (u32)clip_client.width;
-        }
-
-        copy_height = valid_height - (u32)src_y;
-        if (copy_height > (u32)clip_client.height) {
-            copy_height = (u32)clip_client.height;
-        }
+    wm_rect_t window_bounds = {0};
+    if (!wm_window_bounds_rect(window, &window_bounds)) {
+        return;
     }
 
-    if (copy_width && copy_height) {
-        size_t copy_bytes = (size_t)copy_width * sizeof(pixel_t);
-
-        for (u32 row = 0; row < copy_height; row++) {
-            size_t src_off = (size_t)(src_y + (i32)row) * surface_stride + (size_t)src_x;
-            size_t dst_off = (size_t)(clip_client.y + (i32)row) * fb_width + (size_t)clip_client.x;
-            memcpy(frame + dst_off, window->surface + src_off, copy_bytes);
-        }
+    if (!_rect_intersect(&window_bounds, clip, NULL)) {
+        return;
     }
 
-    if (copy_width < (u32)clip_client.width) {
-        draw_rect(
-            &fb,
-            clip_client.x + (i32)copy_width,
-            clip_client.y,
-            (u32)clip_client.width - copy_width,
-            (u32)clip_client.height,
-            palette->client_bg
-        );
-    }
-
-    if (copy_height < (u32)clip_client.height) {
-        draw_rect(
-            &fb,
-            clip_client.x,
-            clip_client.y + (i32)copy_height,
-            copy_width,
-            (u32)clip_client.height - copy_height,
-            palette->client_bg
-        );
-    }
+    const wm_palette_t *palette = wm_palette_get();
+    _draw_window_title_region(frame, fb_width, fb_height, window, clip, palette);
+    _draw_window_client_region(frame, fb_width, fb_height, window, clip, palette);
 }
 
 void wm_init(void) {
@@ -889,6 +1003,8 @@ void wm_init(void) {
     window_index = hashmap_create();
     render_order_count = 0;
     render_order_dirty = true;
+    focused_window_valid = false;
+    focused_window_id = 0;
 }
 
 void wm_destroy(void) {
@@ -908,6 +1024,8 @@ void wm_destroy(void) {
     render_order_capacity = 0;
     render_order_count = 0;
     render_order_dirty = true;
+    focused_window_valid = false;
+    focused_window_id = 0;
 }
 
 wm_window_t *wm_window_by_id(u32 id) {
@@ -1001,35 +1119,33 @@ void wm_collect_raise_damage(const wm_window_t *window, u32 old_z, wm_rect_t *da
 }
 
 wm_window_t *wm_top_window_at(i32 px, i32 py) {
-    wm_window_t *top = NULL;
-
-    for (size_t i = 0; i < windows->size; i++) {
-        wm_window_t *window = vec_at(windows, i);
-
-        if (!_point_in_window(window, px, py)) {
-            continue;
-        }
-
-        if (!top || window->z >= top->z) {
-            top = window;
-        }
+    if (!windows || !windows->size) {
+        return NULL;
     }
 
-    return top;
+    if (_render_order_refresh()) {
+        for (size_t i = render_order_count; i > 0; i--) {
+            wm_window_t *window = render_order[i - 1];
+            if (_point_in_window(window, px, py)) {
+                return window;
+            }
+        }
+        return NULL;
+    }
+
+    return _top_window_linear(true, px, py);
 }
 
 wm_window_t *wm_top_window(void) {
-    wm_window_t *top = NULL;
-
-    for (size_t i = 0; i < windows->size; i++) {
-        wm_window_t *window = vec_at(windows, i);
-
-        if (!top || window->z >= top->z) {
-            top = window;
-        }
+    if (!windows || !windows->size) {
+        return NULL;
     }
 
-    return top;
+    if (_render_order_refresh()) {
+        return render_order_count ? render_order[render_order_count - 1] : NULL;
+    }
+
+    return _top_window_linear(false, 0, 0);
 }
 
 void wm_set_focus(ui_t *ui, wm_window_t *window, u32 *z_counter) {
@@ -1045,12 +1161,24 @@ void wm_set_focus(ui_t *ui, wm_window_t *window, u32 *z_counter) {
         render_order_dirty = true;
     }
 
-    for (size_t i = 0; i < windows->size; i++) {
-        wm_window_t *w = vec_at(windows, i);
-        w->focused = false;
+    if (focused_window_valid && focused_window_id != window->id) {
+        size_t focused_index = 0;
+        if (_window_index_get(focused_window_id, &focused_index) && focused_index < windows->size) {
+            wm_window_t *focused = vec_at(windows, focused_index);
+            if (focused && focused->id == focused_window_id) {
+                focused->focused = false;
+            } else {
+                _window_index_remove(focused_window_id);
+                focused_window_valid = false;
+            }
+        } else {
+            focused_window_valid = false;
+        }
     }
 
     window->focused = true;
+    focused_window_valid = true;
+    focused_window_id = window->id;
 }
 
 bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage) {
@@ -1207,7 +1335,7 @@ void wm_render_damage(pixel_t *frame, u32 fb_width, u32 fb_height, const wm_rect
         return;
     }
 
-    if (!_render_order_ensure(count)) {
+    if (!_render_order_refresh()) {
         for (size_t i = 0; i < count; i++) {
             wm_window_t *window = vec_at(windows, i);
             _blit_window_region(frame, fb_width, fb_height, window, &clip);
@@ -1215,16 +1343,7 @@ void wm_render_damage(pixel_t *frame, u32 fb_width, u32 fb_height, const wm_rect
         return;
     }
 
-    if (render_order_dirty || render_order_count != count) {
-        for (size_t i = 0; i < count; i++) {
-            render_order[i] = vec_at(windows, i);
-        }
-        _sort_by_z(render_order, count);
-        render_order_count = count;
-        render_order_dirty = false;
-    }
-
-    for (size_t i = 0; i < count; i++) {
+    for (size_t i = 0; i < render_order_count; i++) {
         _blit_window_region(frame, fb_width, fb_height, render_order[i], &clip);
     }
 }
@@ -1249,4 +1368,6 @@ void wm_cleanup_all_windows(void) {
     _window_index_clear();
     render_order_count = 0;
     render_order_dirty = true;
+    focused_window_valid = false;
+    focused_window_id = 0;
 }

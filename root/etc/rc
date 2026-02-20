@@ -1,4 +1,4 @@
 # apheleiaOS rc
 
-echo rc: booting system
-uname -a
+# mkdir -p /tmp /var /var/log /var/run
+# chmod 1777 /tmp

@@ -77,7 +77,8 @@ def prepare_root_tree(src_root: Path, dst_root: Path) -> None:
 
     chmod_if_exists("etc/passwd", 0o644)
     chmod_if_exists("etc/group", 0o644)
-    chmod_if_exists("etc/loader.conf", 0o644)
+    chmod_if_exists("etc/font.psf", 0o644)
+    chmod_if_exists("boot/loader.conf", 0o644)
     chmod_if_exists("etc/shadow", 0o600)
     chmod_if_exists("dev", 0o755)
     chmod_if_exists("home", 0o755)
@@ -92,7 +93,7 @@ def prepare_root_tree(src_root: Path, dst_root: Path) -> None:
         except (PermissionError, OSError):
             pass
 
-    for rel in ("etc/passwd", "etc/group", "etc/loader.conf", "etc/shadow", "dev", "home"):
+    for rel in ("etc/passwd", "etc/group", "etc/font.psf", "boot/loader.conf", "etc/shadow", "dev", "home"):
         chown_if_exists(rel, 0, 0)
 
     chown_if_exists("home/user", 1000, 1000)
@@ -542,7 +543,7 @@ def build_ext2_image(
         free_inodes = inode_count - len(used_inodes)
         dir_count = sum(1 for n in inode_map.values() if n.is_dir)
 
-        # Group descriptor in this codebase's expected packed format.
+        # Group descriptor
         gd = bytearray(38)
         struct.pack_into("<I", gd, 0, block_bitmap_block)
         struct.pack_into("<I", gd, 4, inode_bitmap_block)
@@ -553,7 +554,7 @@ def build_ext2_image(
         gdt_off = gdt_block * block_size
         alloc.image[gdt_off : gdt_off + len(gd)] = gd
 
-        # Superblock at offset 1024.
+        # Superblock at offset 1024
         sb = bytearray(1024)
         now = int(time.time())
         first_data_block = 1 if block_size == 1024 else 0

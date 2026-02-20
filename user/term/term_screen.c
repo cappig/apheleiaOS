@@ -84,10 +84,6 @@ static bool init_font(void) {
         }
     }
 
-    if (load_font_file("/boot/font.psf")) {
-        return true;
-    }
-
     if (load_font_file("/etc/font.psf")) {
         return true;
     }

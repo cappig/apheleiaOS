@@ -21,7 +21,7 @@ enum video_mode : u8 {
 #define BOOT_DEFAULT_VESA_WIDTH  -1
 #define BOOT_DEFAULT_VESA_HEIGHT -1
 #define BOOT_DEFAULT_VESA_BPP    32
-#define BOOT_DEFAULT_FONT        "/boot/font.psf"
+#define BOOT_DEFAULT_FONT        "/etc/font.psf"
 
 typedef struct PACKED {
     u8 debug;

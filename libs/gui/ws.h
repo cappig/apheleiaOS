@@ -9,6 +9,7 @@ enum ws_event_type {
     WS_EVT_WINDOW_NEW = 1,
     WS_EVT_WINDOW_CLOSED = 2,
     WS_EVT_WINDOW_DIRTY = 3,
+    WS_EVT_SCREEN_ACTIVE = 4,
 };
 
 enum ws_window_flags {

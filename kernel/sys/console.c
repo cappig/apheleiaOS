@@ -1453,17 +1453,76 @@ static void _write_screen_locked(size_t screen_index, const char *buf, size_t le
     }
 }
 
-static void _free_screens(void) {
-    if (console_state.screens && console_state.screens != &console_state.fallback_screen) {
-        free(console_state.screens);
+static void _clamp_screen_positions(console_screen_t *screen, size_t cols, size_t rows) {
+    if (!screen) {
+        return;
     }
 
-    if (console_state.cells) {
-        free(console_state.cells);
+    if (!cols || !rows) {
+        screen->cursor_x = 0;
+        screen->cursor_y = 0;
+        screen->saved_cursor_x = 0;
+        screen->saved_cursor_y = 0;
+        screen->saved_cursor_valid = false;
+        return;
     }
 
-    console_state.screens = NULL;
-    console_state.cells = NULL;
+    if (screen->cursor_x >= cols) {
+        screen->cursor_x = cols - 1;
+    }
+    if (screen->cursor_y >= rows) {
+        screen->cursor_y = rows - 1;
+    }
+
+    if (screen->saved_cursor_valid) {
+        if (screen->saved_cursor_x >= cols) {
+            screen->saved_cursor_x = cols - 1;
+        }
+        if (screen->saved_cursor_y >= rows) {
+            screen->saved_cursor_y = rows - 1;
+        }
+    }
+}
+
+static void _preserve_screens(
+    const console_screen_t *old_screens,
+    size_t old_screen_count,
+    const console_cell_t *old_cells,
+    size_t old_cols,
+    size_t old_rows
+) {
+    if (!old_screens || !console_state.screens || !console_state.screen_count) {
+        return;
+    }
+
+    size_t copy_screens = min(old_screen_count, console_state.screen_count);
+    size_t new_cols = console_state.cols;
+    size_t new_rows = console_state.rows;
+    size_t copy_cols = min(old_cols, new_cols);
+    size_t copy_rows = min(old_rows, new_rows);
+    size_t old_stride = old_cols * old_rows;
+    size_t new_stride = _cell_count();
+
+    for (size_t i = 0; i < copy_screens; i++) {
+        console_screen_t *dst_screen = &console_state.screens[i];
+        const console_screen_t *src_screen = &old_screens[i];
+        *dst_screen = *src_screen;
+        _clamp_screen_positions(dst_screen, new_cols, new_rows);
+
+        if (dst_screen->utf8_pending_len > sizeof(dst_screen->utf8_pending)) {
+            dst_screen->utf8_pending_len = 0;
+        }
+
+        if (!old_cells || !console_state.cells || !copy_cols || !copy_rows || !old_stride || !new_stride) {
+            continue;
+        }
+
+        const console_cell_t *src_cells = old_cells + i * old_stride;
+        console_cell_t *dst_cells = console_state.cells + i * new_stride;
+        for (size_t row = 0; row < copy_rows; row++) {
+            memcpy(dst_cells + row * new_cols, src_cells + row * old_cols, copy_cols * sizeof(*dst_cells));
+        }
+    }
 }
 
 static void _init_screens(size_t active_screen) {
@@ -1565,10 +1624,26 @@ void console_set_font(const font_t *font) {
         return;
     }
 
+    console_screen_t *old_screens = console_state.screens;
+    console_cell_t *old_cells = console_state.cells;
+    size_t old_screen_count = console_state.screen_count;
+    bool free_old_screens = old_screens && old_screens != &console_state.fallback_screen;
+    bool free_old_cells = old_cells != NULL;
     size_t active = console_state.active_screen;
 
-    _free_screens();
+    console_state.screens = NULL;
+    console_state.cells = NULL;
+    console_state.screen_count = 0;
     _init_screens(active);
+    _preserve_screens(old_screens, old_screen_count, old_cells, old_cols, old_rows);
+
+    if (free_old_screens) {
+        free(old_screens);
+    }
+    if (free_old_cells) {
+        free(old_cells);
+    }
+
     _redraw_screen(console_state.active_screen);
 }
 

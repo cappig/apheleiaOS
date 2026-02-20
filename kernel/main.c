@@ -8,6 +8,7 @@
 #include <sys/framebuffer.h>
 #include <sys/init.h>
 #include <sys/keyboard.h>
+#include <sys/console.h>
 #include <sys/logsink.h>
 #include <sys/mouse.h>
 #include <sys/psf.h>
@@ -53,10 +54,15 @@ NORETURN void kernel_main(void *boot_info) {
     }
 
     const char *font_path = args ? args->font : NULL;
+    size_t text_cols = 0;
+    size_t text_rows = 0;
+    bool had_text_grid = console_get_size(&text_cols, &text_rows) && text_cols && text_rows;
 
     if (font_path && font_path[0]) {
         if (!psf_load(font_path)) {
             log_warn("failed to load console font '%s'", font_path);
+        } else if (!had_text_grid) {
+            arch_log_replay_console();
         }
     }
 

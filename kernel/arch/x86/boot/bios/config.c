@@ -95,10 +95,10 @@ void parse_config(kernel_args_t *args) {
     strncpy(args->font, BOOT_DEFAULT_FONT, sizeof(args->font) - 1);
     args->font[sizeof(args->font) - 1] = '\0';
 
-    void *config = read_rootfs("/etc/loader.conf");
+    void *config = read_rootfs("/boot/loader.conf");
 
     if (!config) {
-        puts("/etc/loader.conf not found, using defaults\r\n");
+        puts("/boot/loader.conf not found, using defaults\r\n");
         return;
     }
 

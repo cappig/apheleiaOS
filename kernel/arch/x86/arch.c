@@ -35,7 +35,7 @@
 #include <x86/serial.h>
 #include <x86/tsc.h>
 
-#define LOG_BOOT_HISTORY_CAP    (64 * 512)
+#define LOG_BOOT_HISTORY_CAP    (256 * 1024)
 #define BOOT_ROOTFS_SECTOR_SIZE 512
 
 static bool log_console_ready = false;
@@ -81,6 +81,10 @@ static void _log_history_replay_console(void) {
     }
 
     console_write_screen(TTY_CONSOLE, boot_log_history, boot_log_history_len);
+}
+
+void arch_log_replay_console(void) {
+    _log_history_replay_console();
 }
 
 static void _log_write_early(const char *s, size_t len) {
