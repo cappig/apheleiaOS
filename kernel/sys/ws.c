@@ -29,6 +29,9 @@ typedef struct {
     u32 width;
     u32 height;
     u32 stride;
+    u32 io_width;
+    u32 io_height;
+    u32 io_stride;
     u32 z;
     u32 flags;
     u8 *fb;
@@ -37,6 +40,7 @@ typedef struct {
     u32 fb_store_stride;
     size_t fb_store_size;
     size_t fb_size;
+    size_t io_fb_size;
     size_t fb_capacity;
     volatile int fb_io_lock;
     u32 io_refs;
@@ -468,24 +472,24 @@ static void _queue_manager_dirty_event(
     sched_wake_all(&ws_state.mgr_wait);
 }
 
-static void _queue_manager_dirty_write(u32 id, ws_window_t *window, size_t offset, size_t len) {
-    if (!window || !len || window->width == 0) {
+static void _queue_manager_dirty_write(u32 id, ws_window_t *window, size_t offset, size_t len, u32 view_width) {
+    if (!window || !len || !view_width) {
         return;
     }
 
     size_t start_pixel = offset / sizeof(u32);
     size_t end_pixel = (offset + len - 1) / sizeof(u32);
 
-    u32 y0 = (u32)(start_pixel / window->width);
-    u32 x0 = (u32)(start_pixel % window->width);
-    u32 y1 = (u32)(end_pixel / window->width);
-    u32 x1 = (u32)(end_pixel % window->width);
+    u32 y0 = (u32)(start_pixel / view_width);
+    u32 x0 = (u32)(start_pixel % view_width);
+    u32 y1 = (u32)(end_pixel / view_width);
+    u32 x1 = (u32)(end_pixel % view_width);
 
     if (y0 == y1) {
         _queue_manager_dirty_event(id, window, x0, y0, x1 - x0 + 1, 1);
         return;
     }
-    _queue_manager_dirty_event(id, window, 0, y0, window->width, y1 - y0 + 1);
+    _queue_manager_dirty_event(id, window, 0, y0, view_width, y1 - y0 + 1);
 }
 
 static void _finalize_window_free(u32 id, bool notify_manager) {
@@ -711,15 +715,22 @@ static size_t _copy_len(size_t size, size_t offset, size_t len) {
     return copy_len;
 }
 
-static void _copy_from_store(const ws_window_t *window, void *dst, size_t offset, size_t len) {
-    if (!window || !window->fb || !dst || !len || !window->stride || !window->fb_store_stride) {
+static void _copy_from_store(
+    const ws_window_t *window,
+    void *dst,
+    size_t offset,
+    size_t len,
+    u32 view_height,
+    u32 view_stride
+) {
+    if (!window || !window->fb || !dst || !len || !view_height || !view_stride || !window->fb_store_stride) {
         return;
     }
 
-    size_t view_stride = (size_t)window->stride;
+    size_t view_stride_bytes = (size_t)view_stride;
     size_t store_stride = (size_t)window->fb_store_stride;
 
-    if (view_stride == store_stride) {
+    if (view_stride_bytes == store_stride) {
         memcpy(dst, window->fb + offset, len);
         return;
     }
@@ -729,13 +740,13 @@ static void _copy_from_store(const ws_window_t *window, void *dst, size_t offset
     size_t remaining = len;
 
     while (remaining > 0) {
-        size_t row = offset / view_stride;
-        size_t col = offset % view_stride;
-        if (row >= window->height) {
+        size_t row = offset / view_stride_bytes;
+        size_t col = offset % view_stride_bytes;
+        if (row >= view_height) {
             break;
         }
 
-        size_t chunk = view_stride - col;
+        size_t chunk = view_stride_bytes - col;
         if (chunk > remaining) {
             chunk = remaining;
         }
@@ -749,15 +760,22 @@ static void _copy_from_store(const ws_window_t *window, void *dst, size_t offset
     }
 }
 
-static void _copy_to_store(ws_window_t *window, const void *src, size_t offset, size_t len) {
-    if (!window || !window->fb || !src || !len || !window->stride || !window->fb_store_stride) {
+static void _copy_to_store(
+    ws_window_t *window,
+    const void *src,
+    size_t offset,
+    size_t len,
+    u32 view_height,
+    u32 view_stride
+) {
+    if (!window || !window->fb || !src || !len || !view_height || !view_stride || !window->fb_store_stride) {
         return;
     }
 
-    size_t view_stride = (size_t)window->stride;
+    size_t view_stride_bytes = (size_t)view_stride;
     size_t store_stride = (size_t)window->fb_store_stride;
 
-    if (view_stride == store_stride) {
+    if (view_stride_bytes == store_stride) {
         memcpy(window->fb + offset, src, len);
         return;
     }
@@ -767,13 +785,13 @@ static void _copy_to_store(ws_window_t *window, const void *src, size_t offset, 
     size_t remaining = len;
 
     while (remaining > 0) {
-        size_t row = offset / view_stride;
-        size_t col = offset % view_stride;
-        if (row >= window->height) {
+        size_t row = offset / view_stride_bytes;
+        size_t col = offset % view_stride_bytes;
+        if (row >= view_height) {
             break;
         }
 
-        size_t chunk = view_stride - col;
+        size_t chunk = view_stride_bytes - col;
         if (chunk > remaining) {
             chunk = remaining;
         }
@@ -886,6 +904,9 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     window->width = cmd->width;
     window->height = cmd->height;
     window->stride = (u32)stride;
+    window->io_width = cmd->width;
+    window->io_height = cmd->height;
+    window->io_stride = (u32)stride;
     window->fb_store_width = cmd->width;
     window->fb_store_height = cmd->height;
     window->fb_store_stride = (u32)stride;
@@ -893,6 +914,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     window->z = free_id;
     window->flags = cmd->flags | WS_WINDOW_MAPPED;
     window->fb_size = (size_t)fb_size_u64;
+    window->io_fb_size = (size_t)fb_size_u64;
     window->fb_capacity = (size_t)fb_size_u64;
 
     strncpy(window->title, cmd->title, sizeof(window->title) - 1);
@@ -1518,7 +1540,12 @@ ssize_t ws_fb_read(u32 id, void *buf, size_t offset, size_t len, u32 flags) {
         return status;
     }
 
-    size_t copy_len = _copy_len(window->fb_size, offset, len);
+    bool is_manager = _is_manager(caller_pid);
+    u32 view_height = is_manager ? window->height : window->io_height;
+    u32 view_stride = is_manager ? window->stride : window->io_stride;
+    size_t view_size = is_manager ? window->fb_size : window->io_fb_size;
+
+    size_t copy_len = _copy_len(view_size, offset, len);
     if (!copy_len) {
         unlock(&ws_lock);
         return VFS_EOF;
@@ -1528,7 +1555,7 @@ ssize_t ws_fb_read(u32 id, void *buf, size_t offset, size_t len, u32 flags) {
     unlock(&ws_lock);
 
     lock(&window->fb_io_lock);
-    _copy_from_store(window, buf, offset, copy_len);
+    _copy_from_store(window, buf, offset, copy_len, view_height, view_stride);
     unlock(&window->fb_io_lock);
 
     lock(&ws_lock);
@@ -1559,7 +1586,13 @@ ssize_t ws_fb_write(u32 id, const void *buf, size_t offset, size_t len, u32 flag
         return status;
     }
 
-    size_t copy_len = _copy_len(window->fb_size, offset, len);
+    bool is_manager = _is_manager(caller_pid);
+    u32 view_width = is_manager ? window->width : window->io_width;
+    u32 view_height = is_manager ? window->height : window->io_height;
+    u32 view_stride = is_manager ? window->stride : window->io_stride;
+    size_t view_size = is_manager ? window->fb_size : window->io_fb_size;
+
+    size_t copy_len = _copy_len(view_size, offset, len);
     if (!copy_len) {
         unlock(&ws_lock);
         return VFS_EOF;
@@ -1574,14 +1607,14 @@ ssize_t ws_fb_write(u32 id, const void *buf, size_t offset, size_t len, u32 flag
     unlock(&ws_lock);
 
     lock(&window->fb_io_lock);
-    _copy_to_store(window, buf, offset, copy_len);
+    _copy_to_store(window, buf, offset, copy_len, view_height, view_stride);
     unlock(&window->fb_io_lock);
 
     stats_add_ws_fb_write_bytes((u64)copy_len);
     stats_add_wm_dirty_pixels((u64)(copy_len / 4));
 
     lock(&ws_lock);
-    _queue_manager_dirty_write(id, window, offset, copy_len);
+    _queue_manager_dirty_write(id, window, offset, copy_len, view_width);
 
     _window_release_io(id, window);
     unlock(&ws_lock);
@@ -1680,8 +1713,24 @@ ssize_t ws_ev_read(u32 id, void *buf, size_t offset, size_t len, u32 flags) {
             return -EIO;
         }
 
+        bool apply_resize_ack = caller_pid == window->owner_pid;
+
         while (copied < max_events && window->ev_count > 0) {
-            out_events[copied] = window->ev_queue[window->ev_head];
+            ws_input_event_t event = window->ev_queue[window->ev_head];
+
+            if (apply_resize_ack && event.type == INPUT_EVENT_WINDOW_RESIZE && event.width &&
+                event.height) {
+                u32 io_stride = event.stride ? event.stride : event.width * sizeof(u32);
+                u64 io_fb_size_u64 = (u64)io_stride * (u64)event.height;
+                if (io_stride && io_fb_size_u64 <= WS_MAX_FB_BYTES) {
+                    window->io_width = event.width;
+                    window->io_height = event.height;
+                    window->io_stride = io_stride;
+                    window->io_fb_size = (size_t)io_fb_size_u64;
+                }
+            }
+
+            out_events[copied] = event;
             window->ev_head = (window->ev_head + 1) % window->ev_capacity;
             window->ev_count--;
             copied++;

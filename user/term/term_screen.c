@@ -519,10 +519,6 @@ bool term_screen_can_resize(u32 width, u32 height) {
         return false;
     }
 
-    if (width > TERM_MAX_W || height > TERM_MAX_H) {
-        return false;
-    }
-
     size_t cols = width / term_screen.font.width;
     size_t rows = height / term_screen.font.height;
     if (!cols || !rows || cols > TERM_MAX_COLS || rows > TERM_MAX_ROWS) {

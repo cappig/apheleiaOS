@@ -53,17 +53,17 @@ int main(int argc, char **argv) {
         login_path = argv[2];
     }
 
-    if (setsid() < 0) {
-        return 1;
-    }
+    (void)setsid();
 
     if (attach_tty(tty_path) < 0) {
         return 1;
     }
 
     pid_t self = getpid();
-    setpgid(0, self);
-    ioctl(STDIN_FILENO, TIOCSPGRP, &self);
+    if (self > 0) {
+        (void)setpgid(0, self);
+        (void)ioctl(STDIN_FILENO, TIOCSPGRP, &self);
+    }
 
     char *login_argv[] = {"login", NULL};
     execve(login_path, login_argv, NULL);

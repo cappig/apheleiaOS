@@ -19,6 +19,7 @@ void arch_register_devices(void);
 void *arch_phys_map(u64 paddr, size_t size, u32 flags);
 void arch_phys_unmap(void *vaddr, size_t size);
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size);
+bool arch_phys_map_can_persist(void);
 
 void arch_dump_stack_trace(void);
 

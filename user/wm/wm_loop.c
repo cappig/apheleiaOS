@@ -150,6 +150,49 @@ static bool _is_mouse_event(u32 type) {
            type == INPUT_EVENT_MOUSE_WHEEL;
 }
 
+typedef struct {
+    bool valid;
+    u32 target_id;
+    input_event_t event;
+} wm_forward_batch_t;
+
+static void _flush_forward_batch(ui_t *ui, wm_forward_batch_t *batch) {
+    if (!ui || !batch || !batch->valid) {
+        return;
+    }
+
+    ui_mgr_send(ui, batch->target_id, &batch->event);
+    batch->valid = false;
+    batch->target_id = 0;
+    memset(&batch->event, 0, sizeof(batch->event));
+}
+
+static void _queue_forward_move(
+    ui_t *ui,
+    wm_forward_batch_t *batch,
+    u32 target_id,
+    const input_event_t *event
+) {
+    if (!ui || !batch || !event || event->type != INPUT_EVENT_MOUSE_MOVE) {
+        return;
+    }
+
+    if (!batch->valid || batch->target_id != target_id || batch->event.type != INPUT_EVENT_MOUSE_MOVE) {
+        _flush_forward_batch(ui, batch);
+        batch->valid = true;
+        batch->target_id = target_id;
+        batch->event = *event;
+        return;
+    }
+
+    batch->event.timestamp_ms = event->timestamp_ms;
+    batch->event.source = event->source;
+    batch->event.buttons = event->buttons;
+    batch->event.modifiers = event->modifiers;
+    batch->event.dx += event->dx;
+    batch->event.dy += event->dy;
+}
+
 static int _sync_drag_resize(
     ui_t *ui,
     wm_runtime_t *rt,
@@ -409,46 +452,21 @@ static wm_cursor_kind_t _cursor_kind_for_state(const wm_runtime_t *rt) {
     return _cursor_kind_for_edges(_resize_hit_edges(window, rt->mouse_x, rt->mouse_y));
 }
 
-static bool _apply_drag(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm_rect_t *damage) {
-    if (!ui || !rt || !fb_info || !damage) {
-        return false;
-    }
+typedef struct {
+    i32 x;
+    i32 y;
+    u32 width;
+    u32 height;
+} wm_resize_geometry_t;
 
-    if (rt->drag_id < 0 || !(rt->mouse_btn_state & MOUSE_LEFT_CLICK)) {
-        return false;
-    }
-
-    wm_window_t *window = wm_window_by_id((u32)rt->drag_id);
-    if (!window) {
-        _clear_drag(rt);
-        return false;
-    }
-
-    i32 delta_x = rt->mouse_x - rt->drag_mouse_start_x;
-    i32 delta_y = rt->mouse_y - rt->drag_mouse_start_y;
-
-    if (rt->drag_mode == WM_DRAG_MOVE) {
-        i32 next_x = rt->drag_window_start_x + delta_x;
-        i32 next_y = rt->drag_window_start_y + delta_y;
-        if (next_x == window->x && next_y == window->y) {
-            return false;
-        }
-
-        wm_rect_t old_rect = {0};
-        wm_window_bounds_rect(window, &old_rect);
-
-        window->x = next_x;
-        window->y = next_y;
-        ui_mgr_move(ui, window->id, window->x, window->y);
-
-        wm_rect_t new_rect = {0};
-        wm_window_bounds_rect(window, &new_rect);
-        wm_rect_union(damage, &old_rect);
-        wm_rect_union(damage, &new_rect);
-        return true;
-    }
-
-    if (rt->drag_mode != WM_DRAG_RESIZE) {
+static bool _compute_resize_geometry(
+    const wm_runtime_t *rt,
+    const fb_info_t *fb_info,
+    i32 delta_x,
+    i32 delta_y,
+    wm_resize_geometry_t *out
+) {
+    if (!rt || !fb_info || !out) {
         return false;
     }
 
@@ -560,8 +578,63 @@ static bool _apply_drag(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm
         return false;
     }
 
-    bool pos_changed = (x != window->x) || (y != window->y);
-    bool size_changed = (next_width != window->width) || (next_height != window->height);
+    out->x = x;
+    out->y = y;
+    out->width = next_width;
+    out->height = next_height;
+    return true;
+}
+
+static bool _apply_drag(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm_rect_t *damage) {
+    if (!ui || !rt || !fb_info || !damage) {
+        return false;
+    }
+
+    if (rt->drag_id < 0 || !(rt->mouse_btn_state & MOUSE_LEFT_CLICK)) {
+        return false;
+    }
+
+    wm_window_t *window = wm_window_by_id((u32)rt->drag_id);
+    if (!window) {
+        _clear_drag(rt);
+        return false;
+    }
+
+    i32 delta_x = rt->mouse_x - rt->drag_mouse_start_x;
+    i32 delta_y = rt->mouse_y - rt->drag_mouse_start_y;
+
+    if (rt->drag_mode == WM_DRAG_MOVE) {
+        i32 next_x = rt->drag_window_start_x + delta_x;
+        i32 next_y = rt->drag_window_start_y + delta_y;
+        if (next_x == window->x && next_y == window->y) {
+            return false;
+        }
+
+        wm_rect_t old_rect = {0};
+        wm_window_bounds_rect(window, &old_rect);
+
+        window->x = next_x;
+        window->y = next_y;
+        ui_mgr_move(ui, window->id, window->x, window->y);
+
+        wm_rect_t new_rect = {0};
+        wm_window_bounds_rect(window, &new_rect);
+        wm_rect_union(damage, &old_rect);
+        wm_rect_union(damage, &new_rect);
+        return true;
+    }
+
+    if (rt->drag_mode != WM_DRAG_RESIZE) {
+        return false;
+    }
+
+    wm_resize_geometry_t geometry = {0};
+    if (!_compute_resize_geometry(rt, fb_info, delta_x, delta_y, &geometry)) {
+        return false;
+    }
+
+    bool pos_changed = (geometry.x != window->x) || (geometry.y != window->y);
+    bool size_changed = (geometry.width != window->width) || (geometry.height != window->height);
     if (!pos_changed && !size_changed) {
         return false;
     }
@@ -569,10 +642,10 @@ static bool _apply_drag(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm
     wm_rect_t old_rect = {0};
     wm_window_bounds_rect(window, &old_rect);
 
-    window->x = x;
-    window->y = y;
-    window->width = next_width;
-    window->height = next_height;
+    window->x = geometry.x;
+    window->y = geometry.y;
+    window->width = geometry.width;
+    window->height = geometry.height;
 
     wm_rect_t new_rect = {0};
     wm_window_bounds_rect(window, &new_rect);
@@ -811,19 +884,23 @@ static int _handle_input_events(
     wm_rect_t *damage
 ) {
     input_event_t events[WM_INPUT_EVENT_BATCH];
+    wm_forward_batch_t forward_batch = {0};
 
     for (;;) {
         ssize_t n = ui_input(ui, events, ARRAY_LEN(events));
 
         if (n < 0) {
             if (errno == EAGAIN) {
+                _flush_forward_batch(ui, &forward_batch);
                 return 0;
             }
 
+            _flush_forward_batch(ui, &forward_batch);
             return -1;
         }
 
         if (!n) {
+            _flush_forward_batch(ui, &forward_batch);
             return 0;
         }
 
@@ -832,6 +909,11 @@ static int _handle_input_events(
         for (size_t i = 0; i < count; i++) {
             input_event_t *event = &events[i];
             bool consumed_mouse = false;
+            bool key_handled = false;
+
+            if (event->type != INPUT_EVENT_MOUSE_MOVE) {
+                _flush_forward_batch(ui, &forward_batch);
+            }
 
             if (event->type == INPUT_EVENT_MOUSE_MOVE) {
                 if (_handle_mouse_move(ui, rt, fb_info, event, damage)) {
@@ -853,16 +935,36 @@ static int _handle_input_events(
                 *changed = true;
 
                 if (_handle_key(ui, rt, event, exit_requested)) {
-                    continue;
+                    key_handled = true;
                 }
             }
 
-            if (rt->focused_id >= 0) {
-                if (_is_mouse_event(event->type) && consumed_mouse) {
-                    continue;
-                }
-                ui_mgr_send(ui, (u32)rt->focused_id, event);
+            if (rt->focused_id < 0) {
+                _flush_forward_batch(ui, &forward_batch);
+                continue;
             }
+
+            bool should_forward = true;
+            if (_is_mouse_event(event->type) && consumed_mouse) {
+                should_forward = false;
+            }
+            if (key_handled) {
+                should_forward = false;
+            }
+
+            if (!should_forward) {
+                if (event->type == INPUT_EVENT_MOUSE_MOVE) {
+                    _flush_forward_batch(ui, &forward_batch);
+                }
+                continue;
+            }
+
+            if (event->type == INPUT_EVENT_MOUSE_MOVE) {
+                _queue_forward_move(ui, &forward_batch, (u32)rt->focused_id, event);
+                continue;
+            }
+
+            ui_mgr_send(ui, (u32)rt->focused_id, event);
         }
     }
 }

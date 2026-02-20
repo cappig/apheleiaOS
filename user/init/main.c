@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -16,6 +17,43 @@ static void write_str(const char *str) {
     }
 
     write(STDOUT_FILENO, str, strlen(str));
+}
+
+static void attach_stdio(const char *path) {
+    if (!path || !path[0]) {
+        return;
+    }
+
+    int fd = open(path, O_RDWR, 0);
+    if (fd < 0) {
+        return;
+    }
+
+    (void)dup2(fd, STDIN_FILENO);
+    (void)dup2(fd, STDOUT_FILENO);
+    (void)dup2(fd, STDERR_FILENO);
+
+    if (fd > STDERR_FILENO) {
+        close(fd);
+    }
+}
+
+static void spawn_rc(void) {
+    if (access("/etc/rc", R_OK) < 0) {
+        return;
+    }
+
+    pid_t pid = fork();
+    if (!pid) {
+        char *args[] = {"sh", "/etc/rc", NULL};
+        execve("/bin/sh", args, NULL);
+        write_str("init: failed to exec /etc/rc\n");
+        _exit(1);
+    }
+
+    if (pid < 0) {
+        write_str("init: failed to fork /etc/rc\n");
+    }
 }
 
 static pid_t spawn_getty(const char *tty_path) {
@@ -41,10 +79,9 @@ int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
 
-    if (!access("/etc/rc", R_OK)) {
-        write_str("init: running /etc/rc\n");
-        system("/bin/sh /etc/rc");
-    }
+    attach_stdio("/dev/console");
+    write_str("init: starting\n");
+    spawn_rc();
 
     getty_slot_t slots[INIT_TTY_COUNT] = {
         {.tty_path = "/dev/tty0", .pid = -1},

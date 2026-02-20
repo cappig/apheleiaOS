@@ -1,6 +1,7 @@
 #include "vfs.h"
 
 #include <arch/arch.h>
+#include <data/hashmap.h>
 #include <data/list.h>
 #include <errno.h>
 #include <log/log.h>
@@ -49,10 +50,79 @@ static mode_t _type_mode(u32 type) {
     }
 }
 
+static hashmap_str_t *_child_index_map(vfs_node_t *parent, bool create) {
+    if (!parent) {
+        return NULL;
+    }
+
+    if (!parent->children_index && create) {
+        parent->children_index = hashmap_str_create();
+    }
+
+    return parent->children_index;
+}
+
+static void _child_index_clear(vfs_node_t *node) {
+    if (!node || !node->children_index) {
+        return;
+    }
+
+    hashmap_str_destroy(node->children_index);
+    node->children_index = NULL;
+}
+
+static bool _child_index_get(vfs_node_t *parent, const char *name, tree_node_t **tnode_out) {
+    hashmap_str_t *map = _child_index_map(parent, false);
+    if (!map || !name) {
+        return false;
+    }
+
+    u64 encoded = 0;
+    if (!hashmap_str_get(map, name, &encoded)) {
+        return false;
+    }
+
+    tree_node_t *tnode = (tree_node_t *)(uintptr_t)encoded;
+    if (!tnode) {
+        return false;
+    }
+
+    vfs_node_t *vnode = tnode->data;
+    if (!vnode || !vnode->name || strcmp(vnode->name, name)) {
+        return false;
+    }
+
+    if (tnode_out) {
+        *tnode_out = tnode;
+    }
+
+    return true;
+}
+
+static void _child_index_set(vfs_node_t *parent, const char *name, tree_node_t *tnode) {
+    hashmap_str_t *map = _child_index_map(parent, true);
+    if (!map || !name || !tnode) {
+        return;
+    }
+
+    (void)hashmap_str_set(map, name, (u64)(uintptr_t)tnode);
+}
+
+static void _child_index_remove(vfs_node_t *parent, const char *name) {
+    hashmap_str_t *map = _child_index_map(parent, false);
+    if (!map || !name) {
+        return;
+    }
+
+    (void)hashmap_str_remove(map, name);
+}
+
 static void _free_node_data(vfs_node_t *node) {
     if (!node) {
         return;
     }
+
+    _child_index_clear(node);
 
     if (node->interface) {
         free(node->interface);
@@ -88,6 +158,15 @@ static vfs_node_t *_find_child(vfs_node_t *parent, const char *name, tree_node_t
         return NULL;
     }
 
+    tree_node_t *indexed = NULL;
+    if (_child_index_get(parent, name, &indexed) && indexed && indexed->data) {
+        if (out_tnode) {
+            *out_tnode = indexed;
+        }
+
+        return indexed->data;
+    }
+
     ll_foreach(child, parent->tree_entry->children) {
         tree_node_t *tnode = child->data;
         vfs_node_t *vnode = tnode ? tnode->data : NULL;
@@ -97,6 +176,7 @@ static vfs_node_t *_find_child(vfs_node_t *parent, const char *name, tree_node_t
         }
 
         if (!strcmp(vnode->name, name)) {
+            _child_index_set(parent, vnode->name, tnode);
             if (out_tnode) {
                 *out_tnode = tnode;
             }
@@ -113,7 +193,11 @@ static bool _remove_child(vfs_node_t *parent, vfs_node_t *child) {
         return false;
     }
 
-    tree_remove_child(parent->tree_entry, child->tree_entry);
+    if (!tree_remove_child(parent->tree_entry, child->tree_entry)) {
+        return false;
+    }
+
+    _child_index_remove(parent, child->name);
     _prune_tree(child->tree_entry);
     return true;
 }
@@ -239,6 +323,8 @@ void vfs_destroy_node(vfs_node_t *node) {
         return;
     }
 
+    _child_index_clear(node);
+
     if (node->interface) {
         free(node->interface);
     }
@@ -347,28 +433,14 @@ vfs_node_t *vfs_lookup_from(vfs_node_t *from, const char *path) {
             node = parent->tree_entry;
         }
 
-        bool found = false;
-
-        ll_foreach(child, node->children) {
-            tree_node_t *tnode = child->data;
-            vfs_node_t *vnode = tnode ? tnode->data : NULL;
-
-            if (!vnode || !vnode->name) {
-                continue;
-            }
-
-            if (!strcmp(vnode->name, pos)) {
-                found = true;
-                node = tnode;
-                break;
-            }
-        }
-
-        if (!found) {
+        tree_node_t *next = NULL;
+        if (!_find_child(parent, pos, &next) || !next) {
             node = NULL;
             errno = ENOENT;
             break;
         }
+
+        node = next;
 
     next:
         pos = strtok_r(NULL, "/", &tok_pos);
@@ -788,7 +860,12 @@ bool vfs_rename(const char *old_path, const char *new_path) {
         return false;
     }
 
-    tree_remove_child(old_parent->tree_entry, child_tnode);
+    if (!tree_remove_child(old_parent->tree_entry, child_tnode)) {
+        free(old_base);
+        free(new_base);
+        return false;
+    }
+    _child_index_remove(old_parent, old_base);
 
     char *new_name = strdup(new_base);
 
@@ -797,6 +874,7 @@ bool vfs_rename(const char *old_path, const char *new_path) {
 
     if (!new_name) {
         tree_insert_child(old_parent->tree_entry, child_tnode);
+        _child_index_set(old_parent, child->name, child_tnode);
         return false;
     }
 
@@ -804,6 +882,7 @@ bool vfs_rename(const char *old_path, const char *new_path) {
     child->name = new_name;
 
     tree_insert_child(new_parent->tree_entry, child_tnode);
+    _child_index_set(new_parent, child->name, child_tnode);
 
     return true;
 }
@@ -838,15 +917,10 @@ bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
     assert(parent_tnode);
     assert(child->tree_entry);
 
-    ll_foreach(node, parent_tnode->children) {
-        tree_node_t *child_tnode = node->data;
-        vfs_node_t *child_vnode = child_tnode->data;
-
-        if (!strcmp(child_vnode->name, child->name)) {
-            errno = EEXIST;
-            // log_warn("duplicate name '%s'", child->name);
-            return false;
-        }
+    if (_find_child(parent, child->name, NULL)) {
+        errno = EEXIST;
+        // log_warn("duplicate name '%s'", child->name);
+        return false;
     }
 
     tree_insert_child(parent_tnode, child->tree_entry);
@@ -861,6 +935,7 @@ bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
         }
     }
 
+    _child_index_set(parent, child->name, child->tree_entry);
     return true;
 }
 

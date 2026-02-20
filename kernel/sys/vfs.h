@@ -1,6 +1,7 @@
 #pragma once
 
 #include <base/types.h>
+#include <data/hashmap.h>
 #include <data/list.h>
 #include <data/tree.h>
 #include <poll.h>
@@ -81,6 +82,7 @@ struct vfs_node {
     fs_instance_t *fs;
 
     tree_node_t *tree_entry;
+    hashmap_str_t *children_index;
 
     void *private;
 };

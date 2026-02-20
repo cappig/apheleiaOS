@@ -750,6 +750,14 @@ void arch_register_devices(void) {
     serial_devfs_init();
 }
 
+bool arch_phys_map_can_persist(void) {
+#if defined(__x86_64__)
+    return true;
+#else
+    return false;
+#endif
+}
+
 void arch_tlb_flush(uintptr_t addr) {
 #if defined(__x86_64__)
     tlb_flush((u64)addr);

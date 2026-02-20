@@ -319,9 +319,12 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
         return true;
     }
 
-    _present_vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
-    if (!_present_vram) {
-        log_warn("failed to create persistent VRAM map for present path");
+    _present_vram = NULL;
+    if (arch_phys_map_can_persist()) {
+        _present_vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
+        if (!_present_vram) {
+            log_warn("failed to create persistent VRAM map for present path");
+        }
     }
 
     vfs_interface_t *fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);

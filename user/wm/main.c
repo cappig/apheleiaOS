@@ -414,8 +414,7 @@ int main(int argc, char **argv) {
     wm_config_t cfg = {0};
     _load_wm_config(&cfg);
 
-    wm_palette_t palette = {0};
-    wm_palette_defaults(&palette);
+    wm_palette_t palette = *wm_palette_get();
 
     if (cfg.palette_mask & WM_CFG_PAL_BACKGROUND) {
         palette.background = cfg.palette.background;

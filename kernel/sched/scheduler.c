@@ -7,6 +7,7 @@
 #include <base/attributes.h>
 #include <base/macros.h>
 #include <base/units.h>
+#include <data/hashmap.h>
 #include <errno.h>
 #include <log/log.h>
 #include <sched/signal.h>
@@ -31,6 +32,7 @@
 static linked_list_t *run_queue = NULL;
 static linked_list_t *zombie_list = NULL;
 static linked_list_t *all_list = NULL;
+static hashmap_t *pid_index = NULL;
 static arch_vm_space_t *kernel_vm = NULL;
 
 static pid_t next_pid = 1;
@@ -310,6 +312,45 @@ static inline bool sched_local_preempt_disabled(void) {
     return sched_local()->preempt_depth != 0;
 }
 
+static u64 _pid_index_key(pid_t pid) {
+    return (u64)(u32)pid;
+}
+
+static sched_thread_t *_pid_index_get_locked(pid_t pid) {
+    if (!pid_index || pid <= 0) {
+        return NULL;
+    }
+
+    u64 encoded = 0;
+    if (!hashmap_get(pid_index, _pid_index_key(pid), &encoded)) {
+        return NULL;
+    }
+
+    sched_thread_t *thread = (sched_thread_t *)(uintptr_t)encoded;
+    if (thread && thread->in_all_list && thread->pid == pid) {
+        return thread;
+    }
+
+    (void)hashmap_remove(pid_index, _pid_index_key(pid));
+    return NULL;
+}
+
+static void _pid_index_set_locked(sched_thread_t *thread) {
+    if (!pid_index || !thread || thread->pid <= 0) {
+        return;
+    }
+
+    (void)hashmap_set(pid_index, _pid_index_key(thread->pid), (u64)(uintptr_t)thread);
+}
+
+static void _pid_index_remove_locked(pid_t pid) {
+    if (!pid_index || pid <= 0) {
+        return;
+    }
+
+    (void)hashmap_remove(pid_index, _pid_index_key(pid));
+}
+
 static void add_all_thread(sched_thread_t *thread) {
     if (!thread || !all_list) {
         return;
@@ -325,6 +366,7 @@ static void add_all_thread(sched_thread_t *thread) {
     thread->all_node.data = thread;
     list_append(all_list, &thread->all_node);
     thread->in_all_list = true;
+    _pid_index_set_locked(thread);
     sched_lock_restore(flags);
 }
 
@@ -635,6 +677,7 @@ static void remove_all_thread(sched_thread_t *thread) {
         return;
     }
 
+    _pid_index_remove_locked(thread->pid);
     list_remove(all_list, &thread->all_node);
     thread->in_all_list = false;
     sched_lock_restore(flags);
@@ -646,11 +689,17 @@ static sched_thread_t *find_thread_by_pid(pid_t pid) {
     }
 
     unsigned long flags = sched_lock_save();
+    sched_thread_t *thread = _pid_index_get_locked(pid);
+    if (thread) {
+        sched_lock_restore(flags);
+        return thread;
+    }
 
     ll_foreach(node, all_list) {
-        sched_thread_t *thread = node->data;
+        thread = node->data;
 
         if (thread && thread->pid == pid) {
+            _pid_index_set_locked(thread);
             sched_lock_restore(flags);
             return thread;
         }
@@ -1552,49 +1601,21 @@ pid_t sched_setsid(void) {
 }
 
 bool sched_process_is_child(pid_t child_pid, pid_t parent_pid) {
-    if (child_pid <= 0 || parent_pid <= 0 || !all_list) {
+    if (child_pid <= 0 || parent_pid <= 0) {
         return false;
     }
 
-    bool is_child = false;
-    unsigned long flags = sched_lock_save();
-
-    ll_foreach(node, all_list) {
-        sched_thread_t *thread = node->data;
-
-        if (!thread || thread->pid != child_pid) {
-            continue;
-        }
-
-        is_child = thread->ppid == parent_pid;
-        break;
-    }
-
-    sched_lock_restore(flags);
-    return is_child;
+    sched_thread_t *thread = find_thread_by_pid(child_pid);
+    return thread && thread->ppid == parent_pid;
 }
 
 bool sched_pid_is_group_leader(pid_t pid) {
-    if (pid <= 0 || !all_list) {
+    if (pid <= 0) {
         return false;
     }
 
-    bool is_leader = false;
-    unsigned long flags = sched_lock_save();
-
-    ll_foreach(node, all_list) {
-        sched_thread_t *thread = node->data;
-
-        if (!thread || thread->pid != pid) {
-            continue;
-        }
-
-        is_leader = thread->pgid == pid;
-        break;
-    }
-
-    sched_lock_restore(flags);
-    return is_leader;
+    sched_thread_t *thread = find_thread_by_pid(pid);
+    return thread && thread->pgid == pid;
 }
 
 bool sched_pgrp_exists(pid_t pgid) {
@@ -1664,6 +1685,7 @@ void scheduler_init(void) {
 
     all_list = list_create();
     assert(all_list);
+    pid_index = hashmap_create();
 
     kernel_vm = arch_vm_kernel();
     assert(kernel_vm);
@@ -1684,6 +1706,31 @@ void scheduler_init(void) {
 void scheduler_start(void) {
     log_info("scheduler starting");
     sched_running = true;
+    sched_local_set_ticks_left(SCHED_SLICE);
+
+    sched_thread_t *current = sched_local_current();
+    sched_thread_t *next = pick_next_thread();
+
+    if (!current || !next || next == current) {
+        return;
+    }
+
+    next->state = THREAD_RUNNING;
+    sched_local_set_current(next);
+
+    if (current->fpu_initialized) {
+        arch_fpu_save(current->fpu_state);
+    }
+
+    arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
+    arch_vm_switch(next->vm_space);
+
+    if (next->fpu_initialized) {
+        arch_fpu_restore(next->fpu_state);
+    }
+
+    stats_inc_sched_switch_count();
+    arch_context_switch(next->context);
 }
 
 bool sched_is_running(void) {

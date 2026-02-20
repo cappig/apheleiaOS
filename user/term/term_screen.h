@@ -5,10 +5,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define TERM_MAX_W      1024
-#define TERM_MAX_H      768
-#define TERM_MAX_PIXELS (TERM_MAX_W * TERM_MAX_H)
-
 #define TERM_MAX_COLS 160
 #define TERM_MAX_ROWS 64
 

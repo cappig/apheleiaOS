@@ -47,6 +47,8 @@ typedef struct {
     pixel_t *surface;
     size_t surface_pixels;
     size_t surface_capacity;
+    u32 surface_width;
+    u32 surface_height;
     bool surface_dirty;
     u32 dirty_x;
     u32 dirty_y;
@@ -57,7 +59,6 @@ typedef struct {
 
 void wm_init(void);
 void wm_destroy(void);
-void wm_palette_defaults(wm_palette_t *palette);
 void wm_palette_set(const wm_palette_t *palette);
 const wm_palette_t *wm_palette_get(void);
 

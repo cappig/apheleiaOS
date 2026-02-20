@@ -78,11 +78,6 @@ static bool read_window(window_t *window, int master_fd) {
 
     size_t count = (size_t)n / sizeof(events[0]);
     for (size_t i = 0; i < count; i++) {
-        if (events[i].type == INPUT_EVENT_KEY) {
-            term_handle_key_event(master_fd, &events[i]);
-            continue;
-        }
-
         if (events[i].type != INPUT_EVENT_WINDOW_RESIZE) {
             continue;
         }
@@ -131,6 +126,12 @@ static bool read_window(window_t *window, int master_fd) {
 
         // Winsize signaling failure should not kill terminal rendering.
         term_set_winsize(master_fd, term_screen_cols(), term_screen_rows(), window->width, window->height);
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        if (events[i].type == INPUT_EVENT_KEY) {
+            term_handle_key_event(master_fd, &events[i]);
+        }
     }
 
     return true;
@@ -200,10 +201,6 @@ int main(void) {
             break;
         }
 
-        if ((pfds[0].revents & POLLIN) && !read_pty(master_fd)) {
-            break;
-        }
-
         if (pfds[1].revents & POLLIN) {
             if (!read_window(&window, master_fd)) {
                 if (errno == ENOENT) {
@@ -213,6 +210,32 @@ int main(void) {
 
                 continue;
             }
+        }
+
+        if (!(pfds[1].revents & POLLIN)) {
+            struct pollfd ev_check = {
+                .fd = window.ev_fd,
+                .events = POLLIN,
+                .revents = 0,
+            };
+
+            int ev_ready = poll(&ev_check, 1, 0);
+            if (ev_ready > 0 && (ev_check.revents & POLLIN)) {
+                if (!read_window(&window, master_fd)) {
+                    if (errno == ENOENT) {
+                        running = false;
+                        continue;
+                    }
+
+                    if (errno != EAGAIN && errno != EINTR) {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if ((pfds[0].revents & POLLIN) && !read_pty(master_fd)) {
+            break;
         }
 
         if (!pending_flush && !term_screen_render_rect(&flush_x, &flush_y, &flush_w, &flush_h)) {

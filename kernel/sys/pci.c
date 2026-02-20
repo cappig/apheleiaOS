@@ -2,6 +2,7 @@
 
 #include <arch/arch.h>
 #include <arch/pci.h>
+#include <data/hashmap.h>
 #include <data/list.h>
 #include <log/log.h>
 #include <stdlib.h>
@@ -11,6 +12,23 @@
 
 static bool pci_is_express = false;
 static linked_list_t *pci_devices = NULL;
+static hashmap_t *pci_bsf_index = NULL;
+
+static u64 _bsf_key(u8 bus, u8 slot, u8 func) {
+    return ((u64)bus << 16) | ((u64)slot << 8) | (u64)func;
+}
+
+static void _index_device(pci_found_t *device) {
+    if (!pci_bsf_index || !device) {
+        return;
+    }
+
+    (void)hashmap_set(
+        pci_bsf_index,
+        _bsf_key(device->bus, device->slot, device->func),
+        (u64)(uintptr_t)device
+    );
+}
 
 static u64 _ecam_addr(u64 base, u8 bus, u8 slot, u8 func) {
     return base + ((u64)bus << 20) + ((u64)slot << 15) + ((u64)func << 12);
@@ -66,6 +84,7 @@ static void _probe_slot_legacy(u8 bus, u8 slot) {
         }
 
         list_append(pci_devices, list_create_node(device));
+        _index_device(device);
     }
 }
 
@@ -105,6 +124,7 @@ static void _probe_slot_express(u64 base, u8 bus, u8 slot) {
         device->header = current;
 
         list_append(pci_devices, list_create_node(device));
+        _index_device(device);
     }
 }
 
@@ -156,6 +176,7 @@ size_t pci_init(void) {
     if (!pci_devices) {
         return 0;
     }
+    pci_bsf_index = hashmap_create();
 
     mcfg_t *table = (mcfg_t *)acpi_find_table("MCFG");
 
@@ -229,6 +250,16 @@ void pci_destroy_device(pci_device_t *dev) {
 static pci_found_t *_find_by_bsf(u8 bus, u8 slot, u8 func) {
     if (!pci_devices) {
         return NULL;
+    }
+
+    if (pci_bsf_index) {
+        u64 encoded = 0;
+        if (hashmap_get(pci_bsf_index, _bsf_key(bus, slot, func), &encoded)) {
+            pci_found_t *device = (pci_found_t *)(uintptr_t)encoded;
+            if (device && device->bus == bus && device->slot == slot && device->func == func) {
+                return device;
+            }
+        }
     }
 
     ll_foreach(node, pci_devices) {
