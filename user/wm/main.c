@@ -22,12 +22,143 @@ static volatile sig_atomic_t exit_requested = 0;
 
 typedef struct {
     char background[PATH_MAX];
-    char cursor[PATH_MAX];
+    char cursors[PATH_MAX];
+    wm_palette_t palette;
+    u32 palette_mask;
 } wm_config_t;
+
+enum wm_cfg_palette_mask {
+    WM_CFG_PAL_BACKGROUND = 1u << 0,
+    WM_CFG_PAL_BORDER = 1u << 1,
+    WM_CFG_PAL_TITLE = 1u << 2,
+    WM_CFG_PAL_TITLE_FOCUS = 1u << 3,
+    WM_CFG_PAL_CLIENT_BG = 1u << 4,
+    WM_CFG_PAL_TITLE_TEXT = 1u << 5,
+    WM_CFG_PAL_CLOSE_BG = 1u << 6,
+    WM_CFG_PAL_CLOSE_FG = 1u << 7,
+};
 
 static void _on_signal(int signum) {
     (void)signum;
     exit_requested = 1;
+}
+
+static int _hex_nibble(char ch) {
+    if (ch >= '0' && ch <= '9') {
+        return ch - '0';
+    }
+
+    if (ch >= 'a' && ch <= 'f') {
+        return 10 + (ch - 'a');
+    }
+
+    if (ch >= 'A' && ch <= 'F') {
+        return 10 + (ch - 'A');
+    }
+
+    return -1;
+}
+
+static bool _parse_hex_color(const char *text, u32 *color_out) {
+    if (!text || !color_out) {
+        return false;
+    }
+
+    const char *pos = text;
+    if (pos[0] == '#') {
+        pos++;
+    } else if (pos[0] == '0' && (pos[1] == 'x' || pos[1] == 'X')) {
+        pos += 2;
+    }
+
+    u32 value = 0;
+    size_t digits = 0;
+    while (digits < 8) {
+        int nib = _hex_nibble(pos[digits]);
+        if (nib < 0) {
+            break;
+        }
+
+        value = (value << 4) | (u32)nib;
+        digits++;
+    }
+
+    if (pos[digits] != '\0') {
+        return false;
+    }
+
+    if (digits == 6) {
+        *color_out = value;
+        return true;
+    }
+
+    if (digits == 8) {
+        *color_out = value & 0x00ffffffU;
+        return true;
+    }
+
+    return false;
+}
+
+static bool _cfg_set_palette_color(wm_config_t *cfg, const char *key, const char *value) {
+    if (!cfg || !key || !value) {
+        return false;
+    }
+
+    u32 color = 0;
+    if (!_parse_hex_color(value, &color)) {
+        return false;
+    }
+
+    if (!strcmp(key, "color.background")) {
+        cfg->palette.background = color;
+        cfg->palette_mask |= WM_CFG_PAL_BACKGROUND;
+        return true;
+    }
+
+    if (!strcmp(key, "color.border")) {
+        cfg->palette.border = color;
+        cfg->palette_mask |= WM_CFG_PAL_BORDER;
+        return true;
+    }
+
+    if (!strcmp(key, "color.title")) {
+        cfg->palette.title = color;
+        cfg->palette_mask |= WM_CFG_PAL_TITLE;
+        return true;
+    }
+
+    if (!strcmp(key, "color.title_focus")) {
+        cfg->palette.title_focus = color;
+        cfg->palette_mask |= WM_CFG_PAL_TITLE_FOCUS;
+        return true;
+    }
+
+    if (!strcmp(key, "color.client_bg")) {
+        cfg->palette.client_bg = color;
+        cfg->palette_mask |= WM_CFG_PAL_CLIENT_BG;
+        return true;
+    }
+
+    if (!strcmp(key, "color.title_text")) {
+        cfg->palette.title_text = color;
+        cfg->palette_mask |= WM_CFG_PAL_TITLE_TEXT;
+        return true;
+    }
+
+    if (!strcmp(key, "color.close_bg")) {
+        cfg->palette.close_bg = color;
+        cfg->palette_mask |= WM_CFG_PAL_CLOSE_BG;
+        return true;
+    }
+
+    if (!strcmp(key, "color.close_fg")) {
+        cfg->palette.close_fg = color;
+        cfg->palette_mask |= WM_CFG_PAL_CLOSE_FG;
+        return true;
+    }
+
+    return false;
 }
 
 static void _load_wm_config(wm_config_t *cfg) {
@@ -36,7 +167,8 @@ static void _load_wm_config(wm_config_t *cfg) {
     }
 
     cfg->background[0] = '\0';
-    cfg->cursor[0] = '\0';
+    cfg->cursors[0] = '\0';
+    cfg->palette_mask = 0;
 
     char cfg_text[2048];
     if (kv_read_file("/etc/wm.conf", cfg_text, sizeof(cfg_text)) <= 0) {
@@ -82,23 +214,36 @@ static void _load_wm_config(wm_config_t *cfg) {
         while (value_end > value_start && isspace((unsigned char)value_end[-1])) {
             value_end--;
         }
-
-        size_t key_len = (size_t)(key_end - key_start);
-        char *out = NULL;
-        size_t out_len = 0;
-
-        if (key_len == strlen("background") && !strncmp(key_start, "background", key_len)) {
-            out = cfg->background;
-            out_len = sizeof(cfg->background);
-        } else if (key_len == strlen("cursor") && !strncmp(key_start, "cursor", key_len)) {
-            out = cfg->cursor;
-            out_len = sizeof(cfg->cursor);
-        } else {
+        size_t value_len = (size_t)(value_end - value_start);
+        if (!value_len) {
             continue;
         }
 
-        size_t value_len = (size_t)(value_end - value_start);
-        if (!value_len) {
+        size_t key_len = (size_t)(key_end - key_start);
+        char key[64];
+        if (!key_len || key_len >= sizeof(key)) {
+            continue;
+        }
+        memcpy(key, key_start, key_len);
+        key[key_len] = '\0';
+
+        char *out = NULL;
+        size_t out_len = 0;
+        char value_buf[64];
+
+        if (!strcmp(key, "background")) {
+            out = cfg->background;
+            out_len = sizeof(cfg->background);
+        } else if (!strcmp(key, "cursors")) {
+            out = cfg->cursors;
+            out_len = sizeof(cfg->cursors);
+        } else if (value_len < sizeof(value_buf)) {
+            memcpy(value_buf, value_start, value_len);
+            value_buf[value_len] = '\0';
+            if (_cfg_set_palette_color(cfg, key, value_buf)) {
+                continue;
+            }
+        } else {
             continue;
         }
 
@@ -175,10 +320,26 @@ static void _warn_cursor_failed(const char *path) {
     io_write_str(line);
 }
 
+static bool _cursor_path_join(char *out, size_t out_len, const char *dir, const char *name) {
+    if (!out || !out_len || !dir || !dir[0] || !name || !name[0]) {
+        return false;
+    }
+
+    size_t dir_len = strlen(dir);
+    int n = 0;
+    if (dir_len && dir[dir_len - 1] == '/') {
+        n = snprintf(out, out_len, "%s%s", dir, name);
+    } else {
+        n = snprintf(out, out_len, "%s/%s", dir, name);
+    }
+
+    return n > 0 && (size_t)n < out_len;
+}
+
 int main(int argc, char **argv) {
     int ret = 1;
     int fb_fd = -1;
-    u32 *frame_store = NULL;
+    pixel_t *frame_store = NULL;
 
     ui_t ui = {0};
 
@@ -237,7 +398,7 @@ int main(int argc, char **argv) {
     mgr_claimed = true;
 
     size_t frame_pixels = (size_t)fb_info.width * (size_t)fb_info.height;
-    size_t frame_bytes = frame_pixels * 4;
+    size_t frame_bytes = frame_pixels * sizeof(pixel_t);
 
     if (frame_pixels > WM_MAX_FB_PIX) {
         io_write_str("wm: framebuffer too large\n");
@@ -253,6 +414,36 @@ int main(int argc, char **argv) {
     wm_config_t cfg = {0};
     _load_wm_config(&cfg);
 
+    wm_palette_t palette = {0};
+    wm_palette_defaults(&palette);
+
+    if (cfg.palette_mask & WM_CFG_PAL_BACKGROUND) {
+        palette.background = cfg.palette.background;
+    }
+    if (cfg.palette_mask & WM_CFG_PAL_BORDER) {
+        palette.border = cfg.palette.border;
+    }
+    if (cfg.palette_mask & WM_CFG_PAL_TITLE) {
+        palette.title = cfg.palette.title;
+    }
+    if (cfg.palette_mask & WM_CFG_PAL_TITLE_FOCUS) {
+        palette.title_focus = cfg.palette.title_focus;
+    }
+    if (cfg.palette_mask & WM_CFG_PAL_CLIENT_BG) {
+        palette.client_bg = cfg.palette.client_bg;
+    }
+    if (cfg.palette_mask & WM_CFG_PAL_TITLE_TEXT) {
+        palette.title_text = cfg.palette.title_text;
+    }
+    if (cfg.palette_mask & WM_CFG_PAL_CLOSE_BG) {
+        palette.close_bg = cfg.palette.close_bg;
+    }
+    if (cfg.palette_mask & WM_CFG_PAL_CLOSE_FG) {
+        palette.close_fg = cfg.palette.close_fg;
+    }
+
+    wm_palette_set(&palette);
+
     const char *bg_path = NULL;
     if (bg_override && bg_override[0]) {
         bg_path = bg_override;
@@ -260,13 +451,17 @@ int main(int argc, char **argv) {
         bg_path = cfg.background;
     }
 
+    const char *cursors_dir = cfg.cursors[0] ? cfg.cursors : "/etc/cursors";
+
+    char cursor_default_path[PATH_MAX];
     const char *cursor_path = NULL;
+
     if (cursor_override && cursor_override[0]) {
         cursor_path = cursor_override;
-    } else if (cfg.cursor[0]) {
-        cursor_path = cfg.cursor;
-    } else {
-        cursor_path = "/etc/cursor.ppm";
+    } else if (_cursor_path_join(
+                   cursor_default_path, sizeof(cursor_default_path), cursors_dir, "pointer.ppm"
+               )) {
+        cursor_path = cursor_default_path;
     }
 
     wm_init();
@@ -278,6 +473,42 @@ int main(int argc, char **argv) {
 
     if (cursor_path && !wm_cursor_load(cursor_path)) {
         _warn_cursor_failed(cursor_path);
+    }
+
+    char resize_fallback_path[PATH_MAX];
+    const char *resize_fallback = NULL;
+    if (_cursor_path_join(resize_fallback_path, sizeof(resize_fallback_path), cursors_dir, "resize.ppm")) {
+        resize_fallback = resize_fallback_path;
+    }
+
+    typedef struct {
+        wm_cursor_kind_t kind;
+        const char *name;
+    } resize_cursor_spec_t;
+
+    const resize_cursor_spec_t resize_specs[] = {
+        {WM_CURSOR_RESIZE_EW, "resize_ew.ppm"},
+        {WM_CURSOR_RESIZE_NS, "resize_ns.ppm"},
+        {WM_CURSOR_RESIZE_NW, "resize_nw.ppm"},
+        {WM_CURSOR_RESIZE_SE, "resize_se.ppm"},
+        {WM_CURSOR_RESIZE_SW, "resize_sw.ppm"},
+    };
+
+    for (size_t i = 0; i < (sizeof(resize_specs) / sizeof(resize_specs[0])); i++) {
+        char cursor_kind_path[PATH_MAX];
+        const char *load_path = NULL;
+
+        if (_cursor_path_join(
+                cursor_kind_path, sizeof(cursor_kind_path), cursors_dir, resize_specs[i].name
+            )) {
+            load_path = cursor_kind_path;
+        } else {
+            load_path = resize_fallback;
+        }
+
+        if (load_path && !wm_cursor_load_kind(resize_specs[i].kind, load_path)) {
+            _warn_cursor_failed(load_path);
+        }
     }
 
     wm_loop(&ui, fb_fd, &fb_info, frame_store, frame_bytes, &exit_requested);

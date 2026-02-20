@@ -13,6 +13,7 @@
 #define SH_HISTORY_MAX 64
 
 static volatile sig_atomic_t *sh_sigint = NULL;
+static volatile sig_atomic_t *sh_sigwinch = NULL;
 static char *sh_history[SH_HISTORY_MAX];
 static size_t sh_history_count = 0;
 static termios_t sh_tty_saved = {0};
@@ -94,6 +95,10 @@ void input_set_sigint_flag(volatile sig_atomic_t *flag) {
     sh_sigint = flag;
 }
 
+void input_set_sigwinch_flag(volatile sig_atomic_t *flag) {
+    sh_sigwinch = flag;
+}
+
 static bool tty_read(termios_t *out) {
     if (!out) {
         return false;
@@ -146,6 +151,16 @@ static bool got_sigint(void) {
 static void clear_sigint(void) {
     if (sh_sigint) {
         *sh_sigint = 0;
+    }
+}
+
+static bool got_sigwinch(void) {
+    return sh_sigwinch && *sh_sigwinch;
+}
+
+static void clear_sigwinch(void) {
+    if (sh_sigwinch) {
+        *sh_sigwinch = 0;
     }
 }
 
@@ -387,6 +402,12 @@ int read_line_interactive(const char *prompt, char *buf, size_t len, bool use_hi
             clear_sigint();
             tty_set_line_mode(false);
             return -1;
+        }
+
+        if (got_sigwinch()) {
+            clear_sigwinch();
+            layout.cols = normalize_cols(term_cols());
+            redraw_line(prompt, &layout, buf, pos, cursor, &render);
         }
 
         char ch = 0;

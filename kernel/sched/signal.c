@@ -6,6 +6,7 @@
 
 static const sighandler_t default_actions[NSIG] = {
     [SIGCHLD] = SIG_IGN,
+    [SIGWINCH] = SIG_IGN,
 };
 
 static bool signal_valid(int signum) {

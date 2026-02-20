@@ -22,10 +22,11 @@ typedef struct {
     psf_font_t font;
     term_cell_t cells[TERM_MAX_ROWS][TERM_MAX_COLS];
     u8 *font_buf;
-    u32 *pixels;
+    pixel_t *pixels;
     size_t pixels_count;
     u32 width;
     u32 height;
+    u32 stride;
     size_t cols;
     size_t rows;
     size_t cursor_x;
@@ -47,21 +48,24 @@ typedef struct {
 
 static term_screen_state_t term_screen = {0};
 
+static framebuffer_t _screen_framebuffer(void) {
+    framebuffer_t fb = {
+        .pixels = term_screen.pixels,
+        .width = term_screen.width,
+        .height = term_screen.height,
+        .stride = term_screen.stride,
+        .pixel_count = term_screen.pixels_count,
+    };
+    return fb;
+}
+
 static void clear_pixels_full(void) {
     if (!term_screen.pixels || !term_screen.width || !term_screen.height) {
         return;
     }
 
-    draw_rect(
-        term_screen.pixels,
-        term_screen.width,
-        term_screen.height,
-        0,
-        0,
-        term_screen.width,
-        term_screen.height,
-        TERM_BG
-    );
+    framebuffer_t fb = _screen_framebuffer();
+    draw_rect(&fb, 0, 0, term_screen.width, term_screen.height, TERM_BG);
 }
 
 static bool load_font_file(const char *path) {
@@ -466,8 +470,48 @@ static void draw_glyph(size_t px, size_t py, char ch, u32 fg, u32 bg) {
     }
 }
 
-bool term_screen_init(u32 width, u32 height, u32 *pixels, size_t pixels_count) {
-    if (!pixels || !width || !height || !pixels_count) {
+static bool term_screen_layout(
+    u32 width,
+    u32 height,
+    size_t pixels_count,
+    size_t *cols_out,
+    size_t *rows_out
+) {
+    if (!width || !height || !pixels_count || !cols_out || !rows_out) {
+        return false;
+    }
+
+    size_t pixel_total = (size_t)width * (size_t)height;
+    if (height && pixel_total / height != width) {
+        return false;
+    }
+
+    if (pixel_total > pixels_count) {
+        return false;
+    }
+
+    size_t cols = width / term_screen.font.width;
+    size_t rows = height / term_screen.font.height;
+
+    if (cols > TERM_MAX_COLS) {
+        cols = TERM_MAX_COLS;
+    }
+
+    if (rows > TERM_MAX_ROWS) {
+        rows = TERM_MAX_ROWS;
+    }
+
+    if (!cols || !rows) {
+        return false;
+    }
+
+    *cols_out = cols;
+    *rows_out = rows;
+    return true;
+}
+
+bool term_screen_can_resize(u32 width, u32 height) {
+    if (!width || !height) {
         return false;
     }
 
@@ -481,15 +525,33 @@ bool term_screen_init(u32 width, u32 height, u32 *pixels, size_t pixels_count) {
 
     size_t cols = width / term_screen.font.width;
     size_t rows = height / term_screen.font.height;
-
     if (!cols || !rows || cols > TERM_MAX_COLS || rows > TERM_MAX_ROWS) {
         return false;
     }
 
-    term_screen.width = width;
-    term_screen.height = height;
-    term_screen.pixels = pixels;
-    term_screen.pixels_count = pixels_count;
+    return true;
+}
+
+bool term_screen_init(const framebuffer_t *fb) {
+    if (!fb || !fb->pixels || !fb->width || !fb->height || !fb->pixel_count) {
+        return false;
+    }
+
+    if (!init_font()) {
+        return false;
+    }
+
+    size_t cols = 0;
+    size_t rows = 0;
+    if (!term_screen_layout(fb->width, fb->height, fb->pixel_count, &cols, &rows)) {
+        return false;
+    }
+
+    term_screen.width = fb->width;
+    term_screen.height = fb->height;
+    term_screen.stride = fb->stride;
+    term_screen.pixels = fb->pixels;
+    term_screen.pixels_count = fb->pixel_count;
     term_screen.cols = cols;
     term_screen.rows = rows;
     term_screen.cursor_x = 0;
@@ -505,6 +567,73 @@ bool term_screen_init(u32 width, u32 height, u32 *pixels, size_t pixels_count) {
     mark_dirty_all();
 
     term_screen.ready = true;
+    return true;
+}
+
+bool term_screen_resize(const framebuffer_t *fb) {
+    if (!term_screen.ready || !fb || !fb->pixels) {
+        return false;
+    }
+
+    size_t cols = 0;
+    size_t rows = 0;
+    if (!term_screen_layout(fb->width, fb->height, fb->pixel_count, &cols, &rows)) {
+        return false;
+    }
+
+    term_cell_t old_cells[TERM_MAX_ROWS][TERM_MAX_COLS];
+    memcpy(old_cells, term_screen.cells, sizeof(old_cells));
+
+    size_t old_cols = term_screen.cols;
+    size_t old_rows = term_screen.rows;
+
+    term_screen.width = fb->width;
+    term_screen.height = fb->height;
+    term_screen.stride = fb->stride;
+    term_screen.pixels = fb->pixels;
+    term_screen.pixels_count = fb->pixel_count;
+    term_screen.cols = cols;
+    term_screen.rows = rows;
+
+    clear_cells();
+
+    size_t copy_rows = old_rows;
+    if (rows < copy_rows) {
+        copy_rows = rows;
+    }
+
+    size_t copy_cols = old_cols;
+    if (cols < copy_cols) {
+        copy_cols = cols;
+    }
+
+    for (size_t y = 0; y < copy_rows; y++) {
+        for (size_t x = 0; x < copy_cols; x++) {
+            term_screen.cells[y][x] = old_cells[y][x];
+        }
+    }
+
+    if (term_screen.cursor_x >= cols) {
+        term_screen.cursor_x = cols - 1;
+    }
+    if (term_screen.cursor_y >= rows) {
+        term_screen.cursor_y = rows - 1;
+    }
+
+    if (term_screen.saved_x >= cols) {
+        term_screen.saved_x = cols - 1;
+    }
+    if (term_screen.saved_y >= rows) {
+        term_screen.saved_y = rows - 1;
+    }
+
+    if (term_screen.cursor_prev_x >= cols || term_screen.cursor_prev_y >= rows) {
+        term_screen.cursor_prev_valid = false;
+    }
+
+    clear_pixels_full();
+    mark_dirty_all();
+
     return true;
 }
 
@@ -572,16 +701,8 @@ bool term_screen_render_rect(u32 *x, u32 *y, u32 *width, u32 *height) {
         size_t px = term_screen.cursor_x * term_screen.font.width;
         size_t py = term_screen.cursor_y * term_screen.font.height;
 
-        draw_rect(
-            term_screen.pixels,
-            term_screen.width,
-            term_screen.height,
-            (i32)px,
-            (i32)py,
-            term_screen.font.width,
-            term_screen.font.height,
-            TERM_FG
-        );
+        framebuffer_t fb = _screen_framebuffer();
+        draw_rect(&fb, (i32)px, (i32)py, term_screen.font.width, term_screen.font.height, TERM_FG);
         draw_glyph(
             px,
             py,
@@ -598,20 +719,35 @@ bool term_screen_render_rect(u32 *x, u32 *y, u32 *width, u32 *height) {
 
     term_screen.dirty = false;
 
+    u32 out_x = (u32)(x0 * term_screen.font.width);
+    u32 out_y = (u32)(y0 * term_screen.font.height);
+    u32 out_width = (u32)((x1 - x0) * term_screen.font.width);
+    u32 out_height = (u32)((y1 - y0) * term_screen.font.height);
+
+    // If dirty spans full cell-space extents, include any partial right/bottom
+    // pixel strips so expanded windows do not retain stale/black edges.
+    if (x0 == 0 && x1 == term_screen.cols) {
+        out_width = term_screen.width;
+    }
+
+    if (y0 == 0 && y1 == term_screen.rows) {
+        out_height = term_screen.height;
+    }
+
     if (x) {
-        *x = (u32)(x0 * term_screen.font.width);
+        *x = out_x;
     }
 
     if (y) {
-        *y = (u32)(y0 * term_screen.font.height);
+        *y = out_y;
     }
 
     if (width) {
-        *width = (u32)((x1 - x0) * term_screen.font.width);
+        *width = out_width;
     }
 
     if (height) {
-        *height = (u32)((y1 - y0) * term_screen.font.height);
+        *height = out_height;
     }
 
     return true;

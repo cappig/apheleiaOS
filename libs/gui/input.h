@@ -7,6 +7,7 @@ enum input_event_type {
     INPUT_EVENT_MOUSE_MOVE = 2,
     INPUT_EVENT_MOUSE_BUTTON = 3,
     INPUT_EVENT_MOUSE_WHEEL = 4,
+    INPUT_EVENT_WINDOW_RESIZE = 5,
 };
 
 enum input_modifiers {
@@ -27,4 +28,7 @@ typedef struct input_event {
     i32 dx;
     i32 dy;
     i32 wheel;
+    u32 width;
+    u32 height;
+    u32 stride;
 } input_event_t;

@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -25,6 +26,7 @@ enum vi_key {
     VI_KEY_DEL,
     VI_KEY_HOME,
     VI_KEY_END,
+    VI_KEY_RESIZE,
 };
 
 typedef enum {
@@ -68,6 +70,7 @@ typedef struct {
 
 static vi_t vi;
 static vi_out_t out;
+static volatile sig_atomic_t vi_got_sigwinch = 0;
 static char *frame_cache = NULL;
 static size_t frame_cache_cols = 0;
 static size_t frame_cache_rows = 0;
@@ -290,6 +293,11 @@ static int read_key(void) {
         }
 
         if (n < 0 && errno == EINTR) {
+            if (vi_got_sigwinch) {
+                vi_got_sigwinch = 0;
+                return VI_KEY_RESIZE;
+            }
+
             continue;
         }
     }
@@ -971,6 +979,11 @@ static void handle_command_mode(int key) {
     }
 }
 
+static void sigwinch_handler(int signum) {
+    (void)signum;
+    vi_got_sigwinch = 1;
+}
+
 int main(int argc, char *argv[]) {
     memset(&vi, 0, sizeof(vi));
 
@@ -1009,6 +1022,8 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    signal(SIGWINCH, sigwinch_handler);
+
     write(STDOUT_FILENO, "\x1b[2J\x1b[H", 7);
 
     while (vi.running) {
@@ -1020,6 +1035,10 @@ int main(int argc, char *argv[]) {
         }
 
         int key = read_key();
+        if (key == VI_KEY_RESIZE) {
+            vi.redraw = true;
+            continue;
+        }
 
         switch (vi.mode) {
         case VI_INSERT:

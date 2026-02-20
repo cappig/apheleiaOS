@@ -8,7 +8,7 @@ static bool should_quit(const ws_input_event_t *event) {
         return false;
     }
 
-    return event->keycode == KBD_ESCAPE || event->keycode == KBD_Q || event->keycode == KBD_ENTER;
+    return event->keycode == KBD_ESCAPE;
 }
 
 int main(void) {
@@ -19,22 +19,22 @@ int main(void) {
     }
 
     // Get the window's framebuffer
-    u32 *pixels = window_buffer(&window);
-    if (!pixels) {
+    framebuffer_t *fb = window_buffer(&window);
+    if (!fb || !fb->pixels) {
         window_deinit(&window);
         return 1;
     }
 
     // Fill the background with a solid color
-    draw_rect(pixels, window.width, window.height, 0, 0, window.width, window.height, 0x00141414U);
+    draw_rect(fb, 0, 0, fb->width, fb->height, 0x00141414U);
 
     // Draw a filled triangle in the middle of the window
     draw_point_t triangle[3] = {
-        {.x = (i32)(window.width / 2), .y = (i32)(window.height / 5)},
-        {.x = (i32)(window.width / 4), .y = (i32)((window.height * 4) / 5)},
-        {.x = (i32)((window.width * 3) / 4), .y = (i32)((window.height * 4) / 5)},
+        {.x = (i32)(fb->width / 2), .y = (i32)(fb->height / 5)},
+        {.x = (i32)(fb->width / 4), .y = (i32)((fb->height * 4) / 5)},
+        {.x = (i32)((fb->width * 3) / 4), .y = (i32)((fb->height * 4) / 5)},
     };
-    draw_polygon(pixels, window.width, window.height, triangle, 3, 0x0000ff00U);
+    draw_polygon(fb, triangle, 3, 0x0000ff00U);
 
     // Flush the buffer to the window
     if (window_flush(&window)) {
@@ -42,7 +42,7 @@ int main(void) {
         return 1;
     }
 
-    // Wait for the user to press escape, q, or enter
+    // Wait for the user to press escape
     ws_input_event_t event = {0};
     while (window_wait_event(&window, &event, -1) >= 0) {
         if (should_quit(&event)) {

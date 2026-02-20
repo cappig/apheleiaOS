@@ -9,7 +9,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -70,6 +69,18 @@ static void close_fd(int *fd) {
 
     close(*fd);
     *fd = -1;
+}
+
+static void window_sync_framebuffer(window_t *window) {
+    if (!window) {
+        return;
+    }
+
+    window->framebuffer.pixels = window->pixels;
+    window->framebuffer.width = window->width;
+    window->framebuffer.height = window->height;
+    window->framebuffer.stride = window->stride;
+    window->framebuffer.pixel_count = window->pixels_count;
 }
 
 static u64 _input_timestamp_ms(void) {
@@ -202,18 +213,21 @@ static void window_reset_runtime(window_t *window) {
     close_fd(&window->ev_fd);
     window->pixels = NULL;
     window->pixels_count = 0;
+    window->pixels_capacity = 0;
+    window_sync_framebuffer(window);
 }
 
 static void window_unmap_pixels(window_t *window) {
-    if (!window || !window->pixels || !window->pixels_count) {
+    if (!window || !window->pixels || !window->pixels_capacity) {
         return;
     }
 
-    size_t bytes = window->pixels_count * sizeof(u32);
-    munmap(window->pixels, bytes);
+    free(window->pixels);
 
     window->pixels = NULL;
     window->pixels_count = 0;
+    window->pixels_capacity = 0;
+    window_sync_framebuffer(window);
 }
 
 static void window_reset(window_t *window, ui_t *ui) {
@@ -229,6 +243,7 @@ static void window_reset(window_t *window, ui_t *ui) {
     window->width = 0;
     window->height = 0;
     window->stride = 0;
+    window_sync_framebuffer(window);
 }
 
 static int window_open_fds(window_t *window) {
@@ -473,6 +488,20 @@ int ui_mgr_move(ui_t *ui, u32 id, i32 x, i32 y) {
     return ui_simple(ui, WSIOC_SET_POS, id, x, y, 0);
 }
 
+int ui_mgr_resize(ui_t *ui, u32 id, u32 width, u32 height) {
+    if (!ui || ui->ctl_fd < 0 || !width || !height) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ws_cmd_t cmd = {0};
+    cmd.id = id;
+    cmd.width = width;
+    cmd.height = height;
+
+    return ioctl(ui->ctl_fd, WSIOC_SET_SIZE, &cmd);
+}
+
 int ui_mgr_raise(ui_t *ui, u32 id, u32 z) {
     return ui_simple(ui, WSIOC_SET_Z, id, 0, 0, z);
 }
@@ -521,6 +550,7 @@ int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const char *
     window->width = cmd.width;
     window->height = cmd.height;
     window->stride = cmd.stride;
+    window_sync_framebuffer(window);
 
     if (!window_open_fds(window)) {
         return 0;
@@ -553,6 +583,8 @@ int window_from_env(ui_t *ui, window_t *window) {
 
         window->stride = window->width * 4;
     }
+
+    window_sync_framebuffer(window);
 
     return window_open_fds(window);
 }
@@ -659,7 +691,7 @@ void window_deinit(window_t *window) {
     window_reset_runtime(window);
 }
 
-u32 *window_buffer(window_t *window) {
+framebuffer_t *window_buffer(window_t *window) {
     if (!window || !window->width || !window->height) {
         errno = EINVAL;
         return NULL;
@@ -671,26 +703,52 @@ u32 *window_buffer(window_t *window) {
         return NULL;
     }
 
-    if (pixels > ((size_t)-1) / sizeof(u32)) {
+    if (pixels > ((size_t)-1) / sizeof(pixel_t)) {
         errno = EOVERFLOW;
         return NULL;
     }
 
-    if (window->pixels && window->pixels_count == pixels) {
-        return window->pixels;
+    if (window->pixels && window->pixels_capacity >= pixels) {
+        window->pixels_count = pixels;
+        window_sync_framebuffer(window);
+        return &window->framebuffer;
     }
 
-    window_unmap_pixels(window);
+    size_t capacity = pixels;
+    if (window->pixels_capacity) {
+        capacity = window->pixels_capacity;
+        while (capacity < pixels) {
+            size_t grown = capacity * 2;
+            if (grown <= capacity) {
+                capacity = pixels;
+                break;
+            }
+            capacity = grown;
+        }
+    }
 
-    size_t bytes = pixels * sizeof(u32);
-    void *map = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (map == MAP_FAILED) {
+    if (capacity > ((size_t)-1) / sizeof(pixel_t)) {
+        errno = EOVERFLOW;
         return NULL;
     }
 
-    window->pixels = map;
+    size_t old_capacity = window->pixels_capacity;
+    pixel_t *grown = realloc(window->pixels, capacity * sizeof(pixel_t));
+    if (!grown) {
+        return NULL;
+    }
+
+    if (capacity > old_capacity) {
+        size_t zero_from = old_capacity;
+        size_t zero_count = capacity - old_capacity;
+        memset(grown + zero_from, 0, zero_count * sizeof(pixel_t));
+    }
+
+    window->pixels = grown;
     window->pixels_count = pixels;
-    return window->pixels;
+    window->pixels_capacity = capacity;
+    window_sync_framebuffer(window);
+    return &window->framebuffer;
 }
 
 int window_flush(window_t *window) {
@@ -699,14 +757,14 @@ int window_flush(window_t *window) {
         return -1;
     }
 
-    size_t bytes = window->pixels_count * sizeof(u32);
+    size_t bytes = window->pixels_count * sizeof(pixel_t);
     ssize_t n = window_blit(window, window->pixels, bytes, 0);
     if (n == (ssize_t)bytes) {
         return 0;
     }
 
     if (n >= 0) {
-        errno = EIO;
+        errno = EAGAIN;
     }
 
     return -1;
@@ -727,7 +785,7 @@ static int window_flush_row(window_t *window, const u8 *row, size_t bytes, off_t
         }
 
         if (!n) {
-            errno = EIO;
+            errno = EAGAIN;
             return -1;
         }
 
@@ -735,6 +793,98 @@ static int window_flush_row(window_t *window, const u8 *row, size_t bytes, off_t
     }
 
     return 0;
+}
+
+static void _window_resize_preserve(
+    pixel_t *pixels,
+    u32 old_width,
+    u32 old_height,
+    u32 new_width,
+    u32 new_height
+) {
+    if (!pixels || !old_width || !old_height || !new_width || !new_height) {
+        return;
+    }
+
+    u32 copy_width = old_width < new_width ? old_width : new_width;
+    u32 copy_height = old_height < new_height ? old_height : new_height;
+    size_t copy_bytes = (size_t)copy_width * sizeof(pixel_t);
+    size_t old_stride = (size_t)old_width * sizeof(pixel_t);
+    size_t new_stride = (size_t)new_width * sizeof(pixel_t);
+
+    if (new_stride > old_stride) {
+        for (u32 row = copy_height; row > 0; row--) {
+            size_t i = row - 1;
+            u8 *dst = (u8 *)pixels + (i * new_stride);
+            const u8 *src = (const u8 *)pixels + (i * old_stride);
+            memmove(dst, src, copy_bytes);
+        }
+    } else {
+        for (u32 row = 0; row < copy_height; row++) {
+            u8 *dst = (u8 *)pixels + ((size_t)row * new_stride);
+            const u8 *src = (const u8 *)pixels + ((size_t)row * old_stride);
+            memmove(dst, src, copy_bytes);
+        }
+    }
+
+    if (new_width > old_width) {
+        for (u32 row = 0; row < copy_height; row++) {
+            size_t row_off = (size_t)row * new_width;
+            pixel_t fill = pixels[row_off + (old_width - 1)];
+            for (u32 col = old_width; col < new_width; col++) {
+                pixels[row_off + col] = fill;
+            }
+        }
+    }
+
+    if (new_height > old_height) {
+        size_t src_row = (size_t)(old_height - 1) * new_width;
+        for (u32 row = old_height; row < new_height; row++) {
+            size_t row_off = (size_t)row * new_width;
+            memcpy(pixels + row_off, pixels + src_row, (size_t)new_width * sizeof(pixel_t));
+        }
+    }
+}
+
+static void _window_apply_resize_default(window_t *window, const ws_input_event_t *event) {
+    if (!window || !event || event->type != INPUT_EVENT_WINDOW_RESIZE || !event->width || !event->height) {
+        return;
+    }
+
+    u32 new_width = event->width;
+    u32 new_height = event->height;
+    u32 new_stride = event->stride ? event->stride : event->width * sizeof(pixel_t);
+
+    if (window->width == new_width && window->height == new_height && window->stride == new_stride) {
+        return;
+    }
+
+    u32 old_width = window->width;
+    u32 old_height = window->height;
+    u32 old_stride = window->stride;
+
+    bool had_pixels = window->pixels && window->pixels_count && old_width && old_height;
+
+    window->width = new_width;
+    window->height = new_height;
+    window->stride = new_stride;
+
+    framebuffer_t *fb = window_buffer(window);
+    if (!fb || !fb->pixels) {
+        window->width = old_width;
+        window->height = old_height;
+        window->stride = old_stride;
+        window_sync_framebuffer(window);
+        return;
+    }
+
+    if (had_pixels) {
+        _window_resize_preserve(fb->pixels, old_width, old_height, new_width, new_height);
+    } else if (window->pixels_count) {
+        memset(fb->pixels, 0, window->pixels_count * sizeof(pixel_t));
+    }
+
+    window_sync_framebuffer(window);
 }
 
 int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height) {
@@ -759,19 +909,20 @@ int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height) {
     }
 
     // Fast path: full-width rect with matching stride — single pwrite
-    if (x == 0 && clip_w == window->width && window->stride == window->width * sizeof(u32)) {
+    if (x == 0 && clip_w == window->width && window->stride == window->width * sizeof(pixel_t)) {
         const u8 *src = (const u8 *)(window->pixels + (size_t)y * window->width);
-        size_t total = (size_t)clip_h * (size_t)window->width * sizeof(u32);
+        size_t total = (size_t)clip_h * (size_t)window->width * sizeof(pixel_t);
         off_t dst_off = (off_t)((size_t)y * window->stride);
 
         return window_flush_row(window, src, total, dst_off);
     }
 
-    size_t row_bytes = (size_t)clip_w * sizeof(u32);
+    size_t row_bytes = (size_t)clip_w * sizeof(pixel_t);
 
     for (u32 row = 0; row < clip_h; row++) {
         const u8 *src = (const u8 *)(window->pixels + ((size_t)y + row) * window->width + x);
-        off_t dst_off = (off_t)(((size_t)y + row) * window->stride + (size_t)x * sizeof(u32));
+        off_t dst_off =
+            (off_t)(((size_t)y + row) * window->stride + (size_t)x * sizeof(pixel_t));
 
         if (window_flush_row(window, src, row_bytes, dst_off) < 0) {
             return -1;
@@ -804,6 +955,9 @@ int window_wait_event(window_t *window, ws_input_event_t *event, int timeout_ms)
 
     ssize_t n = window_events(window, event, 1);
     if (n == (ssize_t)sizeof(*event)) {
+        if (event->type == INPUT_EVENT_WINDOW_RESIZE) {
+            _window_apply_resize_default(window, event);
+        }
         return 1;
     }
 

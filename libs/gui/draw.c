@@ -28,17 +28,30 @@ static i64 edge(draw_point_t a, draw_point_t b, i32 px, i32 py) {
     return (i64)(px - a.x) * (i64)(b.y - a.y) - (i64)(py - a.y) * (i64)(b.x - a.x);
 }
 
-void draw_rect(
-    u32 *fb,
-    u32 fb_width,
-    u32 fb_height,
-    i32 x,
-    i32 y,
-    u32 width,
-    u32 height,
-    u32 color
-) {
-    if (!fb || !width || !height) {
+static size_t _stride_pixels(const framebuffer_t *fb) {
+    if (!fb || !fb->width) {
+        return 0;
+    }
+
+    if (!fb->stride) {
+        return fb->width;
+    }
+
+    size_t stride = (size_t)fb->stride / sizeof(pixel_t);
+    if (!stride || stride < fb->width) {
+        return fb->width;
+    }
+
+    return stride;
+}
+
+void draw_rect(framebuffer_t *fb, i32 x, i32 y, u32 width, u32 height, pixel_t color) {
+    if (!fb || !fb->pixels || !fb->width || !fb->height || !width || !height) {
+        return;
+    }
+
+    size_t stride_pixels = _stride_pixels(fb);
+    if (!stride_pixels) {
         return;
     }
 
@@ -53,11 +66,11 @@ void draw_rect(
     if (y0 < 0) {
         y0 = 0;
     }
-    if (x1 > (i32)fb_width) {
-        x1 = (i32)fb_width;
+    if (x1 > (i32)fb->width) {
+        x1 = (i32)fb->width;
     }
-    if (y1 > (i32)fb_height) {
-        y1 = (i32)fb_height;
+    if (y1 > (i32)fb->height) {
+        y1 = (i32)fb->height;
     }
 
     if (x0 >= x1 || y0 >= y1) {
@@ -65,7 +78,7 @@ void draw_rect(
     }
 
     size_t span = (size_t)(x1 - x0);
-    size_t span_bytes = span * sizeof(u32);
+    size_t span_bytes = span * sizeof(pixel_t);
 
     // Check if all 4 bytes are the same — memset is fastest for this case
     u8 b0 = (u8)color;
@@ -74,33 +87,30 @@ void draw_rect(
 
     if (byte_fill) {
         for (i32 row = y0; row < y1; row++) {
-            memset(fb + (size_t)row * fb_width + (size_t)x0, (int)b0, span_bytes);
+            memset(fb->pixels + (size_t)row * stride_pixels + (size_t)x0, (int)b0, span_bytes);
         }
         return;
     }
 
     // Fill the first row manually, then memcpy to subsequent rows
-    u32 *first_row = fb + (size_t)y0 * fb_width + (size_t)x0;
+    pixel_t *first_row = fb->pixels + (size_t)y0 * stride_pixels + (size_t)x0;
 
     for (size_t i = 0; i < span; i++) {
         first_row[i] = color;
     }
 
     for (i32 row = y0 + 1; row < y1; row++) {
-        memcpy(fb + (size_t)row * fb_width + (size_t)x0, first_row, span_bytes);
+        memcpy(fb->pixels + (size_t)row * stride_pixels + (size_t)x0, first_row, span_bytes);
     }
 }
 
-void draw_triangle(
-    u32 *fb,
-    u32 fb_width,
-    u32 fb_height,
-    draw_point_t p0,
-    draw_point_t p1,
-    draw_point_t p2,
-    u32 color
-) {
-    if (!fb || !fb_width || !fb_height) {
+void draw_triangle(framebuffer_t *fb, draw_point_t p0, draw_point_t p1, draw_point_t p2, pixel_t color) {
+    if (!fb || !fb->pixels || !fb->width || !fb->height) {
+        return;
+    }
+
+    size_t stride_pixels = _stride_pixels(fb);
+    if (!stride_pixels) {
         return;
     }
 
@@ -115,11 +125,11 @@ void draw_triangle(
     if (min_y < 0) {
         min_y = 0;
     }
-    if (max_x >= (i32)fb_width) {
-        max_x = (i32)fb_width - 1;
+    if (max_x >= (i32)fb->width) {
+        max_x = (i32)fb->width - 1;
     }
-    if (max_y >= (i32)fb_height) {
-        max_y = (i32)fb_height - 1;
+    if (max_y >= (i32)fb->height) {
+        max_y = (i32)fb->height - 1;
     }
 
     for (i32 y = min_y; y <= max_y; y++) {
@@ -132,25 +142,18 @@ void draw_triangle(
                 continue;
             }
 
-            fb[(size_t)y * fb_width + (size_t)x] = color;
+            fb->pixels[(size_t)y * stride_pixels + (size_t)x] = color;
         }
     }
 }
 
-void draw_polygon(
-    u32 *fb,
-    u32 fb_width,
-    u32 fb_height,
-    const draw_point_t *points,
-    size_t count,
-    u32 color
-) {
-    if (!fb || !points || count < 3) {
+void draw_polygon(framebuffer_t *fb, const draw_point_t *points, size_t count, pixel_t color) {
+    if (!fb || !fb->pixels || !points || count < 3) {
         return;
     }
 
     draw_point_t first = points[0];
     for (size_t i = 1; i + 1 < count; i++) {
-        draw_triangle(fb, fb_width, fb_height, first, points[i], points[i + 1], color);
+        draw_triangle(fb, first, points[i], points[i + 1], color);
     }
 }

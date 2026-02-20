@@ -31,6 +31,7 @@
 #define WSIOC_ALLOC           71
 #define WSIOC_FREE            72
 #define WSIOC_QUERY           73
+#define WSIOC_SET_SIZE        74
 #endif
 
 int ioctl(int fd, unsigned long request, ...);

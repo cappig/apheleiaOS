@@ -27,6 +27,9 @@ typedef struct ws_input_event {
     i32 dx;
     i32 dy;
     i32 wheel;
+    u32 width;
+    u32 height;
+    u32 stride;
 } ws_input_event_t;
 
 typedef struct ws_event {

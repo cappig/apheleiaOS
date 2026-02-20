@@ -403,12 +403,26 @@ ssize_t tty_ioctl_handle(const tty_handle_t *handle, u64 request, void *args) {
         }
 
         return tty_input_get_winsize(screen, args) ? 0 : -EIO;
-    case TIOCSWINSZ:
+    case TIOCSWINSZ: {
         if (!args) {
             return -EINVAL;
         }
 
-        return tty_input_set_winsize(screen, args) ? 0 : -EIO;
+        winsize_t old_ws = {0};
+        tty_input_get_winsize(screen, &old_ws);
+
+        if (!tty_input_set_winsize(screen, args)) {
+            return -EIO;
+        }
+
+        winsize_t new_ws = *(const winsize_t *)args;
+        if ((old_ws.ws_row != new_ws.ws_row || old_ws.ws_col != new_ws.ws_col) &&
+            tty_pgrp[screen] > 0) {
+            sched_signal_send_pgrp(tty_pgrp[screen], SIGWINCH);
+        }
+
+        return 0;
+    }
     case TCGETS:
         if (!args) {
             return -EINVAL;

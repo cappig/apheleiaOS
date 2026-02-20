@@ -17,8 +17,7 @@
 
 #define FB_MAP_CHUNK (4 * MIB)
 
-static u8 *_back_buf;
-static size_t _back_buf_size;
+static void *_present_vram;
 
 static ssize_t
 _dev_fb_transfer(const framebuffer_info_t *fb, void *buf, size_t offset, size_t len, bool write) {
@@ -129,7 +128,7 @@ static bool _clip_present_rect(
 }
 
 static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_present_rect_t *req) {
-    if (!fb || !fb->available || !req || !req->frame || !_back_buf) {
+    if (!fb || !fb->available || !req || !req->frame) {
         return -EINVAL;
     }
 
@@ -148,7 +147,6 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
         return -EINVAL;
     }
 
-    u32 full_row_bytes = fb_width * bpp_bytes;
     u32 rect_row_bytes = width * bpp_bytes;
     const u32 *src = req->frame;
 
@@ -164,6 +162,18 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
 
     sched_preempt_disable();
 
+    bool transient_map = false;
+    void *vram = _present_vram;
+    if (!vram) {
+        vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
+        transient_map = true;
+    }
+
+    if (!vram) {
+        sched_preempt_enable();
+        return -EIO;
+    }
+
     if (pixel_is_fast_bgrx8888(
             (u8)bpp_bytes, red_shift, green_shift, blue_shift, red_size, green_size, blue_size
         )) {
@@ -171,13 +181,13 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
 
         for (u32 row = 0; row < height; row++) {
             const u32 *src_row = src + (size_t)(y + row) * fb_width + x;
-            u8 *dst_row = _back_buf + (size_t)(y + row) * full_row_bytes + (size_t)x * bpp_bytes;
+            u8 *dst_row = (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
             memcpy(dst_row, src_row, src_row_bytes);
         }
     } else {
         for (u32 row = 0; row < height; row++) {
             const u32 *src_row = src + (size_t)(y + row) * fb_width + x;
-            u8 *dst_row = _back_buf + (size_t)(y + row) * full_row_bytes + (size_t)x * bpp_bytes;
+            u8 *dst_row = (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
 
             for (u32 col = 0; col < width; col++) {
                 u32 packed = pixel_pack_rgb888(
@@ -194,22 +204,12 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
         }
     }
 
-    // Copy only the updated rows/columns into VRAM.
-    void *vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
-    if (!vram) {
-        sched_preempt_enable();
-        return -EIO;
-    }
-
-    for (u32 row = 0; row < height; row++) {
-        u8 *dst_row = (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
-        const u8 *src_row = _back_buf + (size_t)(y + row) * full_row_bytes + (size_t)x * bpp_bytes;
-        memcpy(dst_row, src_row, rect_row_bytes);
-    }
-
     stats_add_fb_present_bytes((u64)rect_row_bytes * (u64)height);
 
-    arch_phys_unmap(vram, fb->size);
+    if (transient_map) {
+        arch_phys_unmap(vram, fb->size);
+    }
+
     sched_preempt_enable();
     return 0;
 }
@@ -319,11 +319,9 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
         return true;
     }
 
-    // Allocate kernel-side back buffer for double buffering
-    _back_buf_size = (size_t)fb->height * (size_t)fb->width * (fb->bpp / 8);
-    _back_buf = malloc(_back_buf_size);
-    if (!_back_buf) {
-        log_warn("failed to allocate back buffer (%zu bytes)", _back_buf_size);
+    _present_vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
+    if (!_present_vram) {
+        log_warn("failed to create persistent VRAM map for present path");
     }
 
     vfs_interface_t *fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);

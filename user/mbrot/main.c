@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <input/kbd.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,6 +11,30 @@ typedef struct {
     double center_y;
     double scale;
 } mandelbrot_view_t;
+
+typedef enum {
+    MBROT_ACTION_NONE = 0,
+    MBROT_ACTION_RENDER = 1,
+    MBROT_ACTION_RESIZE = 2,
+    MBROT_ACTION_QUIT = -1,
+} mbrot_action_t;
+
+static size_t fb_stride_pixels(const framebuffer_t *fb) {
+    if (!fb || !fb->width) {
+        return 0;
+    }
+
+    if (!fb->stride) {
+        return fb->width;
+    }
+
+    size_t stride = (size_t)fb->stride / sizeof(pixel_t);
+    if (!stride || stride < fb->width) {
+        return fb->width;
+    }
+
+    return stride;
+}
 
 static void view_reset(mandelbrot_view_t *view) {
     if (!view) {
@@ -118,48 +143,83 @@ static bool point_inside_main_body(double cx, double cy) {
     return false;
 }
 
-static void fill_block(u32 *pixels, u32 width, u32 height, u32 x, u32 y, u32 step, u32 color) {
-    if (!pixels || !width || !height || !step) {
+static void
+fill_block(framebuffer_t *fb, u32 x, u32 y, u32 step, pixel_t color) {
+    if (!fb || !fb->pixels || !fb->width || !fb->height || !step) {
+        return;
+    }
+
+    size_t stride_pixels = fb_stride_pixels(fb);
+    if (!stride_pixels) {
         return;
     }
 
     u32 y_end = y + step;
     u32 x_end = x + step;
 
-    if (y_end > height) {
-        y_end = height;
+    if (y_end > fb->height) {
+        y_end = fb->height;
     }
 
-    if (x_end > width) {
-        x_end = width;
+    if (x_end > fb->width) {
+        x_end = fb->width;
     }
 
     for (u32 yy = y; yy < y_end; yy++) {
-        size_t row = (size_t)yy * width;
+        size_t row = (size_t)yy * stride_pixels;
         for (u32 xx = x; xx < x_end; xx++) {
-            pixels[row + xx] = color;
+            fb->pixels[row + xx] = color;
         }
     }
 }
 
-static void render_mandelbrot(window_t *window, const mandelbrot_view_t *view) {
+static bool flush_frame(window_t *window) {
+    if (!window) {
+        return false;
+    }
+
+    if (!window_flush(window)) {
+        return true;
+    }
+
+    if (errno == EAGAIN || errno == EINTR) {
+        return false;
+    }
+
+    return false;
+}
+
+static void render_mandelbrot(window_t *window, const mandelbrot_view_t *view, bool fast_preview) {
     if (!window || !view) {
         return;
     }
 
-    u32 *pixels = window_buffer(window);
-    if (!pixels) {
+    framebuffer_t *fb = window_buffer(window);
+    if (!fb || !fb->pixels) {
         return;
     }
 
-    u32 width = window->width;
-    u32 height = window->height;
+    u32 width = fb->width;
+    u32 height = fb->height;
     if (!width || !height) {
         return;
     }
 
     u32 max_iter = compute_max_iter(view->scale);
-    u32 step = (width * height >= 260000U) ? 2U : 1U;
+    if (fast_preview) {
+        max_iter /= 2U;
+        if (max_iter < 48U) {
+            max_iter = 48U;
+        }
+    }
+
+    u32 step = ((u64)width * (u64)height >= 260000ULL) ? 2U : 1U;
+    if (fast_preview) {
+        step *= 2U;
+        if (step > 4U) {
+            step = 4U;
+        }
+    }
 
     double aspect = (double)height / (double)width;
     double x_min = view->center_x - view->scale;
@@ -200,18 +260,22 @@ static void render_mandelbrot(window_t *window, const mandelbrot_view_t *view) {
                 color = palette_color(iter, max_iter);
             }
 
-            fill_block(pixels, width, height, x, y, step, color);
+            fill_block(fb, x, y, step, color);
         }
     }
 }
 
 static int handle_event(mandelbrot_view_t *view, const ws_input_event_t *event) {
     if (!view || !event) {
-        return 0;
+        return MBROT_ACTION_NONE;
+    }
+
+    if (event->type == INPUT_EVENT_WINDOW_RESIZE) {
+        return MBROT_ACTION_RESIZE;
     }
 
     if (event->type != INPUT_EVENT_KEY || !event->action) {
-        return 0;
+        return MBROT_ACTION_NONE;
     }
 
     double pan_step = view->scale * 0.18;
@@ -219,35 +283,35 @@ static int handle_event(mandelbrot_view_t *view, const ws_input_event_t *event) 
     switch (event->keycode) {
     case KBD_ESCAPE:
     case KBD_Q:
-        return -1;
+        return MBROT_ACTION_QUIT;
     case KBD_EQUALS:
     case KBD_KP_PLUS:
         view->scale *= 0.84;
         view_clamp(view);
-        return 1;
+        return MBROT_ACTION_RENDER;
     case KBD_MINUS:
     case KBD_KP_MINUS:
         view->scale *= 1.20;
         view_clamp(view);
-        return 1;
+        return MBROT_ACTION_RENDER;
     case KBD_LEFT:
         view->center_x -= pan_step;
-        return 1;
+        return MBROT_ACTION_RENDER;
     case KBD_RIGHT:
         view->center_x += pan_step;
-        return 1;
+        return MBROT_ACTION_RENDER;
     case KBD_UP:
         view->center_y += pan_step;
-        return 1;
+        return MBROT_ACTION_RENDER;
     case KBD_DOWN:
         view->center_y -= pan_step;
-        return 1;
+        return MBROT_ACTION_RENDER;
     case KBD_0:
     case KBD_R:
         view_reset(view);
-        return 1;
+        return MBROT_ACTION_RENDER;
     default:
-        return 0;
+        return MBROT_ACTION_NONE;
     }
 }
 
@@ -262,36 +326,64 @@ int main(void) {
     mandelbrot_view_t view = {0};
     view_reset(&view);
 
-    render_mandelbrot(&window, &view);
-    if (window_flush(&window)) {
+    render_mandelbrot(&window, &view, false);
+    if (!flush_frame(&window) && errno != EAGAIN && errno != EINTR) {
         window_deinit(&window);
         return 1;
     }
 
+    bool refine_pending = false;
+
     while (true) {
+        int timeout_ms = refine_pending ? 0 : -1;
         ws_input_event_t event = {0};
-        int ret = window_wait_event(&window, &event, -1);
+        int ret = window_wait_event(&window, &event, timeout_ms);
 
         if (ret < 0) {
+            if (errno == EINTR || errno == EAGAIN) {
+                continue;
+            }
             break;
         }
 
         if (ret == 0) {
+            if (refine_pending) {
+                render_mandelbrot(&window, &view, false);
+                if (!flush_frame(&window)) {
+                    if (errno == EAGAIN || errno == EINTR) {
+                        refine_pending = true;
+                        continue;
+                    }
+                    break;
+                }
+                refine_pending = false;
+            }
             continue;
         }
 
         int action = handle_event(&view, &event);
 
-        if (action < 0) {
+        if (action == MBROT_ACTION_QUIT) {
             break;
         }
 
-        if (!action) {
+        if (action == MBROT_ACTION_NONE) {
             continue;
         }
 
-        render_mandelbrot(&window, &view);
-        if (window_flush(&window)) {
+        if (action == MBROT_ACTION_RESIZE) {
+            render_mandelbrot(&window, &view, true);
+            refine_pending = true;
+        } else {
+            render_mandelbrot(&window, &view, false);
+            refine_pending = false;
+        }
+
+        if (!flush_frame(&window)) {
+            if (errno == EAGAIN || errno == EINTR) {
+                refine_pending = true;
+                continue;
+            }
             break;
         }
     }

@@ -10,7 +10,7 @@
 
 #define WM_BG_MAX_FILE_BYTES (64U * 1024U * 1024U)
 
-static u32 *bg_pixels = NULL;
+static pixel_t *bg_pixels = NULL;
 static u32 bg_width = 0;
 static u32 bg_height = 0;
 
@@ -71,7 +71,7 @@ static bool _parse_hex_color(const char *text, u32 *color_out) {
     return false;
 }
 
-static void _fill_solid_color(size_t pixels, u32 color) {
+static void _fill_solid_color(size_t pixels, pixel_t color) {
     for (size_t i = 0; i < pixels; i++) {
         bg_pixels[i] = color;
     }
@@ -150,11 +150,11 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
         return false;
     }
 
-    if (dst_pixels > SIZE_MAX / sizeof(u32)) {
+    if (dst_pixels > SIZE_MAX / sizeof(pixel_t)) {
         return false;
     }
 
-    u32 *dst = malloc(dst_pixels * sizeof(u32));
+    pixel_t *dst = malloc(dst_pixels * sizeof(pixel_t));
     if (!dst) {
         return false;
     }
@@ -232,7 +232,7 @@ fail:
     return false;
 }
 
-bool wm_background_draw(u32 *frame, u32 fb_width, u32 fb_height) {
+bool wm_background_draw(pixel_t *frame, u32 fb_width, u32 fb_height) {
     if (!frame || !bg_pixels || bg_width != fb_width || bg_height != fb_height) {
         return false;
     }
@@ -242,16 +242,16 @@ bool wm_background_draw(u32 *frame, u32 fb_width, u32 fb_height) {
         return false;
     }
 
-    if (pixels > SIZE_MAX / sizeof(u32)) {
+    if (pixels > SIZE_MAX / sizeof(pixel_t)) {
         return false;
     }
 
-    memcpy(frame, bg_pixels, pixels * sizeof(u32));
+    memcpy(frame, bg_pixels, pixels * sizeof(pixel_t));
     return true;
 }
 
 bool wm_background_draw_rect(
-    u32 *frame,
+    pixel_t *frame,
     u32 fb_width,
     u32 fb_height,
     i32 x,
@@ -286,7 +286,7 @@ bool wm_background_draw_rect(
     }
 
     size_t row_pixels = (size_t)(x1 - x0);
-    size_t row_bytes = row_pixels * sizeof(u32);
+    size_t row_bytes = row_pixels * sizeof(pixel_t);
 
     for (i32 row = y0; row < y1; row++) {
         size_t off = (size_t)row * fb_width + (size_t)x0;

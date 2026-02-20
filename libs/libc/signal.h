@@ -28,6 +28,7 @@ typedef int sig_atomic_t;
 #define SIGKILL 18
 #define SIGTTIN 19
 #define SIGTTOU 20
+#define SIGWINCH 21
 
 #define NSIG 32
 

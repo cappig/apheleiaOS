@@ -71,13 +71,66 @@ static bool read_window(window_t *window, int master_fd) {
         return errno == EAGAIN || errno == EINTR;
     }
 
+    bool pending_resize = false;
+    u32 resize_width = 0;
+    u32 resize_height = 0;
+    u32 resize_stride = 0;
+
     size_t count = (size_t)n / sizeof(events[0]);
     for (size_t i = 0; i < count; i++) {
-        if (events[i].type != INPUT_EVENT_KEY) {
+        if (events[i].type == INPUT_EVENT_KEY) {
+            term_handle_key_event(master_fd, &events[i]);
             continue;
         }
 
-        term_handle_key_event(master_fd, &events[i]);
+        if (events[i].type != INPUT_EVENT_WINDOW_RESIZE) {
+            continue;
+        }
+
+        if (!events[i].width || !events[i].height) {
+            continue;
+        }
+
+        pending_resize = true;
+        resize_width = events[i].width;
+        resize_height = events[i].height;
+        resize_stride = events[i].stride ? events[i].stride : events[i].width * sizeof(pixel_t);
+    }
+
+    if (pending_resize &&
+        (window->width != resize_width || window->height != resize_height ||
+         window->stride != resize_stride)) {
+        if (!term_screen_can_resize(resize_width, resize_height)) {
+            return true;
+        }
+
+        u32 old_width = window->width;
+        u32 old_height = window->height;
+        u32 old_stride = window->stride;
+
+        window->width = resize_width;
+        window->height = resize_height;
+        window->stride = resize_stride;
+
+        framebuffer_t *fb = window_buffer(window);
+        if (!fb || !fb->pixels) {
+            // Keep running; retry on next resize/event tick.
+            window->width = old_width;
+            window->height = old_height;
+            window->stride = old_stride;
+            return true;
+        }
+
+        if (!term_screen_resize(fb)) {
+            // Keep running; leave current screen model untouched.
+            window->width = old_width;
+            window->height = old_height;
+            window->stride = old_stride;
+            return true;
+        }
+
+        // Winsize signaling failure should not kill terminal rendering.
+        term_set_winsize(master_fd, term_screen_cols(), term_screen_rows(), window->width, window->height);
     }
 
     return true;
@@ -89,15 +142,13 @@ int main(void) {
         return 1;
     }
 
-    u32 *pixels = window_buffer(&window);
-    if (!pixels) {
+    framebuffer_t *fb = window_buffer(&window);
+    if (!fb || !fb->pixels) {
         window_deinit(&window);
         return 1;
     }
 
-    if (!term_screen_init(
-            window.width, window.height, pixels, (size_t)window.width * (size_t)window.height
-        )) {
+    if (!term_screen_init(fb)) {
         window_deinit(&window);
         return 1;
     }
@@ -160,9 +211,7 @@ int main(void) {
                     continue;
                 }
 
-                if (errno != EAGAIN && errno != EINTR) {
-                    break;
-                }
+                continue;
             }
         }
 
@@ -176,16 +225,22 @@ int main(void) {
             if (errno == ENOENT) {
                 break;
             }
-            if (errno == EAGAIN) {
+            if (errno == EAGAIN || errno == EINTR) {
                 continue;
             }
-
-            if (errno != EAGAIN) {
-                break;
-            }
+            // Keep terminal alive through transient geometry/write races.
+            pending_flush = false;
+            continue;
         }
 
         pending_flush = false;
+
+        // A resize can mark a new dirty region while an older flush was pending.
+        // Queue the next dirty rect immediately so we do not block in poll() and
+        // leave newly exposed pixels stale/black until later input/output arrives.
+        if (term_screen_render_rect(&flush_x, &flush_y, &flush_w, &flush_h)) {
+            pending_flush = true;
+        }
     }
 
     if (child_alive(child)) {

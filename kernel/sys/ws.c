@@ -2,6 +2,7 @@
 
 #include <arch/arch.h>
 #include <errno.h>
+#include <gui/input.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
@@ -31,10 +32,21 @@ typedef struct {
     u32 z;
     u32 flags;
     u8 *fb;
+    u32 fb_store_width;
+    u32 fb_store_height;
+    u32 fb_store_stride;
+    size_t fb_store_size;
     size_t fb_size;
+    size_t fb_capacity;
+    volatile int fb_io_lock;
     u32 io_refs;
     bool pending_free;
     bool pending_notify_manager;
+    bool mgr_dirty_pending;
+    u32 mgr_dirty_x;
+    u32 mgr_dirty_y;
+    u32 mgr_dirty_width;
+    u32 mgr_dirty_height;
     ws_input_event_t *ev_queue;
     size_t ev_capacity;
     size_t ev_head;
@@ -198,6 +210,18 @@ static bool _mgr_queue_push(const ws_event_t *event) {
                 return false;
             }
 
+            ws_event_t dropped = ws_state.mgr_queue[ws_state.mgr_head];
+            if (dropped.type == WS_EVT_WINDOW_DIRTY) {
+                ws_window_t *window = _window_slot(dropped.id);
+                if (window) {
+                    window->mgr_dirty_pending = false;
+                    window->mgr_dirty_x = 0;
+                    window->mgr_dirty_y = 0;
+                    window->mgr_dirty_width = 0;
+                    window->mgr_dirty_height = 0;
+                }
+            }
+
             ws_state.mgr_head = (ws_state.mgr_head + 1) % ws_state.mgr_capacity;
             ws_state.mgr_count--;
         }
@@ -214,38 +238,69 @@ static bool _mgr_queue_push(const ws_event_t *event) {
     return true;
 }
 
-static bool _mgr_queue_merge_dirty(u32 id, u32 x, u32 y, u32 width, u32 height) {
-    if (!ws_state.mgr_count || !ws_state.mgr_queue || !ws_state.mgr_capacity) {
-        return false;
+static void _window_dirty_clear_pending(ws_window_t *window) {
+    if (!window) {
+        return;
     }
+
+    window->mgr_dirty_pending = false;
+    window->mgr_dirty_x = 0;
+    window->mgr_dirty_y = 0;
+    window->mgr_dirty_width = 0;
+    window->mgr_dirty_height = 0;
+}
+
+static void _window_dirty_merge_pending(ws_window_t *window, u32 x, u32 y, u32 width, u32 height) {
+    if (!window || !width || !height) {
+        return;
+    }
+
+    if (!window->mgr_dirty_pending || !window->mgr_dirty_width || !window->mgr_dirty_height) {
+        window->mgr_dirty_pending = true;
+        window->mgr_dirty_x = x;
+        window->mgr_dirty_y = y;
+        window->mgr_dirty_width = width;
+        window->mgr_dirty_height = height;
+        return;
+    }
+
+    u32 x0 = window->mgr_dirty_x < x ? window->mgr_dirty_x : x;
+    u32 y0 = window->mgr_dirty_y < y ? window->mgr_dirty_y : y;
+    u32 x1 = (window->mgr_dirty_x + window->mgr_dirty_width) > (x + width)
+                 ? (window->mgr_dirty_x + window->mgr_dirty_width)
+                 : (x + width);
+    u32 y1 = (window->mgr_dirty_y + window->mgr_dirty_height) > (y + height)
+                 ? (window->mgr_dirty_y + window->mgr_dirty_height)
+                 : (y + height);
+
+    window->mgr_dirty_x = x0;
+    window->mgr_dirty_y = y0;
+    window->mgr_dirty_width = x1 - x0;
+    window->mgr_dirty_height = y1 - y0;
+}
+
+static void _mgr_queue_drop_window_dirty(u32 id) {
+    if (!ws_state.mgr_count || !ws_state.mgr_queue || !ws_state.mgr_capacity) {
+        return;
+    }
+
+    size_t kept = 0;
+    size_t write = ws_state.mgr_head;
 
     for (size_t i = 0; i < ws_state.mgr_count; i++) {
         size_t index = (ws_state.mgr_head + i) % ws_state.mgr_capacity;
-        ws_event_t *event = &ws_state.mgr_queue[index];
-
-        if (event->type != WS_EVT_WINDOW_DIRTY || event->id != id) {
+        ws_event_t event = ws_state.mgr_queue[index];
+        if (event.type == WS_EVT_WINDOW_DIRTY && event.id == id) {
             continue;
         }
 
-        u32 ex = (u32)event->x;
-        u32 ey = (u32)event->y;
-        u32 ew = event->width;
-        u32 eh = event->height;
-
-        u32 x0 = ex < x ? ex : x;
-        u32 y0 = ey < y ? ey : y;
-        u32 x1 = (ex + ew) > (x + width) ? (ex + ew) : (x + width);
-        u32 y1 = (ey + eh) > (y + height) ? (ey + eh) : (y + height);
-
-        event->x = (i32)x0;
-        event->y = (i32)y0;
-        event->width = x1 - x0;
-        event->height = y1 - y0;
-
-        return true;
+        ws_state.mgr_queue[write] = event;
+        write = (write + 1) % ws_state.mgr_capacity;
+        kept++;
     }
 
-    return false;
+    ws_state.mgr_count = kept;
+    ws_state.mgr_tail = (ws_state.mgr_head + kept) % ws_state.mgr_capacity;
 }
 
 static bool _window_ev_reserve(ws_window_t *window, size_t needed) {
@@ -297,12 +352,28 @@ static bool _window_ev_push(ws_window_t *window, const ws_input_event_t *event) 
         return false;
     }
 
+    if (event->type == INPUT_EVENT_WINDOW_RESIZE && window->ev_count && window->ev_capacity &&
+        window->ev_queue) {
+        // Coalesce to the newest queued resize event so geometry stays in sync.
+        for (size_t i = 0; i < window->ev_count; i++) {
+            size_t rel = window->ev_count - 1 - i;
+            size_t index = (window->ev_head + rel) % window->ev_capacity;
+
+            if (window->ev_queue[index].type == INPUT_EVENT_WINDOW_RESIZE) {
+                window->ev_queue[index] = *event;
+                return true;
+            }
+        }
+    }
+
     if (window->ev_count == window->ev_capacity) {
         if (!_window_ev_reserve(window, window->ev_count + 1)) {
             if (!window->ev_capacity) {
                 return false;
             }
 
+            // If we cannot grow the queue, drop the oldest event and keep the
+            // newest one. This is especially important for resize events.
             window->ev_head = (window->ev_head + 1) % window->ev_capacity;
             window->ev_count--;
         }
@@ -346,7 +417,7 @@ static void _queue_manager_event(u32 type, u32 id, const ws_window_t *window) {
 
 static void _queue_manager_dirty_event(
     u32 id,
-    const ws_window_t *window,
+    ws_window_t *window,
     u32 x,
     u32 y,
     u32 width,
@@ -372,26 +443,32 @@ static void _queue_manager_dirty_event(
         return;
     }
 
-    ws_event_t event = {0};
-    event.type = WS_EVT_WINDOW_DIRTY;
-    event.id = id;
-    event.owner_pid = window->owner_pid;
-    event.x = (i32)x;
-    event.y = (i32)y;
-    event.width = width;
-    event.height = height;
+    bool had_pending = window->mgr_dirty_pending;
+    _window_dirty_merge_pending(window, x, y, width, height);
 
-    if (_mgr_queue_merge_dirty(id, x, y, width, height)) {
+    if (had_pending) {
         sched_wake_all(&ws_state.mgr_wait);
         return;
     }
 
-    if (_mgr_queue_push(&event)) {
-        sched_wake_all(&ws_state.mgr_wait);
+    ws_event_t event = {0};
+    event.type = WS_EVT_WINDOW_DIRTY;
+    event.id = id;
+    event.owner_pid = window->owner_pid;
+    event.x = (i32)window->mgr_dirty_x;
+    event.y = (i32)window->mgr_dirty_y;
+    event.width = window->mgr_dirty_width;
+    event.height = window->mgr_dirty_height;
+
+    if (!_mgr_queue_push(&event)) {
+        _window_dirty_clear_pending(window);
+        return;
     }
+
+    sched_wake_all(&ws_state.mgr_wait);
 }
 
-static void _queue_manager_dirty_write(u32 id, const ws_window_t *window, size_t offset, size_t len) {
+static void _queue_manager_dirty_write(u32 id, ws_window_t *window, size_t offset, size_t len) {
     if (!window || !len || window->width == 0) {
         return;
     }
@@ -408,7 +485,6 @@ static void _queue_manager_dirty_write(u32 id, const ws_window_t *window, size_t
         _queue_manager_dirty_event(id, window, x0, y0, x1 - x0 + 1, 1);
         return;
     }
-
     _queue_manager_dirty_event(id, window, 0, y0, window->width, y1 - y0 + 1);
 }
 
@@ -421,6 +497,9 @@ static void _finalize_window_free(u32 id, bool notify_manager) {
     if (!window->allocated) {
         return;
     }
+
+    _window_dirty_clear_pending(window);
+    _mgr_queue_drop_window_dirty(id);
 
     ws_window_t snapshot = *window;
     sched_wake_all(&window->ev_wait);
@@ -632,6 +711,82 @@ static size_t _copy_len(size_t size, size_t offset, size_t len) {
     return copy_len;
 }
 
+static void _copy_from_store(const ws_window_t *window, void *dst, size_t offset, size_t len) {
+    if (!window || !window->fb || !dst || !len || !window->stride || !window->fb_store_stride) {
+        return;
+    }
+
+    size_t view_stride = (size_t)window->stride;
+    size_t store_stride = (size_t)window->fb_store_stride;
+
+    if (view_stride == store_stride) {
+        memcpy(dst, window->fb + offset, len);
+        return;
+    }
+
+    u8 *out = dst;
+    size_t done = 0;
+    size_t remaining = len;
+
+    while (remaining > 0) {
+        size_t row = offset / view_stride;
+        size_t col = offset % view_stride;
+        if (row >= window->height) {
+            break;
+        }
+
+        size_t chunk = view_stride - col;
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+
+        size_t src_off = row * store_stride + col;
+        memcpy(out + done, window->fb + src_off, chunk);
+
+        done += chunk;
+        offset += chunk;
+        remaining -= chunk;
+    }
+}
+
+static void _copy_to_store(ws_window_t *window, const void *src, size_t offset, size_t len) {
+    if (!window || !window->fb || !src || !len || !window->stride || !window->fb_store_stride) {
+        return;
+    }
+
+    size_t view_stride = (size_t)window->stride;
+    size_t store_stride = (size_t)window->fb_store_stride;
+
+    if (view_stride == store_stride) {
+        memcpy(window->fb + offset, src, len);
+        return;
+    }
+
+    const u8 *in = src;
+    size_t done = 0;
+    size_t remaining = len;
+
+    while (remaining > 0) {
+        size_t row = offset / view_stride;
+        size_t col = offset % view_stride;
+        if (row >= window->height) {
+            break;
+        }
+
+        size_t chunk = view_stride - col;
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+
+        size_t dst_off = row * store_stride + col;
+        memcpy(window->fb + dst_off, in + done, chunk);
+
+        done += chunk;
+        offset += chunk;
+        remaining -= chunk;
+    }
+}
+
 static bool _ensure_slot_nodes(u32 id) {
     if (!ws_state.ws_dir || !ws_state.ws_fb_if || !ws_state.ws_ev_if) {
         return false;
@@ -731,9 +886,14 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     window->width = cmd->width;
     window->height = cmd->height;
     window->stride = (u32)stride;
+    window->fb_store_width = cmd->width;
+    window->fb_store_height = cmd->height;
+    window->fb_store_stride = (u32)stride;
+    window->fb_store_size = (size_t)fb_size_u64;
     window->z = free_id;
     window->flags = cmd->flags | WS_WINDOW_MAPPED;
     window->fb_size = (size_t)fb_size_u64;
+    window->fb_capacity = (size_t)fb_size_u64;
 
     strncpy(window->title, cmd->title, sizeof(window->title) - 1);
 
@@ -771,6 +931,169 @@ static int _handle_query(pid_t caller_pid, ws_cmd_t *cmd) {
     }
 
     _cmd_fill_from_window(cmd, cmd->id);
+    return 0;
+}
+
+static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
+    if (!window || !cmd) {
+        return -EINVAL;
+    }
+
+    if (!cmd->width || !cmd->height) {
+        return -EINVAL;
+    }
+
+    if (cmd->width == window->width && cmd->height == window->height) {
+        _cmd_fill_from_window(cmd, id);
+        return 0;
+    }
+
+    u64 stride_u64 = (u64)cmd->width * 4ULL;
+    u64 fb_size_u64 = stride_u64 * (u64)cmd->height;
+    if (!stride_u64 || fb_size_u64 > WS_MAX_FB_BYTES) {
+        return -EINVAL;
+    }
+
+    if (window->io_refs) {
+        return -EAGAIN;
+    }
+
+    size_t view_size = (size_t)fb_size_u64;
+
+    u32 old_store_width = window->fb_store_width;
+    u32 old_store_height = window->fb_store_height;
+    size_t old_store_stride = (size_t)window->fb_store_stride;
+    size_t old_store_size = window->fb_store_size;
+
+    u32 need_store_width = old_store_width;
+    if (cmd->width > need_store_width) {
+        need_store_width = cmd->width;
+    }
+    if (!need_store_width) {
+        need_store_width = cmd->width;
+    }
+
+    u32 need_store_height = old_store_height;
+    if (cmd->height > need_store_height) {
+        need_store_height = cmd->height;
+    }
+    if (!need_store_height) {
+        need_store_height = cmd->height;
+    }
+
+    u64 need_store_stride_u64 = (u64)need_store_width * 4ULL;
+    u64 need_store_size_u64 = need_store_stride_u64 * (u64)need_store_height;
+    if (!need_store_stride_u64 || need_store_size_u64 > WS_MAX_FB_BYTES) {
+        return -EINVAL;
+    }
+
+    size_t need_store_stride = (size_t)need_store_stride_u64;
+    size_t need_store_size = (size_t)need_store_size_u64;
+
+    bool stride_change = old_store_stride != need_store_stride;
+    bool need_alloc = !window->fb || stride_change || window->fb_capacity < need_store_size;
+    u8 *resized_fb = NULL;
+    size_t resized_capacity = 0;
+
+    if (need_alloc) {
+        size_t new_capacity = window->fb_capacity ? window->fb_capacity : old_store_size;
+        if (!new_capacity) {
+            new_capacity = need_store_size;
+        }
+
+        while (new_capacity < need_store_size) {
+            size_t grown = new_capacity * 2;
+            if (grown <= new_capacity) {
+                new_capacity = need_store_size;
+                break;
+            }
+            new_capacity = grown;
+        }
+
+        if (new_capacity < need_store_size || new_capacity > WS_MAX_FB_BYTES) {
+            return -ENOMEM;
+        }
+
+        resized_fb = calloc(1, new_capacity);
+        if (!resized_fb) {
+            return -ENOMEM;
+        }
+
+        if (window->fb && old_store_width && old_store_height && old_store_stride) {
+            size_t row_bytes = (size_t)old_store_width * sizeof(u32);
+            for (u32 row = 0; row < old_store_height; row++) {
+                const u8 *src = window->fb + ((size_t)row * old_store_stride);
+                u8 *dst = resized_fb + ((size_t)row * need_store_stride);
+                memcpy(dst, src, row_bytes);
+            }
+        }
+
+        resized_capacity = new_capacity;
+    }
+
+    ws_input_event_t resize_event = {0};
+    resize_event.type = INPUT_EVENT_WINDOW_RESIZE;
+    resize_event.width = cmd->width;
+    resize_event.height = cmd->height;
+    resize_event.stride = (u32)stride_u64;
+
+    if (!_window_ev_push(window, &resize_event)) {
+        if (resized_fb) {
+            free(resized_fb);
+        }
+        return -ENOMEM;
+    }
+
+    if (need_alloc) {
+        u8 *old_fb = window->fb;
+        window->fb = resized_fb;
+        window->fb_capacity = resized_capacity;
+        free(old_fb);
+    }
+
+    if (window->fb && old_store_width && old_store_height && need_store_width > old_store_width) {
+        for (u32 row = 0; row < old_store_height; row++) {
+            u8 *row_base = window->fb + ((size_t)row * need_store_stride);
+            const u32 *edge = (const u32 *)(row_base + ((size_t)(old_store_width - 1) * sizeof(u32)));
+            u32 fill = *edge;
+
+            u32 *dst = (u32 *)(row_base + ((size_t)old_store_width * sizeof(u32)));
+            for (u32 col = old_store_width; col < need_store_width; col++) {
+                *dst++ = fill;
+            }
+        }
+    }
+
+    if (window->fb && need_store_height > old_store_height) {
+        if (old_store_height > 0) {
+            const u8 *src_row = window->fb + ((size_t)(old_store_height - 1) * need_store_stride);
+            for (u32 row = old_store_height; row < need_store_height; row++) {
+                u8 *dst_row = window->fb + ((size_t)row * need_store_stride);
+                memcpy(dst_row, src_row, need_store_stride);
+            }
+        } else {
+            u8 *dst = window->fb + ((size_t)old_store_height * need_store_stride);
+            size_t grow_bytes = (size_t)(need_store_height - old_store_height) * need_store_stride;
+            memset(dst, 0, grow_bytes);
+        }
+    }
+
+    window->fb_store_width = need_store_width;
+    window->fb_store_height = need_store_height;
+    window->fb_store_stride = (u32)need_store_stride_u64;
+    window->fb_store_size = need_store_size;
+    window->width = cmd->width;
+    window->height = cmd->height;
+    window->stride = (u32)stride_u64;
+    window->fb_size = view_size;
+
+    // Make resize immediately visible to the compositor even for apps that
+    // do not repaint on resize (e.g. simple event-loop demos).
+    _queue_manager_dirty_event(cmd->id, window, 0, 0, window->width, window->height);
+
+    sched_wake_all(&window->ev_wait);
+
+    _cmd_fill_from_window(cmd, id);
     return 0;
 }
 
@@ -826,6 +1149,8 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
         window->y = cmd->y;
         _cmd_fill_from_window(cmd, cmd->id);
         return 0;
+    case WSIOC_SET_SIZE:
+        return _handle_set_size(cmd->id, window, cmd);
     case WSIOC_SET_Z:
         window->z = cmd->flags;
         _cmd_fill_from_window(cmd, cmd->id);
@@ -1041,6 +1366,7 @@ ssize_t ws_ctl_ioctl(vfs_node_t *node, u64 request, void *args) {
     case WSIOC_RELEASE_MANAGER:
     case WSIOC_SET_FOCUS:
     case WSIOC_SET_POS:
+    case WSIOC_SET_SIZE:
     case WSIOC_SET_Z:
     case WSIOC_SEND_INPUT:
     case WSIOC_CLOSE:
@@ -1102,6 +1428,21 @@ ssize_t ws_mgr_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 
             ws_event_t event = ws_state.mgr_queue[ws_state.mgr_head];
             ws_state.mgr_head = (ws_state.mgr_head + 1) % ws_state.mgr_capacity;
             ws_state.mgr_count--;
+
+            if (event.type == WS_EVT_WINDOW_DIRTY) {
+                ws_window_t *window = _window_slot(event.id);
+                if (!window || !window->allocated || window->owner_pid != event.owner_pid ||
+                    !window->mgr_dirty_pending || !window->mgr_dirty_width || !window->mgr_dirty_height) {
+                    unlock(&ws_lock);
+                    continue;
+                }
+
+                event.x = (i32)window->mgr_dirty_x;
+                event.y = (i32)window->mgr_dirty_y;
+                event.width = window->mgr_dirty_width;
+                event.height = window->mgr_dirty_height;
+                _window_dirty_clear_pending(window);
+            }
             unlock(&ws_lock);
 
             memcpy(buf, &event, sizeof(event));
@@ -1184,10 +1525,11 @@ ssize_t ws_fb_read(u32 id, void *buf, size_t offset, size_t len, u32 flags) {
     }
 
     _window_acquire_io(window);
-    const void *src = window->fb + offset;
     unlock(&ws_lock);
 
-    memcpy(buf, src, copy_len);
+    lock(&window->fb_io_lock);
+    _copy_from_store(window, buf, offset, copy_len);
+    unlock(&window->fb_io_lock);
 
     lock(&ws_lock);
     _window_release_io(id, window);
@@ -1223,11 +1565,17 @@ ssize_t ws_fb_write(u32 id, const void *buf, size_t offset, size_t len, u32 flag
         return VFS_EOF;
     }
 
+    if (copy_len != len) {
+        unlock(&ws_lock);
+        return -EAGAIN;
+    }
+
     _window_acquire_io(window);
-    void *dst = window->fb + offset;
     unlock(&ws_lock);
 
-    memcpy(dst, buf, copy_len);
+    lock(&window->fb_io_lock);
+    _copy_to_store(window, buf, offset, copy_len);
+    unlock(&window->fb_io_lock);
 
     stats_add_ws_fb_write_bytes((u64)copy_len);
     stats_add_wm_dirty_pixels((u64)(copy_len / 4));

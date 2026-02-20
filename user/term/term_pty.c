@@ -156,9 +156,9 @@ void term_handle_key_event(int master_fd, const ws_input_event_t *event) {
     write_retry(master_fd, &ch, 1);
 }
 
-pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 height) {
+bool term_set_winsize(int master_fd, size_t cols, size_t rows, u32 width, u32 height) {
     if (master_fd < 0 || !cols || !rows || !width || !height) {
-        return -1;
+        return false;
     }
 
     winsize_t ws = {
@@ -167,7 +167,18 @@ pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 h
         .ws_xpixel = (u16)width,
         .ws_ypixel = (u16)height,
     };
-    ioctl(master_fd, TIOCSWINSZ, &ws);
+
+    return ioctl(master_fd, TIOCSWINSZ, &ws) == 0;
+}
+
+pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 height) {
+    if (master_fd < 0 || !cols || !rows || !width || !height) {
+        return -1;
+    }
+
+    if (!term_set_winsize(master_fd, cols, rows, width, height)) {
+        return -1;
+    }
 
     int ptn = -1;
     if (ioctl(master_fd, TIOCGPTN, &ptn) || ptn < 0) {

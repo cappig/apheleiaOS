@@ -1,6 +1,7 @@
 #pragma once
 
 #include <base/types.h>
+#include <gui/fb.h>
 #include <gui/input.h>
 #include <gui/ws.h>
 #include <stdbool.h>
@@ -28,8 +29,10 @@ typedef struct {
     u32 width;
     u32 height;
     u32 stride;
-    u32 *pixels;
+    pixel_t *pixels;
     size_t pixels_count;
+    size_t pixels_capacity;
+    framebuffer_t framebuffer;
 } window_t;
 
 enum ui_open_flags {
@@ -46,6 +49,7 @@ int ui_mgr_release(ui_t *ui);
 ssize_t ui_mgr_events(ui_t *ui, ws_event_t *events, size_t count);
 int ui_mgr_focus(ui_t *ui, u32 id);
 int ui_mgr_move(ui_t *ui, u32 id, i32 x, i32 y);
+int ui_mgr_resize(ui_t *ui, u32 id, u32 width, u32 height);
 int ui_mgr_raise(ui_t *ui, u32 id, u32 z);
 int ui_mgr_close(ui_t *ui, u32 id);
 int ui_mgr_send(ui_t *ui, u32 id, const input_event_t *event);
@@ -57,10 +61,10 @@ void window_close(window_t *window);
 ssize_t window_blit(window_t *window, const void *pixels, size_t len, size_t offset);
 ssize_t window_events(window_t *window, ws_input_event_t *events, size_t count);
 
-// Simple application-facing helpers (open -> draw to window_buffer -> window_flush -> loop events).
+// Simple application-facing helpers (open -> draw to window_buffer() -> window_flush -> loop events).
 int window_init(window_t *window, u32 width, u32 height, const char *title);
 void window_deinit(window_t *window);
-u32 *window_buffer(window_t *window);
+framebuffer_t *window_buffer(window_t *window);
 int window_flush(window_t *window);
 int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height);
 int window_wait_event(window_t *window, ws_input_event_t *event, int timeout_ms);

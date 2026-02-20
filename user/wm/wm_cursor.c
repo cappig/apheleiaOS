@@ -16,22 +16,29 @@
 typedef struct {
     u32 width;
     u32 height;
-    u32 *pixels;
+    pixel_t *pixels;
 } wm_cursor_t;
 
-static wm_cursor_t cursor = {0};
+static wm_cursor_t cursors[WM_CURSOR_KIND_COUNT];
 
-
-void wm_cursor_unload(void) {
-    if (cursor.pixels) {
-        free(cursor.pixels);
+static void _cursor_release(wm_cursor_t *cursor) {
+    if (!cursor) {
+        return;
     }
 
-    memset(&cursor, 0, sizeof(cursor));
+    if (cursor->pixels) {
+        free(cursor->pixels);
+    }
+
+    memset(cursor, 0, sizeof(*cursor));
 }
 
-bool wm_cursor_load(const char *path) {
-    wm_cursor_unload();
+static bool _cursor_load_into(wm_cursor_t *cursor, const char *path) {
+    if (!cursor) {
+        return false;
+    }
+
+    _cursor_release(cursor);
 
     if (!path || !path[0]) {
         return false;
@@ -65,12 +72,12 @@ bool wm_cursor_load(const char *path) {
     }
 
     size_t size_max = (size_t)-1;
-    if (pixel_count > size_max / sizeof(u32)) {
+    if (pixel_count > size_max / sizeof(pixel_t)) {
         free(file_data);
         return false;
     }
 
-    u32 *pixels = malloc(pixel_count * sizeof(u32));
+    pixel_t *pixels = malloc(pixel_count * sizeof(pixel_t));
     if (!pixels) {
         free(file_data);
         return false;
@@ -88,34 +95,83 @@ bool wm_cursor_load(const char *path) {
 
     free(file_data);
 
-    cursor.width = width;
-    cursor.height = height;
-    cursor.pixels = pixels;
+    cursor->width = width;
+    cursor->height = height;
+    cursor->pixels = pixels;
 
     return true;
 }
 
-bool wm_cursor_draw(u32 *frame, u32 fb_width, u32 fb_height, i32 x, i32 y) {
-    if (!frame || !cursor.pixels || !cursor.width || !cursor.height || !fb_width || !fb_height) {
+static const wm_cursor_t *_cursor_pick(wm_cursor_kind_t kind) {
+    if (kind < WM_CURSOR_KIND_COUNT && cursors[kind].pixels) {
+        return &cursors[kind];
+    }
+
+    if (cursors[WM_CURSOR_NORMAL].pixels) {
+        return &cursors[WM_CURSOR_NORMAL];
+    }
+
+    return NULL;
+}
+
+void wm_cursor_unload(void) {
+    for (u32 i = 0; i < WM_CURSOR_KIND_COUNT; i++) {
+        _cursor_release(&cursors[i]);
+    }
+}
+
+bool wm_cursor_load(const char *path) {
+    return wm_cursor_load_kind(WM_CURSOR_NORMAL, path);
+}
+
+bool wm_cursor_load_kind(wm_cursor_kind_t kind, const char *path) {
+    if (kind >= WM_CURSOR_KIND_COUNT) {
         return false;
     }
 
-    for (u32 cy = 0; cy < cursor.height; cy++) {
-        i32 dst_y = y + (i32)cy;
+    return _cursor_load_into(&cursors[kind], path);
+}
+
+bool wm_cursor_draw_kind(
+    pixel_t *frame,
+    u32 fb_width,
+    u32 fb_height,
+    i32 x,
+    i32 y,
+    wm_cursor_kind_t kind
+) {
+    const wm_cursor_t *cursor = _cursor_pick(kind);
+
+    if (!frame || !cursor || !cursor->pixels || !cursor->width || !cursor->height || !fb_width ||
+        !fb_height) {
+        return false;
+    }
+
+    bool has_exact_cursor =
+        kind < WM_CURSOR_KIND_COUNT && cursors[kind].pixels != NULL;
+    i32 hot_x = 0;
+    i32 hot_y = 0;
+    if (kind != WM_CURSOR_NORMAL && has_exact_cursor) {
+        hot_x = (i32)(cursor->width / 2);
+        hot_y = (i32)(cursor->height / 2);
+    }
+
+    for (u32 cy = 0; cy < cursor->height; cy++) {
+        i32 dst_y = (y - hot_y) + (i32)cy;
         if (dst_y < 0 || (u32)dst_y >= fb_height) {
             continue;
         }
 
-        size_t src_row = (size_t)cy * (size_t)cursor.width;
+        size_t src_row = (size_t)cy * (size_t)cursor->width;
         size_t dst_row = (size_t)dst_y * (size_t)fb_width;
 
-        for (u32 cx = 0; cx < cursor.width; cx++) {
-            u32 color = cursor.pixels[src_row + cx];
+        for (u32 cx = 0; cx < cursor->width; cx++) {
+            u32 color = cursor->pixels[src_row + cx];
             if (color == WM_CURSOR_KEY_COLOR) {
                 continue;
             }
 
-            i32 dst_x = x + (i32)cx;
+            i32 dst_x = (x - hot_x) + (i32)cx;
             if (dst_x < 0 || (u32)dst_x >= fb_width) {
                 continue;
             }
@@ -125,4 +181,8 @@ bool wm_cursor_draw(u32 *frame, u32 fb_width, u32 fb_height, i32 x, i32 y) {
     }
 
     return true;
+}
+
+bool wm_cursor_draw(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32 y) {
+    return wm_cursor_draw_kind(frame, fb_width, fb_height, x, y, WM_CURSOR_NORMAL);
 }

@@ -20,6 +20,7 @@
 #include "input.h"
 
 static volatile sig_atomic_t got_sigint = 0;
+static volatile sig_atomic_t got_sigwinch = 0;
 
 #define SH_ENV_MAX       32
 #define SH_ENV_KEY_MAX   32
@@ -83,6 +84,11 @@ static void sh_printf(const char *format, ...) {
 static void sigint_handler(int signum) {
     (void)signum;
     got_sigint = 1;
+}
+
+static void sigwinch_handler(int signum) {
+    (void)signum;
+    got_sigwinch = 1;
 }
 
 static void tty_set_pgrp(pid_t pid) {
@@ -1233,6 +1239,7 @@ static int run_pipeline(sh_stage_t *stages, int stage_count, bool background, co
             signal(SIGQUIT, SIG_DFL);
             signal(SIGTTIN, SIG_DFL);
             signal(SIGTTOU, SIG_DFL);
+            signal(SIGWINCH, SIG_DFL);
 
             if (i > 0) {
                 if (dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
@@ -1421,11 +1428,13 @@ int main(int argc, char **argv) {
     tty_set_pgrp(sh_pgid);
 
     signal(SIGINT, sigint_handler);
+    signal(SIGWINCH, sigwinch_handler);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
 
     input_set_sigint_flag(&got_sigint);
+    input_set_sigwinch_flag(&got_sigwinch);
 
     env_set("PATH", "/bin");
     env_set("HOME", "/");

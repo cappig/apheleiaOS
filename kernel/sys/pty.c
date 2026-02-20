@@ -685,13 +685,21 @@ ssize_t pty_ioctl_handle(const pty_handle_t *handle, u64 request, void *args) {
 
         memcpy(args, &pty->winsize, sizeof(pty->winsize));
         return 0;
-    case TIOCSWINSZ:
+    case TIOCSWINSZ: {
         if (!args) {
             return -EINVAL;
         }
 
+        winsize_t old_ws = pty->winsize;
         memcpy(&pty->winsize, args, sizeof(pty->winsize));
+
+        if ((old_ws.ws_row != pty->winsize.ws_row || old_ws.ws_col != pty->winsize.ws_col) &&
+            pty->pgrp > 0) {
+            sched_signal_send_pgrp(pty->pgrp, SIGWINCH);
+        }
+
         return 0;
+    }
     case TIOCSPGRP:
         if (!args) {
             return -EINVAL;

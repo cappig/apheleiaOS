@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <ui.h>
@@ -24,6 +25,27 @@ extern char **environ;
 #define WM_POLL_FRAME_MS   16
 #define WM_CURSOR_WIDTH    16
 #define WM_CURSOR_HEIGHT   16
+#define WM_CURSOR_CENTER_HOT_X (WM_CURSOR_WIDTH / 2)
+#define WM_CURSOR_CENTER_HOT_Y (WM_CURSOR_HEIGHT / 2)
+#define WM_RESIZE_EDGE_MARGIN   6
+#define WM_RESIZE_CORNER_MARGIN 12
+#define WM_MIN_CLIENT_W    160
+#define WM_MIN_CLIENT_H    96
+#define WM_WS_EVENT_BATCH  32
+#define WM_INPUT_EVENT_BATCH 32
+
+typedef enum {
+    WM_DRAG_NONE = 0,
+    WM_DRAG_MOVE = 1,
+    WM_DRAG_RESIZE = 2,
+} wm_drag_mode_t;
+
+enum wm_resize_edge {
+    WM_RESIZE_LEFT = 1u << 0,
+    WM_RESIZE_RIGHT = 1u << 1,
+    WM_RESIZE_TOP = 1u << 2,
+    WM_RESIZE_BOTTOM = 1u << 3,
+};
 
 typedef struct {
     i32 mouse_x;
@@ -31,10 +53,23 @@ typedef struct {
     u32 mouse_btn_state;
     u32 z_counter;
     int drag_id;
-    i32 drag_dx;
-    i32 drag_dy;
+    wm_drag_mode_t drag_mode;
+    u32 drag_edges;
+    i32 drag_mouse_start_x;
+    i32 drag_mouse_start_y;
+    i32 drag_window_start_x;
+    i32 drag_window_start_y;
+    u32 drag_window_start_width;
+    u32 drag_window_start_height;
+    i32 drag_synced_x;
+    i32 drag_synced_y;
+    u32 drag_synced_width;
+    u32 drag_synced_height;
+    bool drag_synced_valid;
+    bool drag_release_sync_pending;
     int focused_id;
     bool term_hotkey_down;
+    wm_cursor_kind_t cursor_kind;
 } wm_runtime_t;
 
 static bool _rect_clip_to_fb(wm_rect_t *rect, const fb_info_t *fb_info) {
@@ -74,14 +109,83 @@ static bool _rect_clip_to_fb(wm_rect_t *rect, const fb_info_t *fb_info) {
 }
 
 static wm_rect_t _cursor_rect(i32 x, i32 y) {
+    // Cursor draw origin depends on kind:
+    // normal uses (x,y), resize uses centered hotspot (x-8,y-8).
+    // Damage needs to cover both to avoid stale cursor trails.
     wm_rect_t rect = {
-        .x = x,
-        .y = y,
-        .width = WM_CURSOR_WIDTH,
-        .height = WM_CURSOR_HEIGHT,
+        .x = x - WM_CURSOR_CENTER_HOT_X,
+        .y = y - WM_CURSOR_CENTER_HOT_Y,
+        .width = WM_CURSOR_WIDTH + WM_CURSOR_CENTER_HOT_X,
+        .height = WM_CURSOR_HEIGHT + WM_CURSOR_CENTER_HOT_Y,
     };
 
     return rect;
+}
+
+static void _window_force_full_surface_refresh(wm_window_t *window) {
+    if (!window || !window->width || !window->height) {
+        return;
+    }
+
+    window->surface_dirty = true;
+    window->dirty_x = 0;
+    window->dirty_y = 0;
+    window->dirty_width = window->width;
+    window->dirty_height = window->height;
+}
+
+static void _window_damage_union_bounds(const wm_window_t *window, wm_rect_t *damage) {
+    if (!window || !damage) {
+        return;
+    }
+
+    wm_rect_t rect = {0};
+    if (wm_window_bounds_rect(window, &rect)) {
+        wm_rect_union(damage, &rect);
+    }
+}
+
+static bool _is_mouse_event(u32 type) {
+    return type == INPUT_EVENT_MOUSE_MOVE || type == INPUT_EVENT_MOUSE_BUTTON ||
+           type == INPUT_EVENT_MOUSE_WHEEL;
+}
+
+static int _sync_drag_resize(
+    ui_t *ui,
+    wm_runtime_t *rt,
+    wm_window_t *window,
+    wm_rect_t *damage,
+    bool refresh_surface
+) {
+    if (!ui || !rt || !window) {
+        return -EINVAL;
+    }
+
+    if (ui_mgr_resize(ui, window->id, window->width, window->height) < 0) {
+        return errno ? -errno : -EIO;
+    }
+
+    bool needs_move =
+        !rt->drag_synced_valid || rt->drag_synced_x != window->x || rt->drag_synced_y != window->y;
+    if (needs_move) {
+        ui_mgr_move(ui, window->id, window->x, window->y);
+    }
+
+    window->fb_width = window->width;
+    window->fb_height = window->height;
+
+    rt->drag_synced_x = window->x;
+    rt->drag_synced_y = window->y;
+    rt->drag_synced_width = window->width;
+    rt->drag_synced_height = window->height;
+    rt->drag_synced_valid = true;
+
+    if (refresh_surface) {
+        _window_force_full_surface_refresh(window);
+        _window_damage_union_bounds(window, damage);
+    }
+
+    return 0;
 }
 
 static bool _title_rect(const wm_window_t *window, wm_rect_t *rect) {
@@ -124,7 +228,7 @@ static void _focus_window(ui_t *ui, wm_runtime_t *rt, wm_window_t *window, wm_re
     }
 }
 
-static int _present_damage(int fb_fd, const fb_info_t *fb_info, const u32 *frame, wm_rect_t *damage) {
+static int _present_damage(int fb_fd, const fb_info_t *fb_info, const pixel_t *frame, wm_rect_t *damage) {
     if (!fb_info || !frame || !damage || !wm_rect_valid(damage)) {
         return 0;
     }
@@ -188,8 +292,297 @@ static void _clamp_mouse(wm_runtime_t *rt, const fb_info_t *fb_info) {
     }
 }
 
+static void _clear_drag(wm_runtime_t *rt) {
+    if (!rt) {
+        return;
+    }
+
+    rt->drag_id = -1;
+    rt->drag_mode = WM_DRAG_NONE;
+    rt->drag_edges = 0;
+    rt->drag_synced_x = 0;
+    rt->drag_synced_y = 0;
+    rt->drag_synced_width = 0;
+    rt->drag_synced_height = 0;
+    rt->drag_synced_valid = false;
+    rt->drag_release_sync_pending = false;
+}
+
+static u32 _resize_hit_edges(const wm_window_t *window, i32 px, i32 py) {
+    if (!window) {
+        return 0;
+    }
+
+    if (wm_point_in_close(window, px, py)) {
+        return 0;
+    }
+
+    wm_rect_t bounds = {0};
+    if (!wm_window_bounds_rect(window, &bounds)) {
+        return 0;
+    }
+
+    i32 left = bounds.x;
+    i32 top = bounds.y;
+    i32 right = bounds.x + bounds.width - 1;
+    i32 bottom = bounds.y + bounds.height - 1;
+
+    if (px < left || px > right || py < top || py > bottom) {
+        return 0;
+    }
+
+    bool near_left_edge = (px - left) < WM_RESIZE_EDGE_MARGIN;
+    bool near_right_edge = (right - px) < WM_RESIZE_EDGE_MARGIN;
+    bool near_bottom_edge = (bottom - py) < WM_RESIZE_EDGE_MARGIN;
+
+    bool near_left_corner = (px - left) < WM_RESIZE_CORNER_MARGIN;
+    bool near_right_corner = (right - px) < WM_RESIZE_CORNER_MARGIN;
+    bool near_top_corner = (py - top) < WM_RESIZE_CORNER_MARGIN;
+    bool near_bottom_corner = (bottom - py) < WM_RESIZE_CORNER_MARGIN;
+
+    if (near_left_corner && near_top_corner) {
+        return WM_RESIZE_LEFT | WM_RESIZE_TOP;
+    }
+    if (near_right_corner && near_top_corner) {
+        return 0;
+    }
+    if (near_left_corner && near_bottom_corner) {
+        return WM_RESIZE_LEFT | WM_RESIZE_BOTTOM;
+    }
+    if (near_right_corner && near_bottom_corner) {
+        return WM_RESIZE_RIGHT | WM_RESIZE_BOTTOM;
+    }
+
+    u32 edges = 0;
+    if (near_left_edge) {
+        edges |= WM_RESIZE_LEFT;
+    }
+    if (near_right_edge) {
+        edges |= WM_RESIZE_RIGHT;
+    }
+    if (near_bottom_edge) {
+        edges |= WM_RESIZE_BOTTOM;
+    }
+
+    return edges;
+}
+
+static wm_cursor_kind_t _cursor_kind_for_edges(u32 edges) {
+    bool left = (edges & WM_RESIZE_LEFT) != 0;
+    bool right = (edges & WM_RESIZE_RIGHT) != 0;
+    bool top = (edges & WM_RESIZE_TOP) != 0;
+    bool bottom = (edges & WM_RESIZE_BOTTOM) != 0;
+
+    if (top && left) {
+        return WM_CURSOR_RESIZE_NW;
+    }
+    if (bottom && left) {
+        return WM_CURSOR_RESIZE_SW;
+    }
+    if (bottom && right) {
+        return WM_CURSOR_RESIZE_SE;
+    }
+    if (left || right) {
+        return WM_CURSOR_RESIZE_EW;
+    }
+    if (top || bottom) {
+        return WM_CURSOR_RESIZE_NS;
+    }
+
+    return WM_CURSOR_NORMAL;
+}
+
+static wm_cursor_kind_t _cursor_kind_for_state(const wm_runtime_t *rt) {
+    if (!rt) {
+        return WM_CURSOR_NORMAL;
+    }
+
+    if (rt->drag_mode == WM_DRAG_RESIZE && rt->drag_id >= 0) {
+        return _cursor_kind_for_edges(rt->drag_edges);
+    }
+
+    wm_window_t *window = wm_top_window_at(rt->mouse_x, rt->mouse_y);
+    if (!window) {
+        return WM_CURSOR_NORMAL;
+    }
+
+    return _cursor_kind_for_edges(_resize_hit_edges(window, rt->mouse_x, rt->mouse_y));
+}
+
+static bool _apply_drag(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm_rect_t *damage) {
+    if (!ui || !rt || !fb_info || !damage) {
+        return false;
+    }
+
+    if (rt->drag_id < 0 || !(rt->mouse_btn_state & MOUSE_LEFT_CLICK)) {
+        return false;
+    }
+
+    wm_window_t *window = wm_window_by_id((u32)rt->drag_id);
+    if (!window) {
+        _clear_drag(rt);
+        return false;
+    }
+
+    i32 delta_x = rt->mouse_x - rt->drag_mouse_start_x;
+    i32 delta_y = rt->mouse_y - rt->drag_mouse_start_y;
+
+    if (rt->drag_mode == WM_DRAG_MOVE) {
+        i32 next_x = rt->drag_window_start_x + delta_x;
+        i32 next_y = rt->drag_window_start_y + delta_y;
+        if (next_x == window->x && next_y == window->y) {
+            return false;
+        }
+
+        wm_rect_t old_rect = {0};
+        wm_window_bounds_rect(window, &old_rect);
+
+        window->x = next_x;
+        window->y = next_y;
+        ui_mgr_move(ui, window->id, window->x, window->y);
+
+        wm_rect_t new_rect = {0};
+        wm_window_bounds_rect(window, &new_rect);
+        wm_rect_union(damage, &old_rect);
+        wm_rect_union(damage, &new_rect);
+        return true;
+    }
+
+    if (rt->drag_mode != WM_DRAG_RESIZE) {
+        return false;
+    }
+
+    i32 frame_w = (i32)fb_info->width;
+    i32 frame_h = (i32)fb_info->height;
+    i32 min_w = WM_MIN_CLIENT_W;
+    i32 min_total_h = TITLE_H + WM_MIN_CLIENT_H;
+
+    i32 x = rt->drag_window_start_x;
+    i32 y = rt->drag_window_start_y;
+    i32 w = (i32)rt->drag_window_start_width;
+    i32 total_h = TITLE_H + (i32)rt->drag_window_start_height;
+
+    if (rt->drag_edges & WM_RESIZE_LEFT) {
+        x += delta_x;
+        w -= delta_x;
+    }
+    if (rt->drag_edges & WM_RESIZE_RIGHT) {
+        w += delta_x;
+    }
+    if (rt->drag_edges & WM_RESIZE_TOP) {
+        y += delta_y;
+        total_h -= delta_y;
+    }
+    if (rt->drag_edges & WM_RESIZE_BOTTOM) {
+        total_h += delta_y;
+    }
+
+    if (w < min_w) {
+        if ((rt->drag_edges & WM_RESIZE_LEFT) && !(rt->drag_edges & WM_RESIZE_RIGHT)) {
+            x -= (min_w - w);
+        }
+        w = min_w;
+    }
+
+    if (total_h < min_total_h) {
+        if ((rt->drag_edges & WM_RESIZE_TOP) && !(rt->drag_edges & WM_RESIZE_BOTTOM)) {
+            y -= (min_total_h - total_h);
+        }
+        total_h = min_total_h;
+    }
+
+    if (x < 0) {
+        if ((rt->drag_edges & WM_RESIZE_LEFT) && !(rt->drag_edges & WM_RESIZE_RIGHT)) {
+            w += x;
+        }
+        x = 0;
+    }
+
+    if (y < 0) {
+        if ((rt->drag_edges & WM_RESIZE_TOP) && !(rt->drag_edges & WM_RESIZE_BOTTOM)) {
+            total_h += y;
+        }
+        y = 0;
+    }
+
+    if (w > frame_w) {
+        w = frame_w;
+        x = 0;
+    }
+
+    if (total_h > frame_h) {
+        total_h = frame_h;
+        y = 0;
+    }
+
+    if (x + w > frame_w) {
+        if ((rt->drag_edges & WM_RESIZE_RIGHT) && !(rt->drag_edges & WM_RESIZE_LEFT)) {
+            w = frame_w - x;
+        } else {
+            x = frame_w - w;
+        }
+    }
+
+    if (y + total_h > frame_h) {
+        if ((rt->drag_edges & WM_RESIZE_BOTTOM) && !(rt->drag_edges & WM_RESIZE_TOP)) {
+            total_h = frame_h - y;
+        } else {
+            y = frame_h - total_h;
+        }
+    }
+
+    if (w < min_w) {
+        w = min_w;
+        if (w > frame_w) {
+            w = frame_w;
+        }
+        x = frame_w - w;
+    }
+
+    if (total_h < min_total_h) {
+        total_h = min_total_h;
+        if (total_h > frame_h) {
+            total_h = frame_h;
+        }
+        y = frame_h - total_h;
+    }
+
+    if (x < 0) {
+        x = 0;
+    }
+    if (y < 0) {
+        y = 0;
+    }
+
+    u32 next_width = (u32)w;
+    u32 next_height = (u32)(total_h - TITLE_H);
+    if (!next_width || !next_height) {
+        return false;
+    }
+
+    bool pos_changed = (x != window->x) || (y != window->y);
+    bool size_changed = (next_width != window->width) || (next_height != window->height);
+    if (!pos_changed && !size_changed) {
+        return false;
+    }
+
+    wm_rect_t old_rect = {0};
+    wm_window_bounds_rect(window, &old_rect);
+
+    window->x = x;
+    window->y = y;
+    window->width = next_width;
+    window->height = next_height;
+
+    wm_rect_t new_rect = {0};
+    wm_window_bounds_rect(window, &new_rect);
+    wm_rect_union(damage, &old_rect);
+    wm_rect_union(damage, &new_rect);
+    return true;
+}
+
 static int _handle_ws_events(ui_t *ui, wm_runtime_t *rt, wm_rect_t *damage) {
-    ws_event_t events[8];
+    ws_event_t events[WM_WS_EVENT_BATCH];
 
     for (;;) {
         ssize_t n = ui_mgr_events(ui, events, ARRAY_LEN(events));
@@ -209,6 +602,16 @@ static int _handle_ws_events(ui_t *ui, wm_runtime_t *rt, wm_rect_t *damage) {
         size_t count = (size_t)n / sizeof(ws_event_t);
 
         for (size_t i = 0; i < count; i++) {
+            bool suppress_drag_dirty = rt->drag_id >= 0 &&
+                                       (rt->drag_mode == WM_DRAG_RESIZE ||
+                                        rt->drag_release_sync_pending) &&
+                                       events[i].type == WS_EVT_WINDOW_DIRTY &&
+                                       events[i].id == (u32)rt->drag_id;
+
+            if (suppress_drag_dirty) {
+                continue;
+            }
+
             bool focus_closed = rt->focused_id >= 0 && events[i].type == WS_EVT_WINDOW_CLOSED &&
                                 (u32)rt->focused_id == events[i].id;
 
@@ -245,6 +648,7 @@ static bool _handle_mouse_move(
     const input_event_t *event,
     wm_rect_t *damage
 ) {
+    (void)ui;
     i32 prev_x = rt->mouse_x;
     i32 prev_y = rt->mouse_y;
 
@@ -261,71 +665,104 @@ static bool _handle_mouse_move(
         wm_rect_union(damage, &new_cursor);
     }
 
-    if (rt->drag_id < 0 || !(rt->mouse_btn_state & MOUSE_LEFT_CLICK)) {
-        return changed;
-    }
-
-    wm_window_t *window = wm_window_by_id((u32)rt->drag_id);
-    if (!window) {
-        return changed;
-    }
-
-    wm_rect_t old_rect = {0};
-    wm_window_bounds_rect(window, &old_rect);
-
-    i32 next_x = rt->mouse_x - rt->drag_dx;
-    i32 next_y = rt->mouse_y - rt->drag_dy;
-
-    if (window->x == next_x && window->y == next_y) {
-        return changed;
-    }
-
-    window->x = next_x;
-    window->y = next_y;
-
-    ui_mgr_move(ui, window->id, window->x, window->y);
-
-    wm_rect_t new_rect = {0};
-    wm_window_bounds_rect(window, &new_rect);
-    wm_rect_union(damage, &old_rect);
-    wm_rect_union(damage, &new_rect);
-
-    return true;
+    return changed;
 }
 
-static bool _handle_mouse_button(ui_t *ui, wm_runtime_t *rt, const input_event_t *event, wm_rect_t *damage) {
+static bool _handle_mouse_button(
+    ui_t *ui,
+    wm_runtime_t *rt,
+    const input_event_t *event,
+    wm_rect_t *damage,
+    bool *consumed
+) {
+    if (consumed) {
+        *consumed = false;
+    }
+
     u32 prev = rt->mouse_btn_state;
     rt->mouse_btn_state = event->buttons;
     bool changed = prev != rt->mouse_btn_state;
 
     if (!(prev & MOUSE_LEFT_CLICK) && (rt->mouse_btn_state & MOUSE_LEFT_CLICK)) {
+        _clear_drag(rt);
         wm_window_t *window = wm_top_window_at(rt->mouse_x, rt->mouse_y);
 
         if (window) {
             _focus_window(ui, rt, window, damage);
 
             if (wm_point_in_close(window, rt->mouse_x, rt->mouse_y)) {
+                if (consumed) {
+                    *consumed = true;
+                }
                 wm_rect_t close_damage = {0};
                 wm_window_bounds_rect(window, &close_damage);
                 wm_rect_union(damage, &close_damage);
 
                 ui_mgr_close(ui, window->id);
                 rt->focused_id = -1;
-                rt->drag_id = -1;
-                changed = true;
-            } else if (wm_point_in_title(window, rt->mouse_x, rt->mouse_y)) {
-                rt->drag_id = (int)window->id;
-                rt->drag_dx = rt->mouse_x - window->x;
-                rt->drag_dy = rt->mouse_y - window->y;
+                _clear_drag(rt);
                 changed = true;
             } else {
-                changed = true;
+                u32 edges = _resize_hit_edges(window, rt->mouse_x, rt->mouse_y);
+
+                rt->drag_id = (int)window->id;
+                rt->drag_mouse_start_x = rt->mouse_x;
+                rt->drag_mouse_start_y = rt->mouse_y;
+                rt->drag_window_start_x = window->x;
+                rt->drag_window_start_y = window->y;
+                rt->drag_window_start_width = window->width;
+                rt->drag_window_start_height = window->height;
+                rt->drag_synced_x = window->x;
+                rt->drag_synced_y = window->y;
+                rt->drag_synced_width = window->width;
+                rt->drag_synced_height = window->height;
+                rt->drag_synced_valid = true;
+                rt->drag_release_sync_pending = false;
+
+                if (edges) {
+                    rt->drag_mode = WM_DRAG_RESIZE;
+                    rt->drag_edges = edges;
+                    window->surface_dirty = false;
+                    window->dirty_x = 0;
+                    window->dirty_y = 0;
+                    window->dirty_width = 0;
+                    window->dirty_height = 0;
+                    if (consumed) {
+                        *consumed = true;
+                    }
+                    changed = true;
+                } else if (wm_point_in_title(window, rt->mouse_x, rt->mouse_y)) {
+                    rt->drag_mode = WM_DRAG_MOVE;
+                    rt->drag_edges = 0;
+                    if (consumed) {
+                        *consumed = true;
+                    }
+                    changed = true;
+                } else {
+                    _clear_drag(rt);
+                    changed = true;
+                }
             }
         }
     }
 
     if (!(rt->mouse_btn_state & MOUSE_LEFT_CLICK)) {
-        rt->drag_id = -1;
+        if ((prev & MOUSE_LEFT_CLICK) && rt->drag_mode != WM_DRAG_NONE && consumed) {
+            *consumed = true;
+        }
+
+        if ((prev & MOUSE_LEFT_CLICK) && rt->drag_mode == WM_DRAG_RESIZE && rt->drag_id >= 0) {
+            wm_window_t *window = wm_window_by_id((u32)rt->drag_id);
+            if (window) {
+                int sync = _sync_drag_resize(ui, rt, window, damage, true);
+                if (sync == -EAGAIN) {
+                    rt->drag_release_sync_pending = true;
+                    return changed;
+                }
+            }
+        }
+
+        _clear_drag(rt);
     }
 
     return changed;
@@ -373,7 +810,7 @@ static int _handle_input_events(
     bool *changed,
     wm_rect_t *damage
 ) {
-    input_event_t events[16];
+    input_event_t events[WM_INPUT_EVENT_BATCH];
 
     for (;;) {
         ssize_t n = ui_input(ui, events, ARRAY_LEN(events));
@@ -394,16 +831,23 @@ static int _handle_input_events(
 
         for (size_t i = 0; i < count; i++) {
             input_event_t *event = &events[i];
+            bool consumed_mouse = false;
 
             if (event->type == INPUT_EVENT_MOUSE_MOVE) {
                 if (_handle_mouse_move(ui, rt, fb_info, event, damage)) {
                     *changed = true;
                 }
+                if (rt->drag_mode != WM_DRAG_NONE) {
+                    consumed_mouse = true;
+                }
             } else if (event->type == INPUT_EVENT_MOUSE_BUTTON) {
-                if (_handle_mouse_button(ui, rt, event, damage)) {
+                if (_handle_mouse_button(ui, rt, event, damage, &consumed_mouse)) {
                     wm_rect_t cursor = _cursor_rect(rt->mouse_x, rt->mouse_y);
                     wm_rect_union(damage, &cursor);
                     *changed = true;
+                }
+                if (rt->drag_mode != WM_DRAG_NONE || rt->drag_release_sync_pending) {
+                    consumed_mouse = true;
                 }
             } else if (event->type == INPUT_EVENT_KEY) {
                 *changed = true;
@@ -414,6 +858,9 @@ static int _handle_input_events(
             }
 
             if (rt->focused_id >= 0) {
+                if (_is_mouse_event(event->type) && consumed_mouse) {
+                    continue;
+                }
                 ui_mgr_send(ui, (u32)rt->focused_id, event);
             }
         }
@@ -424,7 +871,7 @@ void wm_loop(
     ui_t *ui,
     int fb_fd,
     const fb_info_t *fb_info,
-    u32 *frame_store,
+    pixel_t *frame_store,
     size_t frame_bytes,
     volatile sig_atomic_t *exit_requested
 ) {
@@ -436,10 +883,23 @@ void wm_loop(
         .mouse_btn_state = 0,
         .z_counter = 100,
         .drag_id = -1,
-        .drag_dx = 0,
-        .drag_dy = 0,
+        .drag_mode = WM_DRAG_NONE,
+        .drag_edges = 0,
+        .drag_mouse_start_x = 0,
+        .drag_mouse_start_y = 0,
+        .drag_window_start_x = 0,
+        .drag_window_start_y = 0,
+        .drag_window_start_width = 0,
+        .drag_window_start_height = 0,
+        .drag_synced_x = 0,
+        .drag_synced_y = 0,
+        .drag_synced_width = 0,
+        .drag_synced_height = 0,
+        .drag_synced_valid = false,
+        .drag_release_sync_pending = false,
         .focused_id = -1,
         .term_hotkey_down = false,
+        .cursor_kind = WM_CURSOR_NORMAL,
     };
 
     struct pollfd pfds[3] = {
@@ -498,6 +958,31 @@ void wm_loop(
             }
         }
 
+        if (rt.drag_id >= 0 && (rt.mouse_btn_state & MOUSE_LEFT_CLICK)) {
+            _apply_drag(ui, &rt, fb_info, &damage);
+        }
+
+        if (rt.drag_release_sync_pending && rt.drag_id >= 0 && !(rt.mouse_btn_state & MOUSE_LEFT_CLICK)) {
+            wm_window_t *window = wm_window_by_id((u32)rt.drag_id);
+            if (!window) {
+                _clear_drag(&rt);
+            } else {
+                int sync = _sync_drag_resize(ui, &rt, window, &damage, true);
+                if (!sync) {
+                    _clear_drag(&rt);
+                } else if (sync != -EAGAIN) {
+                    _clear_drag(&rt);
+                }
+            }
+        }
+
+        wm_cursor_kind_t cursor_kind = _cursor_kind_for_state(&rt);
+        if (cursor_kind != rt.cursor_kind) {
+            wm_rect_t cursor = _cursor_rect(rt.mouse_x, rt.mouse_y);
+            wm_rect_union(&damage, &cursor);
+            rt.cursor_kind = cursor_kind;
+        }
+
         if (!wm_rect_valid(&damage)) {
             if (!pr && has_windows) {
                 continue;
@@ -507,7 +992,14 @@ void wm_loop(
         }
 
         wm_render_damage(frame_store, fb_info->width, fb_info->height, &damage);
-        wm_cursor_draw(frame_store, fb_info->width, fb_info->height, rt.mouse_x, rt.mouse_y);
+        wm_cursor_draw_kind(
+            frame_store,
+            fb_info->width,
+            fb_info->height,
+            rt.mouse_x,
+            rt.mouse_y,
+            cursor_kind
+        );
 
         int present = _present_damage(fb_fd, fb_info, frame_store, &damage);
 
