@@ -1,6 +1,5 @@
 #include <ctype.h>
 #include <dirent.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/proc.h>
@@ -103,8 +102,8 @@ static void format_cpu_time_ms(uint64_t total_ms, char *buf, size_t buf_len) {
 }
 
 int main(void) {
-    int proc_fd = open("/proc", O_RDONLY, 0);
-    if (proc_fd < 0) {
+    DIR *proc_dir = opendir("/proc");
+    if (!proc_dir) {
         write_cstr("ps: failed to open /proc\n");
         return 1;
     }
@@ -126,14 +125,14 @@ int main(void) {
     );
     write_cstr(line);
 
-    dirent_t ent;
-    while (getdents(proc_fd, &ent) > 0) {
-        if (!is_pid_name(ent.d_name)) {
+    struct dirent *ent = NULL;
+    while ((ent = readdir(proc_dir)) != NULL) {
+        if (!is_pid_name(ent->d_name)) {
             continue;
         }
 
         char stat_path[80];
-        snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent.d_name);
+        snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
 
         proc_stat_t info = {0};
         if (proc_stat_read_path(stat_path, &info) < 0) {
@@ -168,7 +167,7 @@ int main(void) {
         write_cstr(line);
     }
 
-    close(proc_fd);
+    closedir(proc_dir);
 
     return 0;
 }

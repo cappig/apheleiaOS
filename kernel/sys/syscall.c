@@ -1,5 +1,6 @@
 #include "syscall.h"
 
+#include <apheleia/syscall.h>
 #include <arch/arch.h>
 #include <arch/mm.h>
 #include <arch/paging.h>
@@ -41,17 +42,22 @@ static mode_t _apply_umask(mode_t mode, mode_t mask) {
     return special | perms;
 }
 
+static int _open_access_mode(int flags) {
+    return flags & O_ACCMODE;
+}
+
 static bool _open_has_read(int flags) {
-    return (flags & O_RDONLY) || (flags & O_RDWR);
+    int access = _open_access_mode(flags);
+    return access == O_RDONLY || access == O_RDWR;
 }
 
 static bool _open_has_write(int flags) {
-    return (flags & O_WRONLY) || (flags & O_RDWR);
+    int access = _open_access_mode(flags);
+    return access == O_WRONLY || access == O_RDWR;
 }
 
 static bool _open_access_valid(int flags) {
-    int access = flags & (O_RDONLY | O_WRONLY | O_RDWR);
-
+    int access = _open_access_mode(flags);
     return access == O_RDONLY || access == O_WRONLY || access == O_RDWR;
 }
 
@@ -998,6 +1004,15 @@ static int sys_dup(int oldfd, int newfd) {
         return -EINVAL;
     }
 
+    if (oldfd < 0 || oldfd >= SCHED_FD_MAX || !thread->fd_used[oldfd]) {
+        return -EBADF;
+    }
+
+    if (newfd < 0) {
+        sched_fd_t source = thread->fds[oldfd];
+        return sched_fd_alloc(thread, &source, 0);
+    }
+
     return sched_fd_dup(thread, oldfd, newfd);
 }
 
@@ -1854,18 +1869,32 @@ static int sys_getdents(int fd, dirent_t *out) {
     return 0;
 }
 
-static int sys_sleep(unsigned int milliseconds) {
-    u32 hz = arch_timer_hz();
+static int sys_sleep(const struct timespec *req, struct timespec *rem) {
+    if (!req) {
+        return -EFAULT;
+    }
+
+    if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L) {
+        return -EINVAL;
+    }
+
+    u64 hz = arch_timer_hz();
     if (!hz) {
         return -EINVAL;
     }
 
-    u64 ticks = ((u64)milliseconds * (u64)hz + 999ULL) / 1000ULL;
-    if (milliseconds && !ticks) {
+    u64 ns = (u64)req->tv_sec * 1000000000ULL + (u64)req->tv_nsec;
+    u64 ticks = (ns * hz + 999999999ULL) / 1000000000ULL;
+    if (ns && !ticks) {
         ticks = 1;
     }
 
     sched_sleep(ticks);
+
+    if (rem) {
+        rem->tv_sec = 0;
+        rem->tv_nsec = 0;
+    }
 
     return 0;
 }
@@ -2231,7 +2260,10 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (int)arch_syscall_arg3(state)
         );
     case SYS_SLEEP:
-        return (u64)sys_sleep((unsigned int)arch_syscall_arg1(state));
+        return (u64)sys_sleep(
+            (const struct timespec *)arch_syscall_arg1(state),
+            (struct timespec *)arch_syscall_arg2(state)
+        );
     case SYS_SIGNAL:
         return (u64)sys_signal(
             (int)arch_syscall_arg1(state),

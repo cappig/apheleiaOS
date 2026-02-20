@@ -1,15 +1,18 @@
 #include <arch/sys.h>
+#include <apheleia/syscall.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <libc_usr/unistd.h>
 #include <limits.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/proc.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #define SYSCALL_RET(type, expr) ((type)__SYSCALL_ERRNO(expr))
@@ -40,7 +43,15 @@ ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset) {
     );
 }
 
-int open(const char *path, int flags, mode_t mode) {
+int open(const char *path, int flags, ...) {
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start(args, flags);
+        mode = va_arg(args, mode_t);
+        va_end(args);
+    }
+
     return SYSCALL_RET(int, syscall3(SYS_OPEN, (uintptr_t)path, (uintptr_t)flags, (uintptr_t)mode));
 }
 
@@ -52,7 +63,11 @@ int pipe(int pipefd[2]) {
     return SYSCALL_RET(int, syscall1(SYS_PIPE, (uintptr_t)pipefd));
 }
 
-int dup(int oldfd, int newfd) {
+int dup(int oldfd) {
+    return SYSCALL_RET(int, syscall2(SYS_DUP, (uintptr_t)oldfd, (uintptr_t)-1));
+}
+
+int dup2(int oldfd, int newfd) {
     return SYSCALL_RET(int, syscall2(SYS_DUP, (uintptr_t)oldfd, (uintptr_t)newfd));
 }
 
@@ -159,15 +174,25 @@ mode_t umask(mode_t mask) {
 }
 
 unsigned int sleep(unsigned int seconds) {
-    unsigned long long total_ms = (unsigned long long)seconds * 1000ULL;
-    unsigned int ms = total_ms > UINT_MAX ? UINT_MAX : (unsigned int)total_ms;
+    struct timespec req = {
+        .tv_sec = (time_t)seconds,
+        .tv_nsec = 0,
+    };
+    struct timespec rem = {0};
 
-    long ret = syscall1(SYS_SLEEP, (uintptr_t)ms);
-    if (ret < 0) {
-        errno = (int)-ret;
+    if (nanosleep(&req, &rem) < 0) {
+        if (errno == EINTR) {
+            unsigned long long left = (unsigned long long)rem.tv_sec;
+            if (rem.tv_nsec > 0) {
+                left++;
+            }
+            return left > UINT_MAX ? UINT_MAX : (unsigned int)left;
+        }
+
         return (unsigned int)-1;
     }
-    return (unsigned int)ret;
+
+    return 0;
 }
 
 int chdir(const char *path) {
@@ -244,8 +269,8 @@ pid_t fork(void) {
     return SYSCALL_RET(pid_t, syscall0(SYS_FORK));
 }
 
-pid_t wait(pid_t pid, int *status) {
-    return SYSCALL_RET(pid_t, syscall2(SYS_WAIT, (uintptr_t)pid, (uintptr_t)status));
+pid_t wait(int *status) {
+    return waitpid(-1, status, 0);
 }
 
 pid_t waitpid(pid_t pid, int *status, int options) {

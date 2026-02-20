@@ -2,7 +2,8 @@ USER_OBJ_DIR   := bin/user/$(ARCH_VARIANT)
 USER_BIN_DIR   := $(USER_OBJ_DIR)/bin
 USER_STAGE_DIR := $(USER_OBJ_DIR)/root/bin
 
-USER_LIBC_SRC   := $(wildcard libs/libc/*.c) $(wildcard libs/libc_ext/*.c) $(wildcard libs/libc_usr/*.c)
+USER_LIBC_SRC   := $(wildcard libs/libc/*.c) $(wildcard libs/libc_ext/*.c) \
+                   $(wildcard libs/libc_usr/*.c)
 USER_COMMON_SRC := $(wildcard libs/user/*.c)
 USER_DATA_SRC   := $(wildcard libs/data/*.c)
 USER_GUI_SRC    := $(wildcard libs/gui/*.c)
@@ -59,6 +60,14 @@ USER_BINARIES  := $(foreach prog, $(USER_PROGS), $(USER_STAGE_DIR)/$(prog))
 .SECONDARY: $(USER_LIBC_OBJ) $(USER_CRT_OBJ) $(USER_APP_OBJ) $(USER_COMMON_OBJ) \
             $(USER_DATA_OBJ) $(USER_GUI_OBJ) $(USER_TERM_OBJ) $(USER_PARSE_OBJ) $(USER_PROGS_BIN)
 
+USER_LIBC_FP_CC := $(USER_CC)
+ifeq ($(ARCH_VARIANT),64)
+USER_LIBC_FP_CC := $(USER_LIBC_FP_CC) -msse -msse2 -mfpmath=sse
+endif
+
+$(USER_OBJ_DIR)/libs/libc/math.c.o: libs/libc/math.c
+	@mkdir -p $(@D)
+	$(call cc, $(USER_LIBC_FP_CC), $@, $<)
 
 $(USER_OBJ_DIR)/%.c.o: %.c
 	@mkdir -p $(@D)

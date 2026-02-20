@@ -1,6 +1,5 @@
 #include <dirent.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <fsutil.h>
 #include <io.h>
 #include <limits.h>
@@ -17,8 +16,8 @@ static void print_error(const char *path) {
 }
 
 static int rm_dir_recursive(const char *path, bool force) {
-    int fd = open(path, O_RDONLY, 0);
-    if (fd < 0) {
+    DIR *dir = opendir(path);
+    if (!dir) {
         if (force) {
             return 0;
         }
@@ -28,17 +27,16 @@ static int rm_dir_recursive(const char *path, bool force) {
     }
 
     int rc = 0;
-    dirent_t ent;
-
-    while (getdents(fd, &ent) > 0) {
-        if (!strcmp(ent.d_name, ".") || !strcmp(ent.d_name, "..")) {
+    struct dirent *ent = NULL;
+    while ((ent = readdir(dir)) != NULL) {
+        if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, "..")) {
             continue;
         }
 
         char child[PATH_MAX];
-        fs_join_path(child, sizeof(child), path, ent.d_name);
+        fs_join_path(child, sizeof(child), path, ent->d_name);
 
-        stat_t child_st;
+        struct stat child_st;
         if (lstat(child, &child_st) < 0) {
             if (!force || errno != ENOENT) {
                 print_error(child);
@@ -62,7 +60,7 @@ static int rm_dir_recursive(const char *path, bool force) {
         }
     }
 
-    close(fd);
+    closedir(dir);
 
     if (rmdir(path) < 0) {
         if (!force) {
@@ -75,7 +73,7 @@ static int rm_dir_recursive(const char *path, bool force) {
 }
 
 static int rm_path(const char *path, bool recursive, bool force) {
-    stat_t st;
+    struct stat st;
     if (lstat(path, &st) < 0) {
         if (force && errno == ENOENT) {
             return 0;

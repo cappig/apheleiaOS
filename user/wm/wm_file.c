@@ -13,12 +13,12 @@ bool wm_file_read_all(const char *path, size_t max_bytes, u8 **data_out, size_t 
     *data_out = NULL;
     *len_out = 0;
 
-    int fd = open(path, O_RDONLY, 0);
+    int fd = open(path, O_RDONLY);
     if (fd < 0) {
         return false;
     }
 
-    stat_t st = {0};
+    struct stat st = {0};
     if (fstat(fd, &st) < 0) {
         close(fd);
         return false;

@@ -1,18 +1,19 @@
 #include <arch/sys.h>
+#include <apheleia/syscall.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-int stat(const char *path, stat_t *st) {
+int stat(const char *path, struct stat *st) {
     return (int)__SYSCALL_ERRNO(syscall2(SYS_STAT, (uintptr_t)path, (uintptr_t)st));
 }
 
-int lstat(const char *path, stat_t *st) {
+int lstat(const char *path, struct stat *st) {
     return (int)__SYSCALL_ERRNO(syscall2(SYS_LSTAT, (uintptr_t)path, (uintptr_t)st));
 }
 
-int fstat(int fd, stat_t *st) {
+int fstat(int fd, struct stat *st) {
     return (int)__SYSCALL_ERRNO(syscall2(SYS_FSTAT, (uintptr_t)fd, (uintptr_t)st));
 }
 

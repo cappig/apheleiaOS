@@ -1,4 +1,5 @@
 #include <arch/sys.h>
+#include <apheleia/syscall.h>
 #include <errno.h>
 #include <libc_usr/signal.h>
 #include <unistd.h>

@@ -153,8 +153,8 @@ static bool pgrp_state(pid_t pgid, bool *stopped_out) {
         return false;
     }
 
-    int fd = open("/proc", O_RDONLY, 0);
-    if (fd < 0) {
+    DIR *dir = opendir("/proc");
+    if (!dir) {
         return false;
     }
 
@@ -162,14 +162,14 @@ static bool pgrp_state(pid_t pgid, bool *stopped_out) {
     bool any_running = false;
     bool any_stopped = false;
 
-    dirent_t ent;
-    while (getdents(fd, &ent) > 0) {
-        if (!is_pid_dir_name(ent.d_name)) {
+    struct dirent *ent = NULL;
+    while ((ent = readdir(dir)) != NULL) {
+        if (!is_pid_dir_name(ent->d_name)) {
             continue;
         }
 
         char stat_path[80];
-        snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent.d_name);
+        snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
 
         proc_stat_t stat = {0};
         if (proc_stat_read_path(stat_path, &stat) < 0) {
@@ -193,7 +193,7 @@ static bool pgrp_state(pid_t pgid, bool *stopped_out) {
         }
     }
 
-    close(fd);
+    closedir(dir);
 
     if (stopped_out && any_alive && any_stopped && !any_running) {
         *stopped_out = true;
@@ -1162,7 +1162,7 @@ static int redirect_path_to_fd(
         return -1;
     }
 
-    if (dup(fd, target_fd) < 0) {
+    if (dup2(fd, target_fd) < 0) {
         close(fd);
         io_write_str("sh: dup failed\n");
         return -1;
@@ -1235,13 +1235,13 @@ static int run_pipeline(sh_stage_t *stages, int stage_count, bool background, co
             signal(SIGTTOU, SIG_DFL);
 
             if (i > 0) {
-                if (dup(pipes[i - 1][0], STDIN_FILENO) < 0) {
+                if (dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
                     _exit(1);
                 }
             }
 
             if (i + 1 < stage_count) {
-                if (dup(pipes[i][1], STDOUT_FILENO) < 0) {
+                if (dup2(pipes[i][1], STDOUT_FILENO) < 0) {
                     _exit(1);
                 }
             }
@@ -1430,9 +1430,9 @@ int main(int argc, char **argv) {
     env_set("PATH", "/bin");
     env_set("HOME", "/");
 
-    passwd_t pwd = {0};
-    if (!getpwuid(getuid(), &pwd) && pwd.pw_dir[0]) {
-        env_set("HOME", pwd.pw_dir);
+    struct passwd *pwd = getpwuid(getuid());
+    if (pwd && pwd->pw_dir && pwd->pw_dir[0]) {
+        env_set("HOME", pwd->pw_dir);
     }
 
     env_set("PWD", "/");

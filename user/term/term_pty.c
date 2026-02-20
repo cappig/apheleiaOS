@@ -194,9 +194,9 @@ pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 h
         pid_t pgrp = getpid();
         ioctl(slave_fd, TIOCSPGRP, &pgrp);
 
-        dup(slave_fd, STDIN_FILENO);
-        dup(slave_fd, STDOUT_FILENO);
-        dup(slave_fd, STDERR_FILENO);
+        dup2(slave_fd, STDIN_FILENO);
+        dup2(slave_fd, STDOUT_FILENO);
+        dup2(slave_fd, STDERR_FILENO);
 
         close(slave_fd);
         close(master_fd);

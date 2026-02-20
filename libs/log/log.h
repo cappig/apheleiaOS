@@ -28,5 +28,5 @@ void slog(char *restrict buf, int lvl, char *file, int line, char *fmt, ...)
     __attribute__((format(printf, 5, 6)));
 void log(int lvl, char *file, int line, char *fmt, ...) __attribute__((format(printf, 4, 5)));
 
-void log_init(puts_fn puts);
+void log_init(puts_fn sink);
 void log_set_lvl(int lvl);

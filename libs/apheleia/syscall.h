@@ -1,0 +1,37 @@
+#pragma once
+
+#define SYS_EXIT          0
+#define SYS_READ          1
+#define SYS_WRITE         2
+#define SYS_OPEN          3
+#define SYS_CLOSE         4
+#define SYS_PREAD         5
+#define SYS_PWRITE        6
+#define SYS_SEEK          7
+#define SYS_MMAP          8
+#define SYS_MUNMAP        9
+#define SYS_IOCTL         10
+#define SYS_GETDENTS      11
+#define SYS_CHDIR         12
+#define SYS_MKDIR         13
+#define SYS_ACCESS        14
+#define SYS_STAT          15
+#define SYS_LSTAT         16
+#define SYS_FSTAT         17
+#define SYS_CHMOD         18
+#define SYS_CHOWN         19
+#define SYS_LINK          20
+#define SYS_UNLINK        21
+#define SYS_RENAME        22
+#define SYS_FORK          23
+#define SYS_EXECVE        24
+#define SYS_WAIT          25
+#define SYS_SIGNAL        26
+#define SYS_SIGRETURN     27
+#define SYS_KILL          28
+#define SYS_WAITPID       29
+#define SYS_PIPE          30
+#define SYS_DUP           31
+#define SYS_RMDIR         32
+#define SYS_POLL          33
+#define SYS_SLEEP         34

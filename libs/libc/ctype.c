@@ -50,7 +50,7 @@ int isdigit(int c) {
 }
 
 int isgraph(int c) {
-    if (c >= 0x21 && c <= 0x7f) {
+    if (c >= 0x21 && c <= 0x7e) {
         return 1;
     }
 
@@ -74,7 +74,7 @@ int isprint(int c) {
 }
 
 int ispunct(int c) {
-    if (c < 0x1f || c == 0x7f) {
+    if (isgraph(c) && !isalnum(c)) {
         return 1;
     }
 

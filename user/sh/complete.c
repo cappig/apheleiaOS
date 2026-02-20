@@ -1,7 +1,6 @@
 #include "complete.h"
 
 #include <dirent.h>
-#include <fcntl.h>
 #include <fsutil.h>
 #include <io.h>
 #include <stdbool.h>
@@ -17,7 +16,7 @@
 #define SH_PATH_MAX  1024
 
 typedef struct {
-    char name[DIRENT_NAME_MAX];
+    char name[NAME_MAX + 1];
     bool is_dir;
 } sh_match_t;
 
@@ -205,35 +204,34 @@ static size_t collect_matches(
         return 0;
     }
 
-    int fd = open(dir_path, O_RDONLY, 0);
-    if (fd < 0) {
+    DIR *dir = opendir(dir_path);
+    if (!dir) {
         return 0;
     }
 
     size_t count = 0;
-    dirent_t dent;
-
-    while (getdents(fd, &dent) > 0) {
-        if (!dent.d_name[0]) {
+    struct dirent *dent = NULL;
+    while ((dent = readdir(dir)) != NULL) {
+        if (!dent->d_name[0]) {
             continue;
         }
 
-        if (!strcmp(dent.d_name, ".") || !strcmp(dent.d_name, "..")) {
+        if (!strcmp(dent->d_name, ".") || !strcmp(dent->d_name, "..")) {
             continue;
         }
 
-        if (!include_hidden && dent.d_name[0] == '.') {
+        if (!include_hidden && dent->d_name[0] == '.') {
             continue;
         }
 
-        if (!starts_with(dent.d_name, prefix)) {
+        if (!starts_with(dent->d_name, prefix)) {
             continue;
         }
 
-        add_match(matches, &count, cap, dent.d_name, match_is_dir(dir_path, dent.d_name));
+        add_match(matches, &count, cap, dent->d_name, match_is_dir(dir_path, dent->d_name));
     }
 
-    close(fd);
+    closedir(dir);
     return count;
 }
 
@@ -266,35 +264,34 @@ collect_command_matches(const char *prefix, bool include_hidden, sh_match_t *mat
         }
 
         const char *dir = cursor[0] ? cursor : ".";
-        int fd = open(dir, O_RDONLY, 0);
-
-        if (fd >= 0) {
-            dirent_t dent;
-            while (getdents(fd, &dent) > 0) {
-                if (!dent.d_name[0]) {
+        DIR *dirp = opendir(dir);
+        if (dirp) {
+            struct dirent *dent = NULL;
+            while ((dent = readdir(dirp)) != NULL) {
+                if (!dent->d_name[0]) {
                     continue;
                 }
 
-                if (!strcmp(dent.d_name, ".") || !strcmp(dent.d_name, "..")) {
+                if (!strcmp(dent->d_name, ".") || !strcmp(dent->d_name, "..")) {
                     continue;
                 }
 
-                if (!include_hidden && dent.d_name[0] == '.') {
+                if (!include_hidden && dent->d_name[0] == '.') {
                     continue;
                 }
 
-                if (!starts_with(dent.d_name, prefix)) {
+                if (!starts_with(dent->d_name, prefix)) {
                     continue;
                 }
 
-                if (!command_is_runnable(dir, dent.d_name)) {
+                if (!command_is_runnable(dir, dent->d_name)) {
                     continue;
                 }
 
-                add_match(matches, &count, cap, dent.d_name, false);
+                add_match(matches, &count, cap, dent->d_name, false);
             }
 
-            close(fd);
+            closedir(dirp);
         }
 
         if (!next) {
@@ -339,7 +336,7 @@ static void list_matches(sh_match_t *matches, size_t count) {
     io_write_str("\n");
 
     for (size_t i = 0; i < count; i++) {
-        char item[DIRENT_NAME_MAX + 2];
+        char item[NAME_MAX + 2];
         snprintf(item, sizeof(item), "%s%s", matches[i].name, matches[i].is_dir ? "/" : "");
         io_write_str(item);
 
@@ -502,7 +499,7 @@ void complete_line(
         size_t base_len = command_mode ? token_len : strlen(base_prefix);
 
         if (common > base_len) {
-            char common_name[DIRENT_NAME_MAX];
+            char common_name[NAME_MAX + 1];
             snprintf(common_name, sizeof(common_name), "%.*s", (int)common, matches[0].name);
 
             if (command_mode) {

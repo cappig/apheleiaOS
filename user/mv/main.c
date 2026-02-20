@@ -23,7 +23,7 @@ int main(int argc, char **argv) {
     }
 
     const char *dest = argv[argc - 1];
-    stat_t st_dest = {0};
+    struct stat st_dest = {0};
 
     bool dest_exists = (!stat(dest, &st_dest));
     bool dest_is_dir = dest_exists && fs_is_dir_mode(st_dest.st_mode);

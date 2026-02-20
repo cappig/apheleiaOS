@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #define SYSTEM_MAX_ARGS 16
@@ -78,7 +79,7 @@ int system(const char *command) {
 
     int status = 0;
 
-    if (wait(pid, &status) < 0) {
+    if (waitpid(pid, &status, 0) < 0) {
         return -1;
     }
 

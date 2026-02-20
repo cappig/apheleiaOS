@@ -30,6 +30,7 @@ CC_BASE := \
 	-ffreestanding \
 	-fno-stack-protector \
 	-DEXTEND_LIBC \
+	-D_APHELEIA_SOURCE \
 	-nostdinc \
 	-mno-sse \
 	-mno-sse2 \

@@ -43,5 +43,9 @@ static void _quick_sort(void *base, size_t low, size_t high, size_t size, comp_f
 }
 
 void qsort(void *base, size_t num, size_t size, comp_fn comp) {
+    if (!base || !comp || !size || num < 2) {
+        return;
+    }
+
     _quick_sort(base, 0, num - 1, size, comp);
 }

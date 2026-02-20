@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <libc_usr/shadow.h>
 #include <parse/textdb.h>
 #include <string.h>
@@ -5,52 +6,113 @@
 
 #define SHADOW_PATH "/etc/shadow"
 
-typedef struct {
-    const char *name;
-    shadow_t *out;
-} shadow_find_ctx_t;
-
-static bool _match_shadow_name(const char *line, void *ctx_ptr) {
-    if (!ctx_ptr) {
-        return false;
+static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
+    size_t n = strlen(src) + 1;
+    if (!cursor || !left || !out || !src || n > *left) {
+        return ERANGE;
     }
 
-    shadow_find_ctx_t *ctx = (shadow_find_ctx_t *)ctx_ptr;
-    if (!ctx->name || !ctx->out) {
-        return false;
-    }
-
-    shadow_t entry = {0};
-    const char *field = line;
-
-    field = textdb_next_field(field, entry.sp_name, sizeof(entry.sp_name));
-    field = textdb_next_field(field, entry.sp_pwd, sizeof(entry.sp_pwd));
-
-    if (strcmp(entry.sp_name, ctx->name) != 0) {
-        return false;
-    }
-
-    *ctx->out = entry;
-    return true;
+    memcpy(*cursor, src, n);
+    *out = *cursor;
+    *cursor += n;
+    *left -= n;
+    return 0;
 }
 
-int getspnam(const char *name, shadow_t *out) {
-    if (!name || !out) {
-        return -1;
+static int parse_shadow_line(const char *line, struct spwd *spbuf, char *buf, size_t buflen) {
+    if (!line || !spbuf || !buf || !buflen) {
+        return EINVAL;
     }
 
-    char buf[4096];
-    ssize_t len = kv_read_file(SHADOW_PATH, buf, sizeof(buf));
+    char name[64] = {0};
+    char pwd[128] = {0};
+    const char *cursor = line;
+    cursor = textdb_next_field(cursor, name, sizeof(name));
+    cursor = textdb_next_field(cursor, pwd, sizeof(pwd));
+    (void)cursor;
 
+    memset(spbuf, 0, sizeof(*spbuf));
+    spbuf->sp_lstchg = -1;
+    spbuf->sp_min = -1;
+    spbuf->sp_max = -1;
+    spbuf->sp_warn = -1;
+    spbuf->sp_inact = -1;
+    spbuf->sp_expire = -1;
+    spbuf->sp_flag = 0;
+
+    char *dst = buf;
+    size_t left = buflen;
+    int rc = copy_field(&dst, &left, &spbuf->sp_namp, name);
+    if (!rc) {
+        rc = copy_field(&dst, &left, &spbuf->sp_pwdp, pwd);
+    }
+
+    return rc;
+}
+
+int getspnam_r(
+    const char *name,
+    struct spwd *spbuf,
+    char *buf,
+    size_t buflen,
+    struct spwd **result
+) {
+    if (!name || !spbuf || !buf || !buflen || !result) {
+        return EINVAL;
+    }
+
+    char file_buf[4096];
+    ssize_t len = kv_read_file(SHADOW_PATH, file_buf, sizeof(file_buf));
     if (len <= 0) {
-        return -1;
+        return ENOENT;
     }
 
-    shadow_find_ctx_t ctx = {
-        .name = name,
-        .out = out,
-    };
+    const char *line = file_buf;
+    while (*line) {
+        const char *next = strchr(line, '\n');
+        size_t line_len = next ? (size_t)(next - line) : strlen(line);
 
-    char line[256] = {0};
-    return textdb_find_line(buf, line, sizeof(line), _match_shadow_name, &ctx);
+        if (line_len) {
+            char tmp[256];
+            if (line_len >= sizeof(tmp)) {
+                return ERANGE;
+            }
+
+            memcpy(tmp, line, line_len);
+            tmp[line_len] = '\0';
+
+            struct spwd parsed = {0};
+            int rc = parse_shadow_line(tmp, &parsed, buf, buflen);
+            if (rc && rc != EINVAL) {
+                return rc;
+            }
+
+            if (!rc && !strcmp(parsed.sp_namp, name)) {
+                *spbuf = parsed;
+                *result = spbuf;
+                return 0;
+            }
+        }
+
+        if (!next) {
+            break;
+        }
+        line = next + 1;
+    }
+
+    *result = NULL;
+    return 0;
+}
+
+struct spwd *getspnam(const char *name) {
+    static struct spwd sp;
+    static char buf[256];
+    struct spwd *result = NULL;
+    int rc = getspnam_r(name, &sp, buf, sizeof(buf), &result);
+    if (rc || !result) {
+        errno = rc ? rc : ENOENT;
+        return NULL;
+    }
+
+    return result;
 }

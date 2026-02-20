@@ -19,17 +19,17 @@ static int attach_tty(const char *path) {
         return -1;
     }
 
-    if (dup(fd, STDIN_FILENO) < 0) {
+    if (dup2(fd, STDIN_FILENO) < 0) {
         close(fd);
         return -1;
     }
 
-    if (dup(fd, STDOUT_FILENO) < 0) {
+    if (dup2(fd, STDOUT_FILENO) < 0) {
         close(fd);
         return -1;
     }
 
-    if (dup(fd, STDERR_FILENO) < 0) {
+    if (dup2(fd, STDERR_FILENO) < 0) {
         close(fd);
         return -1;
     }

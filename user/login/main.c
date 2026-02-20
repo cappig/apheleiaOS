@@ -101,14 +101,14 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        passwd_t pwd = {0};
-        if (getpwnam(name, &pwd) < 0) {
+        struct passwd *pwd = getpwnam(name);
+        if (!pwd) {
             write_str("login: unknown user\n");
             continue;
         }
 
-        shadow_t shadow = {0};
-        if (getspnam(name, &shadow) < 0) {
+        struct spwd *shadow = getspnam(name);
+        if (!shadow) {
             write_str("login: authentication failed\n");
             continue;
         }
@@ -127,23 +127,23 @@ int main(int argc, char **argv) {
 
         strip_newline(pass);
 
-        const char *hashed = crypt(pass, shadow.sp_pwd);
+        const char *hashed = crypt(pass, shadow->sp_pwdp);
 
-        if (!hashed || strcmp(hashed, shadow.sp_pwd)) {
+        if (!hashed || strcmp(hashed, shadow->sp_pwdp)) {
             write_str("login: authentication failed\n");
             continue;
         }
 
-        if (setgid(pwd.pw_gid) < 0 || setuid(pwd.pw_uid) < 0) {
+        if (setgid(pwd->pw_gid) < 0 || setuid(pwd->pw_uid) < 0) {
             write_str("login: failed to set credentials\n");
             continue;
         }
 
-        if (pwd.pw_dir[0]) {
-            chdir(pwd.pw_dir);
+        if (pwd->pw_dir && pwd->pw_dir[0]) {
+            chdir(pwd->pw_dir);
         }
 
-        const char *shell = pwd.pw_shell[0] ? pwd.pw_shell : "/bin/sh";
+        const char *shell = (pwd->pw_shell && pwd->pw_shell[0]) ? pwd->pw_shell : "/bin/sh";
         char *args[] = {(char *)shell, NULL};
         execve(shell, args, NULL);
 

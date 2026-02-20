@@ -1,13 +1,33 @@
 #pragma once
 
-#include <base/types.h>
+#include <sys/types.h>
 
-#define DIRENT_NAME_MAX 64
+#define DT_UNKNOWN 0
+#define DT_FIFO    1
+#define DT_CHR     2
+#define DT_DIR     4
+#define DT_BLK     6
+#define DT_REG     8
+#define DT_LNK     10
+#define DT_SOCK    12
 
-typedef struct dirent {
-    u32 d_ino;
-    u32 d_type;
-    char d_name[DIRENT_NAME_MAX];
-} dirent_t;
+#define NAME_MAX 255
 
-int getdents(int fd, dirent_t *out);
+struct dirent {
+    ino_t d_ino;
+    unsigned char d_type;
+    char d_name[NAME_MAX + 1];
+};
+
+typedef struct DIR DIR;
+
+DIR *opendir(const char *name);
+struct dirent *readdir(DIR *dirp);
+int closedir(DIR *dirp);
+void rewinddir(DIR *dirp);
+
+#ifdef _APHELEIA_SOURCE
+#define DIRENT_NAME_MAX NAME_MAX
+typedef struct dirent dirent_t;
+int getdents(int fd, struct dirent *out);
+#endif

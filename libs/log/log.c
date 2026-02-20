@@ -77,8 +77,8 @@ void log(int lvl, char *file, int line, char *fmt, ...) {
     va_end(args);
 }
 
-void log_init(puts_fn puts) {
-    puts_ptr = puts;
+void log_init(puts_fn sink) {
+    puts_ptr = sink;
 }
 
 void log_set_lvl(int lvl) {

@@ -42,6 +42,7 @@ void *malloc(size_t size);
 void *calloc(size_t num, size_t size);
 void *realloc(void *ptr, size_t size);
 void free(void *ptr);
+void abort(void) __attribute__((noreturn));
 
 long long strtoll(char const *restrict str, char **restrict endptr, int base);
 long strtol(char const *restrict str, char **restrict endptr, int base);

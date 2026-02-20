@@ -152,7 +152,7 @@ int vsnscanf(const char *restrict str, size_t max, const char *restrict format, 
                 }
 
                 if (base == BASE_STRING) {
-                    ptr[j] = '\0';
+                    ptr[width] = '\0';
                 }
             }
         }

@@ -10,15 +10,19 @@
 #include "bios.h"
 #include "stdarg.h"
 
-void puts(const char *str) {
+int puts(const char *str) {
     regs32_t regs = {.ah = 0x0e};
+    int count = 0;
 
     while (*str) {
         regs.al = *str;
         send_serial(SERIAL_COM1, *str);
         bios_call(0x10, &regs, &regs);
         str++;
+        count++;
     }
+
+    return count;
 }
 
 void serial_puts(const char *str) {
@@ -28,7 +32,7 @@ void serial_puts(const char *str) {
     }
 }
 
-int printf(char *fmt, ...) {
+int printf(const char *fmt, ...) {
     char buf[PRINTF_BUF_SIZE];
 
     va_list args;
@@ -43,7 +47,7 @@ int printf(char *fmt, ...) {
     return ret;
 }
 
-int serial_printf(char *fmt, ...) {
+int serial_printf(const char *fmt, ...) {
     char buf[PRINTF_BUF_SIZE];
 
     va_list args;

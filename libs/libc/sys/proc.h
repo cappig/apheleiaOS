@@ -1,5 +1,9 @@
 #pragma once
 
+#ifndef _APHELEIA_SOURCE
+#error "<sys/proc.h> is an apheleiaOS extension. Define _APHELEIA_SOURCE."
+#endif
+
 #include <stdbool.h>
 #include <sys/types.h>
 

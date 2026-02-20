@@ -8,7 +8,11 @@ typedef struct pollfd {
     int fd;
     short events;
     short revents;
-} pollfd_t;
+} pollfd;
+
+#ifdef _APHELEIA_SOURCE
+typedef struct pollfd pollfd_t;
+#endif
 
 #define POLLIN   0x0001
 #define POLLOUT  0x0004

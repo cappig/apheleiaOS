@@ -29,17 +29,17 @@ static void resolve_user(char *user, size_t user_len, char *shell, size_t shell_
     }
 
     uid_t uid = getuid();
-    passwd_t pwd = {0};
-    bool have_pwd = !getpwuid(uid, &pwd);
+    struct passwd *pwd = getpwuid(uid);
+    bool have_pwd = pwd != NULL;
 
-    if (have_pwd && pwd.pw_name[0]) {
-        snprintf(user, user_len, "%s", pwd.pw_name);
+    if (have_pwd && pwd->pw_name && pwd->pw_name[0]) {
+        snprintf(user, user_len, "%s", pwd->pw_name);
     } else {
         snprintf(user, user_len, "%llu", (unsigned long long)uid);
     }
 
-    if (have_pwd && pwd.pw_shell[0]) {
-        snprintf(shell, shell_len, "%s", pwd.pw_shell);
+    if (have_pwd && pwd->pw_shell && pwd->pw_shell[0]) {
+        snprintf(shell, shell_len, "%s", pwd->pw_shell);
     } else {
         snprintf(shell, shell_len, "/bin/sh");
     }

@@ -1,6 +1,5 @@
 #include <account.h>
 #include <dirent.h>
-#include <fcntl.h>
 #include <fsutil.h>
 #include <io.h>
 #include <stdbool.h>
@@ -42,9 +41,8 @@ static size_t term_width(void) {
 
 static int
 list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool opt_single) {
-    int fd = open(path, O_RDONLY, 0);
-
-    if (fd < 0) {
+    DIR *dir = opendir(path);
+    if (!dir) {
         io_write_str("ls: failed to open\n");
         return 1;
     }
@@ -54,12 +52,9 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
     size_t width_uname = 1;
     size_t width_gname = 1;
     size_t width_size = 1;
-    dirent_t ent;
-
-    while (getdents(fd, &ent) > 0) {
-        char name[DIRENT_NAME_MAX];
-        strncpy(name, ent.d_name, sizeof(name) - 1);
-        name[sizeof(name) - 1] = '\0';
+    struct dirent *ent = NULL;
+    while ((ent = readdir(dir)) != NULL) {
+        const char *name = ent->d_name;
 
         if (!want_name(name, opt_all, opt_almost)) {
             continue;
@@ -73,7 +68,7 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
 
         if (opt_long) {
             char full[256];
-            stat_t st;
+            struct stat st;
 
             fs_join_path(full, sizeof(full), path, name);
 
@@ -112,10 +107,7 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
         }
     }
 
-    if (lseek(fd, 0, SEEK_SET) < 0) {
-        close(fd);
-        return 1;
-    }
+    rewinddir(dir);
 
     size_t cols = 1;
     size_t col_width = max_len + 2;
@@ -129,10 +121,8 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
     }
 
     size_t col = 0;
-    while (getdents(fd, &ent) > 0) {
-        char name[DIRENT_NAME_MAX];
-        strncpy(name, ent.d_name, sizeof(name) - 1);
-        name[sizeof(name) - 1] = '\0';
+    while ((ent = readdir(dir)) != NULL) {
+        const char *name = ent->d_name;
 
         if (!want_name(name, opt_all, opt_almost)) {
             continue;
@@ -140,7 +130,7 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
 
         if (opt_long) {
             char full[256];
-            stat_t st;
+            struct stat st;
 
             fs_join_path(full, sizeof(full), path, name);
 
@@ -209,7 +199,7 @@ list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool op
         io_write_char('\n');
     }
 
-    close(fd);
+    closedir(dir);
     return 0;
 }
 

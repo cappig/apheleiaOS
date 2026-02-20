@@ -3,6 +3,15 @@
 #include <stddef.h>
 
 typedef long int time_t;
+typedef int clockid_t;
+
+struct timespec {
+    time_t tv_sec;
+    long tv_nsec;
+};
+
+#define CLOCK_REALTIME  0
+#define CLOCK_MONOTONIC 1
 
 struct tm {
     int tm_sec;
@@ -17,6 +26,8 @@ struct tm {
 };
 
 time_t time(time_t *timer);
+int nanosleep(const struct timespec *req, struct timespec *rem);
+int clock_gettime(clockid_t clock_id, struct timespec *tp);
 
 time_t mktime(struct tm *tm);
 

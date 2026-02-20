@@ -9,10 +9,11 @@ ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
 ssize_t pread(int fd, void *buf, size_t count, off_t offset);
 ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
-int open(const char *path, int flags, mode_t mode);
+int open(const char *path, int flags, ...);
 int close(int fd);
 int pipe(int pipefd[2]);
-int dup(int oldfd, int newfd);
+int dup(int oldfd);
+int dup2(int oldfd, int newfd);
 int mkdir(const char *path, mode_t mode);
 int rmdir(const char *path);
 int access(const char *path, int mode);
@@ -27,7 +28,7 @@ int unlink(const char *path);
 int rename(const char *oldpath, const char *newpath);
 
 pid_t fork(void);
-pid_t wait(pid_t pid, int *status);
+pid_t wait(int *status);
 pid_t waitpid(pid_t pid, int *status, int options);
 int execve(const char *path, char *const argv[], char *const envp[]);
 
@@ -41,4 +42,4 @@ gid_t getgid(void);
 int setuid(uid_t uid);
 int setgid(gid_t gid);
 
-void _exit(int status);
+void _exit(int status) __attribute__((noreturn));

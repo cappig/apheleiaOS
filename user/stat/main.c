@@ -12,7 +12,7 @@ static void usage(void) {
 }
 
 static int print_one(const char *path) {
-    stat_t st;
+    struct stat st;
 
     if (lstat(path, &st) < 0) {
         char line[256];

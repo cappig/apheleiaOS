@@ -26,7 +26,7 @@ static void copy_fd(int fd) {
 }
 
 static bool is_dir_fd(int fd) {
-    stat_t st = {0};
+    struct stat st = {0};
 
     if (fstat(fd, &st) < 0) {
         return false;
@@ -42,7 +42,7 @@ int main(int argc, char **argv) {
     }
 
     for (int i = 1; i < argc; i++) {
-        int fd = open(argv[i], O_RDONLY, 0);
+        int fd = open(argv[i], O_RDONLY);
         if (fd < 0) {
             write(STDOUT_FILENO, "cat: failed to open\n", 20);
             continue;

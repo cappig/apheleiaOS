@@ -179,16 +179,16 @@ static uintmax_t _get_var_number(int size, va_list *vlist) {
 }
 
 static void _buf_putc(char *buffer, size_t *written, size_t max_size, char value) {
-    if (!buffer || !written || !max_size) {
+    if (!written) {
         return;
     }
 
-    if (*written + 1 >= max_size) {
-        return;
+    size_t pos = *written;
+    if (buffer && max_size && pos + 1 < max_size) {
+        buffer[pos] = value;
     }
 
-    buffer[*written] = value;
-    (*written)++;
+    *written = pos + 1;
 }
 
 static void _string_to_buffer(
@@ -317,7 +317,7 @@ static int _get_base(char type) {
 
 // FIXME: check index bounds inside the loop!
 int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict format, va_list vlist) {
-    if (!buffer || !format || !max_size) {
+    if (!format) {
         return 0;
     }
 
@@ -326,7 +326,7 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
 
     size_t written = 0;
 
-    for (size_t i = 0; format[i] && written + 1 < max_size; i++) {
+    for (size_t i = 0; format[i]; i++) {
         if (format[i] != '%') {
             _buf_putc(buffer, &written, max_size, format[i]);
             continue;
@@ -424,13 +424,16 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
         }
     }
 
-    if (written >= max_size) {
-        written = max_size - 1;
+    if (buffer && max_size) {
+        size_t term = written < max_size ? written : max_size - 1;
+        buffer[term] = '\0';
     }
 
-    buffer[written] = '\0';
-
     va_end(args);
+
+    if (written > (size_t)INT_MAX) {
+        return INT_MAX;
+    }
 
     return (int)written;
 }

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <gui/fb.h>
 #include <sys/types.h>
 
 #define TCGETS      1
@@ -12,6 +11,10 @@
 #define TIOCSPGRP   7
 #define TIOCGPGRP   8
 #define TIOCGPTN    9
+
+#ifdef _APHELEIA_SOURCE
+#include <gui/fb.h>
+
 #define FBIOGETINFO 10
 #define FBIOACQUIRE 11
 #define FBIORELEASE 12
@@ -28,5 +31,6 @@
 #define WSIOC_ALLOC           71
 #define WSIOC_FREE            72
 #define WSIOC_QUERY           73
+#endif
 
 int ioctl(int fd, unsigned long request, ...);

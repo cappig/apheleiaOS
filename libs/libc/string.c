@@ -127,6 +127,10 @@ char *strchr(const char *str, int ch) {
         str++;
     }
 
+    if ((char)ch == '\0') {
+        return (char *)str;
+    }
+
     return NULL;
 }
 
@@ -135,7 +139,7 @@ char *strrchr(const char *str, int ch) {
         return NULL;
     }
 
-    const char *ptr = NULL;
+    const char *ptr = (char)ch == '\0' ? str + strlen(str) : NULL;
 
     while (*str) {
         if (*str == (char)ch) {
@@ -204,10 +208,6 @@ void *memset(void *dest, int val, size_t len) {
 }
 
 size_t strlen(const char *str) {
-    if (!str) {
-        return 0;
-    }
-
     int len = 0;
     while (*str) {
         len++;

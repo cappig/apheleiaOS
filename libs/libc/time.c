@@ -462,11 +462,11 @@ char *asctime(const struct tm *time) {
     static char buf[32];
 
     if (!time) {
-        return strcpy(buf, "??? ??? ?? ??:??:?? ????");
+        return strcpy(buf, "??? ??? ?? ??:??:?? ????\n");
     }
 
-    if (!strftime(buf, sizeof(buf), "%a %b %e %H:%M:%S %Y", time)) {
-        return strcpy(buf, "??? ??? ?? ??:??:?? ????");
+    if (!strftime(buf, sizeof(buf), "%a %b %e %H:%M:%S %Y\n", time)) {
+        return strcpy(buf, "??? ??? ?? ??:??:?? ????\n");
     }
 
     return buf;
@@ -475,7 +475,7 @@ char *asctime(const struct tm *time) {
 char *ctime(const time_t *timer) {
     struct tm tm_buf;
 
-    if (!gmtime_r(timer, &tm_buf)) {
+    if (!localtime_r(timer, &tm_buf)) {
         return asctime(NULL);
     }
 

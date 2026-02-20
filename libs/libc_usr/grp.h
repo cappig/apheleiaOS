@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stddef.h>
 #include <grp.h>
 
-int getgrgid(gid_t gid, group_t *out);
+struct group *getgrgid(gid_t gid);
+int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen, struct group **result);

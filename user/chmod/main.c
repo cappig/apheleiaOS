@@ -214,7 +214,7 @@ int main(int argc, char **argv) {
     for (int i = 2; i < argc; i++) {
         mode_t target_mode = mode;
         if (symbolic) {
-            stat_t st = {0};
+            struct stat st = {0};
 
             if (stat(argv[i], &st) != 0) {
                 char msg[128];

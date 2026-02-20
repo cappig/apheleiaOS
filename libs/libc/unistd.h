@@ -1,48 +1,13 @@
 #pragma once
 
-#define SYS_EXIT      0
-#define SYS_READ      1
-#define SYS_WRITE     2
-#define SYS_OPEN      3
-#define SYS_CLOSE     4
-#define SYS_PREAD     5
-#define SYS_PWRITE    6
-#define SYS_SEEK      7
-#define SYS_MMAP      8
-#define SYS_MUNMAP    9
-#define SYS_IOCTL     10
-#define SYS_GETDENTS  11
-#define SYS_CHDIR     12
-#define SYS_MKDIR     13
-#define SYS_ACCESS    14
-#define SYS_STAT      15
-#define SYS_LSTAT     16
-#define SYS_FSTAT     17
-#define SYS_CHMOD     18
-#define SYS_CHOWN     19
-#define SYS_LINK      20
-#define SYS_UNLINK    21
-#define SYS_RENAME    22
-#define SYS_FORK      23
-#define SYS_EXECVE    24
-#define SYS_WAIT      25
-#define SYS_SLEEP     26
-#define SYS_SIGNAL    27
-#define SYS_SIGRETURN 28
-#define SYS_KILL      29
-#define SYS_WAITPID   30
-#define SYS_PIPE      31
-#define SYS_DUP       32
-#define SYS_RMDIR     33
-#define SYS_POLL      34
-
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
-#define R_OK 4
-#define W_OK 2
+#define F_OK 0
 #define X_OK 1
+#define W_OK 2
+#define R_OK 4
 
 #ifndef _KERNEL
 #include <libc_usr/unistd.h>
