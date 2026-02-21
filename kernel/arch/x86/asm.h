@@ -186,6 +186,7 @@ static inline void write_cr3(u32 value) {
 #define CR4_PSE    (1 << 4)
 #define CR4_PAE    (1 << 5)
 #define CR4_OSFXSR (1 << 9)
+#define CR4_OSXMMEXCPT (1 << 10)
 
 #if defined(__x86_64__)
 static inline u64 read_cr4(void) {

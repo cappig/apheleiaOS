@@ -37,12 +37,16 @@
 
 #define LOG_BOOT_HISTORY_CAP    (256 * 1024)
 #define BOOT_ROOTFS_SECTOR_SIZE 512
+#define CPUID_FEATURES          0x00000001
+#define CPUID_FEAT_EDX_FXSR     (1U << 24)
+#define CPUID_FEAT_EDX_SSE      (1U << 25)
 
 static bool log_console_ready = false;
 static kernel_args_t boot_args = {0};
 static u64 boot_rootfs_paddr = 0;
 static size_t boot_rootfs_size = 0;
 static bool boot_rootfs_registered = false;
+static bool arch_fpu_fxsr = false;
 
 static char boot_log_history[LOG_BOOT_HISTORY_CAP];
 static size_t boot_log_history_len = 0;
@@ -51,6 +55,24 @@ typedef struct {
     u64 paddr;
     size_t size;
 } boot_rootfs_t;
+
+#if defined(__i386__)
+#define FX_HELPER_ATTR __attribute__((noinline, force_align_arg_pointer))
+#else
+#define FX_HELPER_ATTR __attribute__((noinline))
+#endif
+
+static void FX_HELPER_ATTR _fxsave_unaligned(void *buf) {
+    u8 bounce[512] __attribute__((aligned(16)));
+    asm volatile("fxsave %0" : "=m"(*(u8 (*)[512])bounce));
+    memcpy(buf, bounce, sizeof(bounce));
+}
+
+static void FX_HELPER_ATTR _fxrstor_unaligned(const void *buf) {
+    u8 bounce[512] __attribute__((aligned(16)));
+    memcpy(bounce, buf, sizeof(bounce));
+    asm volatile("fxrstor %0" : : "m"(*(const u8 (*)[512])bounce));
+}
 
 
 static void _log_history_append(const char *s, size_t len) {
@@ -167,13 +189,46 @@ bool arch_supports_nx(void) {
 }
 
 
+static inline void _fxsave_buf(void *buf) {
+    if (!buf) {
+        return;
+    }
+
+    if (((uintptr_t)buf & 0x0f) == 0) {
+        asm volatile("fxsave %0" : "=m"(*(u8 (*)[512])buf));
+        return;
+    }
+
+    _fxsave_unaligned(buf);
+}
+
+static inline void _fxrstor_buf(const void *buf) {
+    if (!buf) {
+        return;
+    }
+
+    if (((uintptr_t)buf & 0x0f) == 0) {
+        asm volatile("fxrstor %0" : : "m"(*(const u8 (*)[512])buf));
+        return;
+    }
+
+    _fxrstor_unaligned(buf);
+}
+
 void arch_fpu_init(void *buf) {
     if (!buf) {
         return;
     }
 
+    if (arch_fpu_fxsr) {
+        asm volatile("fninit");
+        _fxsave_buf(buf);
+        asm volatile("fninit");
+        return;
+    }
+
     asm volatile("fninit");
-    asm volatile("fnsave %0" : "=m"(*(u8 *)buf));
+    asm volatile("fnsave %0" : "=m"(*(u8 (*)[108])buf));
     asm volatile("fninit");
 }
 
@@ -182,7 +237,12 @@ void arch_fpu_save(void *buf) {
         return;
     }
 
-    asm volatile("fnsave %0" : "=m"(*(u8 *)buf));
+    if (arch_fpu_fxsr) {
+        _fxsave_buf(buf);
+        return;
+    }
+
+    asm volatile("fnsave %0" : "=m"(*(u8 (*)[108])buf));
 }
 
 void arch_fpu_restore(const void *buf) {
@@ -190,7 +250,12 @@ void arch_fpu_restore(const void *buf) {
         return;
     }
 
-    asm volatile("frstor %0" : : "m"(*(const u8 *)buf));
+    if (arch_fpu_fxsr) {
+        _fxrstor_buf(buf);
+        return;
+    }
+
+    asm volatile("frstor %0" : : "m"(*(const u8 (*)[108])buf));
 }
 
 static char cpu_name[64] = "x86";
@@ -268,6 +333,43 @@ static void _select_log_level(const boot_info_t *info) {
     default:
         break;
     }
+}
+
+static bool _cpu_has_fxsr_sse(void) {
+    cpuid_regs_t regs = {0};
+    cpuid(CPUID_FEATURES, &regs);
+
+    if (!(regs.edx & CPUID_FEAT_EDX_FXSR)) {
+        return false;
+    }
+
+    if (!(regs.edx & CPUID_FEAT_EDX_SSE)) {
+        return false;
+    }
+
+    return true;
+}
+
+static void _fpu_hw_enable(void) {
+    u64 cr0 = read_cr0();
+    cr0 &= ~(u64)(CR0_EM | CR0_TS);
+    cr0 |= (u64)CR0_MP;
+    write_cr0(cr0);
+
+    arch_fpu_fxsr = _cpu_has_fxsr_sse();
+    if (!arch_fpu_fxsr) {
+#if defined(__i386__)
+        panic("x86_32 build requires SSE/FXSR support");
+#else
+        return;
+#endif
+    }
+
+    u64 cr4 = read_cr4();
+    cr4 |= (u64)(CR4_OSFXSR | CR4_OSXMMEXCPT);
+    write_cr4(cr4);
+
+    asm volatile("fninit");
 }
 
 static uintptr_t _read_stack_ptr(void) {
@@ -737,6 +839,7 @@ const kernel_args_t *arch_init(void *boot_info) {
     tss_init(_read_stack_ptr());
 
     cpu_init_boot();
+    _fpu_hw_enable();
 
     pat_init();
     pic_init();

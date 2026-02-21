@@ -1743,6 +1743,7 @@ void scheduler_init(void) {
 }
 
 void scheduler_start(void) {
+    unsigned long irq_flags = arch_irq_save();
     log_info("scheduler starting");
     sched_running = true;
     sched_local_set_ticks_left(SCHED_SLICE);
@@ -1751,6 +1752,7 @@ void scheduler_start(void) {
     sched_thread_t *next = pick_next_thread();
 
     if (!current || !next || next == current) {
+        arch_irq_restore(irq_flags);
         return;
     }
 
@@ -1770,6 +1772,7 @@ void scheduler_start(void) {
 
     stats_inc_sched_switch_count();
     arch_context_switch(next->context);
+    arch_irq_restore(irq_flags);
 }
 
 bool sched_is_running(void) {

@@ -27,8 +27,14 @@ MBR_OBJ  := $(patsubst %, bin/boot/%.o, $(MBR_SRC))
 BIOS_OBJ := $(patsubst %, bin/boot/%.o, $(BIOS_SRC))
 
 AS_BOOT := -felf32
+BOOT_X86_FP_FLAGS := \
+	-mno-mmx \
+	-mno-sse \
+	-mno-sse2
+
 CC_BOOT := \
 	-m32 \
+	$(BOOT_X86_FP_FLAGS) \
 	-fdata-sections \
 	-DEXTERNAL_ALLOC \
 	-ffunction-sections

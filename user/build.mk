@@ -35,9 +35,11 @@ USER_CC := \
 	-m$(ARCH_VARIANT) \
 	-DARCH_NAME=\"$(USER_ARCH_NAME)\"
 
-ifeq ($(ARCH_VARIANT),64)
-USER_CC := $(USER_CC) -msse -msse2 -mfpmath=sse
-endif
+# ifeq ($(ARCH_VARIANT),64)
+# USER_CC := $(USER_CC) -msse -msse2
+# else ifeq ($(ARCH_VARIANT),32)
+# USER_CC := $(USER_CC) -msse -msse2 -mfpmath=sse
+# endif
 
 USER_AS := -felf$(ARCH_VARIANT)
 

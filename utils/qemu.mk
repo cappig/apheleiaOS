@@ -11,6 +11,7 @@ QEMU := qemu-system-$(QEMU_ARCH)
 QEMU_CONSOLE ?= false
 BOOT         ?= bios
 QEMU_MEMORY  ?= 128M
+QEMU_SNAPSHOT ?= true
 
 OVMF_DIR          := .cache/ovmf
 OVMF_CODE_LOCAL   := $(OVMF_DIR)/OVMF_CODE.fd
@@ -38,6 +39,10 @@ QEMU_ARGS := \
 	-no-reboot \
 	-m $(QEMU_MEMORY) \
 	$(QEMU_CONSOLE_ARGS)
+
+ifeq ($(QEMU_SNAPSHOT), true)
+QEMU_ARGS += -snapshot
+endif
 
 .PHONY: ovmf-fetch ovmf-clean run
 

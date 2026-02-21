@@ -1,5 +1,6 @@
 #include "heap.h"
 
+#include <arch/arch.h>
 #include <alloc/bitmap.h>
 #include <base/macros.h>
 #include <base/types.h>
@@ -204,6 +205,7 @@ static void *_kmalloc(size_t size) {
         return NULL;
     }
 
+    unsigned long irq_flags = arch_irq_save();
     size_t header_blocks =
         DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
 
@@ -255,6 +257,7 @@ static void *_kmalloc(size_t size) {
     );
 #endif
 
+    arch_irq_restore(irq_flags);
     return ret;
 }
 
@@ -266,6 +269,7 @@ static void _kfree(void *ptr) {
         return;
     }
 
+    unsigned long irq_flags = arch_irq_save();
     kheap_header *header = (kheap_header *)((u8 *)ptr - sizeof(kheap_header));
 
     if (header->magic != KERNEL_HEAP_MAGIC) {
@@ -288,6 +292,8 @@ static void _kfree(void *ptr) {
     size_t size = header->size * KERNEL_HEAP_BLOCK_SIZE;
     log_debug("[KMALLOC_DEBUG] free: bytes = %zd, ptr = %#lx", size, (u64)ptr);
 #endif
+
+    arch_irq_restore(irq_flags);
 }
 
 

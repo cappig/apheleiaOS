@@ -32,9 +32,6 @@ CC_BASE := \
 	-DEXTEND_LIBC \
 	-D_APHELEIA_SOURCE \
 	-nostdinc \
-	-mno-sse \
-	-mno-sse2 \
-	-mno-mmx \
 	-mno-red-zone \
 	-fno-pic \
 	-fno-pie

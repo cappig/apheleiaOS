@@ -6,12 +6,18 @@ UEFI_SRC := \
 
 UEFI_OBJ := $(patsubst $(UEFI_DIR)/%.c, bin/uefi/obj/%.o, $(UEFI_SRC))
 
+UEFI_X86_FP_FLAGS := \
+	-mno-mmx \
+	-mno-sse \
+	-mno-sse2
+
 
 ifeq ($(TOOLCHAIN), llvm)
 UEFI_CC := $(CC)
 UEFI_LD := $(LD)
 UEFI_CFLAGS := \
 	-target x86_64-unknown-uefi \
+	$(UEFI_X86_FP_FLAGS) \
 	-fshort-wchar \
 	-fdata-sections \
 	-ffunction-sections
@@ -24,6 +30,7 @@ else ifeq ($(TOOLCHAIN), gnu)
 UEFI_CC := x86_64-w64-mingw32-gcc
 UEFI_LD := x86_64-w64-mingw32-ld
 UEFI_CFLAGS := \
+	$(UEFI_X86_FP_FLAGS) \
 	-fshort-wchar \
 	-fdata-sections \
 	-ffunction-sections
