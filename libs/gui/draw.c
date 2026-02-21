@@ -1,6 +1,14 @@
 #include "draw.h"
 
+#include <psf.h>
 #include <string.h>
+
+#define DRAW_FONT_BUF_SIZE (256 * 1024)
+
+static u8 draw_font_buf[DRAW_FONT_BUF_SIZE];
+static psf_font_t draw_font = {0};
+static bool draw_font_load_attempted = false;
+static bool draw_font_loaded = false;
 
 static i32 min3(i32 a, i32 b, i32 c) {
     i32 min = a;
@@ -44,6 +52,74 @@ static size_t _stride_pixels(const framebuffer_t *fb) {
     }
 
     return stride;
+}
+
+static bool _load_draw_font(void) {
+    if (draw_font_load_attempted) {
+        return draw_font_loaded;
+    }
+
+    draw_font_load_attempted = true;
+    if (psf_load_file("/etc/font.psf", draw_font_buf, sizeof(draw_font_buf), &draw_font)) {
+        draw_font_loaded = true;
+        return true;
+    }
+
+    memset(&draw_font, 0, sizeof(draw_font));
+    draw_font_loaded = false;
+    return false;
+}
+
+static inline void
+_put_pixel(framebuffer_t *fb, size_t stride_pixels, i32 x, i32 y, pixel_t color) {
+    if (!fb || !fb->pixels || x < 0 || y < 0) {
+        return;
+    }
+
+    if (x >= (i32)fb->width || y >= (i32)fb->height) {
+        return;
+    }
+
+    fb->pixels[(size_t)y * stride_pixels + (size_t)x] = color;
+}
+
+static inline void _draw_hspan(
+    framebuffer_t *fb,
+    size_t stride_pixels,
+    i32 x0,
+    i32 x1,
+    i32 y,
+    pixel_t color
+) {
+    if (!fb || !fb->pixels || y < 0 || y >= (i32)fb->height) {
+        return;
+    }
+
+    if (x0 > x1) {
+        i32 tmp = x0;
+        x0 = x1;
+        x1 = tmp;
+    }
+
+    if (x1 < 0 || x0 >= (i32)fb->width) {
+        return;
+    }
+
+    if (x0 < 0) {
+        x0 = 0;
+    }
+
+    if (x1 >= (i32)fb->width) {
+        x1 = (i32)fb->width - 1;
+    }
+
+    size_t start = (size_t)y * stride_pixels + (size_t)x0;
+    size_t count = (size_t)(x1 - x0 + 1);
+    pixel_t *row = fb->pixels + start;
+
+    for (size_t i = 0; i < count; i++) {
+        row[i] = color;
+    }
 }
 
 void draw_rect(
@@ -117,6 +193,216 @@ void draw_rect(
             first_row,
             span_bytes
         );
+    }
+}
+
+void draw_line(
+    framebuffer_t *fb,
+    i32 x0,
+    i32 y0,
+    i32 x1,
+    i32 y1,
+    pixel_t color
+) {
+    if (!fb || !fb->pixels || !fb->width || !fb->height) {
+        return;
+    }
+
+    size_t stride_pixels = _stride_pixels(fb);
+    if (!stride_pixels) {
+        return;
+    }
+
+    i32 dx = x1 - x0;
+    if (dx < 0) {
+        dx = -dx;
+    }
+
+    i32 sx = (x0 < x1) ? 1 : -1;
+
+    i32 dy = y1 - y0;
+    if (dy > 0) {
+        dy = -dy;
+    }
+
+    i32 sy = (y0 < y1) ? 1 : -1;
+    i32 err = dx + dy;
+
+    for (;;) {
+        _put_pixel(fb, stride_pixels, x0, y0, color);
+        if (x0 == x1 && y0 == y1) {
+            break;
+        }
+
+        i32 e2 = err * 2;
+        if (e2 >= dy) {
+            err += dy;
+            x0 += sx;
+        }
+
+        if (e2 <= dx) {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+void draw_circle(
+    framebuffer_t *fb,
+    i32 cx,
+    i32 cy,
+    u32 radius,
+    pixel_t color
+) {
+    if (!fb || !fb->pixels || !fb->width || !fb->height) {
+        return;
+    }
+
+    size_t stride_pixels = _stride_pixels(fb);
+    if (!stride_pixels) {
+        return;
+    }
+
+    if (!radius) {
+        _put_pixel(fb, stride_pixels, cx, cy, color);
+        return;
+    }
+
+    i32 x = (i32)radius;
+    i32 y = 0;
+    i32 err = 1 - x;
+
+    while (x >= y) {
+        _put_pixel(fb, stride_pixels, cx + x, cy + y, color);
+        _put_pixel(fb, stride_pixels, cx + y, cy + x, color);
+        _put_pixel(fb, stride_pixels, cx - y, cy + x, color);
+        _put_pixel(fb, stride_pixels, cx - x, cy + y, color);
+        _put_pixel(fb, stride_pixels, cx - x, cy - y, color);
+        _put_pixel(fb, stride_pixels, cx - y, cy - x, color);
+        _put_pixel(fb, stride_pixels, cx + y, cy - x, color);
+        _put_pixel(fb, stride_pixels, cx + x, cy - y, color);
+
+        y++;
+        if (err < 0) {
+            err += 2 * y + 1;
+            continue;
+        }
+
+        x--;
+        err += 2 * (y - x) + 1;
+    }
+}
+
+void draw_disk(
+    framebuffer_t *fb,
+    i32 cx,
+    i32 cy,
+    u32 radius,
+    pixel_t color
+) {
+    if (!fb || !fb->pixels || !fb->width || !fb->height) {
+        return;
+    }
+
+    size_t stride_pixels = _stride_pixels(fb);
+    if (!stride_pixels) {
+        return;
+    }
+
+    if (!radius) {
+        _put_pixel(fb, stride_pixels, cx, cy, color);
+        return;
+    }
+
+    i32 x = (i32)radius;
+    i32 y = 0;
+    i32 err = 1 - x;
+
+    while (x >= y) {
+        _draw_hspan(fb, stride_pixels, cx - x, cx + x, cy + y, color);
+        _draw_hspan(fb, stride_pixels, cx - x, cx + x, cy - y, color);
+
+        if (x != y) {
+            _draw_hspan(fb, stride_pixels, cx - y, cx + y, cy + x, color);
+            _draw_hspan(fb, stride_pixels, cx - y, cx + y, cy - x, color);
+        }
+
+        y++;
+        if (err < 0) {
+            err += 2 * y + 1;
+            continue;
+        }
+
+        x--;
+        err += 2 * (y - x) + 1;
+    }
+}
+
+void draw_text(
+    framebuffer_t *fb,
+    i32 x,
+    i32 y,
+    const char *text,
+    pixel_t color
+) {
+    if (!fb || !fb->pixels || !text || !text[0]) {
+        return;
+    }
+
+    if (!_load_draw_font()) {
+        return;
+    }
+
+    if (!draw_font.glyphs || !draw_font.width || !draw_font.height || !draw_font.row_bytes) {
+        return;
+    }
+
+    size_t stride_pixels = _stride_pixels(fb);
+    if (!stride_pixels) {
+        return;
+    }
+
+    i32 pen_x = x;
+    i32 pen_y = y;
+
+    for (const char *p = text; *p; p++) {
+        if (*p == '\n') {
+            pen_x = x;
+            pen_y += (i32)draw_font.height;
+            continue;
+        }
+
+        u32 idx = (u8)(*p);
+        if (idx >= draw_font.glyph_count) {
+            idx = (u32)'?';
+            if (idx >= draw_font.glyph_count) {
+                idx = 0;
+            }
+        }
+
+        const u8 *glyph = draw_font.glyphs + (size_t)idx * draw_font.glyph_size;
+
+        for (u32 gy = 0; gy < draw_font.height; gy++) {
+            const u8 *row_ptr = glyph + (size_t)gy * draw_font.row_bytes;
+
+            for (u32 gx = 0; gx < draw_font.width; gx++) {
+                u8 bits = row_ptr[gx / 8];
+                u8 mask = (u8)(0x80 >> (gx & 7));
+                if (!(bits & mask)) {
+                    continue;
+                }
+
+                _put_pixel(
+                    fb,
+                    stride_pixels,
+                    pen_x + (i32)gx,
+                    pen_y + (i32)gy,
+                    color
+                );
+            }
+        }
+
+        pen_x += (i32)draw_font.width;
     }
 }
 

@@ -46,6 +46,7 @@ typedef struct console_backend_ops {
     void (*text_scroll_up)(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg);
 } console_backend_ops_t;
 
+
 void console_init(void *arch_boot_info);
 void console_set_font(const font_t *font);
 

@@ -35,6 +35,10 @@ USER_CC := \
 	-m$(ARCH_VARIANT) \
 	-DARCH_NAME=\"$(USER_ARCH_NAME)\"
 
+ifeq ($(ARCH_VARIANT),64)
+USER_CC := $(USER_CC) -msse -msse2 -mfpmath=sse
+endif
+
 USER_AS := -felf$(ARCH_VARIANT)
 
 USER_LD := \
@@ -59,15 +63,6 @@ USER_BINARIES  := $(foreach prog, $(USER_PROGS), $(USER_STAGE_DIR)/$(prog))
 
 .SECONDARY: $(USER_LIBC_OBJ) $(USER_CRT_OBJ) $(USER_APP_OBJ) $(USER_COMMON_OBJ) \
             $(USER_DATA_OBJ) $(USER_GUI_OBJ) $(USER_TERM_OBJ) $(USER_PARSE_OBJ) $(USER_PROGS_BIN)
-
-USER_LIBC_FP_CC := $(USER_CC)
-ifeq ($(ARCH_VARIANT),64)
-USER_LIBC_FP_CC := $(USER_LIBC_FP_CC) -msse -msse2 -mfpmath=sse
-endif
-
-$(USER_OBJ_DIR)/libs/libc/math.c.o: libs/libc/math.c
-	@mkdir -p $(@D)
-	$(call cc, $(USER_LIBC_FP_CC), $@, $<)
 
 $(USER_OBJ_DIR)/%.c.o: %.c
 	@mkdir -p $(@D)
