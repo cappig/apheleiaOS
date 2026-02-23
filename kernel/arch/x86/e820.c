@@ -11,6 +11,14 @@
 #include "alloc/bitmap.h"
 #include "x86/boot.h"
 
+static inline u64 _region_top(u64 base, u64 size) {
+    if (size > UINT64_MAX - base) {
+        return UINT64_MAX;
+    }
+
+    return base + size;
+}
+
 
 void mmap_remove_entry(e820_map_t *map, size_t index) {
     map->count--;
@@ -22,9 +30,15 @@ void mmap_remove_entry(e820_map_t *map, size_t index) {
     map->entries[map->count] = (e820_entry_t){0};
 }
 
-void mmap_add_entry(e820_map_t *map, u64 address, u64 size, u32 type) {
+bool mmap_add_entry(e820_map_t *map, u64 address, u64 size, u32 type) {
+    if (!map || !size || map->count >= E820_MAX) {
+        return false;
+    }
+
     map->entries[map->count] = (e820_entry_t){address, size, type, 0};
     map->count++;
+
+    return true;
 }
 
 static int _comp_mmap(const void *a, const void *b) {
@@ -44,6 +58,10 @@ static int _comp_mmap(const void *a, const void *b) {
 
 // Should be called every time the map is altered
 void clean_mmap(e820_map_t *map) {
+    if (map->count > E820_MAX) {
+        map->count = E820_MAX;
+    }
+
     e820_entry_t *entries = (e820_entry_t *)&map->entries;
 
     qsort(entries, map->count, sizeof(e820_entry_t), _comp_mmap);
@@ -57,7 +75,7 @@ void clean_mmap(e820_map_t *map) {
             continue;
         }
 
-        u64 top = entries[i].address + entries[i].size;
+        u64 top = _region_top(entries[i].address, entries[i].size);
 
         // Not touching or overlapping, skip
         if (top < entries[i + 1].address) {
@@ -130,7 +148,8 @@ void *mmap_alloc_inner(
             continue;
         }
 
-        u64 entry_top = entries[i].address + entries[i].size;
+        u64 entry_top = _region_top(entries[i].address, entries[i].size);
+
         if (entry_top > top) {
             entry_top = top;
         }
@@ -147,12 +166,18 @@ void *mmap_alloc_inner(
         }
 
         // Shrink current entry
+        u64 old_addr = entries[i].address;
+        u64 old_size = entries[i].size;
         u64 size = entry_top - base;
         entries[i].address += size;
         entries[i].size -= size;
 
         // Create new entry with memory taken from the current one
-        mmap_add_entry(mmap, base, (u64)bytes, type);
+        if (!mmap_add_entry(mmap, base, (u64)bytes, type)) {
+            entries[i].address = old_addr;
+            entries[i].size = old_size;
+            return NULL;
+        }
 
         clean_mmap(mmap);
 
@@ -206,6 +231,10 @@ bool bitmap_alloc_init_mmap(
     e820_map_t *mmap,
     size_t block_size
 ) {
+    if (mmap->count > E820_MAX) {
+        mmap->count = E820_MAX;
+    }
+
     u64 mem_base = (u64)-1;
     u64 mem_top = 0;
     u64 max_addr = PROTECTED_MODE_TOP;
@@ -217,7 +246,7 @@ bool bitmap_alloc_init_mmap(
             continue;
         }
 
-        u64 top = current->address + current->size;
+        u64 top = _region_top(current->address, current->size);
         u64 base = current->address;
 
         // We only map the low 4 GiB in the current setup.
@@ -278,7 +307,7 @@ bool bitmap_alloc_init_mmap(
         }
 
         u64 base = current->address;
-        u64 top = current->address + current->size;
+        u64 top = _region_top(current->address, current->size);
 
         if (base < MIB) {
             base = MIB;
@@ -304,7 +333,7 @@ bool bitmap_alloc_init_mmap(
         current->address = used_end;
         current->size = top - used_end;
 
-        mmap_add_entry(mmap, aligned, bitmap_size, E820_ALLOC);
+        (void)mmap_add_entry(mmap, aligned, bitmap_size, E820_ALLOC);
         clean_mmap(mmap);
         break;
     }
@@ -330,7 +359,7 @@ bool bitmap_alloc_init_mmap(
     for (size_t i = 0; i < mmap->count; i++) {
         e820_entry_t *current = &mmap->entries[i];
 
-        u64 top = current->address + current->size;
+        u64 top = _region_top(current->address, current->size);
         u64 base = current->address;
 
         if (base >= max_addr) {

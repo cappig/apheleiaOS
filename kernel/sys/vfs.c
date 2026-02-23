@@ -917,7 +917,7 @@ bool vfs_rename(const char *old_path, const char *new_path) {
 }
 
 
-bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
+static bool _vfs_insert_child(vfs_node_t *parent, vfs_node_t *child, bool persist) {
     assert(vfs);
 
     if (!parent || !child) {
@@ -953,7 +953,7 @@ bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
 
     vfs_interface_t *interface = parent->interface;
 
-    if (interface && interface->create) {
+    if (persist && interface && interface->create) {
         if (interface->create(parent, child) < 0) {
             tree_remove_child(parent_tnode, child->tree_entry);
             errno = EIO;
@@ -963,6 +963,14 @@ bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
 
     _child_index_set(parent, child->name, child->tree_entry);
     return true;
+}
+
+bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
+    return _vfs_insert_child(parent, child, true);
+}
+
+bool vfs_insert_child_virtual(vfs_node_t *parent, vfs_node_t *child) {
+    return _vfs_insert_child(parent, child, false);
 }
 
 vfs_node_t *vfs_create(vfs_node_t *parent, char *name, u32 type, mode_t mode) {
@@ -981,6 +989,29 @@ vfs_node_t *vfs_create(vfs_node_t *parent, char *name, u32 type, mode_t mode) {
     node->mode = mode;
 
     if (!vfs_insert_child(parent, node)) {
+        vfs_destroy_node(node);
+        return NULL;
+    }
+
+    return node;
+}
+
+vfs_node_t *vfs_create_virtual(vfs_node_t *parent, char *name, u32 type, mode_t mode) {
+    assert(vfs);
+
+    if (!parent) {
+        return NULL;
+    }
+
+    vfs_node_t *node = vfs_create_node(name, type);
+
+    if (!node) {
+        return NULL;
+    }
+
+    node->mode = mode;
+
+    if (!vfs_insert_child_virtual(parent, node)) {
         vfs_destroy_node(node);
         return NULL;
     }

@@ -35,3 +35,5 @@
 #define SYS_RMDIR     32
 #define SYS_POLL      33
 #define SYS_SLEEP     34
+#define SYS_MOUNT     35
+#define SYS_UMOUNT    36

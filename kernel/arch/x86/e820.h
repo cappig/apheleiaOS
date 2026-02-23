@@ -33,7 +33,7 @@ typedef struct PACKED {
 
 
 void mmap_remove_entry(e820_map_t *map, size_t index);
-void mmap_add_entry(e820_map_t *map, u64 address, u64 size, u32 type);
+bool mmap_add_entry(e820_map_t *map, u64 address, u64 size, u32 type);
 
 void clean_mmap(e820_map_t *map);
 

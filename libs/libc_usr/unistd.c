@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/proc.h>
+#include <sys/mount.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
@@ -290,6 +291,31 @@ int unlink(const char *path) {
 int rename(const char *oldpath, const char *newpath) {
     return SYSCALL_RET(
         int, syscall2(SYS_RENAME, (uintptr_t)oldpath, (uintptr_t)newpath)
+    );
+}
+
+int mount(
+    const char *source,
+    const char *target,
+    const char *filesystemtype,
+    unsigned long flags
+) {
+    return SYSCALL_RET(
+        int,
+        syscall4(
+            SYS_MOUNT,
+            (uintptr_t)source,
+            (uintptr_t)target,
+            (uintptr_t)filesystemtype,
+            (uintptr_t)flags
+        )
+    );
+}
+
+int umount(const char *target, unsigned long flags) {
+    return SYSCALL_RET(
+        int,
+        syscall2(SYS_UMOUNT, (uintptr_t)target, (uintptr_t)flags)
     );
 }
 

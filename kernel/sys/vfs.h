@@ -157,7 +157,9 @@ bool vfs_rmdir(const char *path);
 bool vfs_rename(const char *old_path, const char *new_path);
 
 bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child);
+bool vfs_insert_child_virtual(vfs_node_t *parent, vfs_node_t *child);
 vfs_node_t *vfs_create(vfs_node_t *parent, char *name, u32 type, mode_t mode);
+vfs_node_t *vfs_create_virtual(vfs_node_t *parent, char *name, u32 type, mode_t mode);
 
 bool vfs_mount(fs_instance_t *fs, vfs_node_t *mount);
 bool vfs_unmount(vfs_node_t *mount, bool destroy_tree);

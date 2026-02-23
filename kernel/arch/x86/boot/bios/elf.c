@@ -29,13 +29,12 @@ static bool _cpu_has_long_mode(void) {
     return (regs.edx & CPUID_EI_LM) != 0;
 }
 
-static u64 _get_usable_top(const e820_map_t *map) {
+static u64 _get_map_top(const e820_map_t *map) {
     u64 top = 0;
 
     for (size_t i = 0; i < map->count; i++) {
         const e820_entry_t *entry = &map->entries[i];
-
-        if (entry->type != E820_AVAILABLE) {
+        if (!entry->size) {
             continue;
         }
 
@@ -106,7 +105,7 @@ void load_kerenel(boot_info_t *info) {
 
         u32 entry = load_elf_sections_32(kernel);
 
-        u64 mem_top = _get_usable_top(&info->memory_map);
+        u64 mem_top = _get_map_top(&info->memory_map);
         u32 phys_top = (mem_top > 0xffffffffULL) ? 0xffffffffU : (u32)mem_top;
 
         identity_map_32(phys_top, 0, false);

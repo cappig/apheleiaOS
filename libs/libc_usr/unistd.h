@@ -26,6 +26,13 @@ int isatty(int fd);
 int link(const char *oldpath, const char *newpath);
 int unlink(const char *path);
 int rename(const char *oldpath, const char *newpath);
+int mount(
+    const char *source,
+    const char *target,
+    const char *filesystemtype,
+    unsigned long flags
+);
+int umount(const char *target, unsigned long flags);
 
 pid_t fork(void);
 pid_t wait(int *status);

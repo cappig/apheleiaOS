@@ -1952,7 +1952,7 @@ static bool _build_dir(
 
                     if (read_child_inode) {
                         u32 vfs_type = _inode_type_to_vfs(&child_inode);
-                        vfs_node_t *child = vfs_create(
+                        vfs_node_t *child = vfs_create_virtual(
                             parent,
                             name,
                             vfs_type,

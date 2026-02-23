@@ -23,6 +23,7 @@
 #include <sys/exec.h>
 #include <sys/lock.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/path.h>
 #include <sys/stats.h>
 #include <sys/proc.h>
@@ -1876,6 +1877,138 @@ static int sys_rename(const char *oldpath, const char *newpath) {
     return vfs_rename(resolved_old, resolved_new) ? 0 : -EIO;
 }
 
+static int sys_mount(
+    const char *source,
+    const char *target,
+    const char *filesystemtype,
+    u64 flags
+) {
+    if (!source || !target || !filesystemtype) {
+        return -EFAULT;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    if (thread->uid != 0) {
+        return -EPERM;
+    }
+
+    if (flags != 0) {
+        return -ENOTSUP;
+    }
+
+    if (strcmp(filesystemtype, "ext2")) {
+        return -ENOTSUP;
+    }
+
+    char resolved_source[PATH_MAX];
+    char resolved_target[PATH_MAX];
+
+    int resolve_err = _resolve_user_path(
+        thread,
+        source,
+        resolved_source,
+        sizeof(resolved_source)
+    );
+    if (resolve_err < 0) {
+        return resolve_err;
+    }
+
+    resolve_err = _resolve_user_path(
+        thread,
+        target,
+        resolved_target,
+        sizeof(resolved_target)
+    );
+    if (resolve_err < 0) {
+        return resolve_err;
+    }
+
+    vfs_node_t *source_node = _resolve_link_node(vfs_lookup(resolved_source));
+    if (!source_node) {
+        return -ENOENT;
+    }
+
+    vfs_node_t *target_node = _resolve_link_node(vfs_lookup(resolved_target));
+    if (!target_node) {
+        return -ENOENT;
+    }
+
+    if (source_node->type != VFS_BLOCKDEV) {
+        return -EINVAL;
+    }
+
+    if (!source_node->private) {
+        return -ENODEV;
+    }
+
+    if (target_node->type == VFS_MOUNT) {
+        return -EBUSY;
+    }
+
+    if (target_node->type != VFS_DIR) {
+        return -ENOTDIR;
+    }
+
+    if (!disk_mount_partition_node(source_node, target_node, filesystemtype)) {
+        return -ENODEV;
+    }
+
+    return 0;
+}
+
+static int sys_umount(const char *target, u64 flags) {
+    if (!target) {
+        return -EFAULT;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    if (thread->uid != 0) {
+        return -EPERM;
+    }
+
+    if (flags != 0) {
+        return -ENOTSUP;
+    }
+
+    char resolved_target[PATH_MAX];
+    int resolve_err = _resolve_user_path(
+        thread,
+        target,
+        resolved_target,
+        sizeof(resolved_target)
+    );
+    if (resolve_err < 0) {
+        return resolve_err;
+    }
+
+    if (!strcmp(resolved_target, "/")) {
+        return -EBUSY;
+    }
+
+    vfs_node_t *target_node = vfs_lookup(resolved_target);
+    if (!target_node) {
+        return -ENOENT;
+    }
+
+    if (target_node->type != VFS_MOUNT) {
+        return -EINVAL;
+    }
+
+    if (!disk_unmount_node(target_node, true)) {
+        return -EBUSY;
+    }
+
+    return 0;
+}
+
 static off_t sys_seek(int fd, off_t offset, int whence) {
     sched_thread_t *thread = sched_current();
     sched_fd_t *entry = NULL;
@@ -2386,6 +2519,18 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
         return (u64)sys_sleep(
             (const struct timespec *)arch_syscall_arg1(state),
             (struct timespec *)arch_syscall_arg2(state)
+        );
+    case SYS_MOUNT:
+        return (u64)sys_mount(
+            (const char *)arch_syscall_arg1(state),
+            (const char *)arch_syscall_arg2(state),
+            (const char *)arch_syscall_arg3(state),
+            (u64)arch_syscall_arg4(state)
+        );
+    case SYS_UMOUNT:
+        return (u64)sys_umount(
+            (const char *)arch_syscall_arg1(state),
+            (u64)arch_syscall_arg2(state)
         );
     case SYS_SIGNAL:
         return (u64)sys_signal(

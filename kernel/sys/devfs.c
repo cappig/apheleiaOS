@@ -311,7 +311,7 @@ bool devfs_register_node(
     vfs_node_t *node = vfs_lookup_from(parent, name);
 
     if (!node) {
-        node = vfs_create(parent, (char *)name, type, mode);
+        node = vfs_create_virtual(parent, (char *)name, type, mode);
     }
 
     if (!node) {
@@ -334,7 +334,7 @@ devfs_register_dir(vfs_node_t *parent, const char *name, mode_t mode) {
 
     vfs_node_t *node = vfs_lookup_from(parent, name);
     if (!node) {
-        node = vfs_create(parent, (char *)name, VFS_DIR, mode);
+        node = vfs_create_virtual(parent, (char *)name, VFS_DIR, mode);
     }
 
     if (!node) {
@@ -394,7 +394,7 @@ static vfs_node_t *_ensure_dev_dir(void) {
 
     vfs_node_t *dev_dir = vfs_lookup("/dev");
     if (!dev_dir) {
-        dev_dir = vfs_create(root, "dev", VFS_DIR, 0755);
+        dev_dir = vfs_create_virtual(root, "dev", VFS_DIR, 0755);
     }
 
     if (!dev_dir) {
