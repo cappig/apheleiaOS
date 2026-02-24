@@ -13,6 +13,7 @@
 #include "mm/physical.h"
 #include "sys/disk.h"
 #include "sys/pci.h"
+#include "sys/time.h"
 #include "x86/apic.h"
 #include "x86/asm.h"
 #include "x86/irq.h"
@@ -30,16 +31,6 @@
 static ahci_device_t *ahci_primary = NULL;
 static u8 ahci_primary_irq_line = 0xff;
 static bool ahci_warned_irq_fallback = false;
-
-static u64 ahci_irq_timeout_ticks(void) {
-    u32 hz = arch_timer_hz();
-    if (!hz) {
-        return 1;
-    }
-
-    u64 ticks = ((u64)hz * AHCI_IRQ_TIMEOUT_MS + 999ULL) / 1000ULL;
-    return ticks ? ticks : 1;
-}
 
 static inline u32 lo32(u64 v) {
     return (u32)(v & 0xffffffffULL);
@@ -112,7 +103,7 @@ static bool ahci_wait_irq_event(ahci_device_t *dev, u64 *seq) {
     }
 
     u64 start = irq_ticks();
-    u64 timeout = ahci_irq_timeout_ticks();
+    u64 timeout = ms_to_ticks(AHCI_IRQ_TIMEOUT_MS);
 
     for (;;) {
         unsigned long flags = arch_irq_save();
@@ -175,7 +166,7 @@ ahci_wait_cmd_poll(ahci_device_t *dev, ahci_hba_port_t *port, u32 slot_mask) {
     }
 
     u64 start = irq_ticks();
-    u64 timeout = ahci_irq_timeout_ticks();
+    u64 timeout = ms_to_ticks(AHCI_IRQ_TIMEOUT_MS);
     size_t spins = 0;
 
     for (;;) {
@@ -331,7 +322,7 @@ static void ahci_request_bios_handoff(ahci_hba_mem_t *hba) {
     hba->bohc |= AHCI_BOHC_OOS;
 
     u64 start = irq_ticks();
-    u64 timeout = ahci_irq_timeout_ticks();
+    u64 timeout = ms_to_ticks(AHCI_IRQ_TIMEOUT_MS);
 
     while ((hba->bohc & AHCI_BOHC_BOS) && (irq_ticks() - start) < timeout) {
         arch_cpu_wait();
@@ -427,7 +418,9 @@ static bool ahci_exec_cmd(
 
     arch_phys_unmap(ct_map, PAGE_4KIB);
 
-    void *mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, 0);
+    void *mmio_map =
+        arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+
     if (!mmio_map) {
         return false;
     }
@@ -435,7 +428,7 @@ static bool ahci_exec_cmd(
     ahci_hba_mem_t *hba = mmio_map;
     ahci_hba_port_t *port = &hba->ports[dev->port_index];
 
-    if (!ahci_wait_port_ready(port, ahci_irq_timeout_ticks())) {
+    if (!ahci_wait_port_ready(port, ms_to_ticks(AHCI_IRQ_TIMEOUT_MS))) {
         arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
         return false;
     }
@@ -773,7 +766,9 @@ static bool ahci_setup_port(ahci_device_t *dev) {
         return false;
     }
 
-    void *mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, 0);
+    void *mmio_map =
+        arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+
     if (!mmio_map) {
         return false;
     }
@@ -872,7 +867,9 @@ static bool ahci_find_controller(ahci_device_t *dev) {
             dev->slot = node->slot;
             dev->func = node->func;
 
-            void *mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, 0);
+            void *mmio_map =
+                arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+
             if (!mmio_map) {
                 continue;
             }

@@ -1,5 +1,6 @@
 #include "disk.h"
 
+#include <fs/ext2.h>
 #include <log/log.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,6 +14,10 @@ static vector_t *file_systems = NULL;
 
 static size_t next_disk_id = 1;
 static size_t next_fs_id = 1;
+static bool preferred_rootfs_uuid_set = false;
+static u8 preferred_rootfs_uuid[16] = {0};
+static bool boot_hint_set = false;
+static disk_boot_hint_t boot_hint = {0};
 
 
 static void *_vec_get_ptr(vector_t *vec, size_t index) {
@@ -21,6 +26,95 @@ static void *_vec_get_ptr(vector_t *vec, size_t index) {
         return NULL;
     }
     return *slot;
+}
+
+static bool _disk_name_exists(const char *name) {
+    if (!name || !name[0] || !disks) {
+        return false;
+    }
+
+    for (size_t i = 0; i < disks->size; i++) {
+        disk_dev_t *existing = _vec_get_ptr(disks, i);
+
+        if (!existing || !existing->name) {
+            continue;
+        }
+
+        if (!strcmp(existing->name, name)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static const char *_disk_name_prefix(size_t type) {
+    switch (type) {
+    case DISK_VIRTUAL:
+        return "ram";
+    case DISK_HARD:
+        return "sd";
+    case DISK_FLOPPY:
+        return "fd";
+    case DISK_OPTICAL:
+        return "cd";
+    case DISK_USB:
+        return "usb";
+    default:
+        return "disk";
+    }
+}
+
+static char *_alloc_unique_disk_name(size_t type) {
+    const char *prefix = _disk_name_prefix(type);
+
+    for (size_t index = 0; index < 1024; index++) {
+        char candidate[32] = {0};
+        int wrote = snprintf(
+            candidate,
+            sizeof(candidate),
+            "%s%zu",
+            prefix,
+            index
+        );
+
+        if (wrote <= 0 || (size_t)wrote >= sizeof(candidate)) {
+            continue;
+        }
+
+        if (_disk_name_exists(candidate)) {
+            continue;
+        }
+
+        return strdup(candidate);
+    }
+
+    return NULL;
+}
+
+static bool _ensure_disk_name(disk_dev_t *dev) {
+    if (!dev) {
+        return false;
+    }
+
+    bool has_name = dev->name && dev->name[0];
+    if (has_name && !_disk_name_exists(dev->name)) {
+        return true;
+    }
+
+    char *old = dev->name;
+    char *name = _alloc_unique_disk_name(dev->type);
+    if (!name) {
+        return false;
+    }
+
+    dev->name = name;
+
+    if (has_name) {
+        log_warn("disk name '%s' already exists, renamed to '%s'", old, name);
+    }
+
+    return true;
 }
 
 static char *_partition_name(const char *disk, ssize_t number) {
@@ -41,6 +135,32 @@ static char *_partition_name(const char *disk, ssize_t number) {
 
     snprintf(name, len + 1, "%sp%zd", disk, number);
     return name;
+}
+
+static bool _partition_is_whole_disk_alias(const disk_partition_t *part) {
+    if (!part || !part->disk || !part->name || !part->disk->name) {
+        return false;
+    }
+
+    return !strcmp(part->name, part->disk->name);
+}
+
+static bool _disk_has_real_partitions(const disk_dev_t *dev) {
+    if (!dev || !dev->partitions) {
+        return false;
+    }
+
+    for (size_t i = 0; i < dev->partitions->size; i++) {
+        disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
+
+        if (!part || _partition_is_whole_disk_alias(part)) {
+            continue;
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 static bool _create_partition(
@@ -79,6 +199,100 @@ static bool _create_partition(
     }
 
     return true;
+}
+
+static bool _partition_ext2_uuid(disk_partition_t *part, u8 out_uuid[16]) {
+    if (
+        !part ||
+        !out_uuid ||
+        !part->disk ||
+        !part->disk->interface ||
+        !part->disk->interface->read
+    ) {
+        return false;
+    }
+
+    if (part->size < sizeof(ext2_superblock_t) + 1024) {
+        return false;
+    }
+
+    if (part->offset > (size_t)-1 - 1024) {
+        return false;
+    }
+
+    ext2_superblock_t sb = {0};
+    ssize_t read = part->disk->interface->read(
+        part->disk,
+        &sb,
+        part->offset + 1024,
+        sizeof(sb)
+    );
+
+    if (read < (ssize_t)sizeof(sb)) {
+        return false;
+    }
+
+    if (sb.signature != EXT2_SIGNATURE) {
+        return false;
+    }
+
+    memcpy(out_uuid, sb.fs_id, 16);
+    return true;
+}
+
+static bool _partition_matches_preferred_rootfs(disk_partition_t *part) {
+    if (!preferred_rootfs_uuid_set) {
+        return false;
+    }
+
+    u8 uuid[16] = {0};
+    if (!_partition_ext2_uuid(part, uuid)) {
+        return false;
+    }
+
+    return !memcmp(uuid, preferred_rootfs_uuid, sizeof(uuid));
+}
+
+static bool _disk_matches_boot_hint_transport(const disk_dev_t *dev) {
+    if (!dev || !boot_hint_set || !boot_hint.valid) {
+        return false;
+    }
+
+    switch (boot_hint.transport) {
+    case DISK_BOOT_TRANSPORT_USB:
+        return dev->type == DISK_USB;
+    case DISK_BOOT_TRANSPORT_ATAPI:
+        return dev->type == DISK_OPTICAL;
+    case DISK_BOOT_TRANSPORT_ATA:
+    case DISK_BOOT_TRANSPORT_AHCI:
+    case DISK_BOOT_TRANSPORT_NVME:
+        return dev->type == DISK_HARD;
+    default:
+        break;
+    }
+
+    switch (boot_hint.media) {
+    case DISK_BOOT_MEDIA_USB:
+        return dev->type == DISK_USB;
+    case DISK_BOOT_MEDIA_OPTICAL:
+        return dev->type == DISK_OPTICAL;
+    case DISK_BOOT_MEDIA_DISK:
+        return dev->type == DISK_HARD;
+    default:
+        return false;
+    }
+}
+
+static bool _has_transport_hint(void) {
+    if (!boot_hint_set || !boot_hint.valid) {
+        return false;
+    }
+
+    if (boot_hint.transport != DISK_BOOT_TRANSPORT_UNKNOWN) {
+        return true;
+    }
+
+    return boot_hint.media != DISK_BOOT_MEDIA_UNKNOWN;
 }
 
 static bool _parse_mbr(disk_dev_t *dev) {
@@ -325,6 +539,9 @@ static size_t _parse_partitions(disk_dev_t *dev) {
         return dev->partitions ? dev->partitions->size : 0;
     }
 
+    // Always expose /dev/<disk> in addition to partition nodes.
+    (void)_create_partition(dev, -1, 0, 0, 0, dev->sector_count);
+
     if (!_parse_gpt(dev)) {
         _parse_mbr(dev);
     }
@@ -456,7 +673,17 @@ static void _publish_partition_nodes(disk_dev_t *dev) {
         return;
     }
 
-    vfs_node_t *dev_dir = vfs_open("/dev", VFS_DIR, true, KDIR_MODE);
+    vfs_node_t *dev_dir = vfs_lookup("/dev");
+    if (!dev_dir) {
+        vfs_node_t *root = vfs_lookup("/");
+        if (root && VFS_IS_LINK(root->type) && root->link) {
+            root = root->link;
+        }
+
+        if (root) {
+            dev_dir = vfs_create_virtual(root, "dev", VFS_DIR, KDIR_MODE);
+        }
+    }
 
     if (!dev_dir) {
         log_warn("failed to create /dev directory");
@@ -478,7 +705,7 @@ static void _publish_partition_nodes(disk_dev_t *dev) {
         }
 
         vfs_node_t *node =
-            vfs_create(dev_dir, part->name, VFS_BLOCKDEV, KFILE_MODE);
+            vfs_create_virtual(dev_dir, part->name, VFS_BLOCKDEV, KFILE_MODE);
 
         if (!node) {
             log_warn("failed to create /dev/%s", part->name);
@@ -493,8 +720,36 @@ static void _publish_partition_nodes(disk_dev_t *dev) {
     }
 }
 
-static disk_partition_t *_pick_rootfs_partition(disk_dev_t *dev) {
+static disk_partition_t *_pick_rootfs_partition(
+    disk_dev_t *dev,
+    bool honor_preferred_uuid
+) {
     if (!dev || !dev->partitions) {
+        return NULL;
+    }
+
+    bool has_real = _disk_has_real_partitions(dev);
+
+    if (
+        honor_preferred_uuid &&
+        dev->type != DISK_VIRTUAL &&
+        preferred_rootfs_uuid_set
+    ) {
+        for (size_t i = 0; i < dev->partitions->size; i++) {
+            disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
+            if (!part) {
+                continue;
+            }
+
+            if (has_real && _partition_is_whole_disk_alias(part)) {
+                continue;
+            }
+
+            if (_partition_matches_preferred_rootfs(part)) {
+                return part;
+            }
+        }
+
         return NULL;
     }
 
@@ -508,6 +763,10 @@ static disk_partition_t *_pick_rootfs_partition(disk_dev_t *dev) {
         disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
 
         if (!part) {
+            continue;
+        }
+
+        if (has_real && _partition_is_whole_disk_alias(part)) {
             continue;
         }
 
@@ -550,6 +809,10 @@ static disk_partition_t *_pick_rootfs_partition(disk_dev_t *dev) {
 
 bool disk_register(disk_dev_t *dev) {
     if (!dev) {
+        return false;
+    }
+
+    if (!_ensure_disk_name(dev)) {
         return false;
     }
 
@@ -608,7 +871,116 @@ fs_t *file_system_lookup(const char *name) {
     return NULL;
 }
 
-bool mount_rootfs(disk_dev_t *dev) {
+bool disk_mount_partition_node(
+    vfs_node_t *source,
+    vfs_node_t *target,
+    const char *fs_name
+) {
+    if (!source || !target) {
+        return false;
+    }
+
+    if (source->type != VFS_BLOCKDEV || !source->private) {
+        return false;
+    }
+
+    if (target->type != VFS_DIR) {
+        return false;
+    }
+
+    if (!fs_name || !fs_name[0]) {
+        fs_name = "ext2";
+    }
+
+    disk_partition_t *part = source->private;
+    fs_instance_t *instance = part->fs_instance;
+
+    if (
+        instance &&
+        instance->filesystem &&
+        instance->filesystem->name &&
+        strcmp(instance->filesystem->name, fs_name)
+    ) {
+        instance = NULL;
+    }
+
+    if (!instance) {
+        fs_t *fs = file_system_lookup(fs_name);
+        if (!fs || !fs->fs_interface || !fs->fs_interface->probe) {
+            return false;
+        }
+
+        instance = fs->fs_interface->probe(part);
+        if (!instance) {
+            return false;
+        }
+
+        part->fs_instance = instance;
+        instance->partition = part;
+        instance->filesystem = fs;
+        instance->refcount = 0;
+    }
+
+    return vfs_mount(instance, target);
+}
+
+bool disk_unmount_node(vfs_node_t *target, bool destroy_tree) {
+    if (!target || target->type != VFS_MOUNT) {
+        return false;
+    }
+
+    return vfs_unmount(target, destroy_tree);
+}
+
+void disk_clear_preferred_rootfs_uuid(void) {
+    memset(preferred_rootfs_uuid, 0, sizeof(preferred_rootfs_uuid));
+    preferred_rootfs_uuid_set = false;
+}
+
+void disk_set_preferred_rootfs_uuid(const u8 uuid[16]) {
+    if (!uuid) {
+        disk_clear_preferred_rootfs_uuid();
+        return;
+    }
+
+    memcpy(preferred_rootfs_uuid, uuid, sizeof(preferred_rootfs_uuid));
+    preferred_rootfs_uuid_set = true;
+}
+
+void disk_clear_boot_hint(void) {
+    boot_hint_set = false;
+    memset(&boot_hint, 0, sizeof(boot_hint));
+}
+
+void disk_set_boot_hint(const disk_boot_hint_t *hint) {
+    if (!hint || !hint->valid) {
+        disk_clear_boot_hint();
+        return;
+    }
+
+    boot_hint = *hint;
+    boot_hint_set = true;
+}
+
+static bool _mount_partition_as_root(vfs_node_t *root, disk_partition_t *part) {
+    if (!root || !part) {
+        return false;
+    }
+
+    fs_instance_t *instance = _probe_partition(part);
+    if (!instance) {
+        return false;
+    }
+
+    if (!vfs_mount(instance, root)) {
+        return false;
+    }
+
+    log_info("mounted %s at /", part->name ? part->name : "rootfs");
+    return true;
+}
+
+static bool _mount_rootfs_on_disk(disk_dev_t *dev, bool honor_preferred_uuid) {
     if (!dev) {
         return false;
     }
@@ -617,10 +989,25 @@ bool mount_rootfs(disk_dev_t *dev) {
         return false;
     }
 
-    disk_partition_t *preferred = _pick_rootfs_partition(dev);
+    disk_partition_t *preferred = _pick_rootfs_partition(dev, honor_preferred_uuid);
 
     if (!preferred) {
-        log_warn("no rootfs partition found");
+        if (
+            honor_preferred_uuid &&
+            preferred_rootfs_uuid_set &&
+            dev->type != DISK_VIRTUAL
+        ) {
+            log_debug(
+                "no preferred rootfs UUID match on %s",
+                dev->name ? dev->name : "disk"
+            );
+        } else {
+            log_debug(
+                "no rootfs candidate on %s",
+                dev->name ? dev->name : "disk"
+            );
+        }
+
         return false;
     }
 
@@ -631,21 +1018,18 @@ bool mount_rootfs(disk_dev_t *dev) {
         return false;
     }
 
-    fs_instance_t *instance = _probe_partition(preferred);
-
-    if (instance && vfs_mount(instance, root)) {
-        log_info(
-            "mounted %s at /", preferred->name ? preferred->name : "rootfs"
-        );
+    if (_mount_partition_as_root(root, preferred)) {
         return true;
     }
 
-    if (!instance) {
+    if (!_probe_partition(preferred)) {
         log_warn(
             "no filesystem for %s",
             preferred->name ? preferred->name : "partition"
         );
     }
+
+    bool has_real = _disk_has_real_partitions(dev);
 
     for (size_t i = 0; i < dev->partitions->size; i++) {
         disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
@@ -654,20 +1038,134 @@ bool mount_rootfs(disk_dev_t *dev) {
             continue;
         }
 
-        instance = _probe_partition(part);
-        if (!instance) {
+        if (has_real && _partition_is_whole_disk_alias(part)) {
             continue;
         }
 
-        if (!vfs_mount(instance, root)) {
-            continue;
+        if (_mount_partition_as_root(root, part)) {
+            return true;
         }
-
-        log_info("mounted %s at /", part->name ? part->name : "rootfs");
-        return true;
     }
 
-    log_warn("failed to mount rootfs");
+    log_debug(
+        "failed to mount rootfs from %s",
+        dev->name ? dev->name : "disk"
+    );
+    return false;
+}
+
+bool mount_rootfs(disk_dev_t *dev) {
+    return _mount_rootfs_on_disk(dev, true);
+}
+
+bool mount_rootf(void) {
+    if (!disks || !disks->size) {
+        return false;
+    }
+
+    bool has_virtual = false;
+
+    for (size_t i = 0; i < disks->size; i++) {
+        disk_dev_t *dev = _vec_get_ptr(disks, i);
+
+        if (dev && dev->type == DISK_VIRTUAL) {
+            has_virtual = true;
+            break;
+        }
+    }
+
+    if (preferred_rootfs_uuid_set) {
+        for (size_t i = 0; i < disks->size; i++) {
+            disk_dev_t *dev = _vec_get_ptr(disks, i);
+
+            if (!dev || dev->type == DISK_VIRTUAL) {
+                continue;
+            }
+
+            if (_mount_rootfs_on_disk(dev, true)) {
+                return true;
+            }
+        }
+
+        if (has_virtual) {
+            for (size_t i = 0; i < disks->size; i++) {
+                disk_dev_t *dev = _vec_get_ptr(disks, i);
+                if (!dev || dev->type != DISK_VIRTUAL) {
+                    continue;
+                }
+
+                if (_mount_rootfs_on_disk(dev, true)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        log_warn(
+            "preferred rootfs UUID set but no staged fallback disk is present; "
+            "probing all physical disks"
+        );
+    }
+
+    if (_has_transport_hint()) {
+        for (size_t i = 0; i < disks->size; i++) {
+            disk_dev_t *dev = _vec_get_ptr(disks, i);
+
+            if (!dev || dev->type == DISK_VIRTUAL) {
+                continue;
+            }
+
+            if (!_disk_matches_boot_hint_transport(dev)) {
+                continue;
+            }
+
+            if (_mount_rootfs_on_disk(dev, false)) {
+                return true;
+            }
+        }
+
+        for (size_t i = 0; i < disks->size; i++) {
+            disk_dev_t *dev = _vec_get_ptr(disks, i);
+
+            if (!dev || dev->type == DISK_VIRTUAL) {
+                continue;
+            }
+
+            if (_disk_matches_boot_hint_transport(dev)) {
+                continue;
+            }
+
+            if (_mount_rootfs_on_disk(dev, false)) {
+                return true;
+            }
+        }
+    } else {
+        for (size_t i = 0; i < disks->size; i++) {
+            disk_dev_t *dev = _vec_get_ptr(disks, i);
+
+            if (!dev || dev->type == DISK_VIRTUAL) {
+                continue;
+            }
+
+            if (_mount_rootfs_on_disk(dev, false)) {
+                return true;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < disks->size; i++) {
+        disk_dev_t *dev = _vec_get_ptr(disks, i);
+
+        if (!dev || dev->type != DISK_VIRTUAL) {
+            continue;
+        }
+
+        if (_mount_rootfs_on_disk(dev, false)) {
+            return true;
+        }
+    }
+
     return false;
 }
 

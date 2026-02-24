@@ -35,7 +35,14 @@ static linked_list_t *all_list = NULL;
 static hashmap_t *pid_index = NULL;
 static arch_vm_space_t *kernel_vm = NULL;
 
-static pid_t next_pid = 1;
+typedef enum {
+    SCHED_PID_IDLE = 0,
+    SCHED_PID_USER,
+    SCHED_PID_KERNEL,
+} sched_pid_class_t;
+
+static pid_t next_user_pid = 1;
+static pid_t next_kernel_pid = -1;
 
 static bool sched_running = false;
 typedef struct {
@@ -265,9 +272,49 @@ static sched_thread_t *sleep_heap_top(void) {
     return sleep_heap[0];
 }
 
-static pid_t sched_next_pid(void) {
+static pid_t sched_next_pid(sched_pid_class_t pid_class) {
     unsigned long flags = sched_lock_save();
-    pid_t pid = next_pid++;
+    pid_t pid = 0;
+
+    switch (pid_class) {
+    case SCHED_PID_IDLE:
+        pid = 0;
+        break;
+    case SCHED_PID_USER:
+        if (next_user_pid <= 0) {
+            sched_lock_restore(flags);
+            panic("user PID space exhausted");
+        }
+
+        pid = next_user_pid;
+
+        if (next_user_pid == INT_MAX) {
+            sched_lock_restore(flags);
+            panic("user PID space exhausted");
+        }
+
+        next_user_pid++;
+        break;
+    case SCHED_PID_KERNEL:
+        if (next_kernel_pid >= 0) {
+            sched_lock_restore(flags);
+            panic("kernel PID space exhausted");
+        }
+
+        pid = next_kernel_pid;
+
+        if (next_kernel_pid == INT_MIN) {
+            sched_lock_restore(flags);
+            panic("kernel PID space exhausted");
+        }
+
+        next_kernel_pid--;
+        break;
+    default:
+        sched_lock_restore(flags);
+        panic("invalid scheduler PID class");
+    }
+
     sched_lock_restore(flags);
     return pid;
 }
@@ -1004,7 +1051,9 @@ static void destroy_thread(sched_thread_t *thread) {
         return;
     }
 
-    procfs_unregister_pid(thread->pid);
+    if (thread->pid > 0) {
+        procfs_unregister_pid(thread->pid);
+    }
 
     sched_fd_close_all(thread);
 
@@ -1387,7 +1436,8 @@ static sched_thread_t *create_thread(
     thread_entry_t entry,
     void *arg,
     bool enqueue,
-    bool user_thread
+    bool user_thread,
+    sched_pid_class_t pid_class
 ) {
     sched_thread_t *thread = calloc(1, sizeof(*thread));
     if (!thread) {
@@ -1400,17 +1450,22 @@ static sched_thread_t *create_thread(
     thread->arg = arg;
     thread->state = THREAD_READY;
     thread->user_thread = user_thread;
-    thread->pid = sched_next_pid();
+    thread->pid = sched_next_pid(pid_class);
     thread->ppid = 0;
 
     sched_thread_t *parent = sched_local_current();
 
-    if (parent && parent->pid != 0) {
-        thread->pgid = parent->pgid;
-        thread->sid = parent->sid;
+    if (user_thread) {
+        if (parent && parent->user_thread && parent->pid > 0) {
+            thread->pgid = parent->pgid;
+            thread->sid = parent->sid;
+        } else {
+            thread->pgid = thread->pid;
+            thread->sid = thread->pid;
+        }
     } else {
-        thread->pgid = thread->pid;
-        thread->sid = thread->pid;
+        thread->pgid = 0;
+        thread->sid = 0;
     }
 
     thread->uid = parent ? parent->uid : 0;
@@ -1452,7 +1507,10 @@ static sched_thread_t *create_thread(
     thread->fpu_initialized = true;
 
     add_all_thread(thread);
-    procfs_register_pid(thread->pid);
+
+    if (thread->pid > 0) {
+        procfs_register_pid(thread->pid);
+    }
 
     if (enqueue) {
         enqueue_thread(thread);
@@ -1726,9 +1784,10 @@ void scheduler_init(void) {
     kernel_vm = arch_vm_kernel();
     assert(kernel_vm);
 
-    next_pid = 0;
+    next_user_pid = 1;
+    next_kernel_pid = -1;
     sched_thread_t *idle =
-        create_thread("idle", idle_entry, NULL, false, false);
+        create_thread("idle", idle_entry, NULL, false, false, SCHED_PID_IDLE);
 
     assert(idle);
 
@@ -1781,11 +1840,11 @@ bool sched_is_running(void) {
 
 sched_thread_t *
 sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg) {
-    return create_thread(name, entry, arg, true, false);
+    return create_thread(name, entry, arg, true, false, SCHED_PID_KERNEL);
 }
 
 sched_thread_t *sched_create_user_thread(const char *name) {
-    return create_thread(name, NULL, NULL, false, true);
+    return create_thread(name, NULL, NULL, false, true, SCHED_PID_USER);
 }
 
 pid_t sched_fork(arch_int_state_t *state) {
@@ -2336,9 +2395,7 @@ void sched_exit(void) {
     sched_lock_restore(flags);
 
     if (!next) {
-        for (;;) {
-            arch_cpu_halt();
-        }
+        cpu_halt();
     }
 
     sched_local_set_current(next);

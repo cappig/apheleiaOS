@@ -2,6 +2,7 @@
 #include <arch/paging.h>
 #include <arch/thread.h>
 #include <base/macros.h>
+#include <fs/ext2.h>
 #include <inttypes.h>
 #include <libc_ext/string.h>
 #include <log/log.h>
@@ -19,6 +20,7 @@
 #include <sys/panic.h>
 #include <sys/pci.h>
 #include <sys/tty.h>
+#include <sys/usb.h>
 #include <x86/ahci.h>
 #include <x86/asm.h>
 #include <x86/ata.h>
@@ -34,6 +36,8 @@
 #include <x86/rtc.h>
 #include <x86/serial.h>
 #include <x86/tsc.h>
+#include <x86/usb_xhci.h>
+
 
 #define LOG_BOOT_HISTORY_CAP    (256 * 1024)
 #define BOOT_ROOTFS_SECTOR_SIZE 512
@@ -46,6 +50,7 @@ static kernel_args_t boot_args = {0};
 static u64 boot_rootfs_paddr = 0;
 static size_t boot_rootfs_size = 0;
 static bool boot_rootfs_registered = false;
+static boot_root_hint_t boot_root_hint = {0};
 static bool arch_fpu_fxsr = false;
 
 static char boot_log_history[LOG_BOOT_HISTORY_CAP];
@@ -61,6 +66,7 @@ typedef struct {
 #else
 #define FX_HELPER_ATTR __attribute__((noinline))
 #endif
+
 
 static void FX_HELPER_ATTR _fxsave_unaligned(void *buf) {
     u8 bounce[512] __attribute__((aligned(16)));
@@ -792,6 +798,59 @@ static bool _register_boot_rootfs(void) {
     return true;
 }
 
+static void _set_boot_rootfs_uuid_preference(void) {
+    if (boot_root_hint.valid && boot_root_hint.rootfs_uuid_valid) {
+        disk_set_preferred_rootfs_uuid(boot_root_hint.rootfs_uuid);
+        return;
+    }
+
+    if (!boot_rootfs_paddr || !boot_rootfs_size) {
+        disk_clear_preferred_rootfs_uuid();
+        return;
+    }
+
+    if (boot_rootfs_size < sizeof(ext2_superblock_t) + 1024) {
+        disk_clear_preferred_rootfs_uuid();
+        return;
+    }
+
+    ext2_superblock_t sb = {0};
+    void *map = arch_phys_map(boot_rootfs_paddr + 1024, sizeof(sb), 0);
+
+    if (!map) {
+        disk_clear_preferred_rootfs_uuid();
+        return;
+    }
+
+    memcpy(&sb, map, sizeof(sb));
+    arch_phys_unmap(map, sizeof(sb));
+
+    if (sb.signature != EXT2_SIGNATURE) {
+        disk_clear_preferred_rootfs_uuid();
+        return;
+    }
+
+    disk_set_preferred_rootfs_uuid(sb.fs_id);
+}
+
+static void _set_boot_disk_hint(void) {
+    if (!boot_root_hint.valid) {
+        disk_clear_boot_hint();
+        return;
+    }
+
+    disk_boot_hint_t hint = {
+        .valid = boot_root_hint.valid != 0,
+        .media = boot_root_hint.media,
+        .transport = boot_root_hint.transport,
+        .part_style = boot_root_hint.part_style,
+        .part_index = boot_root_hint.part_index,
+        .bios_drive = boot_root_hint.bios_drive,
+    };
+
+    disk_set_boot_hint(&hint);
+}
+
 const kernel_args_t *arch_init(void *boot_info) {
     boot_info_t *info = boot_info;
 
@@ -806,6 +865,7 @@ const kernel_args_t *arch_init(void *boot_info) {
 
     boot_rootfs_paddr = info->boot_rootfs_paddr;
     boot_rootfs_size = 0;
+    boot_root_hint = info->boot_root_hint;
 
     if (info->boot_rootfs_size > (u64)(size_t)-1) {
         boot_rootfs_paddr = 0;
@@ -889,8 +949,16 @@ const kernel_args_t *arch_init(void *boot_info) {
 }
 
 void arch_storage_init(void) {
+    _set_boot_disk_hint();
+    _set_boot_rootfs_uuid_preference();
+
     ata_disk_init();
     ahci_disk_init();
+    usb_init();
+
+    if (!usb_wait_for_boot_enumeration(1500)) {
+        log_warn("USB boot enumeration did not settle before rootfs mount");
+    }
 
     if (boot_rootfs_paddr && boot_rootfs_size && !_register_boot_rootfs()) {
         log_warn("failed to register staged rootfs fallback");
@@ -899,6 +967,14 @@ void arch_storage_init(void) {
 
 void arch_register_devices(void) {
     serial_devfs_init();
+}
+
+bool arch_usb_controller_init(void) {
+    bool found = false;
+
+    found |= usb_xhci_init();
+
+    return found;
 }
 
 bool arch_phys_map_can_persist(void) {
@@ -935,12 +1011,12 @@ void arch_irq_restore(unsigned long flags) {
     irq_restore(flags);
 }
 
-void arch_cpu_halt(void) {
-    halt();
-}
-
 void arch_cpu_wait(void) {
     asm volatile("hlt");
+}
+
+void arch_cpu_relax(void) {
+    cpu_pause();
 }
 
 void arch_irq_disable(void) {

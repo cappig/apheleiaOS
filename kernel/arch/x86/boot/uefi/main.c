@@ -1,6 +1,7 @@
 #include <base/attributes.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <fs/ext2.h>
 #include <lib/boot.h>
 #include <parse/elf.h>
 #include <x86/asm.h>
@@ -453,6 +454,47 @@ static void _setup_default_args(boot_info_t *info) {
     uefi_str_copy(info->args.font, sizeof(info->args.font), BOOT_DEFAULT_FONT);
 }
 
+static void _set_root_hint_defaults(boot_root_hint_t *hint) {
+    if (!hint) {
+        return;
+    }
+
+    uefi_mem_zero(hint, sizeof(*hint));
+    hint->valid = 1;
+    hint->media = BOOT_MEDIA_UNKNOWN;
+    hint->transport = BOOT_TRANSPORT_UNKNOWN;
+    hint->part_style = BOOT_PARTSTYLE_UNKNOWN;
+    hint->part_index = 0;
+    hint->bios_drive = 0;
+}
+
+static void _populate_root_hint_from_staged(
+    boot_info_t *info,
+    const void *rootfs_file,
+    UINTN rootfs_size
+) {
+    if (!info || !rootfs_file || rootfs_size < 1024 + sizeof(ext2_superblock_t)) {
+        return;
+    }
+
+    _set_root_hint_defaults(&info->boot_root_hint);
+
+    const u8 *bytes = (const u8 *)rootfs_file;
+    const ext2_superblock_t *sb =
+        (const ext2_superblock_t *)(const void *)(bytes + 1024);
+
+    if (sb->signature != EXT2_SIGNATURE) {
+        return;
+    }
+
+    info->boot_root_hint.rootfs_uuid_valid = 1;
+    uefi_mem_copy(
+        info->boot_root_hint.rootfs_uuid,
+        sb->fs_id,
+        sizeof(info->boot_root_hint.rootfs_uuid)
+    );
+}
+
 static void _stage_rootfs_from_esp(EFI_HANDLE image, boot_info_t *info) {
     if (!image || !info || !g_bs) {
         return;
@@ -501,6 +543,7 @@ static void _stage_rootfs_from_esp(EFI_HANDLE image, boot_info_t *info) {
         uefi_mem_copy((void *)(uintptr_t)rootfs_phys, rootfs_file, rootfs_size);
         info->boot_rootfs_paddr = (u64)rootfs_phys;
         info->boot_rootfs_size = (u64)rootfs_size;
+        _populate_root_hint_from_staged(info, rootfs_file, rootfs_size);
     }
 
     g_bs->FreePool(rootfs_file);

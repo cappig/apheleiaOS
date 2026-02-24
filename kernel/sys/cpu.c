@@ -21,6 +21,12 @@ void cpu_set_current(cpu_core_t *core) {
     }
 }
 
+void cpu_halt(void) {
+    for (;;) {
+        arch_cpu_wait();
+    }
+}
+
 void cpu_init_core(size_t id) {
     assert(id < MAX_CORES);
 

@@ -31,17 +31,7 @@ NORETURN void kernel_main(void *boot_info) {
 
     arch_storage_init();
 
-    bool mounted = false;
-
-    for (size_t id = 1; !mounted; id++) {
-        disk_dev_t *dev = disk_lookup(id);
-
-        if (!dev) {
-            break;
-        }
-
-        mounted = mount_rootfs(dev);
-    }
+    bool mounted = mount_rootf();
 
     if (!mounted) {
         panic("failed to mount rootfs");

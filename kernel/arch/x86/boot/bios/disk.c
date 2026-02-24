@@ -22,8 +22,12 @@
 
 static u16 disk_code = 0;
 static u16 disk_sector_size = MBR_SECTOR_SIZE;
+static u16 disk_flags = 0;
 static size_t rootfs_base = 0;
 static size_t rootfs_size = 0;
+static mbr_partition_t rootfs_partition = {0};
+static bool rootfs_partition_valid = false;
+static u8 rootfs_partition_index = 0;
 
 static ext2_superblock_t superblock = {0};
 static u8 bounce[BOUNCE_SIZE] = {0};
@@ -86,7 +90,7 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
     return 0;
 }
 
-static bool _find_rootfs(mbr_partition_t *rootfs) {
+static bool _find_rootfs(mbr_partition_t *rootfs, u8 *part_index) {
     mbr_t mbr;
 
     read_disk(&mbr, 0, sizeof(mbr_t));
@@ -107,6 +111,9 @@ static bool _find_rootfs(mbr_partition_t *rootfs) {
         }
 
         memcpy(rootfs, partition, sizeof(mbr_partition_t));
+        if (part_index) {
+            *part_index = (u8)i;
+        }
 
         return true;
     }
@@ -126,8 +133,11 @@ static void _detect_sector_size(void) {
 
     bios_call(0x13, &r, &r);
 
-    if (!(r.flags & FLAG_CF) && params.bytes_per_sector >= 512) {
-        disk_sector_size = params.bytes_per_sector;
+    if (!(r.flags & FLAG_CF)) {
+        disk_flags = params.flags;
+        if (params.bytes_per_sector >= 512) {
+            disk_sector_size = params.bytes_per_sector;
+        }
     }
 }
 
@@ -138,10 +148,15 @@ void disk_init(u16 disk) {
     printf("boot: disk=0x%x sector_size=%u\n\r", disk_code, disk_sector_size);
 
     mbr_partition_t rootfs = {0};
+    u8 rootfs_index = 0;
 
-    if (!_find_rootfs(&rootfs)) {
+    if (!_find_rootfs(&rootfs, &rootfs_index)) {
         panic("Rootfs partition not found!");
     }
+
+    rootfs_partition = rootfs;
+    rootfs_partition_valid = true;
+    rootfs_partition_index = rootfs_index;
 
     if (rootfs.lba_first > ((size_t)-1 / MBR_SECTOR_SIZE)) {
         panic("Rootfs offset too large!");
@@ -176,6 +191,40 @@ void disk_init(u16 disk) {
         superblock.block_count,
         ext2_block_size(&superblock)
     );
+}
+
+bool bios_boot_root_hint(boot_root_hint_t *out) {
+    if (!out) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    if (!rootfs_partition_valid) {
+        return false;
+    }
+
+    out->valid = 1;
+    bool removable = (disk_flags & (1U << 2)) != 0;
+
+    if (removable) {
+        out->media = BOOT_MEDIA_USB;
+        out->transport = BOOT_TRANSPORT_USB;
+    } else {
+        out->media = BOOT_MEDIA_DISK;
+        out->transport = BOOT_TRANSPORT_ATA;
+    }
+
+    out->part_style = BOOT_PARTSTYLE_MBR;
+    out->part_index = (u8)(rootfs_partition_index + 1);
+    out->bios_drive = (u8)(disk_code & 0xffU);
+
+    if (superblock.signature == EXT2_SIGNATURE) {
+        out->rootfs_uuid_valid = 1;
+        memcpy(out->rootfs_uuid, superblock.fs_id, sizeof(out->rootfs_uuid));
+    }
+
+    return true;
 }
 
 bool stage_rootfs_image(u64 *paddr, u64 *size) {

@@ -58,3 +58,7 @@ all: bin/$(IMAGE_NAME).$(IMAGE_FORMAT)
 clean:
 	@rm -rf bin
 	@echo "Build directories cleaned"
+
+# pull generated header dependencies from previous compiles
+# this prevents stale objects when shared headers change
+-include $(shell test -d bin && find bin -name '*.d' 2>/dev/null)

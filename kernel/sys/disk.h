@@ -19,7 +19,34 @@ enum disk_dev_type {
     DISK_HARD,
     DISK_FLOPPY,
     DISK_OPTICAL,
+    DISK_USB,
 };
+
+typedef enum {
+    DISK_BOOT_MEDIA_UNKNOWN = 0,
+    DISK_BOOT_MEDIA_DISK = 1,
+    DISK_BOOT_MEDIA_USB = 2,
+    DISK_BOOT_MEDIA_OPTICAL = 3,
+    DISK_BOOT_MEDIA_NETWORK = 4,
+} disk_boot_media_t;
+
+typedef enum {
+    DISK_BOOT_TRANSPORT_UNKNOWN = 0,
+    DISK_BOOT_TRANSPORT_ATA = 1,
+    DISK_BOOT_TRANSPORT_AHCI = 2,
+    DISK_BOOT_TRANSPORT_ATAPI = 3,
+    DISK_BOOT_TRANSPORT_USB = 4,
+    DISK_BOOT_TRANSPORT_NVME = 5,
+} disk_boot_transport_t;
+
+typedef struct {
+    bool valid;
+    u8 media;
+    u8 transport;
+    u8 part_style;
+    u8 part_index;
+    u8 bios_drive;
+} disk_boot_hint_t;
 
 typedef struct fs fs_t;
 typedef struct fs_interface fs_interface_t;
@@ -111,6 +138,18 @@ bool file_system_register(fs_t *fs);
 fs_t *file_system_lookup(const char *name);
 
 bool mount_rootfs(disk_dev_t *dev);
+bool mount_rootf(void);
 bool disk_publish_devices(void);
+bool disk_mount_partition_node(
+    vfs_node_t *source,
+    vfs_node_t *target,
+    const char *fs_name
+);
+bool disk_unmount_node(vfs_node_t *target, bool destroy_tree);
+
+void disk_set_preferred_rootfs_uuid(const u8 uuid[16]);
+void disk_clear_preferred_rootfs_uuid(void);
+void disk_set_boot_hint(const disk_boot_hint_t *hint);
+void disk_clear_boot_hint(void);
 
 void dump_partitions(disk_dev_t *dev);

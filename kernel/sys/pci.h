@@ -174,3 +174,4 @@ void pci_enable_bus_mastering(u8 bus, u8 slot, u8 func);
 
 u16 pci_find_capability(u8 bus, u8 slot, u8 func, u8 cap_id);
 bool pci_enable_msi(u8 bus, u8 slot, u8 func, u8 vector, u32 lapic_dest);
+bool pci_disable_msi(u8 bus, u8 slot, u8 func);

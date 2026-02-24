@@ -12,10 +12,13 @@ typedef void (*arch_syscall_handler_t)(arch_int_state_t *state);
 const kernel_args_t *arch_init(void *boot_info);
 void arch_storage_init(void);
 void arch_register_devices(void);
+bool arch_usb_controller_init(void);
 void arch_log_replay_console(void);
 
-#define PHYS_MAP_DEFAULT 0
+#define PHYS_MAP_DEFAULT 0U
 #define PHYS_MAP_WC      (1U << 0) // write-combining
+#define PHYS_MAP_UC      (1U << 1) // uncached
+#define PHYS_MAP_MMIO    (1U << 2) // MMIO-safe (uncached)
 
 void *arch_phys_map(u64 paddr, size_t size, u32 flags);
 void arch_phys_unmap(void *vaddr, size_t size);
@@ -37,8 +40,8 @@ void arch_cpu_set_local(void *ptr);
 unsigned long arch_irq_save(void);
 void arch_irq_restore(unsigned long flags);
 
-void arch_cpu_halt(void);
 void arch_cpu_wait(void);
+void arch_cpu_relax(void);
 
 void arch_irq_disable(void);
 

@@ -2,6 +2,7 @@
 
 #include <base/attributes.h>
 #include <base/types.h>
+#include <x86/boot.h>
 
 typedef struct PACKED {
     u16 size;
@@ -26,6 +27,7 @@ typedef struct PACKED {
 int read_disk(void *dest, size_t offset, size_t bytes);
 
 void disk_init(u16 disk);
+bool bios_boot_root_hint(boot_root_hint_t *out);
 
 void *read_rootfs(const char *path);
 bool stage_rootfs_image(u64 *paddr, u64 *size);

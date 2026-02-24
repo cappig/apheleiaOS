@@ -45,6 +45,41 @@ typedef struct PACKED {
     u16 monitor_height;
 } edid_info_t;
 
+typedef enum PACKED {
+    BOOT_MEDIA_UNKNOWN = 0,
+    BOOT_MEDIA_DISK = 1,
+    BOOT_MEDIA_USB = 2,
+    BOOT_MEDIA_OPTICAL = 3,
+    BOOT_MEDIA_NETWORK = 4,
+} boot_media_t;
+
+typedef enum PACKED {
+    BOOT_TRANSPORT_UNKNOWN = 0,
+    BOOT_TRANSPORT_ATA = 1,
+    BOOT_TRANSPORT_AHCI = 2,
+    BOOT_TRANSPORT_ATAPI = 3,
+    BOOT_TRANSPORT_USB = 4,
+    BOOT_TRANSPORT_NVME = 5,
+} boot_transport_t;
+
+typedef enum PACKED {
+    BOOT_PARTSTYLE_UNKNOWN = 0,
+    BOOT_PARTSTYLE_MBR = 1,
+    BOOT_PARTSTYLE_GPT = 2,
+} boot_part_style_t;
+
+typedef struct PACKED {
+    u8 valid;
+    u8 media;
+    u8 transport;
+    u8 part_style;
+    u8 part_index;
+    u8 bios_drive;
+    u8 rootfs_uuid_valid;
+    u8 _reserved0;
+    u8 rootfs_uuid[16];
+} boot_root_hint_t;
+
 
 typedef struct PACKED {
     kernel_args_t args;
@@ -57,4 +92,6 @@ typedef struct PACKED {
     edid_info_t edid;
 
     e820_map_t memory_map;
+
+    boot_root_hint_t boot_root_hint;
 } boot_info_t;

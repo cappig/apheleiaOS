@@ -86,13 +86,17 @@ static void _build_e820_map(
             (EFI_MEMORY_DESCRIPTOR *)((u8 *)descs + i * desc_size);
 
         u64 base = desc->PhysicalStart;
+        if (desc->NumberOfPages > (UINT64_MAX / EFI_PAGE_SIZE)) {
+            continue;
+        }
+
         u64 size = desc->NumberOfPages * EFI_PAGE_SIZE;
 
         if (!size || base >= PROTECTED_MODE_TOP) {
             continue;
         }
 
-        if (base + size > PROTECTED_MODE_TOP) {
+        if (size > (PROTECTED_MODE_TOP - base)) {
             size = PROTECTED_MODE_TOP - base;
         }
 
@@ -104,7 +108,12 @@ static void _build_e820_map(
             u64 prev_top = prev->address + prev->size;
 
             if (prev->type == type && prev_top == base) {
-                prev->size += size;
+                u64 room = PROTECTED_MODE_TOP - prev->address;
+                if (size >= room || prev->size >= (room - size)) {
+                    prev->size = room;
+                } else {
+                    prev->size += size;
+                }
                 continue;
             }
         }

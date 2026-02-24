@@ -8,15 +8,167 @@
 #include <x86/boot.h>
 
 #if defined(__x86_64__)
+#include <sched/scheduler.h>
+
+#include "virtual.h"
+
+#define PHYS_WINDOW_BASE_64 0xfffffe0000000000ULL
+#define PHYS_WINDOW_SIZE_64 (16 * MIB)
+#define PHYS_WINDOW_STACK_MAX 8
+
+typedef struct {
+    u64 paddr_base;
+    size_t pages;
+    u64 flags;
+} window_map_t;
+
+static size_t window_pages_mapped = 0;
+static u64 window_paddr_base = 0;
+static u64 window_flags = PT_WRITE;
+
+static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
+static size_t window_stack_depth = 0;
+
+
+static u64 _map_flags_to_pt_flags(u32 flags) {
+    u64 pt_flags = PT_WRITE;
+
+    if (flags & PHYS_MAP_WC) {
+        pt_flags |= PT_PAT_4K;
+    }
+
+    if (flags & (PHYS_MAP_UC | PHYS_MAP_MMIO)) {
+        pt_flags &= ~PT_PAT_4K;
+        pt_flags |= PT_NO_CACHE | PT_WRITE_THROUGH;
+    }
+
+    return pt_flags;
+}
+
+static page_t *_get_root(void) {
+    u64 cr3 = read_cr3();
+    return (page_t *)(uintptr_t)(cr3 & ADDR_MASK);
+}
+
+static void _map_window_page(u64 vaddr, u64 paddr, u64 flags) {
+    map_page(_get_root(), PAGE_4KIB, vaddr, paddr, flags);
+}
+
+static void _clear_window_page(u64 vaddr) {
+    unmap_page(_get_root(), vaddr);
+}
+
+static void _clear_window_range(size_t pages) {
+    for (size_t i = 0; i < pages; i++) {
+        _clear_window_page(PHYS_WINDOW_BASE_64 + i * PAGE_4KIB);
+    }
+}
+
+static void _restore_window(window_map_t prev) {
+    window_pages_mapped = prev.pages;
+    window_paddr_base = prev.paddr_base;
+    window_flags = prev.flags;
+
+    for (size_t i = 0; i < prev.pages; i++) {
+        _map_window_page(
+            PHYS_WINDOW_BASE_64 + i * PAGE_4KIB,
+            prev.paddr_base + i * PAGE_4KIB,
+            prev.flags
+        );
+    }
+}
+
 void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
-    (void)size;
-    (void)flags;
-    return (void *)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
+    if (!size) {
+        return NULL;
+    }
+
+    u64 end = paddr + size;
+    if (
+        !(flags & (PHYS_MAP_UC | PHYS_MAP_MMIO)) &&
+        end >= paddr &&
+        end <= PROTECTED_MODE_TOP
+    ) {
+        return (void *)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
+    }
+
+    u64 start = ALIGN_DOWN(paddr, PAGE_4KIB);
+    end = ALIGN(end, PAGE_4KIB);
+
+    size_t pages = (size_t)((end - start) / PAGE_4KIB);
+    size_t window_pages = PHYS_WINDOW_SIZE_64 / PAGE_4KIB;
+
+    if (pages > window_pages) {
+        panic("phys window map too large");
+    }
+
+    if (!window_pages_mapped) {
+        sched_preempt_disable();
+    }
+
+    if (window_pages_mapped) {
+        if (window_stack_depth >= PHYS_WINDOW_STACK_MAX) {
+            panic("phys window map stack overflow");
+        }
+
+        window_stack[window_stack_depth++] = (window_map_t){
+            .paddr_base = window_paddr_base,
+            .pages = window_pages_mapped,
+            .flags = window_flags,
+        };
+
+        _clear_window_range(window_pages_mapped);
+    }
+
+    window_pages_mapped = pages;
+    window_paddr_base = start;
+
+    u64 pt_flags = _map_flags_to_pt_flags(flags);
+
+    window_flags = pt_flags;
+
+    for (size_t i = 0; i < pages; i++) {
+        _map_window_page(
+            PHYS_WINDOW_BASE_64 + i * PAGE_4KIB,
+            start + i * PAGE_4KIB,
+            pt_flags
+        );
+    }
+
+    return (void *)(uintptr_t)(PHYS_WINDOW_BASE_64 + (paddr - start));
 }
 
 void arch_phys_unmap(void *vaddr, size_t size) {
-    (void)vaddr;
     (void)size;
+
+    if (!vaddr) {
+        return;
+    }
+
+    u64 vaddr_u64 = (u64)(uintptr_t)vaddr;
+    u64 window_start = PHYS_WINDOW_BASE_64;
+    u64 window_end = window_start + PHYS_WINDOW_SIZE_64;
+
+    if (vaddr_u64 < window_start || vaddr_u64 >= window_end) {
+        return;
+    }
+
+    if (!window_pages_mapped) {
+        return;
+    }
+
+    _clear_window_range(window_pages_mapped);
+    window_pages_mapped = 0;
+    window_paddr_base = 0;
+    window_flags = PT_WRITE;
+
+    if (!window_stack_depth) {
+        sched_preempt_enable();
+        return;
+    }
+
+    window_map_t prev = window_stack[--window_stack_depth];
+    _restore_window(prev);
 }
 
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
@@ -43,16 +195,33 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
 
 static size_t window_pages_mapped = 0;
 static u64 window_paddr_base = 0;
+static u64 window_flags = PT_WRITE;
 
 #define PHYS_WINDOW_STACK_MAX 8
 
 typedef struct {
     u64 paddr_base;
     size_t pages;
+    u64 flags;
 } window_map_t;
 
 static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
 static size_t window_stack_depth = 0;
+
+static u64 _map_flags_to_pt_flags(u32 flags) {
+    u64 pt_flags = PT_WRITE;
+
+    if (flags & PHYS_MAP_WC) {
+        pt_flags |= PT_PAT_4K;
+    }
+
+    if (flags & (PHYS_MAP_UC | PHYS_MAP_MMIO)) {
+        pt_flags &= ~PT_PAT_4K;
+        pt_flags |= PT_NO_CACHE | PT_WRITE_THROUGH;
+    }
+
+    return pt_flags;
+}
 
 static page_t *_get_pdpt(void) {
     u64 cr3 = read_cr3();
@@ -126,7 +295,8 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
 
         window_stack[window_stack_depth++] = (window_map_t){
             .paddr_base = window_paddr_base,
-            .pages = window_pages_mapped
+            .pages = window_pages_mapped,
+            .flags = window_flags,
         };
 
         _clear_window_range(window_pages_mapped);
@@ -135,9 +305,8 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     window_pages_mapped = pages;
     window_paddr_base = start;
 
-    u64 pt_flags = PT_WRITE;
-    if (flags & PHYS_MAP_WC)
-        pt_flags |= PT_PAT_4K;
+    u64 pt_flags = _map_flags_to_pt_flags(flags);
+    window_flags = pt_flags;
 
     u32 vaddr = PHYS_WINDOW_BASE_32;
 
@@ -159,6 +328,7 @@ void arch_phys_unmap(void *vaddr, size_t size) {
     _clear_window_range(window_pages_mapped);
     window_pages_mapped = 0;
     window_paddr_base = 0;
+    window_flags = PT_WRITE;
 
     if (!window_stack_depth) {
         sched_preempt_enable();
@@ -168,6 +338,7 @@ void arch_phys_unmap(void *vaddr, size_t size) {
     window_map_t prev = window_stack[--window_stack_depth];
     window_pages_mapped = prev.pages;
     window_paddr_base = prev.paddr_base;
+    window_flags = prev.flags;
 
     u32 map_base = PHYS_WINDOW_BASE_32;
 
@@ -175,7 +346,7 @@ void arch_phys_unmap(void *vaddr, size_t size) {
         _map_window_page(
             map_base + (u32)(i * PAGE_4KIB),
             prev.paddr_base + i * PAGE_4KIB,
-            PT_WRITE
+            prev.flags
         );
     }
 }

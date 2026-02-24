@@ -18,3 +18,14 @@ static inline void unlock(volatile int *state) {
 
     __sync_lock_release(state);
 }
+
+static inline unsigned long lock_irqsave(volatile int *state) {
+    unsigned long flags = arch_irq_save();
+    lock(state);
+    return flags;
+}
+
+static inline void unlock_irqrestore(volatile int *state, unsigned long flags) {
+    unlock(state);
+    arch_irq_restore(flags);
+}

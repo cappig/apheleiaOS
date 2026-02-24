@@ -12,6 +12,8 @@
 
 #include "sys/disk.h"
 #include "sys/pci.h"
+#include "sys/time.h"
+
 
 #define ATA_PRIMARY_BASE   0x1f0
 #define ATA_PRIMARY_CTRL   0x3f6
@@ -78,15 +80,6 @@ typedef struct {
 static ata_channel_t ata_channels[2]; // 0 = primary, 1 = secondary
 static bool ata_channel_irq_done[2];
 
-static u64 ata_irq_timeout_ticks(void) {
-    u32 hz = arch_timer_hz();
-    if (!hz) {
-        return 1;
-    }
-
-    u64 ticks = ((u64)hz * ATA_IRQ_TIMEOUT_MS + 999ULL) / 1000ULL;
-    return ticks ? ticks : 1;
-}
 
 static void ata_delay(ata_device_t *dev) {
     if (!dev || !dev->channel) {
@@ -165,7 +158,7 @@ static bool ata_wait_irq_event(ata_device_t *dev, u64 *seq) {
 
     ata_channel_t *ch = dev->channel;
     u64 start = arch_timer_ticks();
-    u64 timeout = ata_irq_timeout_ticks();
+    u64 timeout = ms_to_ticks(ATA_IRQ_TIMEOUT_MS);
 
     for (;;) {
         unsigned long flags = arch_irq_save();
@@ -1052,9 +1045,7 @@ bool ata_disk_init(void) {
         found = true;
     }
 
-    if (!found && ata_probe_channel(
-                      ATA_SECONDARY_BASE, ATA_SECONDARY_CTRL, false, true
-                  )) {
+    if (!found && ata_probe_channel(ATA_SECONDARY_BASE, ATA_SECONDARY_CTRL, false, true)) {
         found = true;
     }
 

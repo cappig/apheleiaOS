@@ -482,7 +482,7 @@ static bool _upsert_dir(
 
     vfs_node_t *dir = vfs_lookup_from(parent, name);
     if (!dir) {
-        dir = vfs_create(parent, (char *)name, VFS_DIR, mode);
+        dir = vfs_create_virtual(parent, (char *)name, VFS_DIR, mode);
     }
 
     if (!dir) {
@@ -518,7 +518,7 @@ static bool _upsert_file(
 
     vfs_node_t *node = vfs_lookup_from(parent, name);
     if (!node) {
-        node = vfs_create(parent, (char *)name, VFS_FILE, mode);
+        node = vfs_create_virtual(parent, (char *)name, VFS_FILE, mode);
     }
 
     if (!node) {
@@ -583,7 +583,7 @@ bool procfs_init(void) {
 
     vfs_node_t *proc = vfs_lookup("/proc");
     if (!proc) {
-        proc = vfs_create(root, "proc", VFS_DIR, 0555);
+        proc = vfs_create_virtual(root, "proc", VFS_DIR, 0555);
     }
 
     if (!proc) {

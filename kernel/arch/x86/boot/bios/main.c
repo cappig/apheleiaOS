@@ -29,6 +29,7 @@ NORETURN void _load_entry(u16 boot_disk) {
     info.acpi_root_ptr = acpi_root_ptr;
 
     disk_init(boot_disk);
+    (void)bios_boot_root_hint(&info.boot_root_hint);
 
     u64 rootfs_paddr = 0;
     u64 rootfs_size = 0;
