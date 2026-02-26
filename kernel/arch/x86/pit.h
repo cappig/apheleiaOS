@@ -12,7 +12,7 @@
 
 #define PIT_BASE_FREQ 1193180
 #ifndef PIT_DEFAULT_HZ
-#define PIT_DEFAULT_HZ 100
+#define PIT_DEFAULT_HZ 500
 #endif
 
 void pit_init(void);

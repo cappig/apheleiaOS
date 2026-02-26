@@ -69,6 +69,14 @@ void set_int_handler(size_t int_num, int_handler_t handler) {
     int_handlers[int_num] = handler;
 }
 
+void reset_int_handler(size_t int_num) {
+    if (int_num >= ISR_COUNT) {
+        return;
+    }
+
+    int_handlers[int_num] = _default_int_handler;
+}
+
 void configure_int(size_t int_num, u16 selector, u8 ist, u8 attribs) {
     if (int_num >= ISR_COUNT) {
         return;

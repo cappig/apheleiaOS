@@ -4,7 +4,10 @@
 #include <poll.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
+#include <stdio.h>
+#include <sys/devfs.h>
 #include <sys/vfs.h>
+#include <x86/serial.h>
 
 #include "serial.h"
 
@@ -19,15 +22,25 @@ typedef struct {
     size_t rx_count;
     sched_wait_queue_t rx_wait;
     bool rx_wait_ready;
-} serial_dev_t;
+} serial_port_t;
 
-static serial_dev_t serial_devices[] = {
+static serial_port_t serial_devices[] = {
     {.index = 0, .port = SERIAL_COM1},
     // we should probably add more
 };
 
 
 static bool serial_nodes_ready = false;
+static bool serial_driver_loaded = false;
+
+const driver_desc_t serial_driver_desc = {
+    .name = "serial",
+    .deps = NULL,
+    .stage = DRIVER_STAGE_DEVFS,
+    .load = serial_driver_load,
+    .unload = serial_driver_unload,
+    .is_busy = serial_driver_busy,
+};
 
 static bool _create_node(
     vfs_node_t *parent,
@@ -37,7 +50,7 @@ static bool _create_node(
 ) {
     vfs_node_t *node = vfs_lookup_from(parent, name);
     if (!node) {
-        node = vfs_create(parent, (char *)name, VFS_CHARDEV, 0666);
+        node = vfs_create(parent, (char *)name, VFS_CHARDEV, 0600);
     }
 
     if (!node) {
@@ -45,7 +58,7 @@ static bool _create_node(
     }
 
     node->type = VFS_CHARDEV;
-    node->mode = 0666;
+    node->mode = 0600;
     node->interface = interface;
     node->private = priv;
 
@@ -64,7 +77,7 @@ _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         return 0;
     }
 
-    serial_dev_t *serial = node->private;
+    serial_port_t *serial = node->private;
     char *out = buf;
 
     for (;;) {
@@ -109,7 +122,7 @@ _write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         return -EINVAL;
     }
 
-    serial_dev_t *serial = node->private;
+    serial_port_t *serial = node->private;
 
     if (!len) {
         return 0;
@@ -126,7 +139,7 @@ static short _poll(vfs_node_t *node, short events, u32 flags) {
         return POLLNVAL;
     }
 
-    serial_dev_t *serial = node->private;
+    serial_port_t *serial = node->private;
     short ready = 0;
 
     unsigned long irq_flags = arch_irq_save();
@@ -143,21 +156,15 @@ static short _poll(vfs_node_t *node, short events, u32 flags) {
     return ready;
 }
 
-void serial_devfs_init(void) {
-    if (serial_nodes_ready) {
-        return;
-    }
-
-    vfs_node_t *dev_dir = vfs_lookup("/dev");
+static bool _serial_register_devfs(vfs_node_t *dev_dir) {
     if (!dev_dir) {
-        log_warn("/dev missing");
-        return;
+        return false;
     }
 
     vfs_interface_t *serial_if = vfs_create_interface(_read, _write, NULL);
     if (!serial_if) {
         log_warn("interface alloc failed");
-        return;
+        return false;
     }
 
     serial_if->poll = _poll;
@@ -183,14 +190,15 @@ void serial_devfs_init(void) {
     }
 
     serial_nodes_ready = true;
+    return true;
 }
 
-void serial_dev_push_rx(size_t index, char ch) {
+void serial_push_rx(size_t index, char ch) {
     if (!ch || index >= sizeof(serial_devices) / sizeof(serial_devices[0])) {
         return;
     }
 
-    serial_dev_t *serial = &serial_devices[index];
+    serial_port_t *serial = &serial_devices[index];
 
     unsigned long irq_flags = arch_irq_save();
 
@@ -208,4 +216,61 @@ void serial_dev_push_rx(size_t index, char ch) {
     if (sched_is_running()) {
         sched_wake_one(&serial->rx_wait);
     }
+}
+
+bool serial_driver_busy(void) {
+    char path[32] = {0};
+    size_t count = sizeof(serial_devices) / sizeof(serial_devices[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        snprintf(path, sizeof(path), "/dev/ttyS%zu", serial_devices[i].index);
+        vfs_node_t *node = vfs_lookup(path);
+        if (node && sched_fd_refs_node(node)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+driver_err_t serial_driver_load(void) {
+    if (serial_driver_loaded) {
+        return DRIVER_OK;
+    }
+
+    if (!devfs_register_device("serial", _serial_register_devfs)) {
+        return DRIVER_ERR_INIT_FAILED;
+    }
+
+    serial_driver_loaded = true;
+    return DRIVER_OK;
+}
+
+driver_err_t serial_driver_unload(void) {
+    if (!serial_driver_loaded) {
+        return DRIVER_OK;
+    }
+
+    if (serial_driver_busy()) {
+        return DRIVER_ERR_BUSY;
+    }
+
+    size_t count = sizeof(serial_devices) / sizeof(serial_devices[0]);
+    char path[32] = {0};
+
+    for (size_t i = 0; i < count; i++) {
+        snprintf(path, sizeof(path), "/dev/ttyS%zu", serial_devices[i].index);
+        vfs_node_t *node = vfs_lookup(path);
+        if (node && !devfs_unregister_node(path)) {
+            return DRIVER_ERR_BUSY;
+        }
+    }
+
+    if (!devfs_unregister_device("serial")) {
+        log_warn("failed to unregister serial devfs callback");
+    }
+
+    serial_nodes_ready = false;
+    serial_driver_loaded = false;
+    return DRIVER_OK;
 }

@@ -258,9 +258,6 @@ static inline void write_msr(u32 msr, u64 value) {
     asm volatile("wrmsr" : : "a"(eax), "d"(edx), "c"(msr));
 }
 
-// Program PAT MSR: entry 4 = WC, rest = defaults.
-// After this, setting the PAT bit in a PTE (bit 7 for 4K, bit 12 for 2M/1G)
-// with PCD=0, PWT=0 selects WC from PAT entry 4.
 static inline void pat_init(void) {
     u64 pat = (u64)PAT_TYPE_WB // PAT0: WB  (PCD=0 PWT=0 PAT=0)
               | ((u64)PAT_TYPE_WT << 8) // PAT1: WT  (PCD=0 PWT=1 PAT=0)

@@ -2,10 +2,12 @@
 
 #include <fs/ext2.h>
 #include <log/log.h>
+#include <sched/scheduler.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "devfs.h"
 #include "mbr.h"
 #include "vfs.h"
 
@@ -19,22 +21,13 @@ static u8 preferred_rootfs_uuid[16] = {0};
 static bool boot_hint_set = false;
 static disk_boot_hint_t boot_hint = {0};
 
-
-static void *_vec_get_ptr(vector_t *vec, size_t index) {
-    void **slot = vec_at(vec, index);
-    if (!slot) {
-        return NULL;
-    }
-    return *slot;
-}
-
 static bool _disk_name_exists(const char *name) {
     if (!name || !name[0] || !disks) {
         return false;
     }
 
     for (size_t i = 0; i < disks->size; i++) {
-        disk_dev_t *existing = _vec_get_ptr(disks, i);
+        disk_dev_t *existing = vec_at_ptr(disks, i);
 
         if (!existing || !existing->name) {
             continue;
@@ -46,6 +39,49 @@ static bool _disk_name_exists(const char *name) {
     }
 
     return false;
+}
+
+static void _destroy_fs_instance(fs_instance_t *instance) {
+    if (!instance) {
+        return;
+    }
+
+    if (
+        instance->has_tree &&
+        instance->filesystem &&
+        instance->filesystem->fs_interface &&
+        instance->filesystem->fs_interface->destroy_tree
+    ) {
+        (void)instance->filesystem->fs_interface->destroy_tree(instance);
+    }
+
+    if (instance->private) {
+        free(instance->private);
+    }
+
+    free(instance);
+}
+
+static void _destroy_partitions(disk_dev_t *dev) {
+    if (!dev || !dev->partitions) {
+        return;
+    }
+
+    for (size_t i = 0; i < dev->partitions->size; i++) {
+        disk_partition_t *part = vec_at_ptr(dev->partitions, i);
+        if (!part) {
+            continue;
+        }
+
+        _destroy_fs_instance(part->fs_instance);
+        part->fs_instance = NULL;
+
+        free(part->name);
+        free(part);
+    }
+
+    vec_destroy(dev->partitions);
+    dev->partitions = NULL;
 }
 
 static const char *_disk_name_prefix(size_t type) {
@@ -151,7 +187,7 @@ static bool _disk_has_real_partitions(const disk_dev_t *dev) {
     }
 
     for (size_t i = 0; i < dev->partitions->size; i++) {
-        disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
+        disk_partition_t *part = vec_at_ptr(dev->partitions, i);
 
         if (!part || _partition_is_whole_disk_alias(part)) {
             continue;
@@ -539,7 +575,7 @@ static size_t _parse_partitions(disk_dev_t *dev) {
         return dev->partitions ? dev->partitions->size : 0;
     }
 
-    // Always expose /dev/<disk> in addition to partition nodes.
+    // Always expose /dev/<disk> in addition to partition nodes
     (void)_create_partition(dev, -1, 0, 0, 0, dev->sector_count);
 
     if (!_parse_gpt(dev)) {
@@ -563,7 +599,7 @@ static fs_instance_t *_probe_partition(disk_partition_t *part) {
     }
 
     for (size_t i = 0; i < file_systems->size; i++) {
-        fs_t *fs = _vec_get_ptr(file_systems, i);
+        fs_t *fs = vec_at_ptr(file_systems, i);
 
         if (!fs || !fs->fs_interface || !fs->fs_interface->probe) {
             continue;
@@ -691,7 +727,7 @@ static void _publish_partition_nodes(disk_dev_t *dev) {
     }
 
     for (size_t i = 0; i < dev->partitions->size; i++) {
-        disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
+        disk_partition_t *part = vec_at_ptr(dev->partitions, i);
 
         if (!part || !part->name) {
             continue;
@@ -736,7 +772,7 @@ static disk_partition_t *_pick_rootfs_partition(
         preferred_rootfs_uuid_set
     ) {
         for (size_t i = 0; i < dev->partitions->size; i++) {
-            disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
+            disk_partition_t *part = vec_at_ptr(dev->partitions, i);
             if (!part) {
                 continue;
             }
@@ -760,7 +796,7 @@ static disk_partition_t *_pick_rootfs_partition(
     size_t nonboot_offset = 0;
 
     for (size_t i = 0; i < dev->partitions->size; i++) {
-        disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
+        disk_partition_t *part = vec_at_ptr(dev->partitions, i);
 
         if (!part) {
             continue;
@@ -820,8 +856,97 @@ bool disk_register(disk_dev_t *dev) {
         return false;
     }
 
+    if (devfs_is_ready()) {
+        _publish_partition_nodes(dev);
+    }
+
     log_debug("registered %s (%zu)", dev->name ? dev->name : "disk", dev->id);
     dump_partitions(dev);
+    return true;
+}
+
+bool disk_is_busy(const disk_dev_t *dev) {
+    if (!dev || !dev->partitions) {
+        return false;
+    }
+
+    for (size_t i = 0; i < dev->partitions->size; i++) {
+        disk_partition_t *part = vec_at_ptr(dev->partitions, i);
+        if (!part) {
+            continue;
+        }
+
+        if (part->fs_instance && part->fs_instance->refcount) {
+            return true;
+        }
+
+        if (!part->name) {
+            continue;
+        }
+
+        char path[64] = {0};
+        snprintf(path, sizeof(path), "/dev/%s", part->name);
+
+        vfs_node_t *node = vfs_lookup(path);
+        if (node && sched_fd_refs_node(node)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool disk_unregister(disk_dev_t *dev) {
+    if (!dev || !disks) {
+        return false;
+    }
+
+    if (disk_is_busy(dev)) {
+        return false;
+    }
+
+    if (dev->partitions) {
+        for (size_t i = 0; i < dev->partitions->size; i++) {
+            disk_partition_t *part = vec_at_ptr(dev->partitions, i);
+
+            if (!part || !part->name) {
+                continue;
+            }
+
+            char path[64] = {0};
+            snprintf(path, sizeof(path), "/dev/%s", part->name);
+
+            vfs_node_t *node = vfs_lookup(path);
+            if (!node) {
+                continue;
+            }
+
+            if (!vfs_unlink(path)) {
+                return false;
+            }
+        }
+    }
+
+    bool removed = false;
+
+    for (size_t i = 0; i < disks->size; i++) {
+        disk_dev_t **slot = vec_at(disks, i);
+        if (!slot || *slot != dev) {
+            continue;
+        }
+
+        *slot = NULL;
+        removed = true;
+        break;
+    }
+
+    if (!removed) {
+        return false;
+    }
+
+    _destroy_partitions(dev);
+    dev->id = 0;
+
     return true;
 }
 
@@ -830,7 +955,7 @@ disk_dev_t *disk_lookup(size_t dev_id) {
         return NULL;
     }
 
-    return _vec_get_ptr(disks, dev_id - 1);
+    return vec_at_ptr(disks, dev_id - 1);
 }
 
 bool file_system_register(fs_t *fs) {
@@ -861,7 +986,7 @@ fs_t *file_system_lookup(const char *name) {
     }
 
     for (size_t i = 0; i < file_systems->size; i++) {
-        fs_t *fs = _vec_get_ptr(file_systems, i);
+        fs_t *fs = vec_at_ptr(file_systems, i);
 
         if (fs && fs->name && !strcmp(name, fs->name)) {
             return fs;
@@ -1032,7 +1157,7 @@ static bool _mount_rootfs_on_disk(disk_dev_t *dev, bool honor_preferred_uuid) {
     bool has_real = _disk_has_real_partitions(dev);
 
     for (size_t i = 0; i < dev->partitions->size; i++) {
-        disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
+        disk_partition_t *part = vec_at_ptr(dev->partitions, i);
 
         if (!part || part == preferred) {
             continue;
@@ -1054,11 +1179,7 @@ static bool _mount_rootfs_on_disk(disk_dev_t *dev, bool honor_preferred_uuid) {
     return false;
 }
 
-bool mount_rootfs(disk_dev_t *dev) {
-    return _mount_rootfs_on_disk(dev, true);
-}
-
-bool mount_rootf(void) {
+bool mount_rootfs(void) {
     if (!disks || !disks->size) {
         return false;
     }
@@ -1066,7 +1187,7 @@ bool mount_rootf(void) {
     bool has_virtual = false;
 
     for (size_t i = 0; i < disks->size; i++) {
-        disk_dev_t *dev = _vec_get_ptr(disks, i);
+        disk_dev_t *dev = vec_at_ptr(disks, i);
 
         if (dev && dev->type == DISK_VIRTUAL) {
             has_virtual = true;
@@ -1076,7 +1197,7 @@ bool mount_rootf(void) {
 
     if (preferred_rootfs_uuid_set) {
         for (size_t i = 0; i < disks->size; i++) {
-            disk_dev_t *dev = _vec_get_ptr(disks, i);
+            disk_dev_t *dev = vec_at_ptr(disks, i);
 
             if (!dev || dev->type == DISK_VIRTUAL) {
                 continue;
@@ -1089,7 +1210,7 @@ bool mount_rootf(void) {
 
         if (has_virtual) {
             for (size_t i = 0; i < disks->size; i++) {
-                disk_dev_t *dev = _vec_get_ptr(disks, i);
+                disk_dev_t *dev = vec_at_ptr(disks, i);
                 if (!dev || dev->type != DISK_VIRTUAL) {
                     continue;
                 }
@@ -1110,7 +1231,7 @@ bool mount_rootf(void) {
 
     if (_has_transport_hint()) {
         for (size_t i = 0; i < disks->size; i++) {
-            disk_dev_t *dev = _vec_get_ptr(disks, i);
+            disk_dev_t *dev = vec_at_ptr(disks, i);
 
             if (!dev || dev->type == DISK_VIRTUAL) {
                 continue;
@@ -1126,7 +1247,7 @@ bool mount_rootf(void) {
         }
 
         for (size_t i = 0; i < disks->size; i++) {
-            disk_dev_t *dev = _vec_get_ptr(disks, i);
+            disk_dev_t *dev = vec_at_ptr(disks, i);
 
             if (!dev || dev->type == DISK_VIRTUAL) {
                 continue;
@@ -1142,7 +1263,7 @@ bool mount_rootf(void) {
         }
     } else {
         for (size_t i = 0; i < disks->size; i++) {
-            disk_dev_t *dev = _vec_get_ptr(disks, i);
+            disk_dev_t *dev = vec_at_ptr(disks, i);
 
             if (!dev || dev->type == DISK_VIRTUAL) {
                 continue;
@@ -1155,7 +1276,7 @@ bool mount_rootf(void) {
     }
 
     for (size_t i = 0; i < disks->size; i++) {
-        disk_dev_t *dev = _vec_get_ptr(disks, i);
+        disk_dev_t *dev = vec_at_ptr(disks, i);
 
         if (!dev || dev->type != DISK_VIRTUAL) {
             continue;
@@ -1175,7 +1296,7 @@ bool disk_publish_devices(void) {
     }
 
     for (size_t i = 0; i < disks->size; i++) {
-        disk_dev_t *dev = _vec_get_ptr(disks, i);
+        disk_dev_t *dev = vec_at_ptr(disks, i);
         _publish_partition_nodes(dev);
     }
 
@@ -1195,7 +1316,7 @@ void dump_partitions(disk_dev_t *dev) {
     }
 
     for (size_t i = 0; i < dev->partitions->size; i++) {
-        disk_partition_t *part = _vec_get_ptr(dev->partitions, i);
+        disk_partition_t *part = vec_at_ptr(dev->partitions, i);
 
         if (!part) {
             continue;

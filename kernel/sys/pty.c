@@ -1,10 +1,12 @@
 #include "pty.h"
 
 #include <arch/arch.h>
+#include <data/ring.h>
 #include <errno.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/devfs.h>
 #include <sys/ioctl.h>
@@ -13,9 +15,7 @@
 
 typedef struct {
     u8 data[PTY_BUFFER_SIZE];
-    size_t read_pos;
-    size_t write_pos;
-    size_t size;
+    ring_io_t ring;
     sched_wait_queue_t read_wait;
     sched_wait_queue_t write_wait;
     bool ready;
@@ -42,9 +42,7 @@ static void _queue_reset(pty_queue_t *queue) {
         return;
     }
 
-    queue->read_pos = 0;
-    queue->write_pos = 0;
-    queue->size = 0;
+    ring_io_init(&queue->ring, queue->data, PTY_BUFFER_SIZE);
 }
 
 static void _reset_state(pty_t *pty) {
@@ -109,74 +107,12 @@ static void _queue_init(pty_queue_t *queue) {
         return;
     }
 
-    queue->read_pos = 0;
-    queue->write_pos = 0;
-    queue->size = 0;
+    _queue_reset(queue);
 
     sched_wait_queue_init(&queue->read_wait);
     sched_wait_queue_init(&queue->write_wait);
 
     queue->ready = true;
-}
-
-static size_t _queue_read_once(pty_queue_t *queue, void *buf, size_t len) {
-    if (!queue || !buf || !len || !queue->size) {
-        return 0;
-    }
-
-    size_t chunk = len;
-    if (chunk > queue->size) {
-        chunk = queue->size;
-    }
-
-    size_t first = chunk;
-    if (first > PTY_BUFFER_SIZE - queue->read_pos) {
-        first = PTY_BUFFER_SIZE - queue->read_pos;
-    }
-
-    memcpy(buf, queue->data + queue->read_pos, first);
-
-    if (chunk > first) {
-        memcpy((u8 *)buf + first, queue->data, chunk - first);
-    }
-
-    queue->read_pos = (queue->read_pos + chunk) % PTY_BUFFER_SIZE;
-    queue->size -= chunk;
-
-    return chunk;
-}
-
-static size_t
-_queue_write_once(pty_queue_t *queue, const void *buf, size_t len) {
-    if (!queue || !buf || !len) {
-        return 0;
-    }
-
-    size_t free_space = PTY_BUFFER_SIZE - queue->size;
-    if (!free_space) {
-        return 0;
-    }
-
-    size_t chunk = len;
-    if (chunk > free_space) {
-        chunk = free_space;
-    }
-
-    size_t first = chunk;
-    if (first > PTY_BUFFER_SIZE - queue->write_pos) {
-        first = PTY_BUFFER_SIZE - queue->write_pos;
-    }
-
-    memcpy(queue->data + queue->write_pos, buf, first);
-
-    if (chunk > first) {
-        memcpy(queue->data, (const u8 *)buf + first, chunk - first);
-    }
-
-    queue->write_pos = (queue->write_pos + chunk) % PTY_BUFFER_SIZE;
-    queue->size += chunk;
-
-    return chunk;
 }
 
 static size_t _queue_size(pty_queue_t *queue) {
@@ -185,7 +121,7 @@ static size_t _queue_size(pty_queue_t *queue) {
     }
 
     unsigned long irq_flags = arch_irq_save();
-    size_t used = queue->size;
+    size_t used = ring_io_size(&queue->ring);
     arch_irq_restore(irq_flags);
 
     return used;
@@ -197,7 +133,7 @@ static size_t _queue_free_space(pty_queue_t *queue) {
     }
 
     unsigned long irq_flags = arch_irq_save();
-    size_t free_space = PTY_BUFFER_SIZE - queue->size;
+    size_t free_space = ring_io_free_space(&queue->ring);
     arch_irq_restore(irq_flags);
 
     return free_space;
@@ -248,11 +184,7 @@ static void _queue_clear(pty_queue_t *queue) {
     }
 
     unsigned long irq_flags = arch_irq_save();
-
-    queue->read_pos = 0;
-    queue->write_pos = 0;
-    queue->size = 0;
-
+    ring_io_reset(&queue->ring);
     arch_irq_restore(irq_flags);
 }
 
@@ -289,8 +221,7 @@ _queue_read(pty_queue_t *queue, void *buf, size_t len, bool nonblock) {
     for (;;) {
         unsigned long irq_flags = arch_irq_save();
 
-        size_t read_now =
-            _queue_read_once(queue, (u8 *)buf + total, len - total);
+        size_t read_now = ring_io_read(&queue->ring, (u8 *)buf + total, len - total);
 
         arch_irq_restore(irq_flags);
 
@@ -355,8 +286,7 @@ static ssize_t _queue_read_termios(
     for (;;) {
         unsigned long irq_flags = arch_irq_save();
 
-        size_t read_now =
-            _queue_read_once(queue, (u8 *)buf + total, len - total);
+        size_t read_now = ring_io_read(&queue->ring, (u8 *)buf + total, len - total);
 
         arch_irq_restore(irq_flags);
 
@@ -453,8 +383,11 @@ _queue_write(pty_queue_t *queue, const void *buf, size_t len, bool nonblock) {
     for (;;) {
         unsigned long irq_flags = arch_irq_save();
 
-        size_t wrote_now =
-            _queue_write_once(queue, (const u8 *)buf + total, len - total);
+        size_t wrote_now = ring_io_write(
+            &queue->ring,
+            (const u8 *)buf + total,
+            len - total
+        );
 
         arch_irq_restore(irq_flags);
 
@@ -647,6 +580,11 @@ void pty_put(size_t index) {
         pty->refs--;
 
         if (!pty->refs) {
+            if (pty->pgrp > 0) {
+                sched_signal_send_pgrp(pty->pgrp, SIGHUP);
+                sched_signal_send_pgrp(pty->pgrp, SIGCONT);
+            }
+
             _reset_state(pty);
             pty->allocated = false;
         }

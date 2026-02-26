@@ -5,6 +5,7 @@
 #include <gui/input.h>
 #include <input/kbd.h>
 #include <input/keymap.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -16,6 +17,7 @@
 extern char **environ;
 
 static const u8 ctrl_ascii[6] = {'\n', '\n', '\b', '\t', '\e', 0x7f};
+static const int write_wait_ms = 25;
 
 static bool write_retry(int fd, const void *data, size_t len) {
     if (fd < 0 || !data || !len) {
@@ -33,8 +35,27 @@ static bool write_retry(int fd, const void *data, size_t len) {
             continue;
         }
 
-        if (n < 0 && errno == EINTR) {
-            continue;
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct pollfd pfd = {
+                    .fd = fd,
+                    .events = POLLOUT,
+                    .revents = 0,
+                };
+
+                int ready = poll(&pfd, 1, write_wait_ms);
+                if (ready > 0 && (pfd.revents & POLLOUT)) {
+                    continue;
+                }
+
+                if (ready < 0 && errno == EINTR) {
+                    continue;
+                }
+            }
         }
 
         return false;

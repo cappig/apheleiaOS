@@ -319,7 +319,7 @@ def _layout_iso(
     rootfs_size: int,
     efi_size: int,
 ) -> IsoLayout:
-    # Minimal ISO has two directories (root + BOOT), one boot catalog, and file extents.
+    # Minimal ISO has two directories (root + BOOT), one boot catalog, and file extents
     path_table_size = len(
         _path_table_entry(name=b"\x00", extent_lba=0, parent=1, big_endian=False)
     ) + len(_path_table_entry(name=b"BOOT", extent_lba=0, parent=1, big_endian=False))
@@ -460,7 +460,7 @@ def _write_iso(
     layout = _layout_iso(bios_size=bios_size, rootfs_size=rootfs_size, efi_size=efi_size)
 
     # Keep ISO file 2048-byte aligned while reserving space for GPT backup
-    # structures. 36 * 512 = 9 * 2048 bytes.
+    # structures. 36 * 512 = 9 * 2048 bytes
     gpt_tail_sectors = 36 if efi_img else 0
     total_512_sectors = layout.iso_blocks * (ISO_SECTOR_SIZE // SECTOR_SIZE) + gpt_tail_sectors
 

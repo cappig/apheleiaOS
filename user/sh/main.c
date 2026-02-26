@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <poll.h>
 #include <sys/proc.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -29,6 +30,7 @@ static volatile sig_atomic_t got_sigwinch = 0;
 #define SH_MAX_ARGS      16
 #define SH_MAX_TOKENS    64
 #define SH_MAX_STAGES    8
+#define SH_MAX_CLAUSES   16
 #define SH_MAX_JOBS      16
 #define SH_CMD_MAX       128
 #define SH_LINE_MAX      SH_INPUT_LINE_MAX
@@ -58,6 +60,11 @@ typedef struct {
     char *out_path;
     bool out_append;
 } sh_stage_t;
+
+typedef struct {
+    bool stopped;
+    int exit_status;
+} sh_wait_result_t;
 
 static sh_env_t sh_env[SH_ENV_MAX];
 static size_t sh_env_count = 0;
@@ -269,10 +276,26 @@ static int parse_job_id(const char *arg) {
     return id > 0 ? id : -1;
 }
 
-static bool wait_foreground_pgrp(pid_t pgid) {
+static bool wait_status_signaled(int status) {
+    int sig = status & 0x7f;
+    return sig > 0 && sig != 0x7f;
+}
+
+static int wait_status_termsig(int status) {
+    return status & 0x7f;
+}
+
+static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
+    sh_wait_result_t result = {
+        .stopped = false,
+        .exit_status = 0,
+    };
+
     if (pgid <= 0) {
-        return false;
+        return result;
     }
+
+    bool have_tracked_status = (tracked_pid <= 0);
 
     for (;;) {
         int status = 0;
@@ -280,13 +303,22 @@ static bool wait_foreground_pgrp(pid_t pgid) {
 
         if (waited > 0) {
             if (WIFSTOPPED(status)) {
-                return true;
+                result.stopped = true;
+                return result;
             }
 
-            continue;
-        }
+            if (tracked_pid > 0 && waited == tracked_pid) {
+                have_tracked_status = true;
 
-        if (!waited) {
+                if (WIFEXITED(status)) {
+                    result.exit_status = WEXITSTATUS(status);
+                } else if (wait_status_signaled(status)) {
+                    result.exit_status = 128 + wait_status_termsig(status);
+                } else {
+                    result.exit_status = 1;
+                }
+            }
+
             continue;
         }
 
@@ -294,7 +326,19 @@ static bool wait_foreground_pgrp(pid_t pgid) {
             continue;
         }
 
-        return false;
+        if (errno == ECHILD) {
+            if (!have_tracked_status) {
+                result.exit_status = 1;
+            }
+
+            return result;
+        }
+
+        if (!have_tracked_status) {
+            result.exit_status = 1;
+        }
+
+        return result;
     }
 }
 
@@ -355,16 +399,16 @@ static int fg(int argc, char **argv) {
     }
 
     tty_set_pgrp(job->pid);
-    bool stopped = wait_foreground_pgrp(job->pid);
+    sh_wait_result_t wait_result = wait_foreground_pgrp(job->pid, 0);
     tty_set_pgrp(sh_pgid);
 
-    if (stopped) {
+    if (wait_result.stopped) {
         job->state = JOB_STOPPED;
     } else if (index < sh_job_count) {
         job_remove_index(index);
     }
 
-    return 1;
+    return wait_result.stopped ? (128 + SIGTSTP) : wait_result.exit_status;
 }
 
 static int bg(int argc, char **argv) {
@@ -374,9 +418,11 @@ static int bg(int argc, char **argv) {
         return 1;
     }
 
-    continue_job(job, index, "bg");
+    if (!continue_job(job, index, "bg")) {
+        return 1;
+    }
 
-    return 1;
+    return 0;
 }
 
 static int env_find(const char *key) {
@@ -787,20 +833,30 @@ static int tokenize(
 }
 
 static int parse_pipeline(
-    char *line,
+    const char *line,
     sh_stage_t *stages,
     int *stage_count_out,
-    bool *background_out
+    bool *background_out,
+    char *token_store,
+    size_t token_store_len,
+    char **tokens,
+    int token_cap
 ) {
-    if (!line || !stages || !stage_count_out || !background_out) {
+    if (
+        !line ||
+        !stages ||
+        !stage_count_out ||
+        !background_out ||
+        !token_store ||
+        !token_store_len ||
+        !tokens ||
+        token_cap <= 1
+    ) {
         return -1;
     }
 
-    char token_store[SH_LINE_MAX];
-    char *tokens[SH_MAX_TOKENS];
-
     int token_count =
-        tokenize(line, token_store, sizeof(token_store), tokens, SH_MAX_TOKENS);
+        tokenize(line, token_store, token_store_len, tokens, token_cap);
 
     if (token_count <= 0) {
         return 0;
@@ -1053,9 +1109,13 @@ static bool parse_umask(const char *text, mode_t *out) {
     return true;
 }
 
-static int handle_builtin(int argc, char **argv) {
+static bool handle_builtin(int argc, char **argv, int *status_out) {
+    if (status_out) {
+        *status_out = 0;
+    }
+
     if (argc <= 0) {
-        return 0;
+        return false;
     }
 
     if (!strcmp(argv[0], "exit")) {
@@ -1067,46 +1127,54 @@ static int handle_builtin(int argc, char **argv) {
             "builtins: help, echo, exit, set, unset, env, cd, umask, "
             "history, jobs, fg, bg\n"
         );
-        return 1;
+        return true;
     }
 
     if (!strcmp(argv[0], "env")) {
         env_print();
-        return 1;
+        return true;
     }
 
     if (!strcmp(argv[0], "set")) {
         if (argc == 1) {
             env_print();
-            return 1;
+            return true;
         }
 
         char *eq = strchr(argv[1], '=');
         if (eq) {
             *eq = '\0';
-            env_set(argv[1], eq + 1);
-            return 1;
+            if (!env_set(argv[1], eq + 1) && status_out) {
+                *status_out = 1;
+            }
+            return true;
         }
 
         if (argc >= 3) {
-            env_set(argv[1], argv[2]);
-            return 1;
+            if (!env_set(argv[1], argv[2]) && status_out) {
+                *status_out = 1;
+            }
+            return true;
         }
 
         io_write_str("set: usage: set NAME=VALUE\n");
-
-        return 1;
+        if (status_out) {
+            *status_out = 1;
+        }
+        return true;
     }
 
     if (!strcmp(argv[0], "unset")) {
         if (argc < 2) {
             io_write_str("unset: usage: unset NAME\n");
-            return 1;
+            if (status_out) {
+                *status_out = 1;
+            }
+            return true;
         }
 
         env_unset(argv[1]);
-
-        return 1;
+        return true;
     }
 
     if (!strcmp(argv[0], "echo")) {
@@ -1122,7 +1190,7 @@ static int handle_builtin(int argc, char **argv) {
         }
 
         io_write_str("\n");
-        return 1;
+        return true;
     }
 
     if (!strcmp(argv[0], "cd")) {
@@ -1134,11 +1202,14 @@ static int handle_builtin(int argc, char **argv) {
 
         if (chdir(target) < 0) {
             io_write_str("cd: failed\n");
-            return 1;
+            if (status_out) {
+                *status_out = 1;
+            }
+            return true;
         }
 
         update_pwd();
-        return 1;
+        return true;
     }
 
     if (!strcmp(argv[0], "umask")) {
@@ -1146,7 +1217,7 @@ static int handle_builtin(int argc, char **argv) {
             mode_t old = umask(0);
             umask(old);
             sh_printf("%03o\n", (unsigned int)(old & 0777));
-            return 1;
+            return true;
         }
 
         if (argc == 2) {
@@ -1154,36 +1225,52 @@ static int handle_builtin(int argc, char **argv) {
 
             if (!parse_umask(argv[1], &mask)) {
                 io_write_str("umask: usage: umask [ooo]\n");
-                return 1;
+                if (status_out) {
+                    *status_out = 1;
+                }
+                return true;
             }
 
             umask(mask);
-            return 1;
+            return true;
         }
 
         io_write_str("umask: usage: umask [ooo]\n");
-        return 1;
+        if (status_out) {
+            *status_out = 1;
+        }
+        return true;
     }
 
     if (!strcmp(argv[0], "jobs")) {
         print_jobs();
-        return 1;
+        return true;
     }
 
     if (!strcmp(argv[0], "history")) {
         history_print();
-        return 1;
+        return true;
     }
 
     if (!strcmp(argv[0], "fg")) {
-        return fg(argc, argv);
+        if (status_out) {
+            *status_out = fg(argc, argv);
+        } else {
+            fg(argc, argv);
+        }
+        return true;
     }
 
     if (!strcmp(argv[0], "bg")) {
-        return bg(argc, argv);
+        if (status_out) {
+            *status_out = bg(argc, argv);
+        } else {
+            bg(argc, argv);
+        }
+        return true;
     }
 
-    return 0;
+    return false;
 }
 
 static void close_pipe_fds(int pipes[][2], int count) {
@@ -1286,6 +1373,7 @@ static int run_pipeline(
     }
 
     pid_t pgid = 0;
+    pid_t last_pid = 0;
     for (int i = 0; i < stage_count; i++) {
         pid_t pid = fork();
 
@@ -1319,8 +1407,9 @@ static int run_pipeline(
                 _exit(1);
             }
 
-            if (handle_builtin(stages[i].argc, stages[i].argv)) {
-                _exit(0);
+            int builtin_status = 0;
+            if (handle_builtin(stages[i].argc, stages[i].argv, &builtin_status)) {
+                _exit(builtin_status);
             }
 
             char env_data[SH_ENV_MAX][SH_ENV_ENTRY_MAX];
@@ -1343,6 +1432,7 @@ static int run_pipeline(
             pgid = pid;
         }
 
+        last_pid = pid;
         setpgid(pid, pgid);
     }
 
@@ -1360,15 +1450,16 @@ static int run_pipeline(
 
     tty_set_pgrp(pgid);
 
-    bool stopped = wait_foreground_pgrp(pgid);
+    sh_wait_result_t wait_result = wait_foreground_pgrp(pgid, last_pid);
 
     tty_set_pgrp(sh_pgid);
 
-    if (stopped) {
+    if (wait_result.stopped) {
         job_add(pgid, cmdline, JOB_STOPPED);
+        return 128 + SIGTSTP;
     }
 
-    return 0;
+    return wait_result.exit_status;
 }
 
 typedef struct {
@@ -1406,7 +1497,99 @@ static void expand_stages(
     }
 }
 
-static int run_command(char *line) {
+static char *trim_ascii_whitespace(char *text) {
+    if (!text) {
+        return NULL;
+    }
+
+    while (*text && isspace((unsigned char)*text)) {
+        text++;
+    }
+
+    size_t len = strlen(text);
+    while (len > 0 && isspace((unsigned char)text[len - 1])) {
+        text[len - 1] = '\0';
+        len--;
+    }
+
+    return text;
+}
+
+static int split_and_clauses(char *line, char **clauses, int max_clauses) {
+    if (!line || !clauses || max_clauses <= 0) {
+        return -1;
+    }
+
+    bool in_single = false;
+    bool in_double = false;
+    bool escape = false;
+    int count = 0;
+    char *start = line;
+
+    for (char *cursor = line; *cursor; cursor++) {
+        char ch = *cursor;
+
+        if (escape) {
+            escape = false;
+            continue;
+        }
+
+        if (!in_single && ch == '\\') {
+            escape = true;
+            continue;
+        }
+
+        if (!in_double && ch == '\'') {
+            in_single = !in_single;
+            continue;
+        }
+
+        if (!in_single && ch == '"') {
+            in_double = !in_double;
+            continue;
+        }
+
+        if (in_single || in_double || ch != '&' || cursor[1] != '&') {
+            continue;
+        }
+
+        *cursor = '\0';
+        char *clause = trim_ascii_whitespace(start);
+        if (!clause || !clause[0]) {
+            io_write_str("sh: syntax error near '&&'\n");
+            return -1;
+        }
+
+        if (count >= max_clauses) {
+            io_write_str("sh: too many && clauses\n");
+            return -1;
+        }
+
+        clauses[count++] = clause;
+        cursor++;
+        start = cursor + 1;
+    }
+
+    char *tail = trim_ascii_whitespace(start);
+    if (!tail || !tail[0]) {
+        io_write_str("sh: syntax error near '&&'\n");
+        return -1;
+    }
+
+    if (count >= max_clauses) {
+        io_write_str("sh: too many && clauses\n");
+        return -1;
+    }
+
+    clauses[count++] = tail;
+    return count;
+}
+
+static int run_single_command(char *line) {
+    if (!line || !line[0]) {
+        return 0;
+    }
+
     size_t line_len = strlen(line);
     if (line_len && line[line_len - 1] == '\n') {
         line[line_len - 1] = '\0';
@@ -1420,12 +1603,27 @@ static int run_command(char *line) {
     snprintf(cmdline, sizeof(cmdline), "%s", line);
 
     sh_stage_t stages[SH_MAX_STAGES];
+    char token_store[SH_LINE_MAX];
+    char *tokens[SH_MAX_TOKENS];
     int stage_count = 0;
     bool background = false;
 
-    int parse_ret = parse_pipeline(line, stages, &stage_count, &background);
+    int parse_ret = parse_pipeline(
+        line,
+        stages,
+        &stage_count,
+        &background,
+        token_store,
+        sizeof(token_store),
+        tokens,
+        SH_MAX_TOKENS
+    );
 
-    if (parse_ret <= 0) {
+    if (parse_ret < 0) {
+        return 1;
+    }
+
+    if (!parse_ret) {
         return 0;
     }
 
@@ -1442,14 +1640,55 @@ static int run_command(char *line) {
     bool simple_builtin =
         stage_count == 1 && !background && !stages[0].in_path && !stages[0].out_path;
 
-    if (simple_builtin && handle_builtin(stages[0].argc, stages[0].argv)) {
-        free(exp);
-        return 0;
+    if (simple_builtin) {
+        int builtin_status = 0;
+        if (handle_builtin(stages[0].argc, stages[0].argv, &builtin_status)) {
+            free(exp);
+            return builtin_status;
+        }
     }
 
     int ret = run_pipeline(stages, stage_count, background, cmdline);
     free(exp);
+
+    if (ret < 0) {
+        return 1;
+    }
+
     return ret;
+}
+
+static int run_command(char *line) {
+    if (!line || !line[0]) {
+        return 0;
+    }
+
+    size_t line_len = strlen(line);
+    if (line_len && line[line_len - 1] == '\n') {
+        line[line_len - 1] = '\0';
+    }
+
+    char *trimmed = trim_ascii_whitespace(line);
+    if (!trimmed || !trimmed[0]) {
+        return 0;
+    }
+
+    char *clauses[SH_MAX_CLAUSES];
+    int clause_count = split_and_clauses(trimmed, clauses, SH_MAX_CLAUSES);
+    if (clause_count < 0) {
+        return 1;
+    }
+
+    int status = 0;
+    for (int i = 0; i < clause_count; i++) {
+        if (i > 0 && status != 0) {
+            break;
+        }
+
+        status = run_single_command(clauses[i]);
+    }
+
+    return status;
 }
 
 static int run_script(const char *path) {
@@ -1502,6 +1741,7 @@ int main(int argc, char **argv) {
 
     env_set("PATH", "/bin");
     env_set("HOME", "/");
+    env_set("SHELL", "/bin/sh");
 
     struct passwd *pwd = getpwuid(getuid());
     if (pwd && pwd->pw_dir && pwd->pw_dir[0]) {

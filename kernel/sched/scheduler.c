@@ -26,7 +26,7 @@
 #define SCHED_STACK_SIZE (16 * KIB)
 
 #ifndef SCHED_SLICE
-#define SCHED_SLICE 2
+#define SCHED_SLICE 1
 #endif
 
 static linked_list_t *run_queue = NULL;
@@ -382,7 +382,10 @@ static sched_thread_t *_pid_index_get_locked(pid_t pid) {
         return thread;
     }
 
-    (void)hashmap_remove(pid_index, _pid_index_key(pid));
+    if (!hashmap_remove(pid_index, _pid_index_key(pid))) {
+        panic("scheduler pid index stale-entry cleanup failed");
+    }
+
     return NULL;
 }
 
@@ -391,9 +394,9 @@ static void _pid_index_set_locked(sched_thread_t *thread) {
         return;
     }
 
-    (void)hashmap_set(
-        pid_index, _pid_index_key(thread->pid), (u64)(uintptr_t)thread
-    );
+    if (!hashmap_set(pid_index, _pid_index_key(thread->pid), (u64)(uintptr_t)thread)) {
+        panic("scheduler pid index insert failed");
+    }
 }
 
 static void _pid_index_remove_locked(pid_t pid) {
@@ -401,7 +404,14 @@ static void _pid_index_remove_locked(pid_t pid) {
         return;
     }
 
-    (void)hashmap_remove(pid_index, _pid_index_key(pid));
+    u64 encoded = 0;
+    if (!hashmap_get(pid_index, _pid_index_key(pid), &encoded)) {
+        return;
+    }
+
+    if (!hashmap_remove(pid_index, _pid_index_key(pid))) {
+        panic("scheduler pid index remove failed");
+    }
 }
 
 static void add_all_thread(sched_thread_t *thread) {
@@ -447,12 +457,12 @@ sched_pipe_t *sched_pipe_create(size_t capacity) {
         return NULL;
     }
 
-    pipe->data = calloc(capacity, sizeof(u8));
+    u8 *data = calloc(capacity, sizeof(u8));
     pipe->read_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
     pipe->write_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
 
-    if (!pipe->data || !pipe->read_wait_queue || !pipe->write_wait_queue) {
-        free(pipe->data);
+    if (!data || !pipe->read_wait_queue || !pipe->write_wait_queue) {
+        free(data);
         free(pipe->read_wait_queue);
         free(pipe->write_wait_queue);
         free(pipe);
@@ -460,7 +470,7 @@ sched_pipe_t *sched_pipe_create(size_t capacity) {
         return NULL;
     }
 
-    pipe->capacity = capacity;
+    ring_io_init(&pipe->ring, data, capacity);
     pipe->read_wait_owned = true;
     pipe->write_wait_owned = true;
     sched_wait_queue_init(pipe->read_wait_queue);
@@ -495,7 +505,7 @@ static void sched_pipe_try_destroy(sched_pipe_t *pipe) {
 
     free(pipe->read_wait_queue);
     free(pipe->write_wait_queue);
-    free(pipe->data);
+    free(pipe->ring.data);
     free(pipe);
 }
 
@@ -709,6 +719,43 @@ void sched_fd_close_all(sched_thread_t *thread) {
     }
 }
 
+bool sched_fd_refs_node(const vfs_node_t *node) {
+    if (!node || !all_list) {
+        return false;
+    }
+
+    bool found = false;
+    unsigned long flags = sched_lock_save();
+
+    ll_foreach(entry, all_list) {
+        sched_thread_t *thread = entry->data;
+        if (!thread) {
+            continue;
+        }
+
+        for (int fd = 0; fd < SCHED_FD_MAX; fd++) {
+            if (!thread->fd_used[fd]) {
+                continue;
+            }
+
+            const sched_fd_t *slot = &thread->fds[fd];
+            if (slot->kind != SCHED_FD_VFS || slot->node != node) {
+                continue;
+            }
+
+            found = true;
+            break;
+        }
+
+        if (found) {
+            break;
+        }
+    }
+
+    sched_lock_restore(flags);
+    return found;
+}
+
 static void sched_init_thread_name(sched_thread_t *thread, const char *name) {
     if (!thread) {
         return;
@@ -846,16 +893,18 @@ find_user_region(sched_thread_t *thread, uintptr_t addr) {
     return NULL;
 }
 
-static void
+static bool
 mark_cow_range(sched_thread_t *thread, sched_user_region_t *region) {
     if (!thread || !region || !region->pages) {
-        return;
+        return false;
     }
 
     page_t *root = arch_vm_root(thread->vm_space);
     if (!root) {
-        return;
+        return false;
     }
+
+    bool updated = false;
 
     for (size_t i = 0; i < region->pages; i++) {
         uintptr_t vaddr = region->vaddr + i * PAGE_4KIB;
@@ -869,9 +918,11 @@ mark_cow_range(sched_thread_t *thread, sched_user_region_t *region) {
 
         if (*entry & PT_WRITE) {
             *entry &= ~PT_WRITE;
-            arch_tlb_flush(vaddr);
+            updated = true;
         }
     }
+
+    return updated;
 }
 
 static bool split_region_for_page(
@@ -1470,6 +1521,10 @@ static sched_thread_t *create_thread(
 
     thread->uid = parent ? parent->uid : 0;
     thread->gid = parent ? parent->gid : 0;
+    thread->group_count = parent ? parent->group_count : 0;
+    if (parent && parent->group_count) {
+        memcpy(thread->groups, parent->groups, sizeof(thread->groups));
+    }
     thread->umask = parent ? parent->umask : 0022;
     thread->stack_size = SCHED_STACK_SIZE;
     thread->stack = malloc(thread->stack_size);
@@ -1567,6 +1622,41 @@ gid_t sched_getgid(void) {
     return thread->gid;
 }
 
+static size_t _copy_groups(const sched_thread_t *thread, gid_t *groups, size_t max_groups) {
+    if (!thread || !groups || !max_groups) {
+        return 0;
+    }
+
+    size_t count = thread->group_count;
+    if (count > max_groups) {
+        count = max_groups;
+    }
+
+    if (count) {
+        memcpy(groups, thread->groups, count * sizeof(gid_t));
+    }
+
+    return count;
+}
+
+static bool _has_group(const sched_thread_t *thread, gid_t gid) {
+    if (!thread) {
+        return false;
+    }
+
+    if (thread->gid == gid) {
+        return true;
+    }
+
+    for (size_t i = 0; i < thread->group_count; i++) {
+        if (thread->groups[i] == gid) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 mode_t sched_getumask(void) {
     sched_thread_t *thread = sched_local_current();
 
@@ -1602,7 +1692,97 @@ int sched_setgid(gid_t gid) {
     }
 
     thread->gid = gid;
+
+    for (size_t i = 0; i < thread->group_count;) {
+        if (thread->groups[i] != gid) {
+            i++;
+            continue;
+        }
+
+        for (size_t j = i + 1; j < thread->group_count; j++) {
+            thread->groups[j - 1] = thread->groups[j];
+        }
+
+        thread->group_count--;
+    }
+
     return 0;
+}
+
+int sched_setgroups(const gid_t *groups, size_t group_count) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    if (thread->uid != 0) {
+        return -EPERM;
+    }
+
+    if (group_count > SCHED_GROUP_MAX || (group_count && !groups)) {
+        return -EINVAL;
+    }
+
+    size_t out_count = 0;
+    for (size_t i = 0; i < group_count; i++) {
+        gid_t gid = groups[i];
+
+        if (gid == thread->gid) {
+            continue;
+        }
+
+        bool seen = false;
+        for (size_t j = 0; j < out_count; j++) {
+            if (thread->groups[j] == gid) {
+                seen = true;
+                break;
+            }
+        }
+
+        if (seen) {
+            continue;
+        }
+
+        if (out_count >= SCHED_GROUP_MAX) {
+            return -EINVAL;
+        }
+
+        thread->groups[out_count++] = gid;
+    }
+
+    thread->group_count = out_count;
+    return 0;
+}
+
+int sched_getgroups(gid_t *groups, size_t max_groups, size_t *group_count_out) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread || !group_count_out) {
+        return -EINVAL;
+    }
+
+    *group_count_out = thread->group_count;
+    if (groups && max_groups) {
+        (void)_copy_groups(thread, groups, max_groups);
+    }
+
+    return 0;
+}
+
+bool sched_gid_matches_cred(uid_t uid, gid_t gid, gid_t target_gid) {
+    if (gid == target_gid) {
+        return true;
+    }
+
+    sched_thread_t *thread = sched_local_current();
+    if (!thread) {
+        return false;
+    }
+
+    if (thread->uid != uid || thread->gid != gid) {
+        return false;
+    }
+
+    return _has_group(thread, target_gid);
 }
 
 int sched_setumask(mode_t mask) {
@@ -1892,6 +2072,7 @@ pid_t sched_fork(arch_int_state_t *state) {
 
     bool cow_enabled = pmm_ref_ready();
 
+    bool parent_tlb_needs_flush = false;
     sched_user_region_t *region = parent->regions;
     while (region) {
         size_t pages = region->pages;
@@ -1948,10 +2129,16 @@ pid_t sched_fork(arch_int_state_t *state) {
         pmm_ref_hold((void *)(uintptr_t)region->paddr, pages);
 
         if (writable) {
-            mark_cow_range(parent, region);
+            if (mark_cow_range(parent, region)) {
+                parent_tlb_needs_flush = true;
+            }
         }
 
         region = region->next;
+    }
+
+    if (parent_tlb_needs_flush) {
+        arch_vm_switch(parent->vm_space);
     }
 
     child->context = build_fork_stack(child, state);
@@ -2458,6 +2645,52 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
 
     sched_lock_restore(flags);
     return found;
+}
+
+int sched_getgroups_pid(
+    pid_t pid,
+    gid_t *primary_gid_out,
+    gid_t *groups_out,
+    size_t max_groups,
+    size_t *group_count_out
+) {
+    if (pid <= 0 || !group_count_out || !all_list) {
+        return -EINVAL;
+    }
+
+    unsigned long flags = sched_lock_save();
+    sched_thread_t *thread = _pid_index_get_locked(pid);
+
+    if (!thread) {
+        ll_foreach(node, all_list) {
+            sched_thread_t *candidate = node->data;
+
+            if (!candidate || candidate->pid != pid) {
+                continue;
+            }
+
+            thread = candidate;
+            _pid_index_set_locked(thread);
+            break;
+        }
+    }
+
+    if (!thread) {
+        sched_lock_restore(flags);
+        return -ESRCH;
+    }
+
+    if (primary_gid_out) {
+        *primary_gid_out = thread->gid;
+    }
+
+    *group_count_out = thread->group_count;
+    if (groups_out && max_groups) {
+        (void)_copy_groups(thread, groups_out, max_groups);
+    }
+
+    sched_lock_restore(flags);
+    return 0;
 }
 
 bool sched_proc_cwd(pid_t pid, char *out, size_t out_len) {

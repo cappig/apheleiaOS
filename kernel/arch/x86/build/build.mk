@@ -20,6 +20,10 @@ KERNEL_SRC_DIRS := \
 KERNEL_ALL_SRC := $(foreach dir, $(KERNEL_SRC_DIRS), \
 	$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm))
 KERNEL_ALL_SRC := $(filter-out libs/libc/math.c, $(KERNEL_ALL_SRC))
+KERNEL_ALL_SRC := $(filter-out kernel/drivers/registry_%.c, $(KERNEL_ALL_SRC))
+
+include kernel/drivers/build.mk
+KERNEL_ALL_SRC := $(sort $(KERNEL_ALL_SRC) $(KERNEL_DRIVER_SRC))
 
 KERNEL_COMMON_SRC := $(filter-out %32.c %64.c %32.asm %64.asm, $(KERNEL_ALL_SRC))
 KERNEL_SRC_64     := $(filter %64.c %64.asm, $(KERNEL_ALL_SRC)) $(KERNEL_COMMON_SRC)

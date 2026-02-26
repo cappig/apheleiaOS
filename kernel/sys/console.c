@@ -3,7 +3,6 @@
 #include <arch/arch.h>
 #include <base/macros.h>
 #include <base/types.h>
-#include <base/utf8.h>
 #include <errno.h>
 #include <gui/pixel.h>
 #include <stddef.h>
@@ -12,10 +11,11 @@
 #include <sys/font.h>
 #include <sys/tty.h>
 #include <term/ansi.h>
-
-// Forward-declare from kernel ws module
-// can't #include <sys/ws.h> because ws.h shadows it on the include path
-void ws_notify_screen_active(void);
+#include <term/cells.h>
+#include <term/cursor.h>
+#include <term/glyph.h>
+#include <term/utf8.h>
+#include "ws.h"
 
 typedef struct {
     size_t cursor_x;
@@ -23,21 +23,12 @@ typedef struct {
     size_t saved_cursor_x;
     size_t saved_cursor_y;
     bool saved_cursor_valid;
-    u8 fg_idx;
-    u8 bg_idx;
-    u32 fg_rgb;
-    u32 bg_rgb;
-    bool bright;
-    u8 utf8_pending[4];
-    size_t utf8_pending_len;
+    ansi_color_state_t color;
+    term_utf8_state_t utf8;
     ansi_parser_t ansi;
 } console_screen_t;
 
-typedef struct {
-    u32 codepoint;
-    u8 fg;
-    u8 bg;
-} console_cell_t;
+typedef term_cell_t console_cell_t;
 
 typedef struct {
     console_mode_t mode;
@@ -59,6 +50,9 @@ typedef struct {
     const font_t *font;
     u32 font_width;
     u32 font_height;
+    u32 font_cell_width;
+    u32 font_cell_height;
+    u32 font_cell_src_x;
     u32 font_row_bytes;
     u32 font_glyph_bytes;
     font_map_t *font_map_sorted;
@@ -87,27 +81,13 @@ typedef struct {
     size_t fb_owner_screen;
 } console_state_t;
 
+typedef struct {
+    size_t screen_index;
+    console_screen_t *screen;
+} console_ansi_ctx_t;
+
 static const console_backend_ops_t *backend_ops = NULL;
 static console_state_t console_state = {0};
-
-static const u32 ansi_rgb[16] = {
-    0x000000,
-    0x800000,
-    0x008000,
-    0x808000,
-    0x000080,
-    0x800080,
-    0x008080,
-    0xc0c0c0,
-    0x808080,
-    0xff0000,
-    0x00ff00,
-    0xffff00,
-    0x0000ff,
-    0xff00ff,
-    0x00ffff,
-    0xffffff,
-};
 
 #define CONSOLE_TAB_WIDTH 4
 
@@ -121,11 +101,15 @@ static void _screen_reset_colors(console_screen_t *screen) {
         return;
     }
 
-    screen->bright = false;
-    screen->fg_idx = 0x7;
-    screen->bg_idx = 0x0;
-    screen->fg_rgb = ansi_rgb[screen->fg_idx];
-    screen->bg_rgb = ansi_rgb[screen->bg_idx];
+    ansi_color_reset(&screen->color);
+}
+
+static bool
+_glyph_pixel_on(const u8 *glyph, u32 row_bytes, u32 x, u32 y) {
+    const u8 *row_ptr = glyph + (size_t)y * row_bytes;
+    u8 bits = row_ptr[x / 8];
+    u8 mask = (u8)(0x80 >> (x & 7));
+    return (bits & mask) != 0;
 }
 
 static void _screen_reset(console_screen_t *screen) {
@@ -140,7 +124,7 @@ static void _screen_reset(console_screen_t *screen) {
     screen->saved_cursor_x = 0;
     screen->saved_cursor_y = 0;
     screen->saved_cursor_valid = false;
-    screen->utf8_pending_len = 0;
+    term_utf8_reset(&screen->utf8);
 
     ansi_parser_reset(&screen->ansi);
 }
@@ -178,13 +162,20 @@ static void _clear_screen_buffer(size_t index) {
         return;
     }
 
-    size_t count = _cell_count();
+    size_t cols = console_state.cols;
+    size_t rows = console_state.rows;
 
-    for (size_t i = 0; i < count; i++) {
-        cells[i].codepoint = ' ';
-        cells[i].fg = screen->fg_idx;
-        cells[i].bg = screen->bg_idx;
+    if (!cols || !rows) {
+        return;
     }
+
+    term_cells_clear(
+        cells,
+        cols,
+        rows,
+        screen->color.fg_idx,
+        screen->color.bg_idx
+    );
 }
 
 static void _update_text_cursor(size_t col, size_t row) {
@@ -255,6 +246,186 @@ static void _build_font_map_index(const font_t *font) {
     console_state.font_map_sorted_src = font;
 }
 
+static bool
+_font_lookup_mapped(const font_t *font, u32 codepoint, u32 *glyph_out) {
+    if (!font || !glyph_out || !font->map || !font->map_count) {
+        return false;
+    }
+
+    if (
+        console_state.font_map_sorted &&
+        console_state.font_map_sorted_count &&
+        console_state.font_map_sorted_src == font
+    ) {
+        u32 lo = 0;
+        u32 hi = console_state.font_map_sorted_count;
+
+        while (lo < hi) {
+            u32 mid = lo + (hi - lo) / 2;
+            const font_map_t *entry = &console_state.font_map_sorted[mid];
+
+            if (entry->codepoint == codepoint) {
+                if (entry->glyph >= font->glyph_count) {
+                    return false;
+                }
+
+                *glyph_out = entry->glyph;
+                return true;
+            }
+
+            if (entry->codepoint < codepoint) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+
+        return false;
+    }
+
+    for (u32 i = 0; i < font->map_count; i++) {
+        if (font->map[i].codepoint != codepoint) {
+            continue;
+        }
+
+        if (font->map[i].glyph >= font->glyph_count) {
+            return false;
+        }
+
+        *glyph_out = font->map[i].glyph;
+        return true;
+    }
+
+    return false;
+}
+
+static void _set_default_font_cell_metrics(void) {
+    console_state.font_cell_src_x = 0;
+    console_state.font_cell_width = console_state.font_width;
+    console_state.font_cell_height = console_state.font_height;
+}
+
+static bool
+_glyph_bounds_for_index(u32 glyph_idx, u32 *left_out, u32 *right_out) {
+    if (
+        !console_state.font ||
+        glyph_idx >= console_state.font->glyph_count ||
+        !left_out ||
+        !right_out
+    ) {
+        return false;
+    }
+
+    const u8 *glyph =
+        console_state.font->glyphs + glyph_idx * console_state.font_glyph_bytes;
+
+    u32 left = console_state.font_width;
+    u32 right = console_state.font_height;
+
+    bool any = false;
+
+    for (u32 gy = 0; gy < console_state.font_height; gy++) {
+        for (u32 gx = 0; gx < console_state.font_width; gx++) {
+            if (!_glyph_pixel_on(glyph, console_state.font_row_bytes, gx, gy)) {
+                continue;
+            }
+
+            if (gx < left) {
+                left = gx;
+            }
+
+            if (!any || gx > right) {
+                right = gx;
+            }
+
+            any = true;
+        }
+    }
+
+    if (!any) {
+        return false;
+    }
+
+    *left_out = left;
+    *right_out = right;
+    return true;
+}
+
+static void _derive_font_cell_metrics(void) {
+    _set_default_font_cell_metrics();
+
+    if (
+        !console_state.font ||
+        !console_state.font->glyphs ||
+        !console_state.font_width ||
+        !console_state.font_height
+    ) {
+        return;
+    }
+
+    u32 min_left = console_state.font_width;
+    u32 max_right = 0;
+    bool have_bounds = false;
+
+    // Derive terminal cell advance from printable ASCII
+    for (u32 cp = 32; cp < 127; cp++) {
+        u32 glyph = 0;
+
+        if (console_state.font->map_count) {
+            if (!_font_lookup_mapped(console_state.font, cp, &glyph)) {
+                continue;
+            }
+        } else {
+            if (cp < console_state.font->first_char) {
+                continue;
+            }
+
+            glyph = cp - console_state.font->first_char;
+            if (glyph >= console_state.font->glyph_count) {
+                continue;
+            }
+        }
+
+        u32 left = 0;
+        u32 right = 0;
+        if (!_glyph_bounds_for_index(glyph, &left, &right)) {
+            continue;
+        }
+
+        if (left < min_left) {
+            min_left = left;
+        }
+
+        if (!have_bounds || right > max_right) {
+            max_right = right;
+        }
+
+        have_bounds = true;
+    }
+
+    if (!have_bounds || max_right < min_left) {
+        return;
+    }
+
+    u32 advance = max_right - min_left + 1;
+    u32 max_advance = console_state.font_width - min_left;
+
+    if (!advance || !max_advance) {
+        return;
+    }
+
+    if (advance < max_advance) {
+        u32 padded = advance + TERM_GLYPH_CELL_GAP_PX;
+        if (padded < advance || padded > max_advance) {
+            padded = max_advance;
+        }
+        advance = padded;
+    }
+
+    console_state.font_cell_src_x = min_left;
+    console_state.font_cell_width = advance;
+}
+
 static void _use_font(const font_t *font) {
     if (!font || !font->glyphs || !font->glyph_width || !font->glyph_height) {
         return;
@@ -266,7 +437,9 @@ static void _use_font(const font_t *font) {
     console_state.font_row_bytes = font_row_bytes(font);
     console_state.font_glyph_bytes = font_glyph_bytes(font);
 
+    _set_default_font_cell_metrics();
     _build_font_map_index(font);
+    _derive_font_cell_metrics();
 }
 
 static u32 _font_index(u32 codepoint) {
@@ -275,43 +448,36 @@ static u32 _font_index(u32 codepoint) {
         return 0;
     }
 
-    if (console_state.font_map_sorted && console_state.font_map_sorted_count) {
-        u32 lo = 0;
-        u32 hi = console_state.font_map_sorted_count;
+    u32 glyph = 0;
 
-        while (lo < hi) {
-            u32 mid = lo + (hi - lo) / 2;
-            const font_map_t *entry = &console_state.font_map_sorted[mid];
+    if (_font_lookup_mapped(font, codepoint, &glyph)) {
+        return glyph;
+    }
 
-            if (entry->codepoint == codepoint) {
-                return entry->glyph;
-            }
-
-            if (entry->codepoint < codepoint) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
+    if (!font->map_count) {
+        if (codepoint < font->first_char) {
+            return 0;
         }
-    } else if (font->map && font->map_count) {
-        for (u32 i = 0; i < font->map_count; i++) {
-            if (font->map[i].codepoint == codepoint) {
-                return font->map[i].glyph;
-            }
+
+        u32 idx = codepoint - font->first_char;
+
+        if (idx < font->glyph_count) {
+            return idx;
         }
     }
 
-    if (codepoint < font->first_char) {
-        return 0;
+    if (_font_lookup_mapped(font, (u32)'?', &glyph)) {
+        return glyph;
     }
 
-    u32 idx = codepoint - font->first_char;
-
-    if (idx >= font->glyph_count) {
-        return 0;
+    if (!font->map_count && (u32)'?' >= font->first_char) {
+        u32 idx = (u32)'?' - font->first_char;
+        if (idx < font->glyph_count) {
+            return idx;
+        }
     }
 
-    return idx;
+    return 0;
 }
 
 static u8 *_map_range(size_t offset, size_t size) {
@@ -522,8 +688,8 @@ static void _clear_text(const console_screen_t *screen) {
         console_state.fb,
         console_state.cols,
         console_state.rows,
-        screen->fg_idx,
-        screen->bg_idx
+        screen->color.fg_idx,
+        screen->color.bg_idx
     );
 }
 
@@ -532,7 +698,13 @@ static void _clear_fb(const console_screen_t *screen) {
         return;
     }
 
-    _fill_rect(0, 0, console_state.width, console_state.height, screen->bg_rgb);
+    _fill_rect(
+        0,
+        0,
+        console_state.width,
+        console_state.height,
+        ansi_color_rgb(screen->color.bg_idx)
+    );
 }
 
 static void _scroll_text(const console_screen_t *screen) {
@@ -544,19 +716,19 @@ static void _scroll_text(const console_screen_t *screen) {
         console_state.fb,
         console_state.cols,
         console_state.rows,
-        screen->fg_idx,
-        screen->bg_idx
+        screen->color.fg_idx,
+        screen->color.bg_idx
     );
 }
 
 static void _scroll_fb(const console_screen_t *screen) {
-    if (!screen || !console_state.fb_size || !console_state.font_height) {
+    if (!screen || !console_state.fb_size || !console_state.font_cell_height) {
         return;
     }
 
-    size_t line_bytes = console_state.pitch * console_state.font_height;
+    size_t line_bytes = console_state.pitch * console_state.font_cell_height;
     size_t move_bytes =
-        console_state.pitch * (console_state.height - console_state.font_height);
+        console_state.pitch * (console_state.height - console_state.font_cell_height);
 
     if (_has_back_buffer()) {
         memmove(
@@ -577,10 +749,10 @@ static void _scroll_fb(const console_screen_t *screen) {
 
     _fill_rect(
         0,
-        console_state.height - console_state.font_height,
+        console_state.height - console_state.font_cell_height,
         console_state.width,
-        console_state.font_height,
-        screen->bg_rgb
+        console_state.font_cell_height,
+        ansi_color_rgb(screen->color.bg_idx)
     );
 
     _maybe_flush_dirty();
@@ -592,18 +764,44 @@ _draw_char_fb(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32 bg_rgb) {
         !console_state.fb_size ||
         !console_state.font ||
         !console_state.font_width ||
-        !console_state.font_height
+        !console_state.font_height ||
+        !console_state.font_cell_width ||
+        !console_state.font_cell_height
     ) {
         return;
     }
 
-    size_t x = col * console_state.font_width;
-    size_t y = row * console_state.font_height;
+    size_t x = col * console_state.font_cell_width;
+    size_t y = row * console_state.font_cell_height;
+
+    u32 glyph_w = console_state.font_width;
+    u32 glyph_h = console_state.font_height;
+    u32 glyph_x0 = console_state.font_cell_src_x;
+
+    if (glyph_x0 >= glyph_w) {
+        glyph_x0 = 0;
+    }
+
+    u32 draw_w = console_state.font_cell_width;
+    u32 draw_h = console_state.font_cell_height;
+    u32 src_w = glyph_w - glyph_x0;
+
+    if (draw_w > src_w) {
+        draw_w = src_w;
+    }
+
+    if (draw_h > glyph_h) {
+        draw_h = glyph_h;
+    }
+
+    if (!draw_w || !draw_h) {
+        return;
+    }
 
     size_t width_bytes =
-        console_state.font_width * console_state.bytes_per_pixel;
+        (size_t)draw_w * console_state.bytes_per_pixel;
     size_t map_size =
-        (console_state.font_height - 1) * console_state.pitch + width_bytes;
+        ((size_t)draw_h - 1) * console_state.pitch + width_bytes;
 
     u32 index = _font_index(codepoint);
     const u8 *glyph =
@@ -622,23 +820,70 @@ _draw_char_fb(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32 bg_rgb) {
         }
     }
 
-    for (size_t gy = 0; gy < console_state.font_height; gy++) {
-        const u8 *row_ptr = glyph + gy * console_state.font_row_bytes;
-        u8 *row_base = base + gy * console_state.pitch;
+    term_pixel_format_t fmt = {
+        .bytes_per_pixel = console_state.bytes_per_pixel,
+        .red_shift = console_state.red_shift,
+        .green_shift = console_state.green_shift,
+        .blue_shift = console_state.blue_shift,
+        .red_size = console_state.red_size,
+        .green_size = console_state.green_size,
+        .blue_size = console_state.blue_size,
+    };
 
-        for (size_t gx = 0; gx < console_state.font_width; gx++) {
-            u8 mask = (u8)(0x80 >> (gx & 7));
-            u8 bits = row_ptr[gx / 8];
-            u32 color = (bits & mask) ? fg_rgb : bg_rgb;
+    if (glyph_x0 == 0 && draw_w == glyph_w && draw_h == glyph_h) {
+        term_glyph_blit_packed(
+            base,
+            console_state.pitch,
+            &fmt,
+            glyph,
+            glyph_w,
+            glyph_h,
+            console_state.font_row_bytes,
+            fg_rgb,
+            bg_rgb
+        );
+    } else {
+        u32 fg_packed = pixel_pack_rgb888(
+            fg_rgb,
+            fmt.red_shift,
+            fmt.green_shift,
+            fmt.blue_shift,
+            fmt.red_size,
+            fmt.green_size,
+            fmt.blue_size
+        );
+        u32 bg_packed = pixel_pack_rgb888(
+            bg_rgb,
+            fmt.red_shift,
+            fmt.green_shift,
+            fmt.blue_shift,
+            fmt.red_size,
+            fmt.green_size,
+            fmt.blue_size
+        );
 
-            _write_pixel(row_base + gx * console_state.bytes_per_pixel, color);
+        for (u32 gy = 0; gy < draw_h; gy++) {
+            u8 *row_base = base + (size_t)gy * console_state.pitch;
+
+            for (u32 gx = 0; gx < draw_w; gx++) {
+                bool on = _glyph_pixel_on(
+                    glyph,
+                    console_state.font_row_bytes,
+                    glyph_x0 + gx,
+                    gy
+                );
+
+                pixel_store_packed(
+                    row_base + (size_t)gx * console_state.bytes_per_pixel,
+                    console_state.bytes_per_pixel,
+                    on ? fg_packed : bg_packed
+                );
+            }
         }
     }
 
     if (_has_back_buffer()) {
-        _mark_dirty_rect(
-            x, y, console_state.font_width, console_state.font_height
-        );
+        _mark_dirty_rect(x, y, draw_w, draw_h);
         _maybe_flush_dirty();
     } else {
         _unmap_range(base, map_size);
@@ -688,8 +933,8 @@ static void _cursor_hide(void) {
     console_cell_t *cell = &cells[row * console_state.cols + col];
     u32 codepoint = cell->codepoint ? cell->codepoint : ' ';
 
-    u32 fg = ansi_rgb[cell->fg & 0x0f];
-    u32 bg = ansi_rgb[cell->bg & 0x0f];
+    u32 fg = ansi_color_rgb(cell->fg);
+    u32 bg = ansi_color_rgb(cell->bg);
 
     _draw_char_fb(codepoint, col, row, fg, bg);
     console_state.cursor_drawn = false;
@@ -734,8 +979,8 @@ static void _cursor_show(size_t screen_index) {
     console_cell_t *cell = &cells[row * console_state.cols + col];
     u32 codepoint = cell->codepoint ? cell->codepoint : ' ';
 
-    u32 fg = ansi_rgb[cell->bg & 0x0f];
-    u32 bg = ansi_rgb[cell->fg & 0x0f];
+    u32 fg = ansi_color_rgb(cell->bg);
+    u32 bg = ansi_color_rgb(cell->fg);
 
     _draw_char_fb(codepoint, col, row, fg, bg);
 
@@ -764,11 +1009,14 @@ static void _clear_screen_range(size_t index, size_t start, size_t end) {
     bool full_clear = !start && end == count;
 
     if (cells) {
-        for (size_t i = start; i < end; i++) {
-            cells[i].codepoint = ' ';
-            cells[i].fg = screen->fg_idx;
-            cells[i].bg = screen->bg_idx;
-        }
+        term_cells_clear_range(
+            cells,
+            count,
+            start,
+            end,
+            screen->color.fg_idx,
+            screen->color.bg_idx
+        );
     }
 
     if (index != console_state.active_screen) {
@@ -804,13 +1052,21 @@ static void _clear_screen_range(size_t index, size_t start, size_t end) {
         for (size_t i = start; i < end; i++) {
             size_t row = i / console_state.cols;
             size_t col = i % console_state.cols;
-            _draw_char_text(' ', col, row, screen->fg_idx, screen->bg_idx);
+            _draw_char_text(
+                ' ', col, row, screen->color.fg_idx, screen->color.bg_idx
+            );
         }
     } else if (console_state.mode == CONSOLE_FRAMEBUFFER) {
         for (size_t i = start; i < end; i++) {
             size_t row = i / console_state.cols;
             size_t col = i % console_state.cols;
-            _draw_char_fb(' ', col, row, screen->fg_rgb, screen->bg_rgb);
+            _draw_char_fb(
+                ' ',
+                col,
+                row,
+                ansi_color_rgb(screen->color.fg_idx),
+                ansi_color_rgb(screen->color.bg_idx)
+            );
         }
     }
 
@@ -822,8 +1078,14 @@ static void _clear_screen_range(size_t index, size_t start, size_t end) {
     }
 }
 
-static void
-_handle_csi_clear(size_t index, console_screen_t *screen, int mode) {
+static void _handle_csi_clear(void *opaque, int mode) {
+    console_ansi_ctx_t *ctx = opaque;
+    if (!ctx || !ctx->screen) {
+        return;
+    }
+
+    size_t index = ctx->screen_index;
+    console_screen_t *screen = ctx->screen;
     size_t cols = console_state.cols;
     size_t rows = console_state.rows;
     size_t count = _cell_count();
@@ -851,8 +1113,15 @@ _handle_csi_clear(size_t index, console_screen_t *screen, int mode) {
     _cursor_show(index);
 }
 
-static void
-_handle_csi_clear_line(size_t index, console_screen_t *screen, int mode) {
+static void _handle_csi_clear_line(void *opaque, int mode) {
+    console_ansi_ctx_t *ctx = opaque;
+    if (!ctx || !ctx->screen) {
+        return;
+    }
+
+    size_t index = ctx->screen_index;
+    console_screen_t *screen = ctx->screen;
+
     if (!screen || !console_state.cols || !console_state.rows) {
         return;
     }
@@ -884,69 +1153,6 @@ _handle_csi_clear_line(size_t index, console_screen_t *screen, int mode) {
     default:
         break;
     }
-
-    _cursor_show(index);
-}
-
-static void
-_handle_csi_cursor(size_t index, console_screen_t *screen, int row, int col) {
-    if (!screen) {
-        return;
-    }
-
-    if (row <= 0) {
-        row = 1;
-    }
-
-    if (col <= 0) {
-        col = 1;
-    }
-
-    if ((size_t)row > console_state.rows) {
-        row = (int)console_state.rows;
-    }
-
-    if ((size_t)col > console_state.cols) {
-        col = (int)console_state.cols;
-    }
-
-    screen->cursor_y = (size_t)(row - 1);
-    screen->cursor_x = (size_t)(col - 1);
-
-    _cursor_show(index);
-}
-
-static void _handle_csi_move(
-    size_t index,
-    console_screen_t *screen,
-    int row_delta,
-    int col_delta
-) {
-    if (!screen || !console_state.cols || !console_state.rows) {
-        return;
-    }
-
-    int row = (int)screen->cursor_y + row_delta;
-    int col = (int)screen->cursor_x + col_delta;
-
-    if (row < 0) {
-        row = 0;
-    }
-
-    if (col < 0) {
-        col = 0;
-    }
-
-    if ((size_t)row >= console_state.rows) {
-        row = (int)console_state.rows - 1;
-    }
-
-    if ((size_t)col >= console_state.cols) {
-        col = (int)console_state.cols - 1;
-    }
-
-    screen->cursor_y = (size_t)row;
-    screen->cursor_x = (size_t)col;
 
     _cursor_show(index);
 }
@@ -991,8 +1197,8 @@ static void _redraw_screen(size_t index) {
             if (console_state.mode == CONSOLE_TEXT) {
                 _draw_char_text(codepoint, col, row, cell->fg, cell->bg);
             } else if (console_state.mode == CONSOLE_FRAMEBUFFER) {
-                u32 fg = ansi_rgb[cell->fg & 0x0f];
-                u32 bg = ansi_rgb[cell->bg & 0x0f];
+                u32 fg = ansi_color_rgb(cell->fg);
+                u32 bg = ansi_color_rgb(cell->bg);
                 _draw_char_fb(codepoint, col, row, fg, bg);
             }
         }
@@ -1031,86 +1237,6 @@ bool console_set_active(size_t index) {
     return true;
 }
 
-static void _set_fg(console_screen_t *screen, u8 base, bool force_bright) {
-    if (!screen) {
-        return;
-    }
-
-    u8 idx = base & 0x7;
-    if (force_bright || screen->bright) {
-        idx = (u8)(idx + 8);
-    }
-
-    screen->fg_idx = idx;
-    screen->fg_rgb = ansi_rgb[idx];
-}
-
-static void _set_bg(console_screen_t *screen, u8 base, bool bright) {
-    if (!screen) {
-        return;
-    }
-
-    u8 idx = base & 0x7;
-    if (bright) {
-        idx = (u8)(idx + 8);
-    }
-
-    screen->bg_idx = idx;
-    screen->bg_rgb = ansi_rgb[idx];
-}
-
-static void _apply_sgr(console_screen_t *screen, int code) {
-    if (!screen) {
-        return;
-    }
-
-    if (!code) {
-        _screen_reset_colors(screen);
-        return;
-    }
-
-    if (code == 1) {
-        screen->bright = true;
-        _set_fg(screen, screen->fg_idx & 0x7, true);
-        return;
-    }
-
-    if (code == 2 || code == 22) {
-        screen->bright = false;
-        _set_fg(screen, screen->fg_idx & 0x7, false);
-        return;
-    }
-
-    if (code == 39) {
-        _set_fg(screen, 0x7, false);
-        return;
-    }
-
-    if (code == 49) {
-        _set_bg(screen, 0x0, false);
-        return;
-    }
-
-    if (code >= 30 && code <= 37) {
-        _set_fg(screen, (u8)(code - 30), false);
-        return;
-    }
-
-    if (code >= 90 && code <= 97) {
-        _set_fg(screen, (u8)(code - 90), true);
-        return;
-    }
-
-    if (code >= 40 && code <= 47) {
-        _set_bg(screen, (u8)(code - 40), false);
-        return;
-    }
-
-    if (code >= 100 && code <= 107) {
-        _set_bg(screen, (u8)(code - 100), true);
-    }
-}
-
 static void _scroll_screen(console_screen_t *screen, size_t screen_index) {
     if (!screen) {
         return;
@@ -1121,15 +1247,9 @@ static void _scroll_screen(console_screen_t *screen, size_t screen_index) {
     size_t rows = console_state.rows;
 
     if (cells && cols && rows) {
-        memmove(cells, cells + cols, (rows - 1) * cols * sizeof(*cells));
-
-        console_cell_t *last = cells + (rows - 1) * cols;
-
-        for (size_t i = 0; i < cols; i++) {
-            last[i].codepoint = ' ';
-            last[i].fg = screen->fg_idx;
-            last[i].bg = screen->bg_idx;
-        }
+        term_cells_scroll_up(
+            cells, cols, rows, screen->color.fg_idx, screen->color.bg_idx
+        );
     }
 
     if (screen_index != console_state.active_screen) {
@@ -1207,19 +1327,27 @@ static void _putc(console_screen_t *screen, size_t screen_index, u32 ch) {
 
             if (cells) {
                 console_cell_t *cell = &cells[row * console_state.cols + col];
-                cell->codepoint = ' ';
-                cell->fg = screen->fg_idx;
-                cell->bg = screen->bg_idx;
+                term_cell_set_blank(
+                    cell, screen->color.fg_idx, screen->color.bg_idx
+                );
             }
 
             if (screen_index == console_state.active_screen) {
                 if (console_state.mode == CONSOLE_TEXT) {
                     _draw_char_text(
-                        ' ', col, row, screen->fg_idx, screen->bg_idx
+                        ' ',
+                        col,
+                        row,
+                        screen->color.fg_idx,
+                        screen->color.bg_idx
                     );
                 } else if (console_state.mode == CONSOLE_FRAMEBUFFER) {
                     _draw_char_fb(
-                        ' ', col, row, screen->fg_rgb, screen->bg_rgb
+                        ' ',
+                        col,
+                        row,
+                        ansi_color_rgb(screen->color.fg_idx),
+                        ansi_color_rgb(screen->color.bg_idx)
                     );
                 }
             }
@@ -1246,15 +1374,23 @@ static void _putc(console_screen_t *screen, size_t screen_index, u32 ch) {
     if (cells) {
         console_cell_t *cell = &cells[row * console_state.cols + col];
         cell->codepoint = ch;
-        cell->fg = screen->fg_idx;
-        cell->bg = screen->bg_idx;
+        cell->fg = screen->color.fg_idx;
+        cell->bg = screen->color.bg_idx;
     }
 
     if (screen_index == console_state.active_screen) {
         if (console_state.mode == CONSOLE_TEXT) {
-            _draw_char_text(ch, col, row, screen->fg_idx, screen->bg_idx);
+            _draw_char_text(
+                ch, col, row, screen->color.fg_idx, screen->color.bg_idx
+            );
         } else if (console_state.mode == CONSOLE_FRAMEBUFFER) {
-            _draw_char_fb(ch, col, row, screen->fg_rgb, screen->bg_rgb);
+            _draw_char_fb(
+                ch,
+                col,
+                row,
+                ansi_color_rgb(screen->color.fg_idx),
+                ansi_color_rgb(screen->color.bg_idx)
+            );
         }
     }
 
@@ -1263,73 +1399,35 @@ static void _putc(console_screen_t *screen, size_t screen_index, u32 ch) {
     _cursor_show(screen_index);
 }
 
-static void
-_put_utf8_byte(console_screen_t *screen, size_t screen_index, u8 byte) {
-    if (!screen) {
+static void _utf8_emit_codepoint(void *opaque, u32 codepoint) {
+    console_ansi_ctx_t *ctx = opaque;
+    if (!ctx || !ctx->screen) {
         return;
     }
 
-    if (!screen->utf8_pending_len && byte < 0x80) {
-        _putc(screen, screen_index, byte);
-        return;
-    }
-
-    if (screen->utf8_pending_len >= sizeof(screen->utf8_pending)) {
-        screen->utf8_pending_len = 0;
-        _putc(screen, screen_index, '?');
-    }
-
-    screen->utf8_pending[screen->utf8_pending_len++] = byte;
-
-    size_t needed = utf8_sequence_len(screen->utf8_pending[0]);
-
-    if (!needed) {
-        screen->utf8_pending_len = 0;
-        _putc(screen, screen_index, '?');
-        return;
-    }
-
-    if (screen->utf8_pending_len < needed) {
-        if (screen->utf8_pending_len > 1 && (byte & 0xc0) != 0x80) {
-            screen->utf8_pending_len = 0;
-            _putc(screen, screen_index, '?');
-
-            if (byte < 0x80) {
-                _putc(screen, screen_index, byte);
-            } else if (utf8_sequence_len(byte) > 1) {
-                screen->utf8_pending[screen->utf8_pending_len++] = byte;
-            } else {
-                _putc(screen, screen_index, '?');
-            }
-        }
-        return;
-    }
-
-    u32 codepoint = 0;
-    size_t decoded = utf8_decode(screen->utf8_pending, needed, &codepoint);
-
-    screen->utf8_pending_len = 0;
-
-    if (!decoded) {
-        _putc(screen, screen_index, '?');
-        return;
-    }
-
-    _putc(screen, screen_index, codepoint);
+    _putc(ctx->screen, ctx->screen_index, codepoint);
 }
 
-typedef struct {
-    size_t screen_index;
-    console_screen_t *screen;
-} console_ansi_ctx_t;
-
-static void _flush_invalid_utf8(console_ansi_ctx_t *ctx) {
-    if (!ctx || !ctx->screen || !ctx->screen->utf8_pending_len) {
+static void _utf8_emit_invalid(void *opaque) {
+    console_ansi_ctx_t *ctx = opaque;
+    if (!ctx || !ctx->screen) {
         return;
     }
 
-    ctx->screen->utf8_pending_len = 0;
     _putc(ctx->screen, ctx->screen_index, '?');
+}
+
+static const term_utf8_callbacks_t _utf8_callbacks = {
+    .on_codepoint = _utf8_emit_codepoint,
+    .on_invalid = _utf8_emit_invalid,
+};
+
+static void _flush_invalid_utf8(console_ansi_ctx_t *ctx) {
+    if (!ctx || !ctx->screen) {
+        return;
+    }
+
+    term_utf8_flush_invalid(&ctx->screen->utf8, &_utf8_callbacks, ctx);
 }
 
 static void _ansi_print(void *opaque, u8 ch) {
@@ -1338,7 +1436,7 @@ static void _ansi_print(void *opaque, u8 ch) {
         return;
     }
 
-    _put_utf8_byte(ctx->screen, ctx->screen_index, ch);
+    term_utf8_feed(&ctx->screen->utf8, ch, &_utf8_callbacks, ctx);
 }
 
 static void _ansi_control(void *opaque, u8 ch) {
@@ -1349,6 +1447,24 @@ static void _ansi_control(void *opaque, u8 ch) {
 
     _flush_invalid_utf8(ctx);
     _putc(ctx->screen, ctx->screen_index, ch);
+}
+
+static void _ansi_csi_cursor_show(void *opaque) {
+    console_ansi_ctx_t *ctx = opaque;
+    if (!ctx || !ctx->screen) {
+        return;
+    }
+
+    _cursor_show(ctx->screen_index);
+}
+
+static void _ansi_csi_cursor_hide(void *opaque) {
+    console_ansi_ctx_t *ctx = opaque;
+    if (!ctx || !ctx->screen) {
+        return;
+    }
+
+    _cursor_hide();
 }
 
 static void _ansi_csi(
@@ -1363,102 +1479,24 @@ static void _ansi_csi(
         return;
     }
 
-    console_screen_t *screen = ctx->screen;
-    size_t screen_index = ctx->screen_index;
+    ansi_csi_state_t csi_state = {
+        .cursor_x = &ctx->screen->cursor_x,
+        .cursor_y = &ctx->screen->cursor_y,
+        .saved_x = &ctx->screen->saved_cursor_x,
+        .saved_y = &ctx->screen->saved_cursor_y,
+        .saved_valid = &ctx->screen->saved_cursor_valid,
+        .cursor_visible = NULL,
+        .cols = console_state.cols,
+        .rows = console_state.rows,
+        .color = &ctx->screen->color,
+        .clear_screen = _handle_csi_clear,
+        .clear_line = _handle_csi_clear_line,
+        .cursor_show = _ansi_csi_cursor_show,
+        .cursor_hide = _ansi_csi_cursor_hide,
+        .ctx = ctx,
+    };
 
-    int move = 1;
-    int row = 1;
-    int col = 1;
-
-    switch (op) {
-    case 'm':
-        if (!count) {
-            _apply_sgr(screen, 0);
-            return;
-        }
-
-        for (size_t i = 0; i < count; i++) {
-            _apply_sgr(screen, params[i]);
-        }
-        break;
-    case 'J':
-        _handle_csi_clear(
-            screen_index, screen, ansi_param(params, count, 0, 0)
-        );
-        break;
-    case 'K':
-        _handle_csi_clear_line(
-            screen_index, screen, ansi_param(params, count, 0, 0)
-        );
-        break;
-    case 'A':
-        move = ansi_param(params, count, 0, 1);
-        if (move < 1) {
-            move = 1;
-        }
-
-        _handle_csi_move(screen_index, screen, -move, 0);
-        break;
-    case 'B':
-        move = ansi_param(params, count, 0, 1);
-        if (move < 1) {
-            move = 1;
-        }
-
-        _handle_csi_move(screen_index, screen, move, 0);
-        break;
-    case 'C':
-        move = ansi_param(params, count, 0, 1);
-        if (move < 1) {
-            move = 1;
-        }
-        _handle_csi_move(screen_index, screen, 0, move);
-        break;
-    case 'D':
-        move = ansi_param(params, count, 0, 1);
-        if (move < 1) {
-            move = 1;
-        }
-
-        _handle_csi_move(screen_index, screen, 0, -move);
-        break;
-    case 'G':
-        col = ansi_param(params, count, 0, 1);
-        _handle_csi_cursor(
-            screen_index, screen, (int)screen->cursor_y + 1, col
-        );
-        break;
-    case 'H':
-    case 'f':
-        row = ansi_param(params, count, 0, 1);
-        col = ansi_param(params, count, 1, 1);
-        _handle_csi_cursor(screen_index, screen, row, col);
-        break;
-    case 's':
-        screen->saved_cursor_x = screen->cursor_x;
-        screen->saved_cursor_y = screen->cursor_y;
-        screen->saved_cursor_valid = true;
-        break;
-    case 'u':
-        if (screen->saved_cursor_valid) {
-            screen->cursor_x = screen->saved_cursor_x;
-            screen->cursor_y = screen->saved_cursor_y;
-            _cursor_show(screen_index);
-        }
-        break;
-    case 'h':
-        if (private_mode && ansi_param(params, count, 0, 0) == 25) {
-            _cursor_show(screen_index);
-        }
-        break;
-    case 'l':
-        if (private_mode && ansi_param(params, count, 0, 0) == 25) {
-            _cursor_hide();
-        }
-        break;
-    default:
-        break;
-    }
+    ansi_csi_dispatch_state(op, params, count, private_mode, &csi_state);
 }
 
 static const ansi_callbacks_t _ansi_callbacks = {
@@ -1523,32 +1561,15 @@ _clamp_screen_positions(console_screen_t *screen, size_t cols, size_t rows) {
         return;
     }
 
-    if (!cols || !rows) {
-        screen->cursor_x = 0;
-        screen->cursor_y = 0;
-        screen->saved_cursor_x = 0;
-        screen->saved_cursor_y = 0;
-        screen->saved_cursor_valid = false;
-        return;
-    }
-
-    if (screen->cursor_x >= cols) {
-        screen->cursor_x = cols - 1;
-    }
-
-    if (screen->cursor_y >= rows) {
-        screen->cursor_y = rows - 1;
-    }
-
-    if (screen->saved_cursor_valid) {
-        if (screen->saved_cursor_x >= cols) {
-            screen->saved_cursor_x = cols - 1;
-        }
-
-        if (screen->saved_cursor_y >= rows) {
-            screen->saved_cursor_y = rows - 1;
-        }
-    }
+    term_cursor_clamp(
+        &screen->cursor_x,
+        &screen->cursor_y,
+        &screen->saved_cursor_x,
+        &screen->saved_cursor_y,
+        &screen->saved_cursor_valid,
+        cols,
+        rows
+    );
 }
 
 static void _preserve_screens(
@@ -1577,8 +1598,8 @@ static void _preserve_screens(
         *dst_screen = *src_screen;
         _clamp_screen_positions(dst_screen, new_cols, new_rows);
 
-        if (dst_screen->utf8_pending_len > sizeof(dst_screen->utf8_pending)) {
-            dst_screen->utf8_pending_len = 0;
+        if (dst_screen->utf8.pending_len > sizeof(dst_screen->utf8.pending)) {
+            term_utf8_reset(&dst_screen->utf8);
         }
 
         if (
@@ -1695,8 +1716,8 @@ void console_set_font(const font_t *font) {
         return;
     }
 
-    console_state.cols = console_state.width / console_state.font_width;
-    console_state.rows = console_state.height / console_state.font_height;
+    console_state.cols = console_state.width / console_state.font_cell_width;
+    console_state.rows = console_state.height / console_state.font_cell_height;
 
 
     if (
@@ -1780,8 +1801,8 @@ void console_init(void *arch_boot_info) {
         );
 
         if (console_state.font_width && console_state.font_height) {
-            console_state.cols = console_state.width / console_state.font_width;
-            console_state.rows = console_state.height / console_state.font_height;
+            console_state.cols = console_state.width / console_state.font_cell_width;
+            console_state.rows = console_state.height / console_state.font_cell_height;
         } else {
             console_state.cols = 0;
             console_state.rows = 0;

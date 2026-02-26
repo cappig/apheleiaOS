@@ -87,11 +87,24 @@ bool vec_reserve_more(vector_t *vec, size_t additional) {
 
 
 void *vec_at(vector_t *vec, size_t index) {
-    if (index > vec->capacity) {
+    if (!vec || index >= vec->capacity) {
         return NULL;
     }
 
     return vec->data + index * vec->elem_size;
+}
+
+void *vec_at_ptr(vector_t *vec, size_t index) {
+    if (!vec || vec->elem_size != sizeof(void *)) {
+        return NULL;
+    }
+
+    void **slot = vec_at(vec, index);
+    if (!slot) {
+        return NULL;
+    }
+
+    return *slot;
 }
 
 bool vec_get(vector_t *vec, size_t index, void *ret) {
@@ -107,7 +120,7 @@ bool vec_get(vector_t *vec, size_t index, void *ret) {
 }
 
 void *vec_set(vector_t *vec, size_t index, void *data) {
-    if (index > vec->capacity) {
+    if (!vec || !data || index >= vec->capacity) {
         return NULL;
     }
 
@@ -131,7 +144,11 @@ bool vec_clear(vector_t *vec) {
 
 
 bool vec_insert(vector_t *vec, size_t index, void *data) {
-    if (index > vec->capacity) {
+    if (!vec || !data) {
+        return false;
+    }
+
+    if (index >= vec->capacity) {
         if (!vec_reserve(vec, index + 1)) {
             return false;
         }
@@ -175,9 +192,15 @@ bool vec_push(vector_t *vec, void *data) {
 }
 
 bool vec_push_array(vector_t *vec, void *array, size_t len) {
+    if (!vec || (!array && len)) {
+        return false;
+    }
+
     for (size_t i = 0; i < len; i++) {
         void *data = array + i * vec->elem_size;
-        vec_push(vec, data);
+        if (!vec_push(vec, data)) {
+            return false;
+        }
     }
 
     return true;
@@ -199,8 +222,8 @@ bool vec_pop(vector_t *vec, void *ret) {
 }
 
 size_t vec_pop_array(vector_t *vec, void *ret, size_t len) {
-    if (!vec->size) {
-        return false;
+    if (!vec || !vec->size || !len) {
+        return 0;
     }
 
     u8 *pos = ret;
@@ -213,6 +236,29 @@ size_t vec_pop_array(vector_t *vec, void *ret, size_t len) {
             pos += vec->elem_size;
         }
     }
+
+    return i;
+}
+
+bool vec_remove_at(vector_t *vec, size_t index, void *ret) {
+    if (!vec || index >= vec->size) {
+        return false;
+    }
+
+    u8 *base = (u8 *)vec->data;
+    u8 *slot = base + (index * vec->elem_size);
+
+    if (ret) {
+        memcpy(ret, slot, vec->elem_size);
+    }
+
+    if (index + 1 < vec->size) {
+        size_t tail_count = vec->size - index - 1;
+        memmove(slot, slot + vec->elem_size, tail_count * vec->elem_size);
+    }
+
+    vec->size--;
+    memset(base + (vec->size * vec->elem_size), 0, vec->elem_size);
 
     return true;
 }

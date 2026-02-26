@@ -63,6 +63,9 @@ USER_PARSE_OBJ  := $(patsubst %.c,  $(USER_OBJ_DIR)/%.c.o,   $(USER_PARSE_SRC))
 USER_PROGS_BIN := $(foreach prog, $(USER_PROGS), $(USER_BIN_DIR)/$(prog))
 USER_BINARIES  := $(foreach prog, $(USER_PROGS), $(USER_STAGE_DIR)/$(prog))
 
+STRIP_USER      ?= true
+USER_STRIP_FLAGS ?= --strip-debug
+
 .SECONDARY: $(USER_LIBC_OBJ) $(USER_CRT_OBJ) $(USER_APP_OBJ) $(USER_COMMON_OBJ) \
             $(USER_DATA_OBJ) $(USER_GUI_OBJ) $(USER_TERM_OBJ) $(USER_PARSE_OBJ) $(USER_PROGS_BIN)
 
@@ -80,6 +83,9 @@ $(USER_BIN_DIR)/$(1): $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_COMMON_OBJ) \
 	$$(filter $(USER_OBJ_DIR)/user/$(1)/%.c.o,$(USER_APP_OBJ)) $(USER_LIBGCC)
 	@mkdir -p $$(@D)
 	$$(call ld, $(USER_LD), $$@, $$^)
+	@if [ "$(STRIP_USER)" = "true" ]; then \
+		$(ST) $(USER_STRIP_FLAGS) $$@; \
+	fi
 endef
 
 $(foreach prog, $(USER_PROGS), $(eval $(call USER_LINK_RULE,$(prog))))

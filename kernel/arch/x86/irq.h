@@ -24,6 +24,7 @@ typedef enum {
 
 bool irq_init(void);
 void irq_register(size_t irq, int_handler_t handler);
+void irq_unregister(size_t irq);
 void irq_ack(size_t irq);
 bool irq_using_ioapic(void);
 

@@ -8,6 +8,7 @@
 #include <arch/thread.h>
 #include <base/macros.h>
 #include <data/list.h>
+#include <data/ring.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -238,27 +239,8 @@ _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblock) {
         bool eof = false;
 
         lock(&pipe->lock);
-        if (pipe->size > 0) {
-            size_t chunk = len - total;
-
-            if (chunk > pipe->size) {
-                chunk = pipe->size;
-            }
-
-            size_t first = chunk;
-
-            if (first > pipe->capacity - pipe->read_pos) {
-                first = pipe->capacity - pipe->read_pos;
-            }
-
-            memcpy(out + total, pipe->data + pipe->read_pos, first);
-
-            if (chunk > first) {
-                memcpy(out + total + first, pipe->data, chunk - first);
-            }
-
-            pipe->read_pos = (pipe->read_pos + chunk) % pipe->capacity;
-            pipe->size -= chunk;
+        if (ring_io_size(&pipe->ring)) {
+            size_t chunk = ring_io_read(&pipe->ring, out + total, len - total);
             total += chunk;
         }
 
@@ -320,27 +302,8 @@ _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
             return total > 0 ? (ssize_t)total : -EPIPE;
         }
 
-        size_t free_space = pipe->capacity - pipe->size;
-        if (free_space > 0) {
-            size_t chunk = len - total;
-
-            if (chunk > free_space) {
-                chunk = free_space;
-            }
-
-            size_t first = chunk;
-            if (first > pipe->capacity - pipe->write_pos) {
-                first = pipe->capacity - pipe->write_pos;
-            }
-
-            memcpy(pipe->data + pipe->write_pos, in + total, first);
-
-            if (chunk > first) {
-                memcpy(pipe->data, in + total + first, chunk - first);
-            }
-
-            pipe->write_pos = (pipe->write_pos + chunk) % pipe->capacity;
-            pipe->size += chunk;
+        if (ring_io_free_space(&pipe->ring) > 0) {
+            size_t chunk = ring_io_write(&pipe->ring, in + total, len - total);
             total += chunk;
         }
 
@@ -1670,7 +1633,7 @@ static int sys_chmod(const char *path, mode_t mode) {
             return -EPERM;
         }
 
-        if ((desired & S_ISGID) && thread->gid != node->gid) {
+        if ((desired & S_ISGID) && !sched_gid_matches_cred(thread->uid, thread->gid, node->gid)) {
             return -EPERM;
         }
 
@@ -2208,8 +2171,8 @@ static short _pipe_poll(sched_pipe_t *pipe, bool read_end, short events) {
     size_t writers = 0;
 
     lock(&pipe->lock);
-    size = pipe->size;
-    free_space = pipe->capacity - pipe->size;
+    size = ring_io_size(&pipe->ring);
+    free_space = ring_io_free_space(&pipe->ring);
     readers = pipe->readers;
     writers = pipe->writers;
     unlock(&pipe->lock);

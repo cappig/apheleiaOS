@@ -1,5 +1,6 @@
 #include <arch/arch.h>
 #include <base/attributes.h>
+#include <drivers/manager.h>
 #include <fs/ext2fs.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
@@ -7,10 +8,8 @@
 #include <sys/disk.h>
 #include <sys/framebuffer.h>
 #include <sys/init.h>
-#include <sys/keyboard.h>
-#include <sys/console.h>
+#include <sys/cpu.h>
 #include <sys/logsink.h>
-#include <sys/mouse.h>
 #include <sys/psf.h>
 #include <sys/pty.h>
 #include <sys/procfs.h>
@@ -24,6 +23,7 @@
 
 NORETURN void kernel_main(void *boot_info) {
     const kernel_args_t *args = arch_init(boot_info);
+
     scheduler_init();
     syscall_init();
     vfs_init();
@@ -31,7 +31,7 @@ NORETURN void kernel_main(void *boot_info) {
 
     arch_storage_init();
 
-    bool mounted = mount_rootf();
+    bool mounted = mount_rootfs();
 
     if (!mounted) {
         panic("failed to mount rootfs");
@@ -43,46 +43,25 @@ NORETURN void kernel_main(void *boot_info) {
         log_warn("procfs init failed");
     }
 
-    const char *font_path = args ? args->font : NULL;
-    size_t text_cols = 0;
-    size_t text_rows = 0;
-    bool had_text_grid =
-        console_get_size(&text_cols, &text_rows) && text_cols && text_rows;
-
-    if (font_path && font_path[0]) {
-        if (!psf_load(font_path)) {
-            log_warn("failed to load console font '%s'", font_path);
-        } else if (!had_text_grid) {
-            arch_log_replay_console();
-        }
-    }
+    psf_load_boot_font(args ? args->font : NULL);
 
     tty_init();
     pty_init();
 
-    if (!keyboard_init()) {
-        log_warn("keyboard init failed");
+    if (framebuffer_get_info()) {
+        if (!ws_init()) {
+            log_warn("ws init failed");
+        }
     }
 
-    if (!mouse_init()) {
-        log_warn("mouse init failed");
-    }
-
-    if (!ws_init()) {
-        log_warn("ws init failed");
-    }
-
-    framebuffer_devfs_init();
     devfs_init();
     disk_publish_devices();
-    arch_register_devices();
+    driver_load_stage(DRIVER_STAGE_DEVFS);
 
     logsink_bind_devices();
 
     init_spawn();
     scheduler_start();
 
-    for (;;) {
-        arch_cpu_wait();
-    }
+    cpu_halt();
 }

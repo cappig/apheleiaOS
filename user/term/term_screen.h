@@ -10,7 +10,6 @@
 
 bool term_screen_init(const framebuffer_t *fb);
 bool term_screen_resize(const framebuffer_t *fb);
-bool term_screen_can_resize(u32 width, u32 height);
 void term_screen_reset(void);
 void term_screen_feed(const u8 *bytes, size_t len);
 bool term_screen_render_rect(u32 *x, u32 *y, u32 *width, u32 *height);

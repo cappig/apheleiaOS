@@ -1,5 +1,6 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 #include <stddef.h>
 
@@ -139,11 +140,13 @@ typedef struct usb_class_driver {
 
 
 bool usb_register_class_driver(const usb_class_driver_t *driver);
+MUST_USE bool usb_unregister_class_driver(const char *name);
 bool usb_register_hcd(
     const usb_hcd_info_t *info,
     const usb_hcd_ops_t *ops,
     size_t *out_hcd_id
 );
+MUST_USE bool usb_unregister_hcd(size_t hcd_id);
 bool usb_report_port_state(
     size_t hcd_id,
     size_t port,
@@ -196,4 +199,6 @@ bool usb_bulk_transfer(
 );
 size_t usb_connected_device_count(void);
 
+bool usb_core_init(void);
+bool usb_core_is_ready(void);
 bool usb_init(void);

@@ -2,7 +2,6 @@
 #include <data/hashmap.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <psf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,14 +11,10 @@
 #include "wm_background.h"
 #include "wm_rect.h"
 
-#define FONT_BUF_SIZE   (256 * 1024)
 #define MAX_TITLE_CHARS 48
 
 static vector_t *windows;
 static hashmap_t *window_index;
-
-static u8 *font_buf;
-static psf_font_t title_font = {0};
 
 static wm_window_t **render_order;
 static size_t render_order_capacity;
@@ -34,7 +29,7 @@ static wm_palette_t wm_palette = {
     .border = 0x00c0c0c0U,
     .title = 0x0020364aU,
     .title_focus = 0x005fa9d8U,
-    .client_bg = 0x001a1a1aU,
+    .client_bg = 0x00000000U,
     .title_text = 0x00f0f0f0U,
     .close_bg = 0x00b04040U,
     .close_fg = 0x00ffffffU,
@@ -138,14 +133,14 @@ static void _window_remove_at(size_t index) {
 
     if (index != last_index) {
         wm_window_t *last = vec_at(windows, last_index);
-        if (last) {
-            u32 moved_id = last->id;
-            memcpy(slot, last, sizeof(*slot));
-            _window_index_set(moved_id, index);
+        if (!last || !vec_swap(windows, index, last_index)) {
+            return;
         }
+
+        _window_index_set(last->id, index);
     }
 
-    windows->size--;
+    vec_pop(windows, NULL);
     _window_index_remove(removed_id);
     if (focused_window_valid && focused_window_id == removed_id) {
         focused_window_valid = false;
@@ -181,25 +176,6 @@ static int _open_ws_fb(u32 id) {
     return open(path, O_RDWR, 0);
 }
 
-static bool _load_font_file(const char *path) {
-    return psf_load_file(path, font_buf, FONT_BUF_SIZE, &title_font);
-}
-
-static void _init_font(void) {
-    if (!font_buf) {
-        font_buf = malloc(FONT_BUF_SIZE);
-        if (!font_buf) {
-            return;
-        }
-    }
-
-    if (_load_font_file("/etc/font.psf")) {
-        return;
-    }
-
-    memset(&title_font, 0, sizeof(title_font));
-}
-
 static void _draw_pixel(
     pixel_t *frame,
     u32 fb_width,
@@ -217,55 +193,6 @@ static void _draw_pixel(
     }
 
     frame[(size_t)y * fb_width + (size_t)x] = color;
-}
-
-static void _draw_text(
-    pixel_t *frame,
-    u32 fb_width,
-    u32 fb_height,
-    i32 x,
-    i32 y,
-    const char *text,
-    pixel_t color
-) {
-    if (!title_font.glyphs || !text || !text[0]) {
-        return;
-    }
-
-    i32 pen_x = x;
-
-    for (const char *p = text; *p && (p - text) < MAX_TITLE_CHARS; p++) {
-        u32 idx = (u8)(*p);
-
-        if (idx >= title_font.glyph_count) {
-            idx = '?';
-        }
-
-        const u8 *glyph =
-            title_font.glyphs + (size_t)idx * title_font.glyph_size;
-
-        for (u32 gy = 0; gy < title_font.height; gy++) {
-            const u8 *row_ptr = glyph + gy * title_font.row_bytes;
-
-            for (u32 gx = 0; gx < title_font.width; gx++) {
-                u8 bits = row_ptr[gx / 8];
-                u8 mask = (u8)(0x80 >> (gx & 7));
-
-                if (bits & mask) {
-                    _draw_pixel(
-                        frame,
-                        fb_width,
-                        fb_height,
-                        pen_x + (i32)gx,
-                        y + (i32)gy,
-                        color
-                    );
-                }
-            }
-        }
-
-        pen_x += (i32)title_font.width;
-    }
 }
 
 static void _draw_close_button(
@@ -548,26 +475,25 @@ static void _surface_resize_preserve_in_place(
     }
 
     if (new_width > old_width) {
-        const wm_palette_t *palette = wm_palette_get();
-        pixel_t fill = palette ? palette->client_bg : 0;
-
         for (u32 row = 0; row < copy_height; row++) {
-            pixel_t *dst = surface + (size_t)row * new_width + old_width;
+            size_t row_off = (size_t)row * new_width;
+            pixel_t fill = surface[row_off + (old_width - 1)];
+
             for (u32 col = old_width; col < new_width; col++) {
-                *dst++ = fill;
+                surface[row_off + col] = fill;
             }
         }
     }
 
     if (new_height > old_height) {
-        const wm_palette_t *palette = wm_palette_get();
-        pixel_t fill = palette ? palette->client_bg : 0;
-
+        size_t src_row = (size_t)(old_height - 1) * new_width;
         for (u32 row = old_height; row < new_height; row++) {
-            pixel_t *dst = surface + (size_t)row * new_width;
-            for (u32 col = 0; col < new_width; col++) {
-                dst[col] = fill;
-            }
+            size_t row_off = (size_t)row * new_width;
+            memcpy(
+                surface + row_off,
+                surface + src_row,
+                (size_t)new_width * sizeof(pixel_t)
+            );
         }
     }
 }
@@ -859,7 +785,9 @@ static void _draw_window_title_region(
         _draw_close_button(frame, fb_width, fb_height, window, window->focused);
     }
 
-    if (!window->title[0] || !title_font.width || !title_font.height) {
+    u32 title_font_w = draw_font_width();
+    u32 title_font_h = draw_font_height();
+    if (!window->title[0] || !title_font_w || !title_font_h) {
         return;
     }
 
@@ -868,20 +796,27 @@ static void _draw_window_title_region(
         return;
     }
 
+    char title_text[MAX_TITLE_CHARS + 1];
+    memcpy(title_text, window->title, title_len);
+    title_text[title_len] = '\0';
+
+    i32 text_y = title_rect.y + ((title_rect.height - (i32)title_font_h) / 2);
+    if (text_y < title_rect.y) {
+        text_y = title_rect.y;
+    }
+
     wm_rect_t text_rect = {
         .x = window->x + 6,
-        .y = window->y + 1,
-        .width = (i32)(title_len * title_font.width),
-        .height = (i32)title_font.height,
+        .y = text_y,
+        .width = (i32)(title_len * title_font_w),
+        .height = (i32)title_font_h,
     };
     if (_rect_intersect(&text_rect, &clip_title, NULL)) {
-        _draw_text(
-            frame,
-            fb_width,
-            fb_height,
+        draw_text(
+            &fb,
             text_rect.x,
             text_rect.y,
-            window->title,
+            title_text,
             palette->title_text
         );
     }
@@ -981,33 +916,107 @@ static void _fill_window_client_gap(
     framebuffer_t *fb,
     const wm_rect_t *clip_client,
     u32 copy_width,
-    u32 copy_height,
-    pixel_t color
+    u32 copy_height
 ) {
     if (!fb || !clip_client) {
         return;
     }
 
-    if (copy_width < (u32)clip_client->width) {
-        draw_rect(
-            fb,
-            clip_client->x + (i32)copy_width,
-            clip_client->y,
-            (u32)clip_client->width - copy_width,
-            (u32)clip_client->height,
-            color
-        );
+    u32 clip_w = (u32)clip_client->width;
+    u32 clip_h = (u32)clip_client->height;
+
+    if (!clip_w || !clip_h || !fb->pixels) {
+        return;
     }
 
-    if (copy_height < (u32)clip_client->height) {
+    if (clip_client->x < 0 || clip_client->y < 0) {
+        const wm_palette_t *palette = wm_palette_get();
+        pixel_t fill = palette ? palette->client_bg : 0;
         draw_rect(
             fb,
             clip_client->x,
-            clip_client->y + (i32)copy_height,
-            copy_width,
-            (u32)clip_client->height - copy_height,
-            color
+            clip_client->y,
+            clip_w,
+            clip_h,
+            fill
         );
+        return;
+    }
+
+    if (copy_width > clip_w) {
+        copy_width = clip_w;
+    }
+    if (copy_height > clip_h) {
+        copy_height = clip_h;
+    }
+
+    if (!copy_width || !copy_height) {
+        const wm_palette_t *palette = wm_palette_get();
+        pixel_t fill = palette ? palette->client_bg : 0;
+        draw_rect(
+            fb,
+            clip_client->x,
+            clip_client->y,
+            clip_w,
+            clip_h,
+            fill
+        );
+        return;
+    }
+
+    size_t stride_pixels = fb->stride / sizeof(pixel_t);
+    if (!stride_pixels) {
+        stride_pixels = fb->width;
+    }
+
+    size_t base_x = (size_t)clip_client->x;
+    size_t base_y = (size_t)clip_client->y;
+
+    if (base_x >= fb->width || base_y >= fb->height) {
+        return;
+    }
+
+    size_t max_w = (size_t)fb->width - base_x;
+    size_t max_h = (size_t)fb->height - base_y;
+
+    if ((size_t)clip_w > max_w) {
+        clip_w = (u32)max_w;
+    }
+
+    if ((size_t)clip_h > max_h) {
+        clip_h = (u32)max_h;
+    }
+
+    if (!clip_w || !clip_h) {
+        return;
+    }
+
+    if (copy_width < clip_w) {
+        size_t edge_x = base_x + (size_t)copy_width - 1;
+
+        for (u32 row = 0; row < copy_height; row++) {
+            size_t y = base_y + (size_t)row;
+
+            pixel_t fill = fb->pixels[y * stride_pixels + edge_x];
+            pixel_t *dst = fb->pixels + y * stride_pixels + base_x + copy_width;
+
+            for (u32 col = copy_width; col < clip_w; col++) {
+                *dst++ = fill;
+            }
+        }
+    }
+
+    if (copy_height < clip_h) {
+        size_t src_y = base_y + (size_t)copy_height - 1;
+
+        const pixel_t *src = fb->pixels + src_y * stride_pixels + base_x;
+        size_t row_bytes = (size_t)clip_w * sizeof(pixel_t);
+
+        for (u32 row = copy_height; row < clip_h; row++) {
+            size_t y = base_y + (size_t)row;
+            pixel_t *dst = fb->pixels + y * stride_pixels + base_x;
+            memcpy(dst, src, row_bytes);
+        }
     }
 }
 
@@ -1090,7 +1099,7 @@ static void _draw_window_client_region(
     }
 
     _fill_window_client_gap(
-        &fb, &clip_client, copy_width, copy_height, palette->client_bg
+        &fb, &clip_client, copy_width, copy_height
     );
 }
 
@@ -1124,7 +1133,6 @@ static void _blit_window_region(
 }
 
 void wm_init(void) {
-    _init_font();
     windows = vec_create(sizeof(wm_window_t));
     window_index = hashmap_create();
     render_order_count = 0;
@@ -1139,11 +1147,6 @@ void wm_destroy(void) {
 
     hashmap_destroy(window_index);
     window_index = NULL;
-
-    if (font_buf) {
-        free(font_buf);
-        font_buf = NULL;
-    }
 
     free(render_order);
     render_order = NULL;

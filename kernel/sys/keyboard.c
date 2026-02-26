@@ -15,17 +15,28 @@
 #include <sys/tty.h>
 #include <sys/tty_input.h>
 
+#define KBD_DEV_BUFFER_SIZE 256
+#define KBD_DEV_UID         0U
+#define KBD_DEV_GID         45U
+#define KBD_DEV_MODE        0644
+
+typedef struct {
+    const char *name;
+
+    bool shift;
+    bool ctrl;
+    bool alt;
+    bool capslock;
+
+    ascii_keymap *keymap;
+} keyboard_dev_t;
+
 static vector_t *kbds = NULL;
 static ring_buffer_t *buffer = NULL;
 static sched_wait_queue_t kbd_wait = {0};
 
 static keyboard_dev_t *_get(size_t index) {
-    keyboard_dev_t **slot = vec_at(kbds, index);
-    if (!slot) {
-        return NULL;
-    }
-
-    return *slot;
+    return vec_at_ptr(kbds, index);
 }
 
 static bool _screen_captured(void) {
@@ -110,7 +121,7 @@ static bool _push_ansi_key(u8 code) {
     return true;
 }
 
-ssize_t keyboard_read(
+static ssize_t keyboard_read(
     vfs_node_t *node,
     void *buf,
     size_t offset,
@@ -231,34 +242,6 @@ void keyboard_handle_key(key_event event) {
     tty_input_push(ch);
 }
 
-u8 keyboard_register(const char *name, ascii_keymap *keymap) {
-    if (!kbds || !buffer) {
-        keyboard_init();
-    }
-
-    if (!kbds || !buffer) {
-        return 0;
-    }
-
-    keyboard_dev_t *kbd = calloc(1, sizeof(keyboard_dev_t));
-
-    if (!kbd) {
-        return 0;
-    }
-
-    kbd->name = strdup(name);
-    kbd->keymap = keymap ? keymap : &us_keymap;
-
-    if (!vec_push(kbds, &kbd)) {
-        free((void *)kbd->name);
-        free(kbd);
-        return 0;
-    }
-
-    log_debug("registered %s", kbd->name ? kbd->name : "device");
-    return (u8)(kbds->size - 1);
-}
-
 static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
     if (!dev_dir) {
         return false;
@@ -281,13 +264,19 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
         dev_dir,
         "keyboard",
         VFS_CHARDEV,
-        0666,
+        KBD_DEV_MODE,
         kbd_if,
         NULL
     );
 
     if (!registered) {
         log_warn("failed to create /dev/keyboard");
+        return false;
+    }
+
+    vfs_node_t *kbd_node = vfs_lookup_from(dev_dir, "keyboard");
+    if (!kbd_node || !vfs_chown(kbd_node, KBD_DEV_UID, KBD_DEV_GID)) {
+        log_warn("failed to set /dev/keyboard ownership to root:input");
         return false;
     }
 
@@ -320,4 +309,30 @@ bool keyboard_init(void) {
     }
 
     return true;
+}
+
+u8 keyboard_register(const char *name, ascii_keymap *keymap) {
+    if (!kbds || !buffer) {
+        if (!keyboard_init()) {
+            return 0;
+        }
+    }
+
+    keyboard_dev_t *kbd = calloc(1, sizeof(keyboard_dev_t));
+
+    if (!kbd) {
+        return 0;
+    }
+
+    kbd->name = strdup(name);
+    kbd->keymap = keymap ? keymap : &us_keymap;
+
+    if (!vec_push(kbds, &kbd)) {
+        free((void *)kbd->name);
+        free(kbd);
+        return 0;
+    }
+
+    log_debug("registered %s", kbd->name ? kbd->name : "device");
+    return (u8)(kbds->size - 1);
 }

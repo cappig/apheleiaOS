@@ -274,7 +274,7 @@ static int window_open_fds(window_t *window) {
         return -1;
     }
 
-    window->ev_fd = open(ev_path, O_RDONLY, 0);
+    window->ev_fd = open(ev_path, O_RDONLY | O_NONBLOCK, 0);
     if (window->ev_fd >= 0) {
         return 0;
     }
@@ -381,8 +381,8 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
                 }
 
                 if (n > 0) {
-                    errno = EIO;
-                    return produced ? (ssize_t)(produced * sizeof(*events)) : -1;
+                    // Drop truncated keyboard bytes and keep draining.
+                    continue;
                 }
 
                 if (n < 0 && errno != EAGAIN) {
@@ -421,8 +421,8 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
             }
 
             if (n > 0) {
-                errno = EIO;
-                return produced ? (ssize_t)(produced * sizeof(*events)) : -1;
+                // Drop truncated mouse bytes and keep draining.
+                continue;
             }
 
             if (n < 0 && errno != EAGAIN) {
@@ -481,6 +481,17 @@ int ui_mgr_release(ui_t *ui) {
 
     close_fd(&ui->mgr_fd);
     return ui_simple(ui, WSIOC_RELEASE_MANAGER, 0, 0, 0, 0);
+}
+
+int ui_mgr_transfer(ui_t *ui, pid_t pid) {
+    if (!ui || ui->ctl_fd < 0 || pid <= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ws_cmd_t cmd = {0};
+    cmd.pid = pid;
+    return ioctl(ui->ctl_fd, WSIOC_TRANSFER_MANAGER, &cmd);
 }
 
 ssize_t ui_mgr_events(ui_t *ui, ws_event_t *events, size_t count) {
@@ -638,16 +649,6 @@ window_blit(window_t *window, const void *pixels, size_t len, size_t offset) {
     }
 
     return pwrite(window->fb_fd, pixels, len, (off_t)offset);
-}
-
-ssize_t
-window_events(window_t *window, ws_input_event_t *events, size_t count) {
-    if (!window || window->ev_fd < 0 || !events || !count) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    return read(window->ev_fd, events, count * sizeof(*events));
 }
 
 int window_init(window_t *window, u32 width, u32 height, const char *title) {
@@ -939,6 +940,38 @@ _window_apply_resize_default(window_t *window, const ws_input_event_t *event) {
     window_sync_framebuffer(window);
 }
 
+ssize_t
+window_events(window_t *window, ws_input_event_t *events, size_t count) {
+    if (!window || window->ev_fd < 0 || !events || !count) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ssize_t n = read(window->ev_fd, events, count * sizeof(*events));
+    if (!n) {
+        errno = ENOENT;
+        return -1;
+    }
+
+    if (n < 0) {
+        return -1;
+    }
+
+    if ((size_t)n % sizeof(*events)) {
+        errno = EIO;
+        return -1;
+    }
+
+    size_t event_count = (size_t)n / sizeof(*events);
+    for (size_t i = 0; i < event_count; i++) {
+        if (events[i].type == INPUT_EVENT_WINDOW_RESIZE) {
+            _window_apply_resize_default(window, &events[i]);
+        }
+    }
+
+    return n;
+}
+
 int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height) {
     if (!window || !window->pixels || !window->pixels_count) {
         errno = EINVAL;
@@ -1008,20 +1041,18 @@ int window_wait_event(
         return ready;
     }
 
+    if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) {
+        errno = ENOENT;
+        return -1;
+    }
+
     if (!(pfd.revents & POLLIN)) {
         return 0;
     }
 
     ssize_t n = window_events(window, event, 1);
     if (n == (ssize_t)sizeof(*event)) {
-        if (event->type == INPUT_EVENT_WINDOW_RESIZE) {
-            _window_apply_resize_default(window, event);
-        }
         return 1;
-    }
-
-    if (!n) {
-        return 0;
     }
 
     if (n > 0) {

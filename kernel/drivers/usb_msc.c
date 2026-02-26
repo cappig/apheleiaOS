@@ -6,9 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/lock.h>
-
-#include "disk.h"
-#include "usb.h"
+#include <sys/disk.h>
+#include <sys/usb.h>
 
 #define USB_MSC_MAX_LUNS        32
 #define USB_MSC_CMD_TIMEOUT_MS  1000
@@ -71,6 +70,15 @@ static bool msc_registered = false;
 static usb_msc_lun_t msc_luns[USB_MSC_MAX_LUNS] = {0};
 static volatile int msc_state_lock = 0;
 static u32 next_tag = 1;
+
+const driver_desc_t usb_msc_driver_desc = {
+    .name = "usb-msc",
+    .deps = NULL,
+    .stage = DRIVER_STAGE_STORAGE,
+    .load = usb_msc_driver_load,
+    .unload = usb_msc_driver_unload,
+    .is_busy = usb_msc_driver_busy,
+};
 
 typedef enum {
     MSC_TRANSPORT_BOT = 0,
@@ -838,6 +846,25 @@ static bool _msc_register_disk(usb_msc_lun_t *lun) {
     return true;
 }
 
+static bool _msc_unpublish_lun(usb_msc_lun_t *lun) {
+    if (!lun || !lun->disk) {
+        return true;
+    }
+
+    if (disk_is_busy(lun->disk)) {
+        return false;
+    }
+
+    if (!disk_unregister(lun->disk)) {
+        return false;
+    }
+
+    free(lun->disk->name);
+    free(lun->disk);
+    lun->disk = NULL;
+    return true;
+}
+
 static u8 _msc_get_max_lun(usb_device_handle_t dev, u8 interface_number) {
     usb_setup_packet_t setup = {
         .request_type = USB_REQ_DIR_IN | USB_REQ_TYPE_CLASS | USB_REQ_RECIP_INTERFACE,
@@ -1048,9 +1075,10 @@ static void _usb_msc_detach(usb_device_handle_t dev) {
     size_t hcd_id = usb_device_hcd_id(dev);
     size_t port = usb_device_port(dev);
 
-    lock(&msc_state_lock);
-
+    size_t detached_indexes[USB_MSC_MAX_LUNS] = {0};
     size_t detached = 0;
+
+    lock(&msc_state_lock);
 
     for (size_t i = 0; i < ARRAY_LEN(msc_luns); i++) {
         usb_msc_lun_t *lun = &msc_luns[i];
@@ -1065,17 +1093,47 @@ static void _usb_msc_detach(usb_device_handle_t dev) {
 
         lun->online = false;
         lun->device = NULL;
+        detached_indexes[detached] = i;
         detached++;
     }
 
     unlock(&msc_state_lock);
 
+    size_t released = 0;
+    size_t busy = 0;
+
+    for (size_t i = 0; i < detached; i++) {
+        usb_msc_lun_t *lun = &msc_luns[detached_indexes[i]];
+        if (_msc_unpublish_lun(lun)) {
+            released++;
+            continue;
+        }
+
+        busy++;
+    }
+
+    lock(&msc_state_lock);
+    for (size_t i = 0; i < detached; i++) {
+        usb_msc_lun_t *lun = &msc_luns[detached_indexes[i]];
+        if (!lun->disk) {
+            memset(lun, 0, sizeof(*lun));
+        }
+    }
+    unlock(&msc_state_lock);
+
     if (detached) {
-        log_info("USB MSC detached hcd=%zu port=%zu luns=%zu", hcd_id, port, detached);
+        log_info(
+            "USB MSC detached hcd=%zu port=%zu luns=%zu released=%zu busy=%zu",
+            hcd_id,
+            port,
+            detached,
+            released,
+            busy
+        );
     }
 }
 
-bool usb_msc_init(void) {
+static bool usb_msc_init(void) {
     if (msc_registered) {
         return true;
     }
@@ -1093,4 +1151,64 @@ bool usb_msc_init(void) {
 
     msc_registered = true;
     return true;
+}
+
+bool usb_msc_driver_busy(void) {
+    for (size_t i = 0; i < ARRAY_LEN(msc_luns); i++) {
+        usb_msc_lun_t *lun = &msc_luns[i];
+        if (lun->used && lun->disk && disk_is_busy(lun->disk)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+driver_err_t usb_msc_driver_load(void) {
+    if (msc_registered) {
+        return DRIVER_OK;
+    }
+
+    if (!usb_core_is_ready()) {
+        return DRIVER_ERR_DEPENDENCY;
+    }
+
+    if (!usb_msc_init()) {
+        return DRIVER_ERR_INIT_FAILED;
+    }
+
+    return DRIVER_OK;
+}
+
+driver_err_t usb_msc_driver_unload(void) {
+    if (!msc_registered) {
+        return DRIVER_OK;
+    }
+
+    if (usb_msc_driver_busy()) {
+        return DRIVER_ERR_BUSY;
+    }
+
+    if (!usb_unregister_class_driver("usb-msc")) {
+        log_warn("USB MSC class driver unregister failed");
+    }
+
+    for (size_t i = 0; i < ARRAY_LEN(msc_luns); i++) {
+        usb_msc_lun_t *lun = &msc_luns[i];
+        if (!lun->used) {
+            continue;
+        }
+
+        lun->online = false;
+        lun->device = NULL;
+
+        if (!_msc_unpublish_lun(lun)) {
+            return DRIVER_ERR_BUSY;
+        }
+
+        memset(lun, 0, sizeof(*lun));
+    }
+
+    msc_registered = false;
+    return DRIVER_OK;
 }

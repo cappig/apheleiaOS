@@ -93,6 +93,192 @@ static EFI_STATUS _uefi_fail(const CHAR16 *msg, EFI_STATUS status) {
     return status;
 }
 
+// a bit of repeated code here... TODO: can we do anything about this?
+static bool _ascii_is_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+static char _ascii_to_lower(char c) {
+    if (c >= 'A' && c <= 'Z') {
+        return (char)(c - 'A' + 'a');
+    }
+
+    return c;
+}
+
+static bool _token_ieq(const char *begin, const char *end, const char *value) {
+    if (!begin || !end || !value || end < begin) {
+        return false;
+    }
+
+    const char *p = begin;
+    const char *q = value;
+
+    while (p < end && *q) {
+        if (_ascii_to_lower(*p) != _ascii_to_lower(*q)) {
+            return false;
+        }
+
+        p++;
+        q++;
+    }
+
+    return (p == end) && (*q == '\0');
+}
+
+static bool
+_parse_bool_token(const char *begin, const char *end, bool *value_out) {
+    if (!begin || !end || !value_out || end < begin) {
+        return false;
+    }
+
+    while (begin < end && _ascii_is_space(*begin)) {
+        begin++;
+    }
+
+    while (end > begin && _ascii_is_space(*(end - 1))) {
+        end--;
+    }
+
+    if (_token_ieq(begin, end, "1") || _token_ieq(begin, end, "true")) {
+        *value_out = true;
+        return true;
+    }
+
+    if (_token_ieq(begin, end, "0") || _token_ieq(begin, end, "false")) {
+        *value_out = false;
+        return true;
+    }
+
+    return false;
+}
+
+static void _parse_loader_conf(EFI_HANDLE image, boot_info_t *info) {
+    if (!image || !info || !g_bs) {
+        return;
+    }
+
+    void *config_data = NULL;
+    UINTN config_size = 0;
+    EFI_STATUS status = EFI_NOT_FOUND;
+    const CHAR16 *candidates[] = {
+        (const CHAR16 *)L"\\boot\\loader.conf",
+        (const CHAR16 *)L"\\loader.conf",
+    };
+
+    for (size_t i = 0; i < ARRAY_LEN(candidates); i++) {
+        config_data = NULL;
+        config_size = 0;
+        status = uefi_load_file_from_boot_volume(
+            g_bs,
+            image,
+            &loaded_image_guid,
+            &simple_fs_guid,
+            &file_info_guid,
+            candidates[i],
+            &config_data,
+            &config_size
+        );
+
+        if (!efi_error(status) && config_data && config_size) {
+            break;
+        }
+
+        if (config_data) {
+            g_bs->FreePool(config_data);
+            config_data = NULL;
+        }
+    }
+
+    if (efi_error(status) || !config_data || !config_size) {
+        return;
+    }
+
+    const char *text = (const char *)config_data;
+    size_t cursor = 0;
+
+    while (cursor < config_size) {
+        const char *line_begin = text + cursor;
+
+        while (cursor < config_size && text[cursor] != '\n') {
+            cursor++;
+        }
+
+        const char *line_end = text + cursor;
+        if (cursor < config_size && text[cursor] == '\n') {
+            cursor++;
+        }
+
+        const char *begin = line_begin;
+        const char *end = line_end;
+
+        while (begin < end && _ascii_is_space(*begin)) {
+            begin++;
+        }
+
+        if (begin >= end || *begin == '#') {
+            continue;
+        }
+
+        const char *comment = begin;
+        while (comment < end && *comment != '#') {
+            comment++;
+        }
+        end = comment;
+
+        while (end > begin && _ascii_is_space(*(end - 1))) {
+            end--;
+        }
+
+        if (begin >= end) {
+            continue;
+        }
+
+        const char *eq = begin;
+        while (eq < end && *eq != '=') {
+            eq++;
+        }
+
+        if (eq >= end) {
+            continue;
+        }
+
+        const char *key_begin = begin;
+        const char *key_end = eq;
+        const char *value_begin = eq + 1;
+        const char *value_end = end;
+
+        while (key_begin < key_end && _ascii_is_space(*key_begin)) {
+            key_begin++;
+        }
+        while (key_end > key_begin && _ascii_is_space(*(key_end - 1))) {
+            key_end--;
+        }
+
+        while (value_begin < value_end && _ascii_is_space(*value_begin)) {
+            value_begin++;
+        }
+        while (value_end > value_begin && _ascii_is_space(*(value_end - 1))) {
+            value_end--;
+        }
+
+        if (key_begin >= key_end || value_begin >= value_end) {
+            continue;
+        }
+
+        if (_token_ieq(key_begin, key_end, "stage_rootfs") ||
+            _token_ieq(key_begin, key_end, "stage_roootfs")) {
+            bool enabled = info->args.stage_rootfs != 0;
+
+            if (_parse_bool_token(value_begin, value_end, &enabled)) {
+                info->args.stage_rootfs = enabled ? 1 : 0;
+            }
+        }
+    }
+
+    g_bs->FreePool(config_data);
+}
+
 static EFI_STATUS _alloc_pages_low(UINTN pages, EFI_PHYSICAL_ADDRESS *addr) {
     if (!addr) {
         return EFI_INVALID_PARAM;
@@ -327,7 +513,7 @@ static EFI_STATUS _map_framebuffer_linear(const boot_info_t *info) {
                 return s;
             }
         } else {
-            // Above 4 GiB — no pre-existing mapping; use 4KB WC pages.
+            // Above 4 GiB — no pre-existing mapping; use 4KB WC pages
             u64 chunk_base = ALIGN_DOWN(addr, PAGE_4KIB);
             u64 chunk_end = addr + PAGE_2MIB;
 
@@ -440,6 +626,7 @@ static void _setup_default_args(boot_info_t *info) {
     uefi_mem_zero(&info->args, sizeof(info->args));
 
     info->args.debug = DEBUG_ALL;
+    info->args.stage_rootfs = BOOT_DEFAULT_STAGE_ROOTFS;
     info->args.video = BOOT_DEFAULT_VIDEO;
     info->args.vesa_width = (u16)BOOT_DEFAULT_VESA_WIDTH;
     info->args.vesa_height = (u16)BOOT_DEFAULT_VESA_HEIGHT;
@@ -612,6 +799,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     uefi_mem_zero(info, sizeof(*info));
 
     _setup_default_args(info);
+    _parse_loader_conf(image, info);
 
     uefi_detect_acpi(info, g_st, &acpi2_guid, &acpi_guid);
     uefi_detect_video(info, g_bs, &gop_guid);
@@ -663,7 +851,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
         );
     }
 
-    _stage_rootfs_from_esp(image, info);
+    if (info->args.stage_rootfs) {
+        _stage_rootfs_from_esp(image, info);
+    }
 
     u64 stack_top = stack_phys + KERNEL_STACK_SIZE + LINEAR_MAP_OFFSET_64;
     boot_info_t *info_virt =

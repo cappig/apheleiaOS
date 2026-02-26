@@ -5,13 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "mm/physical.h"
-#include "sys/time.h"
+#include <sys/time.h>
+#include <x86/mm/physical.h>
 #include "usb_hcd_common.h"
 #include "usb_xhci_internal.h"
-#include "x86/apic.h"
-#include "x86/asm.h"
-#include "x86/irq.h"
+#include <x86/apic.h>
+#include <x86/asm.h>
+#include <x86/irq.h>
 
 xhci_controller_t controllers[XHCI_MAX_DEVICES];
 size_t controller_count = 0;
@@ -20,6 +20,17 @@ bool msi_handler_registered = false;
 bool legacy_handler_registered = false;
 u8 legacy_irq_line = 0xff;
 sched_thread_t *xhci_watchdog_thread = NULL;
+volatile bool xhci_watchdog_stop = false;
+static bool xhci_driver_loaded = false;
+
+const driver_desc_t xhci_driver_desc = {
+    .name = "xhci",
+    .deps = NULL,
+    .stage = DRIVER_STAGE_STORAGE,
+    .load = xhci_driver_load,
+    .unload = xhci_driver_unload,
+    .is_busy = xhci_driver_busy,
+};
 
 static const char *_xhci_health_name(xhci_health_t state) {
     switch (state) {
@@ -1434,6 +1445,10 @@ static void _xhci_watchdog_worker(void *arg) {
     (void)arg;
 
     for (;;) {
+        if (xhci_watchdog_stop) {
+            break;
+        }
+
         for (size_t i = 0; i < controller_count; i++) {
             xhci_controller_t *ctrl = &controllers[i];
             if (!ctrl->used || !ctrl->cap_length) {
@@ -1476,6 +1491,10 @@ static void _xhci_watchdog_worker(void *arg) {
 
         sched_sleep(10);
     }
+
+    xhci_watchdog_thread = NULL;
+    xhci_watchdog_stop = false;
+    sched_exit();
 }
 
 static void _xhci_start_watchdog(void) {
@@ -1483,6 +1502,7 @@ static void _xhci_start_watchdog(void) {
         return;
     }
 
+    xhci_watchdog_stop = false;
     xhci_watchdog_thread =
         sched_create_kernel_thread("xhci-watchdog", _xhci_watchdog_worker, NULL);
 
@@ -1494,7 +1514,69 @@ static void _xhci_start_watchdog(void) {
     sched_make_runnable(xhci_watchdog_thread);
 }
 
-bool usb_xhci_init(void) {
+static void _xhci_stop_watchdog(void) {
+    if (!xhci_watchdog_thread) {
+        return;
+    }
+
+    xhci_watchdog_stop = true;
+    sched_unblock_thread(xhci_watchdog_thread);
+
+    if (sched_is_running()) {
+        for (size_t i = 0; i < 200 && xhci_watchdog_thread; i++) {
+            sched_yield();
+        }
+    }
+
+    if (xhci_watchdog_thread) {
+        xhci_watchdog_thread = NULL;
+    }
+}
+
+static void _xhci_shutdown_controller(xhci_controller_t *ctrl) {
+    if (!ctrl || !ctrl->used) {
+        return;
+    }
+
+    if (ctrl->hcd_id) {
+        if (!usb_unregister_hcd(ctrl->hcd_id)) {
+            log_warn(
+                "xHCI %u:%u.%u failed to unregister HCD id=%zu",
+                ctrl->bus,
+                ctrl->slot,
+                ctrl->func,
+                ctrl->hcd_id
+            );
+        }
+        ctrl->hcd_id = 0;
+    }
+
+    void *mmio = arch_phys_map(ctrl->mmio_base, XHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+    if (mmio) {
+        volatile u8 *op = (volatile u8 *)mmio + ctrl->cap_length;
+        u32 cmd = _read32(op, XHCI_OP_USBCMD_OFF);
+        cmd &= ~(XHCI_USBCMD_RUNSTOP | XHCI_USBCMD_INTE);
+        _write32(op, XHCI_OP_USBCMD_OFF, cmd);
+        (void)_wait_bits32(
+            (volatile u32 *)(op + XHCI_OP_USBSTS_OFF),
+            XHCI_USBSTS_HCH,
+            true,
+            XHCI_HALT_TIMEOUT_MS
+        );
+        arch_phys_unmap(mmio, XHCI_MMIO_SIZE);
+    }
+
+    if (ctrl->msi_enabled) {
+        (void)pci_disable_msi(ctrl->bus, ctrl->slot, ctrl->func);
+    } else if (ctrl->irq_enabled && usb_hcd_irq_line_supported(ctrl->irq_line)) {
+        irq_unregister(ctrl->irq_line);
+    }
+
+    _xhci_release_dma(ctrl);
+    memset(ctrl, 0, sizeof(*ctrl));
+}
+
+static bool usb_xhci_init(void) {
     bool found = false;
     pci_found_t *cursor = NULL;
 
@@ -1571,4 +1653,53 @@ bool usb_xhci_init(void) {
     }
 
     return found;
+}
+
+bool xhci_driver_busy(void) {
+    return false;
+}
+
+driver_err_t xhci_driver_load(void) {
+    if (xhci_driver_loaded) {
+        return DRIVER_OK;
+    }
+
+    if (!usb_core_is_ready()) {
+        return DRIVER_ERR_DEPENDENCY;
+    }
+
+    if (!usb_xhci_init()) {
+        return DRIVER_ERR_INIT_FAILED;
+    }
+
+    xhci_driver_loaded = true;
+    return DRIVER_OK;
+}
+
+driver_err_t xhci_driver_unload(void) {
+    if (!xhci_driver_loaded) {
+        return DRIVER_OK;
+    }
+
+    _xhci_stop_watchdog();
+
+    for (size_t i = 0; i < controller_count; i++) {
+        _xhci_shutdown_controller(&controllers[i]);
+    }
+
+    controller_count = 0;
+
+    if (legacy_handler_registered && usb_hcd_irq_line_supported(legacy_irq_line)) {
+        irq_unregister(legacy_irq_line);
+    }
+
+    if (msi_handler_registered) {
+        reset_int_handler(XHCI_MSI_VECTOR);
+    }
+
+    msi_handler_registered = false;
+    legacy_handler_registered = false;
+    legacy_irq_line = 0xff;
+    xhci_driver_loaded = false;
+    return DRIVER_OK;
 }

@@ -15,6 +15,7 @@
 #include <string.h>
 #include <sys/lock.h>
 #include <sys/path.h>
+#include <sys/stat.h>
 #include <sys/vfs.h>
 #include <unistd.h>
 
@@ -826,6 +827,21 @@ static const char *_basename(const char *path) {
     return slash ? slash + 1 : path;
 }
 
+static void
+_apply_exec_identity(sched_thread_t *thread, const vfs_node_t *node) {
+    if (!thread || !node) {
+        return;
+    }
+
+    if (node->mode & S_ISGID) {
+        thread->gid = node->gid;
+    }
+
+    if (node->mode & S_ISUID) {
+        thread->uid = node->uid;
+    }
+}
+
 sched_thread_t *user_spawn(const char *path) {
     if (!path) {
         return NULL;
@@ -924,6 +940,8 @@ sched_thread_t *user_spawn(const char *path) {
 
         return NULL;
     }
+
+    _apply_exec_identity(thread, file.node);
 
     arch_vm_switch(thread->vm_space);
     stack_top = _build_user_stack_args(stack_top, &args, &env);
@@ -1070,6 +1088,8 @@ int user_exec(
 
         return -ENOMEM;
     }
+
+    _apply_exec_identity(thread, file.node);
 
     arch_vm_switch(thread->vm_space);
     stack_top = _build_user_stack_args(stack_top, &args, &env);

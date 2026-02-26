@@ -8,9 +8,9 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "sys/pci.h"
-#include "sys/usb.h"
-#include "x86/asm.h"
+#include <sys/pci.h>
+#include <sys/usb.h>
+#include <x86/asm.h>
 
 #define USB_SUBCLASS       0x03
 #define USB_PROGIF_XHCI    0x30
@@ -282,6 +282,7 @@ extern bool msi_handler_registered;
 extern bool legacy_handler_registered;
 extern u8 legacy_irq_line;
 extern sched_thread_t *xhci_watchdog_thread;
+extern volatile bool xhci_watchdog_stop;
 extern const usb_hcd_ops_t xhci_hcd_ops;
 
 

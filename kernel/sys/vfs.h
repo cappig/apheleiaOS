@@ -1,5 +1,6 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 #include <data/hashmap.h>
 #include <data/list.h>
@@ -152,8 +153,8 @@ bool vfs_stat_node(vfs_node_t *node, stat_t *out, bool follow_links);
 bool vfs_chmod(vfs_node_t *node, mode_t mode);
 bool vfs_chown(vfs_node_t *node, uid_t uid, gid_t gid);
 bool vfs_link(const char *target, const char *link_path);
-bool vfs_unlink(const char *path);
-bool vfs_rmdir(const char *path);
+MUST_USE bool vfs_unlink(const char *path);
+MUST_USE bool vfs_rmdir(const char *path);
 bool vfs_rename(const char *old_path, const char *new_path);
 
 bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child);

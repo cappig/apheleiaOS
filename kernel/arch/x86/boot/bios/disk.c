@@ -418,7 +418,7 @@ static void *_read_inode(ext2_inode_t *inode) {
 
     free(blocks);
 
-    // Ensure text consumers never read past EOF.
+    // Ensure text consumers never read past EOF
     u8 *bytes = (u8 *)buffer;
     bytes[file_size] = '\0';
 

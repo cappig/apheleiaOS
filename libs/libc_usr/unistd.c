@@ -451,6 +451,106 @@ int setgid(gid_t gid) {
     return _write_proc_value_path("/proc/self/gid", (long long)gid);
 }
 
+int getgroups(int size, gid_t list[]) {
+    if (size < 0 || (size > 0 && !list)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    int fd = open("/proc/self/groups", O_RDONLY, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    char text[256];
+    ssize_t n = read(fd, text, sizeof(text) - 1);
+    int saved = errno;
+    close(fd);
+
+    if (n < 0) {
+        errno = saved;
+        return -1;
+    }
+
+    text[n] = '\0';
+    int total = 0;
+
+    char *save = NULL;
+    char *token = strtok_r(text, " \t\r\n,", &save);
+    while (token) {
+        char *end = NULL;
+        long value = strtol(token, &end, 10);
+        if (end == token || *end != '\0' || value < 0) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        if (size > 0) {
+            if (total >= size) {
+                errno = EINVAL;
+                return -1;
+            }
+
+            list[total] = (gid_t)value;
+        }
+
+        total++;
+        token = strtok_r(NULL, " \t\r\n,", &save);
+    }
+
+    return total;
+}
+
+int setgroups(size_t size, const gid_t list[]) {
+    if ((size && !list) || size > 64) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char text[512];
+    size_t used = 0;
+
+    for (size_t i = 0; i < size; i++) {
+        int n = snprintf(
+            text + used,
+            sizeof(text) - used,
+            "%s%llu",
+            i ? " " : "",
+            (unsigned long long)list[i]
+        );
+
+        if (n <= 0 || used + (size_t)n >= sizeof(text) - 1) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        used += (size_t)n;
+    }
+
+    text[used++] = '\n';
+
+    int fd = open("/proc/self/groups", O_WRONLY, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    ssize_t written = write(fd, text, used);
+    int saved = errno;
+    close(fd);
+
+    if (written < 0) {
+        errno = saved;
+        return -1;
+    }
+
+    if ((size_t)written != used) {
+        errno = EIO;
+        return -1;
+    }
+
+    return 0;
+}
+
 void _exit(int status) {
     syscall1(SYS_EXIT, (uintptr_t)status);
 

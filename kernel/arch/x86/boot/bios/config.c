@@ -70,6 +70,33 @@ static void handle_font(char *value, void *data) {
     args->font[sizeof(args->font) - 1] = '\0';
 }
 
+static bool _parse_bool(const char *value, bool *out) {
+    if (!value || !out) {
+        return false;
+    }
+
+    if (!strcasecmp(value, "1") || !strcasecmp(value, "true")) {
+        *out = true;
+        return true;
+    }
+
+    if (!strcasecmp(value, "0") || !strcasecmp(value, "false")) {
+        *out = false;
+        return true;
+    }
+
+    return false;
+}
+
+static void handle_stage_rootfs(char *value, void *data) {
+    kernel_args_t *args = data;
+    bool enabled = args->stage_rootfs != 0;
+
+    if (_parse_bool(value, &enabled)) {
+        args->stage_rootfs = enabled ? 1 : 0;
+    }
+}
+
 
 static const cfg_entry_t cfg_table[] = {
     {"debug", handle_debug},
@@ -81,6 +108,8 @@ static const cfg_entry_t cfg_table[] = {
     {"font", handle_font},
     {"console.font", handle_font},
     {"text.font", handle_font},
+    {"stage_rootfs", handle_stage_rootfs},
+    {"stage_roootfs", handle_stage_rootfs},
     {NULL, NULL}
 };
 
@@ -91,6 +120,7 @@ void parse_config(kernel_args_t *args) {
     args->vesa_width = BOOT_DEFAULT_VESA_WIDTH;
     args->vesa_height = BOOT_DEFAULT_VESA_HEIGHT;
     args->vesa_bpp = BOOT_DEFAULT_VESA_BPP;
+    args->stage_rootfs = BOOT_DEFAULT_STAGE_ROOTFS;
     args->console[0] = '\0';
     strncpy(args->font, BOOT_DEFAULT_FONT, sizeof(args->font) - 1);
     args->font[sizeof(args->font) - 1] = '\0';

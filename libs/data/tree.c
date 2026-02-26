@@ -38,23 +38,34 @@ tree_t *tree_create(void *root_data) {
 }
 
 void tree_destroy(tree_t *trunk) {
+    if (!trunk) {
+        return;
+    }
+
     tree_prune(trunk->root);
     free(trunk);
 }
 
 
 void tree_prune_callback(tree_node_t *parent, tree_callback_fn callback) {
-    ll_foreach(node, parent->children) {
-        tree_node_t *child = node->data;
-
-        if (callback) {
-            callback(child);
-        }
-
-        tree_prune(child);
+    if (!parent) {
+        return;
     }
 
-    list_destroy(parent->children, false);
+    if (parent->children) {
+        ll_foreach(node, parent->children) {
+            tree_node_t *child = node->data;
+            tree_prune_callback(child, callback);
+        }
+
+        list_destroy(parent->children, false);
+        parent->children = NULL;
+    }
+
+    if (callback) {
+        callback(parent);
+    }
+
     free(parent);
 }
 
@@ -68,14 +79,30 @@ bool tree_insert_child(tree_node_t *parent, tree_node_t *child) {
         return false;
     }
 
+    if (!parent->children) {
+        parent->children = list_create();
+    }
+
+    if (!parent->children) {
+        return false;
+    }
+
     list_node_t *node = list_create_node(child);
-    list_append(parent->children, node);
+    if (!node || !list_append(parent->children, node)) {
+        list_destroy_node(node);
+        return false;
+    }
+
     child->parent = parent;
 
     return true;
 }
 
 bool tree_remove_child(tree_node_t *parent, tree_node_t *child) {
+    if (!parent || !child || !parent->children) {
+        return false;
+    }
+
     linked_list_t *list = parent->children;
 
     list_node_t *lnode = list_find(list, child);

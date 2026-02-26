@@ -4,7 +4,7 @@
 #include <log/log.h>
 #include <string.h>
 
-#include "sys/time.h"
+#include <sys/time.h>
 #include "usb_hcd_common.h"
 
 static const char *_xhci_cmd_type_name(u32 type) {

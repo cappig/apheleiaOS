@@ -6,13 +6,15 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#ifndef TIMER_FREQ
+#define TIMER_FREQ 500U
+#endif
+
 typedef struct arch_vm_space arch_vm_space_t;
 typedef void (*arch_syscall_handler_t)(arch_int_state_t *state);
 
 const kernel_args_t *arch_init(void *boot_info);
 void arch_storage_init(void);
-void arch_register_devices(void);
-bool arch_usb_controller_init(void);
 void arch_log_replay_console(void);
 
 #define PHYS_MAP_DEFAULT 0U
@@ -65,3 +67,6 @@ void arch_panic_enter(void);
 void arch_fpu_init(void *buf);
 void arch_fpu_save(void *buf);
 void arch_fpu_restore(const void *buf);
+
+ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len);
+size_t arch_log_ring_size(void);

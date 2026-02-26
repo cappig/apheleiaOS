@@ -9,11 +9,11 @@
 
 #define PROC_NAME_MAX 32
 
-// Controlling terminal encoding in procfs stat `tty_index`.
+// Controlling terminal encoding in procfs stat `tty_index`
 //  -1: no controlling terminal
 //   0: console
 //   1..N: virtual tty screen index
-// <= -2: pseudo terminal, decoded with PROC_TTY_PTS_INDEX().
+// <= -2: pseudo terminal, decoded with PROC_TTY_PTS_INDEX()
 #define PROC_TTY_NONE             (-1)
 #define PROC_TTY_CONSOLE          0
 #define PROC_TTY_PTS(index)       (-2 - (index))

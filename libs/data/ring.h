@@ -10,6 +10,23 @@ typedef struct ring {
     size_t tail_index;
 } ring_buffer_t;
 
+typedef struct ring_io {
+    u8 *data;
+    size_t capacity;
+    size_t read_pos;
+    size_t write_pos;
+    size_t size;
+} ring_io_t;
+
+
+void ring_io_init(ring_io_t *ring, u8 *data, size_t capacity);
+void ring_io_reset(ring_io_t *ring);
+
+size_t ring_io_size(const ring_io_t *ring);
+size_t ring_io_free_space(const ring_io_t *ring);
+
+size_t ring_io_read(ring_io_t *ring, void *out, size_t len);
+size_t ring_io_write(ring_io_t *ring, const void *in, size_t len);
 
 ring_buffer_t *ring_buffer_create(size_t size);
 void ring_buffer_destroy(ring_buffer_t *ring);

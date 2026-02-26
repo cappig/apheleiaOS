@@ -249,7 +249,7 @@ bool bitmap_alloc_init_mmap(
         u64 top = _region_top(current->address, current->size);
         u64 base = current->address;
 
-        // We only map the low 4 GiB in the current setup.
+        // We only map the low 4 GiB in the current setup
         if (base >= max_addr) {
             continue;
         }
@@ -343,7 +343,7 @@ bool bitmap_alloc_init_mmap(
     }
 
     // The allocator tracks physical addresses, but the bitmap itself must be
-    // accessed via a valid virtual mapping.
+    // accessed via a valid virtual mapping
 #if defined(__x86_64__)
     alloc->bitmap =
         (bitmap_word_t *)((uintptr_t)bitmap_addr + LINEAR_MAP_OFFSET_64);

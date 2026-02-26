@@ -21,4 +21,3 @@ typedef struct framebuffer_info {
 
 void framebuffer_set_info(const framebuffer_info_t *info);
 const framebuffer_info_t *framebuffer_get_info(void);
-void framebuffer_devfs_init(void);

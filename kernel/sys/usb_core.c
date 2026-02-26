@@ -10,7 +10,6 @@
 #include <sys/time.h>
 
 #include "usb_internal.h"
-#include "usb_msc.h"
 
 typedef struct {
     size_t id;
@@ -42,6 +41,18 @@ typedef struct {
     u64 generation;
 } usb_enum_task_t;
 
+typedef struct {
+    const usb_class_driver_t *driver;
+    usb_device_handle_t dev;
+} usb_detach_task_t;
+
+typedef struct {
+    void (*release)(size_t hcd_id, size_t port, void *ctx);
+    size_t hcd_id;
+    size_t port;
+    void *ctx;
+} usb_release_task_t;
+
 static vector_t *usb_hcds = NULL;
 static vector_t *usb_devices = NULL;
 static vector_t *usb_class_drivers = NULL;
@@ -54,6 +65,7 @@ static volatile int usb_state_lock = 0;
 static sched_wait_queue_t usb_enum_wait = {0};
 static bool usb_enum_wait_ready = false;
 static sched_thread_t *usb_enum_thread = NULL;
+static bool usb_core_ready = false;
 
 
 static const char *_usb_hcd_kind_name(usb_hcd_kind_t kind) {
@@ -326,6 +338,22 @@ static bool _usb_queue_enum_locked(size_t hcd_id, size_t port, u64 generation) {
     };
 
     return vec_push(usb_enum_tasks, &task);
+}
+
+static void _usb_drop_enum_tasks_for_hcd_locked(size_t hcd_id) {
+    if (!usb_enum_tasks || !hcd_id) {
+        return;
+    }
+
+    for (size_t i = 0; i < usb_enum_tasks->size;) {
+        usb_enum_task_t *task = vec_at(usb_enum_tasks, i);
+        if (!task || task->hcd_id != hcd_id) {
+            i++;
+            continue;
+        }
+
+        vec_remove_at(usb_enum_tasks, i, NULL);
+    }
 }
 
 static void _usb_wake_enum_worker(void) {
@@ -649,6 +677,7 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
     }
 
     vector_t *attach_list = vec_create(sizeof(usb_device_handle_t));
+    bool attach_queue_failed = false;
 
     if (attach_list) {
         for (size_t i = 0; i < usb_devices->size; i++) {
@@ -675,9 +704,14 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
             dev->bind_attempted = true;
 
             if (!vec_push(attach_list, &dev)) {
+                dev->bound_driver = NULL;
+                dev->bind_attempted = false;
+                attach_queue_failed = true;
                 break;
             }
         }
+    } else if (usb_devices->size > 0) {
+        attach_queue_failed = true;
     }
 
     unlock_irqrestore(&usb_state_lock, flags);
@@ -703,6 +737,108 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
 
     if (attach_list) {
         vec_destroy(attach_list);
+    }
+
+    if (attach_queue_failed) {
+        log_warn(
+            "USB class driver '%s' registered without immediate attach due low memory",
+            driver->name
+        );
+    }
+
+    return true;
+}
+
+bool usb_unregister_class_driver(const char *name) {
+    if (!name || !name[0]) {
+        return false;
+    }
+
+    if (!_usb_ensure_state()) {
+        return false;
+    }
+
+    const usb_class_driver_t *driver = NULL;
+    vector_t *detach_list = vec_create(sizeof(usb_detach_task_t));
+    size_t dropped_detach_callbacks = 0;
+
+    unsigned long flags = lock_irqsave(&usb_state_lock);
+
+    size_t driver_index = (size_t)-1;
+    for (size_t i = 0; i < usb_class_drivers->size; i++) {
+        usb_class_driver_t **slot = vec_at(usb_class_drivers, i);
+        if (!slot || !*slot) {
+            continue;
+        }
+
+        if (strcmp((*slot)->name, name)) {
+            continue;
+        }
+
+        driver = *slot;
+        driver_index = i;
+        break;
+    }
+
+    if (!driver) {
+        unlock_irqrestore(&usb_state_lock, flags);
+        if (detach_list) {
+            vec_destroy(detach_list);
+        }
+        return false;
+    }
+
+    for (size_t i = 0; i < usb_devices->size; i++) {
+        usb_device_handle_t *slot = vec_at(usb_devices, i);
+        if (!slot || !*slot) {
+            continue;
+        }
+
+        usb_device_handle_t dev = *slot;
+        if (dev->bound_driver != driver) {
+            continue;
+        }
+
+        if (detach_list) {
+            usb_detach_task_t task = {
+                .driver = driver,
+                .dev = dev,
+            };
+            if (!vec_push(detach_list, &task)) {
+                dropped_detach_callbacks++;
+            }
+        } else {
+            dropped_detach_callbacks++;
+        }
+
+        dev->bound_driver = NULL;
+        dev->bind_attempted = false;
+    }
+
+    vec_remove_at(usb_class_drivers, driver_index, NULL);
+    unlock_irqrestore(&usb_state_lock, flags);
+
+    if (driver->detach && detach_list) {
+        for (size_t i = 0; i < detach_list->size; i++) {
+            usb_detach_task_t *task = vec_at(detach_list, i);
+            if (!task || !task->driver || !task->driver->detach || !task->dev) {
+                continue;
+            }
+
+            task->driver->detach(task->dev);
+        }
+    }
+
+    if (detach_list) {
+        vec_destroy(detach_list);
+    }
+
+    if (dropped_detach_callbacks > 0) {
+        log_warn(
+            "USB class driver '%s' detached %zu device(s) without callback due low memory",
+            driver->name,
+            dropped_detach_callbacks
+        );
     }
 
     return true;
@@ -782,6 +918,204 @@ bool usb_register_hcd(
         info->irq_driven ? ", irq" : "",
         info->msi_enabled ? ", msi" : ""
     );
+
+    return true;
+}
+
+bool usb_unregister_hcd(size_t hcd_id) {
+    if (!hcd_id) {
+        return false;
+    }
+
+    if (!_usb_ensure_state()) {
+        return false;
+    }
+
+    vector_t *detach_list = vec_create(sizeof(usb_detach_task_t));
+    vector_t *release_list = vec_create(sizeof(usb_release_task_t));
+    vector_t *free_list = vec_create(sizeof(usb_device_handle_t));
+    size_t dropped_detach_callbacks = 0;
+    size_t inline_release_count = 0;
+    size_t inline_free_count = 0;
+
+    unsigned long flags = lock_irqsave(&usb_state_lock);
+    size_t hcd_index = (size_t)-1;
+    usb_hcd_state_t hcd_copy = {0};
+
+    for (size_t i = 0; i < usb_hcds->size; i++) {
+        usb_hcd_state_t *hcd = vec_at(usb_hcds, i);
+        if (!hcd || hcd->id != hcd_id) {
+            continue;
+        }
+
+        hcd_index = i;
+        hcd_copy = *hcd;
+        break;
+    }
+
+    if (hcd_index == (size_t)-1) {
+        unlock_irqrestore(&usb_state_lock, flags);
+        if (detach_list) {
+            vec_destroy(detach_list);
+        }
+        if (release_list) {
+            vec_destroy(release_list);
+        }
+        if (free_list) {
+            vec_destroy(free_list);
+        }
+        return false;
+    }
+
+    for (size_t i = 0; i < usb_devices->size; i++) {
+        usb_device_handle_t *slot = vec_at(usb_devices, i);
+        if (!slot || !*slot) {
+            continue;
+        }
+
+        usb_device_handle_t dev = *slot;
+        if (dev->hcd_id != hcd_id) {
+            continue;
+        }
+
+        if (
+            dev->connected &&
+            dev->bound_driver &&
+            dev->bound_driver->detach &&
+            dev->identity_valid
+        ) {
+            usb_detach_task_t task = {
+                .driver = dev->bound_driver,
+                .dev = dev,
+            };
+
+            if (detach_list) {
+                if (!vec_push(detach_list, &task)) {
+                    dropped_detach_callbacks++;
+                }
+            } else {
+                dropped_detach_callbacks++;
+            }
+        }
+
+        if (
+            dev->hcd_device &&
+            _usb_hcd_has_enum_ops(&hcd_copy) &&
+            hcd_copy.ops.device_close
+        ) {
+            usb_release_task_t task = {
+                .release = hcd_copy.ops.device_close,
+                .hcd_id = hcd_id,
+                .port = dev->port,
+                .ctx = dev->hcd_device,
+            };
+
+            if (release_list) {
+                if (!vec_push(release_list, &task)) {
+                    task.release(task.hcd_id, task.port, task.ctx);
+                    inline_release_count++;
+                }
+            } else {
+                task.release(task.hcd_id, task.port, task.ctx);
+                inline_release_count++;
+            }
+        }
+
+        dev->connected = false;
+        dev->generation++;
+        dev->identity_valid = false;
+        dev->identity = (usb_device_identity_t){0};
+        dev->hcd_device = NULL;
+        dev->bound_driver = NULL;
+        dev->bind_attempted = false;
+        dev->enum_attempted = false;
+        dev->enum_queued = false;
+
+        if (free_list) {
+            if (!vec_push(free_list, &dev)) {
+                free(dev);
+                inline_free_count++;
+            }
+        } else {
+            free(dev);
+            inline_free_count++;
+        }
+
+        *slot = NULL;
+    }
+
+    _usb_drop_enum_tasks_for_hcd_locked(hcd_id);
+    vec_remove_at(usb_hcds, hcd_index, NULL);
+    unlock_irqrestore(&usb_state_lock, flags);
+
+    if (detach_list) {
+        for (size_t i = 0; i < detach_list->size; i++) {
+            usb_detach_task_t *task = vec_at(detach_list, i);
+            if (!task || !task->driver || !task->driver->detach || !task->dev) {
+                continue;
+            }
+
+            task->driver->detach(task->dev);
+        }
+    }
+
+    if (release_list) {
+        for (size_t i = 0; i < release_list->size; i++) {
+            usb_release_task_t *task = vec_at(release_list, i);
+            if (!task || !task->release || !task->ctx) {
+                continue;
+            }
+
+            task->release(task->hcd_id, task->port, task->ctx);
+        }
+    }
+
+    if (free_list) {
+        for (size_t i = 0; i < free_list->size; i++) {
+            usb_device_handle_t *slot = vec_at(free_list, i);
+            if (!slot || !*slot) {
+                continue;
+            }
+
+            free(*slot);
+        }
+    }
+
+    if (detach_list) {
+        vec_destroy(detach_list);
+    }
+
+    if (release_list) {
+        vec_destroy(release_list);
+    }
+
+    if (free_list) {
+        vec_destroy(free_list);
+    }
+
+    if (dropped_detach_callbacks > 0) {
+        log_warn(
+            "USB HCD id=%zu dropped %zu class detach callback(s) due low memory",
+            hcd_id,
+            dropped_detach_callbacks
+        );
+    }
+
+    if (inline_release_count > 0) {
+        log_warn(
+            "USB HCD id=%zu released %zu device context(s) inline due low memory",
+            hcd_id,
+            inline_release_count
+        );
+    }
+
+    if (inline_free_count > 0) {
+        log_warn(
+            "USB HCD id=%zu freed %zu device record(s) inline due low memory",
+            hcd_id,
+            inline_free_count
+        );
+    }
 
     return true;
 }
@@ -1338,22 +1672,25 @@ size_t usb_connected_device_count(void) {
     return connected;
 }
 
-bool usb_init(void) {
+bool usb_core_init(void) {
+    if (usb_core_ready) {
+        return true;
+    }
+
     if (!_usb_ensure_state()) {
         log_warn("USB core failed while allocating state");
         return false;
     }
 
     _usb_start_enum_worker();
-
-    if (!usb_msc_init()) {
-        log_warn("USB core failed while initializing USB MSC class");
-    }
-
-    if (!arch_usb_controller_init()) {
-        log_warn("no USB host controllers found");
-        return false;
-    }
-
+    usb_core_ready = true;
     return true;
+}
+
+bool usb_core_is_ready(void) {
+    return usb_core_ready;
+}
+
+bool usb_init(void) {
+    return usb_core_init();
 }

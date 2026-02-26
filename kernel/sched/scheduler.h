@@ -5,6 +5,7 @@
 #include <base/attributes.h>
 #include <base/types.h>
 #include <data/list.h>
+#include <data/ring.h>
 #include <limits.h>
 #include <signal.h>
 #include <sys/proc.h>
@@ -16,6 +17,7 @@ typedef struct vfs_node vfs_node_t;
 
 #define SCHED_FD_MAX     32
 #define SCHED_REGION_COW (1ULL << 62)
+#define SCHED_GROUP_MAX  16
 
 #define SCHED_PIPE_CAPACITY 4096
 
@@ -28,11 +30,7 @@ typedef enum {
 
 typedef struct sched_pipe {
     volatile int lock;
-    u8 *data;
-    size_t capacity;
-    size_t read_pos;
-    size_t write_pos;
-    size_t size;
+    ring_io_t ring;
     size_t readers;
     size_t writers;
     bool destroying;
@@ -100,6 +98,8 @@ typedef struct sched_thread {
     pid_t sid;
     uid_t uid;
     gid_t gid;
+    gid_t groups[SCHED_GROUP_MAX];
+    size_t group_count;
     mode_t umask;
     int exit_code;
 
@@ -170,7 +170,17 @@ gid_t sched_getgid(void);
 mode_t sched_getumask(void);
 int sched_setuid(uid_t uid);
 int sched_setgid(gid_t gid);
+int sched_setgroups(const gid_t *groups, size_t group_count);
 int sched_setumask(mode_t mask);
+int sched_getgroups(gid_t *groups, size_t max_groups, size_t *group_count_out);
+bool sched_gid_matches_cred(uid_t uid, gid_t gid, gid_t target_gid);
+int sched_getgroups_pid(
+    pid_t pid,
+    gid_t *primary_gid_out,
+    gid_t *groups_out,
+    size_t max_groups,
+    size_t *group_count_out
+);
 pid_t sched_getpgid(pid_t pid);
 int sched_setpgid(pid_t pid, pid_t pgid);
 pid_t sched_setsid(void);
@@ -236,6 +246,7 @@ int sched_fd_close(sched_thread_t *thread, int fd);
 int sched_fd_dup(sched_thread_t *thread, int oldfd, int newfd);
 bool sched_fd_clone_table(sched_thread_t *dst, const sched_thread_t *src);
 void sched_fd_close_all(sched_thread_t *thread);
+bool sched_fd_refs_node(const vfs_node_t *node);
 
 sched_pipe_t *sched_pipe_create(size_t capacity);
 void sched_pipe_acquire_reader(sched_pipe_t *pipe);

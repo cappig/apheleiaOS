@@ -48,5 +48,7 @@ uid_t getuid(void);
 gid_t getgid(void);
 int setuid(uid_t uid);
 int setgid(gid_t gid);
+int getgroups(int size, gid_t list[]);
+int setgroups(size_t size, const gid_t list[]);
 
 void _exit(int status) __attribute__((noreturn));

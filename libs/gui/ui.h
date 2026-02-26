@@ -46,6 +46,7 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count);
 
 int ui_mgr_claim(ui_t *ui);
 int ui_mgr_release(ui_t *ui);
+int ui_mgr_transfer(ui_t *ui, pid_t pid);
 ssize_t ui_mgr_events(ui_t *ui, ws_event_t *events, size_t count);
 int ui_mgr_focus(ui_t *ui, u32 id);
 int ui_mgr_move(ui_t *ui, u32 id, i32 x, i32 y);

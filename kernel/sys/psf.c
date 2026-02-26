@@ -1,9 +1,9 @@
 #include "psf.h"
 
+#include <arch/arch.h>
 #include <base/attributes.h>
 #include <base/macros.h>
 #include <base/types.h>
-#include <base/utf8.h>
 #include <log/log.h>
 #include <parse/psf.h>
 #include <stdlib.h>
@@ -19,6 +19,12 @@ static font_t loaded_font = {0};
 static font_map_t *loaded_map = NULL;
 static size_t loaded_map_count = 0;
 static size_t loaded_map_capacity = 0;
+
+typedef struct {
+    font_map_t **map;
+    size_t *map_count;
+    size_t *map_capacity;
+} font_map_builder_t;
 
 
 static void _discard(void) {
@@ -94,81 +100,20 @@ static bool _font_map_push(
     return true;
 }
 
-static bool _parse_psf2_unicode(
-    const psf_blob_t *blob,
-    font_map_t **map,
-    size_t *map_count,
-    size_t *map_capacity
-) {
-    if (!blob || !blob->unicode_table || !blob->unicode_size) {
-        return true;
+static bool
+_collect_font_map(void *ctx, u32 codepoint, u32 glyph) {
+    font_map_builder_t *builder = ctx;
+    if (!builder) {
+        return false;
     }
 
-    const u8 *table = blob->unicode_table;
-    const u8 *end = table + blob->unicode_size;
-
-    for (u32 glyph = 0; glyph < blob->glyph_count && table < end; glyph++) {
-        while (table < end && *table != 0xffU) {
-            if (*table == 0xfeU) {
-                table++;
-                continue;
-            }
-
-            u32 cp = 0;
-            size_t consumed = utf8_decode(table, (size_t)(end - table), &cp);
-            if (!consumed) {
-                table++;
-                continue;
-            }
-
-            if (!_font_map_push(map, map_count, map_capacity, cp, glyph)) {
-                return false;
-            }
-
-            table += consumed;
-        }
-
-        if (table < end && *table == 0xffU) {
-            table++;
-        }
-    }
-
-    return true;
-}
-
-static bool _parse_psf1_unicode(
-    const psf_blob_t *blob,
-    font_map_t **map,
-    size_t *map_count,
-    size_t *map_capacity
-) {
-    if (!blob || !blob->unicode_table || !blob->unicode_size) {
-        return true;
-    }
-
-    const u8 *table = blob->unicode_table;
-    const u8 *end = table + blob->unicode_size;
-
-    for (u32 glyph = 0; glyph < blob->glyph_count && table + 1 < end; glyph++) {
-        while (table + 1 < end) {
-            u16 code = (u16)(table[0] | ((u16)table[1] << 8));
-            table += 2;
-
-            if (code == 0xffffU) {
-                break;
-            }
-
-            if (code == 0xfffeU) {
-                continue;
-            }
-
-            if (!_font_map_push(map, map_count, map_capacity, code, glyph)) {
-                return false;
-            }
-        }
-    }
-
-    return true;
+    return _font_map_push(
+        builder->map,
+        builder->map_count,
+        builder->map_capacity,
+        codepoint,
+        glyph
+    );
 }
 
 bool psf_load(const char *path) {
@@ -211,25 +156,18 @@ bool psf_load(const char *path) {
         return false;
     }
 
-    if (blob_info.flags & PSF_BLOB_UNICODE) {
-        bool ok = true;
-        if (blob_info.type == PSF_TYPE_2) {
-            ok = _parse_psf2_unicode(
-                &blob_info, &map, &map_count, &map_capacity
-            );
-        } else if (blob_info.type == PSF_TYPE_1) {
-            ok = _parse_psf1_unicode(
-                &blob_info, &map, &map_count, &map_capacity
-            );
-        }
+    font_map_builder_t builder = {
+        .map = &map,
+        .map_count = &map_count,
+        .map_capacity = &map_capacity,
+    };
 
-        if (!ok) {
-            free(blob);
-            if (map) {
-                free(map);
-            }
-            return false;
+    if (!psf_iter_unicode_mappings(&blob_info, _collect_font_map, &builder)) {
+        free(blob);
+        if (map) {
+            free(map);
         }
+        return false;
     }
 
     font_t parsed = {
@@ -262,4 +200,24 @@ bool psf_load(const char *path) {
     );
 
     return true;
+}
+
+void psf_load_boot_font(const char *path) {
+    size_t text_cols = 0;
+    size_t text_rows = 0;
+    bool had_text_grid =
+        console_get_size(&text_cols, &text_rows) && text_cols && text_rows;
+
+    if (!path || !path[0]) {
+        return;
+    }
+
+    if (!psf_load(path)) {
+        log_warn("failed to load console font '%s'", path);
+        return;
+    }
+
+    if (!had_text_grid) {
+        arch_log_replay_console();
+    }
 }

@@ -1,15 +1,31 @@
+#include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdio.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/ioctl.h>
+#include <sys/proc.h>
 #include <sys/wait.h>
 #include <ui.h>
 #include <unistd.h>
 
 #include "term_pty.h"
 #include "term_screen.h"
+
+static volatile sig_atomic_t term_exit_requested = 0;
+enum {
+    TERM_EVENT_BATCH = 32,
+    TERM_EVENT_BUDGET = 512,
+};
+
+static void term_exit_signal(int signum) {
+    (void)signum;
+    term_exit_requested = 1;
+}
 
 static bool child_alive(pid_t child) {
     if (child <= 0) {
@@ -18,16 +34,261 @@ static bool child_alive(pid_t child) {
 
     int status = 0;
     pid_t done = waitpid(child, &status, WNOHANG);
-    return done != child;
+    if (!done) {
+        return true;
+    }
+
+    if (done == child) {
+        return false;
+    }
+
+    return errno != ECHILD;
 }
 
-static void stop_child(pid_t child) {
-    if (child <= 0) {
+static void wait_ms(int ms) {
+    if (ms <= 0) {
         return;
     }
 
-    kill(-child, SIGHUP);
-    kill(child, SIGHUP);
+    (void)poll(NULL, 0, ms);
+}
+
+static bool is_pid_dir_name(const char *name) {
+    if (!name || !name[0]) {
+        return false;
+    }
+
+    for (const char *p = name; *p; p++) {
+        if (!isdigit((unsigned char)*p)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool session_alive(pid_t sid) {
+    if (sid <= 0) {
+        return false;
+    }
+
+    DIR *dir = opendir("/proc");
+    if (!dir) {
+        return false;
+    }
+
+    bool alive = false;
+    struct dirent *ent = NULL;
+
+    while ((ent = readdir(dir)) != NULL) {
+        if (!is_pid_dir_name(ent->d_name)) {
+            continue;
+        }
+
+        char stat_path[80];
+        snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
+
+        proc_stat_t stat = {0};
+        if (proc_stat_read_path(stat_path, &stat) < 0) {
+            continue;
+        }
+
+        if (stat.sid != sid || stat.state == PROC_STATE_ZOMBIE) {
+            continue;
+        }
+
+        alive = true;
+        break;
+    }
+
+    closedir(dir);
+    return alive;
+}
+
+static bool master_tty_index(int master_fd, int *tty_index_out) {
+    if (master_fd < 0 || !tty_index_out) {
+        return false;
+    }
+
+    int ptn = -1;
+    if (ioctl(master_fd, TIOCGPTN, &ptn) || ptn < 0) {
+        return false;
+    }
+
+    *tty_index_out = PROC_TTY_PTS(ptn);
+    return true;
+}
+
+static bool tty_alive(int tty_index) {
+    DIR *dir = opendir("/proc");
+    if (!dir) {
+        return false;
+    }
+
+    bool alive = false;
+    struct dirent *ent = NULL;
+
+    while ((ent = readdir(dir)) != NULL) {
+        if (!is_pid_dir_name(ent->d_name)) {
+            continue;
+        }
+
+        char stat_path[80];
+        snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
+
+        proc_stat_t stat = {0};
+        if (proc_stat_read_path(stat_path, &stat) < 0) {
+            continue;
+        }
+
+        if (stat.tty_index != tty_index || stat.state == PROC_STATE_ZOMBIE) {
+            continue;
+        }
+
+        alive = true;
+        break;
+    }
+
+    closedir(dir);
+    return alive;
+}
+
+static void signal_session(pid_t sid, int signum) {
+    if (sid <= 0 || signum <= 0) {
+        return;
+    }
+
+    DIR *dir = opendir("/proc");
+    if (!dir) {
+        return;
+    }
+
+    struct dirent *ent = NULL;
+    while ((ent = readdir(dir)) != NULL) {
+        if (!is_pid_dir_name(ent->d_name)) {
+            continue;
+        }
+
+        char stat_path[80];
+        snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
+
+        proc_stat_t stat = {0};
+        if (proc_stat_read_path(stat_path, &stat) < 0) {
+            continue;
+        }
+
+        if (stat.sid != sid || stat.state == PROC_STATE_ZOMBIE) {
+            continue;
+        }
+
+        kill(stat.pid, signum);
+    }
+
+    closedir(dir);
+}
+
+static void signal_tty(int tty_index, int signum) {
+    if (signum <= 0) {
+        return;
+    }
+
+    DIR *dir = opendir("/proc");
+    if (!dir) {
+        return;
+    }
+
+    struct dirent *ent = NULL;
+    while ((ent = readdir(dir)) != NULL) {
+        if (!is_pid_dir_name(ent->d_name)) {
+            continue;
+        }
+
+        char stat_path[80];
+        snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
+
+        proc_stat_t stat = {0};
+        if (proc_stat_read_path(stat_path, &stat) < 0) {
+            continue;
+        }
+
+        if (stat.tty_index != tty_index || stat.state == PROC_STATE_ZOMBIE) {
+            continue;
+        }
+
+        kill(stat.pid, signum);
+    }
+
+    closedir(dir);
+}
+
+static bool teardown_targets_alive(int master_fd, pid_t sid) {
+    if (sid > 0 && session_alive(sid)) {
+        return true;
+    }
+
+    int tty_index = 0;
+    if (master_tty_index(master_fd, &tty_index) && tty_alive(tty_index)) {
+        return true;
+    }
+
+    return false;
+}
+
+static void signal_teardown_targets(int master_fd, pid_t sid, int signum) {
+    if (signum <= 0) {
+        return;
+    }
+
+    int tty_index = 0;
+    if (master_tty_index(master_fd, &tty_index)) {
+        signal_tty(tty_index, signum);
+    }
+
+    if (sid > 0) {
+        signal_session(sid, signum);
+    }
+}
+
+static void stop_child(int master_fd, pid_t child) {
+    pid_t fg_pgrp = 0;
+    if (master_fd >= 0 && ioctl(master_fd, TIOCGPGRP, &fg_pgrp) == 0 && fg_pgrp > 0) {
+        kill(-fg_pgrp, SIGHUP);
+        kill(-fg_pgrp, SIGCONT);
+    }
+
+    signal_teardown_targets(master_fd, child, SIGHUP);
+    signal_teardown_targets(master_fd, child, SIGCONT);
+
+    if (child > 0) {
+        kill(-child, SIGHUP);
+        kill(child, SIGHUP);
+    }
+
+    for (size_t i = 0; i < 20; i++) {
+        if (!teardown_targets_alive(master_fd, child)) {
+            return;
+        }
+
+        wait_ms(10);
+    }
+
+    signal_teardown_targets(master_fd, child, SIGTERM);
+    if (child > 0) {
+        kill(-child, SIGTERM);
+    }
+
+    for (size_t i = 0; i < 20; i++) {
+        if (!teardown_targets_alive(master_fd, child)) {
+            return;
+        }
+
+        wait_ms(10);
+    }
+
+    signal_teardown_targets(master_fd, child, SIGKILL);
+    if (child > 0) {
+        kill(-child, SIGKILL);
+    }
 }
 
 static bool read_pty(int master_fd) {
@@ -36,27 +297,46 @@ static bool read_pty(int master_fd) {
     }
 
     u8 buf[4096];
-    bool got_data = false;
 
     for (;;) {
         ssize_t n = read(master_fd, buf, sizeof(buf));
 
         if (n > 0) {
             term_screen_feed(buf, (size_t)n);
-            got_data = true;
             continue;
         }
 
         if (!n) {
-            return got_data;
+            return false;
         }
 
         if (errno == EAGAIN || errno == EINTR) {
-            return got_data || (errno == EAGAIN);
+            return true;
         }
 
         return false;
     }
+}
+
+static bool sync_screen_size(window_t *window, int master_fd) {
+    if (!window || master_fd < 0) {
+        return false;
+    }
+
+    framebuffer_t *fb = window_buffer(window);
+    if (!fb || !fb->pixels || !term_screen_resize(fb)) {
+        return false;
+    }
+
+    term_set_winsize(
+        master_fd,
+        term_screen_cols(),
+        term_screen_rows(),
+        window->width,
+        window->height
+    );
+
+    return true;
 }
 
 static bool read_window(window_t *window, int master_fd) {
@@ -64,85 +344,62 @@ static bool read_window(window_t *window, int master_fd) {
         return false;
     }
 
-    ws_input_event_t events[16];
-    ssize_t n =
-        window_events(window, events, sizeof(events) / sizeof(events[0]));
-
-    if (n < 0) {
-        return errno == EAGAIN || errno == EINTR;
-    }
-
     bool pending_resize = false;
-    u32 resize_width = 0;
-    u32 resize_height = 0;
-    u32 resize_stride = 0;
+    bool window_closed = false;
+    size_t handled = 0;
 
-    size_t count = (size_t)n / sizeof(events[0]);
-    for (size_t i = 0; i < count; i++) {
-        if (events[i].type != INPUT_EVENT_WINDOW_RESIZE) {
-            continue;
+    while (handled < TERM_EVENT_BUDGET) {
+        ws_input_event_t events[TERM_EVENT_BATCH];
+        ssize_t n = window_events(window, events, TERM_EVENT_BATCH);
+
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EINTR) {
+                break;
+            }
+
+            if (errno == ENOENT) {
+                window_closed = true;
+            }
+
+            break;
         }
 
-        if (!events[i].width || !events[i].height) {
-            continue;
+        size_t count = (size_t)n / sizeof(events[0]);
+        if (!count) {
+            break;
         }
 
-        pending_resize = true;
-        resize_width = events[i].width;
-        resize_height = events[i].height;
-        resize_stride =
-            events[i].stride ? events[i].stride : events[i].width * sizeof(pixel_t);
+        for (size_t i = 0; i < count; i++) {
+            ws_input_event_t *event = &events[i];
+
+            if (
+                event->type == INPUT_EVENT_WINDOW_RESIZE &&
+                event->width &&
+                event->height
+            ) {
+                pending_resize = true;
+                continue;
+            }
+
+            if (event->type == INPUT_EVENT_KEY) {
+                term_handle_key_event(master_fd, event);
+            }
+        }
+
+        handled += count;
+
+        if (count < TERM_EVENT_BATCH) {
+            break;
+        }
     }
 
-    if (
-        pending_resize &&
-        (window->width != resize_width ||
-         window->height != resize_height ||
-         window->stride != resize_stride)
-    ) {
-        if (!term_screen_can_resize(resize_width, resize_height)) {
-            return true;
-        }
-
-        u32 old_width = window->width;
-        u32 old_height = window->height;
-        u32 old_stride = window->stride;
-
-        window->width = resize_width;
-        window->height = resize_height;
-        window->stride = resize_stride;
-
-        framebuffer_t *fb = window_buffer(window);
-        if (!fb || !fb->pixels) {
-            // Keep running; retry on next resize/event tick.
-            window->width = old_width;
-            window->height = old_height;
-            window->stride = old_stride;
-            return true;
-        }
-
-        if (!term_screen_resize(fb)) {
-            // Keep running; leave current screen model untouched.
-            window->width = old_width;
-            window->height = old_height;
-            window->stride = old_stride;
-            return true;
-        }
-
-        // Winsize signaling failure should not kill terminal rendering.
-        term_set_winsize(
-            master_fd,
-            term_screen_cols(),
-            term_screen_rows(),
-            window->width,
-            window->height
-        );
+    if (pending_resize) {
+        (void)sync_screen_size(window, master_fd);
     }
 
-    for (size_t i = 0; i < count; i++) {
-        if (events[i].type == INPUT_EVENT_KEY) {
-            term_handle_key_event(master_fd, &events[i]);
-        }
+    if (window_closed) {
+        errno = ENOENT;
+        return false;
     }
 
     return true;
@@ -190,8 +447,16 @@ int main(void) {
     }
 
     struct pollfd pfds[2] = {
-        {.fd = master_fd, .events = POLLIN, .revents = 0},
-        {.fd = window.ev_fd, .events = POLLIN, .revents = 0},
+        {
+            .fd = master_fd,
+            .events = POLLIN,
+            .revents = 0,
+        },
+        {
+            .fd = window.ev_fd,
+            .events = POLLIN,
+            .revents = 0,
+        },
     };
 
     bool running = true;
@@ -201,7 +466,15 @@ int main(void) {
     u32 flush_w = 0;
     u32 flush_h = 0;
 
+    signal(SIGHUP, term_exit_signal);
+    signal(SIGTERM, term_exit_signal);
+    signal(SIGINT, term_exit_signal);
+
     while (running) {
+        if (term_exit_requested) {
+            break;
+        }
+
         if (!child_alive(child)) {
             break;
         }
@@ -212,8 +485,18 @@ int main(void) {
             if (errno == EINTR) {
                 continue;
             }
-
             break;
+        }
+
+        if (pfds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+            if (!(pfds[0].revents & POLLIN)) {
+                break;
+            }
+        }
+
+        if (pfds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+            running = false;
+            continue;
         }
 
         if (pfds[1].revents & POLLIN) {
@@ -222,34 +505,19 @@ int main(void) {
                     running = false;
                     continue;
                 }
-
-                continue;
             }
         }
 
-        if (!(pfds[1].revents & POLLIN)) {
-            struct pollfd ev_check = {
-                .fd = window.ev_fd,
-                .events = POLLIN,
-                .revents = 0,
-            };
-
-            int ev_ready = poll(&ev_check, 1, 0);
-            if (ev_ready > 0 && (ev_check.revents & POLLIN)) {
-                if (!read_window(&window, master_fd)) {
-                    if (errno == ENOENT) {
-                        running = false;
-                        continue;
-                    }
-
-                    if (errno != EAGAIN && errno != EINTR) {
-                        continue;
-                    }
-                }
+        if ((pfds[0].revents & POLLIN) || !ready) {
+            if (!read_pty(master_fd)) {
+                break;
             }
         }
 
-        if ((pfds[0].revents & POLLIN) && !read_pty(master_fd)) {
+        pfds[0].revents = 0;
+        pfds[1].revents = 0;
+
+        if (term_exit_requested) {
             break;
         }
 
@@ -266,7 +534,7 @@ int main(void) {
             if (errno == EAGAIN || errno == EINTR) {
                 continue;
             }
-            // Keep terminal alive through transient geometry/write races.
+            // Keep terminal alive through transient geometry/write races
             pending_flush = false;
             continue;
         }
@@ -278,9 +546,7 @@ int main(void) {
         }
     }
 
-    if (child_alive(child)) {
-        stop_child(child);
-    }
+    stop_child(master_fd, child);
 
     close(master_fd);
     window_deinit(&window);

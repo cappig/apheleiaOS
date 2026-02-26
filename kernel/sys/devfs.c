@@ -2,9 +2,11 @@
 
 #include <arch/arch.h>
 #include <base/units.h>
+#include <data/vector.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <log/log.h>
+#include <sched/scheduler.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +18,6 @@
 #include "vfs.h"
 
 #define SYSINFO_TEXT_MAX  384
-#define DEVFS_MAX_DEVICES 32
 
 #ifndef BUILD_DATE
 #define BUILD_DATE "unknown"
@@ -37,8 +38,8 @@ typedef struct {
     devfs_device_init_fn init_fn;
 } devfs_device_entry_t;
 
-static devfs_device_entry_t devfs_devices[DEVFS_MAX_DEVICES];
-static size_t devfs_device_count = 0;
+static vector_t *devfs_devices = NULL;
+static bool devfs_ready = false;
 
 
 static u64 _boot_seconds(void) {
@@ -349,42 +350,6 @@ devfs_register_dir(vfs_node_t *parent, const char *name, mode_t mode) {
     return node;
 }
 
-bool devfs_register_device(const char *name, devfs_device_init_fn init_fn) {
-    if (!name || !init_fn) {
-        return false;
-    }
-
-    for (size_t i = 0; i < devfs_device_count; i++) {
-        if (devfs_devices[i].init_fn == init_fn) {
-            return true;
-        }
-    }
-
-    if (devfs_device_count >= DEVFS_MAX_DEVICES) {
-        log_warn("device registry full");
-        return false;
-    }
-
-    devfs_devices[devfs_device_count].name = name;
-    devfs_devices[devfs_device_count].init_fn = init_fn;
-    devfs_device_count++;
-
-    return true;
-}
-
-static void _init_registered_devices(vfs_node_t *dev_dir) {
-    for (size_t i = 0; i < devfs_device_count; i++) {
-        const char *name =
-            devfs_devices[i].name ? devfs_devices[i].name : "device";
-
-        devfs_device_init_fn init_fn = devfs_devices[i].init_fn;
-
-        if (!init_fn || !init_fn(dev_dir)) {
-            log_warn("%s registration failed", name);
-        }
-    }
-}
-
 static vfs_node_t *_ensure_dev_dir(void) {
     vfs_node_t *root = vfs_lookup("/");
     if (!root) {
@@ -412,6 +377,124 @@ static vfs_node_t *_ensure_dev_dir(void) {
     dev_dir->mode = 0755;
 
     return dev_dir;
+}
+
+static bool _ensure_device_registry(void) {
+    if (devfs_devices) {
+        return true;
+    }
+
+    devfs_devices = vec_create(sizeof(devfs_device_entry_t));
+    if (!devfs_devices) {
+        log_warn("failed to allocate devfs device registry");
+        return false;
+    }
+
+    return true;
+}
+
+bool devfs_register_device(const char *name, devfs_device_init_fn init_fn) {
+    if (!name || !init_fn) {
+        return false;
+    }
+
+    if (!_ensure_device_registry()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < devfs_devices->size; i++) {
+        devfs_device_entry_t *entry = vec_at(devfs_devices, i);
+        if (entry && entry->init_fn == init_fn) {
+            return true;
+        }
+    }
+
+    devfs_device_entry_t entry = {
+        .name = name,
+        .init_fn = init_fn,
+    };
+
+    if (!vec_push(devfs_devices, &entry)) {
+        log_warn("failed to grow devfs device registry");
+        return false;
+    }
+
+    if (devfs_ready) {
+        vfs_node_t *dev_dir = _ensure_dev_dir();
+        if (!dev_dir || !init_fn(dev_dir)) {
+            log_warn("%s registration failed", name);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool devfs_unregister_device(const char *name) {
+    if (!name || !name[0] || !devfs_devices) {
+        return false;
+    }
+
+    for (size_t i = 0; i < devfs_devices->size; i++) {
+        devfs_device_entry_t *entry = vec_at(devfs_devices, i);
+        if (!entry) {
+            continue;
+        }
+
+        const char *entry_name = entry->name;
+        if (!entry_name || strcmp(entry_name, name)) {
+            continue;
+        }
+
+        return vec_remove_at(devfs_devices, i, NULL);
+    }
+
+    return false;
+}
+
+bool devfs_unregister_node(const char *path) {
+    if (!path || strncmp(path, "/dev/", 5) != 0) {
+        return false;
+    }
+
+    vfs_node_t *node = vfs_lookup(path);
+    if (!node) {
+        return false;
+    }
+
+    if (sched_fd_refs_node(node)) {
+        return false;
+    }
+
+    if (node->type == VFS_DIR) {
+        return vfs_rmdir(path);
+    }
+
+    return vfs_unlink(path);
+}
+
+bool devfs_is_ready(void) {
+    return devfs_ready;
+}
+
+static void _init_registered_devices(vfs_node_t *dev_dir) {
+    if (!dev_dir || !devfs_devices) {
+        return;
+    }
+
+    for (size_t i = 0; i < devfs_devices->size; i++) {
+        devfs_device_entry_t *entry = vec_at(devfs_devices, i);
+        if (!entry) {
+            continue;
+        }
+
+        const char *name = entry->name ? entry->name : "device";
+        devfs_device_init_fn init_fn = entry->init_fn;
+
+        if (!init_fn || !init_fn(dev_dir)) {
+            log_warn("%s registration failed", name);
+        }
+    }
 }
 
 static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
@@ -484,6 +567,10 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
 }
 
 void devfs_init(void) {
+    if (devfs_ready) {
+        return;
+    }
+
     _boot_seconds();
 
     vfs_node_t *dev_dir = _ensure_dev_dir();
@@ -494,6 +581,7 @@ void devfs_init(void) {
     _init_registered_devices(dev_dir);
 
     _register_builtin_nodes(dev_dir);
+    devfs_ready = true;
 
     log_debug("devfs devices ready");
 }

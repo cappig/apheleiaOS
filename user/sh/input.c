@@ -1,6 +1,8 @@
 #include "input.h"
 
+#include <errno.h>
 #include <io.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -385,6 +387,44 @@ static void load_history_line(
     redraw_line(prompt, layout, buf, *pos, *cursor, render);
 }
 
+static bool read_escape_byte(char *out) {
+    if (!out) {
+        return false;
+    }
+
+    struct pollfd pfd = {
+        .fd = STDIN_FILENO,
+        .events = POLLIN,
+        .revents = 0,
+    };
+
+    for (;;) {
+        int rc = poll(&pfd, 1, 20);
+        if (rc > 0) {
+            ssize_t n = read(STDIN_FILENO, out, 1);
+            if (n == 1) {
+                return true;
+            }
+
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+
+            return false;
+        }
+
+        if (!rc) {
+            return false;
+        }
+
+        if (errno == EINTR) {
+            continue;
+        }
+
+        return false;
+    }
+}
+
 int read_line_interactive(
     const char *prompt,
     char *buf,
@@ -550,14 +590,14 @@ int read_line_interactive(
             char seq1 = 0;
             char seq2 = 0;
 
-            if (read(STDIN_FILENO, &seq1, 1) <= 0) {
+            if (!read_escape_byte(&seq1)) {
                 continue;
             }
-            if (read(STDIN_FILENO, &seq2, 1) <= 0) {
+            if (!read_escape_byte(&seq2)) {
                 continue;
             }
 
-            if (seq1 != '[') {
+            if (seq1 != '[' && seq1 != 'O') {
                 continue;
             }
 

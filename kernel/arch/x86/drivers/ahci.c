@@ -10,17 +10,17 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "mm/physical.h"
-#include "sys/disk.h"
-#include "sys/pci.h"
-#include "sys/time.h"
-#include "x86/apic.h"
-#include "x86/asm.h"
-#include "x86/irq.h"
+#include <sys/disk.h>
+#include <sys/pci.h>
+#include <sys/time.h>
+#include <x86/apic.h>
+#include <x86/asm.h>
+#include <x86/irq.h>
+#include <x86/mm/physical.h>
 #if defined(__x86_64__)
-#include "x86/paging64.h"
+#include <x86/paging64.h>
 #else
-#include "x86/paging32.h"
+#include <x86/paging32.h>
 #endif
 
 // OSdevWiki provides extensive documentation on AHCI:
@@ -29,8 +29,19 @@
 #define AHCI_MSI_VECTOR 0x40
 
 static ahci_device_t *ahci_primary = NULL;
+static disk_dev_t *ahci_primary_disk = NULL;
 static u8 ahci_primary_irq_line = 0xff;
 static bool ahci_warned_irq_fallback = false;
+static bool ahci_driver_loaded = false;
+
+const driver_desc_t ahci_driver_desc = {
+    .name = "ahci",
+    .deps = NULL,
+    .stage = DRIVER_STAGE_STORAGE,
+    .load = ahci_driver_load,
+    .unload = ahci_driver_unload,
+    .is_busy = ahci_driver_busy,
+};
 
 static inline u32 lo32(u64 v) {
     return (u32)(v & 0xffffffffULL);
@@ -225,6 +236,29 @@ static void ahci_destroy_device(ahci_device_t *dev) {
     }
 
     free(dev);
+}
+
+static void ahci_stop_controller(ahci_device_t *dev) {
+    if (!dev) {
+        return;
+    }
+
+    void *mmio = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+    if (!mmio) {
+        return;
+    }
+
+    ahci_hba_mem_t *hba = mmio;
+    ahci_hba_port_t *port = &hba->ports[dev->port_index];
+
+    port->ie = 0;
+    u32 cmd = port->cmd;
+    cmd &= ~(AHCI_PxCMD_ST | AHCI_PxCMD_FRE);
+    port->cmd = cmd;
+    port->is = 0xffffffffU;
+    hba->ghc &= ~AHCI_HBA_IE;
+
+    arch_phys_unmap(mmio, AHCI_MMIO_SIZE);
 }
 
 static void ahci_lock(ahci_device_t *dev) {
@@ -932,7 +966,7 @@ static bool ahci_find_controller(ahci_device_t *dev) {
     return false;
 }
 
-bool ahci_disk_init(void) {
+static bool ahci_disk_init(void) {
     ahci_device_t *dev = calloc(1, sizeof(ahci_device_t));
     if (!dev) {
         return false;
@@ -1034,6 +1068,8 @@ bool ahci_disk_init(void) {
         return false;
     }
 
+    ahci_primary_disk = disk;
+
     log_info(
         "AHCI initialized port %u irq=%u (%zu sectors, %zu MiB)",
         dev->port_index,
@@ -1043,4 +1079,67 @@ bool ahci_disk_init(void) {
     );
 
     return true;
+}
+
+bool ahci_driver_busy(void) {
+    return ahci_primary_disk && disk_is_busy(ahci_primary_disk);
+}
+
+driver_err_t ahci_driver_load(void) {
+    if (ahci_driver_loaded) {
+        return DRIVER_OK;
+    }
+
+    if (!ahci_disk_init()) {
+        return DRIVER_ERR_INIT_FAILED;
+    }
+
+    ahci_driver_loaded = true;
+    return DRIVER_OK;
+}
+
+driver_err_t ahci_driver_unload(void) {
+    if (!ahci_driver_loaded) {
+        return DRIVER_OK;
+    }
+
+    if (ahci_driver_busy()) {
+        return DRIVER_ERR_BUSY;
+    }
+
+    ahci_device_t *dev = ahci_primary;
+
+    if (ahci_primary_disk) {
+        if (!disk_unregister(ahci_primary_disk)) {
+            return DRIVER_ERR_BUSY;
+        }
+    }
+
+    if (dev) {
+        ahci_stop_controller(dev);
+    }
+
+    if (dev && dev->msi_enabled) {
+        (void)pci_disable_msi(dev->bus, dev->slot, dev->func);
+        reset_int_handler(AHCI_MSI_VECTOR);
+    } else if (dev && dev->irq_enabled && ahci_irq_line_supported(dev->irq_line)) {
+        irq_unregister(dev->irq_line);
+    }
+
+    if (ahci_primary_disk) {
+        free(ahci_primary_disk->name);
+        free(ahci_primary_disk);
+        ahci_primary_disk = NULL;
+    }
+
+    if (dev) {
+        ahci_destroy_device(dev);
+    }
+
+    ahci_primary = NULL;
+    ahci_primary_irq_line = 0xff;
+    ahci_warned_irq_fallback = false;
+    ahci_driver_loaded = false;
+
+    return DRIVER_OK;
 }

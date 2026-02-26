@@ -20,6 +20,50 @@ class BuildError(RuntimeError):
     pass
 
 
+ROOT_UID = 0
+ROOT_GID = 0
+USER_UID = 1000
+USER_GID = 1000
+JOHN_UID = 1001
+JOHN_GID = 1001
+
+ROOT_OWNER = (ROOT_UID, ROOT_GID)
+USER_OWNER = (USER_UID, USER_GID)
+JOHN_OWNER = (JOHN_UID, JOHN_GID)
+
+
+def _meta(mode: int, owner: tuple[int, int] = ROOT_OWNER) -> dict[str, int]:
+    uid, gid = owner
+    return {"mode": mode, "uid": uid, "gid": gid}
+
+
+ROOTFS_SYSTEM_DIRS = ("", "bin", "boot", "dev", "etc", "home")
+
+ROOTFS_METADATA_OVERRIDES: dict[str, dict[str, int]] = {
+    rel: _meta(0o755)
+    for rel in ROOTFS_SYSTEM_DIRS
+}
+
+ROOTFS_METADATA_OVERRIDES.update(
+    {
+        "home/user": _meta(0o755, USER_OWNER),
+        "home/john": _meta(0o755, JOHN_OWNER),
+        "etc/passwd": _meta(0o644),
+        "etc/group": _meta(0o644),
+        "etc/shadow": _meta(0o600),
+        "etc/cozette.psf": _meta(0o644),
+        "etc/font.psf": _meta(0o644),
+        "boot/loader.conf": _meta(0o644),
+        "bin/su": _meta(0o4755),
+    }
+)
+
+ROOTFS_OWNER_PREFIX_OVERRIDES: dict[str, tuple[int, int]] = {
+    "home/user": USER_OWNER,
+    "home/john": JOHN_OWNER,
+}
+
+
 def div_round_up(value: int, divisor: int) -> int:
     return (value + divisor - 1) // divisor
 
@@ -28,21 +72,10 @@ def align_up(value: int, alignment: int) -> int:
     return div_round_up(value, alignment) * alignment
 
 
-def align_down(value: int, alignment: int) -> int:
-    return (value // alignment) * alignment
-
-
 def write_at(path: Path, offset: int, data: bytes) -> None:
     with path.open("r+b") as f:
         f.seek(offset)
         f.write(data)
-
-
-def append_file(path: Path, data: bytes) -> int:
-    old_size = path.stat().st_size if path.exists() else 0
-    with path.open("ab") as f:
-        f.write(data)
-    return old_size
 
 
 def write_file_to_lba(
@@ -75,41 +108,17 @@ def prepare_root_tree(src_root: Path, dst_root: Path) -> None:
     shutil.copytree(src_root, dst_root, symlinks=True)
     (dst_root / "dev").mkdir(parents=True, exist_ok=True)
 
-    def chmod_if_exists(rel: str, mode: int) -> None:
-        p = dst_root / rel
-        if p.exists():
-            p.chmod(mode)
+    for rel, meta in ROOTFS_METADATA_OVERRIDES.items():
+        path = dst_root if not rel else (dst_root / rel)
+        if not path.exists():
+            continue
 
-    chmod_if_exists("etc/passwd", 0o644)
-    chmod_if_exists("etc/group", 0o644)
-    chmod_if_exists("etc/font.psf", 0o644)
-    chmod_if_exists("boot/loader.conf", 0o644)
-    chmod_if_exists("etc/shadow", 0o600)
-    chmod_if_exists("dev", 0o755)
-    chmod_if_exists("home", 0o755)
-    chmod_if_exists("home/user", 0o755)
+        path.chmod(meta["mode"])
 
-    def chown_if_exists(rel: str, uid: int, gid: int) -> None:
-        p = dst_root / rel
-        if not p.exists():
-            return
         try:
-            os.chown(p, uid, gid)
+            os.chown(path, meta["uid"], meta["gid"])
         except (PermissionError, OSError):
             pass
-
-    for rel in (
-        "etc/passwd",
-        "etc/group",
-        "etc/font.psf",
-        "boot/loader.conf",
-        "etc/shadow",
-        "dev",
-        "home",
-    ):
-        chown_if_exists(rel, 0, 0)
-
-    chown_if_exists("home/user", 1000, 1000)
 
 
 def _mbr_entry(status: int, ptype: int, lba: int, sectors: int) -> bytes:
@@ -231,6 +240,32 @@ class _Ext2Node:
     inode_num: int = 0
     children: list["_Ext2Node"] = field(default_factory=list)
     content: bytes = b""
+
+
+def _node_rel_path(node: _Ext2Node) -> str:
+    parts: list[str] = []
+    current = node
+
+    while current and current.parent is not None:
+        if current.name:
+            parts.append(current.name)
+        current = current.parent
+
+    parts.reverse()
+    return "/".join(parts)
+
+
+def _default_owner_for_rel_path(rel_path: str) -> tuple[int, int]:
+    best_prefix = ""
+    best_owner = ROOT_OWNER
+
+    for prefix, owner in ROOTFS_OWNER_PREFIX_OVERRIDES.items():
+        if rel_path == prefix or rel_path.startswith(prefix + "/"):
+            if len(prefix) > len(best_prefix):
+                best_prefix = prefix
+                best_owner = owner
+
+    return best_owner
 
 
 def _scan_tree(path: Path, parent: _Ext2Node | None, name: str) -> _Ext2Node:
@@ -385,6 +420,20 @@ def build_ext2_image(
 
     root = _scan_tree(root_tree, None, "")
     inode_map = _assign_inode_numbers(root)
+
+    for node in inode_map.values():
+        rel_path = _node_rel_path(node)
+        default_uid, default_gid = _default_owner_for_rel_path(rel_path)
+        node.uid = default_uid
+        node.gid = default_gid
+
+        override = ROOTFS_METADATA_OVERRIDES.get(rel_path)
+        if not override:
+            continue
+
+        node.mode = override.get("mode", node.mode)
+        node.uid = override.get("uid", node.uid)
+        node.gid = override.get("gid", node.gid)
 
     for node in inode_map.values():
         if node.is_dir:

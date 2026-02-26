@@ -3,6 +3,8 @@
 #include <input/kbd.h>
 #include <math.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <ui.h>
 
@@ -12,6 +14,149 @@ typedef struct {
 } point_t;
 
 static const double k_pi = 3.14159265358979323846;
+static const int k_clock_face_label_gap = 6;
+static const int k_clock_edge_pad = 4;
+static const int k_clock_label_raise = 8;
+
+typedef struct {
+    bool show_date;
+    bool smooth;
+    bool numbered;
+} clock_options_t;
+
+static void print_usage(const char *prog) {
+    const char *name = (prog && prog[0]) ? prog : "clock";
+    printf(
+        "usage: %s [options]\n"
+        "  -d, --no-date  hide date/year labels\n"
+        "  -n, --numbered place numbers at hour ticks\n"
+        "  -s, --smooth   animate second/minute/hour hands smoothly\n"
+        "  -h, --help     show this help\n",
+        name
+    );
+}
+
+static int parse_args(int argc, char **argv, clock_options_t *out) {
+    if (!out) {
+        return -1;
+    }
+
+    out->show_date = true;
+    out->smooth = false;
+    out->numbered = false;
+
+    for (int i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        if (!arg) {
+            continue;
+        }
+
+        if (!strcmp(arg, "-d") || !strcmp(arg, "--no-date")) {
+            out->show_date = false;
+            continue;
+        }
+
+        if (!strcmp(arg, "-n") || !strcmp(arg, "--numbered")) {
+            out->numbered = true;
+            continue;
+        }
+
+        if (!strcmp(arg, "-s") || !strcmp(arg, "--smooth")) {
+            out->smooth = true;
+            continue;
+        }
+
+        if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
+            print_usage(argv ? argv[0] : NULL);
+            return 0;
+        }
+
+        printf("clock: unknown option '%s'\n", arg);
+        print_usage(argv ? argv[0] : NULL);
+        return -1;
+    }
+
+    return 1;
+}
+
+static int text_width_px(const char *text) {
+    if (!text) {
+        return 0;
+    }
+
+    int advance = (int)draw_font_width();
+    if (advance < 1) {
+        advance = 1;
+    }
+
+    size_t len = strlen(text);
+    return (int)len * advance;
+}
+
+static int text_height_px(void) {
+    int height = (int)draw_font_height();
+    if (height < 1) {
+        height = 1;
+    }
+
+    return height;
+}
+
+static void draw_face_labels(
+    framebuffer_t *fb,
+    int width,
+    int cx,
+    int cy,
+    int radius,
+    const struct tm *tm_now
+) {
+    if (!fb || !tm_now || width <= 0 || radius <= 0) {
+        return;
+    }
+
+    char year_text[16] = {0};
+    char date_text[16] = {0};
+
+    if (!strftime(year_text, sizeof(year_text), "%Y", tm_now)) {
+        snprintf(year_text, sizeof(year_text), "?");
+    }
+    if (!strftime(date_text, sizeof(date_text), "%b %d", tm_now)) {
+        snprintf(date_text, sizeof(date_text), "??? ??");
+    }
+
+    int date_w = text_width_px(date_text);
+    int year_w = text_width_px(year_text);
+
+    int face_left = cx - radius;
+    int face_right = cx + radius;
+    int text_height = text_height_px();
+    int label_y =
+        cy - radius - k_clock_face_label_gap - text_height - k_clock_label_raise;
+    if (label_y < 2) {
+        label_y = 2;
+    }
+
+    int date_x = face_left;
+    if (date_x < k_clock_edge_pad) {
+        date_x = k_clock_edge_pad;
+    }
+
+    int year_x = face_right - year_w;
+    if (year_x + year_w > width - k_clock_edge_pad) {
+        year_x = width - k_clock_edge_pad - year_w;
+    }
+    if (year_x < k_clock_edge_pad) {
+        year_x = k_clock_edge_pad;
+    }
+
+    if (date_x + date_w + k_clock_edge_pad > year_x) {
+        date_x = k_clock_edge_pad;
+        year_x = width - k_clock_edge_pad - year_w;
+    }
+
+    draw_text(fb, date_x, label_y, date_text, DRAW_WHITE);
+    draw_text(fb, year_x, label_y, year_text, DRAW_WHITE);
+}
 
 static int clamp_i32(int value, int low, int high) {
     if (value < low) {
@@ -31,6 +176,27 @@ static int imin(int a, int b) {
     }
 
     return b;
+}
+
+static int tick_milli_from_scale(double value, double scale) {
+    if (scale <= 0.0) {
+        return 0;
+    }
+
+    double wrapped = fmod(value, scale);
+    if (wrapped < 0.0) {
+        wrapped += scale;
+    }
+
+    int tick_milli = (int)((wrapped * 60000.0) / scale);
+    if (tick_milli < 0) {
+        return 0;
+    }
+    if (tick_milli >= 60000) {
+        return 59999;
+    }
+
+    return tick_milli;
 }
 
 static double angle_from_tick_milli(int tick_milli) {
@@ -78,6 +244,28 @@ static void draw_ticks(framebuffer_t *fb, int cx, int cy, int radius) {
     }
 }
 
+static void draw_hour_numbers(framebuffer_t *fb, int cx, int cy, int radius) {
+    if (!fb || radius <= 0) {
+        return;
+    }
+
+    int inset = clamp_i32((radius / 7) + 5, 18, 28);
+    int label_radius = radius - inset;
+
+    for (int hour = 1; hour <= 12; hour++) {
+        int tick_index = (hour % 12) * 5;
+        point_t p = polar_point_tick(cx, cy, label_radius, tick_index * 1000);
+
+        char text[4];
+        snprintf(text, sizeof(text), "%d", hour);
+
+        int text_w = text_width_px(text);
+        int text_x = p.x - (text_w / 2);
+        int text_y = p.y - (text_height_px() / 2);
+        draw_text(fb, text_x, text_y, text, DRAW_WHITE);
+    }
+}
+
 static void draw_hand(
     framebuffer_t *fb,
     int cx,
@@ -98,7 +286,13 @@ static bool clock_tm_from_time(time_t now, struct tm *tm_out) {
     return localtime_r(&now, tm_out) != NULL;
 }
 
-static bool draw_clock(window_t *window, const struct tm *tm_now) {
+static bool
+draw_clock(
+    window_t *window,
+    const struct tm *tm_now,
+    const clock_options_t *opts,
+    double second_fraction
+) {
     if (!window || !tm_now) {
         return false;
     }
@@ -113,25 +307,52 @@ static bool draw_clock(window_t *window, const struct tm *tm_now) {
     int width = (int)fb->width;
     int height = (int)fb->height;
     int cx = width / 2;
-    int cy = height / 2;
+    bool show_date = !opts || opts->show_date;
+    int clock_top = k_clock_edge_pad;
+
+    if (show_date) {
+        clock_top += text_height_px() + k_clock_face_label_gap + k_clock_edge_pad;
+    }
+
+    int available_h = height - clock_top;
+    if (available_h < 1) {
+        available_h = 1;
+    }
+
+    int cy = clock_top + (available_h / 2);
 
     int min_dim = imin(width, height);
     int margin = min_dim / 12;
     margin = clamp_i32(margin, 8, 20);
 
-    int radius = (min_dim / 2) - margin;
+    int radius_w = (width / 2) - margin;
+    int radius_h = (available_h / 2) - margin;
+    int radius = imin(radius_w, radius_h);
     if (radius < 8) {
         radius = 8;
     }
 
+    if (show_date) {
+        draw_face_labels(fb, width, cx, cy, radius, tm_now);
+    }
     draw_ticks(fb, cx, cy, radius);
+    if (opts && opts->numbered) {
+        draw_hour_numbers(fb, cx, cy, radius);
+    }
 
-    int second_tick_milli = tm_now->tm_sec * 1000;
-    int minute_tick_milli =
-        (tm_now->tm_min * 1000) + ((tm_now->tm_sec * 1000) / 60);
-    int hour = tm_now->tm_hour % 12;
-    int hour_tick_milli =
-        (hour * 5000) + ((tm_now->tm_min * 5000) / 60) + ((tm_now->tm_sec * 5000) / 3600);
+    if (second_fraction < 0.0) {
+        second_fraction = 0.0;
+    } else if (second_fraction > 0.999999) {
+        second_fraction = 0.999999;
+    }
+
+    double second_pos = (double)tm_now->tm_sec + second_fraction;
+    double minute_pos = (double)tm_now->tm_min + (second_pos / 60.0);
+    double hour_pos = (double)(tm_now->tm_hour % 12) + (minute_pos / 60.0);
+
+    int second_tick_milli = tick_milli_from_scale(second_pos, 60.0);
+    int minute_tick_milli = tick_milli_from_scale(minute_pos, 60.0);
+    int hour_tick_milli = tick_milli_from_scale(hour_pos, 12.0);
 
     int hour_len = (radius * 50) / 100;
     int minute_len = (radius * 70) / 100;
@@ -176,7 +397,50 @@ static bool should_quit(const ws_input_event_t *event) {
     return event->keycode == KBD_ESCAPE;
 }
 
-int main(void) {
+typedef struct {
+    bool valid;
+    time_t realtime_sec;
+    struct timespec mono_mark;
+} smooth_clock_state_t;
+
+static double smooth_second_fraction(time_t realtime_sec, smooth_clock_state_t *state) {
+    if (!state || realtime_sec == (time_t)-1) {
+        return 0.0;
+    }
+
+    struct timespec mono_now = {0};
+    if (clock_gettime(CLOCK_MONOTONIC, &mono_now) < 0) {
+        return 0.0;
+    }
+
+    if (!state->valid || state->realtime_sec != realtime_sec) {
+        state->valid = true;
+        state->realtime_sec = realtime_sec;
+        state->mono_mark = mono_now;
+        return 0.0;
+    }
+
+    time_t ds = mono_now.tv_sec - state->mono_mark.tv_sec;
+    long dns = mono_now.tv_nsec - state->mono_mark.tv_nsec;
+    double elapsed = (double)ds + ((double)dns / 1000000000.0);
+
+    if (elapsed < 0.0) {
+        return 0.0;
+    }
+    if (elapsed > 0.999999) {
+        return 0.999999;
+    }
+
+    return elapsed;
+}
+
+int main(int argc, char **argv) {
+    clock_options_t opts = {0};
+    int parse_status = parse_args(argc, argv, &opts);
+    if (parse_status <= 0) {
+        return parse_status < 0 ? 1 : 0;
+    }
+
     window_t window = {0};
     if (window_init(&window, 320, 360, "clock")) {
         return 1;
@@ -185,12 +449,19 @@ int main(void) {
     time_t last_sec = (time_t)-1;
     bool redraw = true;
     bool running = true;
+    smooth_clock_state_t smooth_state = {0};
 
     while (running) {
         time_t now = time(NULL);
+        double second_fraction = 0.0;
 
         if (now != (time_t)-1 && now != last_sec) {
             last_sec = now;
+            redraw = true;
+        }
+
+        if (opts.smooth && now != (time_t)-1) {
+            second_fraction = smooth_second_fraction(now, &smooth_state);
             redraw = true;
         }
 
@@ -201,17 +472,14 @@ int main(void) {
                 break;
             }
 
-            if (draw_clock(&window, &tm_now)) {
+            if (draw_clock(&window, &tm_now, &opts, second_fraction)) {
                 redraw = false;
             }
         }
 
         ws_input_event_t event = {0};
 
-        int timeout_ms = 100;
-        if (redraw) {
-            timeout_ms = 0;
-        }
+        int timeout_ms = opts.smooth ? 16 : (redraw ? 0 : 100);
 
         int rc = window_wait_event(&window, &event, timeout_ms);
 

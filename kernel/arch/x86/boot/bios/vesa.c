@@ -176,7 +176,7 @@ void init_graphics(boot_info_t *info) {
     edid_info_t *edid = &info->edid;
     kernel_args_t *args = &info->args;
 
-    // Start in text mode and only switch to graphics if mode set succeeds.
+    // Start in text mode and only switch to graphics if mode set succeeds
     video->mode = VIDEO_TEXT;
     video->framebuffer = VGA_ADDR;
     video->width = VGA_WIDTH;

@@ -1,10 +1,11 @@
 #pragma once
 
+#include <base/attributes.h>
 #include <base/types.h>
 #include <data/tree.h>
 #include <data/vector.h>
 
-#include "sys/types.h"
+#include <sys/types.h>
 
 
 // files and directories created by the kernel have these permissions
@@ -131,14 +132,15 @@ struct fs_instance {
     void *private;
 };
 
-bool disk_register(disk_dev_t *dev);
+MUST_USE bool disk_register(disk_dev_t *dev);
+MUST_USE bool disk_unregister(disk_dev_t *dev);
+bool disk_is_busy(const disk_dev_t *dev);
 disk_dev_t *disk_lookup(size_t dev_id);
 
 bool file_system_register(fs_t *fs);
 fs_t *file_system_lookup(const char *name);
 
-bool mount_rootfs(disk_dev_t *dev);
-bool mount_rootf(void);
+bool mount_rootfs(void);
 bool disk_publish_devices(void);
 bool disk_mount_partition_node(
     vfs_node_t *source,

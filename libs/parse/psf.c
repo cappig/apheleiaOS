@@ -1,6 +1,7 @@
 #include "psf.h"
 
 #include <base/attributes.h>
+#include <base/utf8.h>
 #include <string.h>
 
 #define PSF1_MAGIC 0x0436U
@@ -107,4 +108,93 @@ bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out) {
     }
 
     return true;
+}
+
+bool psf_iter_unicode_mappings(
+    const psf_blob_t *blob,
+    psf_unicode_map_iter_t iter,
+    void *ctx
+) {
+    if (!blob || !iter) {
+        return false;
+    }
+
+    if (
+        !(blob->flags & PSF_BLOB_UNICODE) ||
+        !blob->unicode_table ||
+        !blob->unicode_size
+    ) {
+        return true;
+    }
+
+    const u8 *table = blob->unicode_table;
+    const u8 *end = table + blob->unicode_size;
+
+    if (blob->type == PSF_TYPE_2) {
+        for (u32 glyph = 0; glyph < blob->glyph_count && table < end; glyph++) {
+            bool sequence = false;
+
+            while (table < end && *table != 0xffU) {
+                if (*table == 0xfeU) {
+                    sequence = true;
+                    table++;
+                    continue;
+                }
+
+                u32 codepoint = 0;
+                size_t consumed =
+                    utf8_decode(table, (size_t)(end - table), &codepoint);
+
+                if (!consumed) {
+                    table++;
+                    continue;
+                }
+
+                if (
+                    !sequence &&
+                    codepoint != 0xfffeU &&
+                    codepoint != 0xffffU &&
+                    !iter(ctx, codepoint, glyph)
+                ) {
+                    return false;
+                }
+
+                table += consumed;
+            }
+
+            if (table < end && *table == 0xffU) {
+                table++;
+            }
+        }
+
+        return true;
+    }
+
+    if (blob->type == PSF_TYPE_1) {
+        for (u32 glyph = 0; glyph < blob->glyph_count && table + 1 < end; glyph++) {
+            bool sequence = false;
+
+            while (table + 1 < end) {
+                u16 code = (u16)(table[0] | ((u16)table[1] << 8));
+                table += 2;
+
+                if (code == 0xffffU) {
+                    break;
+                }
+
+                if (code == 0xfffeU) {
+                    sequence = true;
+                    continue;
+                }
+
+                if (!sequence && !iter(ctx, code, glyph)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    return false;
 }

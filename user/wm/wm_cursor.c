@@ -122,14 +122,19 @@ static const wm_cursor_t *_cursor_pick(wm_cursor_kind_t kind) {
     return NULL;
 }
 
+static bool _cursor_uses_center_hotspot(wm_cursor_kind_t kind) {
+    return kind == WM_CURSOR_RESIZE_EW ||
+           kind == WM_CURSOR_RESIZE_NS ||
+           kind == WM_CURSOR_RESIZE_NW ||
+           kind == WM_CURSOR_RESIZE_SE ||
+           kind == WM_CURSOR_RESIZE_SW ||
+           kind == WM_CURSOR_MOVE;
+}
+
 void wm_cursor_unload(void) {
     for (u32 i = 0; i < WM_CURSOR_KIND_COUNT; i++) {
         _cursor_release(&cursors[i]);
     }
-}
-
-bool wm_cursor_load(const char *path) {
-    return wm_cursor_load_kind(WM_CURSOR_NORMAL, path);
 }
 
 bool wm_cursor_load_kind(wm_cursor_kind_t kind, const char *path) {
@@ -168,7 +173,7 @@ bool wm_cursor_draw_kind(
     i32 hot_x = 0;
     i32 hot_y = 0;
 
-    if (kind != WM_CURSOR_NORMAL && has_exact_cursor) {
+    if (has_exact_cursor && _cursor_uses_center_hotspot(kind)) {
         hot_x = (i32)(cursor->width / 2);
         hot_y = (i32)(cursor->height / 2);
     }
@@ -199,10 +204,4 @@ bool wm_cursor_draw_kind(
     }
 
     return true;
-}
-
-bool wm_cursor_draw(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32 y) {
-    return wm_cursor_draw_kind(
-        frame, fb_width, fb_height, x, y, WM_CURSOR_NORMAL
-    );
 }

@@ -16,3 +16,8 @@ void bitmap_set_region(bitmap_word_t *bitmap, size_t index, size_t blocks);
 void bitmap_clear_region(bitmap_word_t *bitmap, size_t index, size_t blocks);
 
 bool bitmap_get(bitmap_word_t *bitmap, size_t index);
+bool bitmap_find_first_clear(
+    const bitmap_word_t *bitmap,
+    size_t bit_count,
+    size_t *index_out
+);

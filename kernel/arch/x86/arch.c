@@ -2,6 +2,7 @@
 #include <arch/paging.h>
 #include <arch/thread.h>
 #include <base/macros.h>
+#include <drivers/manager.h>
 #include <fs/ext2.h>
 #include <inttypes.h>
 #include <libc_ext/string.h>
@@ -16,14 +17,14 @@
 #include <sys/cpu.h>
 #include <sys/disk.h>
 #include <sys/framebuffer.h>
+#include <sys/keyboard.h>
 #include <sys/logsink.h>
+#include <sys/mouse.h>
 #include <sys/panic.h>
 #include <sys/pci.h>
 #include <sys/tty.h>
 #include <sys/usb.h>
-#include <x86/ahci.h>
 #include <x86/asm.h>
-#include <x86/ata.h>
 #include <x86/boot.h>
 #include <x86/console.h>
 #include <x86/gdt.h>
@@ -32,11 +33,9 @@
 #include <x86/mm/heap.h>
 #include <x86/mm/physical.h>
 #include <x86/pic.h>
-#include <x86/ps2.h>
 #include <x86/rtc.h>
 #include <x86/serial.h>
 #include <x86/tsc.h>
-#include <x86/usb_xhci.h>
 
 
 #define LOG_BOOT_HISTORY_CAP    (256 * 1024)
@@ -121,6 +120,40 @@ static void _log_history_replay_console(void) {
 
 void arch_log_replay_console(void) {
     _log_history_replay_console();
+}
+
+ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
+    if (!buf) {
+        return -1;
+    }
+
+    if (!len) {
+        return 0;
+    }
+
+    unsigned long irq_flags = arch_irq_save();
+    size_t history_len = boot_log_history_len;
+
+    if (offset >= history_len) {
+        arch_irq_restore(irq_flags);
+        return 0;
+    }
+
+    size_t copy_len = history_len - offset;
+    if (copy_len > len) {
+        copy_len = len;
+    }
+
+    memcpy(buf, boot_log_history + offset, copy_len);
+    arch_irq_restore(irq_flags);
+    return (ssize_t)copy_len;
+}
+
+size_t arch_log_ring_size(void) {
+    unsigned long irq_flags = arch_irq_save();
+    size_t history_len = boot_log_history_len;
+    arch_irq_restore(irq_flags);
+    return history_len;
 }
 
 static void _log_write_early(const char *s, size_t len) {
@@ -918,6 +951,9 @@ const kernel_args_t *arch_init(void *boot_info) {
     heap_init();
     arch_init_alloc();
     pmm_ref_init();
+    if (!pmm_ref_ready()) {
+        panic("PMM refcount table unavailable, COW fork is required");
+    }
 
     x86_console_backend_init();
     console_init(info);
@@ -930,9 +966,22 @@ const kernel_args_t *arch_init(void *boot_info) {
     tsc_init();
     irq_init();
 
-    ps2_init();
-
     pci_init();
+
+    if (!keyboard_init()) {
+        log_warn("keyboard core init failed");
+    }
+
+    if (!mouse_init()) {
+        log_warn("mouse core init failed");
+    }
+
+    if (!driver_registry_init()) {
+        log_warn("driver registry init failed");
+    } else {
+        driver_load_stage(DRIVER_STAGE_ARCH_EARLY);
+    }
+
     if (info->args.debug == DEBUG_ALL) {
         dump_pci_devices();
     }
@@ -952,9 +1001,11 @@ void arch_storage_init(void) {
     _set_boot_disk_hint();
     _set_boot_rootfs_uuid_preference();
 
-    ata_disk_init();
-    ahci_disk_init();
-    usb_init();
+    if (!usb_core_init()) {
+        log_warn("USB core init failed");
+    }
+
+    driver_load_stage(DRIVER_STAGE_STORAGE);
 
     if (!usb_wait_for_boot_enumeration(1500)) {
         log_warn("USB boot enumeration did not settle before rootfs mount");
@@ -963,18 +1014,6 @@ void arch_storage_init(void) {
     if (boot_rootfs_paddr && boot_rootfs_size && !_register_boot_rootfs()) {
         log_warn("failed to register staged rootfs fallback");
     }
-}
-
-void arch_register_devices(void) {
-    serial_devfs_init();
-}
-
-bool arch_usb_controller_init(void) {
-    bool found = false;
-
-    found |= usb_xhci_init();
-
-    return found;
 }
 
 bool arch_phys_map_can_persist(void) {

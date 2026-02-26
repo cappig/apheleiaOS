@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <draw.h>
 #include <fcntl.h>
 #include <gui/fb.h>
 #include <limits.h>
@@ -23,6 +24,7 @@ static volatile sig_atomic_t exit_requested = 0;
 typedef struct {
     char background[PATH_MAX];
     char cursors[PATH_MAX];
+    char font[PATH_MAX];
     wm_palette_t palette;
     u32 palette_mask;
 } wm_config_t;
@@ -37,6 +39,12 @@ enum wm_cfg_palette_mask {
     WM_CFG_PAL_CLOSE_BG = 1u << 6,
     WM_CFG_PAL_CLOSE_FG = 1u << 7,
 };
+
+typedef struct {
+    const char *bg_override;
+    const char *cursor_override;
+    int fb_fd;
+} wm_startup_t;
 
 
 static void _on_signal(int signum) {
@@ -171,6 +179,7 @@ static void _load_wm_config(wm_config_t *cfg) {
 
     cfg->background[0] = '\0';
     cfg->cursors[0] = '\0';
+    cfg->font[0] = '\0';
     cfg->palette_mask = 0;
 
     char cfg_text[2048];
@@ -243,6 +252,9 @@ static void _load_wm_config(wm_config_t *cfg) {
         } else if (!strcmp(key, "cursors")) {
             out = cfg->cursors;
             out_len = sizeof(cfg->cursors);
+        } else if (!strcmp(key, "font")) {
+            out = cfg->font;
+            out_len = sizeof(cfg->font);
         } else if (value_len < sizeof(value_buf)) {
             memcpy(value_buf, value_start, value_len);
             value_buf[value_len] = '\0';
@@ -263,18 +275,28 @@ static void _load_wm_config(wm_config_t *cfg) {
     }
 }
 
-static bool _parse_args(
-    int argc,
-    char **argv,
-    const char **bg_override_out,
-    const char **cursor_override_out
-) {
-    if (!bg_override_out || !cursor_override_out) {
+static bool _parse_fd_arg(const char *text, int *fd_out) {
+    if (!text || !text[0] || !fd_out) {
         return false;
     }
 
-    *bg_override_out = NULL;
-    *cursor_override_out = NULL;
+    char *end = NULL;
+    long value = strtol(text, &end, 10);
+    if (!end || *end || value < 0 || value > INT_MAX) {
+        return false;
+    }
+
+    *fd_out = (int)value;
+    return true;
+}
+
+static bool _parse_args(int argc, char **argv, wm_startup_t *startup) {
+    if (!startup) {
+        return false;
+    }
+
+    memset(startup, 0, sizeof(*startup));
+    startup->fb_fd = -1;
 
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i];
@@ -288,7 +310,7 @@ static bool _parse_args(
                 return false;
             }
 
-            *bg_override_out = argv[++i];
+            startup->bg_override = argv[++i];
             continue;
         }
 
@@ -298,7 +320,16 @@ static bool _parse_args(
                 return false;
             }
 
-            *cursor_override_out = argv[++i];
+            startup->cursor_override = argv[++i];
+            continue;
+        }
+
+        if (!strcmp(arg, "--fd-fb")) {
+            if (i + 1 >= argc || !_parse_fd_arg(argv[i + 1], &startup->fb_fd)) {
+                io_write_str("wm: --fd-fb requires a valid fd\n");
+                return false;
+            }
+            i++;
             continue;
         }
 
@@ -366,9 +397,8 @@ int main(int argc, char **argv) {
     bool fb_acquired = false;
     bool mgr_claimed = false;
 
-    const char *bg_override = NULL;
-    const char *cursor_override = NULL;
-    if (!_parse_args(argc, argv, &bg_override, &cursor_override)) {
+    wm_startup_t startup = {0};
+    if (!_parse_args(argc, argv, &startup)) {
         return 1;
     }
 
@@ -378,12 +408,27 @@ int main(int argc, char **argv) {
     signal(SIGTERM, _on_signal);
     signal(SIGHUP, _on_signal);
 
-    fb_fd = open("/dev/fb", O_RDWR, 0);
+    if (startup.fb_fd >= 0) {
+        fb_fd = startup.fb_fd;
+    } else {
+        fb_fd = open("/dev/fb", O_RDWR, 0);
+        if (fb_fd < 0) {
+            io_write_str("wm: open /dev/fb failed\n");
+            goto out;
+        }
+    }
 
-    if (fb_fd < 0) {
-        io_write_str("wm: open /dev/fb failed\n");
+    if (ui_open(&ui, UI_OPEN_INPUT)) {
+        io_write_str("wm: failed to open wsctl/keyboard/mouse\n");
         goto out;
     }
+
+    if (ui_mgr_claim(&ui)) {
+        io_write_str("wm: failed to claim ws manager\n");
+        goto out;
+    }
+
+    mgr_claimed = true;
 
     fb_info_t fb_info = {0};
     if (ioctl(fb_fd, FBIOGETINFO, &fb_info) || !fb_info.available || fb_info.bpp != 32) {
@@ -404,18 +449,6 @@ int main(int argc, char **argv) {
 
     fb_acquired = true;
 
-    if (ui_open(&ui, UI_OPEN_INPUT)) {
-        io_write_str("wm: failed to open wsctl/keyboard/mouse\n");
-        goto out;
-    }
-
-    if (ui_mgr_claim(&ui)) {
-        io_write_str("wm: failed to claim ws manager\n");
-        goto out;
-    }
-
-    mgr_claimed = true;
-
     size_t frame_pixels = (size_t)fb_info.width * (size_t)fb_info.height;
     size_t frame_bytes = frame_pixels * sizeof(pixel_t);
 
@@ -432,6 +465,10 @@ int main(int argc, char **argv) {
 
     wm_config_t cfg = {0};
     _load_wm_config(&cfg);
+
+    if (cfg.font[0] && !draw_set_font_path(cfg.font)) {
+        io_write_str("wm: invalid font path in config\n");
+    }
 
     wm_palette_t palette = *wm_palette_get();
 
@@ -463,8 +500,8 @@ int main(int argc, char **argv) {
     wm_palette_set(&palette);
 
     const char *bg_path = NULL;
-    if (bg_override && bg_override[0]) {
-        bg_path = bg_override;
+    if (startup.bg_override && startup.bg_override[0]) {
+        bg_path = startup.bg_override;
     } else if (cfg.background[0]) {
         bg_path = cfg.background;
     }
@@ -474,8 +511,8 @@ int main(int argc, char **argv) {
     char cursor_default_path[PATH_MAX];
     const char *cursor_path = NULL;
 
-    if (cursor_override && cursor_override[0]) {
-        cursor_path = cursor_override;
+    if (startup.cursor_override && startup.cursor_override[0]) {
+        cursor_path = startup.cursor_override;
     } else {
         bool have_default_cursor = _cursor_path_join(
             cursor_default_path,
@@ -496,8 +533,48 @@ int main(int argc, char **argv) {
             _warn_background_failed(bg_path);
     }
 
-    if (cursor_path && !wm_cursor_load(cursor_path)) {
+    if (cursor_path && !wm_cursor_load_kind(WM_CURSOR_NORMAL, cursor_path)) {
             _warn_cursor_failed(cursor_path);
+    }
+
+    char pointer_cursor_path[PATH_MAX];
+    const char *pointer_cursor_load_path = cursor_path;
+
+    bool have_pointer_cursor = _cursor_path_join(
+        pointer_cursor_path,
+        sizeof(pointer_cursor_path),
+        cursors_dir,
+        "pointer_interact.ppm"
+    );
+
+    if (have_pointer_cursor) {
+        pointer_cursor_load_path = pointer_cursor_path;
+    }
+
+    if (
+        pointer_cursor_load_path &&
+        !wm_cursor_load_kind(WM_CURSOR_POINTER, pointer_cursor_load_path)
+    ) {
+            _warn_cursor_failed(pointer_cursor_load_path);
+    }
+
+    char move_cursor_path[PATH_MAX];
+    const char *move_cursor_load_path = cursor_path;
+
+    bool have_move_cursor = _cursor_path_join(
+        move_cursor_path,
+        sizeof(move_cursor_path),
+        cursors_dir,
+        "move.ppm"
+    );
+
+    if (have_move_cursor) {
+        move_cursor_load_path = move_cursor_path;
+    }
+
+    if (move_cursor_load_path &&
+        !wm_cursor_load_kind(WM_CURSOR_MOVE, move_cursor_load_path)) {
+            _warn_cursor_failed(move_cursor_load_path);
     }
 
     char resize_fallback_path[PATH_MAX];

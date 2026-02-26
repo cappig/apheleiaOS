@@ -10,6 +10,36 @@
 #include <termios.h>
 #include <unistd.h>
 
+static size_t decimal_width_u64(unsigned long long value) {
+    char buf[32];
+    int len = snprintf(buf, sizeof(buf), "%llu", value);
+    return (len > 0) ? (size_t)len : 1;
+}
+
+static void read_entry_meta(
+    const char *dir_path,
+    const char *name,
+    struct stat *st,
+    const char **uname,
+    const char **gname,
+    char uid_buf[16],
+    char gid_buf[16]
+) {
+    if (!dir_path || !name || !st || !uname || !gname || !uid_buf || !gid_buf) {
+        return;
+    }
+
+    char full[256];
+    fs_join_path(full, sizeof(full), dir_path, name);
+
+    if (stat(full, st) < 0) {
+        memset(st, 0, sizeof(*st));
+    }
+
+    *uname = account_uid_name(st->st_uid, uid_buf, 16);
+    *gname = account_gid_name(st->st_gid, gid_buf, 16);
+}
+
 static bool want_name(const char *name, bool opt_all, bool opt_almost) {
     if (!name || !name[0]) {
         return false;
@@ -74,50 +104,40 @@ static int list_dir(
         }
 
         if (opt_long) {
-            char full[256];
-            struct stat st;
-
-            fs_join_path(full, sizeof(full), path, name);
-
-            if (stat(full, &st) < 0) {
-                memset(&st, 0, sizeof(st));
-            }
-
+            struct stat st = {0};
             char uid_buf[16];
             char gid_buf[16];
+            const char *uname = "";
+            const char *gname = "";
 
-            const char *uname =
-                account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
-
-            const char *gname =
-                account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
+            read_entry_meta(
+                path,
+                name,
+                &st,
+                &uname,
+                &gname,
+                uid_buf,
+                gid_buf
+            );
 
             size_t uname_len = strlen(uname);
-            size_t gname_len = strlen(gname);
-
             if (uname_len > width_uname) {
                 width_uname = uname_len;
             }
 
+            size_t gname_len = strlen(gname);
             if (gname_len > width_gname) {
                 width_gname = gname_len;
             }
 
-            char num_buf[32];
-            int num_len = snprintf(
-                num_buf, sizeof(num_buf), "%lu", (unsigned long)st.st_nlink
-            );
-
-            if (num_len > 0 && (size_t)num_len > width_links) {
-                width_links = (size_t)num_len;
+            size_t links_len = decimal_width_u64((unsigned long long)st.st_nlink);
+            if (links_len > width_links) {
+                width_links = links_len;
             }
 
-            num_len = snprintf(
-                num_buf, sizeof(num_buf), "%llu", (unsigned long long)st.st_size
-            );
-
-            if (num_len > 0 && (size_t)num_len > width_size) {
-                width_size = (size_t)num_len;
+            size_t size_len = decimal_width_u64((unsigned long long)st.st_size);
+            if (size_len > width_size) {
+                width_size = size_len;
             }
         }
     }
@@ -144,31 +164,29 @@ static int list_dir(
         }
 
         if (opt_long) {
-            char full[256];
-            struct stat st;
+            struct stat st = {0};
+            char uid_buf[16];
+            char gid_buf[16];
+            const char *uname = "";
+            const char *gname = "";
 
-            fs_join_path(full, sizeof(full), path, name);
-
-            if (stat(full, &st) < 0) {
-                memset(&st, 0, sizeof(st));
-            }
+            read_entry_meta(
+                path,
+                name,
+                &st,
+                &uname,
+                &gname,
+                uid_buf,
+                gid_buf
+            );
 
             char mode[11];
             fs_format_mode(st.st_mode, mode);
 
-            char line[256];
             char timebuf[32];
             fs_format_time_short(st.st_mtime, timebuf, sizeof(timebuf));
 
-            char uid_buf[16];
-            char gid_buf[16];
-
-            const char *uname =
-                account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf));
-
-            const char *gname =
-                account_gid_name(st.st_gid, gid_buf, sizeof(gid_buf));
-
+            char line[256];
             snprintf(
                 line,
                 sizeof(line),
@@ -187,7 +205,6 @@ static int list_dir(
             );
 
             io_write_str(line);
-
             continue;
         }
 
@@ -274,12 +291,23 @@ int main(int argc, char **argv) {
 
     int status = 0;
     for (int i = argi; i < argc; i++) {
+        const char *path = argv[i];
+
         if (paths > 1) {
-            io_write_str(argv[i]);
+            io_write_str(path);
             io_write_str(":\n");
         }
 
-        if (list_dir(argv[i], opt_all, opt_almost, opt_long, opt_single) != 0) {
+        struct stat st;
+        if (!path || stat(path, &st) < 0) {
+            if (list_dir(path, opt_all, opt_almost, opt_long, opt_single) != 0) {
+                status = 1;
+            }
+        } else if (!fs_is_dir_mode(st.st_mode)) {
+            char msg[320];
+            snprintf(msg, sizeof(msg), "ls: %s: not a directory\n", path);
+            io_write_str(msg);
+        } else if (list_dir(path, opt_all, opt_almost, opt_long, opt_single) != 0) {
             status = 1;
         }
 

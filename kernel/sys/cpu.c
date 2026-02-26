@@ -21,7 +21,7 @@ void cpu_set_current(cpu_core_t *core) {
     }
 }
 
-void cpu_halt(void) {
+NORETURN void cpu_halt(void) {
     for (;;) {
         arch_cpu_wait();
     }

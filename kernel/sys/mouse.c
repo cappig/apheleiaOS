@@ -14,6 +14,15 @@
 #include <sys/devfs.h>
 #include <sys/framebuffer.h>
 
+#define MOUSE_DEV_BUFFER_SIZE 256
+#define MOUSE_DEV_UID         0U
+#define MOUSE_DEV_GID         45U
+#define MOUSE_DEV_MODE        0644
+
+typedef struct {
+    const char *name;
+} mouse_dev_t;
+
 static vector_t *mice = NULL;
 static ring_buffer_t *buffer = NULL;
 static sched_wait_queue_t mouse_wait = {0};
@@ -42,7 +51,7 @@ static bool _has_events(void) {
     return has_events;
 }
 
-ssize_t
+static ssize_t
 mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
@@ -109,33 +118,6 @@ void mouse_handle_event(mouse_event event) {
     }
 }
 
-u8 mouse_register(const char *name) {
-    if (!mice || !buffer) {
-        mouse_init();
-    }
-
-    if (!mice || !buffer) {
-        return 0;
-    }
-
-    mouse_dev_t *mse = calloc(1, sizeof(mouse_dev_t));
-
-    if (!mse) {
-        return 0;
-    }
-
-    mse->name = strdup(name);
-
-    if (!vec_push(mice, &mse)) {
-        free((void *)mse->name);
-        free(mse);
-        return 0;
-    }
-
-    log_debug("registered %s", mse->name ? mse->name : "device");
-    return (u8)(mice->size - 1);
-}
-
 static bool mouse_register_devfs(vfs_node_t *dev_dir) {
     if (!dev_dir) {
         return false;
@@ -158,13 +140,19 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
         dev_dir,
         "mouse",
         VFS_CHARDEV,
-        0666,
+        MOUSE_DEV_MODE,
         mouse_if,
         NULL
     );
 
     if (!registered) {
         log_warn("failed to create /dev/mouse");
+        return false;
+    }
+
+    vfs_node_t *mouse_node = vfs_lookup_from(dev_dir, "mouse");
+    if (!mouse_node || !vfs_chown(mouse_node, MOUSE_DEV_UID, MOUSE_DEV_GID)) {
+        log_warn("failed to set /dev/mouse ownership to root:input");
         return false;
     }
 
@@ -208,4 +196,29 @@ bool mouse_init(void) {
     }
 
     return true;
+}
+
+u8 mouse_register(const char *name) {
+    if (!mice || !buffer) {
+        if (!mouse_init()) {
+            return 0;
+        }
+    }
+
+    mouse_dev_t *mse = calloc(1, sizeof(mouse_dev_t));
+
+    if (!mse) {
+        return 0;
+    }
+
+    mse->name = strdup(name);
+
+    if (!vec_push(mice, &mse)) {
+        free((void *)mse->name);
+        free(mse);
+        return 0;
+    }
+
+    log_debug("registered %s", mse->name ? mse->name : "device");
+    return (u8)(mice->size - 1);
 }

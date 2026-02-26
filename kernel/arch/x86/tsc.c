@@ -21,19 +21,19 @@ static bool _has(void) {
     return (r.edx & (1u << 4)) != 0;
 }
 
-// Single PIT-based measurement returning TSC ticks over CAL_MILLIS ms.
-// Returns 0 on failure (PIT gate count too low).
+// Single PIT-based measurement returning TSC ticks over CAL_MILLIS ms
+// Returns 0 on failure (PIT gate count too low)
 static u64 _measure_once(void) {
     size_t retry_counter = 0;
 
 retry:
-    // Pulse high and disable the PC speaker.
+    // Pulse high and disable the PC speaker
     u8 sp = inb(0x61);
     sp &= ~(1u << 1);
     sp |= (1u << 0);
     outb(0x61, sp);
 
-    // Configure PIT channel C.
+    // Configure PIT channel C
     outb(PIT_CONTROL, 0xb0);
     outb(PIT_C, (u8)(CAL_COUNTER & 0xff));
     outb(PIT_C, (u8)((CAL_COUNTER >> 8) & 0xff));
@@ -80,7 +80,7 @@ bool tsc_init(void) {
     }
 
     // Take multiple samples and pick the median to reject outliers
-    // caused by SMIs or other transient delays.
+    // caused by SMIs or other transient delays
     u64 samples[CAL_SAMPLES];
     size_t good = 0;
 

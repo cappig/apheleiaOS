@@ -9,8 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sys/disk.h"
-#include "sys/vfs.h"
+#include <sys/disk.h>
+#include <sys/vfs.h>
 
 #define EXT2_BLOCK_CACHE_SIZE 64
 
@@ -347,25 +347,6 @@ static bool _write_group_inode_bitmap(
     return _write_block(priv, part, bitmap_block, bitmap);
 }
 
-static bool
-_find_free_bit(const u8 *bitmap, size_t bit_count, size_t *index_out) {
-    if (!bitmap || !index_out) {
-        return false;
-    }
-
-    for (size_t i = 0; i < bit_count; i++) {
-        size_t byte = i / 8;
-        size_t bit = i % 8;
-
-        if (!(bitmap[byte] & (1u << bit))) {
-            *index_out = i;
-            return true;
-        }
-    }
-
-    return false;
-}
-
 static void _set_file_size(ext2_inode_t *inode, u64 size) {
     if (!inode) {
         return;
@@ -475,7 +456,7 @@ _alloc_block(ext2_private_t *priv, disk_partition_t *part, u32 *out_block) {
         }
 
         size_t bit = 0;
-        if (!_find_free_bit(bitmap, count, &bit)) {
+        if (!bitmap_find_first_clear((bitmap_word_t *)bitmap, count, &bit)) {
             continue;
         }
 
@@ -595,7 +576,7 @@ _alloc_inode(ext2_private_t *priv, disk_partition_t *part, u32 *out_inode) {
         }
 
         size_t bit = 0;
-        if (!_find_free_bit(bitmap, count, &bit)) {
+        if (!bitmap_find_first_clear((bitmap_word_t *)bitmap, count, &bit)) {
             continue;
         }
 
@@ -2200,10 +2181,8 @@ _node_chown(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid) {
     return true;
 }
 
-static bool _free_vnode(const void *data, void *private) {
-    (void)private;
-
-    vfs_node_t *vnode = (vfs_node_t *)data;
+static bool _free_vnode(tree_node_t *node) {
+    vfs_node_t *vnode = node ? (vfs_node_t *)node->data : NULL;
     if (!vnode) {
         return false;
     }
@@ -2231,8 +2210,7 @@ static bool _destroy_tree(fs_instance_t *instance) {
 
     tree_node_t *root = instance->subtree_root;
 
-    tree_foreach_node(root, _free_vnode, NULL);
-    tree_prune(root);
+    tree_prune_callback(root, _free_vnode);
 
     instance->subtree_root = NULL;
     instance->has_tree = false;

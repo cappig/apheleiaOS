@@ -84,7 +84,7 @@ arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     sp -= sizeof(u64);
     *(u64 *)sp = (u64)entry_point;
 
-    // Error code and vector.
+    // Error code and vector
     sp -= sizeof(u64);
     *(u64 *)sp = 0;
     sp -= sizeof(u64);
@@ -112,7 +112,7 @@ arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     sp -= sizeof(u32);
     *(u32 *)sp = (u32)entry_point;
 
-    // Error code and vector.
+    // Error code and vector
     sp -= sizeof(u32);
     *(u32 *)sp = 0;
     sp -= sizeof(u32);

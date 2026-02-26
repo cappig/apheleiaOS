@@ -2,6 +2,7 @@
 
 #include <base/macros.h>
 #include <base/types.h>
+#include <drivers/manager.h>
 #include <sched/scheduler.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -182,4 +183,8 @@ typedef ahci_prdt_entry_t hba_prdt_entry_t;
 typedef ahci_fis_reg_h2d_t fis_reg_h2d_t;
 typedef ahci_cmd_tbl_t hba_cmd_tbl_t;
 
-bool ahci_disk_init(void);
+driver_err_t ahci_driver_load(void);
+driver_err_t ahci_driver_unload(void);
+bool ahci_driver_busy(void);
+
+extern const driver_desc_t ahci_driver_desc;

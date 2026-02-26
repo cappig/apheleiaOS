@@ -109,7 +109,7 @@ def main() -> None:
 
         mbr_code = args.mbr_bin.read_bytes()[:440]
 
-        # Hybrid MBR for BIOS compatibility while retaining GPT for UEFI.
+        # Hybrid MBR for BIOS compatibility while retaining GPT for UEFI
         write_mbr(
             args.output_img,
             code440=mbr_code,

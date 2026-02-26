@@ -14,10 +14,26 @@
 #include <sys/ioctl.h>
 #include <sys/stats.h>
 #include <sys/tty.h>
+#include <sys/vfs.h>
+
+#include "framebuffer.h"
 
 #define FB_MAP_CHUNK (4 * MIB)
+#define FB_DEV_UID   0U
+#define FB_DEV_GID   44U
+#define FB_DEV_MODE  0660
 
 static void *_present_vram;
+static bool framebuffer_driver_loaded = false;
+
+const driver_desc_t framebuffer_driver_desc = {
+    .name = "framebuffer",
+    .deps = NULL,
+    .stage = DRIVER_STAGE_DEVFS,
+    .load = framebuffer_driver_load,
+    .unload = framebuffer_driver_unload,
+    .is_busy = framebuffer_driver_busy,
+};
 
 static ssize_t _dev_fb_transfer(
     const framebuffer_info_t *fb,
@@ -386,16 +402,66 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
 
     fb_if->ioctl = _dev_fb_ioctl;
 
-    if (!devfs_register_node(dev_dir, "fb", VFS_CHARDEV, 0666, fb_if, NULL)) {
+    if (
+        !devfs_register_node(dev_dir, "fb", VFS_CHARDEV, FB_DEV_MODE, fb_if, NULL)
+    ) {
         log_warn("failed to create /dev/fb");
+        return false;
+    }
+
+    vfs_node_t *fb_node = vfs_lookup("/dev/fb");
+    if (!fb_node || !vfs_chown(fb_node, FB_DEV_UID, FB_DEV_GID)) {
+        log_warn("failed to set /dev/fb ownership to root:video");
         return false;
     }
 
     return true;
 }
 
-void framebuffer_devfs_init(void) {
-    if (!devfs_register_device("framebuffer", framebuffer_register_devfs)) {
-        log_warn("failed to register devfs init callback");
+bool framebuffer_driver_busy(void) {
+    vfs_node_t *node = vfs_lookup("/dev/fb");
+    return node && sched_fd_refs_node(node);
+}
+
+driver_err_t framebuffer_driver_load(void) {
+    if (framebuffer_driver_loaded) {
+        return DRIVER_OK;
     }
+
+    if (!devfs_register_device("framebuffer", framebuffer_register_devfs)) {
+        return DRIVER_ERR_INIT_FAILED;
+    }
+
+    framebuffer_driver_loaded = true;
+    return DRIVER_OK;
+}
+
+driver_err_t framebuffer_driver_unload(void) {
+    if (!framebuffer_driver_loaded) {
+        return DRIVER_OK;
+    }
+
+    if (framebuffer_driver_busy()) {
+        return DRIVER_ERR_BUSY;
+    }
+
+    vfs_node_t *node = vfs_lookup("/dev/fb");
+    if (node && !devfs_unregister_node("/dev/fb")) {
+        return DRIVER_ERR_BUSY;
+    }
+
+    if (!devfs_unregister_device("framebuffer")) {
+        log_warn("failed to unregister framebuffer devfs callback");
+    }
+
+    if (_present_vram) {
+        const framebuffer_info_t *fb = framebuffer_get_info();
+        if (fb && fb->size) {
+            arch_phys_unmap(_present_vram, fb->size);
+        }
+        _present_vram = NULL;
+    }
+
+    framebuffer_driver_loaded = false;
+    return DRIVER_OK;
 }

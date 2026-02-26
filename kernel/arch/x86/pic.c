@@ -5,7 +5,7 @@
 #include <x86/idt.h>
 
 static inline void _wait(void) {
-    // Port 0x80 is unused and commonly used for IO wait.
+    // Port 0x80 is unused and commonly used for IO wait
     outb(0x80, 0);
 }
 

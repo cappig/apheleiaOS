@@ -10,8 +10,16 @@ QEMU := qemu-system-$(QEMU_ARCH)
 
 QEMU_CONSOLE ?= false
 BOOT         ?= bios
-QEMU_MEMORY  ?= 128M
-QEMU_SNAPSHOT ?= true
+QEMU_MEMORY  ?= 256M
+QEMU_CPU     ?= max
+KVM          ?= false
+QEMU_SNAPSHOT ?= false
+
+ifeq ($(KVM), true)
+ifeq ($(QEMU_CPU), max)
+QEMU_CPU = host
+endif
+endif
 
 OVMF_DIR          := .cache/ovmf
 OVMF_CODE_LOCAL   := $(OVMF_DIR)/OVMF_CODE.fd
@@ -37,14 +45,19 @@ endif
 
 QEMU_ARGS := \
 	-no-reboot \
+	-cpu $(QEMU_CPU) \
 	-m $(QEMU_MEMORY) \
 	$(QEMU_CONSOLE_ARGS)
+
+ifeq ($(KVM), true)
+QEMU_ARGS += -enable-kvm
+endif
 
 ifeq ($(QEMU_SNAPSHOT), true)
 QEMU_ARGS += -snapshot
 endif
 
-.PHONY: ovmf-fetch ovmf-clean run
+.PHONY: ovmf-fetch ovmf-clean run run-usb run-usb-bios run-usb-uefi
 
 ovmf-fetch:
 	@python3 $(OVMF_FETCH_SCRIPT) "$(OVMF_DIR)" "$(OVMF_DEB_URL)"
@@ -72,3 +85,34 @@ else
 	@$(QEMU) $(QEMU_ARGS) \
 		-drive format=raw,file=bin/$(IMAGE_NAME).img
 endif
+
+run-usb: bin/$(IMAGE_NAME).img
+ifeq ($(BOOT), uefi)
+ifeq ($(ARCH), x86_64)
+ifeq ($(OVMF_CODE), $(OVMF_CODE_LOCAL))
+ifeq ($(OVMF_VARS), $(OVMF_VARS_LOCAL))
+run-usb: ovmf-fetch
+endif
+endif
+	@cp -f "$(OVMF_VARS)" "$(OVMF_VARS_RUNTIME)"
+	@$(QEMU) $(QEMU_ARGS) \
+		-drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
+		-drive if=pflash,format=raw,file="$(OVMF_VARS_RUNTIME)" \
+		-drive if=none,id=usbstick,format=raw,file=bin/$(IMAGE_NAME).img \
+		-device qemu-xhci,id=xhci \
+		-device usb-storage,bus=xhci.0,drive=usbstick
+else
+	$(error BOOT=uefi requires ARCH=x86_64)
+endif
+else
+	@$(QEMU) $(QEMU_ARGS) \
+		-drive if=none,id=usbstick,format=raw,file=bin/$(IMAGE_NAME).img \
+		-device qemu-xhci,id=xhci \
+		-device usb-storage,bus=xhci.0,drive=usbstick
+endif
+
+run-usb-bios:
+	@$(MAKE) run-usb BOOT=bios
+
+run-usb-uefi:
+	@$(MAKE) run-usb BOOT=uefi

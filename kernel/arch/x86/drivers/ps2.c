@@ -5,6 +5,7 @@
 #include <input/kbd.h>
 #include <input/mouse.h>
 #include <log/log.h>
+#include <string.h>
 #include <sys/keyboard.h>
 #include <sys/mouse.h>
 #include <x86/asm.h>
@@ -191,6 +192,16 @@ static const u8 ps2_codes_extended[128] = {
 
 static bool has_port1 = false;
 static bool has_port2 = false;
+static bool ps2_driver_loaded = false;
+
+const driver_desc_t ps2_driver_desc = {
+    .name = "ps2",
+    .deps = NULL,
+    .stage = DRIVER_STAGE_ARCH_EARLY,
+    .load = ps2_driver_load,
+    .unload = ps2_driver_unload,
+    .is_busy = ps2_driver_busy,
+};
 
 static bool _wait_input_clear(void) {
     for (size_t timeout = PS2_WAIT_LIMIT; timeout > 0; timeout--) {
@@ -480,15 +491,15 @@ done:
     irq_ack(IRQ_PS2_MOUSE);
 }
 
-void ps2_init(void) {
+static bool ps2_init(void) {
     if (!_controller_init()) {
         log_warn("controller init failed");
-        return;
+        return false;
     }
 
     if (!has_port1 && !has_port2) {
         log_debug("no devices detected");
-        return;
+        return true;
     }
 
     if (has_port1) {
@@ -511,4 +522,55 @@ void ps2_init(void) {
     }
 
     log_debug("controller ready");
+    return true;
+}
+
+static void _controller_shutdown(void) {
+    (void)_write_cmd(PS2_COM_DISABLE_PORT1);
+    (void)_write_cmd(PS2_COM_DISABLE_PORT2);
+
+    if (_write_cmd(PS2_COM_READ_CONFIG)) {
+        u8 config = 0;
+        if (_read_data(&config)) {
+            config &= ~(PS2_CON_PORT1_IRQ | PS2_CON_PORT2_IRQ | PS2_CON_PORT1_TRANSLATE);
+            (void)_write_cmd(PS2_COM_WRITE_CONFIG);
+            (void)_write_data(config);
+        }
+    }
+}
+
+bool ps2_driver_busy(void) {
+    return false;
+}
+
+driver_err_t ps2_driver_load(void) {
+    if (ps2_driver_loaded) {
+        return DRIVER_OK;
+    }
+
+    if (!ps2_init()) {
+        return DRIVER_ERR_INIT_FAILED;
+    }
+
+    ps2_driver_loaded = true;
+    return DRIVER_OK;
+}
+
+driver_err_t ps2_driver_unload(void) {
+    if (!ps2_driver_loaded) {
+        return DRIVER_OK;
+    }
+
+    irq_unregister(IRQ_PS2_KEYBOARD);
+    irq_unregister(IRQ_PS2_MOUSE);
+    _controller_shutdown();
+
+    has_port1 = false;
+    has_port2 = false;
+    kbd_extended = false;
+    mouse_byte = 0;
+    memset(mouse_packet, 0, sizeof(mouse_packet));
+
+    ps2_driver_loaded = false;
+    return DRIVER_OK;
 }

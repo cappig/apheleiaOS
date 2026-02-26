@@ -1,5 +1,6 @@
 #include "tty.h"
 
+#include <arch/arch.h>
 #include <errno.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
@@ -130,6 +131,19 @@ static ssize_t _dev_tty_read(
     return tty_read_handle(node ? node->private : NULL, buf, len);
 }
 
+static ssize_t _dev_console_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
+    (void)node;
+    (void)flags;
+
+    return arch_log_ring_read(buf, offset, len);
+}
+
 static ssize_t _dev_tty_write(
     vfs_node_t *node,
     void *buf,
@@ -149,6 +163,24 @@ static ssize_t _dev_tty_ioctl(vfs_node_t *node, u64 request, void *args) {
 
 static short _dev_tty_poll(vfs_node_t *node, short events, u32 flags) {
     return tty_poll_handle(node ? node->private : NULL, events, flags);
+}
+
+static short _dev_console_poll(
+    UNUSED vfs_node_t *node,
+    short events,
+    UNUSED u32 flags
+) {
+    short revents = 0;
+
+    if ((events & POLLIN) && arch_log_ring_size()) {
+        revents |= POLLIN;
+    }
+
+    if (events & POLLOUT) {
+        revents |= POLLOUT;
+    }
+
+    return revents;
 }
 
 bool tty_set_current(size_t index) {
@@ -206,6 +238,17 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
     tty_if->ioctl = _dev_tty_ioctl;
     tty_if->poll = _dev_tty_poll;
 
+    vfs_interface_t *console_if =
+        vfs_create_interface(_dev_console_read, _dev_tty_write, NULL);
+
+    if (!console_if) {
+        log_warn("TTY failed to allocate /dev/console interface");
+        return false;
+    }
+
+    console_if->ioctl = _dev_tty_ioctl;
+    console_if->poll = _dev_console_poll;
+
     bool ok = true;
 
     bool tty_registered = devfs_register_node(
@@ -226,8 +269,8 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
         dev_dir,
         "console",
         VFS_CHARDEV,
-        0666,
-        tty_if,
+        0600,
+        console_if,
         &tty_console_handle
     );
 

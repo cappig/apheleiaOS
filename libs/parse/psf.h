@@ -27,4 +27,15 @@ typedef struct {
     size_t unicode_size;
 } psf_blob_t;
 
+typedef bool (*psf_unicode_map_iter_t)(
+    void *ctx,
+    u32 codepoint,
+    u32 glyph
+);
+
 bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out);
+bool psf_iter_unicode_mappings(
+    const psf_blob_t *blob,
+    psf_unicode_map_iter_t iter,
+    void *ctx
+);

@@ -5,7 +5,7 @@
 #include <string.h>
 #include <sys/time.h>
 
-#include "sys/usb_desc.h"
+#include <sys/usb_desc.h>
 #include "usb_hcd_common.h"
 
 bool _xhci_control_xfer(

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/devfs.h>
+#include <sys/framebuffer.h>
 #include <sys/ioctl.h>
 #include <sys/lock.h>
 #include <sys/stats.h>
@@ -19,6 +20,8 @@
 #define WS_QUEUE_MAX_CAP      4096
 #define WS_MAX_FB_BYTES       (16U * 1024U * 1024U)
 #define WS_WINDOW_INIT_CAP    16
+#define WS_DEV_UID            0U
+#define WS_DEV_GID            46U
 
 typedef struct {
     bool allocated;
@@ -78,6 +81,14 @@ typedef struct {
 static ws_state_t ws_state = {0};
 static volatile int ws_lock = 0;
 
+static bool _set_ws_owner(vfs_node_t *node, const char *path) {
+    if (!node || !vfs_chown(node, WS_DEV_UID, WS_DEV_GID)) {
+        log_warn("failed to set %s ownership to root:ws", path ? path : "node");
+        return false;
+    }
+
+    return true;
+}
 
 static void *_slot_priv_encode(u32 id) {
     return (void *)(uintptr_t)((u64)id + 1ULL);
@@ -866,6 +877,9 @@ static bool _ensure_slot_nodes(u32 id) {
     if (!slot) {
         return false;
     }
+    if (!_set_ws_owner(slot, "/dev/ws/<id>")) {
+        return false;
+    }
 
     void *priv = _slot_priv_encode(id);
 
@@ -881,6 +895,10 @@ static bool _ensure_slot_nodes(u32 id) {
     if (!fb_registered) {
         return false;
     }
+    vfs_node_t *fb_node = vfs_lookup_from(slot, "fb");
+    if (!_set_ws_owner(fb_node, "/dev/ws/<id>/fb")) {
+        return false;
+    }
 
     bool ev_registered = devfs_register_node(
         slot,
@@ -892,6 +910,10 @@ static bool _ensure_slot_nodes(u32 id) {
     );
 
     if (!ev_registered) {
+        return false;
+    }
+    vfs_node_t *ev_node = vfs_lookup_from(slot, "ev");
+    if (!_set_ws_owner(ev_node, "/dev/ws/<id>/ev")) {
         return false;
     }
 
@@ -1217,6 +1239,18 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
         _cmd_fill_from_window(cmd, cmd->id);
 
         return 0;
+    case WSIOC_TRANSFER_MANAGER:
+        if (!_is_manager(caller_pid)) {
+            return -EPERM;
+        }
+
+        if (cmd->pid <= 0 || !_pid_alive(cmd->pid)) {
+            return -ESRCH;
+        }
+
+        ws_state.manager_pid = cmd->pid;
+        _cmd_fill_from_window(cmd, cmd->id);
+        return 0;
     case WSIOC_RELEASE_MANAGER:
         if (!_is_manager(caller_pid)) {
             return -EPERM;
@@ -1270,13 +1304,7 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
 
         return 0;
     case WSIOC_CLOSE:
-        pid_t owner_pid = window->owner_pid;
         _free_window(cmd->id, true);
-
-        if (owner_pid > 0 && owner_pid != caller_pid) {
-            sched_signal_send_pid(owner_pid, SIGHUP);
-        }
-
         _cmd_fill_from_window(cmd, cmd->id);
 
         return 0;
@@ -1428,6 +1456,11 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
         if (!wsctl_registered) {
             log_warn("failed to create /dev/wsctl");
             ok = false;
+        } else {
+            vfs_node_t *wsctl_node = vfs_lookup_from(dev_dir, "wsctl");
+            if (!_set_ws_owner(wsctl_node, "/dev/wsctl")) {
+                ok = false;
+            }
         }
     }
 
@@ -1451,12 +1484,20 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
         if (!wsmgr_registered) {
             log_warn("failed to create /dev/wsmgr");
             ok = false;
+        } else {
+            vfs_node_t *wsmgr_node = vfs_lookup_from(dev_dir, "wsmgr");
+            if (!_set_ws_owner(wsmgr_node, "/dev/wsmgr")) {
+                ok = false;
+            }
         }
     }
 
     ws_state.ws_dir = devfs_register_dir(dev_dir, "ws", 0755);
     if (!ws_state.ws_dir) {
         log_warn("failed to create /dev/ws");
+        return false;
+    }
+    if (!_set_ws_owner(ws_state.ws_dir, "/dev/ws")) {
         return false;
     }
 
@@ -1477,6 +1518,10 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
 }
 
 bool ws_init(void) {
+    if (!framebuffer_get_info()) {
+        return true;
+    }
+
     if (!devfs_register_device("ws", ws_register_devfs)) {
         log_warn("failed to register devfs init callback");
     }
@@ -1515,6 +1560,7 @@ ssize_t ws_ctl_ioctl(vfs_node_t *node, u64 request, void *args) {
         break;
     case WSIOC_CLAIM_MANAGER:
     case WSIOC_RELEASE_MANAGER:
+    case WSIOC_TRANSFER_MANAGER:
     case WSIOC_SET_FOCUS:
     case WSIOC_SET_POS:
     case WSIOC_SET_SIZE:
@@ -1762,6 +1808,11 @@ ws_fb_write(u32 id, const void *buf, size_t offset, size_t len, u32 flags) {
 
 void ws_notify_screen_active(void) {
     lock(&ws_lock);
+
+    if (!ws_state.ready) {
+        unlock(&ws_lock);
+        return;
+    }
 
     _queue_manager_event(WS_EVT_SCREEN_ACTIVE, 0, NULL);
 

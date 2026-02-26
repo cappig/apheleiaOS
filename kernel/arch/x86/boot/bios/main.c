@@ -31,10 +31,13 @@ NORETURN void _load_entry(u16 boot_disk) {
     disk_init(boot_disk);
     (void)bios_boot_root_hint(&info.boot_root_hint);
 
+    printf("boot: parsing config\n\r");
+    parse_config(&info.args);
+
     u64 rootfs_paddr = 0;
     u64 rootfs_size = 0;
 
-    if (stage_rootfs_image(&rootfs_paddr, &rootfs_size)) {
+    if (info.args.stage_rootfs && stage_rootfs_image(&rootfs_paddr, &rootfs_size)) {
         info.boot_rootfs_paddr = rootfs_paddr;
         info.boot_rootfs_size = rootfs_size;
 
@@ -44,9 +47,6 @@ NORETURN void _load_entry(u16 boot_disk) {
             rootfs_size
         );
     }
-
-    printf("boot: parsing config\n\r");
-    parse_config(&info.args);
 
     printf("boot: initializing video\n\r");
     init_graphics(&info);

@@ -8,6 +8,7 @@
 #include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/panic.h>
 
 #include "acpi.h"
 
@@ -37,11 +38,15 @@ static void _index_device(pci_found_t *device) {
         return;
     }
 
-    (void)hashmap_set(
-        pci_bsf_index,
-        _bsf_key(device->bus, device->slot, device->func),
-        (u64)(uintptr_t)device
-    );
+    if (
+        !hashmap_set(
+            pci_bsf_index,
+            _bsf_key(device->bus, device->slot, device->func),
+            (u64)(uintptr_t)device
+        )
+    ) {
+        panic("pci registry index insert failed");
+    }
 }
 
 static bool _device_exists(u8 bus, u8 slot, u8 func) {

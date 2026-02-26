@@ -5,6 +5,7 @@
 #include <data/list.h>
 #include <errno.h>
 #include <log/log.h>
+#include <sched/scheduler.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -110,7 +111,9 @@ _child_index_set(vfs_node_t *parent, const char *name, tree_node_t *tnode) {
         return;
     }
 
-    (void)hashmap_str_set(map, name, (u64)(uintptr_t)tnode);
+    if (!hashmap_str_set(map, name, (u64)(uintptr_t)tnode)) {
+        panic("vfs child index insert failed");
+    }
 }
 
 static void _child_index_remove(vfs_node_t *parent, const char *name) {
@@ -119,7 +122,14 @@ static void _child_index_remove(vfs_node_t *parent, const char *name) {
         return;
     }
 
-    (void)hashmap_str_remove(map, name);
+    u64 encoded = 0;
+    if (!hashmap_str_get(map, name, &encoded)) {
+        return;
+    }
+
+    if (!hashmap_str_remove(map, name)) {
+        panic("vfs child index remove failed");
+    }
 }
 
 static void _free_node_data(vfs_node_t *node) {
@@ -140,22 +150,13 @@ static void _free_node_data(vfs_node_t *node) {
     free(node);
 }
 
-static void _prune_tree(tree_node_t *parent) {
-    if (!parent) {
-        return;
+static bool _free_tree_node(tree_node_t *node) {
+    if (!node) {
+        return false;
     }
 
-    ll_foreach(node, parent->children) {
-        tree_node_t *child = node->data;
-        _prune_tree(child);
-    }
-
-    if (parent->children) {
-        list_destroy(parent->children, false);
-    }
-
-    _free_node_data(parent->data);
-    free(parent);
+    _free_node_data(node->data);
+    return false;
 }
 
 static vfs_node_t *
@@ -204,7 +205,7 @@ static bool _remove_child(vfs_node_t *parent, vfs_node_t *child) {
     }
 
     _child_index_remove(parent, child->name);
-    _prune_tree(child->tree_entry);
+    tree_prune_callback(child->tree_entry, _free_tree_node);
     return true;
 }
 
@@ -545,7 +546,7 @@ bool vfs_access(vfs_node_t *vnode, uid_t uid, gid_t gid, int mode) {
         if (mode & X_OK) {
             perm |= (vnode->mode & S_IXUSR) ? X_OK : 0;
         }
-    } else if (gid == vnode->gid) {
+    } else if (sched_gid_matches_cred(uid, gid, vnode->gid)) {
         if (mode & R_OK) {
             perm |= (vnode->mode & S_IRGRP) ? R_OK : 0;
         }

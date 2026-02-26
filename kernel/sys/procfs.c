@@ -11,7 +11,7 @@
 #include "vfs.h"
 
 #define PROCFS_TEXT_MAX  384
-#define PROCFS_WRITE_MAX 64
+#define PROCFS_WRITE_MAX 256
 
 typedef enum {
     PROC_FIELD_STAT = 1,
@@ -23,6 +23,7 @@ typedef enum {
     PROC_FIELD_UMASK,
     PROC_FIELD_PGID,
     PROC_FIELD_SID,
+    PROC_FIELD_GROUPS,
 } proc_field_t;
 
 static vfs_node_t *proc_root = NULL;
@@ -120,6 +121,60 @@ static bool _parse_i64(const void *buf, size_t len, long long *out) {
     }
 
     *out = value;
+    return true;
+}
+
+static bool _parse_gid_list(
+    const void *buf,
+    size_t len,
+    gid_t *groups,
+    size_t max_groups,
+    size_t *group_count_out
+) {
+    if (!buf || !groups || !group_count_out) {
+        return false;
+    }
+
+    size_t copy_len = len;
+    if (copy_len >= PROCFS_WRITE_MAX) {
+        copy_len = PROCFS_WRITE_MAX - 1;
+    }
+
+    char text[PROCFS_WRITE_MAX];
+    memcpy(text, buf, copy_len);
+    text[copy_len] = '\0';
+
+    size_t out_count = 0;
+    char *save = NULL;
+    char *token = strtok_r(text, " \t\r\n,", &save);
+    while (token) {
+        char *end = NULL;
+        long value = strtol(token, &end, 10);
+        if (end == token || *end != '\0' || value < 0) {
+            return false;
+        }
+
+        gid_t gid = (gid_t)value;
+        bool seen = false;
+        for (size_t i = 0; i < out_count; i++) {
+            if (groups[i] == gid) {
+                seen = true;
+                break;
+            }
+        }
+
+        if (!seen) {
+            if (out_count >= max_groups) {
+                return false;
+            }
+
+            groups[out_count++] = gid;
+        }
+
+        token = strtok_r(NULL, " \t\r\n,", &save);
+    }
+
+    *group_count_out = out_count;
     return true;
 }
 
@@ -390,6 +445,115 @@ static ssize_t _proc_value_read(
     return _text_read(text, buf, offset, len);
 }
 
+static ssize_t _proc_groups_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
+    (void)flags;
+
+    if (!node || !buf) {
+        return -EINVAL;
+    }
+
+    pid_t pid = 0;
+    if (!_resolve_pid(_proc_key_pid((uintptr_t)node->private), &pid)) {
+        return -ENOENT;
+    }
+
+    gid_t primary_gid = 0;
+    gid_t groups[SCHED_GROUP_MAX] = {0};
+    size_t group_count = 0;
+
+    int rc = sched_getgroups_pid(
+        pid,
+        &primary_gid,
+        groups,
+        sizeof(groups) / sizeof(groups[0]),
+        &group_count
+    );
+    if (rc < 0) {
+        return rc;
+    }
+
+    char text[PROCFS_TEXT_MAX];
+    size_t used = 0;
+    int written = snprintf(
+        text + used,
+        sizeof(text) - used,
+        "%llu",
+        (unsigned long long)primary_gid
+    );
+
+    if (written <= 0 || (size_t)written >= sizeof(text) - used) {
+        return -EIO;
+    }
+    used += (size_t)written;
+
+    for (size_t i = 0; i < group_count; i++) {
+        if (groups[i] == primary_gid) {
+            continue;
+        }
+
+        written = snprintf(
+            text + used,
+            sizeof(text) - used,
+            " %llu",
+            (unsigned long long)groups[i]
+        );
+
+        if (written <= 0 || (size_t)written >= sizeof(text) - used) {
+            break;
+        }
+
+        used += (size_t)written;
+    }
+
+    if (used + 1 >= sizeof(text)) {
+        return -EIO;
+    }
+
+    text[used++] = '\n';
+    text[used] = '\0';
+
+    return _text_read(text, buf, offset, len);
+}
+
+static ssize_t _proc_groups_write(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
+    (void)flags;
+
+    if (!node || !buf || offset != 0) {
+        return -EINVAL;
+    }
+
+    uintptr_t key = (uintptr_t)node->private;
+    pid_t path_pid = _proc_key_pid(key);
+    if (path_pid != 0) {
+        return -EPERM;
+    }
+
+    gid_t groups[SCHED_GROUP_MAX] = {0};
+    size_t group_count = 0;
+    if (!_parse_gid_list(buf, len, groups, SCHED_GROUP_MAX, &group_count)) {
+        return -EINVAL;
+    }
+
+    int rc = sched_setgroups(groups, group_count);
+    if (rc < 0) {
+        return rc;
+    }
+
+    return (ssize_t)len;
+}
+
 static ssize_t _proc_value_write(
     vfs_node_t *node,
     void *buf,
@@ -530,6 +694,9 @@ static bool _upsert_file(
             node->interface = vfs_create_interface(_proc_stat_read, NULL, NULL);
         } else if (field == PROC_FIELD_CWD) {
             node->interface = vfs_create_interface(_proc_cwd_read, NULL, NULL);
+        } else if (field == PROC_FIELD_GROUPS) {
+            node->interface =
+                vfs_create_interface(_proc_groups_read, _proc_groups_write, NULL);
         } else {
             node->interface =
                 vfs_create_interface(_proc_value_read, _proc_value_write, NULL);
@@ -556,6 +723,7 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     mode_t gid_mode = self ? 0666 : 0444;
     mode_t umask_mode = self ? 0666 : 0444;
     mode_t sid_mode = self ? 0666 : 0444;
+    mode_t groups_mode = self ? 0666 : 0444;
 
     ok &= _upsert_file(dir, "stat", 0444, PROC_FIELD_STAT, pid);
     ok &= _upsert_file(dir, "cwd", 0444, PROC_FIELD_CWD, pid);
@@ -566,6 +734,7 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     ok &= _upsert_file(dir, "umask", umask_mode, PROC_FIELD_UMASK, pid);
     ok &= _upsert_file(dir, "pgid", 0666, PROC_FIELD_PGID, pid);
     ok &= _upsert_file(dir, "sid", sid_mode, PROC_FIELD_SID, pid);
+    ok &= _upsert_file(dir, "groups", groups_mode, PROC_FIELD_GROUPS, pid);
 
     return ok;
 }
@@ -628,7 +797,9 @@ void procfs_register_pid(pid_t pid) {
         return;
     }
 
-    (void)_ensure_proc_entry(proc_dir, pid, false);
+    if (!_ensure_proc_entry(proc_dir, pid, false)) {
+        log_warn("failed to populate /proc/%lld", (long long)pid);
+    }
 }
 
 void procfs_unregister_pid(pid_t pid) {
@@ -637,15 +808,28 @@ void procfs_unregister_pid(pid_t pid) {
     }
 
     const char *names[] = {
-        "stat", "cwd", "pid", "ppid", "uid", "gid", "umask", "pgid", "sid"
+        "stat",
+        "cwd",
+        "pid",
+        "ppid",
+        "uid",
+        "gid",
+        "umask",
+        "pgid",
+        "sid",
+        "groups"
     };
     char path[56];
 
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         snprintf(path, sizeof(path), "/proc/%lld/%s", (long long)pid, names[i]);
-        (void)vfs_unlink(path);
+        if (!vfs_unlink(path)) {
+            log_warn("failed to remove %s", path);
+        }
     }
 
     snprintf(path, sizeof(path), "/proc/%lld", (long long)pid);
-    (void)vfs_rmdir(path);
+    if (!vfs_rmdir(path)) {
+        log_warn("failed to remove %s", path);
+    }
 }
