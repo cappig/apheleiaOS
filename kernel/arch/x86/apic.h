@@ -67,6 +67,7 @@ enum lapic_registers {
 
 bool apic_init(void);
 bool apic_timer_init(u32 hz);
+bool apic_timer_init_local(void);
 void apic_timer_enable(void);
 void apic_timer_disable(void);
 bool apic_timer_active(void);
@@ -79,3 +80,6 @@ bool ioapic_route_irq(u8 irq, u8 vector, u32 dest_apic);
 
 void lapic_end_int(void);
 u32 lapic_id(void);
+bool lapic_send_init(u32 dest_apic);
+bool lapic_send_startup(u32 dest_apic, u8 vector);
+bool lapic_send_fixed(u32 dest_apic, u8 vector);

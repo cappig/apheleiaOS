@@ -115,6 +115,14 @@ void *mmap_alloc_top(size_t size, int type, size_t alignment, u64 top) {
     return ret;
 }
 
+void *mmap_try_alloc_top(size_t size, int type, size_t alignment, u64 top) {
+    if (!size) {
+        return NULL;
+    }
+
+    return mmap_alloc_inner(e820_mmap, size, type, alignment, top);
+}
+
 static void *_balloc(size_t size) {
     return mmap_alloc(size, E820_ALLOC, 1);
 }

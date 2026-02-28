@@ -94,12 +94,10 @@ CFLAGS_DOOM := $(DOOM_CC) $(CC_BASE) -std=gnu17 -Wno-implicit-function-declarati
 LDFLAGS := -z noexecstack --gc-sections -T$(USER_LINKER_SCRIPT) $(USER_LD_EMU)
 ASFLAGS := -felf$(ARCH_VARIANT)
 
-# Keep the Doom port stable on 32-bit toolchains: some hosts intermittently
-# fail at -O3 with large legacy translation units.
-DOOM_OPT_FLAGS := -O3
-ifeq ($(ARCH),x86_32)
-DOOM_OPT_FLAGS := -O2
-endif
+# DOOM_OPT_FLAGS := -O3
+# ifeq ($(ARCH),x86_32)
+# DOOM_OPT_FLAGS := -O2
+# endif
 
 CFLAGS_SUPPORT += $(DOOM_OPT_FLAGS)
 CFLAGS_DOOM += $(DOOM_OPT_FLAGS)

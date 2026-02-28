@@ -12,6 +12,7 @@ QEMU_CONSOLE ?= false
 BOOT         ?= bios
 QEMU_MEMORY  ?= 256M
 QEMU_CPU     ?= max
+QEMU_SMP     ?= 1
 KVM          ?= false
 QEMU_SNAPSHOT ?= false
 
@@ -47,6 +48,7 @@ QEMU_ARGS := \
 	-no-reboot \
 	-cpu $(QEMU_CPU) \
 	-m $(QEMU_MEMORY) \
+	-smp $(QEMU_SMP) \
 	$(QEMU_CONSOLE_ARGS)
 
 ifeq ($(KVM), true)

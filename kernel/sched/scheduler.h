@@ -75,6 +75,7 @@ typedef struct sched_wait_queue {
 typedef struct sched_thread {
     char name[PROC_NAME_MAX];
     thread_state_t state;
+    size_t affinity_core;
 
     list_node_t run_node;
     bool in_run_queue;
@@ -109,6 +110,7 @@ typedef struct sched_thread {
 
     uintptr_t user_stack_base;
     size_t user_stack_size;
+    u64 user_mem_kib;
 
     struct sched_user_region *regions;
 
@@ -154,18 +156,23 @@ typedef struct {
     u32 signal_pending;
     u32 signal_mask;
     thread_state_t state;
+    int core_id;
     int tty_index;
     u64 cpu_time_ms;
+    u64 vm_kib;
     char name[PROC_NAME_MAX];
 } sched_proc_snapshot_t;
 
 
 void scheduler_init(void);
+void scheduler_init_core(void);
 void scheduler_start(void);
+void scheduler_start_secondary(void);
 
 bool sched_is_running(void);
 
 sched_thread_t *sched_current(void);
+sched_thread_t *sched_current_core(size_t core_id);
 sched_thread_t *sched_find_thread(pid_t pid);
 pid_t sched_getpid(void);
 pid_t sched_getppid(void);
@@ -218,6 +225,10 @@ bool sched_add_user_region(
     u64 flags
 );
 void sched_clear_user_regions(sched_thread_t *thread);
+void sched_user_mem_add(sched_thread_t *thread, size_t pages);
+void sched_user_mem_sub(sched_thread_t *thread, size_t pages);
+void sched_user_mem_set_kib(sched_thread_t *thread, u64 kib);
+u64 sched_user_mem_kib(const sched_thread_t *thread);
 
 void sched_wait_queue_init(sched_wait_queue_t *queue);
 void sched_wait_queue_destroy(sched_wait_queue_t *queue);
@@ -225,6 +236,7 @@ void sched_wait_queue_destroy(sched_wait_queue_t *queue);
 void sched_block(sched_wait_queue_t *queue);
 void sched_wake_one(sched_wait_queue_t *queue);
 void sched_wake_all(sched_wait_queue_t *queue);
+void sched_poll_wait(void);
 
 void sched_preempt_disable(void);
 void sched_preempt_enable(void);
@@ -236,6 +248,11 @@ void sched_sleep(u64 ticks);
 void sched_exit(void) NORETURN;
 bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out);
 void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out);
+void sched_cpu_usage_snapshot_core(
+    size_t core_id,
+    u64 *busy_ticks_out,
+    u64 *total_ticks_out
+);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
 
 bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write);

@@ -98,12 +98,20 @@ static void _clone_kernel_pt_32(page_t *dest_pd, page_t *src_pd) {
 static page_t *_clone_kernel_root_32(page_t *kernel_root) {
     page_t *root = alloc_frames(1);
     memset(root, 0, PAGE_4KIB);
+    const size_t kernel_pdpt_index = GET_LVL3_INDEX(LINEAR_MAP_OFFSET_32);
 
     for (size_t i = 0; i < 4; i++) {
         page_t entry = kernel_root[i];
 
         if (!(entry & PT_PRESENT)) {
             root[i] = 0;
+            continue;
+        }
+
+        // Share the higher-half kernel mapping tree so new kernel mappings
+        // are visible in every user address space.
+        if (i == kernel_pdpt_index) {
+            root[i] = entry;
             continue;
         }
 
@@ -189,7 +197,13 @@ static void _free_tables_64(page_t *root) {
 }
 #else
 static void _free_tables_32(page_t *root) {
+    const size_t kernel_pdpt_index = GET_LVL3_INDEX(LINEAR_MAP_OFFSET_32);
+
     for (size_t i = 0; i < 4; i++) {
+        if (i == kernel_pdpt_index) {
+            continue;
+        }
+
         if (!(root[i] & PT_PRESENT))
             continue;
 

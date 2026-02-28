@@ -1043,11 +1043,13 @@ int user_exec(
     sched_user_region_t *old_regions = thread->regions;
     uintptr_t old_stack_base = thread->user_stack_base;
     size_t old_stack_size = thread->user_stack_size;
+    u64 old_user_mem_kib = sched_user_mem_kib(thread);
 
     thread->vm_space = fresh;
     thread->regions = NULL;
     thread->user_stack_base = old_stack_base;
     thread->user_stack_size = old_stack_size;
+    sched_user_mem_set_kib(thread, 0);
 
     uintptr_t entry_point = 0;
     arch_word_t entry_raw = 0;
@@ -1063,6 +1065,7 @@ int user_exec(
 
         thread->regions = old_regions;
         thread->vm_space = old_vm;
+        sched_user_mem_set_kib(thread, old_user_mem_kib);
 
         arch_vm_destroy(fresh);
 
@@ -1079,6 +1082,7 @@ int user_exec(
 
         thread->regions = old_regions;
         thread->vm_space = old_vm;
+        sched_user_mem_set_kib(thread, old_user_mem_kib);
 
         arch_vm_destroy(fresh);
 

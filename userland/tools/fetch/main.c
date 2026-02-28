@@ -159,6 +159,7 @@ int main(void) {
     unsigned long long total_kib = 0;
     unsigned long long used_kib = 0;
     unsigned long long freq_khz = 0;
+    unsigned long long ncpu = 1;
 
     char os_kv[256] = {0};
     char swap_kv[256] = {0};
@@ -186,6 +187,9 @@ int main(void) {
     if (cpu_fd >= 0 && kv_read_fd(cpu_fd, cpu_kv, sizeof(cpu_kv)) > 0) {
         kv_read_string(cpu_kv, "model", cpu_model, sizeof(cpu_model));
         kv_read_u64(cpu_kv, "clockrate_khz", &freq_khz);
+        if (!kv_read_u64(cpu_kv, "ncpu", &ncpu) || !ncpu) {
+            ncpu = 1;
+        }
     }
     if (cpu_fd >= 0) {
         close(cpu_fd);
@@ -215,12 +219,13 @@ int main(void) {
         snprintf(
             cpu_line,
             sizeof(cpu_line),
-            "cpu: %s @ %llu MHz",
+            "cpu: %s (%llu cores) @ %llu MHz",
             model_clean,
+            ncpu,
             freq_khz / 1000
         );
     } else {
-        snprintf(cpu_line, sizeof(cpu_line), "cpu: %s", cpu_model);
+        snprintf(cpu_line, sizeof(cpu_line), "cpu: %s (%llu cores)", cpu_model, ncpu);
     }
 
     fill_separator(sep, sizeof(sep), strlen(user_at));

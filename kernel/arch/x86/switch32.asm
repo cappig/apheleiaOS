@@ -16,7 +16,7 @@ arch_context_switch:
 
     add esp, 8
     test dword [esp + 4], 0x3
-    jz .no_user
+    jz .to_kernel
     push eax
     mov ax, 0x23
     mov ds, ax
@@ -24,5 +24,14 @@ arch_context_switch:
     mov fs, ax
     mov gs, ax
     pop eax
-.no_user:
+    iret
+
+.to_kernel:
+    push eax
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    pop eax
     iret

@@ -25,6 +25,7 @@
 #include <sys/tty.h>
 #include <sys/usb.h>
 #include <x86/asm.h>
+#include <x86/apic.h>
 #include <x86/boot.h>
 #include <x86/console.h>
 #include <x86/gdt.h>
@@ -35,6 +36,7 @@
 #include <x86/pic.h>
 #include <x86/rtc.h>
 #include <x86/serial.h>
+#include <x86/smp.h>
 #include <x86/tsc.h>
 
 
@@ -54,6 +56,7 @@ static bool arch_fpu_fxsr = false;
 
 static char boot_log_history[LOG_BOOT_HISTORY_CAP];
 static size_t boot_log_history_len = 0;
+static volatile int boot_log_lock = 0;
 
 typedef struct {
     u64 paddr;
@@ -110,6 +113,23 @@ static void _log_history_append(const char *s, size_t len) {
     boot_log_history_len += len;
 }
 
+static unsigned long _boot_log_lock_irqsave(void) {
+    unsigned long flags = arch_irq_save();
+
+    while (__sync_lock_test_and_set(&boot_log_lock, 1)) {
+        while (boot_log_lock) {
+            arch_cpu_relax();
+        }
+    }
+
+    return flags;
+}
+
+static void _boot_log_unlock_irqrestore(unsigned long flags) {
+    __sync_lock_release(&boot_log_lock);
+    arch_irq_restore(flags);
+}
+
 static void _log_history_replay_console(void) {
     if (!log_console_ready || !boot_log_history_len) {
         return;
@@ -119,7 +139,9 @@ static void _log_history_replay_console(void) {
 }
 
 void arch_log_replay_console(void) {
+    unsigned long flags = _boot_log_lock_irqsave();
     _log_history_replay_console();
+    _boot_log_unlock_irqrestore(flags);
 }
 
 ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
@@ -131,11 +153,11 @@ ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
         return 0;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = _boot_log_lock_irqsave();
     size_t history_len = boot_log_history_len;
 
     if (offset >= history_len) {
-        arch_irq_restore(irq_flags);
+        _boot_log_unlock_irqrestore(irq_flags);
         return 0;
     }
 
@@ -145,14 +167,14 @@ ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
     }
 
     memcpy(buf, boot_log_history + offset, copy_len);
-    arch_irq_restore(irq_flags);
+    _boot_log_unlock_irqrestore(irq_flags);
     return (ssize_t)copy_len;
 }
 
 size_t arch_log_ring_size(void) {
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = _boot_log_lock_irqsave();
     size_t history_len = boot_log_history_len;
-    arch_irq_restore(irq_flags);
+    _boot_log_unlock_irqrestore(irq_flags);
     return history_len;
 }
 
@@ -178,14 +200,17 @@ static void _log_puts(const char *s) {
         return;
     }
 
+    unsigned long flags = _boot_log_lock_irqsave();
     _log_history_append(s, len);
 
     if (!logsink_is_bound()) {
         _log_write_early(s, len);
+        _boot_log_unlock_irqrestore(flags);
         return;
     }
 
     logsink_write(s, len);
+    _boot_log_unlock_irqrestore(flags);
 }
 
 void arch_panic_enter(void) {
@@ -895,6 +920,7 @@ const kernel_args_t *arch_init(void *boot_info) {
     }
 
     memcpy(&boot_args, &info->args, sizeof(boot_args));
+    smp_set_boot_info(info);
 
     boot_rootfs_paddr = info->boot_rootfs_paddr;
     boot_rootfs_size = 0;
@@ -997,6 +1023,10 @@ const kernel_args_t *arch_init(void *boot_info) {
     return &boot_args;
 }
 
+void arch_smp_init(void) {
+    smp_init();
+}
+
 void arch_storage_init(void) {
     _set_boot_disk_hint();
     _set_boot_rootfs_uuid_preference();
@@ -1030,6 +1060,7 @@ void arch_tlb_flush(uintptr_t addr) {
 #else
     tlb_flush((u32)addr);
 #endif
+    smp_tlb_shootdown(addr);
 }
 
 void arch_cpu_set_local(void *ptr) {
@@ -1052,6 +1083,15 @@ void *arch_cpu_get_local(void) {
 
     return (void *)(uintptr_t)read_msr(KERNEL_GS_BASE);
 #else
+    cpuid_regs_t regs = {0};
+    cpuid(1, &regs);
+    u32 apic_id = (regs.ebx >> 24) & 0xffU;
+
+    cpu_core_t *core = cpu_find_by_lapic(apic_id);
+    if (core) {
+        return core;
+    }
+
     return NULL;
 #endif
 }

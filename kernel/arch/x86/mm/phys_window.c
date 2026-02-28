@@ -29,6 +29,7 @@ static u64 window_flags = PT_WRITE;
 static volatile int window_lock = 0;
 static size_t window_lock_owner = (size_t)-1;
 static size_t window_lock_depth = 0;
+static unsigned long window_irq_flags = 0;
 
 static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
 static size_t window_stack_depth = 0;
@@ -51,6 +52,8 @@ static void _window_lock_acquire(void) {
         return;
     }
 
+    unsigned long irq_flags = arch_irq_save();
+
     while (__sync_lock_test_and_set(&window_lock, 1)) {
         while (window_lock) {
             arch_cpu_relax();
@@ -59,6 +62,7 @@ static void _window_lock_acquire(void) {
 
     window_lock_owner = cpu_id;
     window_lock_depth = 1;
+    window_irq_flags = irq_flags;
     sched_preempt_disable();
 }
 
@@ -75,6 +79,7 @@ static void _window_lock_release(void) {
         window_lock_owner = (size_t)-1;
         __sync_lock_release(&window_lock);
         sched_preempt_enable();
+        arch_irq_restore(window_irq_flags);
     }
 }
 
@@ -247,6 +252,7 @@ static u64 window_flags = PT_WRITE;
 static volatile int window_lock = 0;
 static size_t window_lock_owner = (size_t)-1;
 static size_t window_lock_depth = 0;
+static unsigned long window_irq_flags = 0;
 
 #define PHYS_WINDOW_STACK_MAX 8
 
@@ -277,6 +283,8 @@ static void _window_lock_acquire(void) {
         return;
     }
 
+    unsigned long irq_flags = arch_irq_save();
+
     while (__sync_lock_test_and_set(&window_lock, 1)) {
         while (window_lock) {
             arch_cpu_relax();
@@ -285,6 +293,7 @@ static void _window_lock_acquire(void) {
 
     window_lock_owner = cpu_id;
     window_lock_depth = 1;
+    window_irq_flags = irq_flags;
     sched_preempt_disable();
 }
 
@@ -301,6 +310,7 @@ static void _window_lock_release(void) {
         window_lock_owner = (size_t)-1;
         __sync_lock_release(&window_lock);
         sched_preempt_enable();
+        arch_irq_restore(window_irq_flags);
     }
 }
 

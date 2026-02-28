@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/lock.h>
 
 #include "vfs.h"
 
@@ -28,6 +29,7 @@ typedef enum {
 } proc_field_t;
 
 static vfs_node_t *proc_root = NULL;
+static volatile int procfs_tree_lock = 0;
 
 
 static uintptr_t _proc_key(pid_t pid, proc_field_t field) {
@@ -246,6 +248,46 @@ static bool _parse_pid_name(const char *name, pid_t *pid_out) {
     return true;
 }
 
+static bool _procfs_contains_node(vfs_node_t *node) {
+    if (!proc_root || !node || !node->tree_entry) {
+        return false;
+    }
+
+    tree_node_t *entry = node->tree_entry;
+    while (entry) {
+        if (entry->data == proc_root) {
+            return true;
+        }
+
+        entry = entry->parent;
+    }
+
+    return false;
+}
+
+bool procfs_dir_lock_if_needed(vfs_node_t *node, unsigned long *flags_out) {
+    if (!flags_out) {
+        return false;
+    }
+
+    *flags_out = 0;
+
+    if (!_procfs_contains_node(node)) {
+        return false;
+    }
+
+    *flags_out = lock_irqsave(&procfs_tree_lock);
+    return true;
+}
+
+void procfs_dir_unlock_if_needed(bool locked, unsigned long flags) {
+    if (!locked) {
+        return;
+    }
+
+    unlock_irqrestore(&procfs_tree_lock, flags);
+}
+
 static bool _owner_for_pid(pid_t pid, uid_t *uid_out, gid_t *gid_out) {
     if (!uid_out || !gid_out) {
         return false;
@@ -349,8 +391,10 @@ static ssize_t _proc_stat_read(
         "signal_pending=%u\n"
         "signal_mask=%u\n"
         "state=%c\n"
+        "core_id=%d\n"
         "tty_index=%d\n"
         "cpu_time_ms=%llu\n"
+        "vm_kib=%llu\n"
         "name=%s\n",
         (long long)snapshot.pid,
         (long long)snapshot.ppid,
@@ -362,8 +406,10 @@ static ssize_t _proc_stat_read(
         (unsigned int)snapshot.signal_pending,
         (unsigned int)snapshot.signal_mask,
         _state_char(snapshot.state),
+        snapshot.core_id,
         snapshot.tty_index,
         (unsigned long long)snapshot.cpu_time_ms,
+        (unsigned long long)snapshot.vm_kib,
         snapshot.name
     );
 
@@ -773,8 +819,11 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
 }
 
 bool procfs_init(void) {
+    unsigned long irq_flags = lock_irqsave(&procfs_tree_lock);
+
     vfs_node_t *root = vfs_lookup("/");
     if (!root) {
+        unlock_irqrestore(&procfs_tree_lock, irq_flags);
         log_warn("procfs missing root");
         return false;
     }
@@ -789,6 +838,7 @@ bool procfs_init(void) {
     }
 
     if (!proc) {
+        unlock_irqrestore(&procfs_tree_lock, irq_flags);
         log_warn("failed to create /proc");
         return false;
     }
@@ -805,15 +855,18 @@ bool procfs_init(void) {
 
     vfs_node_t *self_dir = NULL;
     if (!_upsert_dir(proc_root, "self", 0555, &self_dir)) {
+        unlock_irqrestore(&procfs_tree_lock, irq_flags);
         log_warn("failed to create /proc/self");
         return false;
     }
 
     if (!_ensure_proc_entry(self_dir, 0, true)) {
+        unlock_irqrestore(&procfs_tree_lock, irq_flags);
         log_warn("failed to populate /proc/self");
         return false;
     }
 
+    unlock_irqrestore(&procfs_tree_lock, irq_flags);
     return true;
 }
 
@@ -822,48 +875,26 @@ void procfs_register_pid(pid_t pid) {
         return;
     }
 
+    unsigned long irq_flags = lock_irqsave(&procfs_tree_lock);
+
     char pid_name[24];
     snprintf(pid_name, sizeof(pid_name), "%lld", (long long)pid);
 
     vfs_node_t *proc_dir = NULL;
     if (!_upsert_dir(proc_root, pid_name, 0555, &proc_dir)) {
+        unlock_irqrestore(&procfs_tree_lock, irq_flags);
         return;
     }
 
     if (!_ensure_proc_entry(proc_dir, pid, false)) {
         log_warn("failed to populate /proc/%lld", (long long)pid);
     }
+
+    unlock_irqrestore(&procfs_tree_lock, irq_flags);
 }
 
 void procfs_unregister_pid(pid_t pid) {
-    if (pid <= 0 || !proc_root) {
-        return;
-    }
-
-    const char *names[] = {
-        "stat",
-        "cwd",
-        "pid",
-        "ppid",
-        "uid",
-        "gid",
-        "umask",
-        "pgid",
-        "sid",
-        "groups",
-        "sigmask"
-    };
-    char path[56];
-
-    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-        snprintf(path, sizeof(path), "/proc/%lld/%s", (long long)pid, names[i]);
-        if (!vfs_unlink(path)) {
-            log_warn("failed to remove %s", path);
-        }
-    }
-
-    snprintf(path, sizeof(path), "/proc/%lld", (long long)pid);
-    if (!vfs_rmdir(path)) {
-        log_warn("failed to remove %s", path);
-    }
+    // Keep per-pid procfs nodes stable after open. VFS nodes are not refcounted
+    // yet, so unlinking a live /proc/<pid>/... node can invalidate open FDs.
+    (void)pid;
 }

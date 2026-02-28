@@ -197,10 +197,16 @@ static ssize_t _dev_cpu_read(
 
     u64 idle_ticks = total_ticks - busy_ticks;
 
-    char text[SYSINFO_TEXT_MAX];
-    snprintf(
-        text,
-        sizeof(text),
+    size_t ncpu = core_online_count ? core_online_count : 1;
+    if (ncpu > MAX_CORES) {
+        ncpu = MAX_CORES;
+    }
+
+    char text[SYSINFO_TEXT_MAX * 24];
+    size_t used = 0;
+    int wrote = snprintf(
+        text + used,
+        sizeof(text) - used,
         "model=%s\n"
         "ncpu=%zu\n"
         "pagesize=4096\n"
@@ -209,12 +215,48 @@ static ssize_t _dev_cpu_read(
         "idle_ticks=%" PRIu64 "\n"
         "total_ticks=%" PRIu64 "\n",
         arch_cpu_name(),
-        core_count,
+        ncpu,
         arch_cpu_khz(),
         busy_ticks,
         idle_ticks,
         total_ticks
     );
+
+    if (wrote <= 0 || (size_t)wrote >= sizeof(text) - used) {
+        return _dev_text_read(text, buf, offset, len);
+    }
+
+    used += (size_t)wrote;
+
+    for (size_t i = 0; i < ncpu; i++) {
+        u64 core_busy = 0;
+        u64 core_total = 0;
+        sched_cpu_usage_snapshot_core(i, &core_busy, &core_total);
+        if (core_busy > core_total) {
+            core_busy = core_total;
+        }
+        u64 core_idle = core_total - core_busy;
+
+        wrote = snprintf(
+            text + used,
+            sizeof(text) - used,
+            "core%zu_busy_ticks=%" PRIu64 "\n"
+            "core%zu_idle_ticks=%" PRIu64 "\n"
+            "core%zu_total_ticks=%" PRIu64 "\n",
+            i,
+            core_busy,
+            i,
+            core_idle,
+            i,
+            core_total
+        );
+
+        if (wrote <= 0 || (size_t)wrote >= sizeof(text) - used) {
+            break;
+        }
+
+        used += (size_t)wrote;
+    }
 
     return _dev_text_read(text, buf, offset, len);
 }

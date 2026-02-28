@@ -88,6 +88,24 @@ typedef struct {
 
 static const console_backend_ops_t *backend_ops = NULL;
 static console_state_t console_state = {0};
+static volatile int console_lock = 0;
+
+static unsigned long _console_lock_irqsave(void) {
+    unsigned long flags = arch_irq_save();
+
+    while (__sync_lock_test_and_set(&console_lock, 1)) {
+        while (console_lock) {
+            arch_cpu_relax();
+        }
+    }
+
+    return flags;
+}
+
+static void _console_unlock_irqrestore(unsigned long flags) {
+    __sync_lock_release(&console_lock);
+    arch_irq_restore(flags);
+}
 
 #define CONSOLE_TAB_WIDTH 4
 
@@ -1843,9 +1861,9 @@ ssize_t console_write_screen(size_t screen, const void *buf, size_t len) {
         return 0;
     }
 
-    unsigned long flags = arch_irq_save();
+    unsigned long flags = _console_lock_irqsave();
     _write_screen_locked(screen, buf, len);
-    arch_irq_restore(flags);
+    _console_unlock_irqrestore(flags);
 
     return (ssize_t)len;
 }
@@ -1882,10 +1900,10 @@ int console_fb_acquire(pid_t pid, size_t screen) {
         return -EINVAL;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = _console_lock_irqsave();
 
     if (console_state.fb_owned && console_state.fb_owner != pid) {
-        arch_irq_restore(irq_flags);
+        _console_unlock_irqrestore(irq_flags);
         return -EBUSY;
     }
 
@@ -1893,7 +1911,7 @@ int console_fb_acquire(pid_t pid, size_t screen) {
     console_state.fb_owner = pid;
     console_state.fb_owner_screen = screen;
 
-    arch_irq_restore(irq_flags);
+    _console_unlock_irqrestore(irq_flags);
     return 0;
 }
 
@@ -1906,15 +1924,15 @@ int console_fb_release(pid_t pid) {
         return -ENODEV;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = _console_lock_irqsave();
 
     if (!console_state.fb_owned) {
-        arch_irq_restore(irq_flags);
+        _console_unlock_irqrestore(irq_flags);
         return 0;
     }
 
     if (console_state.fb_owner != pid) {
-        arch_irq_restore(irq_flags);
+        _console_unlock_irqrestore(irq_flags);
         return -EPERM;
     }
 
@@ -1925,7 +1943,7 @@ int console_fb_release(pid_t pid) {
 
     _redraw_screen(console_state.active_screen);
 
-    arch_irq_restore(irq_flags);
+    _console_unlock_irqrestore(irq_flags);
     return 0;
 }
 
@@ -1938,12 +1956,12 @@ ssize_t console_fb_owner_screen(void) {
         return TTY_NONE;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = _console_lock_irqsave();
 
     ssize_t owner_screen =
         console_state.fb_owned ? (ssize_t)console_state.fb_owner_screen : TTY_NONE;
 
-    arch_irq_restore(irq_flags);
+    _console_unlock_irqrestore(irq_flags);
 
     return owner_screen;
 }
@@ -1953,7 +1971,7 @@ void console_panic(void) {
         return;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = _console_lock_irqsave();
 
     if (console_state.mode == CONSOLE_FRAMEBUFFER && _has_back_buffer()) {
         console_state.fb_owned = false;
@@ -1969,5 +1987,5 @@ void console_panic(void) {
 
     _redraw_screen(TTY_CONSOLE);
 
-    arch_irq_restore(irq_flags);
+    _console_unlock_irqrestore(irq_flags);
 }

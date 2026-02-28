@@ -98,3 +98,4 @@ void reset_int_handler(size_t int_num);
 void configure_int(size_t int_num, u16 selector, u8 ist, u8 attribs);
 
 void idt_init(void);
+void idt_load(void);

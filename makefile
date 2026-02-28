@@ -1,5 +1,5 @@
 NAME    := apheleia
-VERSION := alpha-0.3
+VERSION := alpha-0.4
 
 BUILD_DATE       ?= $(shell date -u +%Y-%m-%d)
 GIT_COMMIT_SHORT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)

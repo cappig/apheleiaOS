@@ -16,6 +16,7 @@ typedef void (*arch_syscall_handler_t)(arch_int_state_t *state);
 const kernel_args_t *arch_init(void *boot_info);
 void arch_storage_init(void);
 void arch_log_replay_console(void);
+void arch_smp_init(void);
 
 #define PHYS_MAP_DEFAULT 0U
 #define PHYS_MAP_WC      (1U << 0) // write-combining

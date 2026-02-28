@@ -23,6 +23,7 @@ typedef enum {
 } irq_numbers;
 
 bool irq_init(void);
+void irq_init_ap(void);
 void irq_register(size_t irq, int_handler_t handler);
 void irq_unregister(size_t irq);
 void irq_ack(size_t irq);

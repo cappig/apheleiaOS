@@ -24,6 +24,16 @@ NORETURN void _load_entry(u16 boot_disk) {
     get_e820(&info.memory_map);
     arch_init_alloc();
 
+    void *smp_trampoline =
+        mmap_try_alloc_top(0x1000, E820_KERNEL, 0x1000, 0x000fffffULL);
+    if (smp_trampoline) {
+        info.smp_trampoline_paddr = (u64)(uintptr_t)smp_trampoline;
+    } else {
+        printf(
+            "boot: warning: no low page for SMP trampoline, using UP mode\n\r"
+        );
+    }
+
     u64 acpi_root_ptr = 0;
     get_rsdp(&acpi_root_ptr);
     info.acpi_root_ptr = acpi_root_ptr;

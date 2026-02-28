@@ -288,6 +288,16 @@ static EFI_STATUS _alloc_pages_low(UINTN pages, EFI_PHYSICAL_ADDRESS *addr) {
     return g_bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, addr);
 }
 
+static EFI_STATUS
+_alloc_pages_below(UINTN pages, EFI_PHYSICAL_ADDRESS max, EFI_PHYSICAL_ADDRESS *addr) {
+    if (!addr) {
+        return EFI_INVALID_PARAM;
+    }
+
+    *addr = max;
+    return g_bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, addr);
+}
+
 static EFI_STATUS _alloc_table(page_t **table) {
     if (!table) {
         return EFI_INVALID_PARAM;
@@ -797,6 +807,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
     boot_info_t *info = (boot_info_t *)(uintptr_t)info_phys;
     uefi_mem_zero(info, sizeof(*info));
+
+    EFI_PHYSICAL_ADDRESS smp_trampoline = 0;
+    status = _alloc_pages_below(1, 0x000FFFFFULL, &smp_trampoline);
+    if (!efi_error(status)) {
+        info->smp_trampoline_paddr = (u64)smp_trampoline;
+    }
 
     _setup_default_args(info);
     _parse_loader_conf(image, info);

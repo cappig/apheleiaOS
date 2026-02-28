@@ -45,6 +45,7 @@ static pid_t next_user_pid = 1;
 static pid_t next_kernel_pid = -1;
 
 static bool sched_running = false;
+static bool sched_secondary_released = false;
 typedef struct {
     sched_thread_t *current;
     sched_thread_t *idle_thread;
@@ -62,12 +63,34 @@ static size_t sleep_heap_count = 0;
 static size_t sleep_heap_capacity = 0;
 static volatile u64 sched_busy_ticks = 0;
 static volatile u64 sched_total_ticks = 0;
+static volatile u64 sched_core_busy_ticks[MAX_CORES] = {0};
+static volatile u64 sched_core_total_ticks[MAX_CORES] = {0};
+static sched_wait_queue_t sched_poll_wait_queue = {0};
+
+static inline bool sched_running_get(void) {
+    return __atomic_load_n(&sched_running, __ATOMIC_ACQUIRE);
+}
+
+static inline void sched_running_set(bool running) {
+    __atomic_store_n(&sched_running, running, __ATOMIC_RELEASE);
+}
+
+static inline bool sched_secondary_released_get(void) {
+    return __atomic_load_n(&sched_secondary_released, __ATOMIC_ACQUIRE);
+}
+
+static inline void sched_secondary_released_set(bool released) {
+    __atomic_store_n(&sched_secondary_released, released, __ATOMIC_RELEASE);
+}
 
 
 static size_t sched_cpu_id(void) {
     cpu_core_t *core = cpu_current();
 
     if (!core || core->id >= MAX_CORES) {
+        if (core_count > 1) {
+            panic("scheduler lost current core identity on SMP");
+        }
         return 0;
     }
 
@@ -846,6 +869,65 @@ static NORETURN void thread_trampoline(void) {
     __builtin_unreachable();
 }
 
+static inline u64 _pages_to_kib(size_t pages) {
+    return ((u64)pages * PAGE_4KIB) / KIB;
+}
+
+void sched_user_mem_add(sched_thread_t *thread, size_t pages) {
+    if (!thread || !pages) {
+        return;
+    }
+
+    u64 delta_kib = _pages_to_kib(pages);
+    if (!delta_kib) {
+        return;
+    }
+
+    __atomic_add_fetch(&thread->user_mem_kib, delta_kib, __ATOMIC_RELAXED);
+}
+
+void sched_user_mem_sub(sched_thread_t *thread, size_t pages) {
+    if (!thread || !pages) {
+        return;
+    }
+
+    u64 delta_kib = _pages_to_kib(pages);
+    if (!delta_kib) {
+        return;
+    }
+
+    u64 current = __atomic_load_n(&thread->user_mem_kib, __ATOMIC_RELAXED);
+    while (current > 0) {
+        u64 next = current > delta_kib ? (current - delta_kib) : 0;
+        if (__atomic_compare_exchange_n(
+                &thread->user_mem_kib,
+                &current,
+                next,
+                false,
+                __ATOMIC_RELAXED,
+                __ATOMIC_RELAXED
+            )) {
+            return;
+        }
+    }
+}
+
+void sched_user_mem_set_kib(sched_thread_t *thread, u64 kib) {
+    if (!thread) {
+        return;
+    }
+
+    __atomic_store_n(&thread->user_mem_kib, kib, __ATOMIC_RELAXED);
+}
+
+u64 sched_user_mem_kib(const sched_thread_t *thread) {
+    if (!thread) {
+        return 0;
+    }
+
+    return __atomic_load_n(&thread->user_mem_kib, __ATOMIC_RELAXED);
+}
+
 bool sched_add_user_region(
     sched_thread_t *thread,
     uintptr_t vaddr,
@@ -868,6 +950,7 @@ bool sched_add_user_region(
     region->flags = flags;
     region->next = thread->regions;
     thread->regions = region;
+    sched_user_mem_add(thread, pages);
 
     return true;
 }
@@ -891,6 +974,7 @@ void sched_clear_user_regions(sched_thread_t *thread) {
     }
 
     thread->regions = NULL;
+    sched_user_mem_set_kib(thread, 0);
 }
 
 static sched_user_region_t *
@@ -1178,7 +1262,9 @@ static void sched_reap(void) {
 
 static void idle_entry(UNUSED void *arg) {
     for (;;) {
-        sched_reap();
+        if (sched_cpu_id() == 0) {
+            sched_reap();
+        }
         arch_cpu_wait();
     }
 }
@@ -1238,6 +1324,19 @@ void sched_prepare_user_thread(
 
 static void enqueue_thread(sched_thread_t *thread) {
     if (!thread || thread == sched_local_idle()) {
+        return;
+    }
+
+    if (!thread->context) {
+        log_warn(
+            "scheduler refused enqueue of contextless thread pid=%ld (%s)",
+            (long)thread->pid,
+            thread->name
+        );
+        return;
+    }
+
+    if (thread->state != THREAD_READY) {
         return;
     }
 
@@ -1449,7 +1548,7 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
 
     sched_lock_restore(flags);
 
-    if (thread == sched_local_current() && sched_running) {
+    if (thread == sched_local_current() && sched_running_get()) {
         sched_yield();
     }
 }
@@ -1470,24 +1569,71 @@ void sched_continue_thread(sched_thread_t *thread) {
 }
 
 static sched_thread_t *dequeue_thread(void) {
-    unsigned long flags = sched_lock_save();
+    size_t attempts = 0;
 
-    list_node_t *node = list_pop_front(run_queue);
-    if (!node) {
+    for (;;) {
+        unsigned long flags = sched_lock_save();
+
+        list_node_t *node = list_pop_front(run_queue);
+        if (!node) {
+            sched_lock_restore(flags);
+            return NULL;
+        }
+
+        sched_thread_t *thread = node->data;
+        if (thread) {
+            thread->in_run_queue = false;
+        }
+
         sched_lock_restore(flags);
-        return NULL;
+
+        if (!thread) {
+            continue;
+        }
+
+        size_t cpu_id = sched_cpu_id();
+        if (
+            thread->affinity_core < MAX_CORES && thread->affinity_core != cpu_id
+        ) {
+            thread->run_node.data = thread;
+
+            unsigned long retry_flags = sched_lock_save();
+            list_append(run_queue, &thread->run_node);
+            thread->in_run_queue = true;
+            sched_lock_restore(retry_flags);
+
+            if (++attempts >= MAX_CORES) {
+                return NULL;
+            }
+
+            continue;
+        }
+
+        if (thread->affinity_core >= MAX_CORES) {
+            thread->affinity_core = cpu_id;
+        }
+
+        if (!thread->context) {
+            log_warn(
+                "scheduler dropped contextless runnable pid=%ld (%s)",
+                (long)thread->pid,
+                thread->name
+            );
+            continue;
+        }
+
+        if (thread->state != THREAD_READY) {
+            log_warn(
+                "scheduler dropped non-ready runnable pid=%ld (%s) state=%d",
+                (long)thread->pid,
+                thread->name,
+                thread->state
+            );
+            continue;
+        }
+
+        return thread;
     }
-
-    sched_thread_t *thread = node->data;
-    if (!thread) {
-        sched_lock_restore(flags);
-        return NULL;
-    }
-
-    thread->in_run_queue = false;
-    sched_lock_restore(flags);
-
-    return thread;
 }
 
 static sched_thread_t *pick_next_thread(void) {
@@ -1501,6 +1647,36 @@ static sched_thread_t *pick_next_thread(void) {
     }
 
     return sched_local_current();
+}
+
+static sched_thread_t *pick_bootstrap_init_thread(void) {
+    unsigned long flags = sched_lock_save();
+    size_t cpu_id = sched_cpu_id();
+
+    for (list_node_t *node = run_queue ? run_queue->head : NULL; node;
+         node = node->next) {
+        sched_thread_t *thread = node->data;
+
+        if (
+            !thread || thread->pid != 1 || thread->state != THREAD_READY ||
+            !thread->context
+        ) {
+            continue;
+        }
+
+        list_remove(run_queue, node);
+        thread->in_run_queue = false;
+
+        if (thread->affinity_core >= MAX_CORES) {
+            thread->affinity_core = cpu_id;
+        }
+
+        sched_lock_restore(flags);
+        return thread;
+    }
+
+    sched_lock_restore(flags);
+    return NULL;
 }
 
 static sched_thread_t *create_thread(
@@ -1521,6 +1697,7 @@ static sched_thread_t *create_thread(
     thread->entry = entry;
     thread->arg = arg;
     thread->state = THREAD_READY;
+    thread->affinity_core = MAX_CORES;
     thread->user_thread = user_thread;
     thread->pid = sched_next_pid(pid_class);
     thread->ppid = 0;
@@ -1597,6 +1774,14 @@ static sched_thread_t *create_thread(
 
 sched_thread_t *sched_current(void) {
     return sched_local_current();
+}
+
+sched_thread_t *sched_current_core(size_t core_id) {
+    if (core_id >= MAX_CORES) {
+        return NULL;
+    }
+
+    return sched_cpu_state[core_id].current;
 }
 
 sched_thread_t *sched_find_thread(pid_t pid) {
@@ -1981,31 +2166,103 @@ void scheduler_init(void) {
     all_list = list_create();
     assert(all_list);
     pid_index = hashmap_create();
+    sched_wait_queue_init(&sched_poll_wait_queue);
 
     kernel_vm = arch_vm_kernel();
     assert(kernel_vm);
 
     next_user_pid = 1;
     next_kernel_pid = -1;
+    scheduler_init_core();
+    sched_running_set(false);
+    sched_secondary_released_set(false);
+}
+
+void scheduler_init_core(void) {
+    if (!run_queue) {
+        return;
+    }
+
+    if (sched_local_idle()) {
+        return;
+    }
+
     sched_thread_t *idle =
         create_thread("idle", idle_entry, NULL, false, false, SCHED_PID_IDLE);
 
     assert(idle);
 
     idle->state = THREAD_RUNNING;
+    idle->affinity_core = sched_cpu_id();
     idle->tty_index = TTY_NONE;
 
     sched_local_set_idle(idle);
     sched_local_set_current(idle);
 
     sched_local_set_ticks_left(SCHED_SLICE);
-    sched_running = false;
 }
 
 void scheduler_start(void) {
     unsigned long irq_flags = arch_irq_save();
+    scheduler_init_core();
     log_info("scheduler starting");
-    sched_running = true;
+    sched_running_set(true);
+    sched_secondary_released_set(false);
+    sched_local_set_ticks_left(SCHED_SLICE);
+
+    sched_thread_t *current = sched_local_current();
+    sched_thread_t *next = pick_bootstrap_init_thread();
+    if (!next) {
+        next = pick_next_thread();
+    }
+
+    if (!current || !next || next == current) {
+        sched_secondary_released_set(true);
+        arch_irq_restore(irq_flags);
+        return;
+    }
+    if (!next->context) {
+        panic("scheduler selected contextless thread on BSP");
+    }
+
+    sched_local_set_current(next);
+    next->state = THREAD_RUNNING;
+
+    if (current->fpu_initialized) {
+        arch_fpu_save(current->fpu_state);
+    }
+
+    arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
+    arch_vm_switch(next->vm_space);
+
+    if (next->fpu_initialized) {
+        arch_fpu_restore(next->fpu_state);
+    }
+
+    stats_inc_sched_switch_count();
+    sched_secondary_released_set(true);
+    arch_context_switch(next->context);
+    arch_irq_restore(irq_flags);
+}
+
+void scheduler_start_secondary(void) {
+    unsigned long irq_flags = arch_irq_save();
+    scheduler_init_core();
+
+    if (!sched_running_get()) {
+        arch_irq_restore(irq_flags);
+        return;
+    }
+
+    while (!sched_secondary_released_get()) {
+        if (!sched_running_get()) {
+            arch_irq_restore(irq_flags);
+            return;
+        }
+
+        arch_cpu_relax();
+    }
+
     sched_local_set_ticks_left(SCHED_SLICE);
 
     sched_thread_t *current = sched_local_current();
@@ -2015,9 +2272,12 @@ void scheduler_start(void) {
         arch_irq_restore(irq_flags);
         return;
     }
+    if (!next->context) {
+        panic("scheduler selected contextless thread on AP");
+    }
 
-    next->state = THREAD_RUNNING;
     sched_local_set_current(next);
+    next->state = THREAD_RUNNING;
 
     if (current->fpu_initialized) {
         arch_fpu_save(current->fpu_state);
@@ -2036,7 +2296,7 @@ void scheduler_start(void) {
 }
 
 bool sched_is_running(void) {
-    return sched_running;
+    return sched_running_get();
 }
 
 sched_thread_t *
@@ -2289,7 +2549,7 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
             return 0;
         }
 
-        if (!sched_running) {
+        if (!sched_running_get()) {
             sched_lock_restore(flags);
             return -ECHILD;
         }
@@ -2350,7 +2610,7 @@ static sched_thread_t *wait_queue_pop(sched_wait_queue_t *queue) {
 void sched_block(sched_wait_queue_t *queue) {
     sched_thread_t *self = sched_local_current();
 
-    if (!sched_running || !queue || !queue->list || !self) {
+    if (!sched_running_get() || !queue || !queue->list || !self) {
         return;
     }
 
@@ -2363,18 +2623,52 @@ void sched_block(sched_wait_queue_t *queue) {
     wait_current_wakeup();
 }
 
+void sched_poll_wait(void) {
+    if (!sched_running_get()) {
+        return;
+    }
+
+    sched_block(&sched_poll_wait_queue);
+}
+
+static void wake_queue_one_locked(sched_wait_queue_t *queue) {
+    sched_thread_t *thread = wait_queue_pop(queue);
+    if (!thread) {
+        return;
+    }
+
+    thread->state = THREAD_READY;
+    enqueue_thread(thread);
+}
+
+static void wake_queue_all_locked(sched_wait_queue_t *queue) {
+    for (;;) {
+        sched_thread_t *thread = wait_queue_pop(queue);
+        if (!thread) {
+            return;
+        }
+
+        thread->state = THREAD_READY;
+        enqueue_thread(thread);
+    }
+}
+
+static void wake_pollers_locked(sched_wait_queue_t *queue) {
+    if (queue == &sched_poll_wait_queue || !sched_poll_wait_queue.list) {
+        return;
+    }
+
+    wake_queue_all_locked(&sched_poll_wait_queue);
+}
+
 void sched_wake_one(sched_wait_queue_t *queue) {
     if (!queue || !queue->list) {
         return;
     }
 
     unsigned long flags = sched_lock_save();
-    sched_thread_t *thread = wait_queue_pop(queue);
-
-    if (thread) {
-        thread->state = THREAD_READY;
-        enqueue_thread(thread);
-    }
+    wake_queue_one_locked(queue);
+    wake_pollers_locked(queue);
 
     sched_lock_restore(flags);
 }
@@ -2385,16 +2679,8 @@ void sched_wake_all(sched_wait_queue_t *queue) {
     }
 
     unsigned long flags = sched_lock_save();
-
-    for (;;) {
-        sched_thread_t *thread = wait_queue_pop(queue);
-        if (!thread) {
-            break;
-        }
-
-        thread->state = THREAD_READY;
-        enqueue_thread(thread);
-    }
+    wake_queue_all_locked(queue);
+    wake_pollers_locked(queue);
 
     sched_lock_restore(flags);
 }
@@ -2402,17 +2688,23 @@ void sched_wake_all(sched_wait_queue_t *queue) {
 void sched_tick(arch_int_state_t *state) {
     sched_thread_t *thread = sched_local_current();
 
-    if (!sched_running || !state || !thread) {
+    if (!sched_running_get() || !state || !thread) {
         return;
     }
 
-    __atomic_fetch_add(&sched_total_ticks, 1, __ATOMIC_RELAXED);
+    size_t cpu_id = sched_cpu_id();
 
-    sched_reap();
-    sched_wake_sleepers(arch_timer_ticks());
+    __atomic_fetch_add(&sched_total_ticks, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&sched_core_total_ticks[cpu_id], 1, __ATOMIC_RELAXED);
+
+    if (cpu_id == 0) {
+        sched_reap();
+        sched_wake_sleepers(arch_timer_ticks());
+    }
 
     if (thread != sched_local_idle() && thread->state == THREAD_RUNNING) {
         __atomic_fetch_add(&sched_busy_ticks, 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&sched_core_busy_ticks[cpu_id], 1, __ATOMIC_RELAXED);
         __atomic_fetch_add(&thread->cpu_time_ticks, 1, __ATOMIC_RELAXED);
     }
 
@@ -2441,9 +2733,12 @@ void sched_tick(arch_int_state_t *state) {
         thread->state = THREAD_RUNNING;
         return;
     }
+    if (!next->context) {
+        panic("scheduler tick switched to contextless thread");
+    }
 
-    next->state = THREAD_RUNNING;
     sched_local_set_current(next);
+    next->state = THREAD_RUNNING;
 
     if (thread->fpu_initialized) {
         arch_fpu_save(thread->fpu_state);
@@ -2461,11 +2756,13 @@ void sched_tick(arch_int_state_t *state) {
 }
 
 void sched_yield(void) {
-    if (!sched_running || !sched_local_current()) {
+    if (!sched_running_get() || !sched_local_current()) {
         return;
     }
 
-    sched_reap();
+    if (sched_cpu_id() == 0) {
+        sched_reap();
+    }
     sched_local_set_ticks_left(0);
 }
 
@@ -2475,7 +2772,7 @@ void sched_sleep(u64 ticks) {
         return;
     }
 
-    if (!sched_running) {
+    if (!sched_running_get()) {
         u64 start = arch_timer_ticks();
         while ((arch_timer_ticks() - start) < ticks) {
             arch_cpu_wait();
@@ -2609,6 +2906,10 @@ void sched_exit(void) {
         cpu_halt();
     }
 
+    if (!next->context) {
+        panic("scheduler exit switched to contextless thread");
+    }
+
     sched_local_set_current(next);
     next->state = THREAD_RUNNING;
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
@@ -2655,12 +2956,21 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         out->signal_pending = thread->signal_pending;
         out->signal_mask = thread->signal_mask;
         out->state = thread->state;
+        out->core_id = -1;
         out->tty_index = thread->tty_index;
+
+        for (size_t i = 0; i < MAX_CORES; i++) {
+            if (sched_cpu_state[i].current == thread) {
+                out->core_id = (int)i;
+                break;
+            }
+        }
 
         u64 cpu_ticks =
             __atomic_load_n(&thread->cpu_time_ticks, __ATOMIC_RELAXED);
 
         out->cpu_time_ms = hz ? ((cpu_ticks * 1000ULL) / hz) : 0;
+        out->vm_kib = sched_user_mem_kib(thread);
 
         memset(out->name, 0, sizeof(out->name));
         strncpy(out->name, thread->name, sizeof(out->name) - 1);
@@ -2682,6 +2992,32 @@ void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out) {
     if (total_ticks_out) {
         *total_ticks_out =
             __atomic_load_n(&sched_total_ticks, __ATOMIC_RELAXED);
+    }
+}
+
+void sched_cpu_usage_snapshot_core(
+    size_t core_id,
+    u64 *busy_ticks_out,
+    u64 *total_ticks_out
+) {
+    if (core_id >= MAX_CORES) {
+        if (busy_ticks_out) {
+            *busy_ticks_out = 0;
+        }
+        if (total_ticks_out) {
+            *total_ticks_out = 0;
+        }
+        return;
+    }
+
+    if (busy_ticks_out) {
+        *busy_ticks_out =
+            __atomic_load_n(&sched_core_busy_ticks[core_id], __ATOMIC_RELAXED);
+    }
+
+    if (total_ticks_out) {
+        *total_ticks_out =
+            __atomic_load_n(&sched_core_total_ticks[core_id], __ATOMIC_RELAXED);
     }
 }
 

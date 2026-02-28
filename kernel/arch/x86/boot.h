@@ -94,4 +94,5 @@ typedef struct PACKED {
     e820_map_t memory_map;
 
     boot_root_hint_t boot_root_hint;
+    u64 smp_trampoline_paddr;
 } boot_info_t;

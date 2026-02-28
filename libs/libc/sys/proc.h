@@ -38,8 +38,10 @@ typedef struct {
     gid_t gid;
     uint32_t signal_pending;
     char state;
+    int core_id;
     int tty_index;
     uint64_t cpu_time_ms;
+    uint64_t vm_kib;
     char name[PROC_NAME_MAX];
 } proc_stat_t;
 

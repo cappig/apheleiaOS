@@ -128,6 +128,10 @@ void idt_init(void) {
         set_int_handler(i, _default_int_handler);
     }
 
+    idt_load();
+}
+
+void idt_load(void) {
     asm volatile("lidt %0" : : "m"(idtr) : "memory");
 }
 

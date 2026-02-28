@@ -21,6 +21,18 @@ static gdt_entry_t gdt_entries[MAX_CORES][GDT_ENTRY_COUNT] = {0};
 
 
 static size_t _gdt_core_id(void) {
+    // Prefer deriving the core from the active GDTR so TSS/GDT updates
+    // never depend on scheduler-local CPU bookkeeping.
+    gdt_desc_t current = {0};
+    asm volatile("sgdt %0" : "=m"(current));
+
+    uintptr_t active_gdt = (uintptr_t)current.gdt_ptr;
+    for (size_t i = 0; i < MAX_CORES; i++) {
+        if (active_gdt == (uintptr_t)&gdt_entries[i][0]) {
+            return i;
+        }
+    }
+
     cpu_core_t *core = cpu_current();
 
     if (!core || core->id >= MAX_CORES) {

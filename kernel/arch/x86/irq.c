@@ -4,6 +4,7 @@
 #include <base/attributes.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
+#include <sys/cpu.h>
 #include <sys/stats.h>
 #include <x86/apic.h>
 #include <x86/asm.h>
@@ -53,7 +54,10 @@ static void _unregister_legacy(size_t irq) {
 
 static void _timer_handler(int_state_t *state) {
     u64 begin_tsc = read_tsc();
-    (void)__sync_add_and_fetch(&irq_tick_count, 1);
+    cpu_core_t *core = cpu_current();
+    if (core && core->id == 0) {
+        (void)__sync_add_and_fetch(&irq_tick_count, 1);
+    }
     irq_ack(IRQ_SYSTEM_TIMER);
 
 #if LEGACY_TIMER_SERIAL_RX
@@ -143,6 +147,14 @@ bool irq_init(void) {
 #endif
 
     return true;
+}
+
+void irq_init_ap(void) {
+    if (!apic_timer_init_local()) {
+        return;
+    }
+
+    apic_timer_enable();
 }
 
 void irq_register(size_t irq, int_handler_t handler) {

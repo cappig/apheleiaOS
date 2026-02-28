@@ -48,6 +48,7 @@ int proc_stat_parse(const char *text, proc_stat_t *out) {
 
     memset(out, 0, sizeof(*out));
     out->state = PROC_STATE_UNKNOWN;
+    out->core_id = -1;
     out->tty_index = PROC_TTY_NONE;
 
     bool have_pid = false;
@@ -118,6 +119,11 @@ int proc_stat_parse(const char *text, proc_stat_t *out) {
                     }
                 } else if (!strcmp(key, "state")) {
                     out->state = value[0] ? value[0] : PROC_STATE_UNKNOWN;
+                } else if (!strcmp(key, "core_id")) {
+                    long long parsed = 0;
+                    if (_parse_i64(value, &parsed)) {
+                        out->core_id = (int)parsed;
+                    }
                 } else if (!strcmp(key, "tty_index")) {
                     long long parsed = 0;
                     if (_parse_i64(value, &parsed)) {
@@ -127,6 +133,11 @@ int proc_stat_parse(const char *text, proc_stat_t *out) {
                     unsigned long long parsed = 0;
                     if (_parse_u64(value, &parsed)) {
                         out->cpu_time_ms = (uint64_t)parsed;
+                    }
+                } else if (!strcmp(key, "vm_kib")) {
+                    unsigned long long parsed = 0;
+                    if (_parse_u64(value, &parsed)) {
+                        out->vm_kib = (uint64_t)parsed;
                     }
                 } else if (!strcmp(key, "name")) {
                     strncpy(out->name, value, sizeof(out->name) - 1);

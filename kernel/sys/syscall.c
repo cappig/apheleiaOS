@@ -583,6 +583,9 @@ static ssize_t _fd_read_dir(
     size_t start_index = offset / sizeof(dirent_t);
     size_t current = 0;
     size_t written = 0;
+    unsigned long procfs_irq_flags = 0;
+    bool procfs_locked = procfs_dir_lock_if_needed(node, &procfs_irq_flags);
+    ssize_t ret = 0;
 
     ll_foreach(child, node->tree_entry->children) {
         if (current++ < start_index) {
@@ -595,12 +598,14 @@ static ssize_t _fd_read_dir(
 
         tree_node_t *tnode = child->data;
         if (!tnode) {
-            return -EIO;
+            ret = -EIO;
+            goto out;
         }
 
         vfs_node_t *vnode = tnode->data;
         if (!vnode) {
-            return -EIO;
+            ret = -EIO;
+            goto out;
         }
 
         out[written].d_ino = vnode->inode;
@@ -621,7 +626,11 @@ static ssize_t _fd_read_dir(
         entry->offset = offset + bytes;
     }
 
-    return (ssize_t)bytes;
+    ret = (ssize_t)bytes;
+
+out:
+    procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
+    return ret;
 }
 
 static ssize_t _fd_read_vfs(
@@ -1516,6 +1525,7 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
             }
 
             free(region);
+            sched_user_mem_sub(thread, pages);
         }
 
         for (size_t i = 0; i < pages; i++) {
@@ -1548,6 +1558,7 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
                 }
 
                 free(region);
+                sched_user_mem_sub(thread, pages);
             }
 
             for (size_t i = 0; i < pages; i++) {
@@ -1642,6 +1653,7 @@ static int sys_munmap(void *addr, size_t len) {
             region->paddr + overlap_page_index * (uintptr_t)PAGE_4KIB;
 
         arch_free_frames((void *)overlap_paddr, overlap_pages);
+        sched_user_mem_sub(thread, overlap_pages);
 
         unmapped = true;
 
@@ -2462,6 +2474,11 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
         }
 
         stats_inc_poll_sleep_loops();
+        if (!finite_timeout) {
+            sched_poll_wait();
+            continue;
+        }
+
         sched_sleep(1);
     }
 }
