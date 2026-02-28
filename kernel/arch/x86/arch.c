@@ -1042,6 +1042,20 @@ void arch_cpu_set_local(void *ptr) {
 #endif
 }
 
+void *arch_cpu_get_local(void) {
+#if defined(__x86_64__)
+    u64 gs_base = read_msr(GS_BASE);
+
+    if (gs_base) {
+        return (void *)(uintptr_t)gs_base;
+    }
+
+    return (void *)(uintptr_t)read_msr(KERNEL_GS_BASE);
+#else
+    return NULL;
+#endif
+}
+
 unsigned long arch_irq_save(void) {
     return irq_save();
 }

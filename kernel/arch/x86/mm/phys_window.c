@@ -3,6 +3,7 @@
 #include <base/types.h>
 #include <stddef.h>
 #include <string.h>
+#include <sys/cpu.h>
 #include <sys/panic.h>
 #include <x86/asm.h>
 #include <x86/boot.h>
@@ -25,9 +26,57 @@ typedef struct {
 static size_t window_pages_mapped = 0;
 static u64 window_paddr_base = 0;
 static u64 window_flags = PT_WRITE;
+static volatile int window_lock = 0;
+static size_t window_lock_owner = (size_t)-1;
+static size_t window_lock_depth = 0;
 
 static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
 static size_t window_stack_depth = 0;
+
+static size_t _window_cpu_id(void) {
+    cpu_core_t *core = cpu_current();
+
+    if (!core || core->id >= MAX_CORES) {
+        return 0;
+    }
+
+    return core->id;
+}
+
+static void _window_lock_acquire(void) {
+    size_t cpu_id = _window_cpu_id();
+
+    if (window_lock_owner == cpu_id) {
+        window_lock_depth++;
+        return;
+    }
+
+    while (__sync_lock_test_and_set(&window_lock, 1)) {
+        while (window_lock) {
+            arch_cpu_relax();
+        }
+    }
+
+    window_lock_owner = cpu_id;
+    window_lock_depth = 1;
+    sched_preempt_disable();
+}
+
+static void _window_lock_release(void) {
+    size_t cpu_id = _window_cpu_id();
+
+    if (window_lock_owner != cpu_id || !window_lock_depth) {
+        return;
+    }
+
+    window_lock_depth--;
+
+    if (!window_lock_depth) {
+        window_lock_owner = (size_t)-1;
+        __sync_lock_release(&window_lock);
+        sched_preempt_enable();
+    }
+}
 
 
 static u64 _map_flags_to_pt_flags(u32 flags) {
@@ -102,9 +151,7 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
         panic("phys window map too large");
     }
 
-    if (!window_pages_mapped) {
-        sched_preempt_disable();
-    }
+    _window_lock_acquire();
 
     if (window_pages_mapped) {
         if (window_stack_depth >= PHYS_WINDOW_STACK_MAX) {
@@ -163,12 +210,13 @@ void arch_phys_unmap(void *vaddr, size_t size) {
     window_flags = PT_WRITE;
 
     if (!window_stack_depth) {
-        sched_preempt_enable();
+        _window_lock_release();
         return;
     }
 
     window_map_t prev = window_stack[--window_stack_depth];
     _restore_window(prev);
+    _window_lock_release();
 }
 
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
@@ -196,6 +244,9 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
 static size_t window_pages_mapped = 0;
 static u64 window_paddr_base = 0;
 static u64 window_flags = PT_WRITE;
+static volatile int window_lock = 0;
+static size_t window_lock_owner = (size_t)-1;
+static size_t window_lock_depth = 0;
 
 #define PHYS_WINDOW_STACK_MAX 8
 
@@ -207,6 +258,51 @@ typedef struct {
 
 static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
 static size_t window_stack_depth = 0;
+
+static size_t _window_cpu_id(void) {
+    cpu_core_t *core = cpu_current();
+
+    if (!core || core->id >= MAX_CORES) {
+        return 0;
+    }
+
+    return core->id;
+}
+
+static void _window_lock_acquire(void) {
+    size_t cpu_id = _window_cpu_id();
+
+    if (window_lock_owner == cpu_id) {
+        window_lock_depth++;
+        return;
+    }
+
+    while (__sync_lock_test_and_set(&window_lock, 1)) {
+        while (window_lock) {
+            arch_cpu_relax();
+        }
+    }
+
+    window_lock_owner = cpu_id;
+    window_lock_depth = 1;
+    sched_preempt_disable();
+}
+
+static void _window_lock_release(void) {
+    size_t cpu_id = _window_cpu_id();
+
+    if (window_lock_owner != cpu_id || !window_lock_depth) {
+        return;
+    }
+
+    window_lock_depth--;
+
+    if (!window_lock_depth) {
+        window_lock_owner = (size_t)-1;
+        __sync_lock_release(&window_lock);
+        sched_preempt_enable();
+    }
+}
 
 static u64 _map_flags_to_pt_flags(u32 flags) {
     u64 pt_flags = PT_WRITE;
@@ -284,9 +380,7 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     if (pages > window_pages)
         panic("phys window map too large");
 
-    if (!window_pages_mapped) {
-        sched_preempt_disable();
-    }
+    _window_lock_acquire();
 
     // single sliding window, new mappings invalidate any previous one
     if (window_pages_mapped) {
@@ -331,7 +425,7 @@ void arch_phys_unmap(void *vaddr, size_t size) {
     window_flags = PT_WRITE;
 
     if (!window_stack_depth) {
-        sched_preempt_enable();
+        _window_lock_release();
         return;
     }
 
@@ -349,6 +443,8 @@ void arch_phys_unmap(void *vaddr, size_t size) {
             prev.flags
         );
     }
+
+    _window_lock_release();
 }
 
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {

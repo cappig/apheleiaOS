@@ -1,8 +1,10 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <libc_usr/grp.h>
 #include <parse/textdb.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <user/kv.h>
 
 #define GROUP_PATH "/etc/group"
@@ -77,7 +79,13 @@ int getgrgid_r(
     }
 
     char file_buf[4096];
-    ssize_t len = kv_read_file(GROUP_PATH, file_buf, sizeof(file_buf));
+    int fd = open(GROUP_PATH, O_RDONLY, 0);
+    if (fd < 0) {
+        return ENOENT;
+    }
+
+    ssize_t len = kv_read_fd(fd, file_buf, sizeof(file_buf));
+    close(fd);
     if (len <= 0) {
         return ENOENT;
     }

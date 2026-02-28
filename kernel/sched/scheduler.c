@@ -60,6 +60,8 @@ static size_t sched_lock_depth = 0;
 static sched_thread_t **sleep_heap = NULL;
 static size_t sleep_heap_count = 0;
 static size_t sleep_heap_capacity = 0;
+static volatile u64 sched_busy_ticks = 0;
+static volatile u64 sched_total_ticks = 0;
 
 
 static size_t sched_cpu_id(void) {
@@ -87,7 +89,7 @@ static unsigned long sched_lock_save(void) {
 
     while (__sync_lock_test_and_set(&sched_lock, 1)) {
         while (sched_lock) {
-            arch_cpu_wait();
+            arch_cpu_relax();
         }
     }
 
@@ -445,6 +447,7 @@ static void sched_fd_reset(sched_fd_t *fd) {
     fd->pty_index = -1;
     fd->tty_index = TTY_NONE;
     fd->flags = 0;
+    fd->fd_flags = 0;
 }
 
 sched_pipe_t *sched_pipe_create(size_t capacity) {
@@ -712,6 +715,24 @@ void sched_fd_close_all(sched_thread_t *thread) {
 
     for (int fd = 0; fd < SCHED_FD_MAX; fd++) {
         if (!thread->fd_used[fd]) {
+            continue;
+        }
+
+        sched_fd_close(thread, fd);
+    }
+}
+
+void sched_fd_close_cloexec(sched_thread_t *thread) {
+    if (!thread) {
+        return;
+    }
+
+    for (int fd = 0; fd < SCHED_FD_MAX; fd++) {
+        if (!thread->fd_used[fd]) {
+            continue;
+        }
+
+        if (!(thread->fds[fd].fd_flags & SCHED_FD_FLAG_CLOEXEC)) {
             continue;
         }
 
@@ -2385,10 +2406,13 @@ void sched_tick(arch_int_state_t *state) {
         return;
     }
 
+    __atomic_fetch_add(&sched_total_ticks, 1, __ATOMIC_RELAXED);
+
     sched_reap();
     sched_wake_sleepers(arch_timer_ticks());
 
-    if (thread != sched_local_idle()) {
+    if (thread != sched_local_idle() && thread->state == THREAD_RUNNING) {
+        __atomic_fetch_add(&sched_busy_ticks, 1, __ATOMIC_RELAXED);
         __atomic_fetch_add(&thread->cpu_time_ticks, 1, __ATOMIC_RELAXED);
     }
 
@@ -2628,6 +2652,8 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         out->uid = thread->uid;
         out->gid = thread->gid;
         out->umask = thread->umask & 0777;
+        out->signal_pending = thread->signal_pending;
+        out->signal_mask = thread->signal_mask;
         out->state = thread->state;
         out->tty_index = thread->tty_index;
 
@@ -2645,6 +2671,18 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
 
     sched_lock_restore(flags);
     return found;
+}
+
+void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out) {
+    if (busy_ticks_out) {
+        *busy_ticks_out =
+            __atomic_load_n(&sched_busy_ticks, __ATOMIC_RELAXED);
+    }
+
+    if (total_ticks_out) {
+        *total_ticks_out =
+            __atomic_load_n(&sched_total_ticks, __ATOMIC_RELAXED);
+    }
 }
 
 int sched_getgroups_pid(

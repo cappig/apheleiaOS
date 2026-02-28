@@ -1,5 +1,5 @@
 NAME    := apheleia
-VERSION := alpha-0.2
+VERSION := alpha-0.3
 
 BUILD_DATE       ?= $(shell date -u +%Y-%m-%d)
 GIT_COMMIT_SHORT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -47,7 +47,7 @@ LD_BASE := \
 
 include utils/toolchain.mk
 include utils/qemu.mk
-include user/build.mk
+include userland/build.mk
 
 .DEFAULT_GOAL := all
 .PHONY: all clean

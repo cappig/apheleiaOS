@@ -619,6 +619,25 @@ double ldexp(double x, int exp) {
     return (double)r;
 }
 
+long double ldexpl(long double x, int exp) {
+    if ((x == 0.0L) || __isnanl(x) || __isinfl(x)) {
+        return x;
+    }
+
+    long double r = __scalblnl(x, (long)exp);
+
+    if (!__isfinitel(r)) {
+        errno = ERANGE;
+        return x < 0.0L ? -__builtin_huge_vall() : __builtin_huge_vall();
+    }
+
+    if (r == 0.0L) {
+        errno = ERANGE;
+    }
+
+    return r;
+}
+
 double log(double x) {
     long double lx = (long double)x;
 

@@ -23,6 +23,7 @@ int strncmp(const char *s1, const char *s2, size_t n);
 
 char *strchr(const char *str, int ch);
 char *strrchr(const char *str, int ch);
+char *strstr(const char *haystack, const char *needle);
 size_t strcspn(const char *dest, const char *src);
 char *strpbrk(const char *str, const char *delim);
 // TODO: Some stuff missing here too

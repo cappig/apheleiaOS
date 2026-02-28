@@ -1,10 +1,8 @@
-#include <apheleia/syscall.h>
-#include <arch/sys.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stdint.h>
 #include <stdlib.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 struct DIR {
@@ -13,9 +11,32 @@ struct DIR {
 };
 
 static int _getdents_raw(int fd, struct dirent *out) {
-    return (int)__SYSCALL_ERRNO(
-        syscall2(SYS_GETDENTS, (uintptr_t)fd, (uintptr_t)out)
-    );
+    if (!out) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        return -1;
+    }
+
+    if ((st.st_mode & S_IFMT) != S_IFDIR) {
+        errno = ENOTDIR;
+        return -1;
+    }
+
+    ssize_t ret = read(fd, out, sizeof(*out));
+    if (ret <= 0) {
+        return (int)ret;
+    }
+
+    if ((size_t)ret != sizeof(*out)) {
+        errno = EIO;
+        return -1;
+    }
+
+    return 1;
 }
 
 #ifdef _APHELEIA_SOURCE

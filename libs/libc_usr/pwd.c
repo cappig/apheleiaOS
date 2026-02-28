@@ -1,9 +1,11 @@
 #include <errno.h>
+#include <fcntl.h>
 #include <libc_usr/pwd.h>
 #include <parse/textdb.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <user/kv.h>
 
 #define PASSWD_PATH "/etc/passwd"
@@ -105,7 +107,13 @@ static int find_passwd(
     }
 
     char file_buf[4096];
-    ssize_t len = kv_read_file(PASSWD_PATH, file_buf, sizeof(file_buf));
+    int fd = open(PASSWD_PATH, O_RDONLY, 0);
+    if (fd < 0) {
+        return ENOENT;
+    }
+
+    ssize_t len = kv_read_fd(fd, file_buf, sizeof(file_buf));
+    close(fd);
     if (len <= 0) {
         return ENOENT;
     }

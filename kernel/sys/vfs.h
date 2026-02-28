@@ -96,6 +96,7 @@ struct vfs_node {
     u64 inode;
 
     struct vfs_node *link; // The target if this node is a symlink or a mount point
+    char *symlink_target;
 
     vfs_interface_t *interface;
     fs_instance_t *fs;

@@ -14,6 +14,8 @@
 
 extern char **environ;
 
+#define UI_PENDING_EVENTS_CAP 3
+
 static const char *env_lookup(const char *key) {
     if (!key || !key[0] || !environ) {
         return NULL;
@@ -177,6 +179,18 @@ static size_t _translate_mouse_event(
         move->buttons = raw->buttons;
     }
 
+    if (raw->wheel && produced < out_cap) {
+        input_event_t *wheel = &out[produced++];
+
+        memset(wheel, 0, sizeof(*wheel));
+
+        wheel->timestamp_ms = timestamp;
+        wheel->type = INPUT_EVENT_MOUSE_WHEEL;
+        wheel->source = raw->source;
+        wheel->buttons = raw->buttons;
+        wheel->wheel = raw->wheel;
+    }
+
     if (ui->mouse_buttons == raw->buttons) {
         return produced;
     }
@@ -197,6 +211,38 @@ static size_t _translate_mouse_event(
     buttons->buttons = raw->buttons;
 
     return produced;
+}
+
+static void _pending_reset(ui_t *ui) {
+    if (!ui) {
+        return;
+    }
+
+    ui->pending_head = 0;
+    ui->pending_count = 0;
+    memset(ui->pending_events, 0, sizeof(ui->pending_events));
+}
+
+static bool _pending_pop(ui_t *ui, input_event_t *out) {
+    if (!ui || !out || !ui->pending_count) {
+        return false;
+    }
+
+    *out = ui->pending_events[ui->pending_head];
+    ui->pending_head = (u8)((ui->pending_head + 1U) % UI_PENDING_EVENTS_CAP);
+    ui->pending_count--;
+    return true;
+}
+
+static bool _pending_push(ui_t *ui, const input_event_t *event) {
+    if (!ui || !event || ui->pending_count >= UI_PENDING_EVENTS_CAP) {
+        return false;
+    }
+
+    u8 tail = (u8)((ui->pending_head + ui->pending_count) % UI_PENDING_EVENTS_CAP);
+    ui->pending_events[tail] = *event;
+    ui->pending_count++;
+    return true;
 }
 
 static int
@@ -298,8 +344,7 @@ int ui_open(ui_t *ui, u32 flags) {
     ui->key_modifiers = 0;
     ui->mouse_buttons = 0;
     ui->input_round_robin = false;
-    ui->pending_valid = false;
-    memset(&ui->pending_event, 0, sizeof(ui->pending_event));
+    _pending_reset(ui);
 
     ui->ctl_fd = open("/dev/wsctl", O_RDWR | O_NONBLOCK, 0);
     if (ui->ctl_fd < 0) {
@@ -338,7 +383,7 @@ void ui_close(ui_t *ui) {
     close_fd(&ui->keyboard_fd);
     close_fd(&ui->mgr_fd);
     close_fd(&ui->ctl_fd);
-    ui->pending_valid = false;
+    _pending_reset(ui);
 }
 
 ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
@@ -349,13 +394,12 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
 
     size_t produced = 0;
 
-    if (ui->pending_valid) {
-        events[produced++] = ui->pending_event;
-        ui->pending_valid = false;
+    while (produced < count && _pending_pop(ui, &events[produced])) {
+        produced++;
+    }
 
-        if (produced >= count) {
-            return (ssize_t)(produced * sizeof(*events));
-        }
+    if (produced >= count) {
+        return (ssize_t)(produced * sizeof(*events));
     }
 
     for (;;) {
@@ -396,19 +440,21 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
             ssize_t n = read(ui->mouse_fd, &raw, sizeof(raw));
 
             if (n == (ssize_t)sizeof(raw)) {
-                input_event_t converted[2];
+                input_event_t converted[3];
                 size_t event_count =
-                    _translate_mouse_event(ui, &raw, converted, 2);
+                    _translate_mouse_event(
+                        ui,
+                        &raw,
+                        converted,
+                        sizeof(converted) / sizeof(converted[0])
+                    );
 
                 if (event_count) {
-                    events[produced++] = converted[0];
-
-                    if (event_count > 1) {
+                    for (size_t i = 0; i < event_count; i++) {
                         if (produced < count) {
-                            events[produced++] = converted[1];
+                            events[produced++] = converted[i];
                         } else {
-                            ui->pending_event = converted[1];
-                            ui->pending_valid = true;
+                            (void)_pending_push(ui, &converted[i]);
                         }
                     }
 
@@ -434,9 +480,8 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
             break;
         }
 
-        if (ui->pending_valid && produced < count) {
-            events[produced++] = ui->pending_event;
-            ui->pending_valid = false;
+        while (produced < count && _pending_pop(ui, &events[produced])) {
+            produced++;
         }
     }
 
@@ -632,6 +677,22 @@ int window_free(window_t *window) {
     return ret;
 }
 
+int window_set_title(window_t *window, const char *title) {
+    if (!window || !window->ui || window->ui->ctl_fd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ws_cmd_t cmd = {0};
+    cmd.id = window->id;
+
+    if (title) {
+        snprintf(cmd.title, sizeof(cmd.title), "%s", title);
+    }
+
+    return ioctl(window->ui->ctl_fd, WSIOC_SET_TITLE, &cmd);
+}
+
 void window_close(window_t *window) {
     if (!window) {
         return;
@@ -678,11 +739,15 @@ int window_init(window_t *window, u32 width, u32 height, const char *title) {
         return 0;
     }
 
-    if (errno == ENOENT && !window_alloc(window->ui, window, width, height, title)) {
+    int env_saved = errno;
+    if (!window_alloc(window->ui, window, width, height, title)) {
         return 0;
     }
 
     int saved = errno;
+    if (!saved) {
+        saved = env_saved;
+    }
     if (saved == ENOENT) {
         const char *msg = "error: window manager is not running\n";
         write(STDERR_FILENO, msg, strlen(msg));

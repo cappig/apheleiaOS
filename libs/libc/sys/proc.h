@@ -36,6 +36,7 @@ typedef struct {
     pid_t sid;
     uid_t uid;
     gid_t gid;
+    uint32_t signal_pending;
     char state;
     int tty_index;
     uint64_t cpu_time_ms;

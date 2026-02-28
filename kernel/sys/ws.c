@@ -1046,6 +1046,33 @@ static int _handle_query(pid_t caller_pid, ws_cmd_t *cmd) {
     return 0;
 }
 
+static int _handle_set_title(pid_t caller_pid, ws_cmd_t *cmd) {
+    if (!cmd) {
+        return -EINVAL;
+    }
+
+    ws_window_t *window = NULL;
+    int status = _window_lookup(cmd->id, caller_pid, &window);
+    if (status) {
+        return status;
+    }
+
+    char title[WS_TITLE_MAX] = {0};
+    strncpy(title, cmd->title, sizeof(title) - 1);
+
+    if (!strncmp(window->title, title, sizeof(window->title))) {
+        _cmd_fill_from_window(cmd, cmd->id);
+        return 0;
+    }
+
+    memset(window->title, 0, sizeof(window->title));
+    strncpy(window->title, title, sizeof(window->title) - 1);
+
+    _queue_manager_event(WS_EVT_WINDOW_TITLE, cmd->id, window);
+    _cmd_fill_from_window(cmd, cmd->id);
+    return 0;
+}
+
 static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
     if (!window || !cmd) {
         return -EINVAL;
@@ -1557,6 +1584,9 @@ ssize_t ws_ctl_ioctl(vfs_node_t *node, u64 request, void *args) {
         break;
     case WSIOC_QUERY:
         status = _handle_query(caller_pid, cmd);
+        break;
+    case WSIOC_SET_TITLE:
+        status = _handle_set_title(caller_pid, cmd);
         break;
     case WSIOC_CLAIM_MANAGER:
     case WSIOC_RELEASE_MANAGER:

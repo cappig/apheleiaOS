@@ -57,6 +57,32 @@ ifeq ($(QEMU_SNAPSHOT), true)
 QEMU_ARGS += -snapshot
 endif
 
+QEMU_BOOT_DEPS :=
+QEMU_BOOT_SETUP := @:
+QEMU_BOOT_ARGS :=
+
+ifeq ($(BOOT), uefi)
+ifeq ($(ARCH), x86_64)
+QEMU_BOOT_SETUP := @cp -f "$(OVMF_VARS)" "$(OVMF_VARS_RUNTIME)"
+QEMU_BOOT_ARGS := \
+	-drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
+	-drive if=pflash,format=raw,file="$(OVMF_VARS_RUNTIME)"
+ifeq ($(OVMF_CODE), $(OVMF_CODE_LOCAL))
+ifeq ($(OVMF_VARS), $(OVMF_VARS_LOCAL))
+QEMU_BOOT_DEPS := ovmf-fetch
+endif
+endif
+else
+$(error BOOT=uefi requires ARCH=x86_64)
+endif
+endif
+
+QEMU_IMAGE_ARGS := -drive format=raw,file=bin/$(IMAGE_NAME).img
+QEMU_USB_IMAGE_ARGS := \
+	-drive if=none,id=usbstick,format=raw,file=bin/$(IMAGE_NAME).img \
+	-device qemu-xhci,id=xhci \
+	-device usb-storage,bus=xhci.0,drive=usbstick
+
 .PHONY: ovmf-fetch ovmf-clean run run-usb run-usb-bios run-usb-uefi
 
 ovmf-fetch:
@@ -65,51 +91,13 @@ ovmf-fetch:
 ovmf-clean:
 	@rm -rf "$(OVMF_DIR)"
 
-run: bin/$(IMAGE_NAME).img
-ifeq ($(BOOT), uefi)
-ifeq ($(ARCH), x86_64)
-ifeq ($(OVMF_CODE), $(OVMF_CODE_LOCAL))
-ifeq ($(OVMF_VARS), $(OVMF_VARS_LOCAL))
-run: ovmf-fetch
-endif
-endif
-	@cp -f "$(OVMF_VARS)" "$(OVMF_VARS_RUNTIME)"
-	@$(QEMU) $(QEMU_ARGS) \
-		-drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
-		-drive if=pflash,format=raw,file="$(OVMF_VARS_RUNTIME)" \
-		-drive format=raw,file=bin/$(IMAGE_NAME).img
-else
-	$(error BOOT=uefi requires ARCH=x86_64)
-endif
-else
-	@$(QEMU) $(QEMU_ARGS) \
-		-drive format=raw,file=bin/$(IMAGE_NAME).img
-endif
+run: bin/$(IMAGE_NAME).img $(QEMU_BOOT_DEPS)
+	$(QEMU_BOOT_SETUP)
+	@$(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_IMAGE_ARGS)
 
-run-usb: bin/$(IMAGE_NAME).img
-ifeq ($(BOOT), uefi)
-ifeq ($(ARCH), x86_64)
-ifeq ($(OVMF_CODE), $(OVMF_CODE_LOCAL))
-ifeq ($(OVMF_VARS), $(OVMF_VARS_LOCAL))
-run-usb: ovmf-fetch
-endif
-endif
-	@cp -f "$(OVMF_VARS)" "$(OVMF_VARS_RUNTIME)"
-	@$(QEMU) $(QEMU_ARGS) \
-		-drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
-		-drive if=pflash,format=raw,file="$(OVMF_VARS_RUNTIME)" \
-		-drive if=none,id=usbstick,format=raw,file=bin/$(IMAGE_NAME).img \
-		-device qemu-xhci,id=xhci \
-		-device usb-storage,bus=xhci.0,drive=usbstick
-else
-	$(error BOOT=uefi requires ARCH=x86_64)
-endif
-else
-	@$(QEMU) $(QEMU_ARGS) \
-		-drive if=none,id=usbstick,format=raw,file=bin/$(IMAGE_NAME).img \
-		-device qemu-xhci,id=xhci \
-		-device usb-storage,bus=xhci.0,drive=usbstick
-endif
+run-usb: bin/$(IMAGE_NAME).img $(QEMU_BOOT_DEPS)
+	$(QEMU_BOOT_SETUP)
+	@$(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_USB_IMAGE_ARGS)
 
 run-usb-bios:
 	@$(MAKE) run-usb BOOT=bios

@@ -41,7 +41,6 @@ typedef struct {
 static vector_t *devfs_devices = NULL;
 static bool devfs_ready = false;
 
-
 static u64 _boot_seconds(void) {
     if (boot_seconds) {
         return boot_seconds;
@@ -188,6 +187,16 @@ static ssize_t _dev_cpu_read(
     (void)node;
     (void)flags;
 
+    u64 busy_ticks = 0;
+    u64 total_ticks = 0;
+    sched_cpu_usage_snapshot(&busy_ticks, &total_ticks);
+
+    if (busy_ticks > total_ticks) {
+        busy_ticks = total_ticks;
+    }
+
+    u64 idle_ticks = total_ticks - busy_ticks;
+
     char text[SYSINFO_TEXT_MAX];
     snprintf(
         text,
@@ -195,10 +204,16 @@ static ssize_t _dev_cpu_read(
         "model=%s\n"
         "ncpu=%zu\n"
         "pagesize=4096\n"
-        "clockrate_khz=%" PRIu64 "\n",
+        "clockrate_khz=%" PRIu64 "\n"
+        "busy_ticks=%" PRIu64 "\n"
+        "idle_ticks=%" PRIu64 "\n"
+        "total_ticks=%" PRIu64 "\n",
         arch_cpu_name(),
         core_count,
-        arch_cpu_khz()
+        arch_cpu_khz(),
+        busy_ticks,
+        idle_ticks,
+        total_ticks
     );
 
     return _dev_text_read(text, buf, offset, len);
@@ -214,6 +229,9 @@ static ssize_t _dev_clock_read(
     (void)node;
     (void)flags;
 
+    stats_snapshot_t snapshot = {0};
+    stats_take_snapshot(&snapshot);
+
     u64 now = arch_wallclock_seconds();
     u64 boot = _boot_seconds();
     u64 hz = arch_timer_hz();
@@ -226,11 +244,13 @@ static ssize_t _dev_clock_read(
         "now=%" PRIu64 "\n"
         "boot=%" PRIu64 "\n"
         "hz=%" PRIu64 "\n"
-        "ticks=%" PRIu64 "\n",
+        "ticks=%" PRIu64 "\n"
+        "timer_irq_ns=%" PRIu64 "\n",
         now,
         boot,
         hz,
-        ticks
+        ticks,
+        snapshot.timer_irq_ns
     );
 
     return _dev_text_read(text, buf, offset, len);
@@ -276,17 +296,15 @@ static ssize_t _dev_stats_read(
     stats_snapshot_t snapshot = {0};
     stats_take_snapshot(&snapshot);
 
-    char text[SYSINFO_TEXT_MAX * 2];
+    char text[SYSINFO_TEXT_MAX * 3];
     snprintf(
         text,
         sizeof(text),
-        "timer_irq_ns=%" PRIu64 "\n"
         "sched_switch_count=%" PRIu64 "\n"
         "poll_sleep_loops=%" PRIu64 "\n"
         "ws_fb_write_bytes=%" PRIu64 "\n"
         "fb_present_bytes=%" PRIu64 "\n"
         "wm_dirty_pixels=%" PRIu64 "\n",
-        snapshot.timer_irq_ns,
         snapshot.sched_switch_count,
         snapshot.poll_sleep_loops,
         snapshot.ws_fb_write_bytes,

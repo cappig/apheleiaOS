@@ -102,6 +102,36 @@ static int mode_to_flags(const char *mode, int *open_flags, int *stream_flags) {
     }
 }
 
+FILE *fdopen(int fd, const char *mode) {
+    if (fd < 0) {
+        errno = EBADF;
+        return NULL;
+    }
+
+    int open_flags = 0;
+    int stream_flags = 0;
+    if (mode_to_flags(mode, &open_flags, &stream_flags) < 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    if (stream_flags & FILE_FLAG_APPEND) {
+        (void)lseek(fd, 0, SEEK_END);
+    }
+
+    FILE *stream = malloc(sizeof(*stream));
+    if (!stream) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    stream->fd = fd;
+    stream->flags = stream_flags;
+    stream->eof = 0;
+    stream->error = 0;
+    return stream;
+}
+
 FILE *fopen(const char *path, const char *mode) {
     int open_flags = 0;
     int stream_flags = 0;
@@ -129,6 +159,23 @@ FILE *fopen(const char *path, const char *mode) {
     stream->eof = 0;
     stream->error = 0;
     return stream;
+}
+
+int remove(const char *path) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (!unlink(path)) {
+        return 0;
+    }
+
+    if (errno == EISDIR || errno == EPERM || errno == EACCES) {
+        return rmdir(path);
+    }
+
+    return -1;
 }
 
 int fflush(FILE *stream) {
@@ -340,6 +387,65 @@ void clearerr(FILE *stream) {
     }
     stream->eof = 0;
     stream->error = 0;
+}
+
+int setvbuf(FILE *restrict stream, char *restrict buf, int mode, size_t size) {
+    (void)buf;
+    (void)size;
+
+    if (!stream) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (mode != _IOFBF && mode != _IOLBF && mode != _IONBF) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return 0;
+}
+
+void setbuf(FILE *restrict stream, char *restrict buf) {
+    (void)setvbuf(stream, buf, buf ? _IOFBF : _IONBF, BUFSIZ);
+}
+
+int fileno(FILE *stream) {
+    if (!stream || stream->fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+
+    return stream->fd;
+}
+
+int ungetc(int ch, FILE *stream) {
+    if (ch == EOF) {
+        return EOF;
+    }
+
+    if (!stream || stream->fd < 0 || !(stream->flags & FILE_FLAG_READ)) {
+        errno = EBADF;
+        if (stream) {
+            stream->error = 1;
+        }
+        return EOF;
+    }
+
+    off_t current = lseek(stream->fd, 0, SEEK_CUR);
+    if (current <= 0) {
+        errno = ENOTSUP;
+        stream->error = 1;
+        return EOF;
+    }
+
+    if (lseek(stream->fd, -1, SEEK_CUR) < 0) {
+        stream->error = 1;
+        return EOF;
+    }
+
+    stream->eof = 0;
+    return (unsigned char)ch;
 }
 
 int vfprintf(FILE *stream, const char *restrict format, va_list vlist) {

@@ -1,9 +1,36 @@
 #include <apheleia/syscall.h>
 #include <arch/sys.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <kv.h>
+#include <stdbool.h>
 #include <stdint.h>
+#include <sys/time.h>
 #include <time.h>
+#include <unistd.h>
+
+static int clock_fd = -1;
+
+static bool read_clock_text(char *text, size_t text_len) {
+    if (!text || text_len < 2) {
+        return false;
+    }
+
+    if (clock_fd < 0) {
+        clock_fd = open("/dev/clock", O_RDONLY, 0);
+        if (clock_fd < 0) {
+            return false;
+        }
+    }
+
+    if (lseek(clock_fd, 0, SEEK_SET) < 0) {
+        close(clock_fd);
+        clock_fd = -1;
+        return false;
+    }
+
+    return kv_read_fd(clock_fd, text, text_len) > 0;
+}
 
 int clock_gettime(clockid_t clock_id, struct timespec *tp) {
     if (!tp) {
@@ -12,7 +39,7 @@ int clock_gettime(clockid_t clock_id, struct timespec *tp) {
     }
 
     char text[256] = {0};
-    if (kv_read_file("/dev/clock", text, sizeof(text)) <= 0) {
+    if (!read_clock_text(text, sizeof(text))) {
         errno = EIO;
         return -1;
     }
@@ -64,4 +91,26 @@ time_t time(time_t *timer) {
     }
 
     return ts.tv_sec;
+}
+
+int gettimeofday(struct timeval *tv, struct timezone *tz) {
+    if (!tv) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    struct timespec ts = {0};
+    if (clock_gettime(CLOCK_REALTIME, &ts) < 0) {
+        return -1;
+    }
+
+    tv->tv_sec = ts.tv_sec;
+    tv->tv_usec = (suseconds_t)(ts.tv_nsec / 1000L);
+
+    if (tz) {
+        tz->tz_minuteswest = 0;
+        tz->tz_dsttime = 0;
+    }
+
+    return 0;
 }

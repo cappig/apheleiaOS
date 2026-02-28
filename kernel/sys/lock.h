@@ -8,7 +8,7 @@ static inline void lock(volatile int *state) {
 
     while (__sync_lock_test_and_set(state, 1)) {
         while (*state)
-            arch_cpu_wait();
+            arch_cpu_relax();
     }
 }
 

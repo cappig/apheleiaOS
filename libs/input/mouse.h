@@ -13,6 +13,7 @@ typedef struct {
     // Coordinates are in quadrant 4 i.e. y grows down and x grows right
     i16 delta_x;
     i16 delta_y;
+    i16 wheel;
 
     u8 buttons;
     u8 source;

@@ -30,6 +30,7 @@ double tanh(double x);
 double exp(double x);
 double frexp(double x, int *exp);
 double ldexp(double x, int exp);
+long double ldexpl(long double x, int exp);
 double log(double x);
 double log10(double x);
 double modf(double x, double *iptr);

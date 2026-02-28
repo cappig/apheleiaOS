@@ -25,7 +25,15 @@ static vfs_node_t *_resolve_link(vfs_node_t *node) {
         return NULL;
     }
 
-    if (VFS_IS_LINK(node->type) && node->link) {
+    if (node->type == VFS_MOUNT && node->link) {
+        return node->link;
+    }
+
+    if (node->type == VFS_SYMLINK) {
+        if (!node->link && node->symlink_target) {
+            node->link = vfs_lookup(node->symlink_target);
+        }
+
         return node->link;
     }
 
@@ -145,6 +153,9 @@ static void _free_node_data(vfs_node_t *node) {
 
     if (node->name) {
         free(node->name);
+    }
+    if (node->symlink_target) {
+        free(node->symlink_target);
     }
 
     free(node);
@@ -342,6 +353,9 @@ void vfs_destroy_node(vfs_node_t *node) {
 
     if (node->name) {
         free(node->name);
+    }
+    if (node->symlink_target) {
+        free(node->symlink_target);
     }
 
     if (node->tree_entry) {
@@ -747,9 +761,6 @@ bool vfs_link(const char *target, const char *link_path) {
     }
 
     vfs_node_t *target_node = vfs_lookup(target);
-    if (!target_node) {
-        return false;
-    }
 
     vfs_node_t *parent = NULL;
     char *base_name = NULL;
@@ -769,13 +780,22 @@ bool vfs_link(const char *target, const char *link_path) {
         return false;
     }
 
+    link->symlink_target = strdup(target);
+    if (!link->symlink_target) {
+        vfs_destroy_node(link);
+        return false;
+    }
+
     link->link = target_node;
-    link->inode = target_node->inode;
-    link->uid = target_node->uid;
-    link->gid = target_node->gid;
     link->mode = 0777;
-    link->size = target_node->size;
-    link->time = target_node->time;
+    link->size = strlen(target);
+
+    if (target_node) {
+        link->inode = target_node->inode;
+        link->uid = target_node->uid;
+        link->gid = target_node->gid;
+        link->time = target_node->time;
+    }
 
     if (!vfs_insert_child(parent, link)) {
         vfs_destroy_node(link);

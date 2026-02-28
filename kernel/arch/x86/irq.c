@@ -16,7 +16,7 @@
 #define LEGACY_TIMER_SERIAL_RX 1
 #endif
 
-static volatile u64 irq_tick_count = 0;
+static u64 irq_tick_count = 0;
 static bool use_apic_timer = false;
 static bool use_ioapic = false;
 
@@ -53,7 +53,7 @@ static void _unregister_legacy(size_t irq) {
 
 static void _timer_handler(int_state_t *state) {
     u64 begin_tsc = read_tsc();
-    irq_tick_count++;
+    (void)__sync_add_and_fetch(&irq_tick_count, 1);
     irq_ack(IRQ_SYSTEM_TIMER);
 
 #if LEGACY_TIMER_SERIAL_RX
@@ -205,7 +205,7 @@ bool irq_using_ioapic(void) {
 }
 
 u64 irq_ticks(void) {
-    return irq_tick_count;
+    return __sync_fetch_and_add(&irq_tick_count, 0);
 }
 
 u32 irq_timer_hz(void) {

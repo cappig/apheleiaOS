@@ -554,6 +554,76 @@ static size_t _fd_vfs_io_flags(const sched_fd_t *entry) {
     return (entry->flags & O_NONBLOCK) ? VFS_NONBLOCK : 0;
 }
 
+static ssize_t _fd_read_dir(
+    sched_fd_t *entry,
+    void *buf,
+    size_t len,
+    size_t offset,
+    bool advance_offset
+) {
+    if (!entry || !buf) {
+        return -EINVAL;
+    }
+
+    vfs_node_t *node = _resolve_link_node(entry->node);
+    if (!node || node->type != VFS_DIR || !node->tree_entry) {
+        return -ENOTDIR;
+    }
+
+    if (offset % sizeof(dirent_t)) {
+        return -EINVAL;
+    }
+
+    size_t max_entries = len / sizeof(dirent_t);
+    if (!max_entries) {
+        return 0;
+    }
+
+    dirent_t *out = (dirent_t *)buf;
+    size_t start_index = offset / sizeof(dirent_t);
+    size_t current = 0;
+    size_t written = 0;
+
+    ll_foreach(child, node->tree_entry->children) {
+        if (current++ < start_index) {
+            continue;
+        }
+
+        if (written >= max_entries) {
+            break;
+        }
+
+        tree_node_t *tnode = child->data;
+        if (!tnode) {
+            return -EIO;
+        }
+
+        vfs_node_t *vnode = tnode->data;
+        if (!vnode) {
+            return -EIO;
+        }
+
+        out[written].d_ino = vnode->inode;
+        out[written].d_type = (unsigned char)vnode->type;
+        memset(out[written].d_name, 0, sizeof(out[written].d_name));
+
+        if (vnode->name) {
+            strncpy(
+                out[written].d_name, vnode->name, sizeof(out[written].d_name) - 1
+            );
+        }
+
+        written++;
+    }
+
+    size_t bytes = written * sizeof(dirent_t);
+    if (bytes > 0 && advance_offset) {
+        entry->offset = offset + bytes;
+    }
+
+    return (ssize_t)bytes;
+}
+
 static ssize_t _fd_read_vfs(
     sched_fd_t *entry,
     void *buf,
@@ -568,6 +638,11 @@ static ssize_t _fd_read_vfs(
 
     if (!_open_has_read(entry->flags)) {
         return -EBADF;
+    }
+
+    vfs_node_t *node = _resolve_link_node(entry->node);
+    if (node && node->type == VFS_DIR) {
+        return _fd_read_dir(entry, buf, len, offset, advance_offset);
     }
 
     ssize_t ret =
@@ -909,6 +984,14 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         }
     }
 
+    u32 fd_flags = 0;
+    if (flags & O_CLOEXEC) {
+        fd_flags |= SCHED_FD_FLAG_CLOEXEC;
+    }
+
+    u32 runtime_flags =
+        (u32)flags & (u32)(O_ACCMODE | O_APPEND | O_NONBLOCK | O_SYNC);
+
     sched_fd_t fd = {
         .kind = SCHED_FD_VFS,
         .node = node,
@@ -916,7 +999,8 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         .offset = 0,
         .pty_index = ptmx_open ? (int)ptmx_index : -1,
         .tty_index = fd_tty_index,
-        .flags = (u32)flags,
+        .flags = runtime_flags,
+        .fd_flags = fd_flags,
     };
     int ret = sched_fd_alloc(thread, &fd, 3);
 
@@ -1017,10 +1101,87 @@ static int sys_dup(int oldfd, int newfd) {
 
     if (newfd < 0) {
         sched_fd_t source = thread->fds[oldfd];
+        source.fd_flags &= ~SCHED_FD_FLAG_CLOEXEC;
         return sched_fd_alloc(thread, &source, 0);
     }
 
-    return sched_fd_dup(thread, oldfd, newfd);
+    if (newfd >= SCHED_FD_MAX) {
+        return -EBADF;
+    }
+
+    if (newfd == oldfd) {
+        return newfd;
+    }
+
+    sched_fd_t source = thread->fds[oldfd];
+    source.fd_flags &= ~SCHED_FD_FLAG_CLOEXEC;
+    return sched_fd_install(thread, newfd, &source);
+}
+
+static int sys_fcntl(int fd, int cmd, uintptr_t arg) {
+    sched_thread_t *thread = sched_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    sched_fd_t *entry = NULL;
+
+    switch (cmd) {
+    case F_DUPFD:
+    case F_DUPFD_CLOEXEC: {
+        if (!_fd_lookup(thread, fd, &entry)) {
+            return -EBADF;
+        }
+
+        int min_fd = (int)arg;
+        if (min_fd < 0 || min_fd >= SCHED_FD_MAX) {
+            return -EINVAL;
+        }
+
+        sched_fd_t copy = *entry;
+        copy.fd_flags &= ~SCHED_FD_FLAG_CLOEXEC;
+        if (cmd == F_DUPFD_CLOEXEC) {
+            copy.fd_flags |= SCHED_FD_FLAG_CLOEXEC;
+        }
+
+        return sched_fd_alloc(thread, &copy, min_fd);
+    }
+
+    case F_GETFD:
+        if (!_fd_lookup(thread, fd, &entry)) {
+            return -EBADF;
+        }
+        return (entry->fd_flags & SCHED_FD_FLAG_CLOEXEC) ? FD_CLOEXEC : 0;
+
+    case F_SETFD:
+        if (!_fd_lookup(thread, fd, &entry)) {
+            return -EBADF;
+        }
+        if ((int)arg & FD_CLOEXEC) {
+            entry->fd_flags |= SCHED_FD_FLAG_CLOEXEC;
+        } else {
+            entry->fd_flags &= ~SCHED_FD_FLAG_CLOEXEC;
+        }
+        return 0;
+
+    case F_GETFL:
+        if (!_fd_lookup(thread, fd, &entry)) {
+            return -EBADF;
+        }
+        return (int)entry->flags;
+
+    case F_SETFL:
+        if (!_fd_lookup(thread, fd, &entry)) {
+            return -EBADF;
+        }
+        entry->flags =
+            (entry->flags & ~(O_APPEND | O_NONBLOCK | O_SYNC)) |
+            ((u32)arg & (O_APPEND | O_NONBLOCK | O_SYNC));
+        return 0;
+
+    default:
+        return -EINVAL;
+    }
 }
 
 static int sys_mkdir(const char *path, mode_t mode) {
@@ -1529,7 +1690,7 @@ static pid_t sys_waitpid(pid_t pid, int *status, int options) {
     return sched_waitpid(pid, status, options);
 }
 
-static int sys_stat_path(const char *path, stat_t *st, bool follow_links) {
+static int _sys_stat_path(const char *path, stat_t *st, bool follow_links) {
     if (!st) {
         return -EFAULT;
     }
@@ -1561,6 +1722,14 @@ static int sys_stat_path(const char *path, stat_t *st, bool follow_links) {
     }
 
     return 0;
+}
+
+static int sys_stat(const char *path, stat_t *st) {
+    return _sys_stat_path(path, st, true);
+}
+
+static int sys_lstat(const char *path, stat_t *st) {
+    return _sys_stat_path(path, st, false);
 }
 
 static int sys_fstat(int fd, stat_t *st) {
@@ -1686,20 +1855,23 @@ static int sys_chown(const char *path, uid_t uid, gid_t gid) {
 }
 
 static int sys_link(const char *oldpath, const char *newpath) {
-    sched_thread_t *thread = sched_current();
-
-    char resolved_old[PATH_MAX];
-    char resolved_new[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, oldpath, resolved_old, sizeof(resolved_old));
-
-    if (resolve_err < 0) {
-        return resolve_err;
+    if (!oldpath || !newpath) {
+        return -EFAULT;
     }
 
-    resolve_err =
-        _resolve_user_path(thread, newpath, resolved_new, sizeof(resolved_new));
+    sched_thread_t *thread = sched_current();
+    if (!thread) {
+        return -EINVAL;
+    }
 
+    char resolved_old[PATH_MAX];
+    if (!path_resolve(thread->cwd, oldpath, resolved_old, sizeof(resolved_old))) {
+        return -ENOENT;
+    }
+
+    char resolved_new[PATH_MAX];
+    int resolve_err =
+        _resolve_user_path(thread, newpath, resolved_new, sizeof(resolved_new));
     if (resolve_err < 0) {
         return resolve_err;
     }
@@ -1716,12 +1888,46 @@ static int sys_link(const char *oldpath, const char *newpath) {
         sizeof(base),
         &parent
     );
-
     if (parent_err < 0) {
         return parent_err;
     }
 
     return vfs_link(resolved_old, resolved_new) ? 0 : -EIO;
+}
+
+static ssize_t sys_readlink(const char *path, char *buf, size_t bufsiz) {
+    if (!path || !buf) {
+        return -EFAULT;
+    }
+
+    if (!bufsiz) {
+        return 0;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    char resolved[PATH_MAX];
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    if (resolve_err < 0) {
+        return resolve_err;
+    }
+
+    vfs_node_t *node = vfs_lookup(resolved);
+    if (!node) {
+        return -ENOENT;
+    }
+
+    if (node->type != VFS_SYMLINK || !node->symlink_target) {
+        return -EINVAL;
+    }
+
+    size_t len = strlen(node->symlink_target);
+    size_t copy_len = len < bufsiz ? len : bufsiz;
+    memcpy(buf, node->symlink_target, copy_len);
+    return (ssize_t)copy_len;
 }
 
 static int sys_unlink(const char *path) {
@@ -2007,66 +2213,6 @@ static off_t sys_seek(int fd, off_t offset, int whence) {
 
     entry->offset = (size_t)next;
     return next;
-}
-
-static int sys_getdents(int fd, dirent_t *out) {
-    if (!out) {
-        return -EFAULT;
-    }
-
-    sched_thread_t *thread = sched_current();
-    sched_fd_t *entry = NULL;
-
-    if (!_fd_lookup(thread, fd, &entry)) {
-        return -EBADF;
-    }
-
-    if (entry->kind != SCHED_FD_VFS) {
-        return -ENOTDIR;
-    }
-
-    vfs_node_t *node = entry->node;
-
-    if (node && VFS_IS_LINK(node->type) && node->link) {
-        node = node->link;
-    }
-
-    if (!node || node->type != VFS_DIR || !node->tree_entry) {
-        return -ENOTDIR;
-    }
-
-    size_t index = entry->offset;
-    size_t current = 0;
-
-    ll_foreach(child, node->tree_entry->children) {
-        if (current++ != index) {
-            continue;
-        }
-
-        tree_node_t *tnode = child->data;
-        if (!tnode) {
-            return -EIO;
-        }
-
-        vfs_node_t *vnode = tnode->data;
-        if (!vnode) {
-            return -EIO;
-        }
-
-        out->d_ino = (u32)vnode->inode;
-        out->d_type = (u32)vnode->type;
-
-        memset(out->d_name, 0, sizeof(out->d_name));
-
-        if (vnode->name) {
-            strncpy(out->d_name, vnode->name, sizeof(out->d_name) - 1);
-        }
-
-        entry->offset++;
-        return 1;
-    }
-
-    return 0;
 }
 
 static int sys_sleep(const struct timespec *req, struct timespec *rem) {
@@ -2363,6 +2509,12 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
         return (u64)sys_dup(
             (int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state)
         );
+    case SYS_FCNTL:
+        return (u64)sys_fcntl(
+            (int)arch_syscall_arg1(state),
+            (int)arch_syscall_arg2(state),
+            (uintptr_t)arch_syscall_arg3(state)
+        );
     case SYS_PREAD:
         return (u64)sys_pread(
             (int)arch_syscall_arg1(state),
@@ -2395,10 +2547,6 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (u64)arch_syscall_arg2(state),
             (void *)arch_syscall_arg3(state)
         );
-    case SYS_GETDENTS:
-        return (u64)sys_getdents(
-            (int)arch_syscall_arg1(state), (dirent_t *)arch_syscall_arg2(state)
-        );
     case SYS_CHDIR:
         return (u64)sys_chdir((const char *)arch_syscall_arg1(state));
     case SYS_MKDIR:
@@ -2420,16 +2568,12 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (int)arch_syscall_arg2(state)
         );
     case SYS_STAT:
-        return (u64)sys_stat_path(
-            (const char *)arch_syscall_arg1(state),
-            (stat_t *)arch_syscall_arg2(state),
-            true
+        return (u64)sys_stat(
+            (const char *)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state)
         );
     case SYS_LSTAT:
-        return (u64)sys_stat_path(
-            (const char *)arch_syscall_arg1(state),
-            (stat_t *)arch_syscall_arg2(state),
-            false
+        return (u64)sys_lstat(
+            (const char *)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state)
         );
     case SYS_FSTAT:
         return (u64)sys_fstat(
@@ -2450,6 +2594,12 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
         return (u64)sys_link(
             (const char *)arch_syscall_arg1(state),
             (const char *)arch_syscall_arg2(state)
+        );
+    case SYS_READLINK:
+        return (u64)sys_readlink(
+            (const char *)arch_syscall_arg1(state),
+            (char *)arch_syscall_arg2(state),
+            (size_t)arch_syscall_arg3(state)
         );
     case SYS_UNLINK:
         return (u64)sys_unlink((const char *)arch_syscall_arg1(state));

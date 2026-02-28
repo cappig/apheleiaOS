@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/lock.h>
 #include <sys/panic.h>
 
 #if defined(__x86_64__)
@@ -33,6 +34,7 @@ typedef struct {
 
 static heap_arena_t heap_arenas[HEAP_MAX_ARENAS] = {0};
 static size_t heap_arena_count = 0;
+static volatile int heap_lock = 0;
 
 
 static uintptr_t _linear_offset(void) {
@@ -183,6 +185,7 @@ static heap_arena_t *_find_arena_by_ptr(const void *ptr) {
 
 void heap_init() {
     log_debug("initializing heap");
+    unsigned long irq_flags = lock_irqsave(&heap_lock);
     size_t free_pages = pmm_free_mem() / PAGE_4KIB;
 
     // Aim to take ~33% of the memory for the kernel heap
@@ -192,8 +195,11 @@ void heap_init() {
     size_t heap_pages = clamp(free_pages / 3, min_heap, max_heap);
 
     if (!_add_arena(heap_pages)) {
+        unlock_irqrestore(&heap_lock, irq_flags);
         panic("Failed to initialize kernel heap");
     }
+
+    unlock_irqrestore(&heap_lock, irq_flags);
 }
 
 
@@ -205,7 +211,7 @@ static void *_kmalloc(size_t size) {
         return NULL;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = lock_irqsave(&heap_lock);
     size_t header_blocks =
         DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
 
@@ -257,7 +263,7 @@ static void *_kmalloc(size_t size) {
     );
 #endif
 
-    arch_irq_restore(irq_flags);
+    unlock_irqrestore(&heap_lock, irq_flags);
     return ret;
 }
 
@@ -269,7 +275,7 @@ static void _kfree(void *ptr) {
         return;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = lock_irqsave(&heap_lock);
     kheap_header *header = (kheap_header *)((u8 *)ptr - sizeof(kheap_header));
 
     if (header->magic != KERNEL_HEAP_MAGIC) {
@@ -293,7 +299,7 @@ static void _kfree(void *ptr) {
     log_debug("[KMALLOC_DEBUG] free: bytes = %zd, ptr = %#lx", size, (u64)ptr);
 #endif
 
-    arch_irq_restore(irq_flags);
+    unlock_irqrestore(&heap_lock, irq_flags);
 }
 
 

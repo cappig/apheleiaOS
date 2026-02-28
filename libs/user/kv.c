@@ -1,17 +1,11 @@
 #include "kv.h"
 
-#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
-ssize_t kv_read_file(const char *path, char *out, size_t out_len) {
-    if (!path || !out || out_len < 2) {
-        return -1;
-    }
-
-    int fd = open(path, O_RDONLY, 0);
-    if (fd < 0) {
+ssize_t kv_read_fd(int fd, char *out, size_t out_len) {
+    if (fd < 0 || !out || out_len < 2) {
         return -1;
     }
 
@@ -25,14 +19,12 @@ ssize_t kv_read_file(const char *path, char *out, size_t out_len) {
         }
 
         if (got < 0) {
-            close(fd);
             return -1;
         }
 
         off += (size_t)got;
     }
 
-    close(fd);
     out[off] = '\0';
 
     return (ssize_t)off;

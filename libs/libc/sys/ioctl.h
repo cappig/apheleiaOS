@@ -33,6 +33,7 @@
 #define WSIOC_QUERY           73
 #define WSIOC_SET_SIZE        74
 #define WSIOC_TRANSFER_MANAGER 75
+#define WSIOC_SET_TITLE       76
 #endif
 
 int ioctl(int fd, unsigned long request, ...);

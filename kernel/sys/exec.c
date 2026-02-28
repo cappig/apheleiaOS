@@ -1094,6 +1094,7 @@ int user_exec(
     arch_vm_switch(thread->vm_space);
     stack_top = _build_user_stack_args(stack_top, &args, &env);
     sched_signal_reset_thread(thread);
+    sched_fd_close_cloexec(thread);
 
     if (old_regions) {
         _free_regions_list(old_regions);

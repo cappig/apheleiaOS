@@ -220,6 +220,15 @@ unsigned int sleep(unsigned int seconds) {
     return 0;
 }
 
+int usleep(useconds_t usec) {
+    struct timespec req = {
+        .tv_sec = (time_t)(usec / 1000000U),
+        .tv_nsec = (long)((usec % 1000000U) * 1000U),
+    };
+
+    return nanosleep(&req, NULL);
+}
+
 int chdir(const char *path) {
     return SYSCALL_RET(int, syscall1(SYS_CHDIR, (uintptr_t)path));
 }
@@ -284,6 +293,24 @@ int link(const char *oldpath, const char *newpath) {
     );
 }
 
+int symlink(const char *target, const char *linkpath) {
+    return SYSCALL_RET(
+        int, syscall2(SYS_LINK, (uintptr_t)target, (uintptr_t)linkpath)
+    );
+}
+
+ssize_t readlink(const char *path, char *buf, size_t bufsiz) {
+    return SYSCALL_RET(
+        ssize_t,
+        syscall3(
+            SYS_READLINK,
+            (uintptr_t)path,
+            (uintptr_t)buf,
+            (uintptr_t)bufsiz
+        )
+    );
+}
+
 int unlink(const char *path) {
     return SYSCALL_RET(int, syscall1(SYS_UNLINK, (uintptr_t)path));
 }
@@ -292,6 +319,168 @@ int rename(const char *oldpath, const char *newpath) {
     return SYSCALL_RET(
         int, syscall2(SYS_RENAME, (uintptr_t)oldpath, (uintptr_t)newpath)
     );
+}
+
+static bool _at_usable(int dirfd, const char *path) {
+    if (!path) {
+        errno = EINVAL;
+        return false;
+    }
+
+    if (path[0] == '/') {
+        return true;
+    }
+
+    if (dirfd == AT_FDCWD) {
+        return true;
+    }
+
+    errno = ENOSYS;
+    return false;
+}
+
+int openat(int dirfd, const char *path, int flags, ...) {
+    mode_t mode = 0;
+    if (flags & O_CREAT) {
+        va_list args;
+        va_start(args, flags);
+        mode = va_arg(args, mode_t);
+        va_end(args);
+    }
+
+    if (!_at_usable(dirfd, path)) {
+        return -1;
+    }
+
+    if (flags & O_CREAT) {
+        return open(path, flags, mode);
+    }
+
+    return open(path, flags);
+}
+
+int fstatat(int dirfd, const char *path, struct stat *st, int flags) {
+    if (!_at_usable(dirfd, path)) {
+        return -1;
+    }
+
+    if (flags & AT_SYMLINK_NOFOLLOW) {
+        return lstat(path, st);
+    }
+
+    return stat(path, st);
+}
+
+int faccessat(int dirfd, const char *path, int mode, int flags) {
+    if (!_at_usable(dirfd, path)) {
+        return -1;
+    }
+
+    if (flags & ~(AT_EACCESS)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return access(path, mode);
+}
+
+int mkdirat(int dirfd, const char *path, mode_t mode) {
+    if (!_at_usable(dirfd, path)) {
+        return -1;
+    }
+
+    return mkdir(path, mode);
+}
+
+int unlinkat(int dirfd, const char *path, int flags) {
+    if (!_at_usable(dirfd, path)) {
+        return -1;
+    }
+
+    if (flags & ~(AT_REMOVEDIR)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (flags & AT_REMOVEDIR) {
+        return rmdir(path);
+    }
+
+    return unlink(path);
+}
+
+int renameat(
+    int olddirfd,
+    const char *oldpath,
+    int newdirfd,
+    const char *newpath
+) {
+    if (!_at_usable(olddirfd, oldpath) || !_at_usable(newdirfd, newpath)) {
+        return -1;
+    }
+
+    return rename(oldpath, newpath);
+}
+
+int linkat(
+    int olddirfd,
+    const char *oldpath,
+    int newdirfd,
+    const char *newpath,
+    int flags
+) {
+    if (!_at_usable(olddirfd, oldpath) || !_at_usable(newdirfd, newpath)) {
+        return -1;
+    }
+
+    if (flags & ~(AT_SYMLINK_FOLLOW)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return link(oldpath, newpath);
+}
+
+int fchmod(int fd, mode_t mode) {
+    (void)fd;
+    (void)mode;
+    errno = ENOSYS;
+    return -1;
+}
+
+int fchown(int fd, uid_t uid, gid_t gid) {
+    (void)fd;
+    (void)uid;
+    (void)gid;
+    errno = ENOSYS;
+    return -1;
+}
+
+int truncate(const char *path, off_t length) {
+    (void)path;
+    (void)length;
+    errno = ENOSYS;
+    return -1;
+}
+
+int ftruncate(int fd, off_t length) {
+    (void)fd;
+    (void)length;
+    errno = ENOSYS;
+    return -1;
+}
+
+int fsync(int fd) {
+    if (fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+
+    return 0;
+}
+
+int fdatasync(int fd) {
+    return fsync(fd);
 }
 
 int mount(
@@ -341,6 +530,56 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
         int,
         syscall3(SYS_EXECVE, (uintptr_t)path, (uintptr_t)argv, (uintptr_t)envp)
     );
+}
+
+int execvp(const char *file, char *const argv[]) {
+    if (!file || !*file) {
+        errno = ENOENT;
+        return -1;
+    }
+
+    if (strchr(file, '/')) {
+        return execve(file, argv, environ);
+    }
+
+    const char *path = getenv("PATH");
+    if (!path || !*path) {
+        path = "/bin";
+    }
+
+    int last_error = ENOENT;
+    const char *segment = path;
+
+    while (1) {
+        const char *separator = strchr(segment, ':');
+        size_t segment_len = separator ? (size_t)(separator - segment) : strlen(segment);
+
+        char candidate[PATH_MAX];
+        int n = 0;
+        if (!segment_len) {
+            n = snprintf(candidate, sizeof(candidate), "./%s", file);
+        } else {
+            n = snprintf(candidate, sizeof(candidate), "%.*s/%s", (int)segment_len, segment, file);
+        }
+
+        if (n > 0 && (size_t)n < sizeof(candidate)) {
+            execve(candidate, argv, environ);
+            if (errno != ENOENT && errno != ENOTDIR) {
+                last_error = errno;
+            }
+        } else {
+            last_error = ENAMETOOLONG;
+        }
+
+        if (!separator) {
+            break;
+        }
+
+        segment = separator + 1;
+    }
+
+    errno = last_error;
+    return -1;
 }
 
 static int _read_self_stat(proc_stat_t *stat_out) {
@@ -549,6 +788,27 @@ int setgroups(size_t size, const gid_t list[]) {
     }
 
     return 0;
+}
+
+long sysconf(int name) {
+    switch (name) {
+    case _SC_ARG_MAX:
+        return 4096;
+    case _SC_CHILD_MAX:
+        return 1024;
+    case _SC_CLK_TCK:
+        return 100;
+    case _SC_OPEN_MAX:
+        return 32;
+    case _SC_PAGESIZE:
+        return 4096;
+    case _SC_NPROCESSORS_CONF:
+    case _SC_NPROCESSORS_ONLN:
+        return 1;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
 }
 
 void _exit(int status) {

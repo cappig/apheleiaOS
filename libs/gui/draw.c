@@ -1,11 +1,13 @@
 #include "draw.h"
 
 #include <ctype.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <psf.h>
 #include <stdlib.h>
 #include <string.h>
 #include <term/glyph.h>
+#include <unistd.h>
 #include <user/kv.h>
 
 #define DRAW_FONT_BUF_SIZE (256 * 1024)
@@ -341,9 +343,14 @@ static void _resolve_draw_font_path(void) {
     draw_font_path_initialized = true;
 
     char cfg_text[DRAW_WM_CONFIG_BUF_SIZE];
-    if (
-        kv_read_file(DRAW_WM_CONFIG_PATH, cfg_text, sizeof(cfg_text)) <= 0
-    ) {
+    int cfg_fd = open(DRAW_WM_CONFIG_PATH, O_RDONLY, 0);
+    if (cfg_fd < 0) {
+        return;
+    }
+
+    ssize_t cfg_len = kv_read_fd(cfg_fd, cfg_text, sizeof(cfg_text));
+    close(cfg_fd);
+    if (cfg_len <= 0) {
         return;
     }
 

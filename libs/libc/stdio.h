@@ -10,6 +10,10 @@
 #define L_tmpnam     20
 #define TMP_MAX      10000
 
+#define _IOFBF 0
+#define _IOLBF 1
+#define _IONBF 2
+
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -28,6 +32,8 @@ extern FILE *stderr;
 int fflush(FILE *stream);
 int fclose(FILE *stream);
 FILE *fopen(const char *path, const char *mode);
+FILE *fdopen(int fd, const char *mode);
+int remove(const char *path);
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
 int fseek(FILE *stream, long offset, int whence);
@@ -39,6 +45,10 @@ int fputs(const char *str, FILE *stream);
 int feof(FILE *stream);
 int ferror(FILE *stream);
 void clearerr(FILE *stream);
+int setvbuf(FILE *restrict stream, char *restrict buf, int mode, size_t size);
+void setbuf(FILE *restrict stream, char *restrict buf);
+int fileno(FILE *stream);
+int ungetc(int ch, FILE *stream);
 
 int vfprintf(FILE *stream, const char *restrict format, va_list vlist);
 int fprintf(FILE *restrict stream, const char *restrict format, ...)

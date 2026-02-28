@@ -111,6 +111,11 @@ int proc_stat_parse(const char *text, proc_stat_t *out) {
                     if (_parse_i64(value, &parsed)) {
                         out->gid = (gid_t)parsed;
                     }
+                } else if (!strcmp(key, "signal_pending")) {
+                    unsigned long long parsed = 0;
+                    if (_parse_u64(value, &parsed)) {
+                        out->signal_pending = (uint32_t)parsed;
+                    }
                 } else if (!strcmp(key, "state")) {
                     out->state = value[0] ? value[0] : PROC_STATE_UNKNOWN;
                 } else if (!strcmp(key, "tty_index")) {

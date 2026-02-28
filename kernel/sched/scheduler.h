@@ -20,6 +20,7 @@ typedef struct vfs_node vfs_node_t;
 #define SCHED_GROUP_MAX  16
 
 #define SCHED_PIPE_CAPACITY 4096
+#define SCHED_FD_FLAG_CLOEXEC (1u << 0)
 
 typedef enum {
     SCHED_FD_NONE = 0,
@@ -48,6 +49,7 @@ typedef struct sched_fd {
     int pty_index;
     int tty_index;
     u32 flags;
+    u32 fd_flags;
 } sched_fd_t;
 
 typedef enum {
@@ -149,6 +151,8 @@ typedef struct {
     uid_t uid;
     gid_t gid;
     mode_t umask;
+    u32 signal_pending;
+    u32 signal_mask;
     thread_state_t state;
     int tty_index;
     u64 cpu_time_ms;
@@ -231,6 +235,7 @@ void sched_yield(void);
 void sched_sleep(u64 ticks);
 void sched_exit(void) NORETURN;
 bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out);
+void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
 
 bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write);
@@ -246,6 +251,7 @@ int sched_fd_close(sched_thread_t *thread, int fd);
 int sched_fd_dup(sched_thread_t *thread, int oldfd, int newfd);
 bool sched_fd_clone_table(sched_thread_t *dst, const sched_thread_t *src);
 void sched_fd_close_all(sched_thread_t *thread);
+void sched_fd_close_cloexec(sched_thread_t *thread);
 bool sched_fd_refs_node(const vfs_node_t *node);
 
 sched_pipe_t *sched_pipe_create(size_t capacity);

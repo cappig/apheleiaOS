@@ -24,6 +24,7 @@ typedef enum {
     PROC_FIELD_PGID,
     PROC_FIELD_SID,
     PROC_FIELD_GROUPS,
+    PROC_FIELD_SIGMASK,
 } proc_field_t;
 
 static vfs_node_t *proc_root = NULL;
@@ -345,6 +346,8 @@ static ssize_t _proc_stat_read(
         "uid=%lld\n"
         "gid=%lld\n"
         "umask=%o\n"
+        "signal_pending=%u\n"
+        "signal_mask=%u\n"
         "state=%c\n"
         "tty_index=%d\n"
         "cpu_time_ms=%llu\n"
@@ -356,6 +359,8 @@ static ssize_t _proc_stat_read(
         (long long)snapshot.uid,
         (long long)snapshot.gid,
         (unsigned int)(snapshot.umask & 0777),
+        (unsigned int)snapshot.signal_pending,
+        (unsigned int)snapshot.signal_mask,
         _state_char(snapshot.state),
         snapshot.tty_index,
         (unsigned long long)snapshot.cpu_time_ms,
@@ -435,6 +440,9 @@ static ssize_t _proc_value_read(
         break;
     case PROC_FIELD_SID:
         value = (long long)snapshot.sid;
+        break;
+    case PROC_FIELD_SIGMASK:
+        value = (long long)snapshot.signal_mask;
         break;
     default:
         return -EINVAL;
@@ -623,6 +631,29 @@ static ssize_t _proc_value_write(
             ret = 0;
         }
         break;
+    case PROC_FIELD_SIGMASK: {
+        if (path_pid != 0) {
+            return -EPERM;
+        }
+
+        if (value < 0) {
+            return -EINVAL;
+        }
+
+        sched_thread_t *thread = sched_current();
+        if (!thread) {
+            return -EINVAL;
+        }
+
+        const u32 blockable_mask =
+            ((u32)0x7fffffffU) &
+            (u32) ~(1u << (SIGKILL - 1)) &
+            (u32) ~(1u << (SIGSTOP - 1));
+
+        thread->signal_mask = ((u32)value) & blockable_mask;
+        ret = 0;
+        break;
+    }
     default:
         return -EINVAL;
     }
@@ -724,6 +755,7 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     mode_t umask_mode = self ? 0666 : 0444;
     mode_t sid_mode = self ? 0666 : 0444;
     mode_t groups_mode = self ? 0666 : 0444;
+    mode_t sigmask_mode = self ? 0666 : 0444;
 
     ok &= _upsert_file(dir, "stat", 0444, PROC_FIELD_STAT, pid);
     ok &= _upsert_file(dir, "cwd", 0444, PROC_FIELD_CWD, pid);
@@ -735,6 +767,7 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     ok &= _upsert_file(dir, "pgid", 0666, PROC_FIELD_PGID, pid);
     ok &= _upsert_file(dir, "sid", sid_mode, PROC_FIELD_SID, pid);
     ok &= _upsert_file(dir, "groups", groups_mode, PROC_FIELD_GROUPS, pid);
+    ok &= _upsert_file(dir, "sigmask", sigmask_mode, PROC_FIELD_SIGMASK, pid);
 
     return ok;
 }
@@ -817,7 +850,8 @@ void procfs_unregister_pid(pid_t pid) {
         "umask",
         "pgid",
         "sid",
-        "groups"
+        "groups",
+        "sigmask"
     };
     char path[56];
 

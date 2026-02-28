@@ -65,9 +65,13 @@ enum ps2_kbd_commands {
 };
 
 enum ps2_mouse_commands {
+    PS2_MOUSE_COM_GET_DEVICE_ID = 0xf2,
+    PS2_MOUSE_COM_SET_SAMPLE_RATE = 0xf3,
     PS2_MOUSE_COM_DEFAULT = 0xf6,
     PS2_MOUSE_COM_ENABLE_DATA = 0xf4,
 };
+
+#define PS2_MOUSE_ID_SCROLL_WHEEL 0x03
 
 enum ps2_mouse_flags {
     PS2_MOUSE_LEFT = 1 << 0,
@@ -301,6 +305,55 @@ static bool _mouse_command(u8 cmd) {
     return _expect_ack();
 }
 
+static bool _mouse_command_data(u8 cmd, u8 data) {
+    if (!_mouse_command(cmd)) {
+        return false;
+    }
+
+    if (!_write_cmd(0xd4)) {
+        return false;
+    }
+
+    if (!_write_data(data)) {
+        return false;
+    }
+
+    return _expect_ack();
+}
+
+static bool _mouse_get_device_id(u8 *id) {
+    if (!id) {
+        return false;
+    }
+
+    if (!_mouse_command(PS2_MOUSE_COM_GET_DEVICE_ID)) {
+        return false;
+    }
+
+    return _read_data(id);
+}
+
+static bool _mouse_set_sample_rate(u8 rate) {
+    return _mouse_command_data(PS2_MOUSE_COM_SET_SAMPLE_RATE, rate);
+}
+
+static bool _mouse_enable_wheel(void) {
+    if (
+        !_mouse_set_sample_rate(200) ||
+        !_mouse_set_sample_rate(100) ||
+        !_mouse_set_sample_rate(80)
+    ) {
+        return false;
+    }
+
+    u8 id = 0;
+    if (!_mouse_get_device_id(&id)) {
+        return false;
+    }
+
+    return id == PS2_MOUSE_ID_SCROLL_WHEEL;
+}
+
 static bool _controller_init(void) {
     if (!_write_cmd(PS2_COM_DISABLE_PORT1)) {
         return false;
@@ -463,6 +516,16 @@ static void _mouse_irq(UNUSED int_state_t *s) {
             y -= 0x100;
         }
 
+        i16 wheel = 0;
+        if (mouse_packet_size >= 4) {
+            u8 wheel_raw = mouse_packet[3] & 0x0f;
+            if (wheel_raw & 0x08) {
+                wheel_raw |= 0xf0;
+            }
+
+            wheel = (i8)wheel_raw;
+        }
+
         u8 buttons = 0;
 
         if (flags & PS2_MOUSE_LEFT) {
@@ -480,6 +543,7 @@ static void _mouse_irq(UNUSED int_state_t *s) {
         mouse_event event = {
             .delta_x = x,
             .delta_y = (i16)-y,
+            .wheel = wheel,
             .buttons = buttons,
             .source = mouse_index,
         };
@@ -514,6 +578,7 @@ static bool ps2_init(void) {
 
     if (has_port2) {
         _mouse_command(PS2_MOUSE_COM_DEFAULT);
+        mouse_packet_size = _mouse_enable_wheel() ? 4 : 3;
         _mouse_command(PS2_MOUSE_COM_ENABLE_DATA);
 
         irq_register(IRQ_PS2_MOUSE, _mouse_irq);

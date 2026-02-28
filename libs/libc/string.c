@@ -94,6 +94,18 @@ int memcmp(const void *s1, const void *s2, size_t n) {
     return 0;
 }
 
+int bcmp(const void *s1, const void *s2, size_t n) {
+    return memcmp(s1, s2, n);
+}
+
+void bcopy(const void *src, void *dest, size_t len) {
+    (void)memmove(dest, src, len);
+}
+
+void bzero(void *dest, size_t len) {
+    (void)memset(dest, 0, len);
+}
+
 int strcmp(const char *s1, const char *s2) {
     while (*s1 && (*s1 == *s2)) {
         s1++;
@@ -150,6 +162,40 @@ char *strrchr(const char *str, int ch) {
     }
 
     return (char *)ptr;
+}
+
+char *index(const char *str, int ch) {
+    return strchr(str, ch);
+}
+
+char *rindex(const char *str, int ch) {
+    return strrchr(str, ch);
+}
+
+char *strstr(const char *haystack, const char *needle) {
+    if (!haystack || !needle) {
+        return NULL;
+    }
+
+    if (!needle[0]) {
+        return (char *)haystack;
+    }
+
+    for (const char *cursor = haystack; *cursor; cursor++) {
+        const char *h = cursor;
+        const char *n = needle;
+
+        while (*h && *n && *h == *n) {
+            h++;
+            n++;
+        }
+
+        if (!*n) {
+            return (char *)cursor;
+        }
+    }
+
+    return NULL;
 }
 
 size_t strcspn(const char *dest, const char *src) {

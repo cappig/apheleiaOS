@@ -15,8 +15,9 @@ typedef struct {
     u32 key_modifiers;
     u32 mouse_buttons;
     bool input_round_robin;
-    bool pending_valid;
-    input_event_t pending_event;
+    u8 pending_head;
+    u8 pending_count;
+    input_event_t pending_events[3];
 } ui_t;
 
 typedef struct {
@@ -62,6 +63,7 @@ int window_alloc(
     u32 height,
     const char *title
 );
+int window_set_title(window_t *window, const char *title);
 int window_from_env(ui_t *ui, window_t *window);
 int window_free(window_t *window);
 void window_close(window_t *window);
