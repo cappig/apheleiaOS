@@ -54,6 +54,7 @@ void arch_sched_request_resched(void);
 u64 arch_timer_ticks(void);
 u32 arch_timer_hz(void);
 u64 arch_monotonic_ns(void);
+u64 arch_realtime_ns(void);
 void arch_wallclock_snapshot(
     u64 *seconds_out,
     u64 *ticks_out,

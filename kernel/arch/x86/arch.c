@@ -634,6 +634,7 @@ static void _gp_fault_handler(int_state_t *state) {
             rip,
             cs
         );
+        log_fatal("fault frame rbp=%#" PRIx64, state->g_regs.rbp);
     } else {
         log_fatal("general protection fault: err=%#" PRIx64, code);
     }
@@ -649,10 +650,13 @@ static void _gp_fault_handler(int_state_t *state) {
             eip,
             cs
         );
+        log_fatal("fault frame ebp=%#" PRIx32, state->g_regs.ebp);
     } else {
         log_fatal("general protection fault: err=%#" PRIx64, code);
     }
 #endif
+
+    panic_trace();
 
     disable_interrupts();
     halt();
@@ -660,7 +664,10 @@ static void _gp_fault_handler(int_state_t *state) {
 
 static void _double_fault_handler(UNUSED int_state_t *state) {
     panic_prepare();
+
     log_fatal("double fault (unrecoverable)");
+
+    panic_trace();
     disable_interrupts();
     halt();
 }
@@ -683,6 +690,7 @@ static void _invalid_opcode_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal("invalid opcode: rip=%#" PRIx64 " cs=%#" PRIx64, rip, cs);
+        // log_fatal("fault frame rbp=%#" PRIx64, state->g_regs.rbp);
     } else {
         log_fatal("invalid opcode");
     }
@@ -692,11 +700,13 @@ static void _invalid_opcode_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal("invalid opcode: eip=%#" PRIx64 " cs=%#" PRIx64, eip, cs);
+        // log_fatal("fault frame ebp=%#" PRIx32, state->g_regs.ebp);
     } else {
         log_fatal("invalid opcode");
     }
 #endif
 
+    panic_trace();
     disable_interrupts();
     halt();
 }
@@ -1138,7 +1148,19 @@ bool arch_irq_enabled(void) {
 }
 
 void arch_cpu_wait(void) {
-    asm volatile("hlt");
+    if (arch_irq_enabled()) {
+        asm volatile("hlt" ::: "memory");
+        return;
+    }
+
+    asm volatile(
+        "sti\n"
+        "hlt\n"
+        "cli"
+        :
+        :
+        : "memory", "cc"
+    );
 }
 
 void arch_cpu_relax(void) {
@@ -1262,6 +1284,31 @@ static u64 _wallclock_seconds_from_ticks(u64 now_ticks, u64 hz) {
     }
 
     return seconds;
+}
+
+u64 arch_realtime_ns(void) {
+    u64 hz = irq_timer_hz();
+    if (!hz) {
+        return 0;
+    }
+
+    u64 now_ticks = arch_timer_ticks();
+    u64 seconds = _wallclock_seconds_from_ticks(now_ticks, hz);
+    u64 base_seconds =
+        __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
+    u64 base_ticks =
+        __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
+
+    u64 delta_ns = 0;
+    if (now_ticks >= base_ticks) {
+        delta_ns = ((now_ticks - base_ticks) * 1000000000ULL) / hz;
+    }
+
+    if (!base_seconds) {
+        return (seconds * 1000000000ULL) + delta_ns;
+    }
+
+    return (base_seconds * 1000000000ULL) + delta_ns;
 }
 
 void arch_wallclock_snapshot(u64 *seconds_out, u64 *ticks_out, u64 *hz_out) {

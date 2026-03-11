@@ -121,21 +121,23 @@ void sched_init_thread_name(sched_thread_t *thread, const char *name) {
     thread->name[len] = '\0';
 }
 
-void remove_all_thread(sched_thread_t *thread) {
-    if (!thread || !sched_state.all_list) {
-        return;
-    }
-
-    unsigned long flags = sched_lock_save();
-
-    if (!thread->in_all_list) {
-        sched_lock_restore(flags);
+static void remove_all_thread_locked(sched_thread_t *thread) {
+    if (!thread || !sched_state.all_list || !thread->in_all_list) {
         return;
     }
 
     _pid_index_remove_locked(thread->pid);
     list_remove(sched_state.all_list, &thread->all_node);
     thread->in_all_list = false;
+}
+
+void remove_all_thread(sched_thread_t *thread) {
+    if (!thread || !sched_state.all_list) {
+        return;
+    }
+
+    unsigned long flags = sched_lock_save();
+    remove_all_thread_locked(thread);
     sched_lock_restore(flags);
 }
 
@@ -292,7 +294,7 @@ void sched_reap(void) {
 
             list_remove(sched_state.zombie_list, node);
             thread->in_zombie_list = false;
-            remove_all_thread(thread);
+            remove_all_thread_locked(thread);
             sched_thread_put(thread);
         }
 

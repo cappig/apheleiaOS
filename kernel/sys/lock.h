@@ -26,6 +26,7 @@ typedef struct {
     spinlock_t lock;
     volatile int held;
     struct sched_wait_queue *wait_queue;
+    const char *name;
 #if LOCK_DEBUG
     size_t owner_cpu;
 #endif
@@ -43,7 +44,8 @@ void lock_preempt_enable(void);
     { \
         .lock = SPINLOCK_INIT, \
         .held = 0, \
-        .wait_queue = NULL \
+        .wait_queue = NULL, \
+        .name = NULL \
     }
 
 static inline size_t lock_cpu_id(void) {
@@ -161,35 +163,7 @@ static inline void spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
 }
 
 void mutex_init(mutex_t *mutex);
+void mutex_set_name(mutex_t *mutex, const char *name);
 bool mutex_try_lock(mutex_t *mutex);
 void mutex_lock(mutex_t *mutex);
 void mutex_unlock(mutex_t *mutex);
-
-// Compatibility wrappers for legacy lock users; prefer spin_* APIs for new code.
-static inline void lock(volatile int *state) {
-    if (!state)
-        return;
-
-    while (__sync_lock_test_and_set(state, 1)) {
-        while (__atomic_load_n(state, __ATOMIC_RELAXED))
-            arch_cpu_relax();
-    }
-}
-
-static inline void unlock(volatile int *state) {
-    if (!state)
-        return;
-
-    __sync_lock_release(state);
-}
-
-static inline unsigned long lock_irqsave(volatile int *state) {
-    unsigned long flags = arch_irq_save();
-    lock(state);
-    return flags;
-}
-
-static inline void unlock_irqrestore(volatile int *state, unsigned long flags) {
-    unlock(state);
-    arch_irq_restore(flags);
-}

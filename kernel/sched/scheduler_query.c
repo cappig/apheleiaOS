@@ -8,14 +8,22 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
     u64 hz = arch_timer_hz();
     bool found = false;
     unsigned long flags = sched_lock_save();
+    sched_thread_t *thread = _pid_index_get_locked(pid);
 
-    ll_foreach(node, sched_state.all_list) {
-        sched_thread_t *thread = node->data;
+    if (!thread) {
+        ll_foreach(node, sched_state.all_list) {
+            sched_thread_t *candidate = node->data;
+            if (!candidate || candidate->pid != pid) {
+                continue;
+            }
 
-        if (!thread || thread->pid != pid) {
-            continue;
+            thread = candidate;
+            _pid_index_set_locked(thread);
+            break;
         }
+    }
 
+    if (thread) {
         out->pid = thread->pid;
         out->ppid = thread->ppid;
         out->pgid = thread->pgid;
@@ -47,7 +55,6 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         strncpy(out->name, thread->name, sizeof(out->name) - 1);
 
         found = true;
-        break;
     }
 
     sched_lock_restore(flags);
@@ -179,22 +186,28 @@ bool sched_proc_cwd(pid_t pid, char *out, size_t out_len) {
 
     bool found = false;
     unsigned long flags = sched_lock_save();
+    sched_thread_t *thread = _pid_index_get_locked(pid);
 
-    ll_foreach(node, sched_state.all_list) {
-        sched_thread_t *thread = node->data;
-        if (!thread || thread->pid != pid) {
-            continue;
-        }
+    if (!thread) {
+        ll_foreach(node, sched_state.all_list) {
+            sched_thread_t *candidate = node->data;
+            if (!candidate || candidate->pid != pid) {
+                continue;
+            }
 
-        size_t len = strnlen(thread->cwd, sizeof(thread->cwd));
-        if (len + 1 > out_len) {
+            thread = candidate;
+            _pid_index_set_locked(thread);
             break;
         }
+    }
 
-        memcpy(out, thread->cwd, len);
-        out[len] = '\0';
-        found = true;
-        break;
+    if (thread) {
+        size_t len = strnlen(thread->cwd, sizeof(thread->cwd));
+        if (len + 1 <= out_len) {
+            memcpy(out, thread->cwd, len);
+            out[len] = '\0';
+            found = true;
+        }
     }
 
     sched_lock_restore(flags);

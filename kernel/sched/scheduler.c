@@ -12,6 +12,7 @@ void scheduler_init(void) {
             calloc(sched_state.runqueues[i].capacity, sizeof(sched_thread_t *));
         assert(sched_state.runqueues[i].heap);
         sched_state.runqueues[i].nr_running = 0;
+        sched_state.runqueues[i].min_vruntime = 0;
     }
 
     sched_state.zombie_list = list_create();
@@ -149,11 +150,11 @@ void scheduler_start(void) {
         panic("scheduler selected invalid thread context on BSP");
     }
 
-    sched_local_set_current(next);
     sched_thread_mark_not_running(current);
-    sched_thread_mark_running(next, sched_cpu_id());
     next->exec_start_ns = next->sum_exec_ns;
     sched_local_set_slice_ns(0);
+    sched_local_set_current(next);
+    sched_thread_mark_running(next, sched_cpu_id());
     sched_lock_restore(flags);
 
     if (current->fpu_initialized) {
@@ -219,11 +220,11 @@ void scheduler_start_secondary(void) {
         panic("scheduler selected invalid thread context on AP");
     }
 
-    sched_local_set_current(next);
     sched_thread_mark_not_running(current);
-    sched_thread_mark_running(next, sched_cpu_id());
     next->exec_start_ns = next->sum_exec_ns;
     sched_local_set_slice_ns(0);
+    sched_local_set_current(next);
+    sched_thread_mark_running(next, sched_cpu_id());
     sched_lock_restore(flags);
 
     if (current->fpu_initialized) {

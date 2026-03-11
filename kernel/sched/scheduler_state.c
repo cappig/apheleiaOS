@@ -9,9 +9,40 @@ sched_state_t sched_state = {
     },
 };
 
-unsigned long sched_lock_save(void) {
-    unsigned long flags = arch_irq_save();
+bool sched_lock_reconcile_local(void) {
     sched_cpu_state_t *local = sched_local();
+    if (!local->sched_lock_depth) {
+        return false;
+    }
+
+    // Check the actual scheduler spinlock, not the generic per-CPU
+    // lock_spin_held_depth counter.  The old lock_spin_held_on_cpu() test
+    // returned true when ANY spinlock was held (mutex, device, runqueue …),
+    // which prevented clearing a stale sched_lock_depth.  That caused
+    // sched_lock_try_save to take the reentrant path without the actual
+    // lock, leading to unsynchronized scheduler access.
+    if (__atomic_load_n(&sched_state.lock.state, __ATOMIC_RELAXED)) {
+        return true;
+    }
+
+    local->sched_lock_depth = 0;
+    local->sched_lock_irq_flags = 0;
+    return false;
+}
+
+unsigned long sched_lock_save(void) {
+    // Save the IRQ state at entry. This is the state we must restore when the
+    // lock is eventually released. We must NOT update this with a re-saved value
+    // from inside the spin loop: if the current thread is context-switched out
+    // while IRQs are temporarily re-enabled in the spin loop, it resumes via
+    // iretq with IF=0 (interrupt gate cleared IF). A subsequent arch_irq_save()
+    // at that point would capture IF=0, causing sched_lock_restore() to leave
+    // IRQs disabled after releasing the lock, which permanently prevents timer
+    // interrupts from firing on this CPU.
+    unsigned long flags = arch_irq_save();
+    const unsigned long initial_flags = flags;
+    sched_cpu_state_t *local = sched_local();
+    (void)sched_lock_reconcile_local();
     if (local->sched_lock_depth) {
         local->sched_lock_depth++;
         return 0;
@@ -19,13 +50,27 @@ unsigned long sched_lock_save(void) {
 
     for (;;) {
         if (spin_try_lock(&sched_state.lock)) {
+            // Re-read sched_local() after the spin: we may have been preempted
+            // and migrated to a different CPU while IRQs were re-enabled.  If
+            // we wrote sched_lock_depth into the pre-migration CPU's state,
+            // sched_local() at the assertion (or anywhere in the caller) would
+            // read a different CPU's struct and see depth=0, causing a false
+            // depth-mismatch halt and leaving the lock permanently held.
+            local = sched_local();
             local->sched_lock_depth = 1;
-            local->sched_lock_irq_flags = flags;
+            local->sched_lock_irq_flags = initial_flags;
             break;
         }
 
         // Do not spin with interrupts masked while another core owns the
-        // global scheduler lock; that can stall timer progress and wakeups
+        // global scheduler lock; that can stall timer progress and wakeups.
+        // Note: after arch_irq_restore()+arch_cpu_relax(), this thread may be
+        // preempted, context-switched out, and resume on a DIFFERENT CPU.
+        // When that happens, iretq restores the saved RFLAGS with IF=0.
+        // We re-disable IRQs with arch_irq_save() for the next spin_try_lock
+        // attempt, but we ALWAYS restore initial_flags on final acquisition,
+        // NOT the re-saved flags.  We also re-read sched_local() after the
+        // successful spin_try_lock to handle the migration case.
         __atomic_fetch_add(&sched_state.metrics.lock_contention_spins, 1, __ATOMIC_RELAXED);
         arch_irq_restore(flags);
         arch_cpu_relax();
@@ -33,7 +78,7 @@ unsigned long sched_lock_save(void) {
         flags = arch_irq_save();
     }
 
-    return flags;
+    return initial_flags;
 }
 
 bool sched_lock_try_save(unsigned long *flags_out) {
@@ -43,6 +88,7 @@ bool sched_lock_try_save(unsigned long *flags_out) {
 
     unsigned long flags = arch_irq_save();
     sched_cpu_state_t *local = sched_local();
+    (void)sched_lock_reconcile_local();
     if (local->sched_lock_depth) {
         local->sched_lock_depth++;
         *flags_out = 0;
@@ -148,9 +194,45 @@ static void sleep_heap_sift_down(size_t index) {
     }
 }
 
+static ssize_t sleep_heap_find_thread(const sched_thread_t *thread) {
+    if (!thread) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < sched_state.sleep.count; i++) {
+        if (sched_state.sleep.heap[i] == thread) {
+            return (ssize_t)i;
+        }
+    }
+
+    return -1;
+}
+
 bool sleep_heap_insert(sched_thread_t *thread) {
-    if (!thread || thread->sleep_queued) {
+    if (!thread) {
         return true;
+    }
+
+    if (thread->sleep_queued) {
+        if (
+            thread->sleep_index < sched_state.sleep.count &&
+            sched_state.sleep.heap[thread->sleep_index] == thread
+        ) {
+            sleep_heap_remove_at(thread->sleep_index);
+        } else {
+            ssize_t found = sleep_heap_find_thread(thread);
+            if (found >= 0) {
+                sleep_heap_remove_at((size_t)found);
+            }
+        }
+
+        thread->sleep_queued = false;
+        thread->sleep_index = 0;
+    }
+
+    ssize_t found = sleep_heap_find_thread(thread);
+    if (found >= 0) {
+        sleep_heap_remove_at((size_t)found);
     }
 
     if (sched_state.sleep.count >= SCHED_SLEEP_HEAP_CAPACITY) {
@@ -193,11 +275,29 @@ void sleep_heap_remove_at(size_t index) {
 }
 
 void sleep_heap_remove(sched_thread_t *thread) {
-    if (!thread || !thread->sleep_queued) {
+    if (!thread) {
         return;
     }
 
-    sleep_heap_remove_at(thread->sleep_index);
+    if (
+        thread->sleep_queued &&
+        thread->sleep_index < sched_state.sleep.count &&
+        sched_state.sleep.heap[thread->sleep_index] == thread
+    ) {
+        sleep_heap_remove_at(thread->sleep_index);
+        return;
+    }
+
+    ssize_t found = sleep_heap_find_thread(thread);
+    if (found >= 0) {
+        thread->sleep_queued = true;
+        thread->sleep_index = (size_t)found;
+        sleep_heap_remove_at((size_t)found);
+        return;
+    }
+
+    thread->sleep_queued = false;
+    thread->sleep_index = 0;
 }
 
 sched_thread_t *sleep_heap_top(void) {

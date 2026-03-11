@@ -21,6 +21,10 @@ void vec_destroy(vector_t *vec);
 
 vector_t *vec_clone(vector_t *parent);
 
+size_t vec_size(const vector_t *vec);
+size_t vec_capacity(const vector_t *vec);
+bool vec_resize(vector_t *vec, size_t size);
+
 bool vec_reserve(vector_t *vec, size_t capacity);
 bool vec_reserve_more(vector_t *vec, size_t additional);
 

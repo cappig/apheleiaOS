@@ -262,18 +262,23 @@ bool sched_handle_cow_fault(
         return false;
     }
 
+    unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
+
     uintptr_t page_addr = ALIGN_DOWN(addr, PAGE_4KIB);
     sched_user_region_t *region = find_user_region(thread, page_addr);
     if (!region) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return false;
     }
 
     if (!(region->flags & SCHED_REGION_COW)) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return false;
     }
 
     page_t *root = arch_vm_root(thread->vm_space);
     if (!root) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return false;
     }
 
@@ -281,10 +286,12 @@ bool sched_handle_cow_fault(
     size_t size = arch_get_page(root, page_addr, &entry);
 
     if (!entry || size != PAGE_4KIB) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return false;
     }
 
     if (*entry & PT_WRITE) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return false;
     }
 
@@ -301,6 +308,7 @@ bool sched_handle_cow_fault(
         uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(1);
         if (!arch_phys_copy(new_paddr, old_paddr, PAGE_4KIB)) {
             arch_free_frames((void *)new_paddr, 1);
+            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
             return false;
         }
 
@@ -308,6 +316,7 @@ bool sched_handle_cow_fault(
             split_region_for_page(region, page_index, new_paddr, new_flags);
         if (!split_ok) {
             arch_free_frames((void *)new_paddr, 1);
+            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
             return false;
         }
 
@@ -320,6 +329,7 @@ bool sched_handle_cow_fault(
             region, page_index, (uintptr_t)old_paddr, new_flags
         );
         if (!split_ok) {
+            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
             return false;
         }
 
@@ -329,5 +339,6 @@ bool sched_handle_cow_fault(
     }
 
     arch_tlb_flush(page_addr);
+    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
     return true;
 }

@@ -38,3 +38,4 @@
 #define SYS_SIGNAL    35
 #define SYS_SIGRETURN 36
 #define SYS_KILL      37
+#define SYS_TIME      38

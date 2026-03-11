@@ -19,6 +19,19 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         return;
     }
 
+    // Cannot safely context-switch while the sched lock is already held on
+    // this CPU: sched_lock_try_save() would take the reentrant path, and the
+    // paired sched_lock_restore() before arch_context_switch() would only
+    // decrement the depth counter without releasing the spinlock, leaving it
+    // permanently locked after the switch.
+    if (sched_local()->sched_lock_depth > 0) {
+        sched_local_set_need_resched(true);
+        if (force_resched) {
+            __atomic_store_n(&sched_local()->force_resched, true, __ATOMIC_RELEASE);
+        }
+        return;
+    }
+
     size_t cpu_id = sched_cpu_id();
     bool should_resched = force_resched || sched_local_need_resched();
 
@@ -183,7 +196,10 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
 
         sched_local()->handoff_ready = thread;
     } else {
-        sched_local()->handoff_ready = thread;
+        // Thread is sleeping/zombie/stopped — clear running_cpu so
+        // wake_waiter_locked and sched_capture_context see -1 instead of
+        // a stale cpu_id that could confuse ownership checks.
+        sched_thread_mark_not_running(thread);
     }
 
     sched_local_set_current(next);
@@ -220,6 +236,10 @@ void sched_capture_context(arch_int_state_t *state) {
     int running_cpu = sched_thread_running_cpu_load(current);
     if (running_cpu >= 0 && (size_t)running_cpu != cpu_id) {
         sched_note_ownership_conflict("sched_capture_context", current);
+        if (sched_thread_owned_by_running_cpu(current)) {
+            return;
+        }
+
         sched_thread_running_cpu_store(current, (int)cpu_id);
     }
 
@@ -252,22 +272,18 @@ void sched_tick(arch_int_state_t *state) {
     __atomic_fetch_add(&sched_state.usage.core_total_ticks[cpu_id], 1, __ATOMIC_RELAXED);
 
     u64 now_ticks = arch_timer_ticks();
-    u64 seen_wake_tick =
-        __atomic_load_n(&sched_state.sleep.wake_tick, __ATOMIC_ACQUIRE);
-    while (now_ticks > seen_wake_tick) {
-        u64 expected = seen_wake_tick;
-        if (__atomic_compare_exchange_n(
-                &sched_state.sleep.wake_tick,
-                &expected,
-                now_ticks,
-                false,
-                __ATOMIC_ACQ_REL,
-                __ATOMIC_ACQUIRE
-            )) {
-            sched_wake_sleepers(now_ticks);
-            break;
+    u64 seen_wake_tick = __atomic_load_n(&sched_state.sleep.wake_tick, __ATOMIC_ACQUIRE);
+    if (now_ticks > seen_wake_tick) {
+        unsigned long wake_flags = 0;
+        if (sched_lock_try_save(&wake_flags)) {
+            u64 locked_seen =
+                __atomic_load_n(&sched_state.sleep.wake_tick, __ATOMIC_ACQUIRE);
+            if (now_ticks > locked_seen) {
+                __atomic_store_n(&sched_state.sleep.wake_tick, now_ticks, __ATOMIC_RELEASE);
+                sched_wake_sleepers_locked(now_ticks);
+            }
+            sched_lock_restore(wake_flags);
         }
-        seen_wake_tick = expected;
     }
 
     u64 tick_ns = sched_tick_ns();
@@ -511,9 +527,18 @@ void sched_exit(void) {
             &sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE
         );
         sched_local_set_slice_ns(0);
+        next->exec_start_ns = next->sum_exec_ns;
+
+        if (
+            SCHED_STRICT_CONTEXT_CHECK && sched_context_checked_thread(next) &&
+            (!next->context || !sched_context_valid(next))
+        ) {
+            sched_lock_restore(flags);
+            panic("scheduler exit switched to invalid context thread");
+        }
+
         sched_local_set_current(next);
         sched_thread_mark_running(next, sched_cpu_id());
-        next->exec_start_ns = next->sum_exec_ns;
     }
 
     sched_lock_restore(flags);
@@ -524,13 +549,6 @@ void sched_exit(void) {
 
     if (!next) {
         cpu_halt();
-    }
-
-    if (
-        SCHED_STRICT_CONTEXT_CHECK && sched_context_checked_thread(next) &&
-        (!next->context || !sched_context_valid(next))
-    ) {
-        panic("scheduler exit switched to invalid context thread");
     }
 
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);

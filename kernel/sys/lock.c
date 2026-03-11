@@ -22,6 +22,9 @@ static sched_wait_queue_t *mutex_wait_queue_get(mutex_t *mutex, bool create) {
     }
 
     sched_wait_queue_init(queue);
+    if (mutex->name) {
+        sched_wait_queue_set_name(queue, mutex->name);
+    }
 
     sched_wait_queue_t *expected = NULL;
     if (__atomic_compare_exchange_n(
@@ -64,9 +67,18 @@ void mutex_init(mutex_t *mutex) {
     spinlock_init(&mutex->lock);
     mutex->held = 0;
     __atomic_store_n(&mutex->wait_queue, NULL, __ATOMIC_RELEASE);
+    mutex->name = NULL;
 #if LOCK_DEBUG
     mutex->owner_cpu = (size_t)-1;
 #endif
+}
+
+void mutex_set_name(mutex_t *mutex, const char *name) {
+    if (!mutex) {
+        return;
+    }
+
+    mutex->name = name;
 }
 
 bool mutex_try_lock(mutex_t *mutex) {
@@ -93,7 +105,6 @@ void mutex_lock(mutex_t *mutex) {
     }
 
     sched_wait_queue_t *queue = mutex_wait_queue_get(mutex, true);
-
     for (;;) {
         unsigned long flags = spin_lock_irqsave(&mutex->lock);
         if (!mutex->held) {
@@ -147,7 +158,6 @@ void mutex_unlock(mutex_t *mutex) {
     }
 
     sched_wait_queue_t *queue = mutex_wait_queue_get(mutex, false);
-
     unsigned long flags = spin_lock_irqsave(&mutex->lock);
 #if LOCK_DEBUG
     if (!mutex->held || mutex->owner_cpu != lock_cpu_id()) {

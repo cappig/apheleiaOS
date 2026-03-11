@@ -522,9 +522,6 @@ int main(int argc, char **argv) {
             if (errno == EINTR || errno == EAGAIN) {
                 continue;
             }
-            if (errno == ENOENT) {
-                break;
-            }
             break;
         }
 

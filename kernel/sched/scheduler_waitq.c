@@ -21,32 +21,25 @@ static void wake_waiter_locked(sched_thread_t *thread, const char *conflict_tag)
     thread->wait_deadline_tick = 0;
     thread->wait_result = (u8)SCHED_WAIT_WOKEN;
 
-    if (sched_thread_owned_by_running_cpu(thread)) {
+    if (sched_reclaim_handoff_thread_locked(thread)) {
+        thread_state_t state = sched_thread_state_load(thread);
+        if (state == THREAD_ZOMBIE || state == THREAD_STOPPED) {
+            return;
+        }
+
+        sched_thread_state_store(thread, THREAD_READY);
+        enqueue_thread(thread);
+        return;
+    }
+
+    if (sched_thread_owned_by_current_cpu(thread)) {
         sched_nudge_owned_thread_locked(thread);
         return;
     }
 
     thread_state_t state = sched_thread_state_load(thread);
     if (state == THREAD_RUNNING) {
-        sched_note_ownership_conflict(conflict_tag, thread);
-        int running_cpu = sched_thread_running_cpu_load(thread);
-
-        if (running_cpu >= 0 && (size_t)running_cpu < MAX_CORES) {
-            size_t target_cpu = (size_t)running_cpu;
-            sched_thread_t *owner = __atomic_load_n(
-                &sched_state.cpu[target_cpu].current,
-                __ATOMIC_ACQUIRE
-            );
-
-            if (owner == thread) {
-                if (target_cpu == sched_cpu_id()) {
-                    sched_request_resched_local();
-                } else if (sched_send_wake_ipi(target_cpu)) {
-                    __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
-                }
-            }
-        }
-
+        (void)sched_repair_unowned_running_thread_locked(thread, conflict_tag, true);
         return;
     }
 
@@ -217,6 +210,7 @@ sched_wait_result_t sched_wait_on_queue(
     sched_wait_flags_t flags
 ) {
     sched_thread_t *self = sched_local_current();
+    (void)sched_lock_reconcile_local();
 
     if (!sched_running_get() || !queue || !queue->list || !self) {
         return SCHED_WAIT_ABORTED;
@@ -226,12 +220,32 @@ sched_wait_result_t sched_wait_on_queue(
         return SCHED_WAIT_INTR;
     }
 
-    if (!arch_irq_enabled() || sched_preempt_disabled() || lock_spin_held_on_cpu()) {
-        if (sched_preempt_disabled() || lock_spin_held_on_cpu()) {
-            __atomic_fetch_add(
-                &sched_state.metrics.lockdep_block_under_spin_count, 1, __ATOMIC_RELAXED
+    sched_cpu_state_t *local = sched_local();
+
+    if (
+        sched_preempt_disabled() ||
+        lock_spin_held_on_cpu() ||
+        local->sched_lock_depth
+    ) {
+#if defined(DEBUG)
+        u64 count = __atomic_add_fetch(
+            &sched_state.metrics.lockdep_block_under_spin_count,
+            1,
+            __ATOMIC_RELAXED
+        );
+        if (local->sched_lock_depth && (count <= 8 || ((count & (count - 1ULL)) == 0ULL))) {
+            log_warn(
+                "scheduler wait blocked with sched_lock held pid=%ld (%s)"
+                " depth=%zu queue=%s preempt=%d spin=%d",
+                (long)self->pid,
+                self->name,
+                local->sched_lock_depth,
+                (queue && queue->debug_name) ? queue->debug_name : "?",
+                sched_preempt_disabled() ? 1 : 0,
+                lock_spin_held_on_cpu() ? 1 : 0
             );
         }
+#endif
         return SCHED_WAIT_ABORTED;
     }
 

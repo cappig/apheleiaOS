@@ -38,6 +38,7 @@ typedef struct {
     u64 boot;
     u64 hz;
     u64 ticks;
+    u64 realtime_ns;
     u64 monotonic_ns;
 } dev_clock_snapshot_t;
 
@@ -284,6 +285,7 @@ static ssize_t _dev_clock_read(
     dev_clock_snapshot_t clock = {0};
     arch_wallclock_snapshot(&clock.now, &clock.ticks, &clock.hz);
     clock.boot = _boot_seconds();
+    clock.realtime_ns = arch_realtime_ns();
     clock.monotonic_ns = arch_monotonic_ns();
 
     char text[SYSINFO_TEXT_MAX];
@@ -294,11 +296,13 @@ static ssize_t _dev_clock_read(
         "boot=%" PRIu64 "\n"
         "hz=%" PRIu64 "\n"
         "ticks=%" PRIu64 "\n"
+        "realtime_ns=%" PRIu64 "\n"
         "monotonic_ns=%" PRIu64 "\n",
         clock.now,
         clock.boot,
         clock.hz,
         clock.ticks,
+        clock.realtime_ns,
         clock.monotonic_ns
     );
 
@@ -319,6 +323,7 @@ static ssize_t _dev_clock_ioctl(vfs_node_t *node, u64 request, void *args) {
     dev_clock_snapshot_t clock = {0};
     arch_wallclock_snapshot(&clock.now, &clock.ticks, &clock.hz);
     clock.boot = _boot_seconds();
+    clock.realtime_ns = arch_realtime_ns();
     clock.monotonic_ns = arch_monotonic_ns();
 
     memcpy(args, &clock, sizeof(clock));

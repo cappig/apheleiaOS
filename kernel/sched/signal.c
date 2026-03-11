@@ -93,8 +93,8 @@ void sched_signal_init_thread(sched_thread_t *thread) {
 
     thread->signal_pending = 0;
     thread->signal_mask = 0;
-    thread->current_signal = 0;
-    thread->signal_saved_valid = false;
+    __atomic_store_n(&thread->current_signal, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&thread->signal_saved_valid, 0, __ATOMIC_RELEASE);
     thread->signal_trampoline = 0;
 }
 
@@ -183,7 +183,7 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
         return;
     }
 
-    if (thread->signal_saved_valid) {
+    if (__atomic_load_n(&thread->signal_saved_valid, __ATOMIC_ACQUIRE)) {
         return;
     }
 
@@ -218,12 +218,12 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
     }
 
     thread->signal_saved_state = *state;
-    thread->signal_saved_valid = true;
-    thread->current_signal = (u32)signum;
+    __atomic_store_n(&thread->current_signal, (u32)signum, __ATOMIC_RELEASE);
+    __atomic_store_n(&thread->signal_saved_valid, 1, __ATOMIC_RELEASE);
 
     if (!arch_signal_setup_user_stack(thread, state, handler, signum)) {
-        thread->signal_saved_valid = false;
-        thread->current_signal = 0;
+        __atomic_store_n(&thread->signal_saved_valid, 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&thread->current_signal, 0, __ATOMIC_RELEASE);
 
         signal_clear_pending(thread, signum);
 
@@ -235,13 +235,16 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
 }
 
 bool sched_signal_sigreturn(sched_thread_t *thread, arch_int_state_t *state) {
-    if (!thread || !state || !thread->signal_saved_valid) {
+    if (
+        !thread || !state ||
+        !__atomic_load_n(&thread->signal_saved_valid, __ATOMIC_ACQUIRE)
+    ) {
         return false;
     }
 
     *state = thread->signal_saved_state;
-    thread->signal_saved_valid = false;
-    thread->current_signal = 0;
+    __atomic_store_n(&thread->signal_saved_valid, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&thread->current_signal, 0, __ATOMIC_RELEASE);
     thread->context = (uintptr_t)state;
 
     return true;

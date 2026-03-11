@@ -1165,7 +1165,13 @@ int window_wait_event(
     }
 
     if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) {
-        errno = ENOENT;
+        if (pfd.revents & POLLNVAL) {
+            errno = EBADF;
+        } else if (pfd.revents & POLLERR) {
+            errno = EIO;
+        } else {
+            errno = ENOENT;
+        }
         return -1;
     }
 

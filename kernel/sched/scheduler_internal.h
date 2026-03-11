@@ -51,6 +51,7 @@ typedef struct {
     sched_thread_t **heap;
     u32 capacity;
     size_t nr_running;
+    u64 min_vruntime ALIGNED(8);
 } sched_rq_t;
 
 typedef enum {
@@ -136,75 +137,11 @@ typedef struct {
     sched_metrics_state_t metrics;
 } sched_state_t;
 
-// _Static_assert(
-//     offsetof(sched_cpu_state_t, slice_ns) % 8 == 0,
-//     "sched_cpu_state_t.slice_ns must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_cpu_state_t, local_ticks) % 8 == 0,
-//     "sched_cpu_state_t.local_ticks must be 8-byte aligned"
-// );
-// _Static_assert(
-//     sizeof(sched_cpu_state_t) % 8 == 0,
-//     "sched_cpu_state_t size must preserve 8-byte alignment in arrays"
-// );
-// _Static_assert(
-//     offsetof(sched_sleep_state_t, wake_tick) % 8 == 0,
-//     "sched_sleep_state_t.wake_tick must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_thread_t, allowed_cpu_mask) % 8 == 0,
-//     "sched_thread_t.allowed_cpu_mask must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_thread_t, vruntime_ns) % 8 == 0,
-//     "sched_thread_t.vruntime_ns must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_thread_t, wake_tick) % 8 == 0,
-//     "sched_thread_t.wake_tick must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_thread_t, wait_deadline_tick) % 8 == 0,
-//     "sched_thread_t.wait_deadline_tick must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_thread_t, cpu_time_ticks) % 8 == 0,
-//     "sched_thread_t.cpu_time_ticks must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_metrics_state_t, switch_count) % 8 == 0,
-//     "sched_metrics_state_t.switch_count must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_metrics_state_t, wait_timeout_count) % 8 == 0,
-//     "sched_metrics_state_t.wait_timeout_count must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_usage_state_t, busy_ticks) % 8 == 0,
-//     "sched_usage_state_t.busy_ticks must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_state_t, cpu) % 8 == 0,
-//     "sched_state_t.cpu must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_state_t, sleep) % 8 == 0,
-//     "sched_state_t.sleep must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_state_t, usage) % 8 == 0,
-//     "sched_state_t.usage must be 8-byte aligned"
-// );
-// _Static_assert(
-//     offsetof(sched_state_t, metrics) % 8 == 0,
-//     "sched_state_t.metrics must be 8-byte aligned"
-// );
 
 extern sched_state_t sched_state;
 
 static inline bool sched_context_checked_thread(const sched_thread_t *thread) {
-    return thread && thread->pid != 0;
+    return thread && thread->context != 0;
 }
 
 static inline bool sched_thread_is_idle(const sched_thread_t *thread) {
@@ -476,17 +413,44 @@ static inline bool sched_thread_owned_by_running_cpu(const sched_thread_t *threa
            sched_thread_owned_in_handoff(thread);
 }
 
+static inline bool
+sched_reclaim_handoff_thread_locked(sched_thread_t *thread) {
+    int running_cpu = sched_thread_running_cpu_load(thread);
+    if (!thread || running_cpu < 0 || (size_t)running_cpu >= MAX_CORES) {
+        return false;
+    }
+
+    size_t cpu_id = (size_t)running_cpu;
+    sched_thread_t *handoff = __atomic_load_n(
+        &sched_state.cpu[cpu_id].handoff_ready,
+        __ATOMIC_ACQUIRE
+    );
+    if (handoff != thread) {
+        return false;
+    }
+
+    __atomic_store_n(&sched_state.cpu[cpu_id].handoff_ready, NULL, __ATOMIC_RELEASE);
+    sched_thread_mark_not_running(thread);
+    return true;
+}
+
 static inline void
 sched_note_ownership_conflict(const char *where, sched_thread_t *thread) {
-    u64 count = __atomic_add_fetch(
+    __atomic_fetch_add(
         &sched_state.metrics.ownership_conflicts,
         1,
         __ATOMIC_RELAXED
     );
 
+#if defined(DEBUG)
     if (!thread) {
         return;
     }
+
+    u64 count = __atomic_load_n(
+        &sched_state.metrics.ownership_conflicts,
+        __ATOMIC_RELAXED
+    );
 
     if (count <= 8 || ((count & (count - 1ULL)) == 0ULL)) {
         log_warn(
@@ -502,11 +466,55 @@ sched_note_ownership_conflict(const char *where, sched_thread_t *thread) {
             sched_thread_owned_by_running_cpu(thread) ? 1 : 0
         );
     }
+#else
+    (void)where;
+    (void)thread;
+#endif
+}
+
+void sched_nudge_owned_thread_locked(sched_thread_t *thread);
+void enqueue_thread_with_ipi(sched_thread_t *thread, bool allow_remote_ipi);
+
+static inline bool
+sched_repair_unowned_running_thread_locked(
+    sched_thread_t *thread,
+    const char *where,
+    bool send_ipi
+) {
+    if (!thread) {
+        return false;
+    }
+
+    if (sched_thread_state_load(thread) != THREAD_RUNNING) {
+        return false;
+    }
+
+    if (sched_reclaim_handoff_thread_locked(thread)) {
+        sched_thread_state_store(thread, THREAD_READY);
+        enqueue_thread_with_ipi(thread, send_ipi);
+        return true;
+    }
+
+    if (sched_thread_owned_by_current_cpu(thread)) {
+        sched_nudge_owned_thread_locked(thread);
+        return true;
+    }
+
+    if (sched_thread_owned_in_handoff(thread)) {
+        return true;
+    }
+
+    sched_note_ownership_conflict(where, thread);
+    sched_thread_mark_not_running(thread);
+    sched_thread_state_store(thread, THREAD_READY);
+    enqueue_thread_with_ipi(thread, send_ipi);
+    return true;
 }
 
 unsigned long sched_lock_save(void);
 bool sched_lock_try_save(unsigned long *flags_out);
 void sched_lock_restore(unsigned long flags);
+bool sched_lock_reconcile_local(void);
 
 bool sleep_heap_insert(sched_thread_t *thread);
 void sleep_heap_remove_at(size_t index);
@@ -530,7 +538,6 @@ size_t sched_rq_depth(size_t cpu_id);
 bool sched_cpu_needs_wake_ipi(size_t cpu_id);
 size_t sched_cpu_distance(size_t from_cpu, size_t to_cpu, size_t cpu_count);
 size_t sched_pick_allowed_cpu_minload(const sched_thread_t *thread, size_t disallowed_cpu);
-void sched_nudge_owned_thread_locked(sched_thread_t *thread);
 void sched_publish_handoff_thread_locked(sched_thread_t *thread, size_t cpu_id);
 void sched_flush_handoff_ready_locked(size_t cpu_id);
 void sched_runqueue_record_depth(size_t depth);
@@ -547,7 +554,6 @@ bool sched_has_better_runnable(sched_thread_t *current, size_t cpu_id);
 void sched_rebalance_once(size_t cpu_id);
 
 bool sched_send_wake_ipi(size_t cpu_id);
-void enqueue_thread_with_ipi(sched_thread_t *thread, bool allow_remote_ipi);
 void enqueue_thread(sched_thread_t *thread);
 void run_queue_remove(sched_thread_t *thread);
 sched_thread_t *dequeue_thread(void);

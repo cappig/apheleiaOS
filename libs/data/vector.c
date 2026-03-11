@@ -5,6 +5,29 @@
 #include <string.h>
 
 
+static size_t _vec_grow_capacity(size_t current, size_t needed) {
+    if (current >= needed) {
+        return current;
+    }
+
+    size_t capacity = current ? current : VEC_INITIAL_CAPACITY;
+    if (capacity < needed && capacity == 0) {
+        capacity = needed;
+    }
+
+    while (capacity < needed) {
+        size_t grown = capacity * VEC_GROWTH_RATE;
+        if (grown <= capacity) {
+            return needed;
+        }
+
+        capacity = grown;
+    }
+
+    return capacity;
+}
+
+
 vector_t *vec_create_sized(size_t capacity, size_t elem_size) {
     vector_t *vec = calloc(1, sizeof(vector_t));
 
@@ -63,10 +86,59 @@ vector_t *vec_clone(vector_t *parent) {
     return child;
 }
 
+size_t vec_size(const vector_t *vec) {
+    return vec ? vec->size : 0;
+}
+
+size_t vec_capacity(const vector_t *vec) {
+    return vec ? vec->capacity : 0;
+}
+
+bool vec_resize(vector_t *vec, size_t size) {
+    if (!vec) {
+        return false;
+    }
+
+    if (size > vec->capacity && !vec_reserve(vec, size)) {
+        return false;
+    }
+
+    u8 *base = vec->data;
+    if (size > vec->size) {
+        memset(
+            base + (vec->size * vec->elem_size),
+            0,
+            (size - vec->size) * vec->elem_size
+        );
+    } else if (size < vec->size) {
+        memset(
+            base + (size * vec->elem_size),
+            0,
+            (vec->size - size) * vec->elem_size
+        );
+    }
+
+    vec->size = size;
+    return true;
+}
+
 
 bool vec_reserve(vector_t *vec, size_t capacity) {
+    if (!vec) {
+        return false;
+    }
+
+    if (capacity <= vec->capacity) {
+        return true;
+    }
+
+    size_t new_capacity = _vec_grow_capacity(vec->capacity, capacity);
+    if (!new_capacity) {
+        return false;
+    }
+
     u8 *old_buf = vec->data;
-    u8 *new_buf = calloc(capacity, vec->elem_size);
+    u8 *new_buf = calloc(new_capacity, vec->elem_size);
 
     if (!new_buf) {
         return false;
@@ -76,7 +148,7 @@ bool vec_reserve(vector_t *vec, size_t capacity) {
     free(old_buf);
 
     vec->data = new_buf;
-    vec->capacity = capacity;
+    vec->capacity = new_capacity;
 
     return true;
 }
@@ -179,7 +251,7 @@ bool vec_swap(vector_t *vec, size_t i, size_t j) {
 
 bool vec_push(vector_t *vec, void *data) {
     if (vec->size == vec->capacity) {
-        if (!vec_reserve(vec, vec->capacity * VEC_GROWTH_RATE)) {
+        if (!vec_reserve(vec, vec->size + 1)) {
             return false;
         }
     }

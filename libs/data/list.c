@@ -131,8 +131,9 @@ bool list_remove(linked_list_t *list, list_node_t *node) {
     if (!linked_consistent) {
         prev = NULL;
         next = list->head;
+        size_t limit = list->length ? list->length : 1;
 
-        while (next && next != node) {
+        while (next && next != node && limit--) {
             prev = next;
             next = next->next;
         }

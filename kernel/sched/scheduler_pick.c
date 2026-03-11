@@ -49,7 +49,11 @@ sched_thread_t *dequeue_thread(void) {
                 sched_thread_state_load(thread) == THREAD_RUNNING &&
                 !sched_thread_owned_by_running_cpu(thread)
             ) {
-                sched_note_ownership_conflict("dequeue_thread", thread);
+                (void)sched_repair_unowned_running_thread_locked(
+                    thread,
+                    "dequeue_thread",
+                    true
+                );
             }
             continue;
         }

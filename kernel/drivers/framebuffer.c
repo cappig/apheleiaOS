@@ -494,6 +494,8 @@ driver_err_t framebuffer_driver_load(void) {
         return DRIVER_OK;
     }
 
+    mutex_set_name(&fb_present_lock, "fb_present_lock");
+
     if (!devfs_register_device("framebuffer", framebuffer_register_devfs)) {
         return DRIVER_ERR_INIT_FAILED;
     }

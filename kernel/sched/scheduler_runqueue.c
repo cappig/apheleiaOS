@@ -123,10 +123,17 @@ bool rq_remove_index_locked(sched_rq_t *rq, u32 index) {
             u32 parent = (index - 1U) / 2U;
             if (rq_less(rq->heap[index], rq->heap[parent])) {
                 rq_sift_up_locked(rq, index);
+                if (rq->nr_running > 0 && rq->heap[0]) {
+                    rq->min_vruntime = rq->heap[0]->vruntime_ns;
+                }
                 return true;
             }
         }
         rq_sift_down_locked(rq, index);
+    }
+
+    if (rq->nr_running > 0 && rq->heap[0]) {
+        rq->min_vruntime = rq->heap[0]->vruntime_ns;
     }
 
     return true;
@@ -219,6 +226,10 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
         return;
     }
 
+    if (thread->vruntime_ns < rq->min_vruntime) {
+        thread->vruntime_ns = rq->min_vruntime;
+    }
+
     if (!rq_insert_locked(rq, thread)) {
         spin_unlock_irqrestore(&rq->lock, flags);
         return;
@@ -228,6 +239,9 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
     thread->in_run_queue = true;
     thread->last_cpu = cpu_id;
     thread->affinity_core = cpu_id;
+    if (rq->nr_running > 0 && rq->heap[0]) {
+        rq->min_vruntime = rq->heap[0]->vruntime_ns;
+    }
     size_t depth = rq->nr_running;
     spin_unlock_irqrestore(&rq->lock, flags);
 

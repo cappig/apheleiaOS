@@ -74,6 +74,7 @@ bool sched_context_valid_ex(
     if (!sched_context_stack_window_valid(thread, kernel_frame_need)) {
         SCHED_CTX_FAIL("kernel-frame-outside-stack");
     }
+
 #if defined(__x86_64__)
     u64 cs = state->s_regs.cs;
     bool kernel_cs = cs == (u64)GDT_KERNEL_CODE;

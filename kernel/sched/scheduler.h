@@ -16,7 +16,7 @@ typedef void (*thread_entry_t)(void *arg);
 
 typedef struct vfs_node vfs_node_t;
 
-#define SCHED_FD_MAX     32
+#define SCHED_FD_MAX     256
 #define SCHED_REGION_COW (1ULL << 62)
 #define SCHED_GROUP_MAX  16
 
@@ -135,6 +135,7 @@ typedef struct sched_thread {
     int exit_code;
 
     arch_vm_space_t *vm_space;
+    spinlock_t vm_lock;
 
     uintptr_t user_stack_base;
     size_t user_stack_size;
@@ -167,10 +168,10 @@ typedef struct sched_thread {
 
     u32 signal_pending;
     u32 signal_mask;
-    u32 current_signal;
+    volatile u32 current_signal;
     int stop_signal;
     bool stop_reported;
-    bool signal_saved_valid;
+    volatile u32 signal_saved_valid;
     uintptr_t signal_trampoline;
     arch_int_state_t signal_saved_state;
     sighandler_t signal_handlers[NSIG];
@@ -329,6 +330,7 @@ void sched_sleep(u64 ticks);
 void sched_capture_context(arch_int_state_t *state);
 void sched_ipi_resched(void);
 void sched_resched_softirq(arch_int_state_t *state);
+void sched_request_resched_local_force(void);
 void sched_request_resched_local(void);
 void sched_lockdep_note_block_under_spin(void);
 bool sched_wait_until_running(sched_thread_t *self);

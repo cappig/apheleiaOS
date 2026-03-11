@@ -27,6 +27,7 @@ static size_t s_key_read = 0;
 static size_t s_key_write = 0;
 
 static struct timespec s_ticks_start = {0};
+static uint32_t s_last_ticks_ms = 0;
 
 static bool dg_has_iwad_arg(int argc, char **argv) {
     if (!argv) {
@@ -360,6 +361,8 @@ void DG_Init(void) {
         s_ticks_start.tv_sec = 0;
         s_ticks_start.tv_nsec = 0;
     }
+
+    s_last_ticks_ms = 0;
 }
 
 void DG_DrawFrame(void) {
@@ -387,7 +390,7 @@ void DG_SleepMs(uint32_t ms) {
 uint32_t DG_GetTicksMs(void) {
     struct timespec now = {0};
     if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
-        return 0;
+        return s_last_ticks_ms;
     }
 
     uint64_t sec = 0;
@@ -406,7 +409,15 @@ uint32_t DG_GetTicksMs(void) {
     }
 
     uint64_t ms = sec * 1000ULL + (uint64_t)(nsec / 1000000LL);
-    return (uint32_t)ms;
+    uint32_t ticks_ms = (uint32_t)ms;
+
+    if (ticks_ms < s_last_ticks_ms) {
+        ticks_ms = s_last_ticks_ms;
+    } else {
+        s_last_ticks_ms = ticks_ms;
+    }
+
+    return ticks_ms;
 }
 
 int DG_GetKey(int *pressed, unsigned char *doomKey) {

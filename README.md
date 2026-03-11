@@ -9,6 +9,8 @@ It aims to be as minimalistic and simple as possible while still providing basic
 
 The current tree supports `x86_64` and `x86_32` builds, BIOS boot by default, optional x86_64 UEFI boot, SMP bring-up, and a small windowed userland.
 
+![Apheleia OS running](aos.png)
+
 ### What does this repository include?
 
 - the kernel source in `kernel/`

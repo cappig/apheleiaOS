@@ -165,18 +165,30 @@ void sched_publish_handoff_thread_locked(
         sched_thread_state_store(thread, THREAD_READY);
     } else if (
         sched_thread_state_load(thread) == THREAD_SLEEPING &&
-        thread->wait_result != (u8)SCHED_WAIT_ABORTED &&
         !thread->in_wait_queue &&
         !thread->sleep_queued
     ) {
         sched_thread_state_store(thread, THREAD_READY);
     }
 
-    if (
-        sched_thread_state_load(thread) != THREAD_READY ||
-        thread->on_rq ||
-        !thread->context
-    ) {
+    thread_state_t state = sched_thread_state_load(thread);
+    if (state == THREAD_ZOMBIE || state == THREAD_STOPPED) {
+        return;
+    }
+
+    if (!thread->context || thread->on_rq) {
+        return;
+    }
+
+    if (state == THREAD_SLEEPING && (thread->in_wait_queue || thread->sleep_queued)) {
+        return;
+    }
+
+    if (state != THREAD_READY) {
+        sched_thread_state_store(thread, THREAD_READY);
+    }
+
+    if (sched_thread_state_load(thread) != THREAD_READY) {
         return;
     }
 

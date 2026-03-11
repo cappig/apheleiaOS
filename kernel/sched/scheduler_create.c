@@ -374,6 +374,8 @@ sched_thread_t *create_thread(
         thread->vm_space = sched_state.kernel_vm;
     }
 
+    spinlock_init(&thread->vm_lock);
+
     sched_wait_queue_init(&thread->wait_queue);
     sched_wait_queue_set_name(&thread->wait_queue, "thread_wait");
     sched_signal_init_thread(thread);
@@ -463,8 +465,8 @@ pid_t sched_fork(arch_int_state_t *state) {
     child->signal_mask = parent->signal_mask;
     child->signal_trampoline = parent->signal_trampoline;
     child->signal_pending = 0;
-    child->signal_saved_valid = false;
-    child->current_signal = 0;
+    __atomic_store_n(&child->signal_saved_valid, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&child->current_signal, 0, __ATOMIC_RELEASE);
     child->tty_index = parent->tty_index;
 
     if (parent->fpu_initialized) {
@@ -475,12 +477,14 @@ pid_t sched_fork(arch_int_state_t *state) {
     bool cow_enabled = pmm_ref_ready();
 
     bool parent_tlb_needs_flush = false;
+    unsigned long vm_flags = spin_lock_irqsave(&parent->vm_lock);
     sched_user_region_t *region = parent->regions;
     while (region) {
         size_t pages = region->pages;
         void *root = arch_vm_root(child->vm_space);
 
         if (!root) {
+            spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
             sched_discard_thread(child);
             return -1;
         }
@@ -498,6 +502,7 @@ pid_t sched_fork(arch_int_state_t *state) {
 
             void *dst = arch_phys_map(new_paddr, size, 0);
             if (!dst) {
+                spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
                 sched_discard_thread(child);
                 return -1;
             }
@@ -542,6 +547,8 @@ pid_t sched_fork(arch_int_state_t *state) {
     if (parent_tlb_needs_flush) {
         arch_vm_switch(parent->vm_space);
     }
+
+    spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
 
     child->context = build_fork_stack(child, state);
 

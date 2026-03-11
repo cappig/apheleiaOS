@@ -1,83 +1,35 @@
 #include <apheleia/syscall.h>
 #include <arch/sys.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <kv.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <sys/ioctl.h>
 #include <sys/time.h>
 #include <time.h>
-#include <unistd.h>
 
-static int clock_fd = -1;
-static bool clock_ioctl_supported = true;
-
-typedef struct {
-    unsigned long long now;
-    unsigned long long boot;
-    unsigned long long hz;
-    unsigned long long ticks;
-    unsigned long long monotonic_ns;
-} clock_snapshot_t;
-
-static bool ensure_clock_fd(void) {
-    if (clock_fd >= 0) {
-        return true;
+static int syscall_sleep(const struct timespec *req, struct timespec *rem) {
+    if (!req) {
+        errno = EINVAL;
+        return -1;
     }
 
-    clock_fd = open("/dev/clock", O_RDONLY, 0);
-    return clock_fd >= 0;
+    if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return (int)__SYSCALL_ERRNO(
+        syscall2(SYS_SLEEP, (uintptr_t)req, (uintptr_t)rem)
+    );
 }
 
-static bool read_clock_text(char *text, size_t text_len) {
-    if (!text || text_len < 2) {
-        return false;
+static int syscall_time(struct timespec *realtime, struct timespec *monotonic) {
+    long ret =
+        (long)syscall2(SYS_TIME, (uintptr_t)realtime, (uintptr_t)monotonic);
+
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
     }
 
-    if (!ensure_clock_fd()) {
-        return false;
-    }
-
-    if (lseek(clock_fd, 0, SEEK_SET) < 0) {
-        close(clock_fd);
-        clock_fd = -1;
-        return false;
-    }
-
-    return kv_read_fd(clock_fd, text, text_len) > 0;
-}
-
-static bool read_clock_snapshot(clock_snapshot_t *out) {
-    if (!out) {
-        return false;
-    }
-
-    if (clock_ioctl_supported && ensure_clock_fd()) {
-        if (ioctl(clock_fd, CLOCKIO_GETSNAPSHOT, out) == 0) {
-            return true;
-        }
-
-        if (errno == ENOTTY || errno == EINVAL) {
-            clock_ioctl_supported = false;
-        } else {
-            close(clock_fd);
-            clock_fd = -1;
-        }
-    }
-
-    char text[256] = {0};
-    if (!read_clock_text(text, sizeof(text))) {
-        return false;
-    }
-
-    bool ok = true;
-    ok &= kv_read_u64(text, "now", &out->now);
-    ok &= kv_read_u64(text, "boot", &out->boot);
-    ok &= kv_read_u64(text, "hz", &out->hz);
-    ok &= kv_read_u64(text, "ticks", &out->ticks);
-    (void)kv_read_u64(text, "monotonic_ns", &out->monotonic_ns);
-    return ok;
+    return 0;
 }
 
 int clock_gettime(clockid_t clock_id, struct timespec *tp) {
@@ -86,40 +38,12 @@ int clock_gettime(clockid_t clock_id, struct timespec *tp) {
         return -1;
     }
 
-    clock_snapshot_t snapshot = {0};
-    if (!read_clock_snapshot(&snapshot)) {
-        errno = EIO;
-        return -1;
-    }
-
     if (clock_id == CLOCK_REALTIME) {
-        tp->tv_sec = (time_t)snapshot.now;
-        if (snapshot.hz) {
-            tp->tv_nsec =
-                (long)(((snapshot.ticks % snapshot.hz) * 1000000000ULL) / snapshot.hz);
-        } else if (snapshot.monotonic_ns) {
-            tp->tv_nsec = (long)(snapshot.monotonic_ns % 1000000000ULL);
-        } else {
-            tp->tv_nsec = 0;
-        }
-        return 0;
+        return syscall_time(tp, NULL);
     }
 
     if (clock_id == CLOCK_MONOTONIC) {
-        if (snapshot.monotonic_ns) {
-            tp->tv_sec = (time_t)(snapshot.monotonic_ns / 1000000000ULL);
-            tp->tv_nsec = (long)(snapshot.monotonic_ns % 1000000000ULL);
-            return 0;
-        }
-
-        if (!snapshot.hz) {
-            errno = EIO;
-            return -1;
-        }
-
-        tp->tv_sec = (time_t)(snapshot.ticks / snapshot.hz);
-        tp->tv_nsec = (long)(((snapshot.ticks % snapshot.hz) * 1000000000ULL) / snapshot.hz);
-        return 0;
+        return syscall_time(NULL, tp);
     }
 
     errno = EINVAL;
@@ -127,9 +51,7 @@ int clock_gettime(clockid_t clock_id, struct timespec *tp) {
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem) {
-    return (int)__SYSCALL_ERRNO(
-        syscall2(SYS_SLEEP, (uintptr_t)req, (uintptr_t)rem)
-    );
+    return syscall_sleep(req, rem);
 }
 
 time_t time(time_t *timer) {

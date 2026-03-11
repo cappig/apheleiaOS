@@ -7,12 +7,7 @@ void sched_wake_sleepers_locked(u64 now) {
             break;
         }
 
-        if (!thread->sleep_queued) {
-            sleep_heap_remove_at(0);
-            continue;
-        }
-
-        if (!thread->wake_tick) {
+        if (!thread->sleep_queued || !thread->wake_tick) {
             sleep_heap_remove_at(0);
             continue;
         }
@@ -35,9 +30,15 @@ void sched_wake_sleepers_locked(u64 now) {
             thread->wait_result = (u8)SCHED_WAIT_TIMEOUT;
             __atomic_fetch_add(&sched_state.metrics.wait_timeout_count, 1, __ATOMIC_RELAXED);
 
-            if (sched_thread_owned_by_running_cpu(thread)) {
-                // a timeout raced with a still owned task.. let the owner CPU
-                // complete the handoff or resume the task in place
+            if (sched_reclaim_handoff_thread_locked(thread)) {
+                sched_thread_state_store(thread, THREAD_READY);
+                enqueue_thread_with_ipi(thread, true);
+                continue;
+            }
+
+            if (sched_thread_owned_by_current_cpu(thread)) {
+                // a timeout raced with the still current task on this CPU.. let
+                // the owner CPU resume the task in place
                 sched_nudge_owned_thread_locked(thread);
                 continue;
             }
@@ -45,18 +46,20 @@ void sched_wake_sleepers_locked(u64 now) {
             sched_thread_mark_not_running(thread);
             sched_thread_state_store(thread, THREAD_READY);
 
-            // timeout sleepers are checked from the periodic timer already,
-            // so queue them without generating another cross-core wake IPI
-            enqueue_thread_with_ipi(thread, false);
+            // Timeout wakeups must actively nudge the target CPU; otherwise a
+            // remote busy core can leave a timer-woken task runnable but not
+            // scheduled for far too long.
+            enqueue_thread_with_ipi(thread, true);
 
             continue;
         }
 
-        if (state == THREAD_RUNNING && !sched_thread_owned_by_running_cpu(thread)) {
-            sched_note_ownership_conflict("sched_wake_sleepers", thread);
-            if (thread->in_wait_queue) {
-                wait_queue_remove_locked(thread);
-            }
+        if (state == THREAD_RUNNING) {
+            (void)sched_repair_unowned_running_thread_locked(
+                thread,
+                "sched_wake_sleepers",
+                true
+            );
             continue;
         }
 
@@ -82,8 +85,54 @@ static bool wait_queue_unlink_thread_locked(
         return false;
     }
 
+    list_node_t *target = &thread->wait_node;
+    if (target->owner == queue->list) {
+        list_node_t *prev = target->prev;
+        list_node_t *next = target->next;
+        bool linked_consistent = (
+            (!prev || prev->next == target) &&
+            (!next || next->prev == target) &&
+            (target == queue->list->head || prev) &&
+            (target == queue->list->tail || next)
+        );
+
+        if (linked_consistent) {
+            if (prev) {
+                prev->next = next;
+            } else {
+                queue->list->head = next;
+            }
+
+            if (next) {
+                next->prev = prev;
+            } else {
+                queue->list->tail = prev;
+            }
+
+            if (queue->list->length) {
+                queue->list->length--;
+            }
+            if (queue->waiter_count) {
+                queue->waiter_count--;
+            }
+
+            target->next = NULL;
+            target->prev = NULL;
+            target->owner = NULL;
+            return true;
+        }
+    }
+
     list_node_t *prev = NULL;
-    for (list_node_t *it = queue->list->head; it; it = it->next) {
+    size_t limit = queue->list->length;
+    if (queue->waiter_count > limit) {
+        limit = queue->waiter_count;
+    }
+    if (!limit) {
+        limit = 1;
+    }
+
+    for (list_node_t *it = queue->list->head; it && limit--; it = it->next) {
         if (it != &thread->wait_node && it->data != thread) {
             prev = it;
             continue;
@@ -220,14 +269,25 @@ void sched_make_runnable(sched_thread_t *thread) {
     thread->wait_deadline_tick = 0;
     thread->wait_result = (u8)SCHED_WAIT_WOKEN;
 
-    if (sched_thread_owned_by_running_cpu(thread)) {
+    if (sched_reclaim_handoff_thread_locked(thread)) {
+        sched_thread_state_store(thread, THREAD_READY);
+        enqueue_thread(thread);
+        sched_lock_restore(flags);
+        return;
+    }
+
+    if (sched_thread_owned_by_current_cpu(thread)) {
         sched_nudge_owned_thread_locked(thread);
         sched_lock_restore(flags);
         return;
     }
 
     if (sched_thread_state_load(thread) == THREAD_RUNNING) {
-        sched_note_ownership_conflict("sched_make_runnable", thread);
+        (void)sched_repair_unowned_running_thread_locked(
+            thread,
+            "sched_make_runnable",
+            true
+        );
         sched_lock_restore(flags);
         return;
     }
@@ -261,7 +321,14 @@ void sched_unblock_thread(sched_thread_t *thread) {
                 : SCHED_WAIT_WOKEN
         );
 
-        if (sched_thread_owned_by_running_cpu(thread)) {
+        if (sched_reclaim_handoff_thread_locked(thread)) {
+            sched_thread_state_store(thread, THREAD_READY);
+            enqueue_thread(thread);
+            sched_lock_restore(flags);
+            return;
+        }
+
+        if (sched_thread_owned_by_current_cpu(thread)) {
             sched_nudge_owned_thread_locked(thread);
             sched_lock_restore(flags);
             return;
@@ -271,7 +338,11 @@ void sched_unblock_thread(sched_thread_t *thread) {
         sched_thread_state_store(thread, THREAD_READY);
         enqueue_thread(thread);
     } else if (state == THREAD_RUNNING) {
-        sched_note_ownership_conflict("sched_unblock_thread", thread);
+        (void)sched_repair_unowned_running_thread_locked(
+            thread,
+            "sched_unblock_thread",
+            true
+        );
     }
 
     sched_lock_restore(flags);

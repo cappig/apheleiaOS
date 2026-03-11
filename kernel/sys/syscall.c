@@ -32,6 +32,7 @@
 #include <sys/stat.h>
 #include <sys/tty.h>
 #include <sys/vfs.h>
+#include "ws.h"
 #include <time.h>
 #include <unistd.h>
 
@@ -701,6 +702,7 @@ out:
 }
 
 static ssize_t _fd_read_vfs(
+    sched_thread_t *thread,
     sched_fd_t *entry,
     void *buf,
     size_t len,
@@ -719,6 +721,19 @@ static ssize_t _fd_read_vfs(
     vfs_node_t *node = _resolve_link_node(entry->node);
     if (node && node->type == VFS_DIR) {
         return _fd_read_dir(entry, buf, len, offset, advance_offset);
+    }
+
+    ssize_t ws_result = 0;
+    if (ws_node_read(entry->node, thread ? thread->pid : 0, buf, offset, len, _fd_vfs_io_flags(entry), &ws_result)) {
+        if (ws_result == VFS_EOF) {
+            return 0;
+        }
+
+        if (ws_result > 0 && advance_offset) {
+            entry->offset = offset + (size_t)ws_result;
+        }
+
+        return ws_result;
     }
 
     ssize_t ret =
@@ -757,6 +772,18 @@ static ssize_t _fd_write_vfs(
         offset = (size_t)entry->node->size;
     }
 
+    ssize_t ws_result = 0;
+    if (ws_node_write(entry->node, thread ? thread->pid : 0, buf, offset, len, _fd_vfs_io_flags(entry), &ws_result)) {
+        if (ws_result > 0) {
+            if (advance_offset) {
+                entry->offset = offset + (size_t)ws_result;
+            }
+            _maybe_clear_setid(thread, entry->node);
+        }
+
+        return ws_result;
+    }
+
     ssize_t ret = vfs_write(
         entry->node, (void *)buf, offset, len, _fd_vfs_io_flags(entry)
     );
@@ -791,7 +818,7 @@ static ssize_t sys_read(int fd, void *buf, size_t len) {
             return _pipe_read(entry->pipe, buf, len, nonblock);
         }
 
-        return _fd_read_vfs(entry, buf, len, entry->offset, true, -EBADF);
+        return _fd_read_vfs(thread, entry, buf, len, entry->offset, true, -EBADF);
     }
 
     if (fd == STDIN_FILENO) {
@@ -829,7 +856,7 @@ static ssize_t sys_pread(int fd, void *buf, size_t len, off_t offset) {
 
     _sync_thread_tty(thread, entry);
 
-    return _fd_read_vfs(entry, buf, len, (size_t)offset, false, -ESPIPE);
+    return _fd_read_vfs(thread, entry, buf, len, (size_t)offset, false, -ESPIPE);
 }
 
 static ssize_t sys_write(int fd, const void *buf, size_t len) {
@@ -904,6 +931,12 @@ static ssize_t sys_ioctl(int fd, u64 request, void *args) {
     if (thread && _fd_lookup(thread, fd, &entry)) {
         if (entry->kind == SCHED_FD_VFS && entry->node) {
             _sync_thread_tty(thread, entry);
+
+            ssize_t ws_result = 0;
+            if (ws_node_ioctl(entry->node, thread->pid, request, args, &ws_result)) {
+                return ws_result;
+            }
+
             return vfs_ioctl(entry->node, request, args);
         }
 
@@ -2326,6 +2359,31 @@ static int sys_sleep(const struct timespec *req, struct timespec *rem) {
     return 0;
 }
 
+static void _timespec_from_ns(u64 ns, struct timespec *tp) {
+    if (!tp) {
+        return;
+    }
+
+    tp->tv_sec = (time_t)(ns / 1000000000ULL);
+    tp->tv_nsec = (long)(ns % 1000000000ULL);
+}
+
+static int sys_time(struct timespec *realtime, struct timespec *monotonic) {
+    if (!realtime && !monotonic) {
+        return -EINVAL;
+    }
+
+    if (realtime) {
+        _timespec_from_ns(arch_realtime_ns(), realtime);
+    }
+
+    if (monotonic) {
+        _timespec_from_ns(arch_monotonic_ns(), monotonic);
+    }
+
+    return 0;
+}
+
 static uintptr_t
 sys_signal(int signum, sighandler_t handler, uintptr_t trampoline) {
     sched_thread_t *thread = sched_current();
@@ -2452,6 +2510,11 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
                 vfs_flags |= VFS_NONBLOCK;
             }
 
+            short ws_revents = 0;
+            if (ws_node_poll(entry->node, thread ? thread->pid : 0, events, (u32)vfs_flags, &ws_revents)) {
+                return ws_revents;
+            }
+
             short revents = vfs_poll(entry->node, events, vfs_flags);
 
             if (revents < 0) {
@@ -2470,61 +2533,6 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
     }
 
     return POLLNVAL;
-}
-
-static sched_wait_queue_t *
-_pipe_poll_wait_queue(sched_pipe_t *pipe, bool read_end, short events) {
-    if (!pipe) {
-        return NULL;
-    }
-
-    if ((events & POLLIN) && (events & ~POLLIN) == 0) {
-        return read_end ? pipe->read_wait_queue : NULL;
-    }
-
-    if ((events & POLLOUT) && (events & ~POLLOUT) == 0) {
-        return read_end ? NULL : pipe->write_wait_queue;
-    }
-
-    return NULL;
-}
-
-static sched_wait_queue_t *
-_fd_poll_wait_queue(sched_thread_t *thread, int fd, short events) {
-    if (fd < 0) {
-        return NULL;
-    }
-
-    sched_fd_t *entry = NULL;
-
-    if (thread && _fd_lookup(thread, fd, &entry)) {
-        if (entry->kind == SCHED_FD_PIPE_READ) {
-            return _pipe_poll_wait_queue(entry->pipe, true, events);
-        }
-
-        if (entry->kind == SCHED_FD_PIPE_WRITE) {
-            return _pipe_poll_wait_queue(entry->pipe, false, events);
-        }
-
-        if (entry->kind == SCHED_FD_VFS && entry->node) {
-            size_t vfs_flags = 0;
-
-            if (entry->flags & O_NONBLOCK) {
-                vfs_flags |= VFS_NONBLOCK;
-            }
-
-            return vfs_wait_queue(entry->node, events, vfs_flags);
-        }
-
-        return NULL;
-    }
-
-    if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO) {
-        tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
-        return tty_wait_queue_handle(&handle, events, 0);
-    }
-
-    return NULL;
 }
 
 static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
@@ -2560,16 +2568,8 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
     }
 
     for (;;) {
-        sched_wait_queue_t *wait_queue = NULL;
         u32 wait_seq = 0;
-
-        if (nfds == 1 && fds && fds[0].fd >= 0) {
-            wait_queue = _fd_poll_wait_queue(thread, fds[0].fd, fds[0].events);
-        }
-
-        if (wait_queue) {
-            wait_seq = sched_wait_seq(wait_queue);
-        } else if (nfds) {
+        if (nfds) {
             wait_seq = sched_poll_wait_seq();
         }
 
@@ -2614,22 +2614,6 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
 
         if (!nfds) {
             sched_wait_result_t wait_result = sched_wait_deadline(
-                finite_timeout ? deadline : 0,
-                SCHED_WAIT_INTERRUPTIBLE
-            );
-            if (wait_result == SCHED_WAIT_INTR) {
-                return -EINTR;
-            }
-            if (wait_result == SCHED_WAIT_TIMEOUT) {
-                return 0;
-            }
-            continue;
-        }
-
-        if (wait_queue) {
-            sched_wait_result_t wait_result = sched_wait_on_queue(
-                wait_queue,
-                wait_seq,
                 finite_timeout ? deadline : 0,
                 SCHED_WAIT_INTERRUPTIBLE
             );
@@ -2821,6 +2805,11 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
     case SYS_SLEEP:
         return (u64)sys_sleep(
             (const struct timespec *)arch_syscall_arg1(state),
+            (struct timespec *)arch_syscall_arg2(state)
+        );
+    case SYS_TIME:
+        return (u64)sys_time(
+            (struct timespec *)arch_syscall_arg1(state),
             (struct timespec *)arch_syscall_arg2(state)
         );
     case SYS_MOUNT:
