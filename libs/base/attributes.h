@@ -10,3 +10,4 @@
 #define NONNULL          __attribute__((nonnull))
 #define FALLTHROUGH      __attribute__((fallthrough))
 #define NONSTRING        __attribute__((nonstring))
+#define MUST_USE         __attribute__((warn_unused_result))

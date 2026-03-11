@@ -18,12 +18,12 @@
 typedef struct {
     u16 lsb;
     u16 msb;
-} u16_lsb_msb;
+} u16_lsb_msb_t;
 
 typedef struct {
     u32 lsb;
     u32 msb;
-} u32_lsb_msb;
+} u32_lsb_msb_t;
 
 typedef struct PACKED {
     char year[4];
@@ -34,7 +34,7 @@ typedef struct PACKED {
     char second[2];
     char hundredth[2];
     u8 time_zone_offset;
-} iso_date;
+} iso_date_t;
 
 // Different date format for directory records for some reason
 typedef struct PACKED {
@@ -45,44 +45,44 @@ typedef struct PACKED {
     u8 minute;
     u8 second;
     u8 time_zone_offset;
-} iso_dir_date;
+} iso_dir_date_t;
 
 typedef struct PACKED {
     u8 length;
     u8 extended_attribute_length;
 
-    u32_lsb_msb extent_location;
-    u32_lsb_msb extent_size;
+    u32_lsb_msb_t extent_location;
+    u32_lsb_msb_t extent_size;
 
-    iso_dir_date time;
+    iso_dir_date_t time;
 
     u8 flags;
     u8 interleave_unit_size;
     u8 interleave_gap_size;
 
-    u16_lsb_msb volume_sequence_number;
+    u16_lsb_msb_t volume_sequence_number;
 
     u8 file_id_len;
     char file_id[];
-} iso_dir;
+} iso_dir_t;
 
-typedef enum {
+enum iso_dir_flags {
     ISO_DIR_HIDDEN = 1 << 0,
     ISO_DIR_SUBDIR = 1 << 1,
     ISO_DIR_ASSOCIATED = 1 << 2,
     ISO_DIR_HAS_EXTENDED = 1 << 3,
     ISO_DIR_HAS_OWNER = 1 << 4,
     ISO_DIR_NOT_FINAL = 1 << 7,
-} iso_dir_flags;
+};
 
-typedef enum {
+enum iso_volume_type {
     ISO_BOOT_RECORD = 0,
     ISO_PRIMARY = 1,
     ISO_SUPPLEMENTARY = 2,
     ISO_PARTITION = 3,
 
     ISO_TERMINATOR = 255
-} iso_volume_type;
+};
 
 // As defined in table 4 of the ECMA standard
 typedef struct PACKED {
@@ -95,13 +95,13 @@ typedef struct PACKED {
     char volume_id[32];
     char _unused1[8];
 
-    u32_lsb_msb volume_space_size;
+    u32_lsb_msb_t volume_space_size;
     u8 _unused2[32];
 
-    u16_lsb_msb volume_set_size;
-    u16_lsb_msb volume_sequence_number;
-    u16_lsb_msb logical_block_size;
-    u32_lsb_msb path_table_size;
+    u16_lsb_msb_t volume_set_size;
+    u16_lsb_msb_t volume_sequence_number;
+    u16_lsb_msb_t logical_block_size;
+    u32_lsb_msb_t path_table_size;
 
     u32 path_table_lsb;
     u32 optional_path_table_lsb;
@@ -121,17 +121,17 @@ typedef struct PACKED {
     char abstract_file_id[37];
     char bibliographic_file_id[37];
 
-    iso_date creation_date;
-    iso_date modification_date;
-    iso_date expiration_date;
-    iso_date effective_date;
+    iso_date_t creation_date;
+    iso_date_t modification_date;
+    iso_date_t expiration_date;
+    iso_date_t effective_date;
 
     u8 structure_version; // 0x01
     u8 _unused3;
 
     // extra padding; size of volume_descriptor is 2048 bytes
     char application_use[1165];
-} iso_volume_descriptor;
+} iso_volume_descriptor_t;
 
 typedef struct PACKED {
     u8 id_length;
@@ -139,4 +139,4 @@ typedef struct PACKED {
     u32 extent_location;
     u16 directory_number;
     char file_id[];
-} iso_path_table;
+} iso_path_table_t;

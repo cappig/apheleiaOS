@@ -1,6 +1,17 @@
 #pragma once
 
+#include <stddef.h>
+
 typedef long int time_t;
+typedef int clockid_t;
+
+struct timespec {
+    time_t tv_sec;
+    long tv_nsec;
+};
+
+#define CLOCK_REALTIME  0
+#define CLOCK_MONOTONIC 1
 
 struct tm {
     int tm_sec;
@@ -14,7 +25,18 @@ struct tm {
     int tm_isdst;
 };
 
+time_t time(time_t *timer);
+int nanosleep(const struct timespec *req, struct timespec *rem);
+int clock_gettime(clockid_t clock_id, struct timespec *tp);
 
-time_t mktime(struct tm* tm);
+time_t mktime(struct tm *tm);
 
-char* asctime(const struct tm* time);
+struct tm *gmtime_r(const time_t *timer, struct tm *result);
+struct tm *gmtime(const time_t *timer);
+struct tm *localtime_r(const time_t *timer, struct tm *result);
+struct tm *localtime(const time_t *timer);
+
+size_t strftime(char *str, size_t max, const char *format, const struct tm *tm);
+
+char *asctime(const struct tm *time);
+char *ctime(const time_t *timer);

@@ -2,28 +2,42 @@
 
 #include <base/types.h>
 #include <data/bitmap.h>
-#include <x86/e820.h>
 
 #define BITMAP_FREE 0
 #define BITMAP_USED 1
 
-#define ALLOC_OUT_OF_BLOCKS (-1)
-
 typedef struct {
-    void* chuck_start;
-    usize chunk_size;
+    void *chuck_start;
+    size_t chunk_size;
 
-    usize block_size;
-    usize block_count;
-    usize free_blocks;
+    size_t block_size;
+    size_t block_count;
+    size_t usable_blocks;
+    size_t free_blocks;
 
-    usize word_count;
-    bitmap_word* bitmap;
-} bitmap_alloc;
+    size_t word_count;
+    bitmap_word_t *bitmap;
+    size_t next_fit_block;
+} bitmap_allocator_t;
 
 
-bool bitmap_alloc_init(bitmap_alloc* alloc, void* chunk_start, usize chunk_size, usize block_size);
-bool bitmap_alloc_init_mmap(bitmap_alloc* alloc, e820_map* mmap, usize block_size);
+static inline size_t
+bitmap_alloc_to_block(bitmap_allocator_t *alloc, void *ptr) {
+    return (ptr - alloc->chuck_start) / alloc->block_size;
+}
 
-void* bitmap_alloc_reserve(bitmap_alloc* alloc, usize blocks);
-bool bitmap_alloc_free(bitmap_alloc* alloc, void* ptr, usize blocks);
+static inline bitmap_word_t *
+bitmap_alloc_to_ptr(bitmap_allocator_t *alloc, size_t block) {
+    return alloc->chuck_start + block * alloc->block_size;
+}
+
+bool bitmap_alloc_init(
+    bitmap_allocator_t *alloc,
+    void *chunk_start,
+    size_t chunk_size,
+    size_t block_size
+);
+
+void *bitmap_alloc_reserve(bitmap_allocator_t *alloc, size_t blocks);
+void *bitmap_alloc_reserve_high(bitmap_allocator_t *alloc, size_t blocks);
+bool bitmap_alloc_free(bitmap_allocator_t *alloc, void *ptr, size_t blocks);

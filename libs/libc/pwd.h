@@ -3,15 +3,18 @@
 #include <sys/types.h>
 
 struct passwd {
-    char* pw_name;
-    char* pw_passwd;
+    char *pw_name;
+    char *pw_passwd;
     uid_t pw_uid;
     gid_t pw_gid;
-    char* pw_gecos;
-    char* pw_dir;
-    char* pw_shell;
+    char *pw_gecos;
+    char *pw_dir;
+    char *pw_shell;
 };
 
+#ifdef _APHELEIA_SOURCE
+typedef struct passwd passwd_t;
+#endif
 
 #ifndef _KERNEL
 #include <libc_usr/pwd.h>

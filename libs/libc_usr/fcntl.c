@@ -1,20 +1,26 @@
+#include <apheleia/syscall.h>
+#include <arch/sys.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <stdint.h>
 
-#include "errno.h"
+int fcntl(int fd, int cmd, ...) {
+    uintptr_t arg = 0;
 
-
-int open(const char* path, int flags, ...) {
-    mode_t mode = 0;
-
-    if (flags & O_CREAT) {
-        va_list args;
-        va_start(args, flags);
-        mode = va_arg(args, mode_t);
-        va_end(args);
+    if (
+        cmd == F_DUPFD ||
+        cmd == F_DUPFD_CLOEXEC ||
+        cmd == F_SETFD ||
+        cmd == F_SETFL
+    ) {
+        va_list ap;
+        va_start(ap, cmd);
+        arg = (uintptr_t)va_arg(ap, int);
+        va_end(ap);
     }
 
-    return __SYSCALL_ERRNO(syscall3(SYS_OPEN, (u64)path, flags, mode));
+    return (int)__SYSCALL_ERRNO(
+        syscall3(SYS_FCNTL, (uintptr_t)fd, (uintptr_t)cmd, arg)
+    );
 }

@@ -1,0 +1,7 @@
+root:x:0:
+user:x:1000:user
+john:x:1001:john
+wheel:x:10:user
+video:x:44:user
+input:x:45:user
+ws:x:46:user

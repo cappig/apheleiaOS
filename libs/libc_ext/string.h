@@ -3,19 +3,22 @@
 #include "stddef.h"
 
 
-void memswap(void* a, void* b, size_t len);
+void memswap(void *a, void *b, size_t len);
 
-char* strrev(char* str);
+char *strrev(char *str);
 
-size_t strnlen(const char* str, size_t max);
+size_t strnlen(const char *str, size_t max);
 
-int strcasecmp(const char* s1, const char* s2);
-int strncasecmp(const char* s1, const char* s2, size_t n);
+size_t strlend(const char *str, char delim);
+size_t strnlend(const char *str, char delim, size_t max);
 
-char* strtrim(char* str);
-char* strtrunc(char* str);
+int strcasecmp(const char *s1, const char *s2);
+int strncasecmp(const char *s1, const char *s2, size_t n);
 
-char* basename_ptr(const char* path);
+char *strtrim(char *str);
+char *strtrunc(char *str);
 
-char* dirname(char* path);
-char* basename(char* path);
+char *basename_ptr(const char *path);
+
+char *dirname(char *path);
+char *basename(char *path);

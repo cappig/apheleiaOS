@@ -1,106 +1,68 @@
-#include <alloc/global.h>
-#include <base/addr.h>
+#include <arch/arch.h>
 #include <base/attributes.h>
-#include <base/types.h>
-#include <boot/proto.h>
-#include <gfx/state.h>
+#include <drivers/manager.h>
+#include <fs/ext2fs.h>
 #include <log/log.h>
-#include <x86/asm.h>
-#include <x86/e820.h>
-#include <x86/paging.h>
-#include <x86/serial.h>
+#include <sched/scheduler.h>
+#include <sys/devfs.h>
+#include <sys/disk.h>
+#include <sys/framebuffer.h>
+#include <sys/init.h>
+#include <sys/cpu.h>
+#include <sys/logsink.h>
+#include <sys/psf.h>
+#include <sys/pty.h>
+#include <sys/procfs.h>
+#include <sys/panic.h>
+#include <sys/symbols.h>
+#include <sys/syscall.h>
+#include <sys/tty.h>
+#include <sys/vfs.h>
 
-#include "arch/gdt.h"
-#include "arch/idt.h"
-#include "arch/irq.h"
-#include "arch/pic.h"
-#include "arch/tsc.h"
-#include "drivers/acpi.h"
-#include "drivers/ide.h"
-#include "drivers/initrd.h"
-#include "drivers/iso9660.h"
-#include "drivers/pci.h"
-#include "drivers/ps2.h"
-#include "drivers/serial.h"
-#include "drivers/vesa.h"
-#include "drivers/zero.h"
-#include "mem/heap.h"
-#include "mem/physical.h"
-#include "sched/scheduler.h"
-#include "sys/clock.h"
-#include "sys/console.h"
-#include "sys/cpu.h"
-#include "sys/panic.h"
-#include "sys/symbols.h"
-#include "sys/tty.h"
-#include "sys/video.h"
-#include "vfs/fs.h"
+#include "sys/ws.h"
 
+NORETURN void kernel_main(void *boot_info) {
+    const kernel_args_t *args = arch_init(boot_info);
 
-NORETURN void _kern_entry(boot_handoff* handoff) {
-    log_init(&kputs);
-
-    if (handoff->magic != BOOT_MAGIC)
-        panic("Kernel booted with invalid args!");
-
-    if (handoff->args.debug == DEBUG_NONE)
-        log_set_lvl(LOG_INFO);
-
-    cpu_set_gs_base((u64)&cores_local[0]);
-    cpu_init_core(0);
-
-    gdt_init();
-    pic_init();
-    idt_init();
-    tss_init(handoff->stack_top);
-
-    reclaim_boot_map(&handoff->mmap);
-    pmm_init(&handoff->mmap);
-
-    heap_init();
-    galloc_init();
-
-    video_init(&handoff->graphics);
-
-    clock_init();
-    calibrate_tsc();
-
-    acpi_init(handoff->rsdp);
-
-    pci_init();
-
-    irq_init();
-
+    scheduler_init();
+    syscall_init();
     vfs_init();
+    ext2fs_init();
 
-    ustar_init();
-    initrd_mount(handoff);
+    arch_storage_init();
 
-    init_serial_dev();
+    bool mounted = mount_rootfs();
 
-    tty_init(handoff);
-    tty_spawn_devs();
-
-    iso_init();
+    if (!mounted) {
+        panic("failed to mount rootfs");
+    }
 
     load_symbols();
 
-    print_motd(handoff);
+    if (!procfs_init()) {
+        log_warn("procfs init failed");
+    }
 
-    scheduler_init();
+    psf_load_boot_font(args ? args->font : NULL);
 
-    init_framebuffer_dev(handoff);
-    init_zero_devs();
-    init_ps2();
+    tty_init();
+    pty_init();
 
-    ide_disk_init();
+    if (framebuffer_get_info()) {
+        if (!ws_init()) {
+            log_warn("ws init failed");
+        }
+    }
 
-    // dump_vfs();
+    devfs_init();
+    disk_publish_devices();
+    driver_load_stage(DRIVER_STAGE_DEVFS);
 
-    enable_interrupts();
+    logsink_bind_devices();
 
+    init_spawn();
+    arch_smp_init();
     scheduler_start();
 
-    halt();
-    __builtin_unreachable();
+    cpu_halt();
 }

@@ -1,0 +1,18 @@
+cpu: model=corei7_icelake_u, count=1, ips=50000000, reset_on_triple_fault=1
+megs: 128
+
+ata0: enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
+ata1: enabled=1, ioaddr1=0x170, ioaddr2=0x370, irq=15
+ata1-master: type=cdrom, path="bin/apheleia_pre-alpha_x86_64.iso", status=inserted
+
+boot: cdrom
+
+log: bin/bochs.log
+debugger_log: bin/bochs_dbg.log
+
+mouse: enabled=0
+clock: sync=realtime
+
+com1: enabled=1, mode=file, dev=bin/serial.log
+
+display_library: x, options="gui_debug"

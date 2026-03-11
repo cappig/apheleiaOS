@@ -2,15 +2,16 @@
 
 #include <stdarg.h>
 
-enum log_lvl {
-    LOG_DEBUG,
-    LOG_INFO,
-    LOG_WARN,
-    LOG_ERROR,
-    LOG_FATAL,
+enum log_levels {
+    LOG_NONE = 0,
+    LOG_DEBUG = 1,
+    LOG_INFO = 2,
+    LOG_WARN = 3,
+    LOG_ERROR = 4,
+    LOG_FATAL = 5,
 };
 
-typedef void (*puts_fn_ptr)(const char*);
+typedef void (*puts_fn)(const char *);
 
 #define LOG_BUF_SIZE 256
 
@@ -21,11 +22,19 @@ typedef void (*puts_fn_ptr)(const char*);
 #define log_fatal(...) log(LOG_FATAL, __FILE__, __LINE__, __VA_ARGS__)
 
 
-void vslog(char* restrict buf, int lvl, char* file, int line, char* fmt, va_list args);
+void vslog(
+    char *restrict buf,
+    int lvl,
+    char *file,
+    int line,
+    char *fmt,
+    va_list args
+);
 
-void slog(char* restrict buf, int lvl, char* file, int line, char* fmt, ...)
+void slog(char *restrict buf, int lvl, char *file, int line, char *fmt, ...)
     __attribute__((format(printf, 5, 6)));
-void log(enum log_lvl lvl, char* file, int line, char* fmt, ...) __attribute__((format(printf, 4, 5)));
+void log(int lvl, char *file, int line, char *fmt, ...)
+    __attribute__((format(printf, 4, 5)));
 
-void log_init(puts_fn_ptr puts);
+void log_init(puts_fn sink);
 void log_set_lvl(int lvl);

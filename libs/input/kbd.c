@@ -2,12 +2,11 @@
 
 #include <ctype.h>
 
-#include "input/keymap.h"
+#include "keymap.h"
 
 static const u8 ctrl_ascii[6] = {'\n', '\n', '\b', '\t', '\e', 0x7f};
 
-
-char kbd_to_ascii(key_event event, ascii_keymap* map, bool shift) {
+char kbd_to_ascii(key_event event, ascii_keymap *map, bool shift) {
     u8 code = event.code;
 
     switch (code) {
@@ -15,7 +14,7 @@ char kbd_to_ascii(key_event event, ascii_keymap* map, bool shift) {
     case 1 ... 63:
         return shift ? map->shifted[code] : map->normal[code];
 
-    // ascii control codes
+    // ASCII control codes
     case KBD_KP_ENTER ... KBD_DELETE:
         return ctrl_ascii[code - KBD_KP_ENTER];
 
@@ -29,30 +28,35 @@ char kbd_to_ascii_default(key_event event) {
 }
 
 bool iscaret(char ch) {
-    ch = toupper(ch);
+    ch = (char)toupper((unsigned char)ch);
 
-    if (ch >= 63 && ch <= 94)
+    if (ch >= 63 && ch <= 94) {
         return true;
+    }
 
     return false;
 }
 
 char ctrl_to_caret(char ascii) {
-    if (!iscntrl(ascii))
+    if (!iscntrl((unsigned char)ascii)) {
         return 0;
+    }
 
-    if (ascii == 127)
+    if (ascii == 127) {
         return '?';
+    }
 
-    return '@' + ascii;
+    return (char)('@' + ascii);
 }
 
 char caret_to_ctrl(char ascii) {
-    if (!iscaret(ascii))
+    if (!iscaret(ascii)) {
         return ascii;
+    }
 
-    if (ascii == '?')
+    if (ascii == '?') {
         return 0;
+    }
 
-    return ascii - '`';
+    return (char)(ascii - '`');
 }

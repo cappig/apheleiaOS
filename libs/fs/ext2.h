@@ -1,7 +1,10 @@
 #pragma once
 
 #include <base/attributes.h>
+#include <base/macros.h>
 #include <base/types.h>
+#include <stddef.h>
+#include <stdlib.h>
 
 // EXT2 filesystem structures
 // https://wiki.osdev.org/Ext2
@@ -74,7 +77,7 @@ typedef struct PACKED {
 
     // some other stuff might be here ...
     u8 _reserved1[788];
-} ext2_superblock;
+} ext2_superblock_t;
 
 enum ext2_fs_state {
     EXT2_FS_CLEAN = 1,
@@ -122,7 +125,7 @@ typedef struct PACKED {
     u32 directory_count;
 
     u8 _padding0[14];
-} ext2_group_descriptor;
+} ext2_group_descriptor_t;
 
 
 typedef struct PACKED {
@@ -155,11 +158,11 @@ typedef struct PACKED {
     u32 fragment_offset;
 
     u8 os_specific1[12];
-} ext2_inode;
+} ext2_inode_t;
+
+#define EXT2_ROOT_INODE 2
 
 #define EXT2_IT_MASK 0xf000
-
-#define EXT2_IS_TYPE(field, type) (((field) & EXT2_IT_MASK) == type)
 
 enum ext2_inode_type {
     EXT2_IT_FIFO = 0x1000,
@@ -213,7 +216,7 @@ typedef struct PACKED {
     u8 name_size;
     u8 type;
     char name[];
-} ext2_directory;
+} ext2_directory_t;
 
 enum ext2_directory_type {
     EXT2_DIR_UNKNOWN = 0,
@@ -225,3 +228,31 @@ enum ext2_directory_type {
     EXT2_DIR_SOCKET = 6,
     EXT2_DIR_SYMLINK = 7,
 };
+
+
+static inline u32 ext2_block_size(const ext2_superblock_t *sb) {
+    return 1024 << sb->block_size_shift;
+}
+
+static inline u32 ext2_fragment_size(const ext2_superblock_t *sb) {
+    return 1024 << sb->fragment_size_shift;
+}
+
+static inline u32 ext2_inode_size(const ext2_superblock_t *sb) {
+    return sb->version_major >= 1 ? sb->inode_size : 128;
+}
+
+static inline u32 ext2_group_count(const ext2_superblock_t *sb) {
+    u32 blocks = DIV_ROUND_UP(sb->block_count, sb->blocks_in_group);
+    u32 inodes = DIV_ROUND_UP(sb->inode_count, sb->inodes_in_group);
+
+    return max(blocks, inodes);
+}
+
+static inline u64 ext2_file_size(const ext2_inode_t *inode) {
+    return ((u64)inode->size_high << 32) | inode->size_low;
+}
+
+static inline bool ext2_is_type(const ext2_inode_t *inode, u16 type) {
+    return (inode->type & EXT2_IT_MASK) == type;
+}

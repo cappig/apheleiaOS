@@ -2,13 +2,17 @@
 
 #include <base/macros.h>
 #include <log/log.h>
-#include <x86/asm.h>
+
+extern void panic_prepare(void);
+extern void panic_halt(void);
+void panic_trace(void);
 
 #define panic(...)                              \
     ({                                          \
         panic_prepare();                        \
         log_fatal("Kernel panic: "__VA_ARGS__); \
-        halt();                                 \
+        panic_trace();                          \
+        panic_halt();                           \
     })
 
 #define assert(expression)                              \
@@ -18,6 +22,3 @@
         if (UNLIKELY(!__as_e))                          \
             panic("Assertion failed: %s", #expression); \
     })
-
-
-void panic_prepare(void);

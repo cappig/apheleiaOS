@@ -1,151 +1,213 @@
 #include "string.h"
 
-#include "errno.h"
-
-#ifdef _KERNEL
-#include <alloc/global.h>
-#define malloc(size) gmalloc(size)
-#else
 #include <stdlib.h>
-#endif
 
+#include "errno.h"
 #include "stddef.h"
+#include "stdint.h"
 
 
-void* memcpy(void* restrict dest, const void* restrict src, size_t len) {
-    const char* srcb = (const char*)src;
-    char* destb = (char*)dest;
+void *memcpy(void *restrict dest, const void *restrict src, size_t len) {
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *s = (const unsigned char *)src;
 
-    for (size_t i = 0; i < len; i++)
-        destb[i] = srcb[i];
+    while (len >= sizeof(unsigned long)) {
+        *(unsigned long *)d = *(const unsigned long *)s;
+        d += sizeof(unsigned long);
+        s += sizeof(unsigned long);
+        len -= sizeof(unsigned long);
+    }
+
+    while (len--) {
+        *d++ = *s++;
+    }
 
     return dest;
 }
 
-void* memmove(void* dest, const void* src, size_t len) {
-    const char* srcb = (const char*)src;
-    char* destb = (char*)dest;
+void *memmove(void *dest, const void *src, size_t len) {
+    const char *srcb = (const char *)src;
+    char *destb = (char *)dest;
 
-    if (srcb == destb || len == 0)
+    if (srcb == destb || !len) {
         return dest;
 
-    else if (srcb > destb)
+    } else if (srcb > destb) {
         memcpy(dest, src, len);
 
-    else if (srcb < destb)
-        for (size_t i = len; i > 0; i--)
+    } else if (srcb < destb) {
+        for (size_t i = len; i > 0; i--) {
             destb[i - 1] = srcb[i - 1];
+        }
+    }
 
     return dest;
 }
 
-char* strcpy(char* restrict dest, const char* restrict src) {
-    for (size_t i = 0; src[i] != 0; i++)
+char *strncpy(char *restrict dest, const char *restrict src, size_t len) {
+    size_t i = 0;
+
+    for (; i < len && src[i]; i++) {
         dest[i] = src[i];
+    }
+
+    for (; i < len; i++) {
+        dest[i] = '\0';
+    }
 
     return dest;
 }
 
-char* strncpy(char* restrict dest, const char* restrict src, size_t len) {
-    for (size_t i = 0; src[i] != 0 && i < len; i++)
-        dest[i] = src[i];
-
-    return dest;
+char *strcpy(char *restrict dest, const char *restrict src) {
+    return strncpy(dest, src, (size_t)-1);
 }
 
 
-char* strcat(char* dest, const char* src) {
-    char* end = dest;
+char *strncat(char *dest, const char *src, size_t len) {
+    char *end = dest;
     dest += strlen(dest);
 
-    while (*src)
+    for (size_t i = 0; *src && i < len; i++) {
         *dest++ = *src++;
+    }
+
+    *dest = '\0';
 
     return end;
 }
 
-char* strncat(char* dest, const char* src, size_t len) {
-    char* end = dest;
-    dest += strlen(dest);
-
-    for (size_t i = 0; *src && i < len; i++)
-        *dest++ = *src++;
-
-    return end;
+char *strcat(char *dest, const char *src) {
+    return strncat(dest, src, (size_t)-1);
 }
 
 
-int memcmp(const void* s1, const void* s2, size_t n) {
-    const char* p1 = (const char*)s1;
-    const char* p2 = (const char*)s2;
+int memcmp(const void *s1, const void *s2, size_t n) {
+    const char *p1 = (const char *)s1;
+    const char *p2 = (const char *)s2;
 
     for (size_t i = 0; i < n; i++) {
-        if (p1[i] != p2[i])
-            return *(const unsigned char*)p1 - *(const unsigned char*)p2;
+        if (p1[i] != p2[i]) {
+            return (unsigned char)p1[i] - (unsigned char)p2[i];
+        }
     }
 
     return 0;
 }
 
-int strcmp(const char* s1, const char* s2) {
+int bcmp(const void *s1, const void *s2, size_t n) {
+    return memcmp(s1, s2, n);
+}
+
+void bcopy(const void *src, void *dest, size_t len) {
+    (void)memmove(dest, src, len);
+}
+
+void bzero(void *dest, size_t len) {
+    (void)memset(dest, 0, len);
+}
+
+int strcmp(const char *s1, const char *s2) {
     while (*s1 && (*s1 == *s2)) {
         s1++;
         s2++;
     }
 
-    return *(const unsigned char*)s1 - *(const unsigned char*)s2;
+    return (unsigned char)*s1 - (unsigned char)*s2;
 }
 
-int strncmp(const char* s1, const char* s2, size_t n) {
+int strncmp(const char *s1, const char *s2, size_t n) {
     while (n && *s1 && (*s1 == *s2)) {
         s1++;
         s2++;
         n--;
     }
 
-    if (n == 0)
+    if (!n) {
         return 0;
-    else
-        return *(const unsigned char*)s1 - *(const unsigned char*)s2;
+    } else {
+        return *(const unsigned char *)s1 - *(const unsigned char *)s2;
+    }
 }
 
 
-char* strchr(const char* str, int ch) {
+char *strchr(const char *str, int ch) {
     while (*str) {
-        if (*str == (char)ch)
-            return (char*)str;
+        if (*str == (char)ch) {
+            return (char *)str;
+        }
 
         str++;
+    }
+
+    if ((char)ch == '\0') {
+        return (char *)str;
     }
 
     return NULL;
 }
 
-char* strrchr(const char* str, int ch) {
-    if (!str)
+char *strrchr(const char *str, int ch) {
+    if (!str) {
         return NULL;
+    }
 
-    const char* ptr = NULL;
+    const char *ptr = (char)ch == '\0' ? str + strlen(str) : NULL;
 
     while (*str) {
-        if (*str == (char)ch)
+        if (*str == (char)ch) {
             ptr = str;
+        }
 
         str++;
     }
 
-    return (char*)ptr;
+    return (char *)ptr;
 }
 
-size_t strcspn(const char* dest, const char* src) {
-    const char* d = dest;
+char *index(const char *str, int ch) {
+    return strchr(str, ch);
+}
+
+char *rindex(const char *str, int ch) {
+    return strrchr(str, ch);
+}
+
+char *strstr(const char *haystack, const char *needle) {
+    if (!haystack || !needle) {
+        return NULL;
+    }
+
+    if (!needle[0]) {
+        return (char *)haystack;
+    }
+
+    for (const char *cursor = haystack; *cursor; cursor++) {
+        const char *h = cursor;
+        const char *n = needle;
+
+        while (*h && *n && *h == *n) {
+            h++;
+            n++;
+        }
+
+        if (!*n) {
+            return (char *)cursor;
+        }
+    }
+
+    return NULL;
+}
+
+size_t strcspn(const char *dest, const char *src) {
+    const char *d = dest;
 
     while (*d) {
-        const char* s = src;
+        const char *s = src;
 
         while (*s) {
-            if (*d == *s)
+            if (*d == *s) {
                 return (size_t)(d - dest);
+            }
 
             s++;
         }
@@ -156,20 +218,42 @@ size_t strcspn(const char* dest, const char* src) {
     return (size_t)(d - dest);
 }
 
+char *strpbrk(const char *str, const char *delim) {
+    while (*str) {
+        if (strchr(delim, *str)) {
+            return (char *)str;
+        }
 
-void* memset(void* dest, int val, size_t len) {
-    unsigned char* ptr = (unsigned char*)dest;
+        str++;
+    }
 
-    while (len--)
-        *ptr++ = (unsigned char)val;
+    return NULL;
+}
+
+
+void *memset(void *dest, int val, size_t len) {
+    unsigned char c = (unsigned char)val;
+    unsigned char *d = (unsigned char *)dest;
+
+    unsigned long fill = c;
+    for (size_t i = 8; i < sizeof(unsigned long) * 8; i <<= 1) {
+        fill |= fill << i;
+    }
+
+    while (len >= sizeof(unsigned long)) {
+        *(unsigned long *)d = fill;
+        d += sizeof(unsigned long);
+        len -= sizeof(unsigned long);
+    }
+
+    while (len--) {
+        *d++ = c;
+    }
 
     return dest;
 }
 
-int strlen(const char* str) {
-    if (!str)
-        return 0;
-
+size_t strlen(const char *str) {
     int len = 0;
     while (*str) {
         len++;
@@ -180,21 +264,24 @@ int strlen(const char* str) {
 }
 
 
-void* memchr(const void* ptr, int ch, size_t len) {
-    const char* str = (const char*)ptr;
+void *memchr(const void *ptr, int ch, size_t len) {
+    const char *str = (const char *)ptr;
 
-    for (size_t i = 0; i < len; i++)
-        if (str[i] == ch)
-            return (void*)&str[i];
+    for (size_t i = 0; i < len; i++) {
+        if ((unsigned char)str[i] == (unsigned char)ch) {
+            return (void *)&str[i];
+        }
+    }
 
     return NULL;
 }
 
 
-static bool _is_delim(char c, const char* delim) {
+static bool _is_delim(char c, const char *delim) {
     while (*delim) {
-        if (c == *delim)
+        if (c == *delim) {
             return true;
+        }
 
         delim++;
     }
@@ -202,12 +289,14 @@ static bool _is_delim(char c, const char* delim) {
     return false;
 }
 
-char* strtok_r(char* str, const char* delim, char** save_ptr) {
-    if (!str)
+char *strtok_r(char *str, const char *delim, char **save_ptr) {
+    if (!str) {
         str = *save_ptr;
+    }
 
-    if (!str)
+    if (!str) {
         return NULL;
+    }
 
     if (*str == '\0') {
         *save_ptr = NULL;
@@ -215,8 +304,9 @@ char* strtok_r(char* str, const char* delim, char** save_ptr) {
     }
 
     // Trim leading deliminators
-    while (*str && _is_delim(*str, delim))
+    while (*str && _is_delim(*str, delim)) {
         str++;
+    }
 
     if (*str == '\0') {
         *save_ptr = str;
@@ -224,9 +314,10 @@ char* strtok_r(char* str, const char* delim, char** save_ptr) {
     }
 
     // Find the end of the token
-    char* end = str;
-    while (*end && !_is_delim(*end, delim))
+    char *end = str;
+    while (*end && !_is_delim(*end, delim)) {
         end++;
+    }
 
     if (*end == '\0') {
         *save_ptr = end;
@@ -239,33 +330,37 @@ char* strtok_r(char* str, const char* delim, char** save_ptr) {
     return str;
 }
 
-char* strtok(char* restrict str, const char* restrict delim) {
-    static char* save = NULL;
+char *strtok(char *restrict str, const char *restrict delim) {
+    static char *save = NULL;
     return strtok_r(str, delim, &save);
 }
 
 
-char* strndup(const char* str, size_t size) {
-    if (!size || !str)
+char *strndup(const char *str, size_t size) {
+    if (!str) {
         return NULL;
-
-    char* dest = malloc(size + 1);
-
-    if (dest) {
-        strncpy(dest, str, size);
-        dest[size] = '\0';
     }
 
+    char *dest = malloc(size + 1);
+    if (!dest) {
+        return NULL;
+    }
+
+    strncpy(dest, str, size);
+    dest[size] = '\0';
     return dest;
 }
 
-// NOTE:  This function triggers a false positive in gcc's static analyser
-char* strdup(const char* str) {
+char *strdup(const char *str) {
+    if (!str) {
+        return NULL;
+    }
+
     return strndup(str, strlen(str));
 }
 
 
-static char* error_strings[] = {
+static char *error_strings[] = {
     [0] = "No error",
     [E2BIG] = "Argument list too long",
     [EACCES] = "Permission denied",
@@ -350,9 +445,10 @@ static char* error_strings[] = {
 
 #define ERROR_STRINGS_COUNT (sizeof(error_strings) / sizeof(error_strings[0]))
 
-char* strerror(int errnum) {
-    if (errnum >= 0 && errnum < (int)ERROR_STRINGS_COUNT)
-        return (char*)error_strings[errnum];
+char *strerror(int errnum) {
+    if (errnum >= 0 && errnum < (int)ERROR_STRINGS_COUNT) {
+        return (char *)error_strings[errnum];
+    }
 
-    return (char*)"Unknown error";
+    return (char *)"Unknown error";
 }

@@ -1,260 +1,530 @@
-#include "stdlib.h"
-
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <float.h>
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
-#include "signal.h"
-#include "unistd.h"
+#define ATEXIT_MAX_FUNCS 32
 
-#define ALIGNMENT        sizeof(void*)
-#define ALIGN_SIZE(size) (((size) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
+static void (*atexit_funcs[ATEXIT_MAX_FUNCS])(void);
+static size_t atexit_count = 0;
 
-#define MMAP_CHUNK_SIZE (16 * 1024)
-#define MIN_BLOCK_SIZE  ALIGN_SIZE(sizeof(struct block_header))
+static bool env_owned = false;
+static size_t env_count = 0;
 
-typedef struct block_header {
-    size_t size;
-    bool is_free;
-
-    struct block_header* next;
-    struct block_header* prev;
-} block_header;
-
-
-static block_header* free_list_head = NULL;
-
-
-static inline block_header* _get_header(void* ptr) {
-    if (!ptr)
-        return NULL;
-
-    return (block_header*)((char*)ptr - sizeof(block_header));
+static long double _ld_abs(long double value) {
+    return value < 0.0L ? -value : value;
 }
 
-static void _add_to_free_list(block_header* block) {
-    block_header* current = free_list_head;
-    block_header* prev = NULL;
-
-    while (current && current < block) {
-        prev = current;
-        current = current->next;
+static int _env_name_valid(const char *name) {
+    if (!name || !name[0]) {
+        return 0;
     }
 
-    block->prev = prev;
-    block->next = current;
-
-    if (prev)
-        prev->next = block;
-    else
-        free_list_head = block;
-
-    if (current)
-        current->prev = block;
-}
-
-static void _remove_from_free_list(block_header* block) {
-    if (block->prev)
-        block->prev->next = block->next;
-    else
-        free_list_head = block->next;
-
-    if (block->next)
-        block->next->prev = block->prev;
-
-    block->next = NULL;
-    block->prev = NULL;
-}
-
-static block_header* _find_free_block(size_t size) {
-    block_header* current = free_list_head;
-
-    while (current) {
-        if (current->is_free && current->size >= size)
-            return current;
-
-        current = current->next;
+    for (const char *cursor = name; *cursor; cursor++) {
+        if (*cursor == '=') {
+            return 0;
+        }
     }
 
-    return NULL;
+    return 1;
 }
 
-static block_header* _get_memory(size_t size) {
-    size_t total_size = ALIGN_SIZE(size + sizeof(block_header));
-
-    if (total_size < MMAP_CHUNK_SIZE)
-        total_size = MMAP_CHUNK_SIZE;
-
-    void* ptr = mmap(NULL, total_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-
-    if (!ptr)
-        return NULL;
-
-    block_header* block = (block_header*)ptr;
-
-    block->size = total_size - sizeof(block_header);
-    block->is_free = true;
-    block->next = NULL;
-    block->prev = NULL;
-
-    _add_to_free_list(block);
-
-    return block;
-}
-
-static void _split_block(block_header* block, size_t size) {
-    if (block->size < size + sizeof(block_header) + MIN_BLOCK_SIZE)
-        return;
-
-    block_header* new_block = (block_header*)((void*)block + sizeof(block_header) + size);
-
-    new_block->size = block->size - size - sizeof(block_header);
-    new_block->is_free = true;
-    new_block->prev = NULL;
-    new_block->next = NULL;
-
-    block->size = size;
-
-    _add_to_free_list(new_block);
-}
-
-static void _coalesce_block(block_header* block) {
-    block_header* next = block->next;
-    if (next && (char*)block + sizeof(block_header) + block->size == (char*)next) {
-        block->size += sizeof(block_header) + next->size;
-        _remove_from_free_list(next);
+static size_t _count_env(char **env) {
+    size_t count = 0;
+    if (!env) {
+        return 0;
     }
 
-    block_header* prev = block->prev;
-    if (prev && (char*)prev + sizeof(block_header) + prev->size == (char*)block) {
-        prev->size += sizeof(block_header) + block->size;
-        _remove_from_free_list(block);
+    while (env[count]) {
+        count++;
     }
+    return count;
 }
 
-
-void* malloc(size_t size) {
-    if (!size)
-        return NULL;
-
-    size = ALIGN_SIZE(size);
-
-    block_header* block = _find_free_block(size);
-
-    if (!block) {
-        block = _get_memory(size);
-
-        if (!block)
-            return NULL;
+static int _ensure_owned_env(void) {
+    if (env_owned) {
+        return 0;
     }
 
-    _remove_from_free_list(block);
-    _split_block(block, size);
-
-    block->is_free = false;
-
-    return (void*)((char*)block + sizeof(block_header));
-}
-
-void* calloc(size_t num, size_t size) {
-    if (!num || !size)
-        return NULL;
-
-    if (SIZE_MAX / num < size)
-        return NULL;
-
-    size_t total = num * size;
-    void* ptr = malloc(total);
-
-    if (ptr)
-        memset(ptr, 0, total);
-
-    return ptr;
-}
-
-void* realloc(void* ptr, size_t size) {
-    if (!ptr)
-        return malloc(size);
-
-    if (!size) {
-        free(ptr);
-        return NULL;
-    }
-
-    block_header* old_block = _get_header(ptr);
-
-    size_t old_size = old_block->size;
-    size_t new_size = ALIGN_SIZE(size);
-
-    if (new_size <= old_size)
-        return ptr;
-
-    void* new_ptr = malloc(new_size);
-
-    if (!new_ptr)
-        return NULL;
-
-    memcpy(new_ptr, ptr, old_size);
-    free(ptr);
-
-    return new_ptr;
-}
-
-void free(void* ptr) {
-    if (!ptr)
-        return;
-
-    block_header* block = _get_header(ptr);
-
-    if (block->is_free)
-        return;
-
-    block->is_free = true;
-
-    _add_to_free_list(block);
-    _coalesce_block(block);
-}
-
-
-[[noreturn]]
-void abort(void) {
-    raise(SIGABRT);
-
-    _exit(1);
-    __builtin_unreachable();
-}
-
-
-static void (*__atexit_funcs[ATEXIT_MAX])(void) = {NULL};
-static int __atexit_count = 0;
-
-void __handle_atexit(void) {
-    while (__atexit_count > 0)
-        __atexit_funcs[--__atexit_count]();
-}
-
-int atexit(void (*func)(void)) {
-    if (__atexit_count >= ATEXIT_MAX || !func)
+    size_t count = _count_env(environ);
+    char **copy = calloc(count + 1, sizeof(char *));
+    if (!copy) {
+        errno = ENOMEM;
         return -1;
+    }
 
-    __atexit_funcs[__atexit_count++] = func;
+    for (size_t i = 0; i < count; i++) {
+        copy[i] = strdup(environ[i]);
+        if (!copy[i]) {
+            for (size_t j = 0; j < i; j++) {
+                free(copy[j]);
+            }
+            free(copy);
+            errno = ENOMEM;
+            return -1;
+        }
+    }
 
+    copy[count] = NULL;
+    environ = copy;
+    env_count = count;
+    env_owned = true;
     return 0;
 }
 
+static int _env_match(const char *entry, const char *name, size_t name_len) {
+    return
+        entry &&
+        !strncmp(entry, name, name_len) &&
+        entry[name_len] == '=';
+}
 
-char* getenv(const char* name) {
-    size_t len = strlen(name);
+static int _find_env_index(const char *name) {
+    if (!environ || !name) {
+        return -1;
+    }
 
-    if (!len)
+    size_t name_len = strlen(name);
+    for (size_t i = 0; i < env_count; i++) {
+        if (_env_match(environ[i], name, name_len)) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+int atexit(void (*fn)(void)) {
+    if (!fn) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (atexit_count >= ATEXIT_MAX_FUNCS) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    atexit_funcs[atexit_count++] = fn;
+    return 0;
+}
+
+void _Exit(int status) {
+    _exit(status);
+
+    for (;;) {
+        ;
+    }
+}
+
+void exit(int status) {
+    while (atexit_count) {
+        void (*fn)(void) = atexit_funcs[--atexit_count];
+        if (fn) {
+            fn();
+        }
+    }
+
+    _Exit(status);
+}
+
+char *getenv(const char *name) {
+    if (!_env_name_valid(name)) {
         return NULL;
+    }
 
-    for (char** env = environ; *env; env++) {
-        if (!strncmp(*env, name, len) && (*env)[len] == '=')
-            return *env + len + 1;
+    size_t name_len = strlen(name);
+    if (!environ) {
+        return NULL;
+    }
+
+    for (size_t i = 0; environ[i]; i++) {
+        if (_env_match(environ[i], name, name_len)) {
+            return environ[i] + name_len + 1;
+        }
     }
 
     return NULL;
+}
+
+int setenv(const char *name, const char *value, int overwrite) {
+    if (!_env_name_valid(name) || !value) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (_ensure_owned_env() < 0) {
+        return -1;
+    }
+
+    int idx = _find_env_index(name);
+    if (idx >= 0 && !overwrite) {
+        return 0;
+    }
+
+    size_t name_len = strlen(name);
+    size_t value_len = strlen(value);
+    char *entry = malloc(name_len + 1 + value_len + 1);
+    if (!entry) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    memcpy(entry, name, name_len);
+    entry[name_len] = '=';
+    memcpy(entry + name_len + 1, value, value_len + 1);
+
+    if (idx >= 0) {
+        free(environ[idx]);
+        environ[idx] = entry;
+        return 0;
+    }
+
+    char **new_env = realloc(environ, (env_count + 2) * sizeof(char *));
+    if (!new_env) {
+        free(entry);
+        errno = ENOMEM;
+        return -1;
+    }
+
+    environ = new_env;
+    environ[env_count++] = entry;
+    environ[env_count] = NULL;
+    return 0;
+}
+
+int unsetenv(const char *name) {
+    if (!_env_name_valid(name)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (_ensure_owned_env() < 0) {
+        return -1;
+    }
+
+    size_t name_len = strlen(name);
+    size_t dst = 0;
+
+    for (size_t src = 0; src < env_count; src++) {
+        if (_env_match(environ[src], name, name_len)) {
+            free(environ[src]);
+            continue;
+        }
+
+        environ[dst++] = environ[src];
+    }
+
+    env_count = dst;
+    environ[env_count] = NULL;
+    return 0;
+}
+
+static int _append_component(char *out, size_t out_cap, const char *comp) {
+    if (!out || !comp || !out_cap) {
+        return -1;
+    }
+
+    size_t out_len = strlen(out);
+    size_t comp_len = strlen(comp);
+
+    if (
+        out_len + (out_len > 1 ? 1 : 0) + comp_len + 1 > out_cap
+    ) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if (out_len > 1 && out[out_len - 1] != '/') {
+        out[out_len++] = '/';
+    }
+
+    memcpy(out + out_len, comp, comp_len + 1);
+    return 0;
+}
+
+static void _pop_component(char *out) {
+    size_t len = strlen(out);
+    if (len <= 1) {
+        strcpy(out, "/");
+        return;
+    }
+
+    while (len > 1 && out[len - 1] == '/') {
+        out[--len] = '\0';
+    }
+
+    while (len > 1 && out[len - 1] != '/') {
+        out[--len] = '\0';
+    }
+
+    if (!len) {
+        strcpy(out, "/");
+    }
+}
+
+char *realpath(const char *path, char *resolved_path) {
+    if (!path || !path[0]) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    char combined[PATH_MAX] = {0};
+    if (path[0] == '/') {
+        if (strlen(path) >= sizeof(combined)) {
+            errno = ENAMETOOLONG;
+            return NULL;
+        }
+        strcpy(combined, path);
+    } else {
+        if (!getcwd(combined, sizeof(combined))) {
+            return NULL;
+        }
+
+        size_t len = strlen(combined);
+        if (len + 1 + strlen(path) + 1 > sizeof(combined)) {
+            errno = ENAMETOOLONG;
+            return NULL;
+        }
+
+        if (len > 1 && combined[len - 1] != '/') {
+            combined[len++] = '/';
+            combined[len] = '\0';
+        }
+
+        strcat(combined, path);
+    }
+
+    char work[PATH_MAX] = {0};
+    strcpy(work, combined);
+
+    char normalized[PATH_MAX] = "/";
+    char *save = NULL;
+    char *tok = strtok_r(work, "/", &save);
+    while (tok) {
+        if (!strcmp(tok, ".") || !tok[0]) {
+            tok = strtok_r(NULL, "/", &save);
+            continue;
+        }
+
+        if (!strcmp(tok, "..")) {
+            _pop_component(normalized);
+            tok = strtok_r(NULL, "/", &save);
+            continue;
+        }
+
+        if (_append_component(normalized, sizeof(normalized), tok) < 0) {
+            return NULL;
+        }
+
+        tok = strtok_r(NULL, "/", &save);
+    }
+
+    struct stat st = {0};
+    if (stat(normalized, &st) < 0) {
+        return NULL;
+    }
+
+    char *out = resolved_path;
+    if (!out) {
+        out = malloc(PATH_MAX);
+        if (!out) {
+            errno = ENOMEM;
+            return NULL;
+        }
+    }
+
+    if (strlen(normalized) >= PATH_MAX) {
+        errno = ENAMETOOLONG;
+        if (!resolved_path) {
+            free(out);
+        }
+        return NULL;
+    }
+
+    strcpy(out, normalized);
+    return out;
+}
+
+long double strtold(char const *restrict str, char **restrict endptr) {
+    if (!str) {
+        errno = EINVAL;
+        if (endptr) {
+            *endptr = NULL;
+        }
+        return 0.0L;
+    }
+
+    const char *cursor = str;
+    while (isspace((unsigned char)*cursor)) {
+        cursor++;
+    }
+
+    int sign = 1;
+    if (*cursor == '+' || *cursor == '-') {
+        if (*cursor == '-') {
+            sign = -1;
+        }
+        cursor++;
+    }
+
+    long double value = 0.0L;
+    bool has_digits = false;
+
+    while (isdigit((unsigned char)*cursor)) {
+        has_digits = true;
+        value = value * 10.0L + (long double)(*cursor - '0');
+        cursor++;
+    }
+
+    if (*cursor == '.') {
+        long double scale = 0.1L;
+        cursor++;
+
+        while (isdigit((unsigned char)*cursor)) {
+            has_digits = true;
+            value += (long double)(*cursor - '0') * scale;
+            scale *= 0.1L;
+            cursor++;
+        }
+    }
+
+    if (!has_digits) {
+        if (endptr) {
+            *endptr = (char *)str;
+        }
+        return 0.0L;
+    }
+
+    int exp_sign = 1;
+    int exp_value = 0;
+
+    const char *exp_mark = cursor;
+    if (*cursor == 'e' || *cursor == 'E') {
+        cursor++;
+
+        if (*cursor == '+' || *cursor == '-') {
+            if (*cursor == '-') {
+                exp_sign = -1;
+            }
+            cursor++;
+        }
+
+        const char *exp_start = cursor;
+        while (isdigit((unsigned char)*cursor)) {
+            if (exp_value < 1000000) {
+                exp_value = exp_value * 10 + (*cursor - '0');
+            }
+            cursor++;
+        }
+
+        if (cursor == exp_start) {
+            cursor = exp_mark;
+            exp_value = 0;
+            exp_sign = 1;
+        }
+    }
+
+    int exponent = exp_sign * exp_value;
+    bool overflow = false;
+    bool underflow = false;
+
+    if (exponent > 0) {
+        for (int i = 0; i < exponent; i++) {
+            if (value > LDBL_MAX / 10.0L) {
+                value = LDBL_MAX;
+                overflow = true;
+                break;
+            }
+
+            value *= 10.0L;
+        }
+    } else if (exponent < 0) {
+        for (int i = exponent; i < 0; i++) {
+            value /= 10.0L;
+            if (value != 0.0L && _ld_abs(value) < LDBL_MIN) {
+                underflow = true;
+            }
+        }
+    }
+
+    if (overflow || underflow) {
+        errno = ERANGE;
+    }
+
+    if (endptr) {
+        *endptr = (char *)cursor;
+    }
+
+    return sign < 0 ? -value : value;
+}
+
+double strtod(char const *restrict str, char **restrict endptr) {
+    long double value = strtold(str, endptr);
+    long double abs_value = _ld_abs(value);
+
+    if (abs_value > (long double)DBL_MAX) {
+        errno = ERANGE;
+        return value < 0 ? -DBL_MAX : DBL_MAX;
+    }
+
+    if (abs_value != 0.0L && abs_value < (long double)DBL_MIN) {
+        errno = ERANGE;
+    }
+
+    return (double)value;
+}
+
+float strtof(char const *restrict str, char **restrict endptr) {
+    long double value = strtold(str, endptr);
+    long double abs_value = _ld_abs(value);
+
+    if (abs_value > (long double)FLT_MAX) {
+        errno = ERANGE;
+        return value < 0 ? -FLT_MAX : FLT_MAX;
+    }
+
+    if (abs_value != 0.0L && abs_value < (long double)FLT_MIN) {
+        errno = ERANGE;
+    }
+
+    return (float)value;
+}
+
+double atof(char const *str) {
+    return strtod(str, NULL);
+}
+
+int system(const char *command) {
+    if (!command) {
+        return access("/bin/sh", X_OK) == 0;
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        return -1;
+    }
+
+    if (!pid) {
+        char *argv[] = {"/bin/sh", "-c", (char *)command, NULL};
+        execve("/bin/sh", argv, environ);
+        _Exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return -1;
+        }
+    }
+
+    return status;
 }

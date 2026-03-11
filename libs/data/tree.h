@@ -6,72 +6,37 @@
 
 // n-ary tree
 typedef struct tree_node {
-    struct tree_node* parent;
-    void* data;
+    struct tree_node *parent;
+    void *data;
 
-    linked_list* children;
-} tree_node;
+    linked_list_t *children;
+} tree_node_t;
 
 typedef struct tree {
     size_t nodes;
-    tree_node* root;
-} tree;
+    tree_node_t *root;
+} tree_t;
 
 
-// Simple binary tree
-// typedef struct bin_tree_node {
-//     struct bin_tree_node* parent;
-//
-//     void* data;
-//
-//     struct bin_tree_node* left;
-//     struct bin_tree_node* right;
-// } bin_tree_node;
-//
-// typedef struct bin_tree {
-//     size_t nodes;
-//     bin_tree_node* root;
-// } bin_tree;
+typedef bool (*tree_comp_fn)(const void *data, void *private);
+typedef bool (*tree_callback_fn)(tree_node_t *node);
+typedef bool (*tree_foreach_fn)(const void *data, void *private);
 
+tree_t *tree_create_rooted(tree_node_t *root);
+tree_t *tree_create(void *root_data);
+void tree_destroy(tree_t *root);
 
-// Red black tree
-// #define RBT_RED   ('R')
-// #define RBT_BLACK ('B')
-//
-// typedef struct rb_tree_node {
-//     struct rb_tree_node* parent;
-//
-//     char color;
-//     void* data;
-//
-//     struct rb_tree_node* left;
-//     struct rb_tree_node* right;
-// } rb_tree_node;
-//
-// typedef struct rb_tree {
-//     size_t nodes;
-//     rb_tree_node* root;
-// } rb_tree;
+tree_node_t *tree_create_node(void *data);
+void tree_destroy_node(tree_node_t *node);
 
-typedef bool (*tree_comp_fn)(const void* data, void* private);
-typedef bool (*tree_callback_fn)(tree_node* node);
-typedef bool (*tree_foreach_fn)(const void* data, void* private);
+void tree_prune(tree_node_t *parent);
+void tree_prune_callback(tree_node_t *parent, tree_callback_fn callback);
 
-tree* tree_create_rooted(tree_node* root);
-tree* tree_create(void* root_data);
-void tree_destroy(tree* root);
+bool tree_insert_child(tree_node_t *parent, tree_node_t *child);
+bool tree_remove_child(tree_node_t *parent, tree_node_t *child);
 
-tree_node* tree_create_node(void* data);
-void tree_destroy_node(tree_node* node);
+tree_node_t *tree_find_comp(tree_t *root, tree_comp_fn comp, void *private);
+tree_node_t *tree_find(tree_t *root, void *data);
 
-void tree_prune(tree_node* parent);
-void tree_prune_callback(tree_node* parent, tree_callback_fn callback);
-
-bool tree_insert_child(tree_node* parent, tree_node* child);
-bool tree_remove_child(tree_node* parent, tree_node* child);
-
-tree_node* tree_find_comp(tree* root, tree_comp_fn comp, void* private);
-tree_node* tree_find(tree* root, void* data);
-
-int tree_foreach_node(tree_node* node, tree_foreach_fn callback, void* data);
-int tree_foreach(tree* tree, tree_foreach_fn callback, void* data);
+int tree_foreach_node(tree_node_t *node, tree_foreach_fn callback, void *data);
+int tree_foreach(tree_t *tree, tree_foreach_fn callback, void *data);

@@ -9,6 +9,10 @@
 -ffreestanding
 -nostdinc
 -Ilibs/libc
+-Ilibs/libc_ext
+-Ikernel
+-Ikernel/arch
+-Ikernel/arch/x86
 -Ilibs
 -Ikernel
--DEXTEND_LIBC
+-DEXTERNAL_ALLOC

@@ -1,0 +1,57 @@
+
+bits 32
+section .text
+; Enter long mode and jump to the kernel entry point
+
+; void jump_to_kernel_64(u64 entry, u64 boot_info, u64 stack);
+global jump_to_kernel_64
+jump_to_kernel_64:
+    lgdt [gdt_desc_64]
+
+    jmp 0x08:.long_mode
+
+bits 64
+.long_mode:
+
+    cli
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov fs, ax
+    mov gs, ax
+
+    mov rbx, qword [esp+4]
+    mov rdi, qword [esp+12]
+    mov rsp, qword [esp+20]
+    and rsp, -16
+
+    jmp rbx
+
+halt:
+    hlt
+    jmp halt
+
+align 8
+gdt_desc_64:
+.size: dw gdt_64.end - gdt_64 - 1
+.addr: dd gdt_64
+
+gdt_64:
+.null:
+    dq 0x00
+.longmode_code:
+    dw 0xffff
+    dw 0x0000
+    db 0x00
+    db 0x9a
+    db 0xaf
+    db 0x00
+.longmode_data:
+    dw 0xffff
+    dw 0x0000
+    db 0x00
+    db 0x92
+    db 0xcf
+    db 0x00
+.end:

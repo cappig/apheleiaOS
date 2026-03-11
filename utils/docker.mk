@@ -7,4 +7,4 @@ docker_build:
 	docker run -it \
 		-u `stat -c "%u:%g" .` \
 		-v "$$PWD":/usr/src/apheleia \
-		apheleia:latest $(MAKE)
+		apheleia:latest $(MAKE) GNU_CC_x86_64=gcc GNU_CC_x86_32=gcc

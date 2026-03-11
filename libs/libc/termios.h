@@ -28,7 +28,7 @@ struct winsize {
     unsigned short ws_ypixel;
 };
 
-#ifdef EXTEND_LIBC
+#ifndef NO_LIBC_EXTENTIONS
 typedef struct termios termios_t;
 typedef struct winsize winsize_t;
 #endif
@@ -154,10 +154,21 @@ enum termios_baud {
     B115200 = 115200,
 };
 
+enum termios_set_action {
+    TCSANOW = 0,
+    TCSADRAIN = 1,
+    TCSAFLUSH = 2,
+};
+
+enum termios_flush_queue {
+    TCIFLUSH = 0,
+    TCOFLUSH = 1,
+    TCIOFLUSH = 2,
+};
 
 // Some sane defaults for termios to use
-#ifdef EXTEND_LIBC
-inline termios_t* __termios_default_init(termios_t* tos) {
+#ifndef NO_LIBC_EXTENTIONS
+static inline termios_t *__termios_default_init(termios_t *tos) {
     if (!tos)
         return tos;
 
@@ -177,7 +188,7 @@ inline termios_t* __termios_default_init(termios_t* tos) {
     tos->c_cc[VMIN] = 1;
 
     tos->c_iflag = BRKINT | ICRNL;
-    tos->c_oflag = OPOST;
+    tos->c_oflag = OPOST | ONLCR;
     tos->c_cflag = CS8 | CREAD | HUPCL;
     tos->c_lflag = ECHO | ECHOE | ECHOK | ECHOCTL | ICANON | IEXTEN | ISIG;
 
@@ -186,4 +197,14 @@ inline termios_t* __termios_default_init(termios_t* tos) {
 
     return tos;
 }
+#endif
+
+#ifndef _KERNEL
+int tcgetattr(int fd, struct termios *tos);
+int tcsetattr(int fd, int optional_actions, const struct termios *tos);
+speed_t cfgetispeed(const struct termios *tos);
+speed_t cfgetospeed(const struct termios *tos);
+int cfsetispeed(struct termios *tos, speed_t speed);
+int cfsetospeed(struct termios *tos, speed_t speed);
+void cfmakeraw(struct termios *tos);
 #endif

@@ -1,34 +1,32 @@
 #include "bitmap.h"
 
-#include <base/addr.h>
 #include <base/macros.h>
 #include <base/types.h>
 #include <data/bitmap.h>
+#include <limits.h>
+#include <stdint.h>
 #include <string.h>
-#include <x86/e820.h>
-
-static inline usize _to_block(bitmap_alloc* alloc, void* ptr) {
-    return ((u64)ptr - (uptr)alloc->chuck_start) / alloc->block_size;
-}
-
-static inline bitmap_word* _to_ptr(bitmap_alloc* alloc, usize block) {
-    return (void*)((uptr)alloc->chuck_start + (block * alloc->block_size));
-}
 
 
-bool bitmap_alloc_init(bitmap_alloc* alloc, void* chunk_start, usize chunk_size, usize block_size) {
+bool bitmap_alloc_init(
+    bitmap_allocator_t *alloc,
+    void *chunk_start,
+    size_t chunk_size,
+    size_t block_size
+) {
     alloc->chuck_start = chunk_start;
     alloc->chunk_size = chunk_size;
 
     alloc->block_size = block_size;
     alloc->block_count = chunk_size / block_size;
-    alloc->word_count = alloc->block_count / BITMAP_WORD_SIZE;
+    alloc->word_count = DIV_ROUND_UP(alloc->block_count, BITMAP_WORD_SIZE);
 
-    usize bitmap_bytes = alloc->block_count / CHAR_BIT;
-    usize bitmap_blocks = DIV_ROUND_UP(bitmap_bytes, block_size);
+    size_t bitmap_bytes = DIV_ROUND_UP(alloc->block_count, CHAR_BIT);
+    size_t bitmap_blocks = DIV_ROUND_UP(bitmap_bytes, block_size);
 
-    if (chunk_size <= bitmap_bytes)
+    if (chunk_size <= bitmap_bytes) {
         return false;
+    }
 
     // Place the bitmap at the start of the chunk
     alloc->bitmap = chunk_start;
@@ -39,134 +37,169 @@ bool bitmap_alloc_init(bitmap_alloc* alloc, void* chunk_start, usize chunk_size,
 
     // Mark the space occupied by the bitmap itself as used
     bitmap_set_region(alloc->bitmap, 0, bitmap_blocks);
+    alloc->next_fit_block = bitmap_blocks;
 
     return true;
 }
 
-bool bitmap_alloc_init_mmap(bitmap_alloc* alloc, e820_map* mmap, usize block_size) {
-    u64 mem_base = (u64)-1;
-    u64 mem_top = 0;
-
-    for (usize i = 0; i < mmap->count; i++) {
-        e820_entry* current = &mmap->entries[i];
-
-        if (current->type != E820_AVAILABLE)
-            continue;
-
-        u64 top = current->address + current->size;
-        u64 base = current->address;
-
-        if (mem_base > base)
-            mem_base = base;
-
-        if (mem_top < top)
-            mem_top = top;
+static int first_fit_in_range(
+    bitmap_allocator_t *alloc,
+    size_t blocks,
+    size_t begin,
+    size_t end
+) {
+    if (!alloc || !blocks || begin >= end) {
+        return -1;
     }
 
-    u64 mem_size = mem_top - mem_base;
+    size_t region_bottom = 0;
+    size_t region_size = 0;
 
-    // Shift the base up so that the addresses end up aligned to the size of the block
-    mem_base = ALIGN(mem_base, block_size);
+    for (size_t block = begin; block < end; block++) {
+        size_t bit = block % BITMAP_WORD_SIZE;
+        size_t word = block / BITMAP_WORD_SIZE;
+        bitmap_word_t bits = alloc->bitmap[word];
 
-    alloc->chuck_start = (void*)mem_base;
-    alloc->chunk_size = mem_size;
-
-    alloc->block_size = block_size;
-    alloc->block_count = mem_size / block_size;
-    alloc->word_count = alloc->block_count / BITMAP_WORD_SIZE;
-
-    usize bitmap_bytes = alloc->block_count / CHAR_BIT;
-
-    if (mem_size <= bitmap_bytes)
-        return false;
-
-    // Find some space for the bitmap
-    void* bitmap_addr = mmap_alloc_inner(mmap, bitmap_bytes, E820_ALLOC, 1, (uptr)-1);
-    if (!bitmap_addr)
-        return false;
-
-    alloc->bitmap = (bitmap_word*)ID_MAPPED_VADDR(bitmap_addr);
-
-    // Mark the whole bitmap as used
-    memset(alloc->bitmap, (unsigned int)-1, bitmap_bytes);
-    alloc->free_blocks = 0;
-
-    for (usize i = 0; i < mmap->count; i++) {
-        e820_entry* current = &mmap->entries[i];
-
-        u64 top = current->address + current->size;
-        u64 base = current->address;
-
-        if (top > mem_top || base < mem_base)
-            continue;
-
-        usize blocks = current->size / block_size;
-        usize start_block = _to_block(alloc, (void*)current->address);
-
-        if (current->type == E820_AVAILABLE) {
-            alloc->free_blocks += blocks;
-            bitmap_clear_region(alloc->bitmap, start_block, blocks);
-        } else {
-            // Do we need this?
-            bitmap_set_region(alloc->bitmap, start_block, blocks);
-        }
-    }
-
-    return true;
-}
-
-
-static isize _first_fit(bitmap_alloc* alloc, usize blocks) {
-    usize region_bottom = 0;
-    usize region_size = 0;
-
-    for (usize word = 0; word < alloc->word_count; word++) {
-        if (alloc->bitmap[word] == (bitmap_word)-1) {
+        if (bit == 0 && bits == (bitmap_word_t)-1 && (block + BITMAP_WORD_SIZE) <= end) {
             region_size = 0;
-            region_bottom = (word + 1) * BITMAP_WORD_SIZE;
+            block += BITMAP_WORD_SIZE - 1;
             continue;
         }
 
-        for (usize bit = 0; bit < BITMAP_WORD_SIZE; bit++) {
-            if (alloc->bitmap[word] & (1 << bit)) {
+        if (bits & ((bitmap_word_t)1U << bit)) {
+            region_size = 0;
+            continue;
+        }
+
+        if (!region_size) {
+            region_bottom = block;
+        }
+
+        region_size++;
+
+        if (region_size == blocks) {
+            return (int)region_bottom;
+        }
+    }
+
+    return -1;
+}
+
+static int _first_fit(bitmap_allocator_t *alloc, size_t blocks) {
+    if (!alloc || !blocks) {
+        return -1;
+    }
+
+    size_t start = alloc->next_fit_block;
+    if (start >= alloc->block_count) {
+        start = 0;
+    }
+
+    int block = first_fit_in_range(alloc, blocks, start, alloc->block_count);
+    if (block < 0 && start) {
+        block = first_fit_in_range(alloc, blocks, 0, start);
+    }
+
+    return block;
+}
+
+static int _last_fit(bitmap_allocator_t *alloc, size_t blocks) {
+    if (!alloc || !blocks) {
+        return -1;
+    }
+
+    size_t region_size = 0;
+    size_t region_top = alloc->block_count;
+
+    for (size_t word = alloc->word_count; word > 0; word--) {
+        size_t word_index = word - 1;
+
+        if (alloc->bitmap[word_index] == (bitmap_word_t)-1) {
+            region_size = 0;
+            region_top = word_index * BITMAP_WORD_SIZE;
+            continue;
+        }
+
+        for (size_t bit = BITMAP_WORD_SIZE; bit > 0; bit--) {
+            size_t bit_index = bit - 1;
+            size_t block = word_index * BITMAP_WORD_SIZE + bit_index;
+
+            if (block >= alloc->block_count) {
                 region_size = 0;
-                region_bottom = word * BITMAP_WORD_SIZE + bit + 1;
+                region_top = block;
+                continue;
+            }
+
+            if (alloc->bitmap[word_index] & ((bitmap_word_t)1U << bit_index)) {
+                region_size = 0;
+                region_top = block;
                 continue;
             }
 
             region_size++;
 
-            if (region_size == blocks)
-                return region_bottom;
+            if (region_size == blocks) {
+                return (int)(region_top - blocks);
+            }
         }
     }
 
-    return ALLOC_OUT_OF_BLOCKS;
+    return -1;
 }
 
-void* bitmap_alloc_reserve(bitmap_alloc* alloc, usize blocks) {
-    if (!blocks || blocks > alloc->free_blocks)
+void *bitmap_alloc_reserve(bitmap_allocator_t *alloc, size_t blocks) {
+    if (!blocks || blocks > alloc->free_blocks) {
         return NULL;
+    }
 
-    isize first_block = _first_fit(alloc, blocks);
+    int first_block = _first_fit(alloc, blocks);
 
-    if (first_block == ALLOC_OUT_OF_BLOCKS)
+    if (first_block == -1) {
         return NULL;
+    }
 
     bitmap_set_region(alloc->bitmap, first_block, blocks);
+    alloc->next_fit_block = (size_t)first_block + blocks;
+
+    if (alloc->next_fit_block >= alloc->block_count) {
+        alloc->next_fit_block = 0;
+    }
 
     alloc->free_blocks -= blocks;
 
-    return _to_ptr(alloc, first_block);
+    return bitmap_alloc_to_ptr(alloc, first_block);
 }
 
-bool bitmap_alloc_free(bitmap_alloc* alloc, void* ptr, usize blocks) {
-    if (!ptr || !blocks)
-        return false;
+void *bitmap_alloc_reserve_high(bitmap_allocator_t *alloc, size_t blocks) {
+    if (!blocks || blocks > alloc->free_blocks) {
+        return NULL;
+    }
 
-    usize first_block = _to_block(alloc, ptr);
+    int first_block = _last_fit(alloc, blocks);
+
+    if (first_block == -1) {
+        return NULL;
+    }
+
+    bitmap_set_region(alloc->bitmap, (size_t)first_block, blocks);
+
+    alloc->free_blocks -= blocks;
+
+    return bitmap_alloc_to_ptr(alloc, (size_t)first_block);
+}
+
+bool bitmap_alloc_free(bitmap_allocator_t *alloc, void *ptr, size_t blocks) {
+    if (!ptr || !blocks) {
+        return false;
+    }
+
+    size_t first_block = bitmap_alloc_to_block(alloc, ptr);
 
     bitmap_clear_region(alloc->bitmap, first_block, blocks);
+
+    if (first_block < alloc->next_fit_block) {
+        alloc->next_fit_block = first_block;
+    }
 
     alloc->free_blocks += blocks;
 

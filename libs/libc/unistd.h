@@ -1,42 +1,23 @@
 #pragma once
 
-// FIXME: this should be arch generic
-#include <x86/sys.h>
-
-#define SYS_EXIT      0
-#define SYS_READ      1
-#define SYS_PREAD     2
-#define SYS_WRITE     3
-#define SYS_PWRITE    4
-#define SYS_SEEK      5
-#define SYS_OPEN      6
-#define SYS_CLOSE     7
-#define SYS_MKDIR     8
-#define SYS_ACCESS    9
-#define SYS_IOCTL     10
-#define SYS_SIGNAL    11
-#define SYS_SIGRETURN 12
-#define SYS_KILL      13
-#define SYS_WAIT      14
-#define SYS_GETPID    15
-#define SYS_GETPPID   16
-#define SYS_SETPGID   17
-#define SYS_GETPGID   18
-#define SYS_SETSID    19
-#define SYS_FORK      20
-#define SYS_EXECVE    21
-#define SYS_SLEEP     22
-#define SYS_MOUNT     23
-#define SYS_UNMOUNT   24
-#define SYS_MMAP      25
+#include <posix.h>
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
 
-#define R_OK 4
-#define W_OK 2
+#define F_OK 0
 #define X_OK 1
+#define W_OK 2
+#define R_OK 4
+
+#define _SC_ARG_MAX         0
+#define _SC_CHILD_MAX       1
+#define _SC_CLK_TCK         2
+#define _SC_OPEN_MAX        3
+#define _SC_PAGESIZE        4
+#define _SC_NPROCESSORS_CONF 5
+#define _SC_NPROCESSORS_ONLN 6
 
 #ifndef _KERNEL
 #include <libc_usr/unistd.h>

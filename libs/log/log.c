@@ -3,17 +3,26 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-static const char* lvl_strings[5] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
-static const char* lvl_colors[5] = {"36", "32", "33", "31", "41;97"};
+static const char *lvl_strings[6] =
+    {"NONE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
+static const char *lvl_colors[6] = {"37", "36", "32", "33", "31", "41;97"};
 
 static int min_log_lvl = LOG_DEBUG;
 
-static puts_fn_ptr puts_ptr = NULL;
+static puts_fn puts_ptr = NULL;
 
 
-void vslog(char* restrict buf, int lvl, char* file, int line, char* fmt, va_list args) {
-    if (buf == NULL)
+void vslog(
+    char *restrict buf,
+    int lvl,
+    char *file,
+    int line,
+    char *fmt,
+    va_list args
+) {
+    if (buf == NULL) {
         return;
+    }
 
     int prefix = snprintf(
         buf,
@@ -25,12 +34,33 @@ void vslog(char* restrict buf, int lvl, char* file, int line, char* fmt, va_list
         line
     );
 
-    int printed = vsprintf(&buf[prefix], fmt, args);
+    if (prefix < 0) {
+        return;
+    }
 
-    buf[prefix + printed] = '\n';
+    if (prefix >= LOG_BUF_SIZE) {
+        buf[LOG_BUF_SIZE - 1] = '\0';
+        return;
+    }
+
+    size_t avail = LOG_BUF_SIZE - (size_t)prefix;
+    if (!avail) {
+        return;
+    }
+
+    int printed = vsnprintf(&buf[prefix], avail, fmt, args);
+    size_t end =
+        (printed < 0) ? (size_t)prefix : (size_t)prefix + (size_t)printed;
+
+    if (end >= LOG_BUF_SIZE - 1) {
+        end = LOG_BUF_SIZE - 2;
+    }
+
+    buf[end++] = '\n';
+    buf[end] = '\0';
 }
 
-void slog(char* restrict buf, int lvl, char* file, int line, char* fmt, ...) {
+void slog(char *restrict buf, int lvl, char *file, int line, char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
 
@@ -39,9 +69,10 @@ void slog(char* restrict buf, int lvl, char* file, int line, char* fmt, ...) {
     va_end(args);
 }
 
-void log(enum log_lvl lvl, char* file, int line, char* fmt, ...) {
-    if ((int)lvl < min_log_lvl || puts_ptr == NULL)
+void log(int lvl, char *file, int line, char *fmt, ...) {
+    if ((int)lvl < min_log_lvl || puts_ptr == NULL) {
         return;
+    }
 
     va_list args;
     va_start(args, fmt);
@@ -55,8 +86,8 @@ void log(enum log_lvl lvl, char* file, int line, char* fmt, ...) {
     va_end(args);
 }
 
-void log_init(puts_fn_ptr puts) {
-    puts_ptr = puts;
+void log_init(puts_fn sink) {
+    puts_ptr = sink;
 }
 
 void log_set_lvl(int lvl) {

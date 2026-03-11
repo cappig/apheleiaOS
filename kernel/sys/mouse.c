@@ -1,80 +1,249 @@
 #include "mouse.h"
 
+#include <arch/arch.h>
 #include <base/types.h>
 #include <data/ring.h>
 #include <data/vector.h>
-#include <input/mouse.h>
+#include <errno.h>
 #include <log/log.h>
-#include <stddef.h>
+#include <poll.h>
+#include <sched/scheduler.h>
+#include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/devfs.h>
+#include <sys/framebuffer.h>
 
-#include "mem/heap.h"
-#include "sys/video.h"
-#include "vfs/fs.h"
+#define MOUSE_DEV_BUFFER_SIZE 256
+#define MOUSE_DEV_UID         0U
+#define MOUSE_DEV_GID         45U
+#define MOUSE_DEV_MODE        0644
 
-static vector* mice = NULL;
+typedef struct {
+    const char *name;
+} mouse_dev_t;
 
-// All the mice send their input to a single buffer
+static vector_t *mice = NULL;
+static ring_buffer_t *buffer = NULL;
+static sched_wait_queue_t mouse_wait = {0};
+static spinlock_t mouse_lock = SPINLOCK_INIT;
 
-static i32 x_pos = 10;
-static i32 y_pos = 10;
+static i32 mouse_x = 0;
+static i32 mouse_y = 0;
 
 
-static ring_buffer* buffer;
+static i32 _clamp_i32(i32 value, i32 min, i32 max) {
+    if (value < min) {
+        return min;
+    }
 
-static isize _read(UNUSED vfs_node* node, void* buf, UNUSED usize offset, usize len, u32 flags) {
-    if (!buf)
-        return -1;
+    if (value > max) {
+        return max;
+    }
 
-    bool popped = ring_buffer_pop_array(buffer, buf, len);
-
-    return popped ? len : 0;
+    return value;
 }
 
+static bool _has_events(void) {
+    unsigned long irq_flags = spin_lock_irqsave(&mouse_lock);
+    bool has_events = buffer && !ring_buffer_is_empty(buffer);
+    spin_unlock_irqrestore(&mouse_lock, irq_flags);
+
+    return has_events;
+}
+
+static ssize_t
+mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+    (void)node;
+    (void)offset;
+
+    if (!buf || !buffer || !len) {
+        return -EINVAL;
+    }
+
+    for (;;) {
+        u32 wait_seq = sched_wait_seq(&mouse_wait);
+        unsigned long irq_flags = spin_lock_irqsave(&mouse_lock);
+        size_t popped = ring_buffer_pop_array(buffer, buf, len);
+        spin_unlock_irqrestore(&mouse_lock, irq_flags);
+
+        if (popped) {
+            return (ssize_t)popped;
+        }
+
+        if (flags & VFS_NONBLOCK) {
+            return -EAGAIN;
+        }
+
+        if (!sched_is_running()) {
+            continue;
+        }
+
+        sched_thread_t *current = sched_current();
+        if (current && sched_signal_has_pending(current)) {
+            return -EINTR;
+        }
+
+        sched_wait_result_t wait_result = sched_wait_on_queue(
+            &mouse_wait,
+            wait_seq,
+            0,
+            SCHED_WAIT_INTERRUPTIBLE
+        );
+        if (wait_result == SCHED_WAIT_INTR) {
+            return -EINTR;
+        }
+    }
+}
+
+static short mouse_poll(vfs_node_t *node, short events, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    short revents = 0;
+
+    if ((events & POLLIN) && _has_events()) {
+        revents |= POLLIN;
+    }
+
+    return revents;
+}
+
+static sched_wait_queue_t *
+mouse_wait_queue(vfs_node_t *node, short events, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    if ((events & POLLIN) == 0 || (events & ~POLLIN) != 0) {
+        return NULL;
+    }
+
+    return &mouse_wait;
+}
 
 void mouse_handle_event(mouse_event event) {
-    u16 width = max(video.monitor_width, video.width);
-    u16 height = max(video.monitor_height, video.height);
+    const framebuffer_info_t *fb = framebuffer_get_info();
 
-    x_pos = clamp(x_pos + event.delta_x, 0, width - 1);
-    y_pos = clamp(y_pos + event.delta_y, 0, height - 1);
+    if (fb && fb->available && fb->width && fb->height) {
+        mouse_x = _clamp_i32(mouse_x + event.delta_x, 0, (i32)fb->width - 1);
+        mouse_y = _clamp_i32(mouse_y + event.delta_y, 0, (i32)fb->height - 1);
+    } else {
+        mouse_x += event.delta_x;
+        mouse_y += event.delta_y;
+    }
 
-    ring_buffer_push_array(buffer, (u8*)&event, sizeof(mouse_event));
-
-#ifdef INPUT_DEBUG
-    log_debug("[INPUT_DEBUG] mouse #%u, x = %i, y = %i", event.source, x_pos, y_pos);
-#endif
+    if (buffer) {
+        unsigned long irq_flags = spin_lock_irqsave(&mouse_lock);
+        ring_buffer_push_array(buffer, (u8 *)&event, sizeof(event));
+        spin_unlock_irqrestore(&mouse_lock, irq_flags);
+        sched_wake_one(&mouse_wait);
+    }
 }
 
-u8 register_mouse(char* name) {
-    if (!mice)
-        mouse_init();
+static bool mouse_register_devfs(vfs_node_t *dev_dir) {
+    if (!dev_dir) {
+        return false;
+    }
 
-    mouse_dev* mse = kcalloc(sizeof(mouse_dev));
+    if (!mice || !buffer) {
+        log_warn("mouse state not initialized");
+        return false;
+    }
+
+    vfs_interface_t *mouse_if = vfs_create_interface(mouse_read, NULL, NULL);
+    if (!mouse_if) {
+        log_warn("failed to allocate /dev interface");
+        return false;
+    }
+
+    mouse_if->poll = mouse_poll;
+    mouse_if->wait_queue = mouse_wait_queue;
+
+    bool registered = devfs_register_node(
+        dev_dir,
+        "mouse",
+        VFS_CHARDEV,
+        MOUSE_DEV_MODE,
+        mouse_if,
+        NULL
+    );
+
+    if (!registered) {
+        log_warn("failed to create /dev/mouse");
+        return false;
+    }
+
+    vfs_node_t *mouse_node = vfs_lookup_from(dev_dir, "mouse");
+    if (!mouse_node || !vfs_chown(mouse_node, MOUSE_DEV_UID, MOUSE_DEV_GID)) {
+        log_warn("failed to set /dev/mouse ownership to root:input");
+        return false;
+    }
+
+    return true;
+}
+
+bool mouse_init(void) {
+    if (!devfs_register_device("mouse", mouse_register_devfs)) {
+        log_warn("failed to register devfs init callback");
+    }
+
+    bool first_init = (mice == NULL || buffer == NULL);
+
+    if (!mice) {
+        mice = vec_create(sizeof(mouse_dev_t *));
+    }
+
+    if (!mice) {
+        return false;
+    }
+
+    if (!buffer) {
+        buffer = ring_buffer_create(MOUSE_DEV_BUFFER_SIZE);
+    }
+
+    if (!buffer) {
+        return false;
+    }
+
+    if (!mouse_wait.list) {
+        sched_wait_queue_init(&mouse_wait);
+        sched_wait_queue_set_name(&mouse_wait, "mouse_wait");
+        sched_wait_queue_set_poll_link(&mouse_wait, true);
+    }
+
+    if (first_init) {
+        const framebuffer_info_t *fb = framebuffer_get_info();
+
+        if (fb && fb->available) {
+            mouse_x = (i32)(fb->width / 2);
+            mouse_y = (i32)(fb->height / 2);
+        }
+    }
+
+    return true;
+}
+
+u8 mouse_register(const char *name) {
+    if (!mice || !buffer) {
+        if (!mouse_init()) {
+            return 0;
+        }
+    }
+
+    mouse_dev_t *mse = calloc(1, sizeof(mouse_dev_t));
+
+    if (!mse) {
+        return 0;
+    }
 
     mse->name = strdup(name);
 
-    vec_push(mice, mse);
+    if (!vec_push(mice, &mse)) {
+        free((void *)mse->name);
+        free(mse);
+        return 0;
+    }
 
-    log_info("Mouse device registered: %s", name);
-
-    return mice->size - 1;
-}
-
-bool mouse_init() {
-    vfs_node* mse = vfs_create_node("mouse", VFS_CHARDEV);
-    mse->interface = vfs_create_interface(_read, NULL);
-
-    vfs_node* dev = vfs_open("/dev", VFS_DIR, true, KDIR_MODE);
-    vfs_insert_child(dev, mse);
-
-    mice = vec_create(sizeof(mouse_dev));
-
-    buffer = ring_buffer_create(MOUSE_DEV_BUFFER_SIZE);
-
-    x_pos = video.width / 2;
-    y_pos = video.height / 2;
-
-    return true;
+    log_debug("registered %s", mse->name ? mse->name : "device");
+    return (u8)(mice->size - 1);
 }

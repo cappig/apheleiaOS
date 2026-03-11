@@ -39,11 +39,52 @@ typedef struct PACKED {
     u16 sh_num; // number of entries in the section header table
 
     u16 shstrndx; // index of the section header table entry
-} elf_header;
+} elf_header_t;
+
+typedef struct PACKED {
+    u32 magic;
+    u8 arch;
+    u8 endianness;
+    u8 id_version;
+    u8 abi;
+    u8 abi_version;
+    u8 _unused0[7];
+
+    u16 type;
+    u16 machine;
+    u32 version;
+
+    u32 entry;
+
+    u32 phoff;
+    u32 shoff;
+
+    u32 flags;
+    u16 hdr_size;
+
+    u16 phent_size;
+    u16 ph_num;
+
+    u16 shdr_size;
+    u16 sh_num;
+
+    u16 shstrndx;
+} elf32_header_t;
+
+typedef struct PACKED {
+    u32 type;
+    u32 offset;
+    u32 vaddr;
+    u32 paddr;
+    u32 file_size;
+    u32 mem_size;
+    u32 flags;
+    u32 align;
+} elf32_prog_header_t;
 
 enum elf_arch {
-    EARCH_X32 = 1,
-    EARCH_X64 = 2,
+    EARCH_32 = 1,
+    EARCH_64 = 2,
 };
 
 enum elf_endianness {
@@ -66,7 +107,7 @@ enum elf_type {
 };
 
 // Only the important ones
-enum ELF_machine {
+enum elf_machine {
     EM_NONE = 0x00,
     EM_X86 = 0x03,
     EM_X86_64 = 0x3E,
@@ -87,7 +128,7 @@ typedef struct PACKED {
     u64 mem_size;
 
     u64 align;
-} elf_prog_header;
+} elf_prog_header_t;
 
 enum elf_program_flags {
     PF_X = 0x1, // Executable
@@ -122,7 +163,7 @@ typedef struct PACKED {
     u64 align;
 
     u64 ent_size;
-} elf_sect_header;
+} elf_sect_header_t;
 
 enum elf_section_type {
     SHT_NULL = 0x00,
@@ -168,7 +209,7 @@ typedef struct PACKED {
     u16 shndx; // section table index
     u64 value;
     u64 size;
-} elf_symbol;
+} elf_symbol_t;
 
 enum elf_symbol_bindig {
     STB_LOCAL = 0,
@@ -183,26 +224,82 @@ enum elf_symbol_type {
 };
 
 typedef enum {
-    VALID_ELF = 1,
-    INVALID_ELF = -1,
-    INVALID_ELF64 = -2,
-    WRONG_ENDIAN_ELF = -3,
-} elf_validity;
+    VALID_ELF = 0,
+    INVALID_ELF = 1,
+    WRONG_ENDIAN_ELF = 2,
+} elf_validity_t;
 
 typedef struct {
     u64 base;
     u64 top;
     u64 alignment;
-} elf_attributes;
+} elf_attributes_t;
+
+typedef struct {
+    const u8 *blob;
+    size_t blob_size;
+    u8 elf_class;
+    size_t shoff;
+    size_t shent_size;
+    size_t sh_num;
+    size_t shstrndx;
+} elf_view_t;
+
+typedef struct {
+    u32 name;
+    u32 type;
+    u64 flags;
+    u64 addr;
+    size_t offset;
+    size_t size;
+    u32 link;
+    u32 info;
+    u64 align;
+    size_t ent_size;
+} elf_section_view_t;
+
+typedef struct {
+    u32 name;
+    u16 shndx;
+    u64 value;
+} elf_symbol_view_t;
 
 
-bool elf_is_executable(elf_header* eheader);
-elf_validity elf_verify(elf_header* header);
+bool elf_is_executable(elf_header_t *eheader);
+elf_validity_t elf_verify(elf_header_t *header);
 
-u64 elf_to_page_flags(u32 elf_flags);
+// u64 elf_to_page_flags(u32 elf_flags);
 u64 elf_to_mmap_prot(u32 elf_flags);
 
-bool elf_parse_header(elf_attributes* attribs, elf_header* header);
+bool elf_parse_header(elf_attributes_t *attribs, elf_header_t *header);
 
-elf_sect_header* elf_locate_section(elf_header* header, const char* name);
-elf_symbol* elf_locate_symbol(elf_symbol* symtab, usize symtab_size, char* strtab, const char* name);
+elf_sect_header_t *elf_locate_section(elf_header_t *header, const char *name);
+elf_symbol_t *elf_locate_symbol(
+    elf_symbol_t *symtab,
+    size_t symtab_size,
+    char *strtab,
+    const char *name
+);
+
+bool elf_view_init(elf_view_t *view, const void *blob, size_t blob_size);
+bool elf_view_read_section(
+    const elf_view_t *view,
+    size_t idx,
+    elf_section_view_t *out
+);
+bool elf_view_section_data_ok(
+    const elf_view_t *view,
+    const elf_section_view_t *section
+);
+bool elf_view_find_section(
+    const elf_view_t *view,
+    const char *name,
+    elf_section_view_t *out_section
+);
+bool elf_view_read_symbol(
+    const elf_view_t *view,
+    const u8 *entry,
+    size_t ent_size,
+    elf_symbol_view_t *out
+);
+size_t elf_view_min_symbol_size(const elf_view_t *view);

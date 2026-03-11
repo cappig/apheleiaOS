@@ -1,661 +1,543 @@
-#include "stdio.h"
-
 #include <errno.h>
 #include <fcntl.h>
-#include <stddef.h>
+#include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include "fcntl.h"
-#include "stdarg.h"
-#include "stdlib.h"
-#include "unistd.h"
+#define PRINTF_STACK_BUF 1024
 
-// FIXME: A BUNCH OF STFF HERE IS STILL BROKEN
+#define FILE_FLAG_READ   (1 << 0)
+#define FILE_FLAG_WRITE  (1 << 1)
+#define FILE_FLAG_APPEND (1 << 2)
+#define FILE_FLAG_STATIC (1 << 3)
 
-FILE _stdin = {
+static FILE std_in = {
     .fd = STDIN_FILENO,
-    .buf_size = BUFSIZ,
-    .buf_mode = _IOFBF,
-    .mode = MODE_READ,
+    .flags = FILE_FLAG_READ | FILE_FLAG_STATIC,
+    .eof = 0,
+    .error = 0,
 };
 
-FILE _stdout = {
+static FILE std_out = {
     .fd = STDOUT_FILENO,
-    .buf_size = BUFSIZ,
-    .buf_mode = _IOLBF,
-    .mode = MODE_WRITE,
+    .flags = FILE_FLAG_WRITE | FILE_FLAG_STATIC,
+    .eof = 0,
+    .error = 0,
 };
 
-FILE _stderr = {
+static FILE std_err = {
     .fd = STDERR_FILENO,
-    .buf_size = BUFSIZ,
-    .buf_mode = _IONBF,
-    .mode = MODE_WRITE,
+    .flags = FILE_FLAG_WRITE | FILE_FLAG_STATIC,
+    .eof = 0,
+    .error = 0,
 };
 
-FILE* stdin = &_stdin;
-FILE* stdout = &_stdout;
-FILE* stderr = &_stderr;
+FILE *stdin = &std_in;
+FILE *stdout = &std_out;
+FILE *stderr = &std_err;
 
-void __init_stdio_buffers(void) {
-    _stdin.buf = malloc(BUFSIZ);
-    _stdout.buf = malloc(BUFSIZ);
+
+static int write_all_fd(int fd, const char *buf, size_t len) {
+    size_t off = 0;
+
+    while (off < len) {
+        ssize_t n = write(fd, buf + off, len - off);
+        if (n <= 0) {
+            return -1;
+        }
+        off += (size_t)n;
+    }
+    return 0;
 }
 
-
-static int _read_byte(FILE* stream) {
-    if (stream->flags & FLAG_ERROR)
-        return EOF;
-
-    if (stream->flags & FLAG_EOF)
-        return EOF;
-
-    if (!(stream->mode & MODE_READ)) {
-        stream->flags |= FLAG_ERROR;
-        return EOF;
-    }
-
-    if (stream->buf_mode == _IONBF) {
-        unsigned char c;
-        ssize_t r = read(stream->fd, &c, 1);
-
-        if (r < 0) {
-            stream->flags |= FLAG_ERROR;
-            return EOF;
+static int stream_write_all(FILE *stream, const char *buf, size_t len) {
+    if (!stream || stream->fd < 0 || !(stream->flags & FILE_FLAG_WRITE)) {
+        errno = EBADF;
+        if (stream) {
+            stream->error = 1;
         }
-
-        if (!r) {
-            stream->flags |= FLAG_EOF;
-            return EOF;
-        }
-
-        return c;
-    }
-
-    // the buffer is empty, read more data
-    if (stream->pos >= stream->len) {
-        // if in write mode, flush the buffer first
-        if (stream->mode & MODE_WRITE)
-            if (fflush(stream))
-                return EOF;
-
-        ssize_t r = read(stream->fd, stream->buf, stream->buf_size);
-
-        if (r < 0) {
-            stream->flags |= FLAG_ERROR;
-            return EOF;
-        }
-
-        if (!r) {
-            stream->flags |= FLAG_EOF;
-            return EOF;
-        }
-
-        stream->len = r;
-        stream->pos = 0;
-    }
-
-    return stream->buf[stream->pos++];
-}
-
-static int _write_byte(char c, FILE* stream) {
-    if (stream->flags & FLAG_ERROR)
-        return EOF;
-
-    if (!(stream->mode & MODE_WRITE)) {
-        stream->flags |= FLAG_ERROR;
-        return EOF;
-    }
-
-    // if in read mode with write permissions flush the buffer and seek to current file position
-    if ((stream->mode & MODE_READ) && (stream->mode & MODE_PLUS)) {
-        if (fflush(stream))
-            return EOF;
-
-        long pos = ftell(stream);
-
-        if (pos == EOF)
-            return EOF;
-
-        if (fseek(stream, pos, SEEK_SET))
-            return EOF;
-    }
-
-    if (stream->buf_mode == _IONBF) {
-        ssize_t w = write(stream->fd, &c, 1);
-
-        if (w < 0) {
-            stream->flags |= FLAG_ERROR;
-            return EOF;
-        }
-
-        return c;
-    }
-
-    // buffer is full, flush
-    if (stream->pos >= stream->buf_size)
-        if (fflush(stream))
-            return EOF;
-
-    stream->buf[stream->pos++] = c;
-
-    // line buffering - flush on newline
-    if (stream->buf_mode == _IOLBF && c == '\n')
-        if (fflush(stream))
-            return EOF;
-
-    return c;
-}
-
-
-static int _parse_mode(const char* mode_str) {
-    int mode = 0;
-
-    switch (*mode_str) {
-    case 'r':
-        mode |= MODE_READ;
-        break;
-
-    case 'w':
-        mode |= MODE_WRITE;
-        break;
-
-    case 'a':
-        mode |= MODE_WRITE | MODE_APPEND;
-        break;
-
-    default:
         return -1;
     }
 
-    mode_str++;
+    if (write_all_fd(stream->fd, buf, len) < 0) {
+        stream->error = 1;
+        return -1;
+    }
 
-    while (*mode_str) {
-        switch (*mode_str) {
-        case '+':
-            mode |= MODE_PLUS;
-            break;
+    return 0;
+}
 
-        case 'b':
-            break;
+static int mode_to_flags(const char *mode, int *open_flags, int *stream_flags) {
+    if (!mode || !mode[0] || !open_flags || !stream_flags) {
+        return -1;
+    }
 
-        default:
+    bool plus = false;
+    for (const char *p = mode + 1; *p; p++) {
+        if (*p == '+') {
+            plus = true;
+        } else if (*p != 'b') {
             return -1;
         }
-        mode_str++;
     }
 
-    return mode;
-}
-
-static int _mode_to_open_flags(int mode) {
-    int flags = 0;
-
-    if (mode & MODE_PLUS)
-        flags = O_RDWR;
-    else if (mode & MODE_WRITE)
-        flags = O_WRONLY;
-    else
-        flags = O_RDONLY;
-
-    if (mode & MODE_WRITE) {
-        flags |= O_CREAT;
-
-        if (mode & MODE_APPEND)
-            flags |= O_APPEND;
-        else
-            flags |= O_TRUNC;
-    }
-
-    return flags;
-}
-
-
-FILE* fopen(const char* restrict pathname, const char* restrict mode_str) {
-    FILE* file = calloc(1, sizeof(FILE));
-
-    if (!file)
-        return NULL;
-
-    file->mode = _parse_mode(mode_str);
-
-    if (file->mode < 0) {
-        free(file);
-        return NULL;
-    }
-
-    int open_flags = _mode_to_open_flags(file->mode);
-    file->fd = open(pathname, open_flags, 0666);
-
-    if (file->fd < 0) {
-        free(file);
-        return NULL;
-    }
-
-    file->buf = calloc(1, BUFSIZ);
-
-    if (!file->buf) {
-        close(file->fd);
-        free(file);
-        return NULL;
-    }
-
-    file->buf_size = BUFSIZ;
-    file->buf_mode = _IOFBF;
-
-    return file;
-}
-
-int fclose(FILE* file) {
-    if (!file)
-        return EOF;
-
-    fflush(file);
-
-    int c = close(file->fd);
-
-    if (file->buf)
-        free(file->buf);
-
-    free(file);
-
-    return (c < 0) ? EOF : 0;
-}
-
-FILE* freopen(const char* restrict pathname, const char* restrict mode, FILE* restrict file) {
-    if (!file)
-        return NULL;
-
-    if (fclose(file))
-        return NULL;
-
-    return fopen(pathname, mode);
-}
-
-
-int fflush(FILE* file) {
-    // TODO: fflush(NULL) should flush all streams
-    if (!file)
-        return EOF;
-
-    if (file->buf_mode == _IONBF)
+    switch (mode[0]) {
+    case 'r':
+        *open_flags = plus ? O_RDWR : O_RDONLY;
+        *stream_flags = FILE_FLAG_READ | (plus ? FILE_FLAG_WRITE : 0);
         return 0;
+    case 'w':
+        *open_flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC;
+        *stream_flags = FILE_FLAG_WRITE | (plus ? FILE_FLAG_READ : 0);
+        return 0;
+    case 'a':
+        *open_flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND;
+        *stream_flags =
+            FILE_FLAG_APPEND | FILE_FLAG_WRITE | (plus ? FILE_FLAG_READ : 0);
+        return 0;
+    default:
+        return -1;
+    }
+}
 
-    if (file->mode & MODE_WRITE) {
-        if (file->pos > 0) {
-            ssize_t w = write(file->fd, file->buf, file->pos);
+FILE *fdopen(int fd, const char *mode) {
+    if (fd < 0) {
+        errno = EBADF;
+        return NULL;
+    }
 
-            // Check if all data was written
-            if (w < 0 || (size_t)w != file->pos) {
-                file->flags |= FLAG_ERROR;
-                return EOF;
-            }
+    int open_flags = 0;
+    int stream_flags = 0;
+    if (mode_to_flags(mode, &open_flags, &stream_flags) < 0) {
+        errno = EINVAL;
+        return NULL;
+    }
 
-            file->pos = 0;
-        }
-    } else {
-        // For read only streams any buffered data is discarded, as per POSIX
-        file->pos = 0;
-        file->len = 0;
+    if (stream_flags & FILE_FLAG_APPEND) {
+        (void)lseek(fd, 0, SEEK_END);
+    }
+
+    FILE *stream = malloc(sizeof(*stream));
+    if (!stream) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    stream->fd = fd;
+    stream->flags = stream_flags;
+    stream->eof = 0;
+    stream->error = 0;
+    return stream;
+}
+
+FILE *fopen(const char *path, const char *mode) {
+    int open_flags = 0;
+    int stream_flags = 0;
+    if (mode_to_flags(mode, &open_flags, &stream_flags) < 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    int fd = 
+        (open_flags & O_CREAT) ? open(path, open_flags, 0666) : open(path, open_flags);
+
+    if (fd < 0) {
+        return NULL;
+    }
+
+    FILE *stream = malloc(sizeof(*stream));
+    if (!stream) {
+        close(fd);
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    stream->fd = fd;
+    stream->flags = stream_flags;
+    stream->eof = 0;
+    stream->error = 0;
+    return stream;
+}
+
+int remove(const char *path) {
+    if (!path) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (!unlink(path)) {
+        return 0;
+    }
+
+    if (errno == EISDIR || errno == EPERM || errno == EACCES) {
+        return rmdir(path);
+    }
+
+    return -1;
+}
+
+int fflush(FILE *stream) {
+    if (!stream) {
+        return 0;
+    }
+
+    if (stream->fd < 0) {
+        errno = EBADF;
+        stream->error = 1;
+        return EOF;
     }
 
     return 0;
 }
 
-
-int setvbuf(FILE* restrict file, char* restrict buf, int mode, size_t size) {
-    if (!file)
+int fclose(FILE *stream) {
+    if (!stream || stream->fd < 0) {
+        errno = EBADF;
         return EOF;
-
-    if (mode != _IOFBF && mode != _IOLBF && mode != _IONBF)
-        return EOF;
-
-    if (fflush(file))
-        return EOF;
-
-    if (file->buf && !(file->flags & FLAG_USER_BUF))
-        free(file->buf);
-
-    file->flags &= ~FLAG_USER_BUF;
-    file->buf = NULL;
-    file->buf_size = 0;
-
-    file->buf_mode = mode;
-    file->pos = 0;
-    file->len = 0;
-
-    if (mode != _IONBF) {
-        // user provided buffer
-        if (buf) {
-            file->buf = (unsigned char*)buf;
-            file->flags |= FLAG_USER_BUF;
-        } else {
-            file->buf = calloc(1, size);
-
-            if (!file->buf) {
-                file->buf_mode = _IONBF;
-                file->buf_size = 0;
-                return EOF;
-            }
-        }
-
-        file->buf_size = size;
     }
 
+    (void)fflush(stream);
+    int ret = close(stream->fd);
+    stream->fd = -1;
+
+    if (!(stream->flags & FILE_FLAG_STATIC)) {
+        free(stream);
+    }
+
+    return ret < 0 ? EOF : 0;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (!ptr || !stream || !size || !nmemb) {
+        return 0;
+    }
+
+    if (stream->fd < 0 || !(stream->flags & FILE_FLAG_READ)) {
+        errno = EBADF;
+        stream->error = 1;
+        return 0;
+    }
+
+    size_t want = size * nmemb;
+    if (size && want / size != nmemb) {
+        errno = EOVERFLOW;
+        stream->error = 1;
+        return 0;
+    }
+
+    size_t got = 0;
+    while (got < want) {
+        ssize_t n = read(stream->fd, (char *)ptr + got, want - got);
+        if (n < 0) {
+            stream->error = 1;
+            break;
+        }
+        if (!n) {
+            stream->eof = 1;
+            break;
+        }
+        got += (size_t)n;
+    }
+
+    return got / size;
+}
+
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (!ptr || !stream || !size || !nmemb) {
+        return 0;
+    }
+
+    if (stream->fd < 0 || !(stream->flags & FILE_FLAG_WRITE)) {
+        errno = EBADF;
+        stream->error = 1;
+        return 0;
+    }
+
+    size_t want = size * nmemb;
+    if (size && want / size != nmemb) {
+        errno = EOVERFLOW;
+        stream->error = 1;
+        return 0;
+    }
+
+    size_t sent = 0;
+    while (sent < want) {
+        ssize_t n = write(stream->fd, (const char *)ptr + sent, want - sent);
+        if (n <= 0) {
+            stream->error = 1;
+            break;
+        }
+        sent += (size_t)n;
+    }
+
+    return sent / size;
+}
+
+int fseek(FILE *stream, long offset, int whence) {
+    if (!stream || stream->fd < 0) {
+        errno = EBADF;
+        if (stream) {
+            stream->error = 1;
+        }
+        return -1;
+    }
+
+    if (lseek(stream->fd, (off_t)offset, whence) < 0) {
+        stream->error = 1;
+        return -1;
+    }
+
+    stream->eof = 0;
     return 0;
 }
 
-void setbuf(FILE* restrict file, char* restrict buf) {
-    setvbuf(file, buf, buf ? _IOFBF : _IONBF, BUFSIZ);
+long ftell(FILE *stream) {
+    if (!stream || stream->fd < 0) {
+        errno = EBADF;
+        if (stream) {
+            stream->error = 1;
+        }
+        return -1;
+    }
+
+    off_t off = lseek(stream->fd, 0, SEEK_CUR);
+    if (off < 0) {
+        stream->error = 1;
+        return -1;
+    }
+
+    return (long)off;
 }
 
-
-int fgetc(FILE* stream) {
-    if (!stream)
+int fgetc(FILE *stream) {
+    unsigned char ch = 0;
+    size_t n = fread(&ch, 1, 1, stream);
+    if (n != 1) {
         return EOF;
-
-    return _read_byte(stream);
+    }
+    return (int)ch;
 }
 
-int fputc(int c, FILE* stream) {
-    if (!stream)
-        return EOF;
-
-    return _write_byte(c, stream);
+int fputc(int ch, FILE *stream) {
+    unsigned char c = (unsigned char)ch;
+    size_t n = fwrite(&c, 1, 1, stream);
+    return n == 1 ? (int)c : EOF;
 }
 
-size_t fread(void* restrict ptr, size_t size, size_t nmemb, FILE* restrict file) {
-    if (!file || !ptr || !size || !nmemb)
-        return 0;
-
-    size_t total = size * nmemb;
-    size_t read_count = 0;
-    unsigned char* dest = (unsigned char*)ptr;
-
-    if (file->buf_mode == _IONBF) {
-        ssize_t r = read(file->fd, dest, total);
-
-        if (r < 0) {
-            file->flags |= FLAG_ERROR;
-            return 0;
+char *fgets(char *str, int n, FILE *stream) {
+    if (!str || n <= 0 || !stream) {
+        errno = EINVAL;
+        if (stream) {
+            stream->error = 1;
         }
-
-        if (!r) {
-            file->flags |= FLAG_EOF;
-            return 0;
-        }
-
-        return r / size;
-    }
-
-    while (read_count < total) {
-        int c = _read_byte(file);
-
-        // EOF or error
-        if (c < 0)
-            break;
-
-        dest[read_count++] = (unsigned char)c;
-    }
-
-    return read_count / size;
-}
-
-size_t fwrite(const void* restrict ptr, size_t size, size_t nmemb, FILE* restrict file) {
-    if (!file || !ptr || !size || !nmemb)
-        return 0;
-
-    if (!(file->mode & MODE_WRITE)) {
-        file->flags |= FLAG_ERROR;
-        return 0;
-    }
-
-    size_t total = size * nmemb;
-    size_t written = 0;
-    const unsigned char* src = (const unsigned char*)ptr;
-
-    if (file->buf_mode == _IONBF) {
-        ssize_t w = write(file->fd, src, total);
-
-        if (w < 0) {
-            file->flags |= FLAG_ERROR;
-            return 0;
-        }
-
-        return w / size;
-    }
-
-    while (written < total) {
-        int result = _write_byte(src[written], file);
-
-        // error
-        if (result < 0)
-            break;
-
-        written++;
-    }
-
-    return written / size;
-}
-
-char* fgets(char* restrict s, int n, FILE* restrict stream) {
-    if (!stream || !s || n <= 0) {
-        return NULL;
-    }
-    if (!(stream->mode & MODE_READ)) {
-        stream->flags |= FLAG_ERROR;
         return NULL;
     }
 
-    int pos = 0;
-    int ch;
-
-    while (pos < n - 1) {
-        ch = _read_byte(stream);
-
+    int i = 0;
+    while (i < n - 1) {
+        int ch = fgetc(stream);
         if (ch == EOF) {
-            // nothing to read
-            if (!pos)
-                return NULL;
-
             break;
         }
 
-        s[pos++] = (char)ch;
-
-        if (ch == '\n')
+        str[i++] = (char)ch;
+        if (ch == '\n') {
             break;
+        }
     }
 
-    s[pos] = '\0';
+    if (!i) {
+        return NULL;
+    }
 
-    return s;
+    str[i] = '\0';
+    return str;
 }
 
-int fputs(const char* restrict s, FILE* restrict stream) {
-    if (!stream || !s)
-        return EOF;
-
-    if (!(stream->mode & MODE_WRITE)) {
-        stream->flags |= FLAG_ERROR;
+int fputs(const char *str, FILE *stream) {
+    if (!str) {
+        errno = EINVAL;
+        if (stream) {
+            stream->error = 1;
+        }
         return EOF;
     }
 
-    size_t len = strlen(s);
+    size_t len = strlen(str);
+    if (stream_write_all(stream, str, len) < 0) {
+        return EOF;
+    }
 
-    if (stream->buf_mode == _IONBF) {
-        ssize_t w = write(stream->fd, s, len);
+    return (int)len;
+}
 
-        if (w < 0) {
-            stream->flags |= FLAG_ERROR;
-            return EOF;
+int feof(FILE *stream) {
+    return stream ? stream->eof : 0;
+}
+
+int ferror(FILE *stream) {
+    return stream ? stream->error : 0;
+}
+
+void clearerr(FILE *stream) {
+    if (!stream) {
+        return;
+    }
+    stream->eof = 0;
+    stream->error = 0;
+}
+
+int setvbuf(FILE *restrict stream, char *restrict buf, int mode, size_t size) {
+    (void)buf;
+    (void)size;
+
+    if (!stream) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (mode != _IOFBF && mode != _IOLBF && mode != _IONBF) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return 0;
+}
+
+void setbuf(FILE *restrict stream, char *restrict buf) {
+    (void)setvbuf(stream, buf, buf ? _IOFBF : _IONBF, BUFSIZ);
+}
+
+int fileno(FILE *stream) {
+    if (!stream || stream->fd < 0) {
+        errno = EBADF;
+        return -1;
+    }
+
+    return stream->fd;
+}
+
+int ungetc(int ch, FILE *stream) {
+    if (ch == EOF) {
+        return EOF;
+    }
+
+    if (!stream || stream->fd < 0 || !(stream->flags & FILE_FLAG_READ)) {
+        errno = EBADF;
+        if (stream) {
+            stream->error = 1;
+        }
+        return EOF;
+    }
+
+    off_t current = lseek(stream->fd, 0, SEEK_CUR);
+    if (current <= 0) {
+        errno = ENOTSUP;
+        stream->error = 1;
+        return EOF;
+    }
+
+    if (lseek(stream->fd, -1, SEEK_CUR) < 0) {
+        stream->error = 1;
+        return EOF;
+    }
+
+    stream->eof = 0;
+    return (unsigned char)ch;
+}
+
+int vfprintf(FILE *stream, const char *restrict format, va_list vlist) {
+    if (!stream || !format) {
+        errno = EINVAL;
+        if (stream) {
+            stream->error = 1;
+        }
+        return -1;
+    }
+
+    char stack_buf[PRINTF_STACK_BUF];
+    va_list args_copy;
+    va_copy(args_copy, vlist);
+    int needed = vsnprintf(stack_buf, sizeof(stack_buf), format, args_copy);
+    va_end(args_copy);
+
+    if (needed < 0) {
+        stream->error = 1;
+        return -1;
+    }
+
+    size_t bytes = (size_t)needed;
+    char *buf = stack_buf;
+
+    if (bytes >= sizeof(stack_buf)) {
+        buf = malloc(bytes + 1);
+        if (!buf) {
+            errno = ENOMEM;
+            stream->error = 1;
+            return -1;
         }
 
-        return len;
+        va_copy(args_copy, vlist);
+        int rebuilt = vsnprintf(buf, bytes + 1, format, args_copy);
+        va_end(args_copy);
+        if (rebuilt < 0) {
+            free(buf);
+            stream->error = 1;
+            return -1;
+        }
     }
 
-    size_t written = 0;
-
-    while (*s) {
-        int write_result = _write_byte(*s, stream);
-
-        if (write_result == EOF)
-            return EOF;
-
-        written++;
-        s++;
+    int ret = needed;
+    if (stream_write_all(stream, buf, bytes) < 0) {
+        ret = -1;
     }
 
-    return written;
-}
-
-
-int fgetpos(FILE* restrict f, fpos_t* restrict pos) {
-    if (!f || !pos)
-        return EOF;
-
-    off_t seek = lseek(f->fd, 0, SEEK_CUR);
-
-    if (seek < 0) {
-        f->flags |= FLAG_ERROR;
-        return EOF;
+    if (buf != stack_buf) {
+        free(buf);
     }
 
-    if (f->mode & MODE_READ)
-        *pos = seek - (f->len - f->pos);
-    else
-        *pos = seek + f->pos;
-
-    return 0;
+    return ret;
 }
 
-
-int fsetpos(FILE* f, const fpos_t* pos) {
-    if (!f || !pos)
-        return EOF;
-
-    if (fflush(f))
-        return EOF;
-
-    off_t seek = lseek(f->fd, *pos, SEEK_SET);
-
-    if (seek < 0) {
-        f->flags |= FLAG_ERROR;
-        return EOF;
-    }
-
-    f->pos = 0;
-    f->len = 0;
-    f->flags &= ~(FLAG_EOF);
-
-    return 0;
-}
-
-int fseek(FILE* f, long offset, int whence) {
-    if (!f)
-        return EOF;
-
-    if (fflush(f))
-        return EOF;
-
-    off_t seek = lseek(f->fd, offset, whence);
-
-    if (seek < 0) {
-        f->flags |= FLAG_ERROR;
-        return EOF;
-    }
-
-    f->pos = 0;
-    f->len = 0;
-    f->flags &= ~(FLAG_EOF);
-
-    return 0;
-}
-
-void rewind(FILE* f) { // where did the f go ??
-    if (!f)
-        return;
-
-    fseek(f, 0, SEEK_SET);
-    f->flags &= ~(FLAG_ERROR | FLAG_EOF);
-}
-
-
-long ftell(FILE* f) {
-    if (!f)
-        return EOF;
-
-    // get the current offset
-    off_t seek = lseek(f->fd, 0, SEEK_CUR);
-
-    if (seek < 0) {
-        f->flags |= FLAG_ERROR;
-        return EOF;
-    }
-
-    if (f->mode & MODE_READ)
-        return seek - (f->len - f->pos);
-    else
-        return seek + f->pos;
-}
-
-
-int feof(FILE* f) {
-    if (!f)
-        return EOF;
-
-    return f->flags & FLAG_EOF;
-}
-
-int ferror(FILE* f) {
-    if (!f)
-        return EOF;
-
-    return f->flags & FLAG_ERROR;
-}
-
-void clearerr(FILE* f) {
-    if (!f)
-        return;
-
-    f->flags &= ~(FLAG_EOF | FLAG_ERROR);
-}
-
-
-int vfprintf(FILE* restrict stream, const char* restrict format, va_list vlist) {
-    char buffer[BUFSIZ] = {0};
-
-    int len = vsnprintf(buffer, BUFSIZ - 1, format, vlist);
-
-    if (!len)
-        return 0;
-
-    return fwrite(buffer, len, 1, stream);
-}
-
-int fprintf(FILE* restrict stream, const char* restrict format, ...) {
+int fprintf(FILE *restrict stream, const char *restrict format, ...) {
     va_list args;
     va_start(args, format);
-
-    int result = vfprintf(stream, format, args);
-
+    int ret = vfprintf(stream, format, args);
     va_end(args);
-    return result;
+    return ret;
 }
 
-int printf(const char* format, ...) {
+int printf(const char *restrict format, ...) {
     va_list args;
     va_start(args, format);
-
-    int result = vfprintf(stdout, format, args);
-
+    int ret = vfprintf(stdout, format, args);
     va_end(args);
-    return result;
+    return ret;
 }
 
+int getchar(void) {
+    return fgetc(stdin);
+}
 
-void perror(const char* string) {
-    fprintf(stderr, "%s: %s\n", string, strerror(errno));
+int putchar(int ch) {
+    return fputc(ch, stdout);
+}
+
+int puts(const char *str) {
+    if (fputs(str, stdout) == EOF) {
+        return EOF;
+    }
+    return fputc('\n', stdout);
+}
+
+void perror(const char *s) {
+    int saved = errno;
+    if (s && s[0]) {
+        (void)fputs(s, stderr);
+        (void)fputs(": ", stderr);
+    }
+    (void)fputs(strerror(saved), stderr);
+    (void)fputc('\n', stderr);
 }

@@ -1,28 +1,108 @@
-EMU := qemu-system-x86_64
+QEMU_ARCH := $(ARCH)
 
-KVM ?= true
+ifeq ($(ARCH), x86_32)
+QEMU_ARCH := i386
+else ifeq ($(ARCH), riscv_64)
+QEMU_ARCH := riscv64
+endif
+
+QEMU := qemu-system-$(QEMU_ARCH)
+
 QEMU_CONSOLE ?= false
-
-EMU_ARGS := \
-	-no-reboot \
-	-m 64M
-
-ifeq ($(QEMU_CONSOLE), true)
-	EMU_ARGS += -s -monitor stdio -d int,cpu_reset,guest_errors,mmu
-else
-ifeq ($(SERIAL_CONSOLE), telnet)
-	EMU_ARGS += -serial telnet:localhost:4321,server,nowait
-else
-	EMU_ARGS += -serial stdio
-endif
-endif
+BOOT         ?= bios
+QEMU_MEMORY  ?= 256M
+QEMU_CPU     ?= max
+QEMU_SMP     ?= 1
+KVM          ?= false
+QEMU_SNAPSHOT ?= false
 
 ifeq ($(KVM), true)
-	EMU_ARGS += -enable-kvm -cpu host
+ifeq ($(QEMU_CPU), max)
+QEMU_CPU = host
+endif
 endif
 
-.PHONY: run mbr
-run:
-	$(EMU) $(EMU_ARGS) -drive media=cdrom,file=bin/$(IMG_NAME)
-mbr:
-	$(EMU) $(EMU_ARGS) -drive format=raw,file=bin/$(IMG_NAME)
+OVMF_DIR          := .cache/ovmf
+OVMF_CODE_LOCAL   := $(OVMF_DIR)/OVMF_CODE.fd
+OVMF_VARS_LOCAL   := $(OVMF_DIR)/OVMF_VARS.fd
+OVMF_FETCH_SCRIPT := utils/ovmf_fetch.py
+
+OVMF_DEB_URL ?= https://deb.debian.org/debian/pool/main/e/edk2/ovmf_2022.11-6+deb12u2_all.deb
+
+OVMF_CODE         ?= $(OVMF_CODE_LOCAL)
+OVMF_VARS         ?= $(OVMF_VARS_LOCAL)
+OVMF_VARS_RUNTIME := bin/ovmf_vars.fd
+
+QEMU_CONSOLE_ARGS :=
+ifeq ($(QEMU_CONSOLE), true)
+QEMU_CONSOLE_ARGS := \
+	-s \
+	-monitor stdio \
+	-d int,cpu_reset,guest_errors,mmu
+else
+QEMU_CONSOLE_ARGS := \
+	-serial stdio
+endif
+
+QEMU_ARGS := \
+	-no-reboot \
+	-cpu $(QEMU_CPU) \
+	-m $(QEMU_MEMORY) \
+	-smp $(QEMU_SMP) \
+	$(QEMU_CONSOLE_ARGS)
+
+ifeq ($(KVM), true)
+QEMU_ARGS += -enable-kvm
+endif
+
+ifeq ($(QEMU_SNAPSHOT), true)
+QEMU_ARGS += -snapshot
+endif
+
+QEMU_BOOT_DEPS :=
+QEMU_BOOT_SETUP := @:
+QEMU_BOOT_ARGS :=
+
+ifeq ($(BOOT), uefi)
+ifeq ($(ARCH), x86_64)
+QEMU_BOOT_SETUP := @cp -f "$(OVMF_VARS)" "$(OVMF_VARS_RUNTIME)"
+QEMU_BOOT_ARGS := \
+	-drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
+	-drive if=pflash,format=raw,file="$(OVMF_VARS_RUNTIME)"
+ifeq ($(OVMF_CODE), $(OVMF_CODE_LOCAL))
+ifeq ($(OVMF_VARS), $(OVMF_VARS_LOCAL))
+QEMU_BOOT_DEPS := ovmf-fetch
+endif
+endif
+else
+$(error BOOT=uefi requires ARCH=x86_64)
+endif
+endif
+
+QEMU_IMAGE_ARGS := -drive format=raw,file=bin/$(IMAGE_NAME).img
+QEMU_USB_IMAGE_ARGS := \
+	-drive if=none,id=usbstick,format=raw,file=bin/$(IMAGE_NAME).img \
+	-device qemu-xhci,id=xhci \
+	-device usb-storage,bus=xhci.0,drive=usbstick
+
+.PHONY: ovmf-fetch ovmf-clean run run-usb run-usb-bios run-usb-uefi
+
+ovmf-fetch:
+	@python3 $(OVMF_FETCH_SCRIPT) "$(OVMF_DIR)" "$(OVMF_DEB_URL)"
+
+ovmf-clean:
+	@rm -rf "$(OVMF_DIR)"
+
+run: bin/$(IMAGE_NAME).img $(QEMU_BOOT_DEPS)
+	$(QEMU_BOOT_SETUP)
+	@$(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_IMAGE_ARGS)
+
+run-usb: bin/$(IMAGE_NAME).img $(QEMU_BOOT_DEPS)
+	$(QEMU_BOOT_SETUP)
+	@$(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_USB_IMAGE_ARGS)
+
+run-usb-bios:
+	@$(MAKE) run-usb BOOT=bios
+
+run-usb-uefi:
+	@$(MAKE) run-usb BOOT=uefi
