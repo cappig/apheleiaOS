@@ -46,6 +46,7 @@ LD_BASE := \
 	-z noexecstack
 
 include utils/toolchain.mk
+include utils/docker.mk
 include utils/qemu.mk
 include userland/build.mk
 

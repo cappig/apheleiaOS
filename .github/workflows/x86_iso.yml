@@ -1,23 +1,69 @@
-name: x86_iso
+name: x86_builds
 
 on:
   push:
-    branches: [ "master" ]
   pull_request:
-    branches: [ "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  build_test:
+    name: build-test (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, x86_32]
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - uses: actions/checkout@v4
 
-    - name: prepare environment
-      run: sudo apt update
-    - name: install tools
-      run: sudo apt install -y gcc nasm make xorriso
-    - name: make image
-      run: make all
+      - name: install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            gcc \
+            gcc-multilib \
+            make \
+            nasm \
+            python3 \
+            xorriso
+
+      - name: make test build
+        run: make ARCH=${{ matrix.arch }} IMAGE_FORMAT=img
+
+  build_iso:
+    name: iso (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, x86_32]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            gcc \
+            gcc-multilib \
+            make \
+            nasm \
+            python3 \
+            xorriso
+
+      - name: make iso
+        run: make ARCH=${{ matrix.arch }} IMAGE_FORMAT=iso
+
+      - name: upload iso
+        uses: actions/upload-artifact@v4
+        with:
+          name: apheleia-${{ matrix.arch }}-iso
+          path: bin/*_${{ matrix.arch }}.iso
+          if-no-files-found: error
