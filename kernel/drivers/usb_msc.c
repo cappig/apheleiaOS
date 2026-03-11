@@ -62,13 +62,13 @@ typedef struct {
     u8 bulk_out_ep;
     size_t block_size;
     size_t block_count;
-    volatile int io_lock;
+    mutex_t io_lock;
     disk_dev_t *disk;
 } usb_msc_lun_t;
 
 static bool msc_registered = false;
 static usb_msc_lun_t msc_luns[USB_MSC_MAX_LUNS] = {0};
-static volatile int msc_state_lock = 0;
+static spinlock_t msc_state_lock = SPINLOCK_INIT;
 static u32 next_tag = 1;
 
 const driver_desc_t usb_msc_driver_desc = {
@@ -586,7 +586,7 @@ static ssize_t _usb_msc_read(disk_dev_t *disk, void *dest, size_t offset, size_t
         return 0;
     }
 
-    lock(&lun->io_lock);
+    mutex_lock(&lun->io_lock);
 
     ssize_t ret = -1;
     size_t block_size = lun->block_size;
@@ -666,7 +666,7 @@ static ssize_t _usb_msc_read(disk_dev_t *disk, void *dest, size_t offset, size_t
 
 done:
     free(bounce);
-    unlock(&lun->io_lock);
+    mutex_unlock(&lun->io_lock);
     return ret;
 }
 
@@ -699,7 +699,7 @@ static ssize_t _usb_msc_write(disk_dev_t *disk, void *src, size_t offset, size_t
         return 0;
     }
 
-    lock(&lun->io_lock);
+    mutex_lock(&lun->io_lock);
 
     ssize_t ret = -1;
     size_t block_size = lun->block_size;
@@ -763,7 +763,7 @@ static ssize_t _usb_msc_write(disk_dev_t *disk, void *src, size_t offset, size_t
 
 done:
     free(bounce);
-    unlock(&lun->io_lock);
+    mutex_unlock(&lun->io_lock);
     return ret;
 }
 
@@ -799,6 +799,7 @@ static usb_msc_lun_t *_msc_alloc_slot_locked(size_t hcd_id, size_t port, u8 lun)
         slot->hcd_id = hcd_id;
         slot->port = port;
         slot->lun = lun;
+        mutex_init(&slot->io_lock);
         return slot;
     }
 
@@ -948,11 +949,11 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
     size_t attached = 0;
 
     for (u8 lun_id = 0; lun_id <= max_lun; lun_id++) {
-        lock(&msc_state_lock);
+        unsigned long state_flags = spin_lock_irqsave(&msc_state_lock);
 
         usb_msc_lun_t *lun = _msc_alloc_slot_locked(hcd_id, port, lun_id);
         if (!lun) {
-            unlock(&msc_state_lock);
+            spin_unlock_irqrestore(&msc_state_lock, state_flags);
             log_warn("USB MSC table full, dropping hcd=%zu port=%zu lun=%u", hcd_id, port, lun_id);
             continue;
         }
@@ -966,7 +967,7 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
         lun->transport = (u8)_msc_transport_for_protocol(protocol);
         lun->online = true;
 
-        unlock(&msc_state_lock);
+        spin_unlock_irqrestore(&msc_state_lock, state_flags);
 
         if (!_msc_inquiry(lun)) {
             log_debug(
@@ -976,9 +977,9 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
                 lun_id
             );
 
-            lock(&msc_state_lock);
+            state_flags = spin_lock_irqsave(&msc_state_lock);
             lun->online = false;
-            unlock(&msc_state_lock);
+            spin_unlock_irqrestore(&msc_state_lock, state_flags);
 
             continue;
         }
@@ -996,9 +997,9 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
                 lun_id
             );
 
-            lock(&msc_state_lock);
+            state_flags = spin_lock_irqsave(&msc_state_lock);
             lun->online = false;
-            unlock(&msc_state_lock);
+            spin_unlock_irqrestore(&msc_state_lock, state_flags);
 
             continue;
         }
@@ -1013,14 +1014,14 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
                 block_size
             );
 
-            lock(&msc_state_lock);
+            state_flags = spin_lock_irqsave(&msc_state_lock);
             lun->online = false;
-            unlock(&msc_state_lock);
+            spin_unlock_irqrestore(&msc_state_lock, state_flags);
 
             continue;
         }
 
-        lock(&msc_state_lock);
+        state_flags = spin_lock_irqsave(&msc_state_lock);
         bool still_online =
             lun->used &&
             lun->hcd_id == hcd_id &&
@@ -1031,7 +1032,7 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
             lun->block_size = block_size;
             lun->block_count = blocks;
         }
-        unlock(&msc_state_lock);
+        spin_unlock_irqrestore(&msc_state_lock, state_flags);
 
         if (!still_online) {
             continue;
@@ -1045,9 +1046,9 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
                 lun_id
             );
 
-            lock(&msc_state_lock);
+            state_flags = spin_lock_irqsave(&msc_state_lock);
             lun->online = false;
-            unlock(&msc_state_lock);
+            spin_unlock_irqrestore(&msc_state_lock, state_flags);
 
             continue;
         }
@@ -1078,7 +1079,7 @@ static void _usb_msc_detach(usb_device_handle_t dev) {
     size_t detached_indexes[USB_MSC_MAX_LUNS] = {0};
     size_t detached = 0;
 
-    lock(&msc_state_lock);
+    unsigned long state_flags = spin_lock_irqsave(&msc_state_lock);
 
     for (size_t i = 0; i < ARRAY_LEN(msc_luns); i++) {
         usb_msc_lun_t *lun = &msc_luns[i];
@@ -1097,7 +1098,7 @@ static void _usb_msc_detach(usb_device_handle_t dev) {
         detached++;
     }
 
-    unlock(&msc_state_lock);
+    spin_unlock_irqrestore(&msc_state_lock, state_flags);
 
     size_t released = 0;
     size_t busy = 0;
@@ -1112,14 +1113,14 @@ static void _usb_msc_detach(usb_device_handle_t dev) {
         busy++;
     }
 
-    lock(&msc_state_lock);
+    state_flags = spin_lock_irqsave(&msc_state_lock);
     for (size_t i = 0; i < detached; i++) {
         usb_msc_lun_t *lun = &msc_luns[detached_indexes[i]];
         if (!lun->disk) {
             memset(lun, 0, sizeof(*lun));
         }
     }
-    unlock(&msc_state_lock);
+    spin_unlock_irqrestore(&msc_state_lock, state_flags);
 
     if (detached) {
         log_info(

@@ -17,7 +17,7 @@ smp_trampoline32_start:
     mov ds, ax
     mov es, ax
     mov ss, ax
-    mov sp, 0x7c00
+    mov sp, 0x0ff0
 
     xor eax, eax
     mov ax, cs

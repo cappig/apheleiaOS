@@ -8,6 +8,7 @@
 #include <sched/scheduler.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/lock.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -15,9 +16,12 @@
 
 
 static vfs_t *vfs = NULL;
+static mutex_t vfs_tree_lock = MUTEX_INIT;
 
 static time_t _time_now(void) {
-    return (time_t)arch_wallclock_seconds();
+    u64 seconds = 0;
+    arch_wallclock_snapshot(&seconds, NULL, NULL);
+    return (time_t)seconds;
 }
 
 static vfs_node_t *_resolve_link(vfs_node_t *node) {
@@ -307,6 +311,106 @@ static bool _resolve_parent_base(
     return true;
 }
 
+static vfs_node_t *_vfs_lookup_from_locked(vfs_node_t *from, const char *path) {
+    tree_node_t *node = from ? from->tree_entry : NULL;
+
+    if (!node) {
+        errno = ENXIO;
+        return NULL;
+    }
+
+    char *tok_pos = NULL;
+    char *tok_str = strdup(path);
+
+    if (!tok_str) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    char *pos = strtok_r(tok_str, "/", &tok_pos);
+
+    while (pos) {
+        if (!strcmp(pos, ".")) {
+            goto next;
+        }
+
+        if (!strcmp(pos, "..")) {
+            if (node->parent) {
+                node = node->parent;
+            }
+
+            goto next;
+        }
+
+        vfs_node_t *parent = node->data;
+
+        if (VFS_IS_LINK(parent->type)) {
+            parent = parent->link;
+
+            if (!parent) {
+                node = NULL;
+                errno = ENOENT;
+                break;
+            }
+
+            node = parent->tree_entry;
+        }
+
+        tree_node_t *next = NULL;
+        if (!_find_child(parent, pos, &next) || !next) {
+            node = NULL;
+            errno = ENOENT;
+            break;
+        }
+
+        node = next;
+
+    next:
+        pos = strtok_r(NULL, "/", &tok_pos);
+    }
+
+    free(tok_str);
+    return node ? node->data : NULL;
+}
+
+static vfs_node_t *_vfs_lookup_locked(const char *path) {
+    tree_node_t *root = vfs->tree->root;
+    return _vfs_lookup_from_locked(root ? root->data : NULL, path);
+}
+
+static bool _resolve_parent_base_locked(
+    const char *path,
+    vfs_node_t **parent_out,
+    char **base_out
+) {
+    if (!path || !parent_out || !base_out) {
+        return false;
+    }
+
+    char *dir_name = NULL;
+    char *base_name = NULL;
+
+    if (!_split_path(path, &dir_name, &base_name)) {
+        return false;
+    }
+
+    vfs_node_t *parent = _vfs_lookup_locked(dir_name);
+    free(dir_name);
+
+    if (parent && VFS_IS_LINK(parent->type)) {
+        parent = parent->link;
+    }
+
+    if (!parent || parent->type != VFS_DIR) {
+        free(base_name);
+        return false;
+    }
+
+    *parent_out = parent;
+    *base_out = base_name;
+    return true;
+}
+
 
 vfs_t *vfs_init(void) {
     vfs = calloc(1, sizeof(vfs_t));
@@ -426,70 +530,10 @@ vfs_node_t *vfs_lookup_from(vfs_node_t *from, const char *path) {
         return NULL;
     }
 
-    tree_node_t *node = from ? from->tree_entry : NULL;
-
-    if (!node) {
-        errno = ENXIO;
-        return NULL;
-    }
-
-    char *tok_pos = NULL;
-    char *tok_str = strdup(path);
-
-    if (!tok_str) {
-        errno = ENOMEM;
-        return NULL;
-    }
-
-    char *pos = strtok_r(tok_str, "/", &tok_pos);
-
-    while (pos) {
-        if (!strcmp(pos, ".")) {
-            goto next;
-        }
-
-        if (!strcmp(pos, "..")) {
-            if (node->parent) {
-                node = node->parent;
-            }
-
-            goto next;
-        }
-
-        vfs_node_t *parent = node->data;
-
-        if (VFS_IS_LINK(parent->type)) {
-            parent = parent->link;
-
-            if (!parent) {
-                node = NULL;
-                errno = ENOENT;
-                break;
-            }
-
-            node = parent->tree_entry;
-        }
-
-        tree_node_t *next = NULL;
-        if (!_find_child(parent, pos, &next) || !next) {
-            node = NULL;
-            errno = ENOENT;
-            break;
-        }
-
-        node = next;
-
-    next:
-        pos = strtok_r(NULL, "/", &tok_pos);
-    }
-
-    free(tok_str);
-
-    if (!node) {
-        return NULL;
-    }
-
-    return node->data;
+    mutex_lock(&vfs_tree_lock);
+    vfs_node_t *result = _vfs_lookup_from_locked(from, path);
+    mutex_unlock(&vfs_tree_lock);
+    return result;
 }
 
 vfs_node_t *vfs_lookup(const char *path) {
@@ -810,9 +854,12 @@ bool vfs_unlink(const char *path) {
         return false;
     }
 
+    mutex_lock(&vfs_tree_lock);
+
     vfs_node_t *parent = NULL;
     char *base_name = NULL;
-    if (!_resolve_parent_base(path, &parent, &base_name)) {
+    if (!_resolve_parent_base_locked(path, &parent, &base_name)) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
@@ -821,20 +868,25 @@ bool vfs_unlink(const char *path) {
     free(base_name);
 
     if (!child || !child_tnode) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     if (child->type == VFS_DIR || child->type == VFS_MOUNT) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     if (parent->interface && parent->interface->remove) {
         if (parent->interface->remove(parent, child->name) < 0) {
+            mutex_unlock(&vfs_tree_lock);
             return false;
         }
     }
 
-    return _remove_child(parent, child);
+    bool ok = _remove_child(parent, child);
+    mutex_unlock(&vfs_tree_lock);
+    return ok;
 }
 
 bool vfs_rmdir(const char *path) {
@@ -842,9 +894,12 @@ bool vfs_rmdir(const char *path) {
         return false;
     }
 
+    mutex_lock(&vfs_tree_lock);
+
     vfs_node_t *parent = NULL;
     char *base_name = NULL;
-    if (!_resolve_parent_base(path, &parent, &base_name)) {
+    if (!_resolve_parent_base_locked(path, &parent, &base_name)) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
@@ -853,10 +908,12 @@ bool vfs_rmdir(const char *path) {
     free(base_name);
 
     if (!child || !child_tnode) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     if (child->type != VFS_DIR) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
@@ -864,16 +921,20 @@ bool vfs_rmdir(const char *path) {
         !child->tree_entry ||
         (child->tree_entry->children && child->tree_entry->children->length)
     ) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     if (parent->interface && parent->interface->remove) {
         if (parent->interface->remove(parent, child->name) < 0) {
+            mutex_unlock(&vfs_tree_lock);
             return false;
         }
     }
 
-    return _remove_child(parent, child);
+    bool ok = _remove_child(parent, child);
+    mutex_unlock(&vfs_tree_lock);
+    return ok;
 }
 
 bool vfs_rename(const char *old_path, const char *new_path) {
@@ -881,17 +942,21 @@ bool vfs_rename(const char *old_path, const char *new_path) {
         return false;
     }
 
+    mutex_lock(&vfs_tree_lock);
+
     vfs_node_t *old_parent = NULL;
     char *old_base = NULL;
     vfs_node_t *new_parent = NULL;
     char *new_base = NULL;
 
-    if (!_resolve_parent_base(old_path, &old_parent, &old_base)) {
+    if (!_resolve_parent_base_locked(old_path, &old_parent, &old_base)) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
-    if (!_resolve_parent_base(new_path, &new_parent, &new_base)) {
+    if (!_resolve_parent_base_locked(new_path, &new_parent, &new_base)) {
         free(old_base);
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
@@ -901,18 +966,21 @@ bool vfs_rename(const char *old_path, const char *new_path) {
     if (!child || !child_tnode) {
         free(old_base);
         free(new_base);
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     if (!_validate_name(new_base) || _find_child(new_parent, new_base, NULL)) {
         free(old_base);
         free(new_base);
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     if (!tree_remove_child(old_parent->tree_entry, child_tnode)) {
         free(old_base);
         free(new_base);
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
     _child_index_remove(old_parent, old_base);
@@ -925,6 +993,7 @@ bool vfs_rename(const char *old_path, const char *new_path) {
     if (!new_name) {
         tree_insert_child(old_parent->tree_entry, child_tnode);
         _child_index_set(old_parent, child->name, child_tnode);
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
@@ -934,20 +1003,24 @@ bool vfs_rename(const char *old_path, const char *new_path) {
     tree_insert_child(new_parent->tree_entry, child_tnode);
     _child_index_set(new_parent, child->name, child_tnode);
 
+    mutex_unlock(&vfs_tree_lock);
     return true;
 }
 
 
 static bool _vfs_insert_child(vfs_node_t *parent, vfs_node_t *child, bool persist) {
     assert(vfs);
+    mutex_lock(&vfs_tree_lock);
 
     if (!parent || !child) {
         errno = EINVAL;
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     if (!_validate_name(child->name)) {
         errno = EBADF;
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
@@ -956,6 +1029,7 @@ static bool _vfs_insert_child(vfs_node_t *parent, vfs_node_t *child, bool persis
 
         if (!parent) {
             errno = EINVAL;
+            mutex_unlock(&vfs_tree_lock);
             return false;
         }
     }
@@ -967,6 +1041,7 @@ static bool _vfs_insert_child(vfs_node_t *parent, vfs_node_t *child, bool persis
 
     if (_find_child(parent, child->name, NULL)) {
         errno = EEXIST;
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
@@ -978,11 +1053,13 @@ static bool _vfs_insert_child(vfs_node_t *parent, vfs_node_t *child, bool persis
         if (interface->create(parent, child) < 0) {
             tree_remove_child(parent_tnode, child->tree_entry);
             errno = EIO;
+            mutex_unlock(&vfs_tree_lock);
             return false;
         }
     }
 
     _child_index_set(parent, child->name, child->tree_entry);
+    mutex_unlock(&vfs_tree_lock);
     return true;
 }
 
@@ -1072,10 +1149,11 @@ bool vfs_mount(fs_instance_t *instance, vfs_node_t *mount) {
         }
     }
 
+    mutex_lock(&vfs_tree_lock);
     mount->type = VFS_MOUNT;
     mount->link = instance->subtree_root->data;
-
     instance->refcount++;
+    mutex_unlock(&vfs_tree_lock);
 
     log_debug("mounted '%s'", mount->name ? mount->name : "/");
     return true;
@@ -1084,23 +1162,29 @@ bool vfs_mount(fs_instance_t *instance, vfs_node_t *mount) {
 bool vfs_unmount(vfs_node_t *mount, bool destroy_tree) {
     assert(vfs);
 
+    mutex_lock(&vfs_tree_lock);
+
     if (mount->type != VFS_MOUNT) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     vfs_node_t *link = mount->link;
 
     if (!link) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     fs_instance_t *instance = link->fs;
 
     if (!instance) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
     if (!instance->refcount) {
+        mutex_unlock(&vfs_tree_lock);
         return false;
     }
 
@@ -1116,6 +1200,7 @@ bool vfs_unmount(vfs_node_t *mount, bool destroy_tree) {
 
     mount->type = VFS_DIR;
     mount->link = NULL;
+    mutex_unlock(&vfs_tree_lock);
 
     log_debug("unmounted '%s'", mount->name ? mount->name : "/");
     return true;
@@ -1280,4 +1365,14 @@ short vfs_poll(vfs_node_t *node, short events, size_t flags) {
 
     (void)flags;
     return revents;
+}
+
+struct sched_wait_queue *
+vfs_wait_queue(vfs_node_t *node, short events, size_t flags) {
+    node = _resolve_link(node);
+    if (!node || !node->interface || !node->interface->wait_queue) {
+        return NULL;
+    }
+
+    return node->interface->wait_queue(node, events, (u32)flags);
 }

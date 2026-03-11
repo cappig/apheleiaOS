@@ -3,9 +3,34 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(DEBUG) || defined(LIST_VALIDATE)
+#define LIST_VALIDATE_NODES 1
+#else
+#define LIST_VALIDATE_NODES 0
+#endif
+
+#if LIST_VALIDATE_NODES
+static bool list_contains_node(const linked_list_t *list, const list_node_t *node) {
+    if (!list || !node) {
+        return false;
+    }
+
+    for (list_node_t *it = list->head; it; it = it->next) {
+        if (it == node) {
+            return true;
+        }
+    }
+
+    return false;
+}
+#endif
 
 linked_list_t *list_create(void) {
     linked_list_t *new = calloc(1, sizeof(linked_list_t));
+    if (!new) {
+        return NULL;
+    }
+
     new->length = 0;
     new->head = NULL;
     new->tail = NULL;
@@ -36,8 +61,13 @@ void list_destroy(linked_list_t *list, bool free_data) {
 
 list_node_t *list_create_node(void *data) {
     list_node_t *new = calloc(1, sizeof(list_node_t));
+    if (!new) {
+        return NULL;
+    }
+
     new->next = NULL;
     new->prev = NULL;
+    new->owner = NULL;
     new->data = data;
 
     return new;
@@ -53,6 +83,18 @@ bool list_append(linked_list_t *list, list_node_t *node) {
         return false;
     }
 
+#if LIST_VALIDATE_NODES
+    if (list_contains_node(list, node)) {
+        return false;
+    }
+#endif
+    if (node->owner) {
+        return false;
+    }
+    if (node->next || node->prev || list->head == node || list->tail == node) {
+        return false;
+    }
+
     node->next = NULL;
 
     if (!list->length) {
@@ -65,32 +107,64 @@ bool list_append(linked_list_t *list, list_node_t *node) {
         list->tail = node;
     }
 
+    node->owner = list;
     list->length++;
 
     return true;
 }
 
 bool list_remove(linked_list_t *list, list_node_t *node) {
-    if (!node || !list) {
+    if (!node || !list || !list->length) {
         return false;
     }
 
-    if (node == list->head) {
-        list->head = node->next;
-    }
-    if (node == list->tail) {
-        list->tail = node->prev;
+    list_node_t *prev = node->prev;
+    list_node_t *next = node->next;
+    bool linked_consistent = (
+        node->owner == list &&
+        (!prev || prev->next == node) &&
+        (!next || next->prev == node) &&
+        (node == list->head || prev) &&
+        (node == list->tail || next)
+    );
+
+    if (!linked_consistent) {
+        prev = NULL;
+        next = list->head;
+
+        while (next && next != node) {
+            prev = next;
+            next = next->next;
+        }
+
+        if (next != node) {
+            return false;
+        }
+
+        next = node->next;
     }
 
-    if (node->prev) {
-        node->prev->next = node->next;
+#if LIST_VALIDATE_NODES
+    if (!list_contains_node(list, node)) {
+        return false;
     }
-    if (node->next) {
-        node->next->prev = node->prev;
+#endif
+
+    if (prev) {
+        prev->next = next;
+    } else {
+        list->head = next;
+    }
+
+    if (next) {
+        next->prev = prev;
+    } else {
+        list->tail = prev;
     }
 
     node->prev = NULL;
     node->next = NULL;
+    node->owner = NULL;
 
     list->length--;
 
@@ -128,6 +202,12 @@ bool list_push(linked_list_t *list, list_node_t *node) {
     if (!node || !list) {
         return false;
     }
+    if (node->owner) {
+        return false;
+    }
+    if (node->next || node->prev || list->head == node || list->tail == node) {
+        return false;
+    }
 
     node->prev = NULL;
 
@@ -141,29 +221,34 @@ bool list_push(linked_list_t *list, list_node_t *node) {
         list->head = node;
     }
 
+    node->owner = list;
     list->length++;
 
     return true;
 }
 
 list_node_t *list_pop(linked_list_t *list) {
-    if (!list->length) {
+    if (!list || !list->length) {
         return NULL;
     }
 
     list_node_t *tail = list->tail;
-    list_remove(list, tail);
+    if (!list_remove(list, tail)) {
+        return NULL;
+    }
 
     return tail;
 }
 
 list_node_t *list_pop_front(linked_list_t *list) {
-    if (!list->length) {
+    if (!list || !list->length) {
         return NULL;
     }
 
     list_node_t *head = list->head;
-    list_remove(list, head);
+    if (!list_remove(list, head)) {
+        return NULL;
+    }
 
     return head;
 }

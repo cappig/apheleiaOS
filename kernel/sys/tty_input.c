@@ -16,6 +16,7 @@
 
 typedef struct {
     ring_buffer_t *buffer;
+    spinlock_t lock;
     sched_wait_queue_t wait;
     bool ready;
     char line_buf[TTY_INPUT_BUFFER_SIZE];
@@ -39,7 +40,9 @@ _signal_flush(size_t screen, ring_buffer_t *buffer, const termios_t *tos) {
     }
 
     if (buffer) {
+        unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
         ring_buffer_clear(buffer);
+        spin_unlock_irqrestore(&tty_state[screen].lock, flags);
     }
 
     tty_state[screen].line_len = 0;
@@ -92,7 +95,10 @@ static ring_buffer_t *_input_buffer(size_t screen) {
     }
 
     if (!tty_state[screen].ready) {
+        spinlock_init(&tty_state[screen].lock);
         sched_wait_queue_init(&tty_state[screen].wait);
+        sched_wait_queue_set_name(&tty_state[screen].wait, "tty_input_wait");
+        sched_wait_queue_set_poll_link(&tty_state[screen].wait, true);
         tty_state[screen].ready = true;
     }
 
@@ -347,6 +353,7 @@ static void _flush_line(
     size_t *line_len = &tty_state[screen].line_len;
     char *line = tty_state[screen].line_buf;
 
+    unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
     if (*line_len) {
         ring_buffer_push_array(buffer, (u8 *)line, *line_len);
     }
@@ -354,6 +361,7 @@ static void _flush_line(
     if (add_newline) {
         ring_buffer_push(buffer, (u8)'\n');
     }
+    spin_unlock_irqrestore(&tty_state[screen].lock, flags);
 
     *line_len = 0;
 
@@ -383,9 +391,9 @@ static ssize_t _input_read_raw(
     }
 
     if (!vmin && !vtime) {
-        unsigned long flags = arch_irq_save();
+        unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
         size_t popped = ring_buffer_pop_array(buffer, buf, len);
-        arch_irq_restore(flags);
+        spin_unlock_irqrestore(&tty_state[screen].lock, flags);
         return (ssize_t)popped;
     }
 
@@ -403,11 +411,12 @@ static ssize_t _input_read_raw(
     }
 
     for (;;) {
-        unsigned long flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&tty_state[screen].wait);
+        unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
         size_t popped =
             ring_buffer_pop_array(buffer, (u8 *)buf + total, len - total);
 
-        arch_irq_restore(flags);
+        spin_unlock_irqrestore(&tty_state[screen].lock, flags);
 
         if (popped) {
             total += popped;
@@ -447,11 +456,33 @@ static ssize_t _input_read_raw(
         }
 
         if (timer_started && timeout_ticks) {
-            sched_sleep(1);
+            u64 deadline_tick = timer_start + timeout_ticks;
+            sched_wait_result_t wait_result = sched_wait_on_queue(
+                &tty_state[screen].wait,
+                wait_seq,
+                deadline_tick,
+                SCHED_WAIT_INTERRUPTIBLE
+            );
+
+            if (wait_result == SCHED_WAIT_TIMEOUT) {
+                return (ssize_t)total;
+            }
+
+            if (wait_result == SCHED_WAIT_INTR) {
+                return -EINTR;
+            }
             continue;
         }
 
-        sched_block(&tty_state[screen].wait);
+        sched_wait_result_t wait_result = sched_wait_on_queue(
+            &tty_state[screen].wait,
+            wait_seq,
+            0,
+            SCHED_WAIT_INTERRUPTIBLE
+        );
+        if (wait_result == SCHED_WAIT_INTR) {
+            return -EINTR;
+        }
     }
 }
 
@@ -675,7 +706,9 @@ static void _input_push_impl(char ch) {
 
         if (ch == (char)tos->c_cc[VEOF]) {
             if (!tty_state[screen].line_len) {
+                unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
                 ring_buffer_push(buffer, 0);
+                spin_unlock_irqrestore(&tty_state[screen].lock, flags);
                 sched_wake_one(&tty_state[screen].wait);
             } else {
                 _flush_line(screen, buffer, false, false);
@@ -694,7 +727,9 @@ static void _input_push_impl(char ch) {
     }
 
     if (!canon) {
+        unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
         ring_buffer_push(buffer, (u8)ch);
+        spin_unlock_irqrestore(&tty_state[screen].lock, flags);
         _echo_char(screen, tos, ch, ch == '\n');
         sched_wake_one(&tty_state[screen].wait);
         return;
@@ -736,9 +771,10 @@ ssize_t tty_input_read(size_t screen, void *buf, size_t len) {
     }
 
     for (;;) {
-        unsigned long flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&tty_state[screen].wait);
+        unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
         size_t popped = ring_buffer_pop_array(buffer, out, len);
-        arch_irq_restore(flags);
+        spin_unlock_irqrestore(&tty_state[screen].lock, flags);
 
         if (popped) {
             if (popped == 1 && !out[0]) {
@@ -773,7 +809,15 @@ ssize_t tty_input_read(size_t screen, void *buf, size_t len) {
             return -EINTR;
         }
 
-        sched_block(&tty_state[screen].wait);
+        sched_wait_result_t wait_result = sched_wait_on_queue(
+            &tty_state[screen].wait,
+            wait_seq,
+            0,
+            SCHED_WAIT_INTERRUPTIBLE
+        );
+        if (wait_result == SCHED_WAIT_INTR) {
+            return -EINTR;
+        }
     }
 }
 
@@ -838,9 +882,9 @@ bool tty_input_has_data(size_t screen) {
         return false;
     }
 
-    unsigned long flags = arch_irq_save();
+    unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
     bool ready = !ring_buffer_is_empty(buffer);
-    arch_irq_restore(flags);
+    spin_unlock_irqrestore(&tty_state[screen].lock, flags);
 
     return ready;
 }
@@ -852,7 +896,9 @@ void tty_input_flush(size_t screen) {
 
     ring_buffer_t *buffer = _input_buffer(screen);
     if (buffer) {
+        unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
         ring_buffer_clear(buffer);
+        spin_unlock_irqrestore(&tty_state[screen].lock, flags);
     }
 
     tty_state[screen].line_len = 0;
@@ -860,4 +906,16 @@ void tty_input_flush(size_t screen) {
     tty_state[screen].cr_pending = false;
     tty_state[screen].pending_newlines = 0;
     tty_state[screen].ready = true;
+}
+
+sched_wait_queue_t *tty_input_wait_queue(size_t screen) {
+    if (screen >= TTY_SCREEN_COUNT) {
+        return NULL;
+    }
+
+    if (!_input_buffer(screen) || !tty_state[screen].ready) {
+        return NULL;
+    }
+
+    return &tty_state[screen].wait;
 }

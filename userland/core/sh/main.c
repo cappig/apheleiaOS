@@ -72,6 +72,8 @@ static job_t sh_jobs[SH_MAX_JOBS];
 static size_t sh_job_count = 0;
 static int sh_next_job_id = 1;
 static pid_t sh_pgid = 0;
+static int sh_last_status = 0;
+static pid_t sh_last_bg_pid = 0;
 
 
 static void sh_printf(const char *format, ...) {
@@ -506,6 +508,52 @@ static void update_pwd(void) {
     }
 }
 
+static bool env_key_is_valid(const char *key, size_t len) {
+    if (!key || !len) {
+        return false;
+    }
+
+    if (!(isalpha((unsigned char)key[0]) || key[0] == '_')) {
+        return false;
+    }
+
+    for (size_t i = 1; i < len; i++) {
+        char ch = key[i];
+        if (!(isalnum((unsigned char)ch) || ch == '_')) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool apply_assignment_token(const char *token) {
+    if (!token || !token[0]) {
+        return false;
+    }
+
+    const char *eq = strchr(token, '=');
+    if (!eq) {
+        return false;
+    }
+
+    size_t key_len = (size_t)(eq - token);
+    if (!env_key_is_valid(token, key_len)) {
+        return false;
+    }
+
+    char key[SH_ENV_KEY_MAX];
+    size_t copy_len = key_len;
+    if (copy_len >= sizeof(key)) {
+        copy_len = sizeof(key) - 1;
+    }
+
+    memcpy(key, token, copy_len);
+    key[copy_len] = '\0';
+
+    return env_set(key, eq + 1);
+}
+
 static void expand_arg(const char *in, char *out, size_t out_len) {
     if (!in || !out || !out_len) {
         return;
@@ -548,6 +596,12 @@ static void expand_arg(const char *in, char *out, size_t out_len) {
             while (in[end] && in[end] != '}') {
                 end++;
             }
+        } else if (
+            in[start] == '?' ||
+            in[start] == '!' ||
+            in[start] == '$'
+        ) {
+            end = start + 1;
         } else {
             while (isalnum((unsigned char)in[end]) || in[end] == '_') {
                 end++;
@@ -567,7 +621,26 @@ static void expand_arg(const char *in, char *out, size_t out_len) {
         memcpy(key, in + start, key_len);
         key[key_len] = '\0';
 
-        const char *value = env_get(key);
+        char special[32] = {0};
+        const char *value = NULL;
+
+        if (!strcmp(key, "?")) {
+            snprintf(special, sizeof(special), "%d", sh_last_status);
+            value = special;
+        } else if (!strcmp(key, "!")) {
+            if (sh_last_bg_pid > 0) {
+                snprintf(special, sizeof(special), "%ld", (long)sh_last_bg_pid);
+                value = special;
+            } else {
+                value = "";
+            }
+        } else if (!strcmp(key, "$")) {
+            snprintf(special, sizeof(special), "%ld", (long)sh_pgid);
+            value = special;
+        } else {
+            value = env_get(key);
+        }
+
         size_t value_len = strlen(value);
 
         if (o + value_len >= out_len) {
@@ -1561,6 +1634,7 @@ static int run_pipeline(
     close_pipe_fds(pipes, stage_count - 1);
 
     if (background) {
+        sh_last_bg_pid = pgid;
         job_t *job = job_add(pgid, cmdline, JOB_RUNNING);
 
         if (job) {
@@ -1762,6 +1836,13 @@ static int run_single_command(char *line) {
     bool simple_builtin =
         stage_count == 1 && !background && !stages[0].in_path && !stages[0].out_path;
 
+    if (simple_builtin && stages[0].argc == 1) {
+        if (apply_assignment_token(stages[0].argv[0])) {
+            free(exp);
+            return 0;
+        }
+    }
+
     if (simple_builtin) {
         int builtin_status = 0;
         if (handle_builtin(stages[0].argc, stages[0].argv, &builtin_status)) {
@@ -1798,6 +1879,7 @@ static int run_command(char *line) {
     char *clauses[SH_MAX_CLAUSES];
     int clause_count = split_and_clauses(trimmed, clauses, SH_MAX_CLAUSES);
     if (clause_count < 0) {
+        sh_last_status = 1;
         return 1;
     }
 
@@ -1808,6 +1890,7 @@ static int run_command(char *line) {
         }
 
         status = run_single_command(clauses[i]);
+        sh_last_status = status;
     }
 
     return status;

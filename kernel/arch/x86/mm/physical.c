@@ -22,7 +22,7 @@ static bitmap_allocator_t frame_alloc = {0};
 static u16 *frame_refs = NULL;
 static size_t frame_refs_count = 0;
 static bool frame_refs_ready = false;
-static volatile int pmm_lock = 0;
+static spinlock_t pmm_lock = SPINLOCK_INIT;
 
 static size_t _pmm_block_index(void *ptr) {
     return bitmap_alloc_to_block(&frame_alloc, ptr);
@@ -47,27 +47,27 @@ static void _pmm_ref_set_range(void *ptr, size_t blocks, u16 value) {
 
 void pmm_init(e820_map_t *mmap) {
     log_debug("initializing PMM");
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
 
     if (!bitmap_alloc_init_mmap(&frame_alloc, mmap, PAGE_4KIB)) {
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         panic("Failed to initialize the page frame allocator!");
     }
 
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
     log_debug("PMM ready");
 }
 
 void pmm_ref_init(void) {
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
 
     if (frame_refs_ready || !frame_alloc.block_count || !frame_alloc.bitmap) {
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         return;
     }
 
     size_t block_count = frame_alloc.block_count;
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
 
     u16 *refs = calloc(block_count, sizeof(*refs));
     if (!refs) {
@@ -75,10 +75,10 @@ void pmm_ref_init(void) {
         return;
     }
 
-    irq_flags = lock_irqsave(&pmm_lock);
+    irq_flags = spin_lock_irqsave(&pmm_lock);
 
     if (frame_refs_ready) {
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         free(refs);
         return;
     }
@@ -93,40 +93,40 @@ void pmm_ref_init(void) {
     }
 
     frame_refs_ready = true;
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
     log_debug("refcount table ready");
 }
 
 bool pmm_ref_ready(void) {
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
     bool ready = frame_refs_ready;
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
     return ready;
 }
 
 size_t pmm_total_mem(void) {
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
     size_t total = frame_alloc.usable_blocks * frame_alloc.block_size;
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
     return total;
 }
 
 size_t pmm_free_mem(void) {
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
     size_t free_mem = frame_alloc.free_blocks * frame_alloc.block_size;
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
     return free_mem;
 }
 
 
 void *alloc_frames(size_t count) {
     assert(count);
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
 
     void *ret = bitmap_alloc_reserve(&frame_alloc, count);
 
     if (UNLIKELY(!ret)) {
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         panic("Out of physical memory!");
     }
 
@@ -137,18 +137,18 @@ void *alloc_frames(size_t count) {
 #endif
 
     _pmm_ref_set_range(ret, count, 1);
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
     return ret;
 }
 
 void *alloc_frames_high(size_t count) {
     assert(count);
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
 
     void *ret = bitmap_alloc_reserve_high(&frame_alloc, count);
 
     if (UNLIKELY(!ret)) {
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         panic("Out of physical memory!");
     }
 
@@ -161,7 +161,7 @@ void *alloc_frames_high(size_t count) {
 #endif
 
     _pmm_ref_set_range(ret, count, 1);
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
     return ret;
 }
 
@@ -174,16 +174,16 @@ void *alloc_frames_user(size_t count) {
 }
 
 void free_frames(void *ptr, size_t size) {
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
 
     if (!frame_refs_ready) {
         bitmap_alloc_free(&frame_alloc, ptr, size);
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         return;
     }
 
     if (!ptr || !size) {
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         return;
     }
 
@@ -211,14 +211,14 @@ void free_frames(void *ptr, size_t size) {
     log_debug("[MMU DEBUG] freed %zu frames: paddr = %#lx", size, (u64)ptr);
 #endif
 
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
 }
 
 void pmm_ref_hold(void *ptr, size_t blocks) {
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
 
     if (!frame_refs_ready || !ptr || !blocks) {
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         return;
     }
 
@@ -232,26 +232,26 @@ void pmm_ref_hold(void *ptr, size_t blocks) {
         }
     }
 
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
 }
 
 u16 pmm_refcount(void *ptr) {
-    unsigned long irq_flags = lock_irqsave(&pmm_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
 
     if (!frame_refs_ready || !ptr) {
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         return 1;
     }
 
     size_t index = _pmm_block_index(ptr);
 
     if (index >= frame_refs_count) {
-        unlock_irqrestore(&pmm_lock, irq_flags);
+        spin_unlock_irqrestore(&pmm_lock, irq_flags);
         return 1;
     }
 
     u16 refs = frame_refs[index];
-    unlock_irqrestore(&pmm_lock, irq_flags);
+    spin_unlock_irqrestore(&pmm_lock, irq_flags);
     return refs;
 }
 

@@ -172,6 +172,7 @@ typedef struct {
     size_t sector_count;
 
     volatile bool io_busy;
+    spinlock_t io_lock;
     sched_wait_queue_t io_wait;
     sched_wait_queue_t irq_wait;
 } ahci_device_t;

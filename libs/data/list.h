@@ -3,19 +3,22 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+typedef struct linked_list linked_list_t;
+
 typedef struct list_node {
     void *data;
 
     struct list_node *next;
     struct list_node *prev;
+    linked_list_t *owner;
 } list_node_t;
 
-typedef struct linked_list {
+struct linked_list {
     size_t length;
 
     list_node_t *head;
     list_node_t *tail;
-} linked_list_t;
+};
 
 #define ll_foreach(node, list) \
     for (list_node_t *node = (list)->head; node != NULL; node = node->next)

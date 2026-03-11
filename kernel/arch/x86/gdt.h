@@ -101,3 +101,4 @@ enum gdt_segments {
 void gdt_init(void);
 void tss_init(uintptr_t kernel_stack_top);
 void set_tss_stack(uintptr_t stack);
+bool gdt_current_core_id(size_t *out);

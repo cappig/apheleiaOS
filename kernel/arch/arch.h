@@ -7,7 +7,7 @@
 #include <sys/types.h>
 
 #ifndef TIMER_FREQ
-#define TIMER_FREQ 500U
+#define TIMER_FREQ 1000U
 #endif
 
 typedef struct arch_vm_space arch_vm_space_t;
@@ -43,15 +43,23 @@ void *arch_cpu_get_local(void);
 
 unsigned long arch_irq_save(void);
 void arch_irq_restore(unsigned long flags);
+bool arch_irq_enabled(void);
 
 void arch_cpu_wait(void);
 void arch_cpu_relax(void);
 
 void arch_irq_disable(void);
+void arch_sched_request_resched(void);
 
 u64 arch_timer_ticks(void);
 u32 arch_timer_hz(void);
-u64 arch_wallclock_seconds(void);
+u64 arch_monotonic_ns(void);
+void arch_wallclock_snapshot(
+    u64 *seconds_out,
+    u64 *ticks_out,
+    u64 *hz_out
+);
+void arch_wallclock_maintain(void);
 
 const char *arch_name(void);
 const char *arch_cpu_name(void);

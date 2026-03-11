@@ -285,7 +285,7 @@ size_t _xhci_wait_for_ports(
 
     while (!connected && (arch_timer_ticks() - start) < timeout) {
         if (sched_is_running() && sched_current()) {
-            sched_sleep(1);
+            sched_yield();
         } else {
             cpu_pause();
         }

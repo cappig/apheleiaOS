@@ -16,6 +16,7 @@
 
 #include "wm.h"
 #include "wm_background.h"
+#include "wm_color.h"
 #include "wm_cursor.h"
 #include "wm_loop.h"
 
@@ -46,68 +47,9 @@ typedef struct {
     int fb_fd;
 } wm_startup_t;
 
-
 static void _on_signal(int signum) {
     (void)signum;
     exit_requested = 1;
-}
-
-static int _hex_nibble(char ch) {
-    if (ch >= '0' && ch <= '9') {
-        return ch - '0';
-    }
-
-    if (ch >= 'a' && ch <= 'f') {
-        return 10 + (ch - 'a');
-    }
-
-    if (ch >= 'A' && ch <= 'F') {
-        return 10 + (ch - 'A');
-    }
-
-    return -1;
-}
-
-static bool _parse_hex_color(const char *text, u32 *color_out) {
-    if (!text || !color_out) {
-        return false;
-    }
-
-    const char *pos = text;
-    if (pos[0] == '#') {
-        pos++;
-    } else if (pos[0] == '0' && (pos[1] == 'x' || pos[1] == 'X')) {
-        pos += 2;
-    }
-
-    u32 value = 0;
-    size_t digits = 0;
-
-    while (digits < 8) {
-        int nib = _hex_nibble(pos[digits]);
-        if (nib < 0) {
-            break;
-        }
-
-        value = (value << 4) | (u32)nib;
-        digits++;
-    }
-
-    if (pos[digits] != '\0') {
-        return false;
-    }
-
-    if (digits == 6) {
-        *color_out = value;
-        return true;
-    }
-
-    if (digits == 8) {
-        *color_out = value & 0x00ffffffU;
-        return true;
-    }
-
-    return false;
 }
 
 static bool
@@ -117,7 +59,7 @@ _cfg_set_palette_color(wm_config_t *cfg, const char *key, const char *value) {
     }
 
     u32 color = 0;
-    if (!_parse_hex_color(value, &color)) {
+    if (!wm_parse_hex_color(value, &color)) {
         return false;
     }
 
@@ -393,6 +335,43 @@ static bool _cursor_path_join(
     return n > 0 && (size_t)n < out_len;
 }
 
+static const char *_cursor_path_or_fallback(
+    char *path_buf,
+    size_t path_buf_len,
+    const char *dir,
+    const char *name,
+    const char *fallback
+) {
+    if (
+        path_buf &&
+        path_buf_len &&
+        dir &&
+        dir[0] &&
+        name &&
+        name[0] &&
+        _cursor_path_join(path_buf, path_buf_len, dir, name)
+    ) {
+        return path_buf;
+    }
+
+    return fallback;
+}
+
+static void _load_cursor_variant(
+    wm_cursor_kind_t kind,
+    const char *cursors_dir,
+    const char *name,
+    const char *fallback
+) {
+    char path[PATH_MAX];
+    const char *load_path =
+        _cursor_path_or_fallback(path, sizeof(path), cursors_dir, name, fallback);
+
+    if (load_path && !wm_cursor_load_kind(kind, load_path)) {
+        _warn_cursor_failed(load_path);
+    }
+}
+
 int main(int argc, char **argv) {
     int ret = 1;
     int fb_fd = -1;
@@ -424,7 +403,6 @@ int main(int argc, char **argv) {
             goto out;
         }
     }
-
     if (ui_open(&ui, UI_OPEN_INPUT)) {
         io_write_str("wm: failed to open wsctl/keyboard/mouse\n");
         goto out;
@@ -464,7 +442,7 @@ int main(int argc, char **argv) {
         goto out;
     }
 
-    frame_store = malloc(frame_bytes);
+    frame_store = calloc(frame_pixels, sizeof(pixel_t));
     if (!frame_store) {
         io_write_str("wm: failed to allocate frame buffer\n");
         goto out;
@@ -537,66 +515,36 @@ int main(int argc, char **argv) {
     wm_inited = true;
 
     if (bg_path && !wm_background_load(fb_info.width, fb_info.height, bg_path)) {
-            _warn_background_failed(bg_path);
+        _warn_background_failed(bg_path);
     }
 
-    if (cursor_path && !wm_cursor_load_kind(WM_CURSOR_NORMAL, cursor_path)) {
+    if (cursor_path) {
+        if (!wm_cursor_load_kind(WM_CURSOR_NORMAL, cursor_path)) {
             _warn_cursor_failed(cursor_path);
+        }
     }
 
-    char pointer_cursor_path[PATH_MAX];
-    const char *pointer_cursor_load_path = cursor_path;
-
-    bool have_pointer_cursor = _cursor_path_join(
-        pointer_cursor_path,
-        sizeof(pointer_cursor_path),
+    _load_cursor_variant(
+        WM_CURSOR_POINTER,
         cursors_dir,
-        "pointer_interact.ppm"
+        "pointer_interact.ppm",
+        cursor_path
     );
-
-    if (have_pointer_cursor) {
-        pointer_cursor_load_path = pointer_cursor_path;
-    }
-
-    if (
-        pointer_cursor_load_path &&
-        !wm_cursor_load_kind(WM_CURSOR_POINTER, pointer_cursor_load_path)
-    ) {
-            _warn_cursor_failed(pointer_cursor_load_path);
-    }
-
-    char move_cursor_path[PATH_MAX];
-    const char *move_cursor_load_path = cursor_path;
-
-    bool have_move_cursor = _cursor_path_join(
-        move_cursor_path,
-        sizeof(move_cursor_path),
+    _load_cursor_variant(
+        WM_CURSOR_MOVE,
         cursors_dir,
-        "move.ppm"
+        "move.ppm",
+        cursor_path
     );
-
-    if (have_move_cursor) {
-        move_cursor_load_path = move_cursor_path;
-    }
-
-    if (move_cursor_load_path &&
-        !wm_cursor_load_kind(WM_CURSOR_MOVE, move_cursor_load_path)) {
-            _warn_cursor_failed(move_cursor_load_path);
-    }
 
     char resize_fallback_path[PATH_MAX];
-    const char *resize_fallback = NULL;
-
-    bool have_resize_fallback = _cursor_path_join(
+    const char *resize_fallback = _cursor_path_or_fallback(
         resize_fallback_path,
         sizeof(resize_fallback_path),
         cursors_dir,
-        "resize.ppm"
+        "resize.ppm",
+        NULL
     );
-
-    if (have_resize_fallback) {
-        resize_fallback = resize_fallback_path;
-    }
 
     typedef struct {
         wm_cursor_kind_t kind;
@@ -612,25 +560,12 @@ int main(int argc, char **argv) {
     };
 
     for (size_t i = 0; i < (sizeof(resize_specs) / sizeof(resize_specs[0])); i++) {
-        char cursor_kind_path[PATH_MAX];
-        const char *load_path = NULL;
-
-        bool have_kind_path = _cursor_path_join(
-            cursor_kind_path,
-            sizeof(cursor_kind_path),
+        _load_cursor_variant(
+            resize_specs[i].kind,
             cursors_dir,
-            resize_specs[i].name
+            resize_specs[i].name,
+            resize_fallback
         );
-
-        if (have_kind_path) {
-            load_path = cursor_kind_path;
-        } else {
-            load_path = resize_fallback;
-        }
-
-        if (load_path && !wm_cursor_load_kind(resize_specs[i].kind, load_path)) {
-                _warn_cursor_failed(load_path);
-        }
     }
 
     wm_loop(&ui, fb_fd, &fb_info, frame_store, frame_bytes, &exit_requested);

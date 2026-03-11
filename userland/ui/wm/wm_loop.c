@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "wm.h"
+#include "wm_background.h"
 #include "wm_cursor.h"
 #include "wm_rect.h"
 
@@ -34,6 +35,8 @@ extern char **environ;
 #define WM_MIN_CLIENT_H         96
 #define WM_WS_EVENT_BATCH       32
 #define WM_INPUT_EVENT_BATCH    32
+#define WM_WS_EVENT_BUDGET      512
+#define WM_INPUT_EVENT_BUDGET   512
 
 typedef enum {
     WM_DRAG_NONE = 0,
@@ -407,6 +410,10 @@ static void _spawn_term(void) {
     }
 
     if (!pid) {
+        for (int fd = 3; fd < 64; fd++) {
+            close(fd);
+        }
+
         char *argv[] = {"/bin/term", NULL};
         char *empty_env[] = {NULL};
         char *const *envp = environ ? environ : empty_env;
@@ -840,8 +847,13 @@ static int _handle_ws_events(
     wm_rect_t *damage
 ) {
     ws_event_t events[WM_WS_EVENT_BATCH];
+    size_t processed = 0;
 
     for (;;) {
+        if (processed >= WM_WS_EVENT_BUDGET) {
+            return 0;
+        }
+
         ssize_t n = ui_mgr_events(ui, events, ARRAY_LEN(events));
 
         if (n < 0) {
@@ -859,6 +871,8 @@ static int _handle_ws_events(
         size_t count = (size_t)n / sizeof(ws_event_t);
 
         for (size_t i = 0; i < count; i++) {
+            processed++;
+
             if (events[i].type == WS_EVT_SCREEN_ACTIVE) {
                 wm_rect_t full = {
                     .x = 0,
@@ -898,6 +912,10 @@ static int _handle_ws_events(
                 } else {
                     rt->focused_id = -1;
                 }
+            }
+
+            if (processed >= WM_WS_EVENT_BUDGET) {
+                return 0;
             }
         }
     }
@@ -1084,8 +1102,14 @@ static int _handle_input_events(
 ) {
     input_event_t events[WM_INPUT_EVENT_BATCH];
     wm_forward_batch_t forward_batch = {0};
+    size_t processed = 0;
 
     for (;;) {
+        if (processed >= WM_INPUT_EVENT_BUDGET) {
+            _flush_forward_batch(ui, &forward_batch);
+            return 0;
+        }
+
         ssize_t n = ui_input(ui, events, ARRAY_LEN(events));
 
         if (n <= 0) {
@@ -1102,6 +1126,7 @@ static int _handle_input_events(
             input_event_t *event = &events[i];
             bool consumed_mouse = false;
             bool key_handled = false;
+            processed++;
 
             if (event->type != INPUT_EVENT_MOUSE_MOVE) {
                 _flush_forward_batch(ui, &forward_batch);
@@ -1180,6 +1205,11 @@ static int _handle_input_events(
                     rt->focused_id = -1;
                 }
             }
+
+            if (processed >= WM_INPUT_EVENT_BUDGET) {
+                _flush_forward_batch(ui, &forward_batch);
+                return 0;
+            }
         }
     }
 }
@@ -1230,6 +1260,22 @@ void wm_loop(
         .width = (i32)fb_info->width,
         .height = (i32)fb_info->height,
     };
+
+    // Prime the display with a deterministic full frame before entering the
+    // event-driven dirty-rect loop. This prevents stale VRAM bytes from
+    // surfacing as single-pixel artifacts on first visible frame.
+    wm_render_frame(frame_store, fb_info->width, fb_info->height);
+    wm_cursor_draw_kind(
+        frame_store,
+        fb_info->width,
+        fb_info->height,
+        rt.mouse_x,
+        rt.mouse_y,
+        rt.cursor_kind
+    );
+    if (_present_damage(fb_fd, fb_info, frame_store, &damage) == 0) {
+        memset(&damage, 0, sizeof(damage));
+    }
 
     for (;;) {
         if (*exit_requested) {

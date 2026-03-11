@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/cpu.h>
-#include <sys/stats.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 
 #include "vfs.h"
@@ -34,6 +34,14 @@
 static u64 boot_seconds = 0;
 
 typedef struct {
+    u64 now;
+    u64 boot;
+    u64 hz;
+    u64 ticks;
+    u64 monotonic_ns;
+} dev_clock_snapshot_t;
+
+typedef struct {
     const char *name;
     devfs_device_init_fn init_fn;
 } devfs_device_entry_t;
@@ -46,15 +54,17 @@ static u64 _boot_seconds(void) {
         return boot_seconds;
     }
 
-    u64 now = arch_wallclock_seconds();
-    u32 hz = arch_timer_hz();
+    u64 now = 0;
+    u64 ticks = 0;
+    u64 hz = 0;
+    arch_wallclock_snapshot(&now, &ticks, &hz);
 
     if (!hz) {
         boot_seconds = now;
         return boot_seconds;
     }
 
-    u64 uptime = arch_timer_ticks() / hz;
+    u64 uptime = ticks / hz;
 
     if (now > uptime) {
         boot_seconds = now - uptime;
@@ -271,13 +281,10 @@ static ssize_t _dev_clock_read(
     (void)node;
     (void)flags;
 
-    stats_snapshot_t snapshot = {0};
-    stats_take_snapshot(&snapshot);
-
-    u64 now = arch_wallclock_seconds();
-    u64 boot = _boot_seconds();
-    u64 hz = arch_timer_hz();
-    u64 ticks = arch_timer_ticks();
+    dev_clock_snapshot_t clock = {0};
+    arch_wallclock_snapshot(&clock.now, &clock.ticks, &clock.hz);
+    clock.boot = _boot_seconds();
+    clock.monotonic_ns = arch_monotonic_ns();
 
     char text[SYSINFO_TEXT_MAX];
     snprintf(
@@ -287,15 +294,35 @@ static ssize_t _dev_clock_read(
         "boot=%" PRIu64 "\n"
         "hz=%" PRIu64 "\n"
         "ticks=%" PRIu64 "\n"
-        "timer_irq_ns=%" PRIu64 "\n",
-        now,
-        boot,
-        hz,
-        ticks,
-        snapshot.timer_irq_ns
+        "monotonic_ns=%" PRIu64 "\n",
+        clock.now,
+        clock.boot,
+        clock.hz,
+        clock.ticks,
+        clock.monotonic_ns
     );
 
     return _dev_text_read(text, buf, offset, len);
+}
+
+static ssize_t _dev_clock_ioctl(vfs_node_t *node, u64 request, void *args) {
+    (void)node;
+
+    if (request != CLOCKIO_GETSNAPSHOT) {
+        return -ENOTTY;
+    }
+
+    if (!args) {
+        return -EINVAL;
+    }
+
+    dev_clock_snapshot_t clock = {0};
+    arch_wallclock_snapshot(&clock.now, &clock.ticks, &clock.hz);
+    clock.boot = _boot_seconds();
+    clock.monotonic_ns = arch_monotonic_ns();
+
+    memcpy(args, &clock, sizeof(clock));
+    return 0;
 }
 
 static ssize_t _dev_swap_read(
@@ -325,7 +352,7 @@ static ssize_t _dev_swap_read(
     return _dev_text_read(text, buf, offset, len);
 }
 
-static ssize_t _dev_stats_read(
+static ssize_t _dev_sched_read(
     vfs_node_t *node,
     void *buf,
     size_t offset,
@@ -335,23 +362,39 @@ static ssize_t _dev_stats_read(
     (void)node;
     (void)flags;
 
-    stats_snapshot_t snapshot = {0};
-    stats_take_snapshot(&snapshot);
+    sched_metrics_snapshot_t sched_snapshot = {0};
+    sched_metrics_snapshot(&sched_snapshot);
 
-    char text[SYSINFO_TEXT_MAX * 3];
+    char text[SYSINFO_TEXT_MAX * 4];
     snprintf(
         text,
         sizeof(text),
         "sched_switch_count=%" PRIu64 "\n"
-        "poll_sleep_loops=%" PRIu64 "\n"
-        "ws_fb_write_bytes=%" PRIu64 "\n"
-        "fb_present_bytes=%" PRIu64 "\n"
-        "wm_dirty_pixels=%" PRIu64 "\n",
-        snapshot.sched_switch_count,
-        snapshot.poll_sleep_loops,
-        snapshot.ws_fb_write_bytes,
-        snapshot.fb_present_bytes,
-        snapshot.wm_dirty_pixels
+        "sched_migrations=%" PRIu64 "\n"
+        "sched_steals=%" PRIu64 "\n"
+        "sched_wake_ipi=%" PRIu64 "\n"
+        "sched_runqueue_max=%" PRIu64 "\n"
+        "sched_balance_runs=%" PRIu64 "\n"
+        "sched_ownership_conflicts=%" PRIu64 "\n"
+        "sched_ready_running_conflicts=%" PRIu64 "\n"
+        "sched_ref_underflow=%" PRIu64 "\n"
+        "wait_timeout_count=%" PRIu64 "\n"
+        "sched_lock_contention_spins=%" PRIu64 "\n"
+        "lockdep_inversion_count=%" PRIu64 "\n"
+        "lockdep_block_under_spin_count=%" PRIu64 "\n",
+        sched_snapshot.sched_switch_count,
+        sched_snapshot.sched_migrations,
+        sched_snapshot.sched_steals,
+        sched_snapshot.sched_wake_ipi,
+        sched_snapshot.sched_runqueue_max,
+        sched_snapshot.sched_balance_runs,
+        sched_snapshot.sched_ownership_conflicts,
+        sched_snapshot.sched_ownership_conflicts,
+        sched_snapshot.sched_ref_underflow,
+        sched_snapshot.wait_timeout_count,
+        sched_snapshot.sched_lock_contention_spins,
+        sched_snapshot.lockdep_inversion_count,
+        sched_snapshot.lockdep_block_under_spin_count
     );
 
     return _dev_text_read(text, buf, offset, len);
@@ -590,6 +633,9 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
 
     vfs_interface_t *clock_if =
         vfs_create_interface(_dev_clock_read, NULL, NULL);
+    if (clock_if) {
+        clock_if->ioctl = _dev_clock_ioctl;
+    }
 
     if (
         !clock_if ||
@@ -614,12 +660,12 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
         ok = false;
     }
 
-    vfs_interface_t *stats_if = vfs_create_interface(_dev_stats_read, NULL, NULL);
+    vfs_interface_t *sched_if = vfs_create_interface(_dev_sched_read, NULL, NULL);
     if (
-        !stats_if ||
-        !devfs_register_node(dev_dir, "stats", VFS_CHARDEV, 0444, stats_if, NULL)
+        !sched_if ||
+        !devfs_register_node(dev_dir, "sched", VFS_CHARDEV, 0444, sched_if, NULL)
     ) {
-        log_warn("failed to create /dev/stats");
+        log_warn("failed to create /dev/sched");
         ok = false;
     }
 

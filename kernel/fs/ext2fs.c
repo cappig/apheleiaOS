@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include <sys/disk.h>
+#include <sys/lock.h>
 #include <sys/vfs.h>
 
 #define EXT2_BLOCK_CACHE_SIZE 64
@@ -32,6 +33,7 @@ typedef struct {
 } ext2_block_cache_entry_t;
 
 typedef struct {
+    mutex_t lock;
     ext2_superblock_t superblock;
     ext2_group_descriptor_t *groups;
     u32 group_count;
@@ -1366,8 +1368,11 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         return -1;
     }
 
+    mutex_lock(&priv->lock);
+
     u64 size = ext2_file_size(&info->inode);
     if (offset >= size) {
+        mutex_unlock(&priv->lock);
         return 0;
     }
 
@@ -1381,6 +1386,7 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     u8 *bounce = malloc(block_size);
 
     if (!bounce) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1394,6 +1400,7 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
 
         if (!_read_block(priv, part, block, bounce)) {
             free(bounce);
+            mutex_unlock(&priv->lock);
             return -1;
         }
 
@@ -1418,6 +1425,7 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         }
     }
 
+    mutex_unlock(&priv->lock);
     return (ssize_t)(to_read - remaining);
 }
 
@@ -1437,11 +1445,15 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         return -1;
     }
 
+    mutex_lock(&priv->lock);
+
     if (!ext2_is_type(&info->inode, EXT2_IT_FILE)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!len) {
+        mutex_unlock(&priv->lock);
         return 0;
     }
 
@@ -1449,6 +1461,7 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     u8 *bounce = malloc(block_size);
 
     if (!bounce) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1466,6 +1479,7 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
 
         if (!_ensure_block(priv, part, info, block_index, &block, &changed)) {
             free(bounce);
+            mutex_unlock(&priv->lock);
             return -1;
         }
 
@@ -1477,6 +1491,7 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         if (block_off || chunk < block_size) {
             if (!_read_block(priv, part, block, bounce)) {
                 free(bounce);
+                mutex_unlock(&priv->lock);
                 return -1;
             }
         } else {
@@ -1487,6 +1502,7 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
 
         if (!_write_block(priv, part, block, bounce)) {
             free(bounce);
+            mutex_unlock(&priv->lock);
             return -1;
         }
 
@@ -1509,15 +1525,18 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     inode_changed = true;
 
     if (inode_changed && !_write_inode(priv, part, info->inode_num, &info->inode)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_update_super_write_time(priv, part, now)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     _sync_vnode(node, &info->inode);
 
+    mutex_unlock(&priv->lock);
     return (ssize_t)len;
 }
 
@@ -1538,7 +1557,10 @@ static ssize_t _truncate_file(vfs_node_t *node, size_t len) {
         return -1;
     }
 
+    mutex_lock(&priv->lock);
+
     if (!_release_inode_blocks(priv, part, &info->inode)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1548,15 +1570,18 @@ static ssize_t _truncate_file(vfs_node_t *node, size_t len) {
     info->inode.last_modification_time = now;
 
     if (!_write_inode(priv, part, info->inode_num, &info->inode)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_update_super_write_time(priv, part, now)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     _sync_vnode(node, &info->inode);
 
+    mutex_unlock(&priv->lock);
     return 0;
 }
 
@@ -1573,7 +1598,10 @@ static ssize_t _dir_remove(vfs_node_t *node, char *name) {
         return -1;
     }
 
+    mutex_lock(&priv->lock);
+
     if (!ext2_is_type(&parent_info->inode, EXT2_IT_DIR)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1593,32 +1621,39 @@ static ssize_t _dir_remove(vfs_node_t *node, char *name) {
     );
 
     if (!found_entry) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     ext2_inode_t inode;
     if (!_read_inode(priv, part, inode_num, &inode)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     bool is_dir = ext2_is_type(&inode, EXT2_IT_DIR);
     if (is_dir && !_dir_is_empty(priv, part, &inode)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_dir_remove_entry(priv, part, parent_info, name, NULL, NULL)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_release_inode_blocks(priv, part, &inode)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_clear_inode(priv, part, inode_num)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_free_inode(priv, part, inode_num)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1639,14 +1674,17 @@ static ssize_t _dir_remove(vfs_node_t *node, char *name) {
     );
 
     if (!wrote_parent_inode) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_update_super_write_time(priv, part, now)) {
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     _sync_vnode(node, &parent_info->inode);
+    mutex_unlock(&priv->lock);
     return 0;
 }
 
@@ -1663,8 +1701,11 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         return -1;
     }
 
+    mutex_lock(&priv->lock);
+
     if (!ext2_is_type(&parent_info->inode, EXT2_IT_DIR)) {
         log_warn("create '%s' failed: parent is not a directory", child->name);
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1675,12 +1716,14 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
             child->name,
             child->type
         );
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     u32 inode_num = 0;
     if (!_alloc_inode(priv, part, &inode_num)) {
         log_warn("create '%s' failed: no free inode", child->name);
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1701,6 +1744,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         if (!_alloc_block(priv, part, &block)) {
             log_warn("create '%s' failed: no free data block", child->name);
             _free_inode(priv, part, inode_num);
+            mutex_unlock(&priv->lock);
             return -1;
         }
 
@@ -1720,6 +1764,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
             log_warn("create '%s' failed: dot entries write", child->name);
             _free_block(priv, part, block);
             _free_inode(priv, part, inode_num);
+            mutex_unlock(&priv->lock);
             return -1;
         }
     }
@@ -1728,6 +1773,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         log_warn("create '%s' failed: inode write", child->name);
         _release_inode_blocks(priv, part, &inode);
         _free_inode(priv, part, inode_num);
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1747,6 +1793,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         _release_inode_blocks(priv, part, &inode);
         _clear_inode(priv, part, inode_num);
         _free_inode(priv, part, inode_num);
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1766,6 +1813,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
 
     if (!wrote_parent_inode) {
         log_warn("create '%s' failed: parent inode write", child->name);
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1773,11 +1821,13 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         log_warn(
             "create '%s' failed: superblock write time update", child->name
         );
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_init_vnode(child, node->fs, inode_num, &inode)) {
         log_warn("create '%s' failed: vnode init", child->name);
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1795,6 +1845,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
 
     if ((child->type == VFS_FILE || child->type == VFS_DIR) && !iface) {
         log_warn("create '%s' failed: interface alloc", child->name);
+        mutex_unlock(&priv->lock);
         return -1;
     }
 
@@ -1802,6 +1853,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
 
     _sync_vnode(node, &parent_info->inode);
 
+    mutex_unlock(&priv->lock);
     return 0;
 }
 
@@ -2001,6 +2053,8 @@ static fs_instance_t *_probe(disk_partition_t *part) {
         return NULL;
     }
 
+    mutex_init(&priv->lock);
+
     if (!_ext2_read(part, &priv->superblock, 1024, sizeof(ext2_superblock_t))) {
         free(priv);
         return NULL;
@@ -2086,19 +2140,23 @@ static bool _build_tree(fs_instance_t *instance) {
     }
 
     ext2_private_t *priv = instance->private;
+    mutex_lock(&priv->lock);
     ext2_inode_t root_inode;
 
     if (!_read_inode(priv, instance->partition, EXT2_ROOT_INODE, &root_inode)) {
+        mutex_unlock(&priv->lock);
         return false;
     }
 
     vfs_node_t *root = vfs_create_node(NULL, VFS_DIR);
     if (!root) {
+        mutex_unlock(&priv->lock);
         return false;
     }
 
     if (!_init_vnode(root, instance, EXT2_ROOT_INODE, &root_inode)) {
         vfs_destroy_node(root);
+        mutex_unlock(&priv->lock);
         return false;
     }
 
@@ -2111,9 +2169,11 @@ static bool _build_tree(fs_instance_t *instance) {
 
     if (!_assign_interface(root, VFS_DIR)) {
         vfs_destroy_node(root);
+        mutex_unlock(&priv->lock);
         return false;
     }
 
+    mutex_unlock(&priv->lock);
     return true;
 }
 
@@ -2125,6 +2185,7 @@ _node_chmod(fs_instance_t *instance, vfs_node_t *node, mode_t mode) {
 
     ext2_private_t *priv = instance->private;
     ext2_node_info_t *info = node->private;
+    mutex_lock(&priv->lock);
     u32 now = _now(priv);
 
     info->inode.type =
@@ -2138,14 +2199,17 @@ _node_chmod(fs_instance_t *instance, vfs_node_t *node, mode_t mode) {
     );
 
     if (!wrote_inode) {
+        mutex_unlock(&priv->lock);
         return false;
     }
 
     if (!_update_super_write_time(priv, instance->partition, now)) {
+        mutex_unlock(&priv->lock);
         return false;
     }
 
     _sync_vnode(node, &info->inode);
+    mutex_unlock(&priv->lock);
     return true;
 }
 
@@ -2157,6 +2221,7 @@ _node_chown(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid) {
 
     ext2_private_t *priv = instance->private;
     ext2_node_info_t *info = node->private;
+    mutex_lock(&priv->lock);
     u32 now = _now(priv);
 
     info->inode.uid = (u16)uid;
@@ -2170,14 +2235,17 @@ _node_chown(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid) {
     );
 
     if (!wrote_inode) {
+        mutex_unlock(&priv->lock);
         return false;
     }
 
     if (!_update_super_write_time(priv, instance->partition, now)) {
+        mutex_unlock(&priv->lock);
         return false;
     }
 
     _sync_vnode(node, &info->inode);
+    mutex_unlock(&priv->lock);
     return true;
 }
 
@@ -2208,12 +2276,21 @@ static bool _destroy_tree(fs_instance_t *instance) {
         return false;
     }
 
+    ext2_private_t *priv = instance->private;
+    if (priv) {
+        mutex_lock(&priv->lock);
+    }
+
     tree_node_t *root = instance->subtree_root;
 
     tree_prune_callback(root, _free_vnode);
 
     instance->subtree_root = NULL;
     instance->has_tree = false;
+
+    if (priv) {
+        mutex_unlock(&priv->lock);
+    }
 
     return true;
 }

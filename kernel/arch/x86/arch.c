@@ -18,6 +18,7 @@
 #include <sys/disk.h>
 #include <sys/framebuffer.h>
 #include <sys/keyboard.h>
+#include <sys/lock.h>
 #include <sys/logsink.h>
 #include <sys/mouse.h>
 #include <sys/panic.h>
@@ -45,6 +46,7 @@
 #define CPUID_FEATURES          0x00000001
 #define CPUID_FEAT_EDX_FXSR     (1U << 24)
 #define CPUID_FEAT_EDX_SSE      (1U << 25)
+#define WALLCLOCK_RTC_RESYNC_SEC 60ULL
 
 static bool log_console_ready = false;
 static kernel_args_t boot_args = {0};
@@ -56,7 +58,11 @@ static bool arch_fpu_fxsr = false;
 
 static char boot_log_history[LOG_BOOT_HISTORY_CAP];
 static size_t boot_log_history_len = 0;
-static volatile int boot_log_lock = 0;
+static spinlock_t boot_log_lock = SPINLOCK_INIT;
+static volatile u64 wallclock_base_seconds ALIGNED(8) = 0;
+static volatile u64 wallclock_base_ticks ALIGNED(8) = 0;
+static volatile u64 wallclock_last_sync_ticks ALIGNED(8) = 0;
+static volatile u32 wallclock_sync_inflight = 0;
 
 typedef struct {
     u64 paddr;
@@ -114,20 +120,11 @@ static void _log_history_append(const char *s, size_t len) {
 }
 
 static unsigned long _boot_log_lock_irqsave(void) {
-    unsigned long flags = arch_irq_save();
-
-    while (__sync_lock_test_and_set(&boot_log_lock, 1)) {
-        while (boot_log_lock) {
-            arch_cpu_relax();
-        }
-    }
-
-    return flags;
+    return spin_lock_irqsave(&boot_log_lock);
 }
 
 static void _boot_log_unlock_irqrestore(unsigned long flags) {
-    __sync_lock_release(&boot_log_lock);
-    arch_irq_restore(flags);
+    spin_unlock_irqrestore(&boot_log_lock, flags);
 }
 
 static void _log_history_replay_console(void) {
@@ -989,7 +986,7 @@ const kernel_args_t *arch_init(void *boot_info) {
     _publish_framebuffer(info);
 
     acpi_init(info->acpi_root_ptr);
-    tsc_init();
+    (void)tsc_init();
     irq_init();
 
     pci_init();
@@ -1083,11 +1080,27 @@ void *arch_cpu_get_local(void) {
 
     return (void *)(uintptr_t)read_msr(KERNEL_GS_BASE);
 #else
+    size_t core_id = 0;
+    if (gdt_current_core_id(&core_id) && core_id < MAX_CORES) {
+        cpu_core_t *core = &cores_local[core_id];
+        if (core->valid) {
+            return core;
+        }
+    }
+
     cpuid_regs_t regs = {0};
     cpuid(1, &regs);
-    u32 apic_id = (regs.ebx >> 24) & 0xffU;
+    u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
+    u32 live_apic_id = lapic_id();
 
-    cpu_core_t *core = cpu_find_by_lapic(apic_id);
+    if (live_apic_id || live_apic_id == cpuid_apic_id) {
+        cpu_core_t *core = cpu_find_by_lapic(live_apic_id);
+        if (core) {
+            return core;
+        }
+    }
+
+    cpu_core_t *core = cpu_find_by_lapic(cpuid_apic_id);
     if (core) {
         return core;
     }
@@ -1104,6 +1117,26 @@ void arch_irq_restore(unsigned long flags) {
     irq_restore(flags);
 }
 
+bool arch_irq_enabled(void) {
+#if defined(__x86_64__)
+    u64 flags = 0;
+    asm volatile("pushfq\n"
+                 "popq %0"
+                 : "=r"(flags)
+                 :
+                 : "memory", "cc");
+    return (flags & (1ULL << 9)) != 0;
+#else
+    u32 flags = 0;
+    asm volatile("pushf\n"
+                 "pop %0"
+                 : "=r"(flags)
+                 :
+                 : "memory", "cc");
+    return (flags & (1U << 9)) != 0;
+#endif
+}
+
 void arch_cpu_wait(void) {
     asm volatile("hlt");
 }
@@ -1116,6 +1149,10 @@ void arch_irq_disable(void) {
     disable_interrupts();
 }
 
+void arch_sched_request_resched(void) {
+    asm volatile("int %0" : : "i"(SCHED_SOFT_RESCHED_VECTOR) : "memory");
+}
+
 u64 arch_timer_ticks(void) {
     return irq_ticks();
 }
@@ -1124,19 +1161,128 @@ u32 arch_timer_hz(void) {
     return irq_timer_hz();
 }
 
-u64 arch_wallclock_seconds(void) {
-    u64 seconds = x86_rtc_unix_seconds();
-
-    if (seconds) {
-        return seconds;
-    }
-
+u64 arch_monotonic_ns(void) {
     u64 hz = irq_timer_hz();
     if (!hz) {
         return 0;
     }
 
-    return irq_ticks() / hz;
+    u64 ticks = irq_ticks();
+    u64 sec = ticks / hz;
+    u64 rem_ticks = ticks % hz;
+    u64 rem_ns = (rem_ticks * 1000000000ULL) / hz;
+    return sec * 1000000000ULL + rem_ns;
+}
+
+static void _wallclock_set_base(u64 seconds, u64 ticks) {
+    __atomic_store_n(&wallclock_base_seconds, seconds, __ATOMIC_RELEASE);
+    __atomic_store_n(&wallclock_base_ticks, ticks, __ATOMIC_RELEASE);
+    __atomic_store_n(&wallclock_last_sync_ticks, ticks, __ATOMIC_RELEASE);
+}
+
+static void _wallclock_try_rtc_sync(u64 now_ticks, bool force) {
+    u64 hz = irq_timer_hz();
+    if (!hz) {
+        return;
+    }
+
+    u64 base_seconds =
+        __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
+    u64 base_ticks =
+        __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
+    u64 last_sync =
+        __atomic_load_n(&wallclock_last_sync_ticks, __ATOMIC_ACQUIRE);
+    u64 sync_interval = hz * WALLCLOCK_RTC_RESYNC_SEC;
+
+    if (!force && base_seconds && last_sync && now_ticks >= last_sync &&
+        (now_ticks - last_sync) < sync_interval) {
+        return;
+    }
+
+    u32 expected = 0;
+    if (!__atomic_compare_exchange_n(
+            &wallclock_sync_inflight,
+            &expected,
+            1,
+            false,
+            __ATOMIC_ACQ_REL,
+            __ATOMIC_ACQUIRE
+        )) {
+        return;
+    }
+
+    u64 predicted_seconds = base_seconds;
+    if (base_seconds && now_ticks >= base_ticks) {
+        predicted_seconds = base_seconds + ((now_ticks - base_ticks) / hz);
+    }
+
+    u64 rtc_seconds = x86_rtc_unix_seconds();
+    if (rtc_seconds) {
+        if (base_seconds) {
+            if (rtc_seconds < predicted_seconds) {
+                rtc_seconds = predicted_seconds;
+            } else if (rtc_seconds > (predicted_seconds + 1ULL)) {
+                rtc_seconds = predicted_seconds + 1ULL;
+            }
+        }
+
+        _wallclock_set_base(rtc_seconds, now_ticks);
+    } else if (!base_seconds) {
+        _wallclock_set_base(now_ticks / hz, now_ticks);
+    }
+
+    __atomic_store_n(&wallclock_sync_inflight, 0, __ATOMIC_RELEASE);
+}
+
+static u64 _wallclock_seconds_from_ticks(u64 now_ticks, u64 hz) {
+    if (!hz) {
+        return 0;
+    }
+
+    u64 base_seconds =
+        __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
+    u64 base_ticks =
+        __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
+
+    if (!base_seconds) {
+        _wallclock_try_rtc_sync(now_ticks, true);
+        base_seconds = __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
+        base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
+    }
+
+    if (!base_seconds && hz) {
+        _wallclock_set_base(now_ticks / hz, now_ticks);
+        base_seconds = __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
+        base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
+    }
+
+    u64 seconds = base_seconds;
+    if (hz && now_ticks >= base_ticks) {
+        seconds = base_seconds + ((now_ticks - base_ticks) / hz);
+    }
+
+    return seconds;
+}
+
+void arch_wallclock_snapshot(u64 *seconds_out, u64 *ticks_out, u64 *hz_out) {
+    u64 ticks = arch_timer_ticks();
+    u64 hz = irq_timer_hz();
+    u64 seconds = _wallclock_seconds_from_ticks(ticks, hz);
+
+    if (seconds_out) {
+        *seconds_out = seconds;
+    }
+    if (ticks_out) {
+        *ticks_out = ticks;
+    }
+    if (hz_out) {
+        *hz_out = hz;
+    }
+}
+
+void arch_wallclock_maintain(void) {
+    u64 now_ticks = arch_timer_ticks();
+    _wallclock_try_rtc_sync(now_ticks, false);
 }
 
 const char *arch_name(void) {

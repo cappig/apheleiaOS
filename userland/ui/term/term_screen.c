@@ -937,8 +937,33 @@ static void draw_glyph(size_t px, size_t py, u32 codepoint, u32 fg, u32 bg) {
     }
 
     u32 src_w = glyph_w - glyph_x0;
-    u32 draw_w = term_screen.cell_width;
-    u32 draw_h = term_screen.cell_height;
+    u32 cell_w = term_screen.cell_width;
+    u32 cell_h = term_screen.cell_height;
+    u32 draw_w = cell_w;
+    u32 draw_h = cell_h;
+
+    u32 right = term_screen.width - (u32)px;
+    u32 bottom = term_screen.height - (u32)py;
+
+    if (cell_w > right) {
+        cell_w = right;
+    }
+
+    if (cell_h > bottom) {
+        cell_h = bottom;
+    }
+
+    if (!cell_w || !cell_h) {
+        return;
+    }
+
+    // Always clear the full cell so sub-glyph updates do not leave stale pixels.
+    for (u32 by = 0; by < cell_h; by++) {
+        u32 *row = dst + (size_t)by * stride;
+        for (u32 bx = 0; bx < cell_w; bx++) {
+            row[bx] = bg;
+        }
+    }
 
     if (draw_w > src_w) {
         draw_w = src_w;
@@ -948,15 +973,12 @@ static void draw_glyph(size_t px, size_t py, u32 codepoint, u32 fg, u32 bg) {
         draw_h = glyph_h;
     }
 
-    u32 right = term_screen.width - (u32)px;
-    u32 bottom = term_screen.height - (u32)py;
-
-    if (draw_w > right) {
-        draw_w = right;
+    if (draw_w > cell_w) {
+        draw_w = cell_w;
     }
 
-    if (draw_h > bottom) {
-        draw_h = bottom;
+    if (draw_h > cell_h) {
+        draw_h = cell_h;
     }
 
     if (!draw_w || !draw_h) {

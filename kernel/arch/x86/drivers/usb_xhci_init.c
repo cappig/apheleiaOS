@@ -190,19 +190,7 @@ void _xhci_op_lock(xhci_controller_t *ctrl) {
         return;
     }
 
-    for (;;) {
-        if (!__sync_lock_test_and_set(&ctrl->op_lock, 1)) {
-            return;
-        }
-
-        while (ctrl->op_lock) {
-            if (sched_is_running() && sched_current()) {
-                sched_yield();
-            } else {
-                cpu_pause();
-            }
-        }
-    }
+    mutex_lock(&ctrl->op_lock);
 }
 
 void _xhci_op_unlock(xhci_controller_t *ctrl) {
@@ -210,7 +198,7 @@ void _xhci_op_unlock(xhci_controller_t *ctrl) {
         return;
     }
 
-    __sync_lock_release(&ctrl->op_lock);
+    mutex_unlock(&ctrl->op_lock);
 }
 
 bool _xhci_alloc_dma_pages(
@@ -684,7 +672,7 @@ static void _xhci_release_dma(xhci_controller_t *ctrl) {
     ctrl->runtime_ready = false;
     ctrl->commands_healthy = false;
     ctrl->first_fault_logged = false;
-    ctrl->event_lock = 0;
+    spinlock_init(&ctrl->event_lock);
     ctrl->event_cycle_sync_pending = false;
 
     _xhci_reset_wait_state(ctrl);
@@ -1617,6 +1605,8 @@ static bool usb_xhci_init(void) {
 
         xhci_controller_t *ctrl = &controllers[controller_count];
         memset(ctrl, 0, sizeof(*ctrl));
+        mutex_init(&ctrl->op_lock);
+        spinlock_init(&ctrl->event_lock);
 
         ctrl->used = true;
         ctrl->bus = node->bus;

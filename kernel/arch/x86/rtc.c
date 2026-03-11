@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <string.h>
+#include <sys/lock.h>
 #include <time.h>
 #include <x86/asm.h>
 #include <x86/rtc.h>
@@ -34,6 +35,8 @@ typedef struct {
     u8 century;
     u8 status_b;
 } rtc_sample_t;
+
+static spinlock_t rtc_lock = SPINLOCK_INIT;
 
 static u8 _cmos_read(u8 reg) {
     outb(CMOS_ADDR_PORT, (u8)(CMOS_NMI_DISABLE | reg));
@@ -138,6 +141,8 @@ static bool _sample_valid(const rtc_sample_t *sample) {
 }
 
 u64 x86_rtc_unix_seconds(void) {
+    unsigned long flags = spin_lock_irqsave(&rtc_lock);
+
     rtc_sample_t first = {0};
     rtc_sample_t second = {0};
 
@@ -160,11 +165,13 @@ u64 x86_rtc_unix_seconds(void) {
     _normalize_sample(&second);
 
     if (!_sample_valid(&second)) {
+        spin_unlock_irqrestore(&rtc_lock, flags);
         return 0;
     }
 
     int year = _full_year(&second);
     if (year < 1970) {
+        spin_unlock_irqrestore(&rtc_lock, flags);
         return 0;
     }
 
@@ -179,8 +186,10 @@ u64 x86_rtc_unix_seconds(void) {
 
     time_t unix_time = mktime(&tm_val);
     if (unix_time < 0) {
+        spin_unlock_irqrestore(&rtc_lock, flags);
         return 0;
     }
 
+    spin_unlock_irqrestore(&rtc_lock, flags);
     return (u64)unix_time;
 }

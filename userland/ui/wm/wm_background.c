@@ -1,11 +1,11 @@
 #include "wm_background.h"
 
-#include <limits.h>
 #include <parse/ppm.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "wm_color.h"
 #include "wm_file.h"
 
 #define WM_BG_MAX_FILE_BYTES (64U * 1024U * 1024U)
@@ -13,63 +13,7 @@
 static pixel_t *bg_pixels = NULL;
 static u32 bg_width = 0;
 static u32 bg_height = 0;
-
-static int _hex_nibble(char ch) {
-    if (ch >= '0' && ch <= '9') {
-        return ch - '0';
-    }
-
-    if (ch >= 'a' && ch <= 'f') {
-        return 10 + (ch - 'a');
-    }
-
-    if (ch >= 'A' && ch <= 'F') {
-        return 10 + (ch - 'A');
-    }
-
-    return -1;
-}
-
-static bool _parse_hex_color(const char *text, u32 *color_out) {
-    if (!text || !color_out) {
-        return false;
-    }
-
-    const char *pos = text;
-    if (pos[0] == '#') {
-        pos++;
-    } else if (pos[0] == '0' && (pos[1] == 'x' || pos[1] == 'X')) {
-        pos += 2;
-    }
-
-    u32 value = 0;
-    size_t digits = 0;
-    while (digits < 8) {
-        int nib = _hex_nibble(pos[digits]);
-        if (nib < 0) {
-            break;
-        }
-
-        value = (value << 4) | (u32)nib;
-        digits++;
-    }
-
-    if (pos[digits] != '\0') {
-        return false;
-    }
-
-    if (digits == 6) {
-        *color_out = value;
-        return true;
-    }
-
-    if (digits == 8) {
-        *color_out = value & 0x00ffffffU;
-        return true;
-    }
-
-    return false;
-}
+static const size_t k_size_max = (size_t)-1;
 
 static void _fill_solid_color(size_t pixels, pixel_t color) {
     for (size_t i = 0; i < pixels; i++) {
@@ -96,14 +40,12 @@ static void _build_cover_map(
     if (lhs > rhs) {
         crop_w = (u32)(((u64)src_h * (u64)dst_w) / (u64)dst_h);
         if (!crop_w) {
-
             crop_w = 1;
         }
 
         crop_x = (src_w - crop_w) / 2;
     } else if (lhs < rhs) {
         crop_h = (u32)(((u64)src_w * (u64)dst_h) / (u64)dst_w);
-
         if (!crop_h) {
             crop_h = 1;
         }
@@ -114,7 +56,6 @@ static void _build_cover_map(
     for (u32 x = 0; x < dst_w; x++) {
         u64 num = (u64)(2U * x + 1U) * (u64)crop_w;
         u32 sx = crop_x + (u32)(num / (2ULL * (u64)dst_w));
-
         if (sx >= src_w) {
             sx = src_w - 1;
         }
@@ -125,7 +66,6 @@ static void _build_cover_map(
     for (u32 y = 0; y < dst_h; y++) {
         u64 num = (u64)(2U * y + 1U) * (u64)crop_h;
         u32 sy = crop_y + (u32)(num / (2ULL * (u64)dst_h));
-
         if (sy >= src_h) {
             sy = src_h - 1;
         }
@@ -152,12 +92,11 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
     }
 
     size_t dst_pixels = (size_t)fb_width * (size_t)fb_height;
-
     if (fb_height && dst_pixels / fb_height != fb_width) {
         return false;
     }
 
-    if (dst_pixels > SIZE_MAX / sizeof(pixel_t)) {
+    if (dst_pixels > k_size_max / sizeof(pixel_t)) {
         return false;
     }
 
@@ -169,7 +108,7 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
     bg_pixels = dst;
 
     u32 solid_color = 0;
-    if (_parse_hex_color(path, &solid_color)) {
+    if (wm_parse_hex_color(path, &solid_color)) {
         _fill_solid_color(dst_pixels, solid_color);
         bg_width = fb_width;
         bg_height = fb_height;
@@ -178,7 +117,6 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
 
     u8 *file_data = NULL;
     size_t file_len = 0;
-
     if (!wm_file_read_all(path, WM_BG_MAX_FILE_BYTES, &file_data, &file_len)) {
         goto fail;
     }
@@ -190,31 +128,27 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
 
     u32 *x_map = malloc((size_t)fb_width * sizeof(u32));
     u32 *y_map = malloc((size_t)fb_height * sizeof(u32));
-
     if (!x_map || !y_map) {
         if (x_map) {
             free(x_map);
         }
-
         if (y_map) {
             free(y_map);
         }
-
         goto fail;
     }
 
     const u8 *raster = ppm_blob.raster;
     u32 src_w = ppm_blob.width;
     u32 src_h = ppm_blob.height;
-
     _build_cover_map(src_w, src_h, fb_width, fb_height, x_map, y_map);
 
     for (u32 y = 0; y < fb_height; y++) {
         size_t dst_row = (size_t)y * fb_width;
-        size_t src_row = (size_t)y_map[y] * (size_t)src_w * 3;
+        size_t src_row = (size_t)y_map[y] * (size_t)src_w * 3U;
 
         for (u32 x = 0; x < fb_width; x++) {
-            size_t src_off = src_row + (size_t)x_map[x] * 3;
+            size_t src_off = src_row + (size_t)x_map[x] * 3U;
             u8 r = raster[src_off + 0];
             u8 g = raster[src_off + 1];
             u8 b = raster[src_off + 2];
@@ -249,7 +183,7 @@ bool wm_background_draw(pixel_t *frame, u32 fb_width, u32 fb_height) {
         return false;
     }
 
-    if (pixels > SIZE_MAX / sizeof(pixel_t)) {
+    if (pixels > k_size_max / sizeof(pixel_t)) {
         return false;
     }
 

@@ -46,6 +46,7 @@ enum vfs_flags {
 typedef struct vfs vfs_t;
 typedef struct vfs_node vfs_node_t;
 typedef struct vfs_interface vfs_interface_t;
+struct sched_wait_queue;
 
 struct vfs_interface {
     u32 refcount;
@@ -67,6 +68,11 @@ struct vfs_interface {
     );
     ssize_t (*truncate)(vfs_node_t *node, size_t len);
     short (*poll)(vfs_node_t *node, short events, u32 flags);
+    struct sched_wait_queue *(*wait_queue)(
+        vfs_node_t *node,
+        short events,
+        u32 flags
+    );
 
     ssize_t (*mmap)(
         vfs_node_t *node,
@@ -175,5 +181,7 @@ ssize_t
 vfs_mmap(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_ioctl(vfs_node_t *node, u64 request, void *args);
 short vfs_poll(vfs_node_t *node, short events, size_t flags);
+struct sched_wait_queue *
+vfs_wait_queue(vfs_node_t *node, short events, size_t flags);
 
 void dump_vfs(void);

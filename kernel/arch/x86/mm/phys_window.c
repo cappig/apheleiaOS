@@ -4,13 +4,12 @@
 #include <stddef.h>
 #include <string.h>
 #include <sys/cpu.h>
+#include <sys/lock.h>
 #include <sys/panic.h>
 #include <x86/asm.h>
 #include <x86/boot.h>
 
 #if defined(__x86_64__)
-#include <sched/scheduler.h>
-
 #include "virtual.h"
 
 #define PHYS_WINDOW_BASE_64 0xfffffe0000000000ULL
@@ -26,10 +25,9 @@ typedef struct {
 static size_t window_pages_mapped = 0;
 static u64 window_paddr_base = 0;
 static u64 window_flags = PT_WRITE;
-static volatile int window_lock = 0;
-static size_t window_lock_owner = (size_t)-1;
-static size_t window_lock_depth = 0;
-static unsigned long window_irq_flags = 0;
+static spinlock_t window_lock = SPINLOCK_INIT;
+static u32 window_lock_depth[MAX_CORES] = {0};
+static unsigned long window_irq_flags[MAX_CORES] = {0};
 
 static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
 static size_t window_stack_depth = 0;
@@ -47,39 +45,30 @@ static size_t _window_cpu_id(void) {
 static void _window_lock_acquire(void) {
     size_t cpu_id = _window_cpu_id();
 
-    if (window_lock_owner == cpu_id) {
-        window_lock_depth++;
+    if (window_lock_depth[cpu_id]) {
+        window_lock_depth[cpu_id]++;
         return;
     }
 
     unsigned long irq_flags = arch_irq_save();
+    spin_lock(&window_lock);
 
-    while (__sync_lock_test_and_set(&window_lock, 1)) {
-        while (window_lock) {
-            arch_cpu_relax();
-        }
-    }
-
-    window_lock_owner = cpu_id;
-    window_lock_depth = 1;
-    window_irq_flags = irq_flags;
-    sched_preempt_disable();
+    window_lock_depth[cpu_id] = 1;
+    window_irq_flags[cpu_id] = irq_flags;
 }
 
 static void _window_lock_release(void) {
     size_t cpu_id = _window_cpu_id();
 
-    if (window_lock_owner != cpu_id || !window_lock_depth) {
+    if (!window_lock_depth[cpu_id]) {
         return;
     }
 
-    window_lock_depth--;
+    window_lock_depth[cpu_id]--;
 
-    if (!window_lock_depth) {
-        window_lock_owner = (size_t)-1;
-        __sync_lock_release(&window_lock);
-        sched_preempt_enable();
-        arch_irq_restore(window_irq_flags);
+    if (!window_lock_depth[cpu_id]) {
+        spin_unlock(&window_lock);
+        arch_irq_restore(window_irq_flags[cpu_id]);
     }
 }
 
@@ -229,30 +218,46 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
         return true;
     }
 
-    void *dst = arch_phys_map(dst_paddr, size, 0);
-    void *src = arch_phys_map(src_paddr, size, 0);
+    static const size_t kChunk = 256;
+    u8 bounce[kChunk];
 
-    if (!dst || !src) {
-        return false;
+    size_t offset = 0;
+    while (offset < size) {
+        size_t chunk = size - offset;
+        if (chunk > kChunk) {
+            chunk = kChunk;
+        }
+
+        // The phys window is a single sliding mapping. Never hold two mapped
+        // windows at once or src/dst can alias and silently corrupt copies.
+        void *src = arch_phys_map(src_paddr + offset, chunk, 0);
+        if (!src) {
+            return false;
+        }
+        memcpy(bounce, src, chunk);
+        arch_phys_unmap(src, chunk);
+
+        void *dst = arch_phys_map(dst_paddr + offset, chunk, 0);
+        if (!dst) {
+            return false;
+        }
+        memcpy(dst, bounce, chunk);
+        arch_phys_unmap(dst, chunk);
+
+        offset += chunk;
     }
-
-    memcpy(dst, src, size);
-    arch_phys_unmap(src, size);
-    arch_phys_unmap(dst, size);
 
     return true;
 }
 #else
-#include <sched/scheduler.h>
 #include <x86/paging32.h>
 
 static size_t window_pages_mapped = 0;
 static u64 window_paddr_base = 0;
 static u64 window_flags = PT_WRITE;
-static volatile int window_lock = 0;
-static size_t window_lock_owner = (size_t)-1;
-static size_t window_lock_depth = 0;
-static unsigned long window_irq_flags = 0;
+static spinlock_t window_lock = SPINLOCK_INIT;
+static u32 window_lock_depth[MAX_CORES] = {0};
+static unsigned long window_irq_flags[MAX_CORES] = {0};
 
 #define PHYS_WINDOW_STACK_MAX 8
 
@@ -278,39 +283,30 @@ static size_t _window_cpu_id(void) {
 static void _window_lock_acquire(void) {
     size_t cpu_id = _window_cpu_id();
 
-    if (window_lock_owner == cpu_id) {
-        window_lock_depth++;
+    if (window_lock_depth[cpu_id]) {
+        window_lock_depth[cpu_id]++;
         return;
     }
 
     unsigned long irq_flags = arch_irq_save();
+    spin_lock(&window_lock);
 
-    while (__sync_lock_test_and_set(&window_lock, 1)) {
-        while (window_lock) {
-            arch_cpu_relax();
-        }
-    }
-
-    window_lock_owner = cpu_id;
-    window_lock_depth = 1;
-    window_irq_flags = irq_flags;
-    sched_preempt_disable();
+    window_lock_depth[cpu_id] = 1;
+    window_irq_flags[cpu_id] = irq_flags;
 }
 
 static void _window_lock_release(void) {
     size_t cpu_id = _window_cpu_id();
 
-    if (window_lock_owner != cpu_id || !window_lock_depth) {
+    if (!window_lock_depth[cpu_id]) {
         return;
     }
 
-    window_lock_depth--;
+    window_lock_depth[cpu_id]--;
 
-    if (!window_lock_depth) {
-        window_lock_owner = (size_t)-1;
-        __sync_lock_release(&window_lock);
-        sched_preempt_enable();
-        arch_irq_restore(window_irq_flags);
+    if (!window_lock_depth[cpu_id]) {
+        spin_unlock(&window_lock);
+        arch_irq_restore(window_irq_flags[cpu_id]);
     }
 }
 

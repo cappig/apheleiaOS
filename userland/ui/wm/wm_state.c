@@ -118,6 +118,42 @@ static bool _window_find_index(const wm_window_t *window, size_t *index_out) {
     return true;
 }
 
+static void _window_index_rebuild_from(size_t start) {
+    if (!windows || !window_index) {
+        return;
+    }
+
+    for (size_t i = start; i < windows->size; i++) {
+        wm_window_t *window = vec_at(windows, i);
+        if (window) {
+            _window_index_set(window->id, i);
+        }
+    }
+}
+
+static void _focused_window_revalidate(void) {
+    if (!focused_window_valid || !windows) {
+        return;
+    }
+
+    for (size_t i = 0; i < windows->size; i++) {
+        wm_window_t *window = vec_at(windows, i);
+        if (window && window->id == focused_window_id) {
+            return;
+        }
+    }
+
+    focused_window_valid = false;
+    focused_window_id = 0;
+}
+
+static void _window_cache_revalidate(size_t start) {
+    _window_index_rebuild_from(start);
+    render_order_count = 0;
+    render_order_dirty = true;
+    _focused_window_revalidate();
+}
+
 static void _window_remove_at(size_t index) {
     if (!windows || index >= windows->size) {
         return;
@@ -132,19 +168,19 @@ static void _window_remove_at(size_t index) {
     size_t last_index = windows->size - 1;
 
     if (index != last_index) {
-        wm_window_t *last = vec_at(windows, last_index);
-        if (!last || !vec_swap(windows, index, last_index)) {
+        if (!vec_swap(windows, index, last_index)) {
             return;
         }
-
-        _window_index_set(last->id, index);
     }
 
     vec_pop(windows, NULL);
     _window_index_remove(removed_id);
     if (focused_window_valid && focused_window_id == removed_id) {
         focused_window_valid = false;
+        focused_window_id = 0;
     }
+
+    _window_cache_revalidate(index);
 }
 
 static framebuffer_t _wrap_framebuffer(pixel_t *pixels, u32 width, u32 height) {
@@ -173,7 +209,17 @@ const wm_palette_t *wm_palette_get(void) {
 static int _open_ws_fb(u32 id) {
     char path[64];
     snprintf(path, sizeof(path), "/dev/ws/%u/fb", id);
-    return open(path, O_RDWR, 0);
+    int fd = open(path, O_RDWR, 0);
+    if (fd < 0) {
+        fprintf(
+            stderr,
+            "wm: failed to open %s for id=%u errno=%d\n",
+            path,
+            id,
+            errno
+        );
+    }
+    return fd;
 }
 
 static void _draw_pixel(
@@ -535,10 +581,23 @@ static bool _window_surface_ensure(wm_window_t *window) {
 
     size_t pixels = (size_t)new_width * (size_t)new_height;
     if (new_height && pixels / new_height != new_width) {
+        fprintf(
+            stderr,
+            "wm: surface size overflow id=%u dims=%ux%u\n",
+            window->id,
+            new_width,
+            new_height
+        );
         return false;
     }
 
     if (pixels > ((size_t)-1) / sizeof(pixel_t)) {
+        fprintf(
+            stderr,
+            "wm: surface byte overflow id=%u pixels=%zu\n",
+            window->id,
+            pixels
+        );
         return false;
     }
 
@@ -554,24 +613,27 @@ static bool _window_surface_ensure(wm_window_t *window) {
         return true;
     }
 
-    size_t new_capacity =
-        window->surface_capacity ? window->surface_capacity : 1;
-
-    while (new_capacity < pixels) {
-        size_t grown = new_capacity * 2;
-        if (grown <= new_capacity) {
-            new_capacity = pixels;
-            break;
-        }
-        new_capacity = grown;
-    }
+    size_t new_capacity = pixels;
 
     if (new_capacity > ((size_t)-1) / sizeof(pixel_t)) {
+        fprintf(
+            stderr,
+            "wm: surface capacity overflow id=%u capacity=%zu\n",
+            window->id,
+            new_capacity
+        );
         return false;
     }
 
     pixel_t *surface = calloc(new_capacity, sizeof(pixel_t));
     if (!surface) {
+        fprintf(
+            stderr,
+            "wm: surface allocation failed id=%u capacity=%zu bytes=%zu\n",
+            window->id,
+            new_capacity,
+            new_capacity * sizeof(pixel_t)
+        );
         return false;
     }
 
@@ -675,6 +737,20 @@ static bool _window_refresh_surface(wm_window_t *window) {
     }
 
     if (!_window_surface_ensure(window)) {
+        window->fb_read_failures++;
+        if (
+            window->fb_read_failures <= 4 ||
+            (window->fb_read_failures & (window->fb_read_failures - 1U)) == 0U
+        ) {
+            fprintf(
+                stderr,
+                "wm: surface ensure failed id=%u failures=%u dims=%ux%u\n",
+                window->id,
+                window->fb_read_failures,
+                window->fb_width ? window->fb_width : window->width,
+                window->fb_height ? window->fb_height : window->height
+            );
+        }
         return false;
     }
 
@@ -737,7 +813,33 @@ static bool _window_refresh_surface(wm_window_t *window) {
     }
 
     if (had_error) {
+        window->fb_read_failures++;
+        if (
+            window->fb_read_failures <= 4 ||
+            (window->fb_read_failures & (window->fb_read_failures - 1U)) == 0U
+        ) {
+            fprintf(
+                stderr,
+                "wm: fb read failed id=%u failures=%u rect=%u,%u %ux%u src=%ux%u\n",
+                window->id,
+                window->fb_read_failures,
+                x,
+                y,
+                width,
+                height,
+                src_width,
+                src_height
+            );
+        }
         _window_mark_dirty(window, x, y, width, height);
+    } else if (window->fb_read_failures) {
+        fprintf(
+            stderr,
+            "wm: fb read recovered id=%u after_failures=%u\n",
+            window->id,
+            window->fb_read_failures
+        );
+        window->fb_read_failures = 0;
     }
 
     return true;
@@ -1440,8 +1542,7 @@ bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage) {
     }
 
     size_t added_index = windows->size - 1;
-    _window_index_set(event->id, added_index);
-    render_order_dirty = true;
+    _window_cache_revalidate(added_index);
 
     wm_window_t *added = vec_at(windows, added_index);
     if (added) {

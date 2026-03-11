@@ -9,6 +9,7 @@
 #include <sched/scheduler.h>
 #include <string.h>
 #include <sys/cpu.h>
+#include <sys/lock.h>
 #include <sys/panic.h>
 #include <x86/apic.h>
 #include <x86/asm.h>
@@ -31,10 +32,10 @@ ALIGNED(16)
 static u8 smp_ap_stacks[MAX_CORES][SMP_AP_STACK_SIZE] = {0};
 static volatile u8 smp_ap_ready[MAX_CORES] = {0};
 
-static volatile int smp_tlb_lock = 0;
+static spinlock_t smp_tlb_lock = SPINLOCK_INIT;
 static volatile uintptr_t smp_tlb_addr = 0;
-static volatile u64 smp_tlb_targets = 0;
-static volatile u64 smp_tlb_acks = 0;
+static volatile u64 smp_tlb_targets ALIGNED(8) = 0;
+static volatile u64 smp_tlb_acks ALIGNED(8) = 0;
 
 #if defined(__x86_64__)
 extern const u8 smp_trampoline64_start;
@@ -226,6 +227,11 @@ static void _tlb_ipi_handler(UNUSED int_state_t *state) {
     lapic_end_int();
 }
 
+static void _resched_ipi_handler(UNUSED int_state_t *state) {
+    lapic_end_int();
+    sched_resched_softirq((arch_int_state_t *)state);
+}
+
 NORETURN static void _smp_ap_entry(void *arg) {
     size_t expected = (size_t)(uintptr_t)arg;
     disable_interrupts();
@@ -280,12 +286,12 @@ NORETURN static void _smp_ap_entry(void *arg) {
         arch_cpu_relax();
     }
 
-    enable_interrupts();
     if (smp_online_count() > 1) {
         smp_shootdown_enabled = true;
     }
     log_info("AP core %zu online (lapic=%u)", core->id, core->lapic_id);
     scheduler_start_secondary();
+    enable_interrupts();
     cpu_halt();
 }
 
@@ -304,6 +310,7 @@ void smp_init(void) {
 
     smp_started = true;
     set_int_handler(SMP_IPI_TLB_VECTOR, _tlb_ipi_handler);
+    set_int_handler(SMP_IPI_RESCHED_VECTOR, _resched_ipi_handler);
 
     if (core_count <= 1) {
         return;
@@ -343,7 +350,6 @@ void smp_init(void) {
 
     memset(trampoline, 0, SMP_TRAMPOLINE_PAGE_SIZE);
     memcpy(trampoline, _trampoline_start(), trampoline_size);
-
     size_t started = 0;
 
     for (size_t i = 1; i < core_count && i < MAX_CORES; i++) {
@@ -389,6 +395,25 @@ void smp_init(void) {
     );
 }
 
+bool smp_send_resched(size_t core_id) {
+    if (core_id >= MAX_CORES) {
+        return false;
+    }
+
+    cpu_core_t *target = &cores_local[core_id];
+    cpu_core_t *self = cpu_current();
+
+    if (!target->valid || !target->online) {
+        return false;
+    }
+
+    if (self && self->id == core_id) {
+        return false;
+    }
+
+    return lapic_send_fixed(target->lapic_id, SMP_IPI_RESCHED_VECTOR);
+}
+
 void smp_tlb_shootdown(uintptr_t addr) {
     if (!sched_is_running()) {
         return;
@@ -410,11 +435,7 @@ void smp_tlb_shootdown(uintptr_t addr) {
 
     unsigned long irq_flags = arch_irq_save();
 
-    while (__sync_lock_test_and_set(&smp_tlb_lock, 1)) {
-        while (smp_tlb_lock) {
-            arch_cpu_relax();
-        }
-    }
+    spin_lock(&smp_tlb_lock);
 
     u64 targets = 0;
 
@@ -438,7 +459,7 @@ void smp_tlb_shootdown(uintptr_t addr) {
     }
 
     if (!targets) {
-        __sync_lock_release(&smp_tlb_lock);
+        spin_unlock(&smp_tlb_lock);
         arch_irq_restore(irq_flags);
         return;
     }
@@ -500,6 +521,6 @@ void smp_tlb_shootdown(uintptr_t addr) {
     __atomic_store_n(&smp_tlb_targets, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&smp_tlb_addr, 0, __ATOMIC_RELEASE);
 
-    __sync_lock_release(&smp_tlb_lock);
+    spin_unlock(&smp_tlb_lock);
     arch_irq_restore(irq_flags);
 }

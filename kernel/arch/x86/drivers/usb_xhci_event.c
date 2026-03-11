@@ -11,13 +11,13 @@ bool _xhci_poll_events(
         return false;
     }
 
-    if (__sync_lock_test_and_set(&ctrl->event_lock, 1)) {
+    if (!spin_try_lock(&ctrl->event_lock)) {
         return false;
     }
 
     void *map = arch_phys_map(ctrl->mmio_base, XHCI_MMIO_SIZE, PHYS_MAP_MMIO);
     if (!map) {
-        __sync_lock_release(&ctrl->event_lock);
+        spin_unlock(&ctrl->event_lock);
         return false;
     }
 
@@ -61,7 +61,7 @@ bool _xhci_poll_events(
     }
 
     arch_phys_unmap(map, XHCI_MMIO_SIZE);
-    __sync_lock_release(&ctrl->event_lock);
+    spin_unlock(&ctrl->event_lock);
 
     if (progressed) {
         unsigned long flags = arch_irq_save();

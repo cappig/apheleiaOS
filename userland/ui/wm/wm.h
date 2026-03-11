@@ -54,6 +54,7 @@ typedef struct {
     u32 dirty_y;
     u32 dirty_width;
     u32 dirty_height;
+    u32 fb_read_failures;
     char title[WS_TITLE_MAX];
 } wm_window_t;
 

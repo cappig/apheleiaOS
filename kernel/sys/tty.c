@@ -165,6 +165,11 @@ static short _dev_tty_poll(vfs_node_t *node, short events, u32 flags) {
     return tty_poll_handle(node ? node->private : NULL, events, flags);
 }
 
+static sched_wait_queue_t *
+_dev_tty_wait_queue(vfs_node_t *node, short events, u32 flags) {
+    return tty_wait_queue_handle(node ? node->private : NULL, events, flags);
+}
+
 static short _dev_console_poll(
     UNUSED vfs_node_t *node,
     short events,
@@ -181,6 +186,14 @@ static short _dev_console_poll(
     }
 
     return revents;
+}
+
+static sched_wait_queue_t *
+_dev_console_wait_queue(vfs_node_t *node, short events, u32 flags) {
+    (void)node;
+    (void)events;
+    (void)flags;
+    return NULL;
 }
 
 bool tty_set_current(size_t index) {
@@ -237,6 +250,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
     tty_if->ioctl = _dev_tty_ioctl;
     tty_if->poll = _dev_tty_poll;
+    tty_if->wait_queue = _dev_tty_wait_queue;
 
     vfs_interface_t *console_if =
         vfs_create_interface(_dev_console_read, _dev_tty_write, NULL);
@@ -248,6 +262,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
     console_if->ioctl = _dev_tty_ioctl;
     console_if->poll = _dev_console_poll;
+    console_if->wait_queue = _dev_console_wait_queue;
 
     bool ok = true;
 
@@ -596,4 +611,20 @@ short tty_poll_handle(const tty_handle_t *handle, short events, u32 flags) {
     }
 
     return revents;
+}
+
+sched_wait_queue_t *
+tty_wait_queue_handle(const tty_handle_t *handle, short events, u32 flags) {
+    (void)flags;
+
+    if ((events & POLLIN) == 0 || (events & ~POLLIN) != 0) {
+        return NULL;
+    }
+
+    size_t screen = 0;
+    if (!_resolve_screen(handle, &screen)) {
+        return NULL;
+    }
+
+    return tty_input_wait_queue(screen);
 }

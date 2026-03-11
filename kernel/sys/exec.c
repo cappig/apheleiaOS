@@ -19,14 +19,14 @@
 #include <sys/vfs.h>
 #include <unistd.h>
 
-#define USER_STACK_PAGES 16
+#define USER_STACK_PAGES 64
 #define EXEC_MAX_ARGS    16
 #define EXEC_MAX_ARG_LEN 128
 #define EXEC_MAX_ENV     32
 #define EXEC_MAX_ENV_LEN 128
 
 static uintptr_t next_stack_top;
-static volatile int stack_lock;
+static spinlock_t stack_lock = SPINLOCK_INIT;
 
 typedef struct {
     int argc;
@@ -351,7 +351,7 @@ static bool _load_user_segments(
 static uintptr_t _alloc_stack_base(size_t size) {
     size = ALIGN(size, PAGE_4KIB);
 
-    lock(&stack_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&stack_lock);
 
     if (!next_stack_top) {
         next_stack_top = (uintptr_t)arch_user_stack_top();
@@ -364,7 +364,7 @@ static uintptr_t _alloc_stack_base(size_t size) {
         base = next_stack_top;
     }
 
-    unlock(&stack_lock);
+    spin_unlock_irqrestore(&stack_lock, irq_flags);
     return base;
 }
 
@@ -950,8 +950,6 @@ sched_thread_t *user_spawn(const char *path) {
     sched_prepare_user_thread(thread, entry, stack_top);
     thread->ppid = 0;
     sched_set_thread_name(thread, _basename(exec_name_buf));
-
-    thread->state = THREAD_READY;
 
     _free_args(&args);
     _free_env(&env);

@@ -12,7 +12,12 @@ void delay_ms(u32 ms) {
 
     while ((arch_timer_ticks() - start) < timeout) {
         if (sched_is_running() && sched_current()) {
-            sched_sleep(1);
+            u64 elapsed = arch_timer_ticks() - start;
+            u64 remaining = timeout > elapsed ? (timeout - elapsed) : 0;
+            if (!remaining) {
+                break;
+            }
+            sched_sleep(remaining);
             continue;
         }
 

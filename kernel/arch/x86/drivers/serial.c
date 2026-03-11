@@ -20,6 +20,7 @@ typedef struct {
     size_t rx_head;
     size_t rx_tail;
     size_t rx_count;
+    spinlock_t rx_lock;
     sched_wait_queue_t rx_wait;
     bool rx_wait_ready;
 } serial_port_t;
@@ -82,7 +83,8 @@ _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
 
     for (;;) {
         size_t copied = 0;
-        unsigned long irq_flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&serial->rx_wait);
+        unsigned long irq_flags = spin_lock_irqsave(&serial->rx_lock);
 
         while (copied < len && serial->rx_count) {
             out[copied++] = serial->rx_queue[serial->rx_head];
@@ -90,7 +92,7 @@ _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
             serial->rx_count--;
         }
 
-        arch_irq_restore(irq_flags);
+        spin_unlock_irqrestore(&serial->rx_lock, irq_flags);
 
         if (copied) {
             return (ssize_t)copied;
@@ -109,7 +111,7 @@ _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
             return -EINTR;
         }
 
-        sched_block(&serial->rx_wait);
+        (void)sched_block_if_unchanged(&serial->rx_wait, wait_seq);
     }
 }
 
@@ -142,7 +144,7 @@ static short _poll(vfs_node_t *node, short events, u32 flags) {
     serial_port_t *serial = node->private;
     short ready = 0;
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&serial->rx_lock);
 
     if ((events & POLLIN) && serial->rx_count) {
         ready |= POLLIN;
@@ -152,8 +154,24 @@ static short _poll(vfs_node_t *node, short events, u32 flags) {
         ready |= POLLOUT;
     }
 
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&serial->rx_lock, irq_flags);
     return ready;
+}
+
+static sched_wait_queue_t *
+_wait_queue(vfs_node_t *node, short events, u32 flags) {
+    (void)flags;
+
+    if ((events & POLLIN) == 0 || (events & ~POLLIN) != 0) {
+        return NULL;
+    }
+
+    if (!node || !node->private) {
+        return NULL;
+    }
+
+    serial_port_t *serial = node->private;
+    return &serial->rx_wait;
 }
 
 static bool _serial_register_devfs(vfs_node_t *dev_dir) {
@@ -168,6 +186,7 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
     }
 
     serial_if->poll = _poll;
+    serial_if->wait_queue = _wait_queue;
 
     char name[] = "ttySX";
 
@@ -175,7 +194,10 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
 
     for (size_t i = 0; i < count; i++) {
         if (!serial_devices[i].rx_wait_ready) {
+            spinlock_init(&serial_devices[i].rx_lock);
             sched_wait_queue_init(&serial_devices[i].rx_wait);
+            sched_wait_queue_set_name(&serial_devices[i].rx_wait, "serial_rx_wait");
+            sched_wait_queue_set_poll_link(&serial_devices[i].rx_wait, true);
             serial_devices[i].rx_wait_ready = true;
         }
 
@@ -200,7 +222,7 @@ void serial_push_rx(size_t index, char ch) {
 
     serial_port_t *serial = &serial_devices[index];
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&serial->rx_lock);
 
     if (serial->rx_count == SERIAL_RX_QUEUE_CAP) {
         serial->rx_head = (serial->rx_head + 1) % SERIAL_RX_QUEUE_CAP;
@@ -211,7 +233,7 @@ void serial_push_rx(size_t index, char ch) {
     serial->rx_tail = (serial->rx_tail + 1) % SERIAL_RX_QUEUE_CAP;
     serial->rx_count++;
 
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&serial->rx_lock, irq_flags);
 
     if (sched_is_running()) {
         sched_wake_one(&serial->rx_wait);

@@ -230,29 +230,29 @@ enum ext2_directory_type {
 };
 
 
-inline u32 ext2_block_size(const ext2_superblock_t *sb) {
+static inline u32 ext2_block_size(const ext2_superblock_t *sb) {
     return 1024 << sb->block_size_shift;
 }
 
-inline u32 ext2_fragment_size(const ext2_superblock_t *sb) {
+static inline u32 ext2_fragment_size(const ext2_superblock_t *sb) {
     return 1024 << sb->fragment_size_shift;
 }
 
-inline u32 ext2_inode_size(const ext2_superblock_t *sb) {
+static inline u32 ext2_inode_size(const ext2_superblock_t *sb) {
     return sb->version_major >= 1 ? sb->inode_size : 128;
 }
 
-inline u32 ext2_group_count(const ext2_superblock_t *sb) {
+static inline u32 ext2_group_count(const ext2_superblock_t *sb) {
     u32 blocks = DIV_ROUND_UP(sb->block_count, sb->blocks_in_group);
     u32 inodes = DIV_ROUND_UP(sb->inode_count, sb->inodes_in_group);
 
     return max(blocks, inodes);
 }
 
-inline u64 ext2_file_size(const ext2_inode_t *inode) {
+static inline u64 ext2_file_size(const ext2_inode_t *inode) {
     return ((u64)inode->size_high << 32) | inode->size_low;
 }
 
-inline bool ext2_is_type(const ext2_inode_t *inode, u16 type) {
+static inline bool ext2_is_type(const ext2_inode_t *inode, u16 type) {
     return (inode->type & EXT2_IT_MASK) == type;
 }

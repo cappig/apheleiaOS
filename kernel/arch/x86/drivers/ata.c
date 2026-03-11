@@ -52,7 +52,8 @@
 #define ATA_CTRL_IRQ_ENABLE 0x00
 #define ATA_CTRL_IRQ_DISABLE 0x02
 #define ATA_MAX_PIO_SECTORS 255
-#define ATA_IRQ_TIMEOUT_MS  100
+#define ATA_IRQ_TIMEOUT_MS      50
+#define ATA_IRQ_MAX_WAIT_MS    250
 
 #define ATA_PCI_BAR0 0x10
 #define ATA_PCI_BAR1 0x14
@@ -62,10 +63,13 @@
 typedef struct {
     u16 io_base;
     u16 ctrl_base;
-    volatile bool irq_enabled;
-    volatile bool irq_error;
-    volatile u64 irq_seq;
-    volatile bool io_busy;
+    bool irq_enabled;
+    bool irq_force_poll;
+    bool irq_error;
+    u64 irq_seq;
+    u32 irq_timeout_count;
+    bool io_busy;
+    spinlock_t io_lock;
     sched_wait_queue_t io_wait;
     sched_wait_queue_t irq_wait;
 } ata_channel_t;
@@ -109,24 +113,43 @@ static void ata_lock(ata_device_t *dev) {
     }
 
     ata_channel_t *ch = dev->channel;
+    u64 wait_start = 0;
+    bool warned = false;
 
     for (;;) {
-        unsigned long flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&ch->io_wait);
+        unsigned long flags = spin_lock_irqsave(&ch->io_lock);
 
         if (!ch->io_busy) {
             ch->io_busy = true;
-            arch_irq_restore(flags);
+            spin_unlock_irqrestore(&ch->io_lock, flags);
             return;
         }
 
-        arch_irq_restore(flags);
+        spin_unlock_irqrestore(&ch->io_lock, flags);
+
+        if (!wait_start) {
+            wait_start = arch_timer_ticks();
+        } else if (!warned) {
+            u64 hz = arch_timer_hz();
+            u64 elapsed = arch_timer_ticks() - wait_start;
+            if (hz && elapsed > hz * 2ULL) {
+                log_warn(
+                    "ata lock wait >2s io=%#x ctrl=%#x busy=%d",
+                    ch->io_base,
+                    ch->ctrl_base,
+                    ch->io_busy ? 1 : 0
+                );
+                warned = true;
+            }
+        }
 
         if (sched_is_running() && sched_current() && ch->io_wait.list) {
-            sched_block(&ch->io_wait);
+            (void)sched_block_if_unchanged(&ch->io_wait, wait_seq);
             continue;
         }
 
-        arch_cpu_wait();
+        arch_cpu_relax();
     }
 }
 
@@ -136,15 +159,31 @@ static void ata_unlock(ata_device_t *dev) {
     }
 
     ata_channel_t *ch = dev->channel;
-    unsigned long flags = arch_irq_save();
+    unsigned long flags = spin_lock_irqsave(&ch->io_lock);
 
     ch->io_busy = false;
 
-    arch_irq_restore(flags);
+    spin_unlock_irqrestore(&ch->io_lock, flags);
 
     if (ch->io_wait.list) {
         sched_wake_one(&ch->io_wait);
     }
+}
+
+static u64 ata_irq_seq_load(const ata_channel_t *ch) {
+    if (!ch) {
+        return 0;
+    }
+
+    return __atomic_load_n(&ch->irq_seq, __ATOMIC_ACQUIRE);
+}
+
+static bool ata_irq_error_exchange_clear(ata_channel_t *ch) {
+    if (!ch) {
+        return false;
+    }
+
+    return __atomic_exchange_n(&ch->irq_error, false, __ATOMIC_ACQ_REL);
 }
 
 static u64 ata_irq_snapshot(ata_device_t *dev) {
@@ -153,13 +192,8 @@ static u64 ata_irq_snapshot(ata_device_t *dev) {
     }
 
     ata_channel_t *ch = dev->channel;
-    unsigned long flags = arch_irq_save();
-
-    u64 seq = ch->irq_seq;
-    ch->irq_error = false;
-
-    arch_irq_restore(flags);
-
+    u64 seq = ata_irq_seq_load(ch);
+    (void)ata_irq_error_exchange_clear(ch);
     return seq;
 }
 
@@ -169,38 +203,96 @@ static bool ata_wait_irq_event(ata_device_t *dev, u64 *seq) {
     }
 
     ata_channel_t *ch = dev->channel;
+    if (!ch->irq_enabled || ch->irq_force_poll) {
+        return true;
+    }
+
     u64 start = arch_timer_ticks();
     u64 timeout = ms_to_ticks(ATA_IRQ_TIMEOUT_MS);
+    u64 max_wait = ms_to_ticks(ATA_IRQ_MAX_WAIT_MS);
+    if (!timeout) {
+        timeout = 1;
+    }
+    if (!max_wait) {
+        max_wait = timeout;
+    }
+    bool timeout_warned = false;
 
     for (;;) {
-        unsigned long flags = arch_irq_save();
-        u64 now = ch->irq_seq;
-        bool had_error = ch->irq_error;
-
+        u64 now = ata_irq_seq_load(ch);
         if (now != *seq) {
             *seq = now;
-            ch->irq_error = false;
-            arch_irq_restore(flags);
-            return !had_error;
+            return !ata_irq_error_exchange_clear(ch);
         }
 
-        arch_irq_restore(flags);
+        u64 elapsed = arch_timer_ticks() - start;
+        if (elapsed >= timeout) {
+            u8 status = inb(ch->io_base + ATA_REG_STATUS);
+            if (status & (ATA_SR_ERR | ATA_SR_DF)) {
+                __atomic_store_n(&ch->irq_error, true, __ATOMIC_RELEASE);
+                return false;
+            }
 
-        if ((arch_timer_ticks() - start) >= timeout) {
-            return false;
+            if (!(status & ATA_SR_BUSY)) {
+                // Lost or delayed IRQ: continue via status polling path.
+                return true;
+            }
+
+            if (!timeout_warned) {
+                log_warn(
+                    "ata irq delayed io=%#x ctrl=%#x seq=%llu",
+                    ch->io_base,
+                    ch->ctrl_base,
+                    (unsigned long long)*seq
+                );
+                timeout_warned = true;
+            }
+
+            if (elapsed >= max_wait) {
+                log_warn(
+                    "ata irq timeout io=%#x ctrl=%#x seq=%llu, switching to poll mode",
+                    ch->io_base,
+                    ch->ctrl_base,
+                    (unsigned long long)*seq
+                );
+                ch->irq_timeout_count++;
+                ch->irq_force_poll = true;
+                ch->irq_enabled = false;
+                return true;
+            }
         }
 
-        if (sched_is_running() && sched_current()) {
+        if (sched_is_running() && sched_current() && ch->irq_wait.list) {
             sched_thread_t *current = sched_current();
             if (current && sched_signal_has_pending(current)) {
                 return false;
             }
 
-            sched_yield();
+            u32 wait_seq = sched_wait_seq(&ch->irq_wait);
+            now = ata_irq_seq_load(ch);
+            if (now != *seq) {
+                continue;
+            }
+
+            u64 now_ticks = arch_timer_ticks();
+            u64 deadline = start + timeout;
+            if ((now_ticks - start) >= timeout) {
+                deadline = now_ticks + 1;
+            }
+
+            sched_wait_result_t wait_result = sched_wait_on_queue(
+                &ch->irq_wait,
+                wait_seq,
+                deadline,
+                SCHED_WAIT_INTERRUPTIBLE
+            );
+            if (wait_result == SCHED_WAIT_INTR) {
+                return false;
+            }
             continue;
         }
 
-        arch_cpu_wait();
+        arch_cpu_relax();
     }
 }
 
@@ -265,11 +357,15 @@ static bool ata_wait_drq(ata_device_t *dev, u64 *seq) {
         return false;
     }
 
-    if (!dev->channel->irq_enabled) {
+    if (!dev->channel->irq_enabled || dev->channel->irq_force_poll) {
         return ata_poll(dev);
     }
 
     for (;;) {
+        if (!dev->channel->irq_enabled || dev->channel->irq_force_poll) {
+            return ata_poll(dev);
+        }
+
         u8 status = inb(dev->channel->io_base + ATA_REG_STATUS);
 
         if (status & ATA_SR_ERR) {
@@ -295,11 +391,15 @@ static bool ata_wait_ready_event(ata_device_t *dev, u64 *seq) {
         return false;
     }
 
-    if (!dev->channel->irq_enabled) {
+    if (!dev->channel->irq_enabled || dev->channel->irq_force_poll) {
         return ata_wait_ready(dev);
     }
 
     for (;;) {
+        if (!dev->channel->irq_enabled || dev->channel->irq_force_poll) {
+            return ata_wait_ready(dev);
+        }
+
         u8 status = inb(dev->channel->io_base + ATA_REG_STATUS);
 
         if (status & ATA_SR_ERR) {
@@ -325,14 +425,12 @@ static void ata_primary_irq(UNUSED int_state_t *s) {
 
     u8 status = inb(ch->io_base + ATA_REG_STATUS);
 
-    unsigned long flags = arch_irq_save();
-
     if (status & (ATA_SR_ERR | ATA_SR_DF)) {
-        ch->irq_error = true;
+        __atomic_store_n(&ch->irq_error, true, __ATOMIC_RELEASE);
     }
 
-    ch->irq_seq++;
-    arch_irq_restore(flags);
+    __atomic_add_fetch(&ch->irq_seq, 1, __ATOMIC_ACQ_REL);
+    ch->irq_timeout_count = 0;
 
     if (ch->irq_wait.list) {
         sched_wake_all(&ch->irq_wait);
@@ -346,14 +444,12 @@ static void ata_secondary_irq(UNUSED int_state_t *s) {
 
     u8 status = inb(ch->io_base + ATA_REG_STATUS);
 
-    unsigned long flags = arch_irq_save();
-
     if (status & (ATA_SR_ERR | ATA_SR_DF)) {
-        ch->irq_error = true;
+        __atomic_store_n(&ch->irq_error, true, __ATOMIC_RELEASE);
     }
 
-    ch->irq_seq++;
-    arch_irq_restore(flags);
+    __atomic_add_fetch(&ch->irq_seq, 1, __ATOMIC_ACQ_REL);
+    ch->irq_timeout_count = 0;
 
     if (ch->irq_wait.list) {
         sched_wake_all(&ch->irq_wait);
@@ -926,9 +1022,12 @@ ata_probe_channel(u16 io_base, u16 ctrl_base, bool is_primary, bool use_irq) {
     ch->io_base = io_base;
     ch->ctrl_base = ctrl_base;
     ch->irq_enabled = use_irq;
+    ch->irq_force_poll = false;
     ch->irq_error = false;
     ch->irq_seq = 0;
+    ch->irq_timeout_count = 0;
     ch->io_busy = false;
+    spinlock_init(&ch->io_lock);
 
     sched_wait_queue_init(&ch->io_wait);
     sched_wait_queue_init(&ch->irq_wait);

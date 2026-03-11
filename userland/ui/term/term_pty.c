@@ -245,6 +245,10 @@ pid_t term_spawn_shell(
         close(slave_fd);
         close(master_fd);
 
+        for (int fd = 3; fd < 64; fd++) {
+            close(fd);
+        }
+
         char *argv[] = {"/bin/sh", NULL};
         execve("/bin/sh", argv, environ);
         _exit(127);

@@ -4,6 +4,8 @@
 #include <sys/types.h>
 #include <termios.h>
 
+struct sched_wait_queue;
+
 #define TTY_INPUT_BUFFER_SIZE 1024
 #define TTY_TERMIOS_SET_NONE  0u
 #define TTY_TERMIOS_SET_FLUSH 1u
@@ -19,3 +21,4 @@ bool tty_input_get_winsize(size_t screen, winsize_t *out);
 bool tty_input_set_winsize(size_t screen, const winsize_t *in);
 bool tty_input_has_data(size_t screen);
 void tty_input_flush(size_t screen);
+struct sched_wait_queue *tty_input_wait_queue(size_t screen);

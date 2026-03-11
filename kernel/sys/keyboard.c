@@ -34,6 +34,7 @@ typedef struct {
 static vector_t *kbds = NULL;
 static ring_buffer_t *buffer = NULL;
 static sched_wait_queue_t kbd_wait = {0};
+static spinlock_t kbd_lock = SPINLOCK_INIT;
 
 static keyboard_dev_t *_get(size_t index) {
     return vec_at_ptr(kbds, index);
@@ -50,9 +51,9 @@ static bool _screen_captured(void) {
 }
 
 static bool _has_events(void) {
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&kbd_lock);
     bool has_events = buffer && !ring_buffer_is_empty(buffer);
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&kbd_lock, irq_flags);
 
     return has_events;
 }
@@ -136,9 +137,10 @@ static ssize_t keyboard_read(
     }
 
     for (;;) {
-        unsigned long irq_flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&kbd_wait);
+        unsigned long irq_flags = spin_lock_irqsave(&kbd_lock);
         size_t popped = ring_buffer_pop_array(buffer, buf, len);
-        arch_irq_restore(irq_flags);
+        spin_unlock_irqrestore(&kbd_lock, irq_flags);
 
         if (popped) {
             return (ssize_t)popped;
@@ -157,7 +159,15 @@ static ssize_t keyboard_read(
             return -EINTR;
         }
 
-        sched_block(&kbd_wait);
+        sched_wait_result_t wait_result = sched_wait_on_queue(
+            &kbd_wait,
+            wait_seq,
+            0,
+            SCHED_WAIT_INTERRUPTIBLE
+        );
+        if (wait_result == SCHED_WAIT_INTR) {
+            return -EINTR;
+        }
     }
 }
 
@@ -174,6 +184,18 @@ static short keyboard_poll(vfs_node_t *node, short events, u32 flags) {
     return revents;
 }
 
+static sched_wait_queue_t *
+keyboard_wait_queue(vfs_node_t *node, short events, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    if ((events & POLLIN) == 0 || (events & ~POLLIN) != 0) {
+        return NULL;
+    }
+
+    return &kbd_wait;
+}
+
 void keyboard_handle_key(key_event event) {
     if (!kbds || !buffer) {
         return;
@@ -187,10 +209,10 @@ void keyboard_handle_key(key_event event) {
     }
 
     bool action = (event.type & KEY_ACTION) != 0;
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&kbd_lock);
     ring_buffer_push_array(buffer, (u8 *)&event, sizeof(event));
-    arch_irq_restore(irq_flags);
-    sched_wake_all(&kbd_wait);
+    spin_unlock_irqrestore(&kbd_lock, irq_flags);
+    sched_wake_one(&kbd_wait);
 
     _update_modifiers(kbd, action, event.code);
 
@@ -259,6 +281,7 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
     }
 
     kbd_if->poll = keyboard_poll;
+    kbd_if->wait_queue = keyboard_wait_queue;
 
     bool registered = devfs_register_node(
         dev_dir,
@@ -306,6 +329,8 @@ bool keyboard_init(void) {
 
     if (!kbd_wait.list) {
         sched_wait_queue_init(&kbd_wait);
+        sched_wait_queue_set_name(&kbd_wait, "kbd_wait");
+        sched_wait_queue_set_poll_link(&kbd_wait, true);
     }
 
     return true;

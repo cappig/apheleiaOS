@@ -16,6 +16,7 @@
 typedef struct {
     u8 data[PTY_BUFFER_SIZE];
     ring_io_t ring;
+    spinlock_t lock;
     sched_wait_queue_t read_wait;
     sched_wait_queue_t write_wait;
     bool ready;
@@ -35,6 +36,7 @@ static pty_t ptys[PTY_COUNT] = {0};
 static pty_handle_t pty_master_handles[PTY_COUNT];
 static pty_handle_t pty_slave_handles[PTY_COUNT];
 static pty_handle_t pty_master_default = {.index = 0, .is_master = true};
+static spinlock_t pty_state_lock = SPINLOCK_INIT;
 
 
 static void _queue_reset(pty_queue_t *queue) {
@@ -108,9 +110,14 @@ static void _queue_init(pty_queue_t *queue) {
     }
 
     _queue_reset(queue);
+    spinlock_init(&queue->lock);
 
     sched_wait_queue_init(&queue->read_wait);
     sched_wait_queue_init(&queue->write_wait);
+    sched_wait_queue_set_name(&queue->read_wait, "pty_read_wait");
+    sched_wait_queue_set_name(&queue->write_wait, "pty_write_wait");
+    sched_wait_queue_set_poll_link(&queue->read_wait, true);
+    sched_wait_queue_set_poll_link(&queue->write_wait, true);
 
     queue->ready = true;
 }
@@ -120,9 +127,9 @@ static size_t _queue_size(pty_queue_t *queue) {
         return 0;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&queue->lock);
     size_t used = ring_io_size(&queue->ring);
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&queue->lock, irq_flags);
 
     return used;
 }
@@ -132,9 +139,9 @@ static size_t _queue_free_space(pty_queue_t *queue) {
         return 0;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&queue->lock);
     size_t free_space = ring_io_free_space(&queue->ring);
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&queue->lock, irq_flags);
 
     return free_space;
 }
@@ -178,14 +185,42 @@ static short _dev_pty_poll(vfs_node_t *node, short events, u32 flags) {
     return pty_poll_handle(node ? node->private : NULL, events, flags);
 }
 
+static sched_wait_queue_t *
+_pty_wait_queue_handle(const pty_handle_t *handle, short events, u32 flags) {
+    (void)flags;
+
+    pty_t *pty = _handle_pty(handle);
+    if (!pty) {
+        return NULL;
+    }
+
+    pty_queue_t *rx = _handle_rx_queue(pty, handle);
+    pty_queue_t *tx = _handle_tx_queue(pty, handle);
+
+    if ((events & POLLIN) && (events & ~POLLIN) == 0) {
+        return rx ? &rx->read_wait : NULL;
+    }
+
+    if ((events & POLLOUT) && (events & ~POLLOUT) == 0) {
+        return tx ? &tx->write_wait : NULL;
+    }
+
+    return NULL;
+}
+
+static sched_wait_queue_t *
+_dev_pty_wait_queue(vfs_node_t *node, short events, u32 flags) {
+    return _pty_wait_queue_handle(node ? node->private : NULL, events, flags);
+}
+
 static void _queue_clear(pty_queue_t *queue) {
     if (!queue) {
         return;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&queue->lock);
     ring_io_reset(&queue->ring);
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&queue->lock, irq_flags);
 }
 
 static u64 _vtime_to_ticks(cc_t vtime) {
@@ -219,11 +254,12 @@ _queue_read(pty_queue_t *queue, void *buf, size_t len, bool nonblock) {
     size_t total = 0;
 
     for (;;) {
-        unsigned long irq_flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&queue->read_wait);
+        unsigned long irq_flags = spin_lock_irqsave(&queue->lock);
 
         size_t read_now = ring_io_read(&queue->ring, (u8 *)buf + total, len - total);
 
-        arch_irq_restore(irq_flags);
+        spin_unlock_irqrestore(&queue->lock, irq_flags);
 
         if (read_now) {
             total += read_now;
@@ -252,7 +288,15 @@ _queue_read(pty_queue_t *queue, void *buf, size_t len, bool nonblock) {
             return -EINTR;
         }
 
-        sched_block(&queue->read_wait);
+        sched_wait_result_t wait_result = sched_wait_on_queue(
+            &queue->read_wait,
+            wait_seq,
+            0,
+            SCHED_WAIT_INTERRUPTIBLE
+        );
+        if (wait_result == SCHED_WAIT_INTR) {
+            return -EINTR;
+        }
     }
 }
 
@@ -284,11 +328,12 @@ static ssize_t _queue_read_termios(
     u64 deadline = 0;
 
     for (;;) {
-        unsigned long irq_flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&queue->read_wait);
+        unsigned long irq_flags = spin_lock_irqsave(&queue->lock);
 
         size_t read_now = ring_io_read(&queue->ring, (u8 *)buf + total, len - total);
 
-        arch_irq_restore(irq_flags);
+        spin_unlock_irqrestore(&queue->lock, irq_flags);
 
         if (read_now) {
             total += read_now;
@@ -360,11 +405,30 @@ static ssize_t _queue_read_termios(
         }
 
         if (use_timeout) {
-            sched_sleep(1);
+            sched_wait_result_t wait_result = sched_wait_on_queue(
+                &queue->read_wait,
+                wait_seq,
+                deadline,
+                SCHED_WAIT_INTERRUPTIBLE
+            );
+            if (wait_result == SCHED_WAIT_TIMEOUT) {
+                return (ssize_t)total;
+            }
+            if (wait_result == SCHED_WAIT_INTR) {
+                return total ? (ssize_t)total : -EINTR;
+            }
             continue;
         }
 
-        sched_block(&queue->read_wait);
+        sched_wait_result_t wait_result = sched_wait_on_queue(
+            &queue->read_wait,
+            wait_seq,
+            0,
+            SCHED_WAIT_INTERRUPTIBLE
+        );
+        if (wait_result == SCHED_WAIT_INTR) {
+            return total ? (ssize_t)total : -EINTR;
+        }
     }
 }
 
@@ -381,7 +445,8 @@ _queue_write(pty_queue_t *queue, const void *buf, size_t len, bool nonblock) {
     size_t total = 0;
 
     for (;;) {
-        unsigned long irq_flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&queue->write_wait);
+        unsigned long irq_flags = spin_lock_irqsave(&queue->lock);
 
         size_t wrote_now = ring_io_write(
             &queue->ring,
@@ -389,7 +454,7 @@ _queue_write(pty_queue_t *queue, const void *buf, size_t len, bool nonblock) {
             len - total
         );
 
-        arch_irq_restore(irq_flags);
+        spin_unlock_irqrestore(&queue->lock, irq_flags);
 
         if (wrote_now) {
             total += wrote_now;
@@ -417,7 +482,15 @@ _queue_write(pty_queue_t *queue, const void *buf, size_t len, bool nonblock) {
             return total ? (ssize_t)total : -EINTR;
         }
 
-        sched_block(&queue->write_wait);
+        sched_wait_result_t wait_result = sched_wait_on_queue(
+            &queue->write_wait,
+            wait_seq,
+            0,
+            SCHED_WAIT_INTERRUPTIBLE
+        );
+        if (wait_result == SCHED_WAIT_INTR) {
+            return total ? (ssize_t)total : -EINTR;
+        }
     }
 }
 
@@ -443,6 +516,7 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
 
     pty_if->ioctl = _dev_pty_ioctl;
     pty_if->poll = _dev_pty_poll;
+    pty_if->wait_queue = _dev_pty_wait_queue;
 
     bool ok = true;
 
@@ -515,7 +589,7 @@ bool pty_reserve(size_t *index_out) {
         return false;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
 
     for (size_t i = 0; i < PTY_COUNT; i++) {
         pty_t *pty = &ptys[i];
@@ -528,11 +602,11 @@ bool pty_reserve(size_t *index_out) {
         pty->allocated = true;
         *index_out = i;
 
-        arch_irq_restore(irq_flags);
+        spin_unlock_irqrestore(&pty_state_lock, irq_flags);
         return true;
     }
 
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
     return false;
 }
 
@@ -541,7 +615,7 @@ void pty_unreserve(size_t index) {
         return;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
     pty_t *pty = &ptys[index];
 
     if (pty->allocated && !pty->refs) {
@@ -549,7 +623,7 @@ void pty_unreserve(size_t index) {
         pty->allocated = false;
     }
 
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
 }
 
 void pty_hold(size_t index) {
@@ -557,7 +631,7 @@ void pty_hold(size_t index) {
         return;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
 
     pty_t *pty = &ptys[index];
 
@@ -565,7 +639,7 @@ void pty_hold(size_t index) {
         pty->refs++;
     }
 
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
 }
 
 void pty_put(size_t index) {
@@ -573,24 +647,26 @@ void pty_put(size_t index) {
         return;
     }
 
-    unsigned long irq_flags = arch_irq_save();
+    pid_t hup_pgrp = 0;
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
     pty_t *pty = &ptys[index];
 
     if (pty->allocated && pty->refs) {
         pty->refs--;
 
         if (!pty->refs) {
-            if (pty->pgrp > 0) {
-                sched_signal_send_pgrp(pty->pgrp, SIGHUP);
-                sched_signal_send_pgrp(pty->pgrp, SIGCONT);
-            }
-
+            hup_pgrp = pty->pgrp;
             _reset_state(pty);
             pty->allocated = false;
         }
     }
 
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
+
+    if (hup_pgrp > 0) {
+        (void)sched_signal_send_pgrp(hup_pgrp, SIGHUP);
+        (void)sched_signal_send_pgrp(hup_pgrp, SIGCONT);
+    }
 }
 
 ssize_t
@@ -678,6 +754,8 @@ ssize_t pty_ioctl_handle(const pty_handle_t *handle, u64 request, void *args) {
             return -EINVAL;
         }
 
+        pid_t winch_pgrp = 0;
+        unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
         winsize_t old_ws = pty->winsize;
         memcpy(&pty->winsize, args, sizeof(pty->winsize));
 
@@ -688,12 +766,17 @@ ssize_t pty_ioctl_handle(const pty_handle_t *handle, u64 request, void *args) {
                 old_ws.ws_col != pty->winsize.ws_col
             )
         ) {
-            sched_signal_send_pgrp(pty->pgrp, SIGWINCH);
+            winch_pgrp = pty->pgrp;
+        }
+        spin_unlock_irqrestore(&pty_state_lock, irq_flags);
+
+        if (winch_pgrp > 0) {
+            sched_signal_send_pgrp(winch_pgrp, SIGWINCH);
         }
 
         return 0;
     }
-    case TIOCSPGRP:
+    case TIOCSPGRP: {
         if (!args) {
             return -EINVAL;
         }
@@ -711,15 +794,25 @@ ssize_t pty_ioctl_handle(const pty_handle_t *handle, u64 request, void *args) {
             return -EPERM;
         }
 
+        unsigned long pty_flags = spin_lock_irqsave(&pty_state_lock);
+        if (!pty->allocated) {
+            spin_unlock_irqrestore(&pty_state_lock, pty_flags);
+            return -EIO;
+        }
         pty->pgrp = *(pid_t *)args;
+        spin_unlock_irqrestore(&pty_state_lock, pty_flags);
         return 0;
-    case TIOCGPGRP:
+    }
+    case TIOCGPGRP: {
         if (!args) {
             return -EINVAL;
         }
 
+        unsigned long pty_flags = spin_lock_irqsave(&pty_state_lock);
         *(pid_t *)args = pty->pgrp;
+        spin_unlock_irqrestore(&pty_state_lock, pty_flags);
         return 0;
+    }
     case TIOCGPTN:
         if (!args || !handle) {
             return -EINVAL;

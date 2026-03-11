@@ -5,21 +5,65 @@
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <sys/cpu.h>
-#include <sys/stats.h>
 #include <x86/apic.h>
 #include <x86/asm.h>
 #include <x86/pic.h>
 #include <x86/pit.h>
 #include <x86/serial.h>
-#include <x86/tsc.h>
+#include <x86/smp.h>
 
 #ifndef LEGACY_TIMER_SERIAL_RX
 #define LEGACY_TIMER_SERIAL_RX 1
 #endif
 
-static u64 irq_tick_count = 0;
+static volatile u64 irq_tick_count ALIGNED(8) = 0;
+static volatile u64 irq_core_tick_count[MAX_CORES] ALIGNED(8) = {0};
 static bool use_apic_timer = false;
 static bool use_ioapic = false;
+
+static inline void _align_core_tick_floor(size_t cpu_id) {
+    if (cpu_id >= MAX_CORES) {
+        return;
+    }
+
+    u64 global = __atomic_load_n(&irq_tick_count, __ATOMIC_ACQUIRE);
+    u64 local = __atomic_load_n(&irq_core_tick_count[cpu_id], __ATOMIC_RELAXED);
+    while (local < global) {
+        if (__atomic_compare_exchange_n(
+                &irq_core_tick_count[cpu_id],
+                &local,
+                global,
+                false,
+                __ATOMIC_RELEASE,
+                __ATOMIC_RELAXED
+            )) {
+            return;
+        }
+    }
+}
+
+static inline void _publish_tick(size_t cpu_id) {
+    if (cpu_id >= MAX_CORES) {
+        cpu_id = 0;
+    }
+
+    u64 core_ticks =
+        __atomic_add_fetch(&irq_core_tick_count[cpu_id], 1, __ATOMIC_RELAXED);
+    u64 observed = __atomic_load_n(&irq_tick_count, __ATOMIC_RELAXED);
+
+    while (core_ticks > observed) {
+        if (__atomic_compare_exchange_n(
+                &irq_tick_count,
+                &observed,
+                core_ticks,
+                false,
+                __ATOMIC_RELEASE,
+                __ATOMIC_RELAXED
+            )) {
+            break;
+        }
+    }
+}
 
 static void _route_irqs(bool to_apic) {
     outb(0x22, 0x70);
@@ -53,10 +97,12 @@ static void _unregister_legacy(size_t irq) {
 }
 
 static void _timer_handler(int_state_t *state) {
-    u64 begin_tsc = read_tsc();
     cpu_core_t *core = cpu_current();
-    if (core && core->id == 0) {
-        (void)__sync_add_and_fetch(&irq_tick_count, 1);
+    size_t cpu_id = (core && core->id < MAX_CORES) ? core->id : 0;
+
+    _publish_tick(cpu_id);
+    if (cpu_id == 0) {
+        arch_wallclock_maintain();
     }
     irq_ack(IRQ_SYSTEM_TIMER);
 
@@ -73,13 +119,6 @@ static void _timer_handler(int_state_t *state) {
 #endif
 
     sched_tick(state);
-
-    u64 khz = tsc_khz();
-    if (khz) {
-        u64 delta_tsc = read_tsc() - begin_tsc;
-        u64 ns = (delta_tsc * 1000000ULL) / khz;
-        stats_add_timer_irq_ns(ns);
-    }
 }
 
 #if !LEGACY_TIMER_SERIAL_RX
@@ -102,6 +141,10 @@ static void _com1_handler(UNUSED int_state_t *state) {
 static void _spurious_handler(UNUSED int_state_t *state) {
 }
 
+static void _soft_resched_handler(int_state_t *state) {
+    sched_resched_softirq(state);
+}
+
 static void _init_timer_source(bool apic_ok) {
     const u32 timer_hz = TIMER_FREQ ? TIMER_FREQ : 1U;
 
@@ -119,6 +162,8 @@ static void _init_timer_source(bool apic_ok) {
 
 bool irq_init(void) {
     bool apic_ok = apic_init();
+
+    set_int_handler(SCHED_SOFT_RESCHED_VECTOR, _soft_resched_handler);
 
     if (apic_ok) {
         set_int_handler(INT_SPURIOUS, _spurious_handler);
@@ -150,6 +195,10 @@ bool irq_init(void) {
 }
 
 void irq_init_ap(void) {
+    cpu_core_t *core = cpu_current();
+    size_t cpu_id = (core && core->id < MAX_CORES) ? core->id : 0;
+    _align_core_tick_floor(cpu_id);
+
     if (!apic_timer_init_local()) {
         return;
     }
@@ -217,7 +266,7 @@ bool irq_using_ioapic(void) {
 }
 
 u64 irq_ticks(void) {
-    return __sync_fetch_and_add(&irq_tick_count, 0);
+    return __atomic_load_n(&irq_tick_count, __ATOMIC_ACQUIRE);
 }
 
 u32 irq_timer_hz(void) {

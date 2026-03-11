@@ -1,5 +1,5 @@
 ARCH_DIR        := kernel/arch/x86
-IMAGE_STAGE_DIR := bin/image
+IMAGE_STAGE_DIR := bin/image/$(ARCH_VARIANT)
 IMAGE_BOOT_DIR  := $(IMAGE_STAGE_DIR)/boot
 
 
@@ -63,7 +63,6 @@ KERNEL_LD_FLAGS := $(KERNEL_LD_COMMON) -T$(ARCH_DIR)/build/linker32.ld
 else
 $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
 endif
-
 
 KERNEL_OBJ := $(patsubst %, $(KERNEL_OBJ_DIR)/%.o, $(KERNEL_SRC))
 

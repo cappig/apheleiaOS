@@ -26,10 +26,11 @@ typedef enum {
     PROC_FIELD_SID,
     PROC_FIELD_GROUPS,
     PROC_FIELD_SIGMASK,
+    PROC_FIELD_AFFINITY,
 } proc_field_t;
 
 static vfs_node_t *proc_root = NULL;
-static volatile int procfs_tree_lock = 0;
+static mutex_t procfs_tree_lock = MUTEX_INIT;
 
 
 static uintptr_t _proc_key(pid_t pid, proc_field_t field) {
@@ -124,6 +125,53 @@ static bool _parse_i64(const void *buf, size_t len, long long *out) {
     }
 
     *out = value;
+    return true;
+}
+
+static bool _parse_u64(const void *buf, size_t len, u64 *out) {
+    if (!buf || !len || !out) {
+        return false;
+    }
+
+    size_t copy_len = len;
+    if (copy_len >= PROCFS_WRITE_MAX) {
+        copy_len = PROCFS_WRITE_MAX - 1;
+    }
+
+    char text[PROCFS_WRITE_MAX];
+    memcpy(text, buf, copy_len);
+    text[copy_len] = '\0';
+
+    char *start = text;
+    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') {
+        start++;
+    }
+
+    char *end_trim = start + strlen(start);
+    while (
+        end_trim > start &&
+        (
+            end_trim[-1] == ' ' ||
+            end_trim[-1] == '\t' ||
+            end_trim[-1] == '\r' ||
+            end_trim[-1] == '\n'
+        )
+    ) {
+        end_trim--;
+    }
+
+    *end_trim = '\0';
+    if (!start[0]) {
+        return false;
+    }
+
+    char *end = NULL;
+    unsigned long long value = strtoull(start, &end, 0);
+    if (end == start || *end != '\0') {
+        return false;
+    }
+
+    *out = (u64)value;
     return true;
 }
 
@@ -276,16 +324,15 @@ bool procfs_dir_lock_if_needed(vfs_node_t *node, unsigned long *flags_out) {
         return false;
     }
 
-    *flags_out = lock_irqsave(&procfs_tree_lock);
+    mutex_lock(&procfs_tree_lock);
     return true;
 }
 
 void procfs_dir_unlock_if_needed(bool locked, unsigned long flags) {
-    if (!locked) {
-        return;
+    (void)flags;
+    if (locked) {
+        mutex_unlock(&procfs_tree_lock);
     }
-
-    unlock_irqrestore(&procfs_tree_lock, flags);
 }
 
 static bool _owner_for_pid(pid_t pid, uid_t *uid_out, gid_t *gid_out) {
@@ -608,6 +655,66 @@ static ssize_t _proc_groups_write(
     return (ssize_t)len;
 }
 
+static ssize_t _proc_affinity_read(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
+    (void)flags;
+
+    if (!node || !buf) {
+        return -EINVAL;
+    }
+
+    pid_t pid = 0;
+    if (!_resolve_pid(_proc_key_pid((uintptr_t)node->private), &pid)) {
+        return -ENOENT;
+    }
+
+    u64 mask = 0;
+    int rc = sched_get_affinity(pid, &mask);
+    if (rc < 0) {
+        return rc;
+    }
+
+    char text[32];
+    snprintf(text, sizeof(text), "0x%llx\n", (unsigned long long)mask);
+    return _text_read(text, buf, offset, len);
+}
+
+static ssize_t _proc_affinity_write(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+) {
+    (void)flags;
+
+    if (!node || !buf || !len || offset != 0) {
+        return -EINVAL;
+    }
+
+    pid_t pid = 0;
+    if (!_resolve_pid(_proc_key_pid((uintptr_t)node->private), &pid)) {
+        return -ENOENT;
+    }
+
+    u64 mask = 0;
+    if (!_parse_u64(buf, len, &mask)) {
+        return -EINVAL;
+    }
+
+    int rc = sched_set_affinity(pid, mask);
+    if (rc < 0) {
+        return rc;
+    }
+
+    return (ssize_t)len;
+}
+
 static ssize_t _proc_value_write(
     vfs_node_t *node,
     void *buf,
@@ -696,7 +803,11 @@ static ssize_t _proc_value_write(
             (u32) ~(1u << (SIGKILL - 1)) &
             (u32) ~(1u << (SIGSTOP - 1));
 
-        thread->signal_mask = ((u32)value) & blockable_mask;
+        __atomic_store_n(
+            &thread->signal_mask,
+            ((u32)value) & blockable_mask,
+            __ATOMIC_RELEASE
+        );
         ret = 0;
         break;
     }
@@ -774,6 +885,9 @@ static bool _upsert_file(
         } else if (field == PROC_FIELD_GROUPS) {
             node->interface =
                 vfs_create_interface(_proc_groups_read, _proc_groups_write, NULL);
+        } else if (field == PROC_FIELD_AFFINITY) {
+            node->interface =
+                vfs_create_interface(_proc_affinity_read, _proc_affinity_write, NULL);
         } else {
             node->interface =
                 vfs_create_interface(_proc_value_read, _proc_value_write, NULL);
@@ -802,6 +916,7 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     mode_t sid_mode = self ? 0666 : 0444;
     mode_t groups_mode = self ? 0666 : 0444;
     mode_t sigmask_mode = self ? 0666 : 0444;
+    mode_t affinity_mode = 0644;
 
     ok &= _upsert_file(dir, "stat", 0444, PROC_FIELD_STAT, pid);
     ok &= _upsert_file(dir, "cwd", 0444, PROC_FIELD_CWD, pid);
@@ -814,16 +929,17 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     ok &= _upsert_file(dir, "sid", sid_mode, PROC_FIELD_SID, pid);
     ok &= _upsert_file(dir, "groups", groups_mode, PROC_FIELD_GROUPS, pid);
     ok &= _upsert_file(dir, "sigmask", sigmask_mode, PROC_FIELD_SIGMASK, pid);
+    ok &= _upsert_file(dir, "affinity", affinity_mode, PROC_FIELD_AFFINITY, pid);
 
     return ok;
 }
 
 bool procfs_init(void) {
-    unsigned long irq_flags = lock_irqsave(&procfs_tree_lock);
+    mutex_lock(&procfs_tree_lock);
 
     vfs_node_t *root = vfs_lookup("/");
     if (!root) {
-        unlock_irqrestore(&procfs_tree_lock, irq_flags);
+        mutex_unlock(&procfs_tree_lock);
         log_warn("procfs missing root");
         return false;
     }
@@ -838,7 +954,7 @@ bool procfs_init(void) {
     }
 
     if (!proc) {
-        unlock_irqrestore(&procfs_tree_lock, irq_flags);
+        mutex_unlock(&procfs_tree_lock);
         log_warn("failed to create /proc");
         return false;
     }
@@ -855,18 +971,18 @@ bool procfs_init(void) {
 
     vfs_node_t *self_dir = NULL;
     if (!_upsert_dir(proc_root, "self", 0555, &self_dir)) {
-        unlock_irqrestore(&procfs_tree_lock, irq_flags);
+        mutex_unlock(&procfs_tree_lock);
         log_warn("failed to create /proc/self");
         return false;
     }
 
     if (!_ensure_proc_entry(self_dir, 0, true)) {
-        unlock_irqrestore(&procfs_tree_lock, irq_flags);
+        mutex_unlock(&procfs_tree_lock);
         log_warn("failed to populate /proc/self");
         return false;
     }
 
-    unlock_irqrestore(&procfs_tree_lock, irq_flags);
+    mutex_unlock(&procfs_tree_lock);
     return true;
 }
 
@@ -875,14 +991,14 @@ void procfs_register_pid(pid_t pid) {
         return;
     }
 
-    unsigned long irq_flags = lock_irqsave(&procfs_tree_lock);
+    mutex_lock(&procfs_tree_lock);
 
     char pid_name[24];
     snprintf(pid_name, sizeof(pid_name), "%lld", (long long)pid);
 
     vfs_node_t *proc_dir = NULL;
     if (!_upsert_dir(proc_root, pid_name, 0555, &proc_dir)) {
-        unlock_irqrestore(&procfs_tree_lock, irq_flags);
+        mutex_unlock(&procfs_tree_lock);
         return;
     }
 
@@ -890,7 +1006,7 @@ void procfs_register_pid(pid_t pid) {
         log_warn("failed to populate /proc/%lld", (long long)pid);
     }
 
-    unlock_irqrestore(&procfs_tree_lock, irq_flags);
+    mutex_unlock(&procfs_tree_lock);
 }
 
 void procfs_unregister_pid(pid_t pid) {

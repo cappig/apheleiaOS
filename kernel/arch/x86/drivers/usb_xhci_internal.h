@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include <sys/lock.h>
 #include <sys/pci.h>
 #include <sys/usb.h>
 #include <x86/asm.h>
@@ -246,8 +247,8 @@ struct xhci_controller {
     bool msi_enabled;
     bool irq_enabled;
 
-    volatile int op_lock;
-    volatile int event_lock;
+    mutex_t op_lock;
+    spinlock_t event_lock;
 
     volatile bool cmd_wait_active;
     volatile bool cmd_wait_done;

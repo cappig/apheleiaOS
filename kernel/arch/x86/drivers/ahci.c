@@ -113,7 +113,7 @@ static bool ahci_wait_irq_event(ahci_device_t *dev, u64 *seq) {
         return false;
     }
 
-    u64 start = irq_ticks();
+    u64 start = arch_timer_ticks();
     u64 timeout = ms_to_ticks(AHCI_IRQ_TIMEOUT_MS);
 
     for (;;) {
@@ -128,7 +128,7 @@ static bool ahci_wait_irq_event(ahci_device_t *dev, u64 *seq) {
 
         arch_irq_restore(flags);
 
-        if ((irq_ticks() - start) >= timeout) {
+        if ((arch_timer_ticks() - start) >= timeout) {
             return false;
         }
 
@@ -143,7 +143,7 @@ static bool ahci_wait_irq_event(ahci_device_t *dev, u64 *seq) {
             continue;
         }
 
-        arch_cpu_wait();
+        arch_cpu_relax();
     }
 }
 
@@ -152,11 +152,11 @@ static bool ahci_wait_port_ready(ahci_hba_port_t *port, u64 timeout_ticks) {
         return false;
     }
 
-    u64 start = irq_ticks();
+    u64 start = arch_timer_ticks();
     size_t spins = 0;
 
     while (port->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ)) {
-        if ((irq_ticks() - start) >= timeout_ticks) {
+        if ((arch_timer_ticks() - start) >= timeout_ticks) {
             return false;
         }
 
@@ -164,7 +164,7 @@ static bool ahci_wait_port_ready(ahci_hba_port_t *port, u64 timeout_ticks) {
             return false;
         }
 
-        arch_cpu_wait();
+        arch_cpu_relax();
     }
 
     return true;
@@ -176,7 +176,7 @@ ahci_wait_cmd_poll(ahci_device_t *dev, ahci_hba_port_t *port, u32 slot_mask) {
         return false;
     }
 
-    u64 start = irq_ticks();
+    u64 start = arch_timer_ticks();
     u64 timeout = ms_to_ticks(AHCI_IRQ_TIMEOUT_MS);
     size_t spins = 0;
 
@@ -190,7 +190,7 @@ ahci_wait_cmd_poll(ahci_device_t *dev, ahci_hba_port_t *port, u32 slot_mask) {
             return true;
         }
 
-        if ((irq_ticks() - start) >= timeout) {
+        if ((arch_timer_ticks() - start) >= timeout) {
             return false;
         }
 
@@ -198,7 +198,7 @@ ahci_wait_cmd_poll(ahci_device_t *dev, ahci_hba_port_t *port, u32 slot_mask) {
             return false;
         }
 
-        arch_cpu_wait();
+        arch_cpu_relax();
     }
 }
 
@@ -267,22 +267,23 @@ static void ahci_lock(ahci_device_t *dev) {
     }
 
     for (;;) {
-        unsigned long flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&dev->io_wait);
+        unsigned long flags = spin_lock_irqsave(&dev->io_lock);
 
         if (!dev->io_busy) {
             dev->io_busy = true;
-            arch_irq_restore(flags);
+            spin_unlock_irqrestore(&dev->io_lock, flags);
             return;
         }
 
-        arch_irq_restore(flags);
+        spin_unlock_irqrestore(&dev->io_lock, flags);
 
         if (sched_is_running() && sched_current() && dev->io_wait.list) {
-            sched_block(&dev->io_wait);
+            (void)sched_block_if_unchanged(&dev->io_wait, wait_seq);
             continue;
         }
 
-        arch_cpu_wait();
+        arch_cpu_relax();
     }
 }
 
@@ -291,9 +292,9 @@ static void ahci_unlock(ahci_device_t *dev) {
         return;
     }
 
-    unsigned long flags = arch_irq_save();
+    unsigned long flags = spin_lock_irqsave(&dev->io_lock);
     dev->io_busy = false;
-    arch_irq_restore(flags);
+    spin_unlock_irqrestore(&dev->io_lock, flags);
 
     if (dev->io_wait.list) {
         sched_wake_one(&dev->io_wait);
@@ -355,11 +356,11 @@ static void ahci_request_bios_handoff(ahci_hba_mem_t *hba) {
 
     hba->bohc |= AHCI_BOHC_OOS;
 
-    u64 start = irq_ticks();
+    u64 start = arch_timer_ticks();
     u64 timeout = ms_to_ticks(AHCI_IRQ_TIMEOUT_MS);
 
-    while ((hba->bohc & AHCI_BOHC_BOS) && (irq_ticks() - start) < timeout) {
-        arch_cpu_wait();
+    while ((hba->bohc & AHCI_BOHC_BOS) && (arch_timer_ticks() - start) < timeout) {
+        arch_cpu_relax();
     }
 }
 
@@ -974,6 +975,7 @@ static bool ahci_disk_init(void) {
 
     sched_wait_queue_init(&dev->io_wait);
     sched_wait_queue_init(&dev->irq_wait);
+    spinlock_init(&dev->io_lock);
     dev->sector_size = AHCI_SECTOR_SIZE;
 
     if (!ahci_find_controller(dev)) {

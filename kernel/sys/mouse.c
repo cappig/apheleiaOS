@@ -26,6 +26,7 @@ typedef struct {
 static vector_t *mice = NULL;
 static ring_buffer_t *buffer = NULL;
 static sched_wait_queue_t mouse_wait = {0};
+static spinlock_t mouse_lock = SPINLOCK_INIT;
 
 static i32 mouse_x = 0;
 static i32 mouse_y = 0;
@@ -44,9 +45,9 @@ static i32 _clamp_i32(i32 value, i32 min, i32 max) {
 }
 
 static bool _has_events(void) {
-    unsigned long irq_flags = arch_irq_save();
+    unsigned long irq_flags = spin_lock_irqsave(&mouse_lock);
     bool has_events = buffer && !ring_buffer_is_empty(buffer);
-    arch_irq_restore(irq_flags);
+    spin_unlock_irqrestore(&mouse_lock, irq_flags);
 
     return has_events;
 }
@@ -61,9 +62,10 @@ mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     }
 
     for (;;) {
-        unsigned long irq_flags = arch_irq_save();
+        u32 wait_seq = sched_wait_seq(&mouse_wait);
+        unsigned long irq_flags = spin_lock_irqsave(&mouse_lock);
         size_t popped = ring_buffer_pop_array(buffer, buf, len);
-        arch_irq_restore(irq_flags);
+        spin_unlock_irqrestore(&mouse_lock, irq_flags);
 
         if (popped) {
             return (ssize_t)popped;
@@ -82,7 +84,15 @@ mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
             return -EINTR;
         }
 
-        sched_block(&mouse_wait);
+        sched_wait_result_t wait_result = sched_wait_on_queue(
+            &mouse_wait,
+            wait_seq,
+            0,
+            SCHED_WAIT_INTERRUPTIBLE
+        );
+        if (wait_result == SCHED_WAIT_INTR) {
+            return -EINTR;
+        }
     }
 }
 
@@ -99,6 +109,18 @@ static short mouse_poll(vfs_node_t *node, short events, u32 flags) {
     return revents;
 }
 
+static sched_wait_queue_t *
+mouse_wait_queue(vfs_node_t *node, short events, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    if ((events & POLLIN) == 0 || (events & ~POLLIN) != 0) {
+        return NULL;
+    }
+
+    return &mouse_wait;
+}
+
 void mouse_handle_event(mouse_event event) {
     const framebuffer_info_t *fb = framebuffer_get_info();
 
@@ -111,10 +133,10 @@ void mouse_handle_event(mouse_event event) {
     }
 
     if (buffer) {
-        unsigned long irq_flags = arch_irq_save();
+        unsigned long irq_flags = spin_lock_irqsave(&mouse_lock);
         ring_buffer_push_array(buffer, (u8 *)&event, sizeof(event));
-        arch_irq_restore(irq_flags);
-        sched_wake_all(&mouse_wait);
+        spin_unlock_irqrestore(&mouse_lock, irq_flags);
+        sched_wake_one(&mouse_wait);
     }
 }
 
@@ -135,6 +157,7 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
     }
 
     mouse_if->poll = mouse_poll;
+    mouse_if->wait_queue = mouse_wait_queue;
 
     bool registered = devfs_register_node(
         dev_dir,
@@ -184,6 +207,8 @@ bool mouse_init(void) {
 
     if (!mouse_wait.list) {
         sched_wait_queue_init(&mouse_wait);
+        sched_wait_queue_set_name(&mouse_wait, "mouse_wait");
+        sched_wait_queue_set_poll_link(&mouse_wait, true);
     }
 
     if (first_init) {

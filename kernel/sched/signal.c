@@ -51,7 +51,7 @@ static void signal_mark_pending(sched_thread_t *thread, int signum) {
     }
 
     u32 mask = 1u << (signum - 1);
-    thread->signal_pending |= mask;
+    __atomic_fetch_or(&thread->signal_pending, mask, __ATOMIC_ACQ_REL);
 }
 
 static void signal_clear_pending(sched_thread_t *thread, int signum) {
@@ -60,7 +60,7 @@ static void signal_clear_pending(sched_thread_t *thread, int signum) {
     }
 
     u32 mask = 1u << (signum - 1);
-    thread->signal_pending &= ~mask;
+    __atomic_fetch_and(&thread->signal_pending, ~mask, __ATOMIC_ACQ_REL);
 }
 
 static int signal_next_pending(sched_thread_t *thread) {
@@ -68,7 +68,9 @@ static int signal_next_pending(sched_thread_t *thread) {
         return 0;
     }
 
-    u32 pending = thread->signal_pending & ~thread->signal_mask;
+    u32 pending =
+        __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE) &
+        ~__atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE);
     if (!pending) {
         return 0;
     }
@@ -141,7 +143,7 @@ int sched_signal_send_thread(sched_thread_t *thread, int signum) {
     }
 
     // SIGCONT always continues a stopped process, regardless of handler
-    if (signal_is_continue(signum) && thread->state == THREAD_STOPPED) {
+    if (signal_is_continue(signum)) {
         sched_continue_thread(thread);
     }
 
@@ -155,10 +157,7 @@ int sched_signal_send_thread(sched_thread_t *thread, int signum) {
     }
 
     signal_mark_pending(thread, signum);
-
-    if (thread->state == THREAD_SLEEPING) {
-        sched_unblock_thread(thread);
-    }
+    sched_unblock_thread(thread);
 
     return 1;
 }
@@ -169,7 +168,9 @@ int sched_signal_send_pid(pid_t pid, int signum) {
         return -1;
     }
 
-    return sched_signal_send_thread(thread, signum);
+    int rc = sched_signal_send_thread(thread, signum);
+    sched_thread_put(thread);
+    return rc;
 }
 
 void sched_signal_deliver_current(arch_int_state_t *state) {
@@ -251,5 +252,8 @@ bool sched_signal_has_pending(sched_thread_t *thread) {
         return false;
     }
 
-    return (thread->signal_pending & ~thread->signal_mask) != 0;
+    return (
+               __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE) &
+               ~__atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE)
+           ) != 0;
 }

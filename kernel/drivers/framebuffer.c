@@ -12,7 +12,7 @@
 #include <sys/devfs.h>
 #include <sys/framebuffer.h>
 #include <sys/ioctl.h>
-#include <sys/stats.h>
+#include <sys/lock.h>
 #include <sys/tty.h>
 #include <sys/vfs.h>
 
@@ -22,9 +22,38 @@
 #define FB_DEV_UID   0U
 #define FB_DEV_GID   44U
 #define FB_DEV_MODE  0660
+#define FB_PRESENT_CHUNK_BYTES (64U * 1024U)
 
 static void *_present_vram;
 static bool framebuffer_driver_loaded = false;
+static mutex_t fb_present_lock = MUTEX_INIT;
+static bool fb_present_force_full = true;
+
+static void _fb_handoff_clear(const framebuffer_info_t *fb) {
+    if (!fb || !fb->available || !fb->size) {
+        return;
+    }
+
+    mutex_lock(&fb_present_lock);
+
+    bool transient_map = false;
+    void *vram = _present_vram;
+    if (!vram) {
+        vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
+        transient_map = true;
+    }
+
+    if (vram) {
+        memset(vram, 0, fb->size);
+        if (transient_map) {
+            arch_phys_unmap(vram, fb->size);
+        }
+    }
+
+    // Ensure the first frame after acquire repaints the entire display.
+    fb_present_force_full = true;
+    mutex_unlock(&fb_present_lock);
+}
 
 const driver_desc_t framebuffer_driver_desc = {
     .name = "framebuffer",
@@ -188,7 +217,6 @@ static ssize_t _dev_fb_present_rect(
         return -EINVAL;
     }
 
-    u32 rect_row_bytes = width * bpp_bytes;
     const u32 *src = req->frame;
 
     u8 red_shift = fb->red_shift;
@@ -207,8 +235,7 @@ static ssize_t _dev_fb_present_rect(
         &green_size,
         &blue_size
     );
-
-    sched_preempt_disable();
+    mutex_lock(&fb_present_lock);
 
     bool transient_map = false;
     void *vram = _present_vram;
@@ -218,8 +245,15 @@ static ssize_t _dev_fb_present_rect(
     }
 
     if (!vram) {
-        sched_preempt_enable();
+        mutex_unlock(&fb_present_lock);
         return -EIO;
+    }
+
+    if (fb_present_force_full) {
+        x = 0;
+        y = 0;
+        width = fb->width;
+        height = fb->height;
     }
 
     bool fast_bgrx = pixel_is_fast_bgrx8888(
@@ -234,47 +268,73 @@ static ssize_t _dev_fb_present_rect(
 
     if (fast_bgrx) {
         size_t src_row_bytes = (size_t)width * sizeof(u32);
+        size_t chunk_rows_budget = src_row_bytes
+                                     ? (FB_PRESENT_CHUNK_BYTES / src_row_bytes)
+                                     : 0;
+        if (!chunk_rows_budget) {
+            chunk_rows_budget = 1;
+        }
 
-        for (u32 row = 0; row < height; row++) {
-            const u32 *src_row = src + (size_t)(y + row) * fb_width + x;
+        for (u32 row = 0; row < height;) {
+            u32 rows = height - row;
+            if ((size_t)rows > chunk_rows_budget) {
+                rows = (u32)chunk_rows_budget;
+            }
 
-            u8 *dst_row =
-                (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
-
-            memcpy(dst_row, src_row, src_row_bytes);
+            for (u32 r = 0; r < rows; r++) {
+                const u32 *src_row = src + (size_t)(y + row + r) * fb_width + x;
+                u8 *dst_row = (u8 *)vram + (size_t)(y + row + r) * pitch +
+                              (size_t)x * bpp_bytes;
+                memcpy(dst_row, src_row, src_row_bytes);
+            }
+            row += rows;
         }
     } else {
-        for (u32 row = 0; row < height; row++) {
-            const u32 *src_row = src + (size_t)(y + row) * fb_width + x;
+        size_t dst_row_bytes = (size_t)width * bpp_bytes;
+        size_t chunk_rows_budget = dst_row_bytes
+                                     ? (FB_PRESENT_CHUNK_BYTES / dst_row_bytes)
+                                     : 0;
+        if (!chunk_rows_budget) {
+            chunk_rows_budget = 1;
+        }
 
-            u8 *dst_row =
-                (u8 *)vram + (size_t)(y + row) * pitch + (size_t)x * bpp_bytes;
-
-            for (u32 col = 0; col < width; col++) {
-                u32 packed = pixel_pack_rgb888(
-                    src_row[col],
-                    red_shift,
-                    green_shift,
-                    blue_shift,
-                    red_size,
-                    green_size,
-                    blue_size
-                );
-
-                pixel_store_packed(
-                    dst_row + (size_t)col * bpp_bytes, (u8)bpp_bytes, packed
-                );
+        for (u32 row = 0; row < height;) {
+            u32 rows = height - row;
+            if ((size_t)rows > chunk_rows_budget) {
+                rows = (u32)chunk_rows_budget;
             }
+
+            for (u32 r = 0; r < rows; r++) {
+                const u32 *src_row = src + (size_t)(y + row + r) * fb_width + x;
+                u8 *dst_row = (u8 *)vram + (size_t)(y + row + r) * pitch +
+                              (size_t)x * bpp_bytes;
+
+                for (u32 col = 0; col < width; col++) {
+                    u32 packed = pixel_pack_rgb888(
+                        src_row[col],
+                        red_shift,
+                        green_shift,
+                        blue_shift,
+                        red_size,
+                        green_size,
+                        blue_size
+                    );
+                    pixel_store_packed(
+                        dst_row + (size_t)col * bpp_bytes, (u8)bpp_bytes, packed
+                    );
+                }
+            }
+            row += rows;
         }
     }
 
-    stats_add_fb_present_bytes((u64)rect_row_bytes * (u64)height);
+    fb_present_force_full = false;
 
     if (transient_map) {
         arch_phys_unmap(vram, fb->size);
     }
 
-    sched_preempt_enable();
+    mutex_unlock(&fb_present_lock);
     return 0;
 }
 
@@ -335,7 +395,12 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
             screen = (size_t)current->tty_index;
         }
 
-        return console_fb_acquire(current->pid, screen);
+        int status = console_fb_acquire(current->pid, screen);
+        if (!status) {
+            _fb_handoff_clear(fb);
+        }
+
+        return status;
     }
     case FBIORELEASE: {
         sched_thread_t *current = sched_current();
@@ -385,6 +450,7 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
     }
 
     _present_vram = NULL;
+    fb_present_force_full = true;
     if (arch_phys_map_can_persist()) {
         _present_vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
         if (!_present_vram) {
@@ -461,6 +527,7 @@ driver_err_t framebuffer_driver_unload(void) {
         }
         _present_vram = NULL;
     }
+    fb_present_force_full = true;
 
     framebuffer_driver_loaded = false;
     return DRIVER_OK;

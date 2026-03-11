@@ -26,7 +26,6 @@
 #include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/path.h>
-#include <sys/stats.h>
 #include <sys/proc.h>
 #include <sys/procfs.h>
 #include <sys/pty.h>
@@ -122,6 +121,26 @@ static int _tty_binding_from_dev_name(const char *dev_name) {
     }
 
     return TTY_NONE;
+}
+
+static int _pty_index_from_dev_name(const char *dev_name) {
+    if (!dev_name || !dev_name[0]) {
+        return -1;
+    }
+
+    int idx = 0;
+
+    if (!strncmp(dev_name, "pts", 3) &&
+        _parse_index(dev_name + 3, (int)PTY_COUNT, &idx)) {
+        return idx;
+    }
+
+    if (!strncmp(dev_name, "pty", 3) &&
+        _parse_index(dev_name + 3, (int)PTY_COUNT, &idx)) {
+        return idx;
+    }
+
+    return -1;
 }
 
 static void _sync_thread_tty(sched_thread_t *thread, const sched_fd_t *entry) {
@@ -232,41 +251,52 @@ _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblock) {
         return 0;
     }
 
+    if (!sched_pipe_operation_begin(pipe)) {
+        return -EPIPE;
+    }
+
     u8 *out = buf;
     size_t total = 0;
+    ssize_t result = 0;
 
     for (;;) {
         bool eof = false;
+        u32 wait_seq = pipe->read_wait_queue
+                           ? sched_wait_seq(pipe->read_wait_queue)
+                           : 0;
 
-        lock(&pipe->lock);
+        unsigned long irq_flags = spin_lock_irqsave(&pipe->lock);
         if (ring_io_size(&pipe->ring)) {
             size_t chunk = ring_io_read(&pipe->ring, out + total, len - total);
             total += chunk;
         }
 
         eof = !pipe->writers;
-        unlock(&pipe->lock);
+        spin_unlock_irqrestore(&pipe->lock, irq_flags);
 
         if (total > 0) {
             if (pipe->write_wait_queue) {
                 sched_wake_one(pipe->write_wait_queue);
             }
-
-            return (ssize_t)total;
+            result = (ssize_t)total;
+            break;
         }
 
         if (eof) {
-            return 0;
+            result = 0;
+            break;
         }
 
         if (nonblock) {
-            return -EAGAIN;
+            result = -EAGAIN;
+            break;
         }
 
         sched_thread_t *current = sched_current();
 
         if (current && sched_signal_has_pending(current)) {
-            return -EINTR;
+            result = -EINTR;
+            break;
         }
 
         if (!sched_is_running()) {
@@ -274,9 +304,21 @@ _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblock) {
         }
 
         if (pipe->read_wait_queue) {
-            sched_block(pipe->read_wait_queue);
+            sched_wait_result_t wait_result = sched_wait_on_queue(
+                pipe->read_wait_queue,
+                wait_seq,
+                0,
+                SCHED_WAIT_INTERRUPTIBLE
+            );
+            if (wait_result == SCHED_WAIT_INTR) {
+                result = -EINTR;
+                break;
+            }
         }
     }
+
+    sched_pipe_operation_end(pipe);
+    return result;
 }
 
 static ssize_t
@@ -289,17 +331,26 @@ _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
         return 0;
     }
 
+    if (!sched_pipe_operation_begin(pipe)) {
+        return -EPIPE;
+    }
+
     const u8 *in = buf;
     size_t total = 0;
+    ssize_t result = 0;
 
     for (;;) {
         bool no_readers = false;
+        u32 wait_seq = pipe->write_wait_queue
+                           ? sched_wait_seq(pipe->write_wait_queue)
+                           : 0;
 
-        lock(&pipe->lock);
+        unsigned long irq_flags = spin_lock_irqsave(&pipe->lock);
 
         if (!pipe->readers) {
-            unlock(&pipe->lock);
-            return total > 0 ? (ssize_t)total : -EPIPE;
+            spin_unlock_irqrestore(&pipe->lock, irq_flags);
+            result = total > 0 ? (ssize_t)total : -EPIPE;
+            break;
         }
 
         if (ring_io_free_space(&pipe->ring) > 0) {
@@ -308,7 +359,7 @@ _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
         }
 
         no_readers = !pipe->readers;
-        unlock(&pipe->lock);
+        spin_unlock_irqrestore(&pipe->lock, irq_flags);
 
         if (total > 0) {
             if (pipe->read_wait_queue) {
@@ -316,22 +367,26 @@ _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
             }
 
             if (total == len) {
-                return (ssize_t)total;
+                result = (ssize_t)total;
+                break;
             }
         }
 
         if (no_readers) {
-            return total > 0 ? (ssize_t)total : -EPIPE;
+            result = total > 0 ? (ssize_t)total : -EPIPE;
+            break;
         }
 
         if (nonblock) {
-            return total > 0 ? (ssize_t)total : -EAGAIN;
+            result = total > 0 ? (ssize_t)total : -EAGAIN;
+            break;
         }
 
         sched_thread_t *current = sched_current();
 
         if (current && sched_signal_has_pending(current)) {
-            return total > 0 ? (ssize_t)total : -EINTR;
+            result = total > 0 ? (ssize_t)total : -EINTR;
+            break;
         }
 
         if (!sched_is_running()) {
@@ -339,9 +394,21 @@ _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
         }
 
         if (pipe->write_wait_queue) {
-            sched_block(pipe->write_wait_queue);
+            sched_wait_result_t wait_result = sched_wait_on_queue(
+                pipe->write_wait_queue,
+                wait_seq,
+                0,
+                SCHED_WAIT_INTERRUPTIBLE
+            );
+            if (wait_result == SCHED_WAIT_INTR) {
+                result = total > 0 ? (ssize_t)total : -EINTR;
+                break;
+            }
         }
     }
+
+    sched_pipe_operation_end(pipe);
+    return result;
 }
 
 static bool _split_parent(
@@ -886,6 +953,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     bool ptmx_open = false;
     size_t ptmx_index = 0;
     int fd_tty_index = TTY_NONE;
+    int fd_pty_index = -1;
 
     if (!strncmp(resolved, "/dev/", 5)) {
         const char *dev = resolved + 5;
@@ -912,6 +980,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         }
 
         fd_tty_index = _tty_binding_from_dev_name(dev);
+        fd_pty_index = _pty_index_from_dev_name(dev);
     }
 
     vfs_node_t *node = vfs_lookup(resolved);
@@ -1006,7 +1075,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         .node = node,
         .pipe = NULL,
         .offset = 0,
-        .pty_index = ptmx_open ? (int)ptmx_index : -1,
+        .pty_index = fd_pty_index,
         .tty_index = fd_tty_index,
         .flags = runtime_flags,
         .fd_flags = fd_flags,
@@ -2311,10 +2380,12 @@ static u64 sys_kill(pid_t pid, int signum) {
     }
 
     if (self->uid != 0 && self->uid != target->uid) {
+        sched_thread_put(target);
         return (u64)-EPERM;
     }
 
     int ret = sched_signal_send_thread(target, signum);
+    sched_thread_put(target);
     return ret < 0 ? (u64)-ESRCH : (u64)ret;
 }
 
@@ -2328,12 +2399,12 @@ static short _pipe_poll(sched_pipe_t *pipe, bool read_end, short events) {
     size_t readers = 0;
     size_t writers = 0;
 
-    lock(&pipe->lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pipe->lock);
     size = ring_io_size(&pipe->ring);
     free_space = ring_io_free_space(&pipe->ring);
     readers = pipe->readers;
     writers = pipe->writers;
-    unlock(&pipe->lock);
+    spin_unlock_irqrestore(&pipe->lock, irq_flags);
 
     short revents = 0;
 
@@ -2401,6 +2472,61 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
     return POLLNVAL;
 }
 
+static sched_wait_queue_t *
+_pipe_poll_wait_queue(sched_pipe_t *pipe, bool read_end, short events) {
+    if (!pipe) {
+        return NULL;
+    }
+
+    if ((events & POLLIN) && (events & ~POLLIN) == 0) {
+        return read_end ? pipe->read_wait_queue : NULL;
+    }
+
+    if ((events & POLLOUT) && (events & ~POLLOUT) == 0) {
+        return read_end ? NULL : pipe->write_wait_queue;
+    }
+
+    return NULL;
+}
+
+static sched_wait_queue_t *
+_fd_poll_wait_queue(sched_thread_t *thread, int fd, short events) {
+    if (fd < 0) {
+        return NULL;
+    }
+
+    sched_fd_t *entry = NULL;
+
+    if (thread && _fd_lookup(thread, fd, &entry)) {
+        if (entry->kind == SCHED_FD_PIPE_READ) {
+            return _pipe_poll_wait_queue(entry->pipe, true, events);
+        }
+
+        if (entry->kind == SCHED_FD_PIPE_WRITE) {
+            return _pipe_poll_wait_queue(entry->pipe, false, events);
+        }
+
+        if (entry->kind == SCHED_FD_VFS && entry->node) {
+            size_t vfs_flags = 0;
+
+            if (entry->flags & O_NONBLOCK) {
+                vfs_flags |= VFS_NONBLOCK;
+            }
+
+            return vfs_wait_queue(entry->node, events, vfs_flags);
+        }
+
+        return NULL;
+    }
+
+    if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO) {
+        tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+        return tty_wait_queue_handle(&handle, events, 0);
+    }
+
+    return NULL;
+}
+
 static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
     if (!fds && nfds) {
         return -EFAULT;
@@ -2434,6 +2560,19 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
     }
 
     for (;;) {
+        sched_wait_queue_t *wait_queue = NULL;
+        u32 wait_seq = 0;
+
+        if (nfds == 1 && fds && fds[0].fd >= 0) {
+            wait_queue = _fd_poll_wait_queue(thread, fds[0].fd, fds[0].events);
+        }
+
+        if (wait_queue) {
+            wait_seq = sched_wait_seq(wait_queue);
+        } else if (nfds) {
+            wait_seq = sched_poll_wait_seq();
+        }
+
         int ready = 0;
 
         for (nfds_t i = 0; i < nfds; i++) {
@@ -2473,13 +2612,47 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
             continue;
         }
 
-        stats_inc_poll_sleep_loops();
-        if (!finite_timeout) {
-            sched_poll_wait();
+        if (!nfds) {
+            sched_wait_result_t wait_result = sched_wait_deadline(
+                finite_timeout ? deadline : 0,
+                SCHED_WAIT_INTERRUPTIBLE
+            );
+            if (wait_result == SCHED_WAIT_INTR) {
+                return -EINTR;
+            }
+            if (wait_result == SCHED_WAIT_TIMEOUT) {
+                return 0;
+            }
             continue;
         }
 
-        sched_sleep(1);
+        if (wait_queue) {
+            sched_wait_result_t wait_result = sched_wait_on_queue(
+                wait_queue,
+                wait_seq,
+                finite_timeout ? deadline : 0,
+                SCHED_WAIT_INTERRUPTIBLE
+            );
+            if (wait_result == SCHED_WAIT_INTR) {
+                return -EINTR;
+            }
+            if (wait_result == SCHED_WAIT_TIMEOUT) {
+                return 0;
+            }
+            continue;
+        }
+
+        if (!finite_timeout) {
+            (void)sched_poll_block_if_unchanged(wait_seq);
+            continue;
+        }
+
+        if (timeout_ms > 0) {
+            (void)sched_poll_block_if_unchanged_until(wait_seq, deadline);
+            continue;
+        }
+
+        return 0;
     }
 }
 
@@ -2683,6 +2856,8 @@ static void _syscall_handler(arch_int_state_t *state) {
     if (!state) {
         return;
     }
+
+    sched_capture_context(state);
 
     u64 num = (u64)arch_syscall_num(state);
     u64 ret = _syscall_dispatch(state);

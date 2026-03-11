@@ -17,6 +17,7 @@ static const double k_pi = 3.14159265358979323846;
 static const int k_clock_face_label_gap = 6;
 static const int k_clock_edge_pad = 4;
 static const int k_clock_label_raise = 8;
+static const int k_clock_smooth_frame_ms = 50;
 
 typedef struct {
     bool show_date;
@@ -399,39 +400,68 @@ static bool should_quit(const ws_input_event_t *event) {
 
 typedef struct {
     bool valid;
-    time_t realtime_sec;
+    time_t display_sec;
     struct timespec mono_mark;
 } smooth_clock_state_t;
 
-static double smooth_second_fraction(time_t realtime_sec, smooth_clock_state_t *state) {
-    if (!state || realtime_sec == (time_t)-1) {
-        return 0.0;
+static bool smooth_clock_sample(
+    time_t wall_sec,
+    smooth_clock_state_t *state,
+    time_t *display_sec_out,
+    double *second_fraction_out
+) {
+    if (!state || !display_sec_out || !second_fraction_out || wall_sec == (time_t)-1) {
+        return false;
     }
 
     struct timespec mono_now = {0};
     if (clock_gettime(CLOCK_MONOTONIC, &mono_now) < 0) {
-        return 0.0;
+        return false;
     }
 
-    if (!state->valid || state->realtime_sec != realtime_sec) {
+    if (!state->valid) {
         state->valid = true;
-        state->realtime_sec = realtime_sec;
+        state->display_sec = wall_sec;
         state->mono_mark = mono_now;
-        return 0.0;
+        *display_sec_out = wall_sec;
+        *second_fraction_out = 0.0;
+        return true;
     }
 
     time_t ds = mono_now.tv_sec - state->mono_mark.tv_sec;
     long dns = mono_now.tv_nsec - state->mono_mark.tv_nsec;
     double elapsed = (double)ds + ((double)dns / 1000000000.0);
 
-    if (elapsed < 0.0) {
-        return 0.0;
-    }
-    if (elapsed > 0.999999) {
-        return 0.999999;
+    if (elapsed < 0.0 || elapsed > 4.0) {
+        state->display_sec = wall_sec;
+        state->mono_mark = mono_now;
+        *display_sec_out = wall_sec;
+        *second_fraction_out = 0.0;
+        return true;
     }
 
-    return elapsed;
+    while (elapsed >= 1.0) {
+        state->display_sec++;
+        state->mono_mark.tv_sec++;
+        elapsed -= 1.0;
+    }
+
+    if (wall_sec > state->display_sec || wall_sec + 1 < state->display_sec) {
+        state->display_sec = wall_sec;
+        state->mono_mark = mono_now;
+        elapsed = 0.0;
+    }
+
+    if (elapsed < 0.0) {
+        elapsed = 0.0;
+    }
+    if (elapsed > 0.999999) {
+        elapsed = 0.999999;
+    }
+
+    *display_sec_out = state->display_sec;
+    *second_fraction_out = elapsed;
+    return true;
 }
 
 int main(int argc, char **argv) {
@@ -453,33 +483,38 @@ int main(int argc, char **argv) {
 
     while (running) {
         time_t now = time(NULL);
+        time_t display_sec = now;
         double second_fraction = 0.0;
 
-        if (now != (time_t)-1 && now != last_sec) {
-            last_sec = now;
+        if (opts.smooth && now != (time_t)-1) {
+            if (!smooth_clock_sample(now, &smooth_state, &display_sec, &second_fraction)) {
+                break;
+            }
             redraw = true;
         }
 
-        if (opts.smooth && now != (time_t)-1) {
-            second_fraction = smooth_second_fraction(now, &smooth_state);
+        if (display_sec != (time_t)-1 && display_sec != last_sec) {
+            last_sec = display_sec;
             redraw = true;
         }
 
         if (redraw) {
             struct tm tm_now = {0};
 
-            if (!clock_tm_from_time(now, &tm_now)) {
+            if (!clock_tm_from_time(display_sec, &tm_now)) {
                 break;
             }
 
             if (draw_clock(&window, &tm_now, &opts, second_fraction)) {
                 redraw = false;
+            } else if (errno != EAGAIN && errno != EINTR) {
+                break;
             }
         }
 
         ws_input_event_t event = {0};
 
-        int timeout_ms = opts.smooth ? 16 : (redraw ? 0 : 100);
+        int timeout_ms = opts.smooth ? k_clock_smooth_frame_ms : (redraw ? 0 : 100);
 
         int rc = window_wait_event(&window, &event, timeout_ms);
 

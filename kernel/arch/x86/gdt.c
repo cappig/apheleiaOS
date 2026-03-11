@@ -20,17 +20,31 @@ ALIGNED(0x10)
 static gdt_entry_t gdt_entries[MAX_CORES][GDT_ENTRY_COUNT] = {0};
 
 
-static size_t _gdt_core_id(void) {
-    // Prefer deriving the core from the active GDTR so TSS/GDT updates
-    // never depend on scheduler-local CPU bookkeeping.
+bool gdt_current_core_id(size_t *out) {
+    if (!out) {
+        return false;
+    }
+
     gdt_desc_t current = {0};
     asm volatile("sgdt %0" : "=m"(current));
 
     uintptr_t active_gdt = (uintptr_t)current.gdt_ptr;
     for (size_t i = 0; i < MAX_CORES; i++) {
         if (active_gdt == (uintptr_t)&gdt_entries[i][0]) {
-            return i;
+            *out = i;
+            return true;
         }
+    }
+
+    return false;
+}
+
+static size_t _gdt_core_id(void) {
+    // Prefer deriving the core from the active GDTR so TSS/GDT updates
+    // never depend on scheduler-local CPU bookkeeping.
+    size_t core_id = 0;
+    if (gdt_current_core_id(&core_id)) {
+        return core_id;
     }
 
     cpu_core_t *core = cpu_current();

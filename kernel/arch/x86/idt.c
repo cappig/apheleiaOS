@@ -3,6 +3,7 @@
 #include <base/attributes.h>
 #include <base/types.h>
 #include <log/log.h>
+#include <sched/scheduler.h>
 #include <stddef.h>
 #include <x86/asm.h>
 #include <x86/gdt.h>
@@ -141,6 +142,8 @@ void isr_handler(int_state_t *state) {
         disable_interrupts();
         halt();
     }
+
+    sched_capture_context((arch_int_state_t *)state);
 
     if (state->int_num < ISR_COUNT && int_handlers[state->int_num]) {
         int_handlers[state->int_num](state);

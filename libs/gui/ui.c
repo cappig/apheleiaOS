@@ -16,6 +16,9 @@ extern char **environ;
 
 #define UI_PENDING_EVENTS_CAP 3
 
+static void
+_window_apply_resize_default(window_t *window, const ws_input_event_t *event);
+
 static const char *env_lookup(const char *key) {
     if (!key || !key[0] || !environ) {
         return NULL;
@@ -137,7 +140,12 @@ static void _update_key_modifiers(ui_t *ui, const key_event *event) {
 }
 
 static void
-_translate_key_event(ui_t *ui, const key_event *raw, input_event_t *out) {
+_translate_key_event(
+    ui_t *ui,
+    const key_event *raw,
+    input_event_t *out,
+    u64 timestamp_ms
+) {
     if (!ui || !raw || !out) {
         return;
     }
@@ -145,7 +153,7 @@ _translate_key_event(ui_t *ui, const key_event *raw, input_event_t *out) {
     _update_key_modifiers(ui, raw);
 
     memset(out, 0, sizeof(*out));
-    out->timestamp_ms = _input_timestamp_ms();
+    out->timestamp_ms = timestamp_ms;
     out->type = INPUT_EVENT_KEY;
     out->source = raw->source;
     out->keycode = raw->code;
@@ -157,21 +165,20 @@ static size_t _translate_mouse_event(
     ui_t *ui,
     const mouse_event *raw,
     input_event_t *out,
-    size_t out_cap
+    size_t out_cap,
+    u64 timestamp_ms
 ) {
     if (!ui || !raw || !out || !out_cap) {
         return 0;
     }
 
     size_t produced = 0;
-    u64 timestamp = _input_timestamp_ms();
-
     if ((raw->delta_x || raw->delta_y) && produced < out_cap) {
         input_event_t *move = &out[produced++];
 
         memset(move, 0, sizeof(*move));
 
-        move->timestamp_ms = timestamp;
+        move->timestamp_ms = timestamp_ms;
         move->type = INPUT_EVENT_MOUSE_MOVE;
         move->source = raw->source;
         move->dx = raw->delta_x;
@@ -184,7 +191,7 @@ static size_t _translate_mouse_event(
 
         memset(wheel, 0, sizeof(*wheel));
 
-        wheel->timestamp_ms = timestamp;
+        wheel->timestamp_ms = timestamp_ms;
         wheel->type = INPUT_EVENT_MOUSE_WHEEL;
         wheel->source = raw->source;
         wheel->buttons = raw->buttons;
@@ -205,7 +212,7 @@ static size_t _translate_mouse_event(
 
     memset(buttons, 0, sizeof(*buttons));
 
-    buttons->timestamp_ms = timestamp;
+    buttons->timestamp_ms = timestamp_ms;
     buttons->type = INPUT_EVENT_MOUSE_BUTTON;
     buttons->source = raw->source;
     buttons->buttons = raw->buttons;
@@ -402,6 +409,8 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
         return (ssize_t)(produced * sizeof(*events));
     }
 
+    u64 batch_timestamp_ms = _input_timestamp_ms();
+
     for (;;) {
         if (produced >= count) {
             break;
@@ -418,7 +427,12 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
                 ssize_t n = read(ui->keyboard_fd, &raw, sizeof(raw));
 
                 if (n == (ssize_t)sizeof(raw)) {
-                    _translate_key_event(ui, &raw, &events[produced++]);
+                    _translate_key_event(
+                        ui,
+                        &raw,
+                        &events[produced++],
+                        batch_timestamp_ms
+                    );
                     ui->input_round_robin = true;
                     consumed = true;
                     break;
@@ -446,7 +460,8 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
                         ui,
                         &raw,
                         converted,
-                        sizeof(converted) / sizeof(converted[0])
+                        sizeof(converted) / sizeof(converted[0]),
+                        batch_timestamp_ms
                     );
 
                 if (event_count) {
@@ -804,19 +819,6 @@ framebuffer_t *window_buffer(window_t *window) {
     }
 
     size_t capacity = pixels;
-    if (window->pixels_capacity) {
-        capacity = window->pixels_capacity;
-
-        while (capacity < pixels) {
-            size_t grown = capacity * 2;
-
-            if (grown <= capacity) {
-                capacity = pixels;
-                break;
-            }
-            capacity = grown;
-        }
-    }
 
     if (capacity > ((size_t)-1) / sizeof(pixel_t)) {
         errno = EOVERFLOW;
@@ -849,16 +851,59 @@ int window_flush(window_t *window) {
         return -1;
     }
 
-    size_t bytes = window->pixels_count * sizeof(pixel_t);
-    ssize_t n = window_blit(window, window->pixels, bytes, 0);
-    if (n == (ssize_t)bytes) {
-        return 0;
+    for (size_t attempt = 0; attempt < 8; attempt++) {
+        size_t bytes = window->pixels_count * sizeof(pixel_t);
+        if (!bytes) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        ssize_t n = window_blit(window, window->pixels, bytes, 0);
+        if (n == (ssize_t)bytes) {
+            return 0;
+        }
+
+        if (n >= 0) {
+            errno = EAGAIN;
+        }
+
+        if (errno == ENOENT) {
+            return -1;
+        }
+
+        if (errno != EAGAIN && errno != EINTR) {
+            return -1;
+        }
+
+        // Resize events can race flush writes; pull pending events and retry.
+        ws_input_event_t event_batch[8];
+        for (;;) {
+            ssize_t m = read(window->ev_fd, event_batch, sizeof(event_batch));
+            if (m < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                break;
+            }
+
+            if (!m || ((size_t)m % sizeof(ws_input_event_t))) {
+                break;
+            }
+
+            size_t count = (size_t)m / sizeof(ws_input_event_t);
+            for (size_t i = 0; i < count; i++) {
+                if (event_batch[i].type == INPUT_EVENT_WINDOW_RESIZE) {
+                    _window_apply_resize_default(window, &event_batch[i]);
+                }
+            }
+
+            if (count < (sizeof(event_batch) / sizeof(event_batch[0]))) {
+                break;
+            }
+        }
     }
 
-    if (n >= 0) {
-        errno = EAGAIN;
-    }
-
+    errno = EAGAIN;
     return -1;
 }
 
@@ -871,6 +916,7 @@ window_flush_row(window_t *window, const u8 *row, size_t bytes, off_t offset) {
 
     size_t written = 0;
 
+    size_t stalled = 0;
     while (written < bytes) {
         ssize_t n = pwrite(
             window->fb_fd,
@@ -880,14 +926,26 @@ window_flush_row(window_t *window, const u8 *row, size_t bytes, off_t offset) {
         );
 
         if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == EAGAIN && stalled < 8) {
+                stalled++;
+                continue;
+            }
             return -1;
         }
 
         if (!n) {
+            if (stalled < 8) {
+                stalled++;
+                continue;
+            }
             errno = EAGAIN;
             return -1;
         }
 
+        stalled = 0;
         written += (size_t)n;
     }
 
