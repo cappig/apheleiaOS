@@ -1,12 +1,12 @@
-#include "wm_background.h"
+#include "background.h"
 
 #include <parse/ppm.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "wm_color.h"
-#include "wm_file.h"
+#include "color.h"
+#include "file.h"
 
 #define WM_BG_MAX_FILE_BYTES (64U * 1024U * 1024U)
 

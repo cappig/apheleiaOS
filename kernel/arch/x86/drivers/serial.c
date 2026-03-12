@@ -200,7 +200,6 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
             spinlock_init(&serial_devices[i].rx_lock);
             spinlock_init(&serial_devices[i].tx_lock);
             sched_wait_queue_init(&serial_devices[i].rx_wait);
-            sched_wait_queue_set_name(&serial_devices[i].rx_wait, "serial_rx_wait");
             sched_wait_queue_set_poll_link(&serial_devices[i].rx_wait, true);
             serial_devices[i].rx_wait_ready = true;
         }

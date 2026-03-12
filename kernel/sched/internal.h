@@ -1,11 +1,12 @@
 #pragma once
 
 #include "scheduler.h"
-#include "scheduler_mem.h"
+#include "mem.h"
 
 #include <arch/mm.h>
 #include <arch/paging.h>
 #include <arch/thread.h>
+#include <arch/signal.h>
 #include <base/attributes.h>
 #include <base/macros.h>
 #include <base/units.h>
@@ -24,9 +25,6 @@
 #include <sys/procfs.h>
 #include <sys/tty.h>
 #include <sys/wait.h>
-#include <x86/boot.h>
-#include <x86/gdt.h>
-#include <x86/smp.h>
 
 #define SCHED_STACK_SIZE              (64 * KIB)
 #define SCHED_LATENCY_NS              12000000ULL
@@ -37,14 +35,7 @@
 #define SCHED_IDLE_STEAL_BATCH        2U
 #define SCHED_PUSH_BATCH              2U
 #define SCHED_EXIT_EVENT_CAP          512U
-#define SCHED_STRICT_CONTEXT_CHECK    1
 #define SCHED_WAKE_LOCAL_LOAD_SLOP    2U
-
-#if defined(__x86_64__)
-#define SCHED_KERNEL_VADDR_BASE 0xffffffff80000000ULL
-#else
-#define SCHED_KERNEL_VADDR_BASE 0xc0000000U
-#endif
 
 typedef struct {
     spinlock_t lock;
@@ -75,20 +66,13 @@ typedef struct {
 } sched_cpu_state_t;
 
 typedef struct {
-    // Keep this limited to counters exported through sched_metrics_snapshot()
-    // and /dev/sched.
     volatile u64 switch_count ALIGNED(8);
     volatile u64 migrations;
     volatile u64 steals;
     volatile u64 wake_ipi;
     volatile u64 runqueue_max;
     volatile u64 balance_runs;
-    volatile u64 ownership_conflicts;
-    volatile u64 ref_underflow;
     volatile u64 wait_timeout_count ALIGNED(8);
-    volatile u64 lock_contention_spins;
-    volatile u64 lockdep_inversion_count;
-    volatile u64 lockdep_block_under_spin_count;
 } sched_metrics_state_t;
 
 typedef struct {
@@ -100,10 +84,7 @@ typedef struct {
 
 typedef struct {
     spinlock_t lock;
-    pid_t entries[SCHED_EXIT_EVENT_CAP];
-    u32 head;
-    u32 tail;
-    u32 count;
+    ring_queue_t *ring;
 } sched_exit_event_state_t;
 
 typedef struct {
@@ -121,8 +102,6 @@ typedef struct {
     arch_vm_space_t *kernel_vm;
     pid_t next_user_pid;
     pid_t next_kernel_pid;
-    // Round-robin cursor for equally loaded wake targets. This affects
-    // scheduling policy, so it is state rather than a userspace metric.
     volatile u32 wake_rr_cursor;
     bool running;
     bool secondary_released;
@@ -140,7 +119,7 @@ typedef struct {
 
 extern sched_state_t sched_state;
 
-static inline bool sched_context_checked_thread(const sched_thread_t *thread) {
+static inline bool thread_ctx_ok(const sched_thread_t *thread) {
     return thread && thread->context != 0;
 }
 
@@ -224,18 +203,11 @@ static inline void sched_local_add_slice_ns(u64 delta_ns) {
 }
 
 static inline void sched_local_set_need_resched(bool need_resched) {
-    __atomic_store_n(
-        &sched_state.cpu[sched_cpu_id()].need_resched,
-        need_resched,
-        __ATOMIC_RELEASE
-    );
+    __atomic_store_n(&sched_local()->need_resched, need_resched, __ATOMIC_RELEASE);
 }
 
 static inline bool sched_local_need_resched(void) {
-    return __atomic_load_n(
-        &sched_state.cpu[sched_cpu_id()].need_resched,
-        __ATOMIC_ACQUIRE
-    );
+    return __atomic_load_n(&sched_local()->need_resched, __ATOMIC_ACQUIRE);
 }
 
 static inline void sched_set_need_resched_cpu(size_t cpu_id, bool need_resched) {
@@ -243,11 +215,7 @@ static inline void sched_set_need_resched_cpu(size_t cpu_id, bool need_resched) 
         return;
     }
 
-    __atomic_store_n(
-        &sched_state.cpu[cpu_id].need_resched,
-        need_resched,
-        __ATOMIC_RELEASE
-    );
+    __atomic_store_n(&sched_state.cpu[cpu_id].need_resched, need_resched, __ATOMIC_RELEASE);
 }
 
 static inline bool sched_mark_need_resched_cpu(size_t cpu_id) {
@@ -256,9 +224,7 @@ static inline bool sched_mark_need_resched_cpu(size_t cpu_id) {
     }
 
     bool prior = __atomic_exchange_n(
-        &sched_state.cpu[cpu_id].need_resched,
-        true,
-        __ATOMIC_ACQ_REL
+        &sched_state.cpu[cpu_id].need_resched, true, __ATOMIC_ACQ_REL
     );
     return !prior;
 }
@@ -324,7 +290,7 @@ static inline bool sched_cpu_allowed(const sched_thread_t *thread, size_t cpu_id
     return (mask & (1ULL << cpu_id)) != 0;
 }
 
-static inline thread_state_t sched_thread_state_load(const sched_thread_t *thread) {
+static inline thread_state_t thread_get_state(const sched_thread_t *thread) {
     if (!thread) {
         return THREAD_ZOMBIE;
     }
@@ -332,9 +298,8 @@ static inline thread_state_t sched_thread_state_load(const sched_thread_t *threa
     return __atomic_load_n(&thread->state, __ATOMIC_ACQUIRE);
 }
 
-static inline void sched_thread_state_store(
-    sched_thread_t *thread,
-    thread_state_t state
+static inline void thread_set_state(
+    sched_thread_t *thread, thread_state_t state
 ) {
     if (!thread) {
         return;
@@ -343,7 +308,7 @@ static inline void sched_thread_state_store(
     __atomic_store_n(&thread->state, state, __ATOMIC_RELEASE);
 }
 
-static inline int sched_thread_running_cpu_load(const sched_thread_t *thread) {
+static inline int thread_cpu(const sched_thread_t *thread) {
     if (!thread) {
         return -1;
     }
@@ -351,7 +316,9 @@ static inline int sched_thread_running_cpu_load(const sched_thread_t *thread) {
     return __atomic_load_n(&thread->running_cpu, __ATOMIC_ACQUIRE);
 }
 
-static inline void sched_thread_running_cpu_store(sched_thread_t *thread, int cpu_id) {
+static inline void thread_set_cpu(
+    sched_thread_t *thread, int cpu_id
+) {
     if (!thread) {
         return;
     }
@@ -359,29 +326,21 @@ static inline void sched_thread_running_cpu_store(sched_thread_t *thread, int cp
     __atomic_store_n(&thread->running_cpu, cpu_id, __ATOMIC_RELEASE);
 }
 
-static inline void sched_thread_mark_not_running(sched_thread_t *thread) {
+static inline void thread_unclaim(sched_thread_t *thread) {
+    thread_set_cpu(thread, -1);
+}
+
+static inline void thread_claim(sched_thread_t *thread, size_t cpu_id) {
     if (!thread) {
         return;
     }
 
-    sched_thread_running_cpu_store(thread, -1);
+    thread_set_cpu(thread, (int)cpu_id);
+    thread_set_state(thread, THREAD_RUNNING);
 }
 
-static inline void sched_thread_mark_running(sched_thread_t *thread, size_t cpu_id) {
-    if (!thread) {
-        return;
-    }
-#if defined(DEBUG)
-    if (thread->on_rq || thread->rq_index != UINT32_MAX) {
-        panic("scheduler invariant: running thread still on runqueue");
-    }
-#endif
-    sched_thread_running_cpu_store(thread, (int)cpu_id);
-    sched_thread_state_store(thread, THREAD_RUNNING);
-}
-
-static inline bool sched_thread_owned_by_current_cpu(const sched_thread_t *thread) {
-    int running_cpu = sched_thread_running_cpu_load(thread);
+static inline bool thread_on_local_cpu(const sched_thread_t *thread) {
+    int running_cpu = thread_cpu(thread);
     if (!thread || running_cpu < 0 || (size_t)running_cpu >= MAX_CORES) {
         return false;
     }
@@ -394,8 +353,9 @@ static inline bool sched_thread_owned_by_current_cpu(const sched_thread_t *threa
     return current == thread;
 }
 
-static inline bool sched_thread_owned_in_handoff(const sched_thread_t *thread) {
-    int running_cpu = sched_thread_running_cpu_load(thread);
+static inline bool thread_in_handoff(const sched_thread_t *thread) {
+    int running_cpu = thread_cpu(thread);
+
     if (!thread || running_cpu < 0 || (size_t)running_cpu >= MAX_CORES) {
         return false;
     }
@@ -405,17 +365,18 @@ static inline bool sched_thread_owned_in_handoff(const sched_thread_t *thread) {
         &sched_state.cpu[cpu_id].handoff_ready,
         __ATOMIC_ACQUIRE
     );
+
     return handoff == thread;
 }
 
-static inline bool sched_thread_owned_by_running_cpu(const sched_thread_t *thread) {
-    return sched_thread_owned_by_current_cpu(thread) ||
-           sched_thread_owned_in_handoff(thread);
+static inline bool thread_is_owned(const sched_thread_t *thread) {
+    return thread_on_local_cpu(thread) || thread_in_handoff(thread);
 }
 
 static inline bool
-sched_reclaim_handoff_thread_locked(sched_thread_t *thread) {
-    int running_cpu = sched_thread_running_cpu_load(thread);
+sched_reclaim_handoff(sched_thread_t *thread) {
+    int running_cpu = thread_cpu(thread);
+
     if (!thread || running_cpu < 0 || (size_t)running_cpu >= MAX_CORES) {
         return false;
     }
@@ -425,96 +386,58 @@ sched_reclaim_handoff_thread_locked(sched_thread_t *thread) {
         &sched_state.cpu[cpu_id].handoff_ready,
         __ATOMIC_ACQUIRE
     );
+
     if (handoff != thread) {
         return false;
     }
 
     __atomic_store_n(&sched_state.cpu[cpu_id].handoff_ready, NULL, __ATOMIC_RELEASE);
-    sched_thread_mark_not_running(thread);
+    thread_unclaim(thread);
+
     return true;
 }
 
-static inline void
-sched_note_ownership_conflict(const char *where, sched_thread_t *thread) {
-    __atomic_fetch_add(
-        &sched_state.metrics.ownership_conflicts,
-        1,
-        __ATOMIC_RELAXED
-    );
-
-#if defined(DEBUG)
-    if (!thread) {
-        return;
-    }
-
-    u64 count = __atomic_load_n(
-        &sched_state.metrics.ownership_conflicts,
-        __ATOMIC_RELAXED
-    );
-
-    if (count <= 8 || ((count & (count - 1ULL)) == 0ULL)) {
-        log_warn(
-            "scheduler ownership conflict count=%" PRIu64
-            " where=%s pid=%ld (%s) state=%d running_cpu=%d on_rq=%d owned=%d",
-            count,
-            where ? where : "unknown",
-            (long)thread->pid,
-            thread->name,
-            (int)sched_thread_state_load(thread),
-            sched_thread_running_cpu_load(thread),
-            thread->on_rq ? 1 : 0,
-            sched_thread_owned_by_running_cpu(thread) ? 1 : 0
-        );
-    }
-#else
-    (void)where;
-    (void)thread;
-#endif
-}
-
-void sched_nudge_owned_thread_locked(sched_thread_t *thread);
-void enqueue_thread_with_ipi(sched_thread_t *thread, bool allow_remote_ipi);
+void sched_nudge_thread(sched_thread_t *thread);
+void enqueue_ipi(sched_thread_t *thread, bool allow_remote_ipi);
 
 static inline bool
-sched_repair_unowned_running_thread_locked(
+sched_repair_thread(
     sched_thread_t *thread,
-    const char *where,
     bool send_ipi
 ) {
     if (!thread) {
         return false;
     }
 
-    if (sched_thread_state_load(thread) != THREAD_RUNNING) {
+    if (thread_get_state(thread) != THREAD_RUNNING) {
         return false;
     }
 
-    if (sched_reclaim_handoff_thread_locked(thread)) {
-        sched_thread_state_store(thread, THREAD_READY);
-        enqueue_thread_with_ipi(thread, send_ipi);
+    if (sched_reclaim_handoff(thread)) {
+        thread_set_state(thread, THREAD_READY);
+        enqueue_ipi(thread, send_ipi);
         return true;
     }
 
-    if (sched_thread_owned_by_current_cpu(thread)) {
-        sched_nudge_owned_thread_locked(thread);
+    if (thread_on_local_cpu(thread)) {
+        sched_nudge_thread(thread);
         return true;
     }
 
-    if (sched_thread_owned_in_handoff(thread)) {
+    if (thread_in_handoff(thread)) {
         return true;
     }
 
-    sched_note_ownership_conflict(where, thread);
-    sched_thread_mark_not_running(thread);
-    sched_thread_state_store(thread, THREAD_READY);
-    enqueue_thread_with_ipi(thread, send_ipi);
+    thread_unclaim(thread);
+    thread_set_state(thread, THREAD_READY);
+    enqueue_ipi(thread, send_ipi);
     return true;
 }
 
 unsigned long sched_lock_save(void);
 bool sched_lock_try_save(unsigned long *flags_out);
 void sched_lock_restore(unsigned long flags);
-bool sched_lock_reconcile_local(void);
+bool sched_reconcile_lock(void);
 
 bool sleep_heap_insert(sched_thread_t *thread);
 void sleep_heap_remove_at(size_t index);
@@ -522,28 +445,23 @@ void sleep_heap_remove(sched_thread_t *thread);
 sched_thread_t *sleep_heap_top(void);
 pid_t sched_next_pid(sched_pid_class_t pid_class);
 
-bool sched_context_candidate_valid(
+bool ctx_candidate_valid(
     const sched_thread_t *thread,
     const arch_int_state_t *state
 );
-bool sched_context_valid_ex(const sched_thread_t *thread, const char **reason_out);
-bool sched_context_valid(const sched_thread_t *thread);
-void sched_log_invalid_context_detail(
-    const sched_thread_t *thread,
-    const char *reason
-);
+bool ctx_valid(const sched_thread_t *thread);
 
 size_t sched_cpu_load(size_t cpu_id);
 size_t sched_rq_depth(size_t cpu_id);
-bool sched_cpu_needs_wake_ipi(size_t cpu_id);
+bool cpu_needs_ipi(size_t cpu_id);
 size_t sched_cpu_distance(size_t from_cpu, size_t to_cpu, size_t cpu_count);
-size_t sched_pick_allowed_cpu_minload(const sched_thread_t *thread, size_t disallowed_cpu);
-void sched_publish_handoff_thread_locked(sched_thread_t *thread, size_t cpu_id);
-void sched_flush_handoff_ready_locked(size_t cpu_id);
-void sched_runqueue_record_depth(size_t depth);
+size_t pick_cpu(const sched_thread_t *thread, size_t disallowed_cpu);
+void sched_publish_handoff(sched_thread_t *thread, size_t cpu_id);
+void sched_flush_handoff(size_t cpu_id);
+void rq_note_depth(size_t depth);
 void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id);
 bool rq_remove_thread(sched_thread_t *thread);
-bool rq_remove_index_locked(sched_rq_t *rq, u32 index);
+bool rq_remove_index(sched_rq_t *rq, u32 index);
 sched_thread_t *rq_peek_best(size_t cpu_id);
 sched_thread_t *rq_pop_best_allowed(size_t cpu_id);
 sched_thread_t *rq_pop_disallowed_from_cpu(size_t cpu_id, size_t allowed_cpu);
@@ -553,31 +471,30 @@ u64 sched_target_slice_ns(size_t cpu_id);
 bool sched_has_better_runnable(sched_thread_t *current, size_t cpu_id);
 void sched_rebalance_once(size_t cpu_id);
 
-bool sched_send_wake_ipi(size_t cpu_id);
+bool wake_cpu(size_t cpu_id);
 void enqueue_thread(sched_thread_t *thread);
-void run_queue_remove(sched_thread_t *thread);
+void rq_remove(sched_thread_t *thread);
 sched_thread_t *dequeue_thread(void);
 sched_thread_t *pick_next_thread(void);
-sched_thread_t *pick_bootstrap_init_thread(void);
+sched_thread_t *pick_init_thread(void);
 
 u64 _pid_index_key(pid_t pid);
-sched_thread_t *_pid_index_get_locked(pid_t pid);
-void _pid_index_set_locked(sched_thread_t *thread);
-void _pid_index_remove_locked(pid_t pid);
-void add_all_thread(sched_thread_t *thread);
+sched_thread_t *pid_get(pid_t pid);
+void pid_set(sched_thread_t *thread);
+void pid_remove(pid_t pid);
+void thread_add(sched_thread_t *thread);
 bool sched_fd_refs_node(const vfs_node_t *node);
-void sched_init_thread_name(sched_thread_t *thread, const char *name);
-void sched_set_thread_name(sched_thread_t *thread, const char *name);
-void remove_all_thread(sched_thread_t *thread);
-sched_thread_t *find_thread_by_pid_locked(pid_t pid);
-void sched_thread_get(sched_thread_t *thread);
-void sched_thread_put(sched_thread_t *thread);
-void destroy_thread_final(sched_thread_t *thread);
+void thread_set_name(sched_thread_t *thread, const char *name);
+void thread_cleanup(sched_thread_t *thread);
+sched_thread_t *find_thread(pid_t pid);
+void thread_get(sched_thread_t *thread);
+void thread_put(sched_thread_t *thread);
+void thread_destroy(sched_thread_t *thread);
 void sched_reap_deferred(void);
 void sched_reap(void);
 NORETURN void thread_trampoline(void);
 void idle_entry(void *arg);
-void sched_prepare_user_thread(
+void thread_prepare_user(
     sched_thread_t *thread,
     uintptr_t entry,
     uintptr_t user_stack_top
@@ -591,12 +508,12 @@ sched_thread_t *create_thread(
     sched_pid_class_t pid_class
 );
 
-void sched_wake_sleepers_locked(u64 now);
+void wake_sleepers(u64 now);
 void sched_wake_sleepers(u64 now);
-void wait_queue_remove_locked(sched_thread_t *thread);
-void wait_queue_remove(sched_thread_t *thread);
-bool sched_wait_until_running(sched_thread_t *self);
-void sched_exit_event_push(pid_t pid);
+void wq_dequeue(sched_thread_t *thread);
+void wq_remove(sched_thread_t *thread);
+bool wait_running(sched_thread_t *self);
+void exit_event_push(pid_t pid);
 
 void sched_capture_context(arch_int_state_t *state);
-void sched_request_resched_local_force(void);
+void force_resched(void);

@@ -15,10 +15,10 @@
 #include <user/kv.h>
 
 #include "wm.h"
-#include "wm_background.h"
-#include "wm_color.h"
-#include "wm_cursor.h"
-#include "wm_loop.h"
+#include "background.h"
+#include "color.h"
+#include "cursor.h"
+#include "loop.h"
 
 static volatile sig_atomic_t exit_requested = 0;
 

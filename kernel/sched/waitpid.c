@@ -1,4 +1,4 @@
-#include "scheduler_internal.h"
+#include "internal.h"
 
 pid_t sched_wait(pid_t pid, int *status) {
     return sched_waitpid(pid, status, 0);
@@ -34,6 +34,7 @@ static bool waitpid_target_matches(
 
 pid_t sched_waitpid(pid_t pid, int *status, int options) {
     sched_thread_t *self = sched_local_current();
+
     if (!self || !self->user_thread) {
         return -ECHILD;
     }
@@ -52,6 +53,7 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
 
         ll_foreach(node, sched_state.zombie_list) {
             sched_thread_t *thread = node->data;
+
             if (!waitpid_target_matches(self, thread, pid)) {
                 continue;
             }
@@ -71,8 +73,9 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
             sched_lock_restore(flags);
 
             pid_t ret = found->pid;
-            remove_all_thread(found);
-            sched_thread_put(found);
+            thread_cleanup(found);
+            thread_put(found);
+
             return ret;
         }
 
@@ -87,7 +90,7 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
                 has_matching_child = true;
 
                 if (
-                    sched_thread_state_load(thread) != THREAD_STOPPED ||
+                    thread_get_state(thread) != THREAD_STOPPED ||
                     thread->stop_reported
                 ) {
                     continue;
@@ -99,15 +102,18 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
 
             if (stopped) {
                 stopped->stop_reported = true;
+
                 if (status) {
-                    *status = 0x7f | ((stopped->stop_signal & 0xff) << 8); // as per POSIX
+                    *status = 0x7f | ((stopped->stop_signal & 0xff) << 8);
                 }
+
                 sched_lock_restore(flags);
                 return stopped->pid;
             }
         } else {
             ll_foreach(node, sched_state.all_list) {
                 sched_thread_t *thread = node->data;
+
                 if (waitpid_target_matches(self, thread, pid)) {
                     has_matching_child = true;
                     break;
@@ -132,12 +138,14 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
 
         u32 wait_seq = sched_wait_seq(&self->wait_queue);
         sched_lock_restore(flags);
+
         sched_wait_result_t wait_result = sched_wait_on_queue(
             &self->wait_queue,
             wait_seq,
             0,
             SCHED_WAIT_INTERRUPTIBLE
         );
+
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;
         }

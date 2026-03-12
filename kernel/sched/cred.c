@@ -1,4 +1,4 @@
-#include "scheduler_internal.h"
+#include "internal.h"
 
 bool sched_pid_alive(pid_t pid) {
     if (pid <= 0) {
@@ -7,13 +7,15 @@ bool sched_pid_alive(pid_t pid) {
 
     bool alive = false;
     unsigned long flags = sched_lock_save();
-    sched_thread_t *thread = find_thread_by_pid_locked(pid);
+    sched_thread_t *thread = find_thread(pid);
+
     if (thread && thread->in_all_list && thread->pid == pid) {
         alive = (
-            sched_thread_state_load(thread) != THREAD_ZOMBIE &&
+            thread_get_state(thread) != THREAD_ZOMBIE &&
             (thread->lifecycle_flags & SCHED_THREAD_LIFECYCLE_DESTROYING) == 0
         );
     }
+
     sched_lock_restore(flags);
     return alive;
 }
@@ -197,8 +199,9 @@ int sched_getgroups(gid_t *groups, size_t max_groups, size_t *group_count_out) {
     }
 
     *group_count_out = thread->group_count;
+
     if (groups && max_groups) {
-        (void)_copy_groups(thread, groups, max_groups);
+        _copy_groups(thread, groups, max_groups);
     }
 
     return 0;
@@ -231,8 +234,9 @@ int sched_set_affinity(pid_t pid, u64 mask) {
 
     if (self && self->uid != 0 && self->uid != target->uid) {
         if (target_has_ref) {
-            sched_thread_put(target);
+            thread_put(target);
         }
+
         return -EPERM;
     }
 
@@ -242,14 +246,16 @@ int sched_set_affinity(pid_t pid, u64 mask) {
     target->affinity_user_set = true;
 
     if (target->on_rq && target->state == THREAD_READY) {
-        run_queue_remove(target);
+        rq_remove(target);
         enqueue_thread(target);
     }
 
     bool request_local_resched = false;
     size_t request_remote_resched_cpu = MAX_CORES;
+
     if (target->state == THREAD_RUNNING && !sched_cpu_allowed(target, target->last_cpu)) {
         size_t cpu = target->last_cpu;
+
         if (cpu < MAX_CORES) {
             if (cpu == sched_cpu_id()) {
                 request_local_resched = true;
@@ -265,13 +271,13 @@ int sched_set_affinity(pid_t pid, u64 mask) {
         sched_request_resched_local();
     } else if (
         request_remote_resched_cpu < MAX_CORES &&
-        sched_send_wake_ipi(request_remote_resched_cpu)
+        wake_cpu(request_remote_resched_cpu)
     ) {
         __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
     }
 
     if (target_has_ref) {
-        sched_thread_put(target);
+        thread_put(target);
     }
 
     return 0;
@@ -301,22 +307,25 @@ int sched_get_affinity(pid_t pid, u64 *mask_out) {
 
     if (self && self->uid != 0 && self->uid != target->uid) {
         if (target_has_ref) {
-            sched_thread_put(target);
+            thread_put(target);
         }
+
         return -EPERM;
     }
 
     unsigned long flags = sched_lock_save();
+
     u64 mask = target->allowed_cpu_mask;
     if (!mask) {
         mask = sched_online_cpu_mask();
     }
+
     sched_lock_restore(flags);
 
     *mask_out = mask;
 
     if (target_has_ref) {
-        sched_thread_put(target);
+        thread_put(target);
     }
 
     return 0;
@@ -346,6 +355,7 @@ int sched_setumask(mode_t mask) {
     }
 
     thread->umask = mask & 0777;
+
     return 0;
 }
 
@@ -360,14 +370,18 @@ pid_t sched_getpgid(pid_t pid) {
     }
 
     unsigned long flags = sched_lock_save();
-    sched_thread_t *target = find_thread_by_pid_locked(pid);
+
+    sched_thread_t *target = find_thread(pid);
     pid_t pgid = target ? target->pgid : (pid_t)-ESRCH;
+
     sched_lock_restore(flags);
+
     return pgid;
 }
 
 int sched_setpgid(pid_t pid, pid_t pgid) {
     sched_thread_t *self = sched_local_current();
+
     if (!self || !self->user_thread) {
         return -EINVAL;
     }
@@ -380,7 +394,7 @@ int sched_setpgid(pid_t pid, pid_t pgid) {
 
     sched_thread_t *target = self;
     if (pid > 0) {
-        target = find_thread_by_pid_locked(pid);
+        target = find_thread(pid);
     }
 
     if (!target || !target->user_thread) {
@@ -409,8 +423,10 @@ int sched_setpgid(pid_t pid, pid_t pgid) {
 
     if (pgid != target->pid) {
         bool found = false;
+
         ll_foreach(node, sched_state.all_list) {
             sched_thread_t *iter = node->data;
+
             if (!iter) {
                 continue;
             }
@@ -429,20 +445,24 @@ int sched_setpgid(pid_t pid, pid_t pgid) {
 
     target->pgid = pgid;
     sched_lock_restore(flags);
+
     return 0;
 }
 
 pid_t sched_setsid(void) {
     sched_thread_t *thread = sched_local_current();
+
     if (!thread || !thread->user_thread) {
         return -EINVAL;
     }
 
     unsigned long flags = sched_lock_save();
     bool pgrp_exists = false;
+
     if (sched_state.all_list) {
         ll_foreach(node, sched_state.all_list) {
             sched_thread_t *iter = node->data;
+
             if (!iter) {
                 continue;
             }
@@ -462,6 +482,7 @@ pid_t sched_setsid(void) {
     thread->sid = thread->pid;
     thread->pgid = thread->pid;
     thread->tty_index = TTY_NONE;
+
     sched_lock_restore(flags);
 
     return thread->sid;
@@ -473,9 +494,12 @@ bool sched_process_is_child(pid_t child_pid, pid_t parent_pid) {
     }
 
     unsigned long flags = sched_lock_save();
-    sched_thread_t *thread = find_thread_by_pid_locked(child_pid);
+
+    sched_thread_t *thread = find_thread(child_pid);
     bool is_child = thread && thread->ppid == parent_pid;
+
     sched_lock_restore(flags);
+
     return is_child;
 }
 
@@ -485,9 +509,12 @@ bool sched_pid_is_group_leader(pid_t pid) {
     }
 
     unsigned long flags = sched_lock_save();
-    sched_thread_t *thread = find_thread_by_pid_locked(pid);
+
+    sched_thread_t *thread = find_thread(pid);
     bool is_leader = thread && thread->pgid == pid;
+
     sched_lock_restore(flags);
+
     return is_leader;
 }
 

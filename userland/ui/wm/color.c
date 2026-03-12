@@ -1,4 +1,4 @@
-#include "wm_color.h"
+#include "color.h"
 
 static int _hex_nibble(char ch) {
     if (ch >= '0' && ch <= '9') {

@@ -1,4 +1,4 @@
-#include "wm_loop.h"
+#include "loop.h"
 
 #include <base/macros.h>
 #include <errno.h>
@@ -17,9 +17,9 @@
 #include <unistd.h>
 
 #include "wm.h"
-#include "wm_background.h"
-#include "wm_cursor.h"
-#include "wm_rect.h"
+#include "background.h"
+#include "cursor.h"
+#include "rect.h"
 
 extern char **environ;
 
@@ -1261,9 +1261,6 @@ void wm_loop(
         .height = (i32)fb_info->height,
     };
 
-    // Prime the display with a deterministic full frame before entering the
-    // event-driven dirty-rect loop. This prevents stale VRAM bytes from
-    // surfacing as single-pixel artifacts on first visible frame.
     wm_render_frame(frame_store, fb_info->width, fb_info->height);
     wm_cursor_draw_kind(
         frame_store,

@@ -1,8 +1,8 @@
-#include "scheduler_internal.h"
+#include "internal.h"
 
 sched_thread_t *dequeue_thread(void) {
     size_t cpu_id = sched_cpu_id();
-    sched_flush_handoff_ready_locked(cpu_id);
+    sched_flush_handoff(cpu_id);
 
     for (;;) {
         sched_thread_t *thread = rq_pop_best_allowed(cpu_id);
@@ -11,28 +11,19 @@ sched_thread_t *dequeue_thread(void) {
         }
 
         if (!thread->context) {
-            if (sched_thread_state_load(thread) == THREAD_READY && !thread->on_rq) {
+            if (thread_get_state(thread) == THREAD_READY && !thread->on_rq) {
                 enqueue_thread(thread);
             }
+
             continue;
         }
 
         if (
-            SCHED_STRICT_CONTEXT_CHECK && sched_context_checked_thread(thread) &&
-            !sched_context_valid(thread)
+            thread_ctx_ok(thread) &&
+            !ctx_valid(thread)
         ) {
-            const char *reason = NULL;
-            (void)sched_context_valid_ex(thread, &reason);
-            sched_log_invalid_context_detail(thread, reason);
-            log_warn(
-                "scheduler dropped invalid context runnable pid=%ld (%s) reason=%s",
-                (long)thread->pid,
-                thread->name,
-                reason ? reason : "unknown"
-            );
-
-            sched_thread_mark_not_running(thread);
-            sched_thread_state_store(thread, THREAD_ZOMBIE);
+            thread_unclaim(thread);
+            thread_set_state(thread, THREAD_ZOMBIE);
             thread->exit_code = -EFAULT;
 
             if (sched_state.zombie_list && !thread->in_zombie_list) {
@@ -40,31 +31,28 @@ sched_thread_t *dequeue_thread(void) {
                 list_append(sched_state.zombie_list, &thread->zombie_node);
                 thread->in_zombie_list = true;
             }
-            sched_exit_event_push(thread->pid);
+
+            exit_event_push(thread->pid);
             continue;
         }
 
-        if (sched_thread_state_load(thread) != THREAD_READY) {
+        if (thread_get_state(thread) != THREAD_READY) {
             if (
-                sched_thread_state_load(thread) == THREAD_RUNNING &&
-                !sched_thread_owned_by_running_cpu(thread)
+                thread_get_state(thread) == THREAD_RUNNING &&
+                !thread_is_owned(thread)
             ) {
-                (void)sched_repair_unowned_running_thread_locked(
-                    thread,
-                    "dequeue_thread",
-                    true
-                );
+                sched_repair_thread(thread, true);
             }
+
             continue;
         }
 
-        if (sched_thread_running_cpu_load(thread) >= 0) {
-            if (sched_thread_owned_by_running_cpu(thread)) {
-                sched_note_ownership_conflict("dequeue_thread_ready_owned", thread);
+        if (thread_cpu(thread) >= 0) {
+            if (thread_is_owned(thread)) {
                 continue;
             }
 
-            sched_thread_running_cpu_store(thread, -1);
+            thread_set_cpu(thread, -1);
         }
 
         return thread;
@@ -72,7 +60,8 @@ sched_thread_t *dequeue_thread(void) {
 
     sched_thread_t *stranded = rq_pop_disallowed_from_cpu(cpu_id, cpu_id);
     if (stranded) {
-        size_t target_cpu = sched_pick_allowed_cpu_minload(stranded, cpu_id);
+        size_t target_cpu = pick_cpu(stranded, cpu_id);
+
         if (
             target_cpu < MAX_CORES &&
             target_cpu != cpu_id &&
@@ -83,7 +72,8 @@ sched_thread_t *dequeue_thread(void) {
             stranded->affinity_core = target_cpu;
             rq_enqueue_cpu(stranded, target_cpu);
             __atomic_fetch_add(&sched_state.metrics.migrations, 1, __ATOMIC_RELAXED);
-            if (sched_send_wake_ipi(target_cpu)) {
+
+            if (wake_cpu(target_cpu)) {
                 __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
             }
         } else {
@@ -116,9 +106,11 @@ sched_thread_t *dequeue_thread(void) {
     }
 
     sched_thread_t *first = NULL;
+
     for (size_t i = 0; i < SCHED_IDLE_STEAL_BATCH; i++) {
         sched_thread_t *victim =
             rq_pop_worst_allowed_from_cpu(busiest_cpu, cpu_id);
+
         if (!victim) {
             break;
         }
@@ -152,7 +144,7 @@ sched_thread_t *pick_next_thread(void) {
     return sched_local_current();
 }
 
-sched_thread_t *pick_bootstrap_init_thread(void) {
+sched_thread_t *pick_init_thread(void) {
     size_t cpu_id = sched_cpu_id();
 
     for (size_t i = 0; i < core_count && i < MAX_CORES; i++) {
@@ -164,20 +156,21 @@ sched_thread_t *pick_bootstrap_init_thread(void) {
 
             if (
                 !thread || thread->pid != 1 ||
-                sched_thread_state_load(thread) != THREAD_READY || !thread->context
+                thread_get_state(thread) != THREAD_READY || !thread->context
             ) {
                 continue;
             }
 
-            if (SCHED_STRICT_CONTEXT_CHECK && !sched_context_valid(thread)) {
+            if (!ctx_valid(thread)) {
                 continue;
             }
 
-            (void)rq_remove_index_locked(rq, j);
+            rq_remove_index(rq, j);
             spin_unlock_irqrestore(&rq->lock, flags);
 
             thread->last_cpu = cpu_id;
             thread->affinity_core = cpu_id;
+
             return thread;
         }
 

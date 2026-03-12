@@ -119,14 +119,6 @@ static void _log_history_append(const char *s, size_t len) {
     boot_log_history_len += len;
 }
 
-static unsigned long _boot_log_lock_irqsave(void) {
-    return spin_lock_irqsave(&boot_log_lock);
-}
-
-static void _boot_log_unlock_irqrestore(unsigned long flags) {
-    spin_unlock_irqrestore(&boot_log_lock, flags);
-}
-
 static void _log_history_replay_console(void) {
     if (!log_console_ready || !boot_log_history_len) {
         return;
@@ -136,9 +128,9 @@ static void _log_history_replay_console(void) {
 }
 
 void arch_log_replay_console(void) {
-    unsigned long flags = _boot_log_lock_irqsave();
+    unsigned long flags = spin_lock_irqsave(&boot_log_lock);
     _log_history_replay_console();
-    _boot_log_unlock_irqrestore(flags);
+    spin_unlock_irqrestore(&boot_log_lock, flags);
 }
 
 ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
@@ -150,11 +142,11 @@ ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
         return 0;
     }
 
-    unsigned long irq_flags = _boot_log_lock_irqsave();
+    unsigned long irq_flags = spin_lock_irqsave(&boot_log_lock);
     size_t history_len = boot_log_history_len;
 
     if (offset >= history_len) {
-        _boot_log_unlock_irqrestore(irq_flags);
+        spin_unlock_irqrestore(&boot_log_lock, irq_flags);
         return 0;
     }
 
@@ -164,14 +156,14 @@ ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
     }
 
     memcpy(buf, boot_log_history + offset, copy_len);
-    _boot_log_unlock_irqrestore(irq_flags);
+    spin_unlock_irqrestore(&boot_log_lock, irq_flags);
     return (ssize_t)copy_len;
 }
 
 size_t arch_log_ring_size(void) {
-    unsigned long irq_flags = _boot_log_lock_irqsave();
+    unsigned long irq_flags = spin_lock_irqsave(&boot_log_lock);
     size_t history_len = boot_log_history_len;
-    _boot_log_unlock_irqrestore(irq_flags);
+    spin_unlock_irqrestore(&boot_log_lock, irq_flags);
     return history_len;
 }
 
@@ -197,17 +189,17 @@ static void _log_puts(const char *s) {
         return;
     }
 
-    unsigned long flags = _boot_log_lock_irqsave();
+    unsigned long flags = spin_lock_irqsave(&boot_log_lock);
     _log_history_append(s, len);
 
     if (!logsink_is_bound()) {
         _log_write_early(s, len);
-        _boot_log_unlock_irqrestore(flags);
+        spin_unlock_irqrestore(&boot_log_lock, flags);
         return;
     }
 
     logsink_write(s, len);
-    _boot_log_unlock_irqrestore(flags);
+    spin_unlock_irqrestore(&boot_log_lock, flags);
 }
 
 void arch_panic_enter(void) {
@@ -996,7 +988,7 @@ const kernel_args_t *arch_init(void *boot_info) {
     _publish_framebuffer(info);
 
     acpi_init(info->acpi_root_ptr);
-    (void)tsc_init();
+    tsc_init();
     irq_init();
 
     pci_init();
@@ -1167,12 +1159,12 @@ void arch_cpu_relax(void) {
     cpu_pause();
 }
 
-void arch_irq_disable(void) {
-    disable_interrupts();
+void arch_resched_self(void) {
+    asm volatile("int %0" : : "i"(SCHED_SOFT_RESCHED_VECTOR) : "memory");
 }
 
-void arch_sched_request_resched(void) {
-    asm volatile("int %0" : : "i"(SCHED_SOFT_RESCHED_VECTOR) : "memory");
+bool arch_resched_cpu(size_t cpu_id) {
+    return smp_send_resched(cpu_id);
 }
 
 u64 arch_timer_ticks(void) {
@@ -1181,19 +1173,6 @@ u64 arch_timer_ticks(void) {
 
 u32 arch_timer_hz(void) {
     return irq_timer_hz();
-}
-
-u64 arch_monotonic_ns(void) {
-    u64 hz = irq_timer_hz();
-    if (!hz) {
-        return 0;
-    }
-
-    u64 ticks = irq_ticks();
-    u64 sec = ticks / hz;
-    u64 rem_ticks = ticks % hz;
-    u64 rem_ns = (rem_ticks * 1000000000ULL) / hz;
-    return sec * 1000000000ULL + rem_ns;
 }
 
 static void _wallclock_set_base(u64 seconds, u64 ticks) {
@@ -1311,22 +1290,6 @@ u64 arch_realtime_ns(void) {
     return (base_seconds * 1000000000ULL) + delta_ns;
 }
 
-void arch_wallclock_snapshot(u64 *seconds_out, u64 *ticks_out, u64 *hz_out) {
-    u64 ticks = arch_timer_ticks();
-    u64 hz = irq_timer_hz();
-    u64 seconds = _wallclock_seconds_from_ticks(ticks, hz);
-
-    if (seconds_out) {
-        *seconds_out = seconds;
-    }
-    if (ticks_out) {
-        *ticks_out = ticks;
-    }
-    if (hz_out) {
-        *hz_out = hz;
-    }
-}
-
 void arch_wallclock_maintain(void) {
     u64 now_ticks = arch_timer_ticks();
     _wallclock_try_rtc_sync(now_ticks, false);
@@ -1348,12 +1311,9 @@ u64 arch_cpu_khz(void) {
     return tsc_khz();
 }
 
-size_t arch_mem_total(void) {
-    return pmm_total_mem();
-}
-
-size_t arch_mem_free(void) {
-    return pmm_free_mem();
+void arch_mem_info(size_t *total, size_t *free) {
+    if (total) { *total = pmm_total_mem(); }
+    if (free) { *free = pmm_free_mem(); }
 }
 
 void arch_syscall_install(int vector, arch_syscall_handler_t handler) {

@@ -39,7 +39,6 @@ typedef struct {
     u64 hz;
     u64 ticks;
     u64 realtime_ns;
-    u64 monotonic_ns;
 } dev_clock_snapshot_t;
 
 typedef struct {
@@ -55,10 +54,9 @@ static u64 _boot_seconds(void) {
         return boot_seconds;
     }
 
-    u64 now = 0;
-    u64 ticks = 0;
-    u64 hz = 0;
-    arch_wallclock_snapshot(&now, &ticks, &hz);
+    u64 now = arch_realtime_ns() / 1000000000ULL;
+    u64 ticks = arch_timer_ticks();
+    u64 hz = arch_timer_hz();
 
     if (!hz) {
         boot_seconds = now;
@@ -283,10 +281,11 @@ static ssize_t _dev_clock_read(
     (void)flags;
 
     dev_clock_snapshot_t clock = {0};
-    arch_wallclock_snapshot(&clock.now, &clock.ticks, &clock.hz);
+    clock.now = arch_realtime_ns() / 1000000000ULL;
+    clock.ticks = arch_timer_ticks();
+    clock.hz = arch_timer_hz();
     clock.boot = _boot_seconds();
     clock.realtime_ns = arch_realtime_ns();
-    clock.monotonic_ns = arch_monotonic_ns();
 
     char text[SYSINFO_TEXT_MAX];
     snprintf(
@@ -296,14 +295,12 @@ static ssize_t _dev_clock_read(
         "boot=%" PRIu64 "\n"
         "hz=%" PRIu64 "\n"
         "ticks=%" PRIu64 "\n"
-        "realtime_ns=%" PRIu64 "\n"
-        "monotonic_ns=%" PRIu64 "\n",
+        "realtime_ns=%" PRIu64 "\n",
         clock.now,
         clock.boot,
         clock.hz,
         clock.ticks,
-        clock.realtime_ns,
-        clock.monotonic_ns
+        clock.realtime_ns
     );
 
     return _dev_text_read(text, buf, offset, len);
@@ -321,10 +318,11 @@ static ssize_t _dev_clock_ioctl(vfs_node_t *node, u64 request, void *args) {
     }
 
     dev_clock_snapshot_t clock = {0};
-    arch_wallclock_snapshot(&clock.now, &clock.ticks, &clock.hz);
+    clock.now = arch_realtime_ns() / 1000000000ULL;
+    clock.ticks = arch_timer_ticks();
+    clock.hz = arch_timer_hz();
     clock.boot = _boot_seconds();
     clock.realtime_ns = arch_realtime_ns();
-    clock.monotonic_ns = arch_monotonic_ns();
 
     memcpy(args, &clock, sizeof(clock));
     return 0;
@@ -340,8 +338,10 @@ static ssize_t _dev_swap_read(
     (void)node;
     (void)flags;
 
-    u64 total_kib = (u64)arch_mem_total() / KIB;
-    u64 free_kib = (u64)arch_mem_free() / KIB;
+    size_t _total = 0, _free = 0;
+    arch_mem_info(&_total, &_free);
+    u64 total_kib = (u64)_total / KIB;
+    u64 free_kib = (u64)_free / KIB;
     u64 used_kib = total_kib >= free_kib ? total_kib - free_kib : 0;
 
     char text[SYSINFO_TEXT_MAX];
@@ -374,32 +374,20 @@ static ssize_t _dev_sched_read(
     snprintf(
         text,
         sizeof(text),
-        "sched_switch_count=%" PRIu64 "\n"
-        "sched_migrations=%" PRIu64 "\n"
-        "sched_steals=%" PRIu64 "\n"
-        "sched_wake_ipi=%" PRIu64 "\n"
-        "sched_runqueue_max=%" PRIu64 "\n"
-        "sched_balance_runs=%" PRIu64 "\n"
-        "sched_ownership_conflicts=%" PRIu64 "\n"
-        "sched_ready_running_conflicts=%" PRIu64 "\n"
-        "sched_ref_underflow=%" PRIu64 "\n"
-        "wait_timeout_count=%" PRIu64 "\n"
-        "sched_lock_contention_spins=%" PRIu64 "\n"
-        "lockdep_inversion_count=%" PRIu64 "\n"
-        "lockdep_block_under_spin_count=%" PRIu64 "\n",
+        "context_switches=%" PRIu64 "\n"
+        "migrations=%" PRIu64 "\n"
+        "work_steals=%" PRIu64 "\n"
+        "wake_ipis=%" PRIu64 "\n"
+        "runqueue_depth_peak=%" PRIu64 "\n"
+        "balance_passes=%" PRIu64 "\n"
+        "sleep_timeouts=%" PRIu64 "\n",
         sched_snapshot.sched_switch_count,
         sched_snapshot.sched_migrations,
         sched_snapshot.sched_steals,
         sched_snapshot.sched_wake_ipi,
         sched_snapshot.sched_runqueue_max,
         sched_snapshot.sched_balance_runs,
-        sched_snapshot.sched_ownership_conflicts,
-        sched_snapshot.sched_ownership_conflicts,
-        sched_snapshot.sched_ref_underflow,
-        sched_snapshot.wait_timeout_count,
-        sched_snapshot.sched_lock_contention_spins,
-        sched_snapshot.lockdep_inversion_count,
-        sched_snapshot.lockdep_block_under_spin_count
+        sched_snapshot.wait_timeout_count
     );
 
     return _dev_text_read(text, buf, offset, len);

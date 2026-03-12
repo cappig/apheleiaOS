@@ -1,4 +1,4 @@
-#include "scheduler_internal.h"
+#include "internal.h"
 
 void scheduler_init(void) {
     if (sched_state.all_list) {
@@ -7,10 +7,13 @@ void scheduler_init(void) {
 
     for (size_t i = 0; i < MAX_CORES; i++) {
         spinlock_init(&sched_state.runqueues[i].lock);
+
         sched_state.runqueues[i].capacity = SCHED_RQ_CAPACITY;
         sched_state.runqueues[i].heap =
             calloc(sched_state.runqueues[i].capacity, sizeof(sched_thread_t *));
+
         assert(sched_state.runqueues[i].heap);
+
         sched_state.runqueues[i].nr_running = 0;
         sched_state.runqueues[i].min_vruntime = 0;
     }
@@ -20,19 +23,18 @@ void scheduler_init(void) {
 
     sched_state.all_list = list_create();
     assert(sched_state.all_list);
+
     sched_state.deferred_destroy_list = list_create();
     assert(sched_state.deferred_destroy_list);
+
     sched_state.pid_index = hashmap_create();
+
     sched_wait_queue_init(&sched_state.poll_wait_queue);
     sched_wait_queue_init(&sched_state.exit_event_wait);
     sched_wait_queue_init(&sched_state.sleep_wait_queue);
-    sched_wait_queue_set_name(&sched_state.poll_wait_queue, "sched_poll_wait");
-    sched_wait_queue_set_name(&sched_state.exit_event_wait, "sched_exit_wait");
-    sched_wait_queue_set_name(&sched_state.sleep_wait_queue, "sched_sleep_wait");
+
     spinlock_init(&sched_state.exit_events.lock);
-    sched_state.exit_events.head = 0;
-    sched_state.exit_events.tail = 0;
-    sched_state.exit_events.count = 0;
+    sched_state.exit_events.ring = ring_queue_create(sizeof(pid_t), SCHED_EXIT_EVENT_CAP);
 
     sched_state.kernel_vm = arch_vm_kernel();
     assert(sched_state.kernel_vm);
@@ -94,6 +96,7 @@ static void sched_expand_default_affinity_masks(void) {
 
     ll_foreach(node, sched_state.all_list) {
         sched_thread_t *thread = node->data;
+
         if (!thread || thread->pid == 0 || thread->affinity_user_set) {
             continue;
         }
@@ -129,7 +132,7 @@ void scheduler_start(void) {
     unsigned long flags = sched_lock_save();
 
     sched_thread_t *current = sched_local_current();
-    sched_thread_t *next = pick_bootstrap_init_thread();
+    sched_thread_t *next = pick_init_thread();
 
     if (!next) {
         next = pick_next_thread();
@@ -143,18 +146,18 @@ void scheduler_start(void) {
     }
 
     if (
-        SCHED_STRICT_CONTEXT_CHECK && sched_context_checked_thread(next) &&
-        (!next->context || !sched_context_valid(next))
+        thread_ctx_ok(next) &&
+        (!next->context || !ctx_valid(next))
     ) {
         sched_lock_restore(flags);
         panic("scheduler selected invalid thread context on BSP");
     }
 
-    sched_thread_mark_not_running(current);
+    thread_unclaim(current);
     next->exec_start_ns = next->sum_exec_ns;
     sched_local_set_slice_ns(0);
     sched_local_set_current(next);
-    sched_thread_mark_running(next, sched_cpu_id());
+    thread_claim(next, sched_cpu_id());
     sched_lock_restore(flags);
 
     if (current->fpu_initialized) {
@@ -213,18 +216,18 @@ void scheduler_start_secondary(void) {
     }
 
     if (
-        SCHED_STRICT_CONTEXT_CHECK && sched_context_checked_thread(next) &&
-        (!next->context || !sched_context_valid(next))
+        thread_ctx_ok(next) &&
+        (!next->context || !ctx_valid(next))
     ) {
         sched_lock_restore(flags);
         panic("scheduler selected invalid thread context on AP");
     }
 
-    sched_thread_mark_not_running(current);
+    thread_unclaim(current);
     next->exec_start_ns = next->sum_exec_ns;
     sched_local_set_slice_ns(0);
     sched_local_set_current(next);
-    sched_thread_mark_running(next, sched_cpu_id());
+    thread_claim(next, sched_cpu_id());
     sched_lock_restore(flags);
 
     if (current->fpu_initialized) {

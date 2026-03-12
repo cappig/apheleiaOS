@@ -129,3 +129,60 @@ arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
 
     return sp;
 }
+
+arch_word_t arch_state_ip(const arch_int_state_t *state) {
+#if defined(__x86_64__)
+    return (arch_word_t)state->s_regs.rip;
+#else
+    return (arch_word_t)state->s_regs.eip;
+#endif
+}
+
+arch_word_t arch_state_sp(const arch_int_state_t *state) {
+#if defined(__x86_64__)
+    return (arch_word_t)state->s_regs.rsp;
+#else
+    return (arch_word_t)state->s_regs.esp;
+#endif
+}
+
+arch_word_t arch_state_cs(const arch_int_state_t *state) {
+    return (arch_word_t)state->s_regs.cs;
+}
+
+arch_word_t arch_state_ss(const arch_int_state_t *state) {
+    return (arch_word_t)state->s_regs.ss;
+}
+
+static arch_word_t arch_state_flags(const arch_int_state_t *state) {
+#if defined(__x86_64__)
+    return (arch_word_t)state->s_regs.rflags;
+#else
+    return (arch_word_t)state->s_regs.eflags;
+#endif
+}
+
+bool arch_state_flags_sane(const arch_int_state_t *state) {
+    // bit 1 of FLAGS/EFLAGS/RFLAGS is architecturally reserved and must be 1
+    return (arch_state_flags(state) & 0x2) != 0;
+}
+
+arch_word_t arch_kernel_vaddr_base(void) {
+#if defined(__x86_64__)
+    return (arch_word_t)0xffffffff80000000ULL;
+#else
+    return (arch_word_t)0xc0000000U;
+#endif
+}
+
+arch_word_t arch_kernel_cs(void) {
+    return (arch_word_t)GDT_KERNEL_CODE;
+}
+
+arch_word_t arch_user_cs(void) {
+    return (arch_word_t)(GDT_USER_CODE | 3);
+}
+
+arch_word_t arch_user_ss(void) {
+    return (arch_word_t)(GDT_USER_DATA | 3);
+}

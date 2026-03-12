@@ -19,3 +19,14 @@ void arch_state_set_user_entry(
     arch_word_t entry,
     arch_word_t stack_top
 );
+
+arch_word_t arch_state_ip(const arch_int_state_t *state);
+arch_word_t arch_state_sp(const arch_int_state_t *state);
+arch_word_t arch_state_cs(const arch_int_state_t *state);
+arch_word_t arch_state_ss(const arch_int_state_t *state);
+bool arch_state_flags_sane(const arch_int_state_t *state);
+
+arch_word_t arch_kernel_vaddr_base(void);
+arch_word_t arch_kernel_cs(void);
+arch_word_t arch_user_cs(void);
+arch_word_t arch_user_ss(void);

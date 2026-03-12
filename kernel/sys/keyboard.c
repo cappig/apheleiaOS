@@ -329,7 +329,6 @@ bool keyboard_init(void) {
 
     if (!kbd_wait.list) {
         sched_wait_queue_init(&kbd_wait);
-        sched_wait_queue_set_name(&kbd_wait, "kbd_wait");
         sched_wait_queue_set_poll_link(&kbd_wait, true);
     }
 

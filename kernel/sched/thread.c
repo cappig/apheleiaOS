@@ -1,10 +1,10 @@
-#include "scheduler_internal.h"
+#include "internal.h"
 
 u64 _pid_index_key(pid_t pid) {
     return (u64)(u32)pid;
 }
 
-sched_thread_t *_pid_index_get_locked(pid_t pid) {
+sched_thread_t *pid_get(pid_t pid) {
     if (!sched_state.pid_index || pid <= 0) {
         return NULL;
     }
@@ -26,7 +26,7 @@ sched_thread_t *_pid_index_get_locked(pid_t pid) {
     return NULL;
 }
 
-void _pid_index_set_locked(sched_thread_t *thread) {
+void pid_set(sched_thread_t *thread) {
     if (!sched_state.pid_index || !thread || thread->pid <= 0) {
         return;
     }
@@ -36,7 +36,7 @@ void _pid_index_set_locked(sched_thread_t *thread) {
     }
 }
 
-void _pid_index_remove_locked(pid_t pid) {
+void pid_remove(pid_t pid) {
     if (!sched_state.pid_index || pid <= 0) {
         return;
     }
@@ -51,7 +51,7 @@ void _pid_index_remove_locked(pid_t pid) {
     }
 }
 
-void add_all_thread(sched_thread_t *thread) {
+void thread_add(sched_thread_t *thread) {
     if (!thread || !sched_state.all_list) {
         return;
     }
@@ -66,7 +66,7 @@ void add_all_thread(sched_thread_t *thread) {
     thread->all_node.data = thread;
     list_append(sched_state.all_list, &thread->all_node);
     thread->in_all_list = true;
-    _pid_index_set_locked(thread);
+    pid_set(thread);
     sched_lock_restore(flags);
 }
 
@@ -80,6 +80,7 @@ bool sched_fd_refs_node(const vfs_node_t *node) {
 
     ll_foreach(entry, sched_state.all_list) {
         sched_thread_t *thread = entry->data;
+
         if (!thread) {
             continue;
         }
@@ -107,7 +108,7 @@ bool sched_fd_refs_node(const vfs_node_t *node) {
     return found;
 }
 
-void sched_init_thread_name(sched_thread_t *thread, const char *name) {
+void thread_set_name(sched_thread_t *thread, const char *name) {
     if (!thread) {
         return;
     }
@@ -121,32 +122,32 @@ void sched_init_thread_name(sched_thread_t *thread, const char *name) {
     thread->name[len] = '\0';
 }
 
-static void remove_all_thread_locked(sched_thread_t *thread) {
+static void cleanup_thread(sched_thread_t *thread) {
     if (!thread || !sched_state.all_list || !thread->in_all_list) {
         return;
     }
 
-    _pid_index_remove_locked(thread->pid);
+    pid_remove(thread->pid);
     list_remove(sched_state.all_list, &thread->all_node);
     thread->in_all_list = false;
 }
 
-void remove_all_thread(sched_thread_t *thread) {
+void thread_cleanup(sched_thread_t *thread) {
     if (!thread || !sched_state.all_list) {
         return;
     }
 
     unsigned long flags = sched_lock_save();
-    remove_all_thread_locked(thread);
+    cleanup_thread(thread);
     sched_lock_restore(flags);
 }
 
-sched_thread_t *find_thread_by_pid_locked(pid_t pid) {
+sched_thread_t *find_thread(pid_t pid) {
     if (!sched_state.all_list) {
         return NULL;
     }
 
-    sched_thread_t *thread = _pid_index_get_locked(pid);
+    sched_thread_t *thread = pid_get(pid);
     if (thread) {
         return thread;
     }
@@ -155,7 +156,7 @@ sched_thread_t *find_thread_by_pid_locked(pid_t pid) {
         thread = node->data;
 
         if (thread && thread->pid == pid) {
-            _pid_index_set_locked(thread);
+            pid_set(thread);
             return thread;
         }
     }
@@ -174,7 +175,7 @@ NORETURN void thread_trampoline(void) {
     __builtin_unreachable();
 }
 
-void sched_thread_get(sched_thread_t *thread) {
+void thread_get(sched_thread_t *thread) {
     if (!thread) {
         return;
     }
@@ -182,20 +183,17 @@ void sched_thread_get(sched_thread_t *thread) {
     __atomic_fetch_add(&thread->refcount, 1, __ATOMIC_RELAXED);
 }
 
-void sched_thread_put(sched_thread_t *thread) {
+void thread_put(sched_thread_t *thread) {
     if (!thread) {
         return;
     }
 
     u32 prev = __atomic_fetch_sub(&thread->refcount, 1, __ATOMIC_ACQ_REL);
     if (!prev) {
-        __atomic_fetch_add(&sched_state.metrics.ref_underflow, 1, __ATOMIC_RELAXED);
-#if defined(DEBUG)
-        panic("sched_thread_put refcount underflow");
-#endif
         __atomic_fetch_add(&thread->refcount, 1, __ATOMIC_RELAXED);
         return;
     }
+
     if (prev != 1) {
         return;
     }
@@ -205,20 +203,23 @@ void sched_thread_put(sched_thread_t *thread) {
         SCHED_THREAD_LIFECYCLE_DEFER_QUEUED,
         __ATOMIC_ACQ_REL
     );
+
     if (prior_lifecycle & SCHED_THREAD_LIFECYCLE_DEFER_QUEUED) {
         return;
     }
 
     unsigned long flags = sched_lock_save();
+
     if (sched_state.deferred_destroy_list && !thread->in_deferred_list) {
         thread->deferred_node.data = thread;
         list_append(sched_state.deferred_destroy_list, &thread->deferred_node);
         thread->in_deferred_list = true;
     }
+
     sched_lock_restore(flags);
 }
 
-void destroy_thread_final(sched_thread_t *thread) {
+void thread_destroy(sched_thread_t *thread) {
     if (!thread) {
         return;
     }
@@ -256,18 +257,21 @@ void sched_reap_deferred(void) {
 
     for (;;) {
         unsigned long flags = sched_lock_save();
+
         list_node_t *node = list_pop_front(sched_state.deferred_destroy_list);
         sched_thread_t *thread = node ? node->data : NULL;
+
         if (thread) {
             thread->in_deferred_list = false;
         }
+
         sched_lock_restore(flags);
 
         if (!thread) {
             break;
         }
 
-        destroy_thread_final(thread);
+        thread_destroy(thread);
     }
 }
 
@@ -294,8 +298,8 @@ void sched_reap(void) {
 
             list_remove(sched_state.zombie_list, node);
             thread->in_zombie_list = false;
-            remove_all_thread_locked(thread);
-            sched_thread_put(thread);
+            cleanup_thread(thread);
+            thread_put(thread);
         }
 
         node = next;

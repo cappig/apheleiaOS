@@ -389,7 +389,7 @@ static bool _hashmap_str_bucket_store(
     }
 
     if (!head) {
-        (void)hashmap_remove(map->index, hash);
+        hashmap_remove(map->index, hash);
         return true;
     }
 

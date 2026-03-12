@@ -1,4 +1,4 @@
-#include "scheduler_internal.h"
+#include "internal.h"
 
 bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
     if (!out || pid < 0 || !sched_state.all_list) {
@@ -6,19 +6,22 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
     }
 
     u64 hz = arch_timer_hz();
+
     bool found = false;
     unsigned long flags = sched_lock_save();
-    sched_thread_t *thread = _pid_index_get_locked(pid);
+    sched_thread_t *thread = pid_get(pid);
 
     if (!thread) {
         ll_foreach(node, sched_state.all_list) {
             sched_thread_t *candidate = node->data;
+
             if (!candidate || candidate->pid != pid) {
                 continue;
             }
 
             thread = candidate;
-            _pid_index_set_locked(thread);
+            pid_set(thread);
+
             break;
         }
     }
@@ -35,7 +38,7 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
             __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE);
         out->signal_mask =
             __atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE);
-        out->state = sched_thread_state_load(thread);
+        out->state = thread_get_state(thread);
         out->core_id = -1;
         out->tty_index = thread->tty_index;
 
@@ -58,6 +61,7 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
     }
 
     sched_lock_restore(flags);
+
     return found;
 }
 
@@ -82,9 +86,11 @@ void sched_cpu_usage_snapshot_core(
         if (busy_ticks_out) {
             *busy_ticks_out = 0;
         }
+
         if (total_ticks_out) {
             *total_ticks_out = 0;
         }
+
         return;
     }
 
@@ -116,18 +122,8 @@ void sched_metrics_snapshot(sched_metrics_snapshot_t *out) {
         __atomic_load_n(&sched_state.metrics.runqueue_max, __ATOMIC_RELAXED);
     out->sched_balance_runs =
         __atomic_load_n(&sched_state.metrics.balance_runs, __ATOMIC_RELAXED);
-    out->sched_ownership_conflicts =
-        __atomic_load_n(&sched_state.metrics.ownership_conflicts, __ATOMIC_RELAXED);
-    out->sched_ref_underflow =
-        __atomic_load_n(&sched_state.metrics.ref_underflow, __ATOMIC_RELAXED);
     out->wait_timeout_count =
         __atomic_load_n(&sched_state.metrics.wait_timeout_count, __ATOMIC_RELAXED);
-    out->sched_lock_contention_spins =
-        __atomic_load_n(&sched_state.metrics.lock_contention_spins, __ATOMIC_RELAXED);
-    out->lockdep_inversion_count =
-        __atomic_load_n(&sched_state.metrics.lockdep_inversion_count, __ATOMIC_RELAXED);
-    out->lockdep_block_under_spin_count =
-        __atomic_load_n(&sched_state.metrics.lockdep_block_under_spin_count, __ATOMIC_RELAXED);
 }
 
 int sched_getgroups_pid(
@@ -142,21 +138,7 @@ int sched_getgroups_pid(
     }
 
     unsigned long flags = sched_lock_save();
-    sched_thread_t *thread = _pid_index_get_locked(pid);
-
-    if (!thread) {
-        ll_foreach(node, sched_state.all_list) {
-            sched_thread_t *candidate = node->data;
-
-            if (!candidate || candidate->pid != pid) {
-                continue;
-            }
-
-            thread = candidate;
-            _pid_index_set_locked(thread);
-            break;
-        }
-    }
+    sched_thread_t *thread = find_thread(pid);
 
     if (!thread) {
         sched_lock_restore(flags);
@@ -168,14 +150,17 @@ int sched_getgroups_pid(
     }
 
     *group_count_out = thread->group_count;
+
     if (groups_out && max_groups) {
         size_t copy_count = thread->group_count < max_groups ? thread->group_count : max_groups;
+
         for (size_t i = 0; i < copy_count; i++) {
             groups_out[i] = thread->groups[i];
         }
     }
 
     sched_lock_restore(flags);
+
     return 0;
 }
 
@@ -186,23 +171,11 @@ bool sched_proc_cwd(pid_t pid, char *out, size_t out_len) {
 
     bool found = false;
     unsigned long flags = sched_lock_save();
-    sched_thread_t *thread = _pid_index_get_locked(pid);
-
-    if (!thread) {
-        ll_foreach(node, sched_state.all_list) {
-            sched_thread_t *candidate = node->data;
-            if (!candidate || candidate->pid != pid) {
-                continue;
-            }
-
-            thread = candidate;
-            _pid_index_set_locked(thread);
-            break;
-        }
-    }
+    sched_thread_t *thread = find_thread(pid);
 
     if (thread) {
         size_t len = strnlen(thread->cwd, sizeof(thread->cwd));
+
         if (len + 1 <= out_len) {
             memcpy(out, thread->cwd, len);
             out[len] = '\0';
@@ -211,6 +184,7 @@ bool sched_proc_cwd(pid_t pid, char *out, size_t out_len) {
     }
 
     sched_lock_restore(flags);
+
     return found;
 }
 
@@ -235,5 +209,6 @@ int sched_signal_send_pgrp(pid_t pgid, int signum) {
     }
 
     sched_lock_restore(flags);
+
     return count ? count : -1;
 }

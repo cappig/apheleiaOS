@@ -71,6 +71,7 @@ static int signal_next_pending(sched_thread_t *thread) {
     u32 pending =
         __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE) &
         ~__atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE);
+
     if (!pending) {
         return 0;
     }
@@ -169,7 +170,8 @@ int sched_signal_send_pid(pid_t pid, int signum) {
     }
 
     int rc = sched_signal_send_thread(thread, signum);
-    sched_thread_put(thread);
+    thread_put(thread);
+
     return rc;
 }
 
@@ -256,7 +258,7 @@ bool sched_signal_has_pending(sched_thread_t *thread) {
     }
 
     return (
-               __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE) &
-               ~__atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE)
-           ) != 0;
+        __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE) &
+        ~__atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE)
+    ) != 0;
 }

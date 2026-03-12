@@ -223,3 +223,151 @@ size_t ring_buffer_pop_array(ring_buffer_t *ring, u8 *ret, size_t len) {
 
     return i;
 }
+
+
+ring_queue_t *ring_queue_create(size_t elem_size, size_t cap) {
+    if (!elem_size || !cap) {
+        return NULL;
+    }
+
+    ring_queue_t *q = calloc(1, sizeof(*q));
+    if (!q) {
+        return NULL;
+    }
+
+    q->buf = calloc(cap, elem_size);
+    if (!q->buf) {
+        free(q);
+        return NULL;
+    }
+
+    q->elem_size = elem_size;
+    q->cap = cap;
+
+    return q;
+}
+
+void ring_queue_destroy(ring_queue_t *q) {
+    if (!q) {
+        return;
+    }
+
+    free(q->buf);
+    free(q);
+}
+
+size_t ring_queue_count(const ring_queue_t *q) {
+    return q ? q->count : 0;
+}
+
+size_t ring_queue_capacity(const ring_queue_t *q) {
+    return q ? q->cap : 0;
+}
+
+bool ring_queue_push(ring_queue_t *q, const void *item) {
+    if (!q || !item || !q->buf || q->count >= q->cap) {
+        return false;
+    }
+
+    size_t tail = (q->head + q->count) % q->cap;
+    memcpy(q->buf + tail * q->elem_size, item, q->elem_size);
+
+    q->count++;
+
+    return true;
+}
+
+bool ring_queue_pop(ring_queue_t *q, void *out) {
+    if (!q || !q->count || !q->buf) {
+        return false;
+    }
+
+    if (out) {
+        memcpy(out, q->buf + q->head * q->elem_size, q->elem_size);
+    }
+
+    q->head = (q->head + 1) % q->cap;
+    q->count--;
+
+    return true;
+}
+
+void ring_queue_drop_head(ring_queue_t *q) {
+    if (!q || !q->count) {
+        return;
+    }
+    q->head = (q->head + 1) % q->cap;
+    q->count--;
+}
+
+void *ring_queue_at(ring_queue_t *q, size_t i) {
+    if (!q || i >= q->count || !q->buf) {
+        return NULL;
+    }
+
+    return q->buf + ((q->head + i) % q->cap) * q->elem_size;
+}
+
+bool ring_queue_remove_at(ring_queue_t *q, size_t i) {
+    if (!q || i >= q->count || !q->buf) {
+        return false;
+    }
+
+    for (size_t j = i; j + 1 < q->count; j++) {
+        void *dst = q->buf + ((q->head + j) % q->cap) * q->elem_size;
+        void *src = q->buf + ((q->head + j + 1) % q->cap) * q->elem_size;
+
+        memcpy(dst, src, q->elem_size);
+    }
+
+    q->count--;
+
+    return true;
+}
+
+void ring_queue_clear(ring_queue_t *q) {
+    if (!q) {
+        return;
+    }
+
+    q->head = 0;
+    q->count = 0;
+}
+
+bool ring_queue_reserve(ring_queue_t *q, size_t needed) {
+    if (!q) {
+        return false;
+    }
+
+    if (q->cap >= needed) {
+        return true;
+    }
+
+    size_t new_cap = q->cap ? q->cap * 2 : needed;
+    if (new_cap < needed) {
+        new_cap = needed;
+    }
+
+    u8 *new_buf = malloc(new_cap * q->elem_size);
+    if (!new_buf) {
+        return false;
+    }
+
+    if (q->count && q->buf && q->cap) {
+        for (size_t i = 0; i < q->count; i++) {
+            memcpy(
+                new_buf + i * q->elem_size,
+                q->buf + ((q->head + i) % q->cap) * q->elem_size,
+                q->elem_size
+            );
+        }
+    }
+
+    free(q->buf);
+
+    q->buf = new_buf;
+    q->cap = new_cap;
+    q->head = 0;
+
+    return true;
+}

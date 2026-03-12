@@ -56,51 +56,50 @@ found_part:
     mov eax, [si + 8]           ; start lba
     mov ecx, [si + 12]          ; number of sectors
 
-    ; Loading to 0x0000:0x7C00 can hold at most (0x10000-0x7C00)/512 = 66
-    ; sectors before crossing the 64K DMA boundary, so we split the read 
-    ; in two when the bootloader is larger than 66 sectors.
-    cmp ecx, 66
-    jbe .one_read
-
-    ; first half: 66 sectors to 0x0000:0x7C00 (phys 0x7C00..0xFFFF)
+    ; Load in 64K-safe chunks to avoid DMA boundary crossings
     mov [save_lba], eax
     mov [save_cnt], cx
 
-    mov si, dap
-    mov word [si + 2], 66
-    mov dword [si + 8], eax
-    mov ah, 0x42
-    mov dl, [boot_drive]
-    int 0x13
-    jc read_error
+    mov word [dest_seg], 0x0000
+    mov word [dest_off], 0x7c00
+    mov word [chunk_max], 66
 
-    ; second half: remainder to 0x1000:0x0000 (phys 0x10000+)
+.read_chunk:
     mov cx, [save_cnt]
-    sub cx, 66
+    mov bx, [chunk_max]
+    cmp cx, bx
+    jbe .cnt_ok
+    mov cx, bx
+.cnt_ok:
+    mov si, dap
+    mov [si + 2], cx
+    mov ax, [dest_off]
+    mov [si + 4], ax
+    mov ax, [dest_seg]
+    mov [si + 6], ax
     mov eax, [save_lba]
-    add eax, 66
+    mov [si + 8], eax
 
-    mov si, dap
-    mov word [si + 2], cx
-    mov word [si + 4], 0x0000
-    mov word [si + 6], 0x1000
-    mov dword [si + 8], eax
     mov ah, 0x42
     mov dl, [boot_drive]
+
     int 0x13
     jc read_error
 
-    jmp 0x0000:0x7c00
+    add word [save_lba], cx
+    jnc .no_carry
+    inc word [save_lba + 2]
 
-.one_read:
-    mov si, dap
-    mov word [si + 2], cx
-    mov dword [si + 8], eax
-    mov ah, 0x42
-    mov dl, [boot_drive]
-    int 0x13
-    jc read_error
+.no_carry:
+    sub word [save_cnt], cx
+    jz .load_done
 
+    add word [dest_seg], 0x1000
+    mov word [dest_off], 0x0000
+    mov word [chunk_max], 128
+    jmp .read_chunk
+
+.load_done:
     jmp 0x0000:0x7c00
 
 print:
@@ -142,9 +141,12 @@ dap:
     dw 0                        ; segment
     dq 0                        ; lba
 
-save_cnt: dw 0
-save_lba: dd 0
+save_cnt:  dw 0
+save_lba:  dd 0
 boot_drive: db 0
+dest_seg:  dw 0
+dest_off:  dw 0
+chunk_max: dw 0
 
 msg_no_part db 'no valid partition found', 0
 msg_read_error db 'disk read error', 0

@@ -73,7 +73,6 @@ typedef struct sched_user_region {
 typedef struct sched_wait_queue {
     linked_list_t *list;
     spinlock_t lock;
-    const char *debug_name;
     u32 wake_seq;
     u32 waiter_count;
     bool poll_link;
@@ -191,12 +190,7 @@ typedef struct {
     u64 sched_wake_ipi;
     u64 sched_runqueue_max;
     u64 sched_balance_runs;
-    u64 sched_ownership_conflicts;
-    u64 sched_ref_underflow;
     u64 wait_timeout_count;
-    u64 sched_lock_contention_spins;
-    u64 lockdep_inversion_count;
-    u64 lockdep_block_under_spin_count;
 } sched_metrics_snapshot_t;
 
 enum {
@@ -234,8 +228,8 @@ sched_thread_t *sched_current(void);
 sched_thread_t *sched_current_core(size_t core_id);
 sched_thread_t *sched_find_thread(pid_t pid);
 bool sched_pid_alive(pid_t pid);
-void sched_thread_get(sched_thread_t *thread);
-void sched_thread_put(sched_thread_t *thread);
+void thread_get(sched_thread_t *thread);
+void thread_put(sched_thread_t *thread);
 int sched_set_affinity(pid_t pid, u64 mask);
 int sched_get_affinity(pid_t pid, u64 *mask_out);
 pid_t sched_getpid(void);
@@ -269,7 +263,7 @@ sched_thread_t *sched_create_user_thread(const char *name);
 pid_t sched_fork(arch_int_state_t *state);
 pid_t sched_wait(pid_t pid, int *status);
 pid_t sched_waitpid(pid_t pid, int *status, int options);
-void sched_prepare_user_thread(
+void thread_prepare_user(
     sched_thread_t *thread,
     uintptr_t entry,
     uintptr_t user_stack_top
@@ -279,7 +273,7 @@ void sched_make_runnable(sched_thread_t *thread);
 void sched_unblock_thread(sched_thread_t *thread);
 void sched_stop_thread(sched_thread_t *thread, int signum);
 void sched_continue_thread(sched_thread_t *thread);
-void sched_set_thread_name(sched_thread_t *thread, const char *name);
+void thread_set_name(sched_thread_t *thread, const char *name);
 
 bool sched_add_user_region(
     sched_thread_t *thread,
@@ -296,7 +290,6 @@ u64 sched_user_mem_kib(const sched_thread_t *thread);
 
 void sched_wait_queue_init(sched_wait_queue_t *queue);
 void sched_wait_queue_destroy(sched_wait_queue_t *queue);
-void sched_wait_queue_set_name(sched_wait_queue_t *queue, const char *name);
 void sched_wait_queue_set_poll_link(sched_wait_queue_t *queue, bool enabled);
 
 u32 sched_wait_seq(sched_wait_queue_t *queue);
@@ -330,10 +323,9 @@ void sched_sleep(u64 ticks);
 void sched_capture_context(arch_int_state_t *state);
 void sched_ipi_resched(void);
 void sched_resched_softirq(arch_int_state_t *state);
-void sched_request_resched_local_force(void);
+void force_resched(void);
 void sched_request_resched_local(void);
-void sched_lockdep_note_block_under_spin(void);
-bool sched_wait_until_running(sched_thread_t *self);
+bool wait_running(sched_thread_t *self);
 void sched_exit(void) NORETURN;
 bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out);
 void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out);

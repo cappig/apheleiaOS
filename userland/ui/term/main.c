@@ -14,8 +14,8 @@
 #include <ui.h>
 #include <unistd.h>
 
-#include "term_pty.h"
-#include "term_screen.h"
+#include "pty.h"
+#include "screen.h"
 
 static volatile sig_atomic_t term_exit_requested = 0;
 enum {

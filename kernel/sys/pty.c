@@ -114,8 +114,6 @@ static void _queue_init(pty_queue_t *queue) {
 
     sched_wait_queue_init(&queue->read_wait);
     sched_wait_queue_init(&queue->write_wait);
-    sched_wait_queue_set_name(&queue->read_wait, "pty_read_wait");
-    sched_wait_queue_set_name(&queue->write_wait, "pty_write_wait");
     sched_wait_queue_set_poll_link(&queue->read_wait, true);
     sched_wait_queue_set_poll_link(&queue->write_wait, true);
 

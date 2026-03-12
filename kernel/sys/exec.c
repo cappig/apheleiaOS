@@ -947,9 +947,9 @@ sched_thread_t *user_spawn(const char *path) {
     stack_top = _build_user_stack_args(stack_top, &args, &env);
     arch_vm_switch(arch_vm_kernel());
 
-    sched_prepare_user_thread(thread, entry, stack_top);
+    thread_prepare_user(thread, entry, stack_top);
     thread->ppid = 0;
-    sched_set_thread_name(thread, _basename(exec_name_buf));
+    thread_set_name(thread, _basename(exec_name_buf));
 
     _free_args(&args);
     _free_env(&env);
@@ -1112,7 +1112,7 @@ int user_exec(
         arch_state_set_return(state, 0);
         thread->context = (uintptr_t)state;
     } else {
-        sched_prepare_user_thread(thread, entry_point, stack_top);
+        thread_prepare_user(thread, entry_point, stack_top);
     }
 
     const char *thread_name = exec_name_buf;
@@ -1123,7 +1123,7 @@ int user_exec(
         thread_name = path;
     }
 
-    sched_set_thread_name(thread, _basename(thread_name));
+    thread_set_name(thread, _basename(thread_name));
 
     _free_args(&args);
     _free_env(&env);

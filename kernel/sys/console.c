@@ -92,14 +92,6 @@ static const console_backend_ops_t *backend_ops = NULL;
 static console_state_t console_state = {0};
 static spinlock_t console_lock = SPINLOCK_INIT;
 
-static unsigned long _console_lock_irqsave(void) {
-    return spin_lock_irqsave(&console_lock);
-}
-
-static void _console_unlock_irqrestore(unsigned long flags) {
-    spin_unlock_irqrestore(&console_lock, flags);
-}
-
 #define CONSOLE_TAB_WIDTH 4
 
 void console_backend_register(const console_backend_ops_t *ops) {
@@ -1243,15 +1235,15 @@ static void _redraw_screen(size_t index) {
 bool console_set_active(size_t index) {
     bool notify_ws = false;
 
-    unsigned long irq_flags = _console_lock_irqsave();
+    unsigned long irq_flags = spin_lock_irqsave(&console_lock);
 
     if (!console_state.ready) {
-        _console_unlock_irqrestore(irq_flags);
+        spin_unlock_irqrestore(&console_lock, irq_flags);
         return false;
     }
 
     if (index >= console_state.screen_count) {
-        _console_unlock_irqrestore(irq_flags);
+        spin_unlock_irqrestore(&console_lock, irq_flags);
         return false;
     }
 
@@ -1270,7 +1262,7 @@ bool console_set_active(size_t index) {
         console_state.handoff_refresh_pending = false;
     }
 
-    _console_unlock_irqrestore(irq_flags);
+    spin_unlock_irqrestore(&console_lock, irq_flags);
 
     if (notify_ws) {
         ws_notify_screen_active();
@@ -1779,7 +1771,7 @@ void console_set_font(const font_t *font) {
         }
     }
 
-    unsigned long irq_flags = _console_lock_irqsave();
+    unsigned long irq_flags = spin_lock_irqsave(&console_lock);
 
     size_t old_cols = console_state.cols;
     size_t old_rows = console_state.rows;
@@ -1787,7 +1779,7 @@ void console_set_font(const font_t *font) {
     _use_font(font);
 
     if (!console_state.ready || console_state.mode != CONSOLE_FRAMEBUFFER) {
-        _console_unlock_irqrestore(irq_flags);
+        spin_unlock_irqrestore(&console_lock, irq_flags);
         return;
     }
 
@@ -1802,7 +1794,7 @@ void console_set_font(const font_t *font) {
         console_state.rows == old_rows
     ) {
         _redraw_screen(console_state.active_screen);
-        _console_unlock_irqrestore(irq_flags);
+        spin_unlock_irqrestore(&console_lock, irq_flags);
         return;
     }
 
@@ -1833,7 +1825,7 @@ void console_set_font(const font_t *font) {
     }
 
     _redraw_screen(console_state.active_screen);
-    _console_unlock_irqrestore(irq_flags);
+    spin_unlock_irqrestore(&console_lock, irq_flags);
 }
 
 void console_init(void *arch_boot_info) {
@@ -1921,9 +1913,9 @@ ssize_t console_write_screen(size_t screen, const void *buf, size_t len) {
         return 0;
     }
 
-    unsigned long flags = _console_lock_irqsave();
+    unsigned long flags = spin_lock_irqsave(&console_lock);
     _write_screen_locked(screen, buf, len);
-    _console_unlock_irqrestore(flags);
+    spin_unlock_irqrestore(&console_lock, flags);
 
     return (ssize_t)len;
 }
@@ -1937,17 +1929,17 @@ bool console_get_size(size_t *cols, size_t *rows) {
         return false;
     }
 
-    unsigned long irq_flags = _console_lock_irqsave();
+    unsigned long irq_flags = spin_lock_irqsave(&console_lock);
 
     if (!console_state.ready || console_state.mode == CONSOLE_DISABLED) {
-        _console_unlock_irqrestore(irq_flags);
+        spin_unlock_irqrestore(&console_lock, irq_flags);
         return false;
     }
 
     *cols = console_state.cols;
     *rows = console_state.rows;
 
-    _console_unlock_irqrestore(irq_flags);
+    spin_unlock_irqrestore(&console_lock, irq_flags);
     return true;
 }
 
@@ -1964,10 +1956,10 @@ int console_fb_acquire(pid_t pid, size_t screen) {
         return -EINVAL;
     }
 
-    unsigned long irq_flags = _console_lock_irqsave();
+    unsigned long irq_flags = spin_lock_irqsave(&console_lock);
 
     if (console_state.fb_owned && console_state.fb_owner != pid) {
-        _console_unlock_irqrestore(irq_flags);
+        spin_unlock_irqrestore(&console_lock, irq_flags);
         return -EBUSY;
     }
 
@@ -1975,7 +1967,7 @@ int console_fb_acquire(pid_t pid, size_t screen) {
     console_state.fb_owner = pid;
     console_state.fb_owner_screen = screen;
 
-    _console_unlock_irqrestore(irq_flags);
+    spin_unlock_irqrestore(&console_lock, irq_flags);
     return 0;
 }
 
@@ -1988,15 +1980,15 @@ int console_fb_release(pid_t pid) {
         return -ENODEV;
     }
 
-    unsigned long irq_flags = _console_lock_irqsave();
+    unsigned long irq_flags = spin_lock_irqsave(&console_lock);
 
     if (!console_state.fb_owned) {
-        _console_unlock_irqrestore(irq_flags);
+        spin_unlock_irqrestore(&console_lock, irq_flags);
         return 0;
     }
 
     if (console_state.fb_owner != pid) {
-        _console_unlock_irqrestore(irq_flags);
+        spin_unlock_irqrestore(&console_lock, irq_flags);
         return -EPERM;
     }
 
@@ -2008,7 +2000,7 @@ int console_fb_release(pid_t pid) {
 
     _redraw_screen(console_state.active_screen);
 
-    _console_unlock_irqrestore(irq_flags);
+    spin_unlock_irqrestore(&console_lock, irq_flags);
     return 0;
 }
 
@@ -2021,12 +2013,12 @@ ssize_t console_fb_owner_screen(void) {
         return TTY_NONE;
     }
 
-    unsigned long irq_flags = _console_lock_irqsave();
+    unsigned long irq_flags = spin_lock_irqsave(&console_lock);
 
     ssize_t owner_screen =
         console_state.fb_owned ? (ssize_t)console_state.fb_owner_screen : TTY_NONE;
 
-    _console_unlock_irqrestore(irq_flags);
+    spin_unlock_irqrestore(&console_lock, irq_flags);
 
     return owner_screen;
 }
@@ -2036,7 +2028,7 @@ void console_panic(void) {
         return;
     }
 
-    unsigned long irq_flags = _console_lock_irqsave();
+    unsigned long irq_flags = spin_lock_irqsave(&console_lock);
 
     if (console_state.mode == CONSOLE_FRAMEBUFFER && _has_back_buffer()) {
         console_state.fb_owned = false;
@@ -2052,5 +2044,5 @@ void console_panic(void) {
 
     _redraw_screen(TTY_CONSOLE);
 
-    _console_unlock_irqrestore(irq_flags);
+    spin_unlock_irqrestore(&console_lock, irq_flags);
 }

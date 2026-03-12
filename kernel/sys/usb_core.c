@@ -643,7 +643,6 @@ static void _usb_enum_worker(void *arg) {
 static void _usb_start_enum_worker(void) {
     if (!usb_enum_wait_ready) {
         sched_wait_queue_init(&usb_enum_wait);
-        sched_wait_queue_set_name(&usb_enum_wait, "usb_enum_wait");
         usb_enum_wait_ready = true;
     }
 

@@ -41,3 +41,29 @@ void ring_buffer_push_array(ring_buffer_t *ring, u8 *data, size_t len);
 
 bool ring_buffer_pop(ring_buffer_t *ring, u8 *ret);
 size_t ring_buffer_pop_array(ring_buffer_t *ring, u8 *ret, size_t len);
+
+// generic typed ring queue backed by a heap-allocated circular buffer
+typedef struct ring_queue {
+    u8    *buf;
+    size_t elem_size;
+    size_t cap;
+    size_t head;
+    size_t count;
+} ring_queue_t;
+
+ring_queue_t *ring_queue_create(size_t elem_size, size_t cap);
+void ring_queue_destroy(ring_queue_t *q);
+
+size_t ring_queue_count(const ring_queue_t *q);
+size_t ring_queue_capacity(const ring_queue_t *q);
+
+bool ring_queue_push(ring_queue_t *q, const void *item);
+bool ring_queue_pop(ring_queue_t *q, void *out);
+
+void ring_queue_drop_head(ring_queue_t *q);
+
+void *ring_queue_at(ring_queue_t *q, size_t i);
+bool ring_queue_remove_at(ring_queue_t *q, size_t i);
+
+void ring_queue_clear(ring_queue_t *q);
+bool ring_queue_reserve(ring_queue_t *q, size_t needed);

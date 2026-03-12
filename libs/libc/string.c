@@ -99,11 +99,11 @@ int bcmp(const void *s1, const void *s2, size_t n) {
 }
 
 void bcopy(const void *src, void *dest, size_t len) {
-    (void)memmove(dest, src, len);
+    memmove(dest, src, len);
 }
 
 void bzero(void *dest, size_t len) {
-    (void)memset(dest, 0, len);
+    memset(dest, 0, len);
 }
 
 int strcmp(const char *s1, const char *s2) {

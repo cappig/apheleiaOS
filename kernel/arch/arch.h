@@ -48,27 +48,19 @@ bool arch_irq_enabled(void);
 void arch_cpu_wait(void);
 void arch_cpu_relax(void);
 
-void arch_irq_disable(void);
-void arch_sched_request_resched(void);
+void arch_resched_self(void);
+bool arch_resched_cpu(size_t cpu_id);
 
 u64 arch_timer_ticks(void);
 u32 arch_timer_hz(void);
-u64 arch_monotonic_ns(void);
 u64 arch_realtime_ns(void);
-void arch_wallclock_snapshot(
-    u64 *seconds_out,
-    u64 *ticks_out,
-    u64 *hz_out
-);
-void arch_wallclock_maintain(void);
 
 const char *arch_name(void);
 const char *arch_cpu_name(void);
 
 u64 arch_cpu_khz(void);
 
-size_t arch_mem_total(void);
-size_t arch_mem_free(void);
+void arch_mem_info(size_t *total, size_t *free);
 
 void arch_syscall_install(int vector, arch_syscall_handler_t handler);
 

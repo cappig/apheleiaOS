@@ -1,4 +1,4 @@
-#include "term_pty.h"
+#include "pty.h"
 
 #include <errno.h>
 #include <fcntl.h>

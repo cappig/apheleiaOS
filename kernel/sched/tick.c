@@ -1,4 +1,33 @@
-#include "scheduler_internal.h"
+#include "internal.h"
+
+static bool sched_eval_policy(sched_thread_t *thread, size_t cpu_id) {
+    size_t rq_depth = sched_rq_depth(cpu_id);
+
+    if (thread == sched_local_idle() && thread_get_state(thread) != THREAD_RUNNING) {
+        thread_claim(thread, cpu_id);
+    }
+
+    if (thread_get_state(thread) != THREAD_RUNNING) {
+        return true;
+    }
+
+    if (thread == sched_local_idle()) {
+        return rq_depth != 0;
+    }
+
+    if (!sched_cpu_allowed(thread, cpu_id)) {
+        return true;
+    }
+
+    u64 target_ns = sched_target_slice_ns(cpu_id);
+    bool has_runnable = rq_peek_best(cpu_id) != NULL;
+
+    if (has_runnable && (sched_local_slice_ns() >= target_ns || sched_has_better_runnable(thread, cpu_id))) {
+        return true;
+    }
+
+    return !has_runnable && rq_depth && sched_local_slice_ns() >= target_ns;
+}
 
 static void
 sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
@@ -19,11 +48,6 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         return;
     }
 
-    // Cannot safely context-switch while the sched lock is already held on
-    // this CPU: sched_lock_try_save() would take the reentrant path, and the
-    // paired sched_lock_restore() before arch_context_switch() would only
-    // decrement the depth counter without releasing the spinlock, leaving it
-    // permanently locked after the switch.
     if (sched_local()->sched_lock_depth > 0) {
         sched_local_set_need_resched(true);
         if (force_resched) {
@@ -36,39 +60,7 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
     bool should_resched = force_resched || sched_local_need_resched();
 
     if (!should_resched && evaluate_policy) {
-        size_t rq_depth = sched_rq_depth(cpu_id);
-        if (
-            thread == sched_local_idle() &&
-            sched_thread_state_load(thread) != THREAD_RUNNING
-        ) {
-            sched_thread_mark_running(thread, cpu_id);
-        }
-
-        if (sched_thread_state_load(thread) != THREAD_RUNNING) {
-            should_resched = true;
-        } else if (thread == sched_local_idle()) {
-            // If any entry exists, force dequeue path
-            // so migration/recovery can run instead of idling forever.
-            should_resched = rq_depth != 0;
-        } else if (!sched_cpu_allowed(thread, cpu_id)) {
-            should_resched = true;
-        } else {
-            u64 target_slice_ns = sched_target_slice_ns(cpu_id);
-            bool has_runnable = rq_peek_best(cpu_id) != NULL;
-            if (
-                has_runnable &&
-                (
-                    sched_local_slice_ns() >= target_slice_ns ||
-                    sched_has_better_runnable(thread, cpu_id)
-                )
-            ) {
-                should_resched = true;
-            } else if (!has_runnable && rq_depth && sched_local_slice_ns() >= target_slice_ns) {
-                // Queue contains only temporarily ineligible entries; still
-                // drive dequeue/steal path to keep forward progress.
-                should_resched = true;
-            }
-        }
+        should_resched = sched_eval_policy(thread, cpu_id);
     }
 
     if (!should_resched) {
@@ -84,40 +76,12 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         return;
     }
 
-    sched_flush_handoff_ready_locked(cpu_id);
-    sched_wake_sleepers_locked(arch_timer_ticks());
+    sched_flush_handoff(cpu_id);
+    wake_sleepers(arch_timer_ticks());
     should_resched = force_resched || sched_local_need_resched();
 
     if (!should_resched && evaluate_policy) {
-        size_t rq_depth = sched_rq_depth(cpu_id);
-        if (
-            thread == sched_local_idle() &&
-            sched_thread_state_load(thread) != THREAD_RUNNING
-        ) {
-            sched_thread_mark_running(thread, cpu_id);
-        }
-
-        if (sched_thread_state_load(thread) != THREAD_RUNNING) {
-            should_resched = true;
-        } else if (thread == sched_local_idle()) {
-            should_resched = rq_depth != 0;
-        } else if (!sched_cpu_allowed(thread, cpu_id)) {
-            should_resched = true;
-        } else {
-            u64 target_slice_ns = sched_target_slice_ns(cpu_id);
-            bool has_runnable = rq_peek_best(cpu_id) != NULL;
-            if (
-                has_runnable &&
-                (
-                    sched_local_slice_ns() >= target_slice_ns ||
-                    sched_has_better_runnable(thread, cpu_id)
-                )
-            ) {
-                should_resched = true;
-            } else if (!has_runnable && rq_depth && sched_local_slice_ns() >= target_slice_ns) {
-                should_resched = true;
-            }
-        }
+        should_resched = sched_eval_policy(thread, cpu_id);
     }
 
     if (!should_resched) {
@@ -133,14 +97,14 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
 
     sched_thread_t *next = NULL;
     bool preempted_running = (
-        sched_thread_state_load(thread) == THREAD_RUNNING &&
+        thread_get_state(thread) == THREAD_RUNNING &&
         thread != sched_local_idle()
     );
 
     if (preempted_running) {
         next = dequeue_thread();
         if (!next) {
-            sched_thread_mark_running(thread, cpu_id);
+            thread_claim(thread, cpu_id);
             sched_lock_restore(flags);
             return;
         }
@@ -149,23 +113,12 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
     }
 
     while (
-        SCHED_STRICT_CONTEXT_CHECK && next && next != thread &&
-        sched_context_checked_thread(next) &&
-        (!next->context || !sched_context_valid(next))
+        next && next != thread &&
+        thread_ctx_ok(next) &&
+        (!next->context || !ctx_valid(next))
     ) {
-        const char *reason = NULL;
-        (void)sched_context_valid_ex(next, &reason);
-        sched_log_invalid_context_detail(next, reason);
-        log_warn(
-            "scheduler dropping invalid next pid=%ld (%s) state=%d reason=%s",
-            (long)next->pid,
-            next->name,
-            sched_thread_state_load(next),
-            reason ? reason : "unknown"
-        );
-
-        sched_thread_mark_not_running(next);
-        sched_thread_state_store(next, THREAD_ZOMBIE);
+        thread_unclaim(next);
+        thread_set_state(next, THREAD_ZOMBIE);
         next->exit_code = -EFAULT;
 
         if (sched_state.zombie_list && !next->in_zombie_list) {
@@ -173,13 +126,13 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
             list_append(sched_state.zombie_list, &next->zombie_node);
             next->in_zombie_list = true;
         }
-        sched_exit_event_push(next->pid);
+        exit_event_push(next->pid);
 
         next = pick_next_thread();
     }
 
     if (!next || next == thread) {
-        sched_thread_mark_running(thread, cpu_id);
+        thread_claim(thread, cpu_id);
         sched_lock_restore(flags);
         return;
     }
@@ -191,19 +144,16 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
 
         if (pending && pending != thread) {
             sched_local()->handoff_ready = NULL;
-            sched_publish_handoff_thread_locked(pending, cpu_id);
+            sched_publish_handoff(pending, cpu_id);
         }
 
         sched_local()->handoff_ready = thread;
     } else {
-        // Thread is sleeping/zombie/stopped — clear running_cpu so
-        // wake_waiter_locked and sched_capture_context see -1 instead of
-        // a stale cpu_id that could confuse ownership checks.
-        sched_thread_mark_not_running(thread);
+        thread_unclaim(thread);
     }
 
     sched_local_set_current(next);
-    sched_thread_mark_running(next, cpu_id);
+    thread_claim(next, cpu_id);
     next->exec_start_ns = next->sum_exec_ns;
     sched_lock_restore(flags);
 
@@ -233,17 +183,16 @@ void sched_capture_context(arch_int_state_t *state) {
     }
 
     size_t cpu_id = sched_cpu_id();
-    int running_cpu = sched_thread_running_cpu_load(current);
+    int running_cpu = thread_cpu(current);
     if (running_cpu >= 0 && (size_t)running_cpu != cpu_id) {
-        sched_note_ownership_conflict("sched_capture_context", current);
-        if (sched_thread_owned_by_running_cpu(current)) {
+        if (thread_is_owned(current)) {
             return;
         }
 
-        sched_thread_running_cpu_store(current, (int)cpu_id);
+        thread_set_cpu(current, (int)cpu_id);
     }
 
-    if (!sched_context_candidate_valid(current, state)) {
+    if (!ctx_candidate_valid(current, state)) {
         return;
     }
 
@@ -260,10 +209,9 @@ void sched_tick(arch_int_state_t *state) {
     size_t cpu_id = sched_cpu_id();
 
     if (__atomic_load_n(&sched_local()->handoff_ready, __ATOMIC_ACQUIRE)) {
-        // Preempted RUNNING tasks are deferred until after context switch
         unsigned long flush_flags = 0;
         if (sched_lock_try_save(&flush_flags)) {
-            sched_flush_handoff_ready_locked(cpu_id);
+            sched_flush_handoff(cpu_id);
             sched_lock_restore(flush_flags);
         }
     }
@@ -280,7 +228,7 @@ void sched_tick(arch_int_state_t *state) {
                 __atomic_load_n(&sched_state.sleep.wake_tick, __ATOMIC_ACQUIRE);
             if (now_ticks > locked_seen) {
                 __atomic_store_n(&sched_state.sleep.wake_tick, now_ticks, __ATOMIC_RELEASE);
-                sched_wake_sleepers_locked(now_ticks);
+                wake_sleepers(now_ticks);
             }
             sched_lock_restore(wake_flags);
         }
@@ -290,7 +238,7 @@ void sched_tick(arch_int_state_t *state) {
 
     if (
         thread != sched_local_idle() &&
-        sched_thread_state_load(thread) == THREAD_RUNNING
+        thread_get_state(thread) == THREAD_RUNNING
     ) {
         __atomic_fetch_add(&sched_state.usage.busy_ticks, 1, __ATOMIC_RELAXED);
         __atomic_fetch_add(&sched_state.usage.core_busy_ticks[cpu_id], 1, __ATOMIC_RELAXED);
@@ -320,7 +268,7 @@ void sched_tick(arch_int_state_t *state) {
     sched_reschedule_from_interrupt(state, true);
 }
 
-void sched_request_resched_local_force(void) {
+void force_resched(void) {
     if (!sched_running_get()) {
         return;
     }
@@ -329,15 +277,7 @@ void sched_request_resched_local_force(void) {
     __atomic_store_n(&local->force_resched, true, __ATOMIC_RELEASE);
     __atomic_store_n(&local->need_resched, true, __ATOMIC_RELEASE);
 
-    if (sched_preempt_disabled()) {
-        return;
-    }
-
-    if (local->sched_lock_depth) {
-        return;
-    }
-
-    if (!arch_irq_enabled()) {
+    if (sched_preempt_disabled() || local->sched_lock_depth || !arch_irq_enabled()) {
         return;
     }
 
@@ -346,7 +286,7 @@ void sched_request_resched_local_force(void) {
     }
 
     __atomic_store_n(&local->resched_irq_pending, true, __ATOMIC_RELEASE);
-    arch_sched_request_resched();
+    arch_resched_self();
 }
 
 void sched_request_resched_local(void) {
@@ -357,24 +297,13 @@ void sched_request_resched_local(void) {
     sched_cpu_state_t *local = sched_local();
     __atomic_store_n(&local->need_resched, true, __ATOMIC_RELEASE);
 
-    if (sched_preempt_disabled()) {
-        return;
-    }
-
-    if (local->sched_lock_depth) {
-        return;
-    }
-
-    if (!arch_irq_enabled()) {
+    if (sched_preempt_disabled() || local->sched_lock_depth || !arch_irq_enabled()) {
         return;
     }
 
     sched_thread_t *current = sched_local_current();
-    if (
-        current &&
-        current != sched_local_idle() &&
-        __atomic_load_n(&current->state, __ATOMIC_ACQUIRE) == THREAD_RUNNING
-    ) {
+    if (current && current != sched_local_idle() &&
+        __atomic_load_n(&current->state, __ATOMIC_ACQUIRE) == THREAD_RUNNING) {
         return;
     }
 
@@ -383,11 +312,7 @@ void sched_request_resched_local(void) {
     }
 
     __atomic_store_n(&local->resched_irq_pending, true, __ATOMIC_RELEASE);
-    arch_sched_request_resched();
-}
-
-void sched_lockdep_note_block_under_spin(void) {
-    __atomic_fetch_add(&sched_state.metrics.lockdep_block_under_spin_count, 1, __ATOMIC_RELAXED);
+    arch_resched_self();
 }
 
 void sched_yield(void) {
@@ -400,7 +325,7 @@ void sched_yield(void) {
     }
 
     sched_local_set_slice_ns(sched_target_slice_ns(sched_cpu_id()));
-    sched_request_resched_local_force();
+    force_resched();
 }
 
 void sched_ipi_resched(void) {
@@ -433,8 +358,7 @@ void sched_sleep(u64 ticks) {
         return;
     }
 
-    u64 deadline = arch_timer_ticks() + ticks;
-    (void)sched_wait_deadline(deadline, 0);
+    sched_wait_deadline(arch_timer_ticks() + ticks, 0);
 }
 
 static void sched_reparent_children(sched_thread_t *parent) {
@@ -473,7 +397,7 @@ static void sched_reparent_children(sched_thread_t *parent) {
 
         thread->ppid = reaper_pid;
 
-        if (reaper && sched_thread_state_load(thread) == THREAD_ZOMBIE) {
+        if (reaper && thread_get_state(thread) == THREAD_ZOMBIE) {
             notify_reaper = true;
         }
     }
@@ -485,7 +409,7 @@ static void sched_reparent_children(sched_thread_t *parent) {
 }
 
 void sched_exit(void) {
-    arch_irq_disable();
+    arch_irq_save();
     sched_thread_t *self = sched_local_current();
     pid_t exited_pid = 0;
 
@@ -497,11 +421,11 @@ void sched_exit(void) {
 
     if (self) {
         exited_pid = self->pid;
-        wait_queue_remove_locked(self);
+        wq_dequeue(self);
         sleep_heap_remove(self);
         sched_reparent_children(self);
-        sched_thread_mark_not_running(self);
-        sched_thread_state_store(self, THREAD_ZOMBIE);
+        thread_unclaim(self);
+        thread_set_state(self, THREAD_ZOMBIE);
 
         if (self != sched_local_idle() && !self->in_zombie_list) {
             self->zombie_node.data = self;
@@ -510,11 +434,11 @@ void sched_exit(void) {
         }
 
         if (self->user_thread) {
-            sched_thread_t *parent = find_thread_by_pid_locked(self->ppid);
+            sched_thread_t *parent = find_thread(self->ppid);
 
             if (parent) {
                 sched_wake_one(&parent->wait_queue);
-                (void)sched_signal_send_thread(parent, SIGCHLD);
+                sched_signal_send_thread(parent, SIGCHLD);
             }
         }
     }
@@ -530,21 +454,21 @@ void sched_exit(void) {
         next->exec_start_ns = next->sum_exec_ns;
 
         if (
-            SCHED_STRICT_CONTEXT_CHECK && sched_context_checked_thread(next) &&
-            (!next->context || !sched_context_valid(next))
+            thread_ctx_ok(next) &&
+            (!next->context || !ctx_valid(next))
         ) {
             sched_lock_restore(flags);
             panic("scheduler exit switched to invalid context thread");
         }
 
         sched_local_set_current(next);
-        sched_thread_mark_running(next, sched_cpu_id());
+        thread_claim(next, sched_cpu_id());
     }
 
     sched_lock_restore(flags);
 
     if (exited_pid > 0) {
-        sched_exit_event_push(exited_pid);
+        exit_event_push(exited_pid);
     }
 
     if (!next) {
@@ -568,7 +492,6 @@ void sched_preempt_disable(void) {
 
 void sched_preempt_enable(void) {
     sched_local_dec_preempt_depth();
-
     if (!sched_local_preempt_disabled() && sched_local_need_resched()) {
         sched_request_resched_local();
     }

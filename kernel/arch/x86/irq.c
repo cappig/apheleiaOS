@@ -1,5 +1,7 @@
 #include "irq.h"
 
+void arch_wallclock_maintain(void); // x86-internal, defined in arch.c
+
 #include <arch/arch.h>
 #include <base/attributes.h>
 #include <log/log.h>

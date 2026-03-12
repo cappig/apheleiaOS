@@ -8,8 +8,8 @@
 #include <unistd.h>
 
 #include "wm.h"
-#include "wm_background.h"
-#include "wm_rect.h"
+#include "background.h"
+#include "rect.h"
 
 #define MAX_TITLE_CHARS 48
 

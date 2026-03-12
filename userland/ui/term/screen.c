@@ -1,4 +1,4 @@
-#include "term_screen.h"
+#include "screen.h"
 
 #include <draw.h>
 #include <psf.h>

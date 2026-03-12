@@ -841,7 +841,7 @@ static bool _msc_register_disk(usb_msc_lun_t *lun) {
     lun->disk = disk;
 
     if (sched_is_running()) {
-        (void)disk_publish_devices();
+        disk_publish_devices();
     }
 
     return true;
@@ -984,7 +984,7 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
             continue;
         }
 
-        (void)_msc_test_unit_ready(lun);
+        _msc_test_unit_ready(lun);
 
         size_t blocks = 0;
         size_t block_size = 0;

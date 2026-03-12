@@ -26,7 +26,6 @@ typedef struct {
     spinlock_t lock;
     volatile int held;
     struct sched_wait_queue *wait_queue;
-    const char *name;
 #if LOCK_DEBUG
     size_t owner_cpu;
 #endif
@@ -44,8 +43,7 @@ void lock_preempt_enable(void);
     { \
         .lock = SPINLOCK_INIT, \
         .held = 0, \
-        .wait_queue = NULL, \
-        .name = NULL \
+        .wait_queue = NULL \
     }
 
 static inline size_t lock_cpu_id(void) {
@@ -163,7 +161,6 @@ static inline void spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
 }
 
 void mutex_init(mutex_t *mutex);
-void mutex_set_name(mutex_t *mutex, const char *name);
 bool mutex_try_lock(mutex_t *mutex);
 void mutex_lock(mutex_t *mutex);
 void mutex_unlock(mutex_t *mutex);

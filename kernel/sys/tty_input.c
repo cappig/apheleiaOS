@@ -97,7 +97,6 @@ static ring_buffer_t *_input_buffer(size_t screen) {
     if (!tty_state[screen].ready) {
         spinlock_init(&tty_state[screen].lock);
         sched_wait_queue_init(&tty_state[screen].wait);
-        sched_wait_queue_set_name(&tty_state[screen].wait, "tty_input_wait");
         sched_wait_queue_set_poll_link(&tty_state[screen].wait, true);
         tty_state[screen].ready = true;
     }

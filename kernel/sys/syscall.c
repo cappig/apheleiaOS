@@ -2378,7 +2378,10 @@ static int sys_time(struct timespec *realtime, struct timespec *monotonic) {
     }
 
     if (monotonic) {
-        _timespec_from_ns(arch_monotonic_ns(), monotonic);
+        u64 hz = arch_timer_hz();
+        u64 ticks = arch_timer_ticks();
+        u64 ns = hz ? (ticks / hz * 1000000000ULL + (ticks % hz) * 1000000000ULL / hz) : 0;
+        _timespec_from_ns(ns, monotonic);
     }
 
     return 0;
@@ -2438,12 +2441,12 @@ static u64 sys_kill(pid_t pid, int signum) {
     }
 
     if (self->uid != 0 && self->uid != target->uid) {
-        sched_thread_put(target);
+        thread_put(target);
         return (u64)-EPERM;
     }
 
     int ret = sched_signal_send_thread(target, signum);
-    sched_thread_put(target);
+    thread_put(target);
     return ret < 0 ? (u64)-ESRCH : (u64)ret;
 }
 
@@ -2627,12 +2630,12 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
         }
 
         if (!finite_timeout) {
-            (void)sched_poll_block_if_unchanged(wait_seq);
+            sched_poll_block_if_unchanged(wait_seq);
             continue;
         }
 
         if (timeout_ms > 0) {
-            (void)sched_poll_block_if_unchanged_until(wait_seq, deadline);
+            sched_poll_block_if_unchanged_until(wait_seq, deadline);
             continue;
         }
 

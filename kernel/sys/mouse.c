@@ -207,7 +207,6 @@ bool mouse_init(void) {
 
     if (!mouse_wait.list) {
         sched_wait_queue_init(&mouse_wait);
-        sched_wait_queue_set_name(&mouse_wait, "mouse_wait");
         sched_wait_queue_set_poll_link(&mouse_wait, true);
     }
 

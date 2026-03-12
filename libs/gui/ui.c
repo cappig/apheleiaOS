@@ -469,7 +469,7 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
                         if (produced < count) {
                             events[produced++] = converted[i];
                         } else {
-                            (void)_pending_push(ui, &converted[i]);
+                            _pending_push(ui, &converted[i]);
                         }
                     }
 

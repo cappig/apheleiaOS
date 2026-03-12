@@ -1,4 +1,4 @@
-#include "scheduler_mem.h"
+#include "mem.h"
 
 #include <arch/mm.h>
 #include <arch/paging.h>
@@ -37,6 +37,7 @@ void sched_user_mem_sub(sched_thread_t *thread, size_t pages) {
     u64 current = __atomic_load_n(&thread->user_mem_kib, __ATOMIC_RELAXED);
     while (current > 0) {
         u64 next = current > delta_kib ? (current - delta_kib) : 0;
+
         if (__atomic_compare_exchange_n(
                 &thread->user_mem_kib,
                 &current,
@@ -45,6 +46,7 @@ void sched_user_mem_sub(sched_thread_t *thread, size_t pages) {
                 __ATOMIC_RELAXED,
                 __ATOMIC_RELAXED
             )) {
+
             return;
         }
     }
@@ -121,6 +123,7 @@ find_user_region(sched_thread_t *thread, uintptr_t addr) {
     }
 
     sched_user_region_t *region = thread->regions;
+
     while (region) {
         uintptr_t start = region->vaddr;
         uintptr_t end = start + region->pages * PAGE_4KIB;
@@ -195,6 +198,7 @@ static bool split_region_for_page(
         sched_user_region_t *after_region = NULL;
         if (after > 0) {
             after_region = calloc(1, sizeof(*after_region));
+
             if (!after_region) {
                 return false;
             }
@@ -266,6 +270,7 @@ bool sched_handle_cow_fault(
 
     uintptr_t page_addr = ALIGN_DOWN(addr, PAGE_4KIB);
     sched_user_region_t *region = find_user_region(thread, page_addr);
+
     if (!region) {
         spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return false;
@@ -306,6 +311,7 @@ bool sched_handle_cow_fault(
 
     if (refs > 1) {
         uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(1);
+
         if (!arch_phys_copy(new_paddr, old_paddr, PAGE_4KIB)) {
             arch_free_frames((void *)new_paddr, 1);
             spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
@@ -314,6 +320,7 @@ bool sched_handle_cow_fault(
 
         bool split_ok =
             split_region_for_page(region, page_index, new_paddr, new_flags);
+
         if (!split_ok) {
             arch_free_frames((void *)new_paddr, 1);
             spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
@@ -325,9 +332,9 @@ bool sched_handle_cow_fault(
         *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
         arch_free_frames((void *)(uintptr_t)old_paddr, 1);
     } else {
-        bool split_ok = split_region_for_page(
-            region, page_index, (uintptr_t)old_paddr, new_flags
-        );
+        bool split_ok =
+            split_region_for_page(region, page_index, (uintptr_t)old_paddr, new_flags);
+
         if (!split_ok) {
             spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
             return false;
@@ -340,5 +347,6 @@ bool sched_handle_cow_fault(
 
     arch_tlb_flush(page_addr);
     spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+
     return true;
 }

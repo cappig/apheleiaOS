@@ -19,9 +19,7 @@ static vfs_t *vfs = NULL;
 static mutex_t vfs_tree_lock = MUTEX_INIT;
 
 static time_t _time_now(void) {
-    u64 seconds = 0;
-    arch_wallclock_snapshot(&seconds, NULL, NULL);
-    return (time_t)seconds;
+    return (time_t)(arch_realtime_ns() / 1000000000ULL);
 }
 
 static vfs_node_t *_resolve_link(vfs_node_t *node) {

@@ -1,4 +1,4 @@
-#include "wm_cursor.h"
+#include "cursor.h"
 
 #include <parse/ppm.h>
 #include <stdbool.h>
@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "wm_file.h"
+#include "file.h"
 
 #define WM_CURSOR_MAX_FILE_BYTES (1U * 1024U * 1024U)
 #define WM_CURSOR_WIDTH          16U

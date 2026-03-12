@@ -1,10 +1,11 @@
-#include "scheduler_internal.h"
+#include "internal.h"
 
 void idle_entry(UNUSED void *arg) {
     for (;;) {
         if (sched_cpu_id() == 0) {
             sched_reap();
         }
+
         arch_cpu_wait();
     }
 }
@@ -50,7 +51,7 @@ build_fork_stack(sched_thread_t *thread, arch_int_state_t *state) {
     return sp;
 }
 
-void sched_prepare_user_thread(
+void thread_prepare_user(
     sched_thread_t *thread,
     uintptr_t entry,
     uintptr_t user_stack_top
@@ -62,7 +63,7 @@ void sched_prepare_user_thread(
     thread->context = build_user_stack(thread, entry, user_stack_top);
 }
 
-bool sched_send_wake_ipi(size_t cpu_id) {
+bool wake_cpu(size_t cpu_id) {
     if (cpu_id >= MAX_CORES) {
         return false;
     }
@@ -75,25 +76,19 @@ bool sched_send_wake_ipi(size_t cpu_id) {
         return false;
     }
 
-    if (!sched_cpu_needs_wake_ipi(cpu_id)) {
+    if (!cpu_needs_ipi(cpu_id)) {
         return false;
     }
 
-    if (!smp_send_resched(cpu_id)) {
+    if (!arch_resched_cpu(cpu_id)) {
         return false;
     }
 
     return true;
 }
 
-typedef enum {
-    SCHED_WAKE_REASON_LOCAL = 0,
-    SCHED_WAKE_REASON_IDLE = 1,
-    SCHED_WAKE_REASON_LOAD = 2,
-} sched_wake_reason_t;
-
 static size_t
-sched_pick_target_cpu(const sched_thread_t *thread, sched_wake_reason_t *reason_out) {
+sched_pick_target_cpu(const sched_thread_t *thread) {
     u64 online = sched_online_cpu_mask();
     u64 allowed = thread ? thread->allowed_cpu_mask : 0;
     size_t ncpu = core_count;
@@ -142,19 +137,18 @@ sched_pick_target_cpu(const sched_thread_t *thread, sched_wake_reason_t *reason_
     }
 
     if (!found) {
-        if (reason_out) {
-            *reason_out = SCHED_WAKE_REASON_LOAD;
-        }
         return 0;
     }
 
     size_t preferred_cpu = MAX_CORES;
+
     if (thread && thread->last_cpu < ncpu && (allowed & (1ULL << thread->last_cpu))) {
         preferred_cpu = thread->last_cpu;
     }
 
     if (idle_mask) {
         size_t base_cpu = preferred_cpu;
+
         if (base_cpu >= ncpu || !(allowed & (1ULL << base_cpu))) {
             if (min_mask) {
                 for (size_t cpu = 0; cpu < ncpu; cpu++) {
@@ -170,6 +164,7 @@ sched_pick_target_cpu(const sched_thread_t *thread, sched_wake_reason_t *reason_
 
         size_t best_idle = MAX_CORES;
         size_t best_distance = (size_t)-1;
+
         for (size_t cpu = 0; cpu < ncpu; cpu++) {
             if (!(idle_mask & (1ULL << cpu))) {
                 continue;
@@ -186,19 +181,14 @@ sched_pick_target_cpu(const sched_thread_t *thread, sched_wake_reason_t *reason_
         }
 
         if (best_idle < MAX_CORES) {
-            if (reason_out) {
-                *reason_out = SCHED_WAKE_REASON_IDLE;
-            }
             return best_idle;
         }
     }
 
     if (preferred_cpu < ncpu) {
         size_t preferred_load = sched_cpu_load(preferred_cpu);
+
         if (preferred_load <= min_load + SCHED_WAKE_LOCAL_LOAD_SLOP) {
-            if (reason_out) {
-                *reason_out = SCHED_WAKE_REASON_LOCAL;
-            }
             return preferred_cpu;
         }
     }
@@ -206,8 +196,10 @@ sched_pick_target_cpu(const sched_thread_t *thread, sched_wake_reason_t *reason_
     size_t min_cpu = 0;
     if (min_mask) {
         u32 start = __atomic_fetch_add(&sched_state.wake_rr_cursor, 1, __ATOMIC_RELAXED);
+
         for (size_t step = 0; step < ncpu; step++) {
             size_t cpu = (start + step) % ncpu;
+
             if (min_mask & (1ULL << cpu)) {
                 min_cpu = cpu;
                 break;
@@ -215,27 +207,19 @@ sched_pick_target_cpu(const sched_thread_t *thread, sched_wake_reason_t *reason_
         }
     }
 
-    if (reason_out) {
-        *reason_out = SCHED_WAKE_REASON_LOAD;
-    }
     return min_cpu;
 }
 
-void enqueue_thread_with_ipi(sched_thread_t *thread, bool allow_remote_ipi) {
+void enqueue_ipi(sched_thread_t *thread, bool allow_remote_ipi) {
     if (!thread || thread == sched_local_idle()) {
         return;
     }
 
     if (!thread->context) {
-        log_warn(
-            "scheduler refused enqueue of contextless thread pid=%ld (%s)",
-            (long)thread->pid,
-            thread->name
-        );
         return;
     }
 
-    if (sched_thread_state_load(thread) != THREAD_READY) {
+    if (thread_get_state(thread) != THREAD_READY) {
         return;
     }
 
@@ -243,25 +227,23 @@ void enqueue_thread_with_ipi(sched_thread_t *thread, bool allow_remote_ipi) {
         return;
     }
 
-    sched_wake_reason_t wake_reason = SCHED_WAKE_REASON_LOAD;
-    size_t target_cpu = sched_pick_target_cpu(thread, &wake_reason);
+    size_t target_cpu = sched_pick_target_cpu(thread);
     size_t prev_cpu = thread->last_cpu;
-    bool migrated = thread->on_rq && prev_cpu < MAX_CORES && prev_cpu != target_cpu;
-    (void)wake_reason;
 
-    if (migrated) {
-        (void)rq_remove_thread(thread);
+    if (thread->on_rq && prev_cpu != target_cpu) {
+        rq_remove_thread(thread);
     }
 
     rq_enqueue_cpu(thread, target_cpu);
 
-    if (prev_cpu < MAX_CORES && prev_cpu != target_cpu) {
+    if (prev_cpu != target_cpu) {
         __atomic_fetch_add(&sched_state.metrics.migrations, 1, __ATOMIC_RELAXED);
     }
 
     size_t self_cpu = sched_cpu_id();
+
     if (target_cpu != self_cpu) {
-        if (allow_remote_ipi && sched_send_wake_ipi(target_cpu)) {
+        if (allow_remote_ipi && wake_cpu(target_cpu)) {
             __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
         } else {
             sched_set_need_resched_cpu(target_cpu, true);
@@ -272,15 +254,15 @@ void enqueue_thread_with_ipi(sched_thread_t *thread, bool allow_remote_ipi) {
 }
 
 void enqueue_thread(sched_thread_t *thread) {
-    enqueue_thread_with_ipi(thread, true);
+    enqueue_ipi(thread, true);
 }
 
-void run_queue_remove(sched_thread_t *thread) {
+void rq_remove(sched_thread_t *thread) {
     if (!thread) {
         return;
     }
 
-    (void)rq_remove_thread(thread);
+    rq_remove_thread(thread);
 }
 
 sched_thread_t *create_thread(
@@ -296,11 +278,11 @@ sched_thread_t *create_thread(
         return NULL;
     }
 
-    sched_init_thread_name(thread, name);
+    thread_set_name(thread, name);
 
     thread->entry = entry;
     thread->arg = arg;
-    sched_thread_state_store(thread, THREAD_READY);
+    thread_set_state(thread, THREAD_READY);
     thread->affinity_core = MAX_CORES;
     thread->last_cpu = sched_cpu_id();
     thread->allowed_cpu_mask = sched_online_cpu_mask();
@@ -314,7 +296,7 @@ sched_thread_t *create_thread(
     thread->pid = sched_next_pid(pid_class);
     thread->ppid = 0;
     thread->rq_index = UINT32_MAX;
-    sched_thread_running_cpu_store(thread, -1);
+    thread_set_cpu(thread, -1);
 
     sched_thread_t *parent = sched_local_current();
 
@@ -377,13 +359,12 @@ sched_thread_t *create_thread(
     spinlock_init(&thread->vm_lock);
 
     sched_wait_queue_init(&thread->wait_queue);
-    sched_wait_queue_set_name(&thread->wait_queue, "thread_wait");
     sched_signal_init_thread(thread);
 
     arch_fpu_init(thread->fpu_state);
     thread->fpu_initialized = true;
 
-    add_all_thread(thread);
+    thread_add(thread);
 
     if (thread->pid > 0) {
         procfs_register_pid(thread->pid);
@@ -412,13 +393,16 @@ sched_thread_t *sched_current_core(size_t core_id) {
 
 sched_thread_t *sched_find_thread(pid_t pid) {
     unsigned long flags = sched_lock_save();
-    sched_thread_t *thread = find_thread_by_pid_locked(pid);
+    sched_thread_t *thread = find_thread(pid);
+
     if (thread && thread->in_all_list && thread->pid == pid) {
-        sched_thread_get(thread);
+        thread_get(thread);
     } else {
         thread = NULL;
     }
+
     sched_lock_restore(flags);
+
     return thread;
 }
 
@@ -478,7 +462,9 @@ pid_t sched_fork(arch_int_state_t *state) {
 
     bool parent_tlb_needs_flush = false;
     unsigned long vm_flags = spin_lock_irqsave(&parent->vm_lock);
+
     sched_user_region_t *region = parent->regions;
+
     while (region) {
         size_t pages = region->pages;
         void *root = arch_vm_root(child->vm_space);
@@ -553,5 +539,6 @@ pid_t sched_fork(arch_int_state_t *state) {
     child->context = build_fork_stack(child, state);
 
     enqueue_thread(child);
+
     return child->pid;
 }

@@ -27,9 +27,11 @@ static void sched_pipe_try_destroy(sched_pipe_t *pipe) {
 
     unsigned long flags = spin_lock_irqsave(&pipe->lock);
     bool in_use = pipe->readers || pipe->writers || pipe->wake_refs || pipe->destroying;
+
     if (!in_use) {
         pipe->destroying = true;
     }
+
     spin_unlock_irqrestore(&pipe->lock, flags);
 
     if (in_use) {
@@ -61,6 +63,7 @@ sched_pipe_t *sched_pipe_create(size_t capacity) {
     }
 
     u8 *data = calloc(capacity, sizeof(u8));
+
     pipe->read_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
     pipe->write_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
 
@@ -111,6 +114,7 @@ bool sched_pipe_operation_begin(sched_pipe_t *pipe) {
     }
 
     unsigned long flags = spin_lock_irqsave(&pipe->lock);
+
     if (pipe->destroying) {
         spin_unlock_irqrestore(&pipe->lock, flags);
         return false;
@@ -118,6 +122,7 @@ bool sched_pipe_operation_begin(sched_pipe_t *pipe) {
 
     pipe->wake_refs++;
     spin_unlock_irqrestore(&pipe->lock, flags);
+
     return true;
 }
 
@@ -127,9 +132,11 @@ void sched_pipe_operation_end(sched_pipe_t *pipe) {
     }
 
     unsigned long flags = spin_lock_irqsave(&pipe->lock);
+
     if (pipe->wake_refs > 0) {
         pipe->wake_refs--;
     }
+
     spin_unlock_irqrestore(&pipe->lock, flags);
 
     sched_pipe_try_destroy(pipe);
@@ -160,14 +167,17 @@ static void _pipe_release(sched_pipe_t *pipe, bool is_reader) {
     if (read_wait) {
         sched_wake_all(read_wait);
     }
+
     if (write_wait) {
         sched_wake_all(write_wait);
     }
 
     flags = spin_lock_irqsave(&pipe->lock);
+
     if (pipe->wake_refs > 0) {
         pipe->wake_refs--;
     }
+
     spin_unlock_irqrestore(&pipe->lock, flags);
 
     sched_pipe_try_destroy(pipe);
@@ -234,6 +244,7 @@ int sched_fd_alloc(sched_thread_t *thread, const sched_fd_t *fd, int min_fd) {
         thread->fd_used[slot] = true;
         thread->fds[slot] = *fd;
         sched_fd_retain(&thread->fds[slot]);
+        
         return slot;
     }
 
