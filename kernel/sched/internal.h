@@ -67,6 +67,7 @@ typedef struct {
 
 typedef struct {
     volatile u64 switch_count ALIGNED(8);
+    volatile u64 syscall_count;
     volatile u64 migrations;
     volatile u64 steals;
     volatile u64 wake_ipi;

@@ -375,6 +375,7 @@ static ssize_t _dev_sched_read(
         text,
         sizeof(text),
         "context_switches=%" PRIu64 "\n"
+        "syscalls=%" PRIu64 "\n"
         "migrations=%" PRIu64 "\n"
         "work_steals=%" PRIu64 "\n"
         "wake_ipis=%" PRIu64 "\n"
@@ -382,6 +383,7 @@ static ssize_t _dev_sched_read(
         "balance_passes=%" PRIu64 "\n"
         "sleep_timeouts=%" PRIu64 "\n",
         sched_snapshot.sched_switch_count,
+        sched_snapshot.syscall_count,
         sched_snapshot.sched_migrations,
         sched_snapshot.sched_steals,
         sched_snapshot.sched_wake_ipi,

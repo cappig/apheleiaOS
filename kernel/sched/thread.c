@@ -296,6 +296,11 @@ void sched_reap(void) {
                 continue;
             }
 
+            if (thread_cpu(thread) >= 0) {
+                node = next;
+                continue;
+            }
+
             list_remove(sched_state.zombie_list, node);
             thread->in_zombie_list = false;
             cleanup_thread(thread);

@@ -95,13 +95,13 @@ static inline void spin_lock(spinlock_t *lock) {
 
     lock_preempt_disable();
 
-#if LOCK_DEBUG
     size_t cpu_id = lock_cpu_id();
+
+#if LOCK_DEBUG
     if (lock->owner_cpu == cpu_id) {
         __builtin_trap();
     }
 #endif
-    size_t cpu_id = lock_cpu_id();
 
     while (__sync_lock_test_and_set(&lock->state, 1)) {
         while (__atomic_load_n(&lock->state, __ATOMIC_RELAXED)) {

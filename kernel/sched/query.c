@@ -112,6 +112,8 @@ void sched_metrics_snapshot(sched_metrics_snapshot_t *out) {
 
     out->sched_switch_count =
         __atomic_load_n(&sched_state.metrics.switch_count, __ATOMIC_RELAXED);
+    out->syscall_count =
+        __atomic_load_n(&sched_state.metrics.syscall_count, __ATOMIC_RELAXED);
     out->sched_migrations =
         __atomic_load_n(&sched_state.metrics.migrations, __ATOMIC_RELAXED);
     out->sched_steals =
@@ -124,6 +126,10 @@ void sched_metrics_snapshot(sched_metrics_snapshot_t *out) {
         __atomic_load_n(&sched_state.metrics.balance_runs, __ATOMIC_RELAXED);
     out->wait_timeout_count =
         __atomic_load_n(&sched_state.metrics.wait_timeout_count, __ATOMIC_RELAXED);
+}
+
+void sched_metrics_record_syscall(void) {
+    __atomic_fetch_add(&sched_state.metrics.syscall_count, 1, __ATOMIC_RELAXED);
 }
 
 int sched_getgroups_pid(

@@ -2850,6 +2850,7 @@ static void _syscall_handler(arch_int_state_t *state) {
     }
 
     sched_capture_context(state);
+    sched_metrics_record_syscall();
 
     u64 num = (u64)arch_syscall_num(state);
     u64 ret = _syscall_dispatch(state);

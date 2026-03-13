@@ -29,6 +29,7 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size);
 bool arch_phys_map_can_persist(void);
 
 void arch_dump_stack_trace(void);
+void arch_dump_registers(const arch_int_state_t *state);
 
 arch_vm_space_t *arch_vm_kernel(void);
 arch_vm_space_t *arch_vm_create_user(void);

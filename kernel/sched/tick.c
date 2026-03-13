@@ -40,6 +40,7 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
     __atomic_store_n(
         &sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE
     );
+
     bool force_resched = __atomic_exchange_n(
         &sched_local()->force_resched, false, __ATOMIC_ACQ_REL
     );
@@ -126,8 +127,8 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
             list_append(sched_state.zombie_list, &next->zombie_node);
             next->in_zombie_list = true;
         }
-        exit_event_push(next->pid);
 
+        exit_event_push(next->pid);
         next = pick_next_thread();
     }
 
@@ -155,11 +156,12 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
     sched_local_set_current(next);
     thread_claim(next, cpu_id);
     next->exec_start_ns = next->sum_exec_ns;
-    sched_lock_restore(flags);
 
     if (thread->fpu_initialized) {
         arch_fpu_save(thread->fpu_state);
     }
+
+    sched_lock_restore(flags);
 
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);
@@ -184,6 +186,7 @@ void sched_capture_context(arch_int_state_t *state) {
 
     size_t cpu_id = sched_cpu_id();
     int running_cpu = thread_cpu(current);
+
     if (running_cpu >= 0 && (size_t)running_cpu != cpu_id) {
         if (thread_is_owned(current)) {
             return;
@@ -210,9 +213,12 @@ void sched_tick(arch_int_state_t *state) {
 
     if (__atomic_load_n(&sched_local()->handoff_ready, __ATOMIC_ACQUIRE)) {
         unsigned long flush_flags = 0;
+
         if (sched_lock_try_save(&flush_flags)) {
             sched_flush_handoff(cpu_id);
             sched_lock_restore(flush_flags);
+        } else {
+            sched_local_set_need_resched(true);
         }
     }
 
@@ -221,15 +227,19 @@ void sched_tick(arch_int_state_t *state) {
 
     u64 now_ticks = arch_timer_ticks();
     u64 seen_wake_tick = __atomic_load_n(&sched_state.sleep.wake_tick, __ATOMIC_ACQUIRE);
+
     if (now_ticks > seen_wake_tick) {
         unsigned long wake_flags = 0;
+
         if (sched_lock_try_save(&wake_flags)) {
             u64 locked_seen =
                 __atomic_load_n(&sched_state.sleep.wake_tick, __ATOMIC_ACQUIRE);
+
             if (now_ticks > locked_seen) {
                 __atomic_store_n(&sched_state.sleep.wake_tick, now_ticks, __ATOMIC_RELEASE);
                 wake_sleepers(now_ticks);
             }
+
             sched_lock_restore(wake_flags);
         }
     }
@@ -257,8 +267,10 @@ void sched_tick(arch_int_state_t *state) {
 
     sched_local_inc_local_ticks();
     u64 local_ticks = sched_local_ticks();
+
     if (local_ticks % SCHED_REBALANCE_TICKS == (cpu_id % SCHED_REBALANCE_TICKS)) {
         unsigned long flags = 0;
+
         if (sched_lock_try_save(&flags)) {
             sched_rebalance_once(cpu_id);
             sched_lock_restore(flags);
@@ -465,11 +477,11 @@ void sched_exit(void) {
         thread_claim(next, sched_cpu_id());
     }
 
-    sched_lock_restore(flags);
-
     if (exited_pid > 0) {
         exit_event_push(exited_pid);
     }
+
+    sched_lock_restore(flags);
 
     if (!next) {
         cpu_halt();

@@ -185,6 +185,7 @@ typedef struct sched_thread {
 
 typedef struct {
     u64 sched_switch_count;
+    u64 syscall_count;
     u64 sched_migrations;
     u64 sched_steals;
     u64 sched_wake_ipi;
@@ -335,6 +336,7 @@ void sched_cpu_usage_snapshot_core(
     u64 *total_ticks_out
 );
 void sched_metrics_snapshot(sched_metrics_snapshot_t *out);
+void sched_metrics_record_syscall(void);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
 
 bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write);

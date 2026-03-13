@@ -158,11 +158,12 @@ void scheduler_start(void) {
     sched_local_set_slice_ns(0);
     sched_local_set_current(next);
     thread_claim(next, sched_cpu_id());
-    sched_lock_restore(flags);
 
     if (current->fpu_initialized) {
         arch_fpu_save(current->fpu_state);
     }
+
+    sched_lock_restore(flags);
 
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);
@@ -228,11 +229,12 @@ void scheduler_start_secondary(void) {
     sched_local_set_slice_ns(0);
     sched_local_set_current(next);
     thread_claim(next, sched_cpu_id());
-    sched_lock_restore(flags);
 
     if (current->fpu_initialized) {
         arch_fpu_save(current->fpu_state);
     }
+
+    sched_lock_restore(flags);
 
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
     arch_vm_switch(next->vm_space);

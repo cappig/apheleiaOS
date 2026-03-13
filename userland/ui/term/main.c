@@ -18,6 +18,7 @@
 #include "screen.h"
 
 static volatile sig_atomic_t term_exit_requested = 0;
+
 enum {
     TERM_EVENT_BATCH = 32,
     TERM_EVENT_BUDGET = 512,
@@ -443,7 +444,7 @@ static bool read_window(window_t *window, int master_fd) {
     }
 
     if (pending_resize) {
-        (void)sync_screen_size(window, master_fd);
+        sync_screen_size(window, master_fd);
     }
 
     if (window_closed) {

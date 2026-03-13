@@ -601,6 +601,8 @@ static void _page_fault_handler(int_state_t *state) {
     }
 #endif
 
+    panic_dump_state(state);
+
     disable_interrupts();
     halt();
 }
@@ -626,7 +628,6 @@ static void _gp_fault_handler(int_state_t *state) {
             rip,
             cs
         );
-        log_fatal("fault frame rbp=%#" PRIx64, state->g_regs.rbp);
     } else {
         log_fatal("general protection fault: err=%#" PRIx64, code);
     }
@@ -642,24 +643,23 @@ static void _gp_fault_handler(int_state_t *state) {
             eip,
             cs
         );
-        log_fatal("fault frame ebp=%#" PRIx32, state->g_regs.ebp);
     } else {
         log_fatal("general protection fault: err=%#" PRIx64, code);
     }
 #endif
 
-    panic_trace();
+    panic_dump_state(state);
 
     disable_interrupts();
     halt();
 }
 
-static void _double_fault_handler(UNUSED int_state_t *state) {
+static void _double_fault_handler(int_state_t *state) {
     panic_prepare();
 
     log_fatal("double fault (unrecoverable)");
 
-    panic_trace();
+    panic_dump_state(state);
     disable_interrupts();
     halt();
 }
@@ -698,7 +698,7 @@ static void _invalid_opcode_handler(int_state_t *state) {
     }
 #endif
 
-    panic_trace();
+    panic_dump_state(state);
     disable_interrupts();
     halt();
 }
