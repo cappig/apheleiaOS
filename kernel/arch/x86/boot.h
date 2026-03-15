@@ -16,6 +16,7 @@
 #define PROTECTED_MODE_TOP 0x100000000ULL
 
 #define KERNEL_STACK_SIZE (16 * 0x1000)
+#define BOOT_LOG_CAP      (4 * KIB)
 
 typedef struct PACKED {
     u8 mode;
@@ -94,5 +95,8 @@ typedef struct PACKED {
     e820_map_t memory_map;
 
     boot_root_hint_t boot_root_hint;
+    u64 boot_log_paddr;
+    u32 boot_log_len;
+    u32 boot_log_cap;
     u64 smp_trampoline_paddr;
 } boot_info_t;

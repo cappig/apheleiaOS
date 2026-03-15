@@ -501,6 +501,7 @@ bool _xhci_ensure_running(xhci_controller_t *ctrl) {
     }
 
     cmd |= XHCI_USBCMD_RUNSTOP;
+
     if (ctrl->irq_enabled) {
         cmd |= XHCI_USBCMD_INTE;
     } else {
@@ -632,6 +633,7 @@ bool _xhci_ring_doorbell(xhci_controller_t *ctrl, u8 db_index, u8 target) {
 
     _write32(mmio, off, (u32)target);
     (void)_read32(mmio, off);
+
     arch_phys_unmap(mmio, XHCI_MMIO_SIZE);
 
     return true;

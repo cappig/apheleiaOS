@@ -697,7 +697,7 @@ void dump_pci_devices(void) {
         return;
     }
 
-    log_debug("dump of detected %s devices:", pci_is_express ? "PCIE" : "PCI");
+    log_debug("detected %s devices", pci_is_express ? "PCIE" : "PCI");
 
     ll_foreach(node, pci_devices) {
         pci_found_t *dev = node->data;

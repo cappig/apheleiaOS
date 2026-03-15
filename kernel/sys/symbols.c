@@ -276,7 +276,7 @@ void load_symbols(void) {
         return;
     }
 
-    log_debug("loaded %zu entries from %s", sym_table.len, path);
+    log_debug("loaded %zu symbols from %s", sym_table.len, path);
 }
 
 symbol_entry_t *resolve_symbol(u64 addr) {

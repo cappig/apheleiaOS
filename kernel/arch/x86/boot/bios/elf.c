@@ -47,6 +47,24 @@ static u64 _get_map_top(const e820_map_t *map) {
     return top;
 }
 
+static void _commit_boot_log(boot_info_t *info) {
+    if (!info) {
+        return;
+    }
+
+    size_t len = 0;
+    size_t cap = 0;
+    const char *buf = boot_log_buffer(&len, &cap);
+
+    if (!buf || !cap) {
+        return;
+    }
+
+    info->boot_log_paddr = (u64)(uintptr_t)buf;
+    info->boot_log_len = (u32)len;
+    info->boot_log_cap = (u32)cap;
+}
+
 static elf_header_t *_load_kernel_image(bool want_64, bool *is_64) {
     const char *paths64[] = {"/boot/kernel64.elf", "/boot/kernel32.elf"};
     const char *paths32[] = {"/boot/kernel32.elf", "/boot/kernel64.elf"};
@@ -61,14 +79,18 @@ static elf_header_t *_load_kernel_image(bool want_64, bool *is_64) {
 
         elf_validity_t validity = elf_verify(kernel);
         if (validity) {
-            printf("%s: invalid ELF (error %d)\n\r", paths[i], validity);
+            printf("invalid ELF file %s (error %d)\n\r", paths[i], validity);
             free(kernel);
             continue;
         }
 
         if (kernel->machine == EM_X86_64) {
             if (!want_64) {
-                printf("%s: 64-bit kernel but CPU lacks long mode\n\r", paths[i]);
+                printf(
+                    "64-bit kernel %s but CPU lacks long mode\n\r",
+                    paths[i]
+                );
+
                 free(kernel);
                 continue;
             }
@@ -82,7 +104,11 @@ static elf_header_t *_load_kernel_image(bool want_64, bool *is_64) {
             return kernel;
         }
 
-        printf("%s: unsupported machine type 0x%x\n\r", paths[i], kernel->machine);
+        printf(
+            "unsupported machine type 0x%x for %s\n\r",
+            kernel->machine,
+            paths[i]
+        );
         free(kernel);
     }
 
@@ -95,11 +121,11 @@ void load_kerenel(boot_info_t *info) {
     elf_header_t *kernel = _load_kernel_image(want_64, &is_64);
 
     if (!kernel) {
-        panic("No suitable kernel image found!");
+        panic("no suitable kernel image found");
     }
 
     if (!is_64) {
-        printf("Loading 32 bit kernel...\n\r");
+        printf("loading 32-bit kernel\n\r");
 
         setup_paging_32();
 
@@ -119,11 +145,12 @@ void load_kerenel(boot_info_t *info) {
 
         u32 boot_info = (u32)(uintptr_t)info;
 
-        serial_printf("Jumping to kernel at %#x\n\r", entry);
+        serial_printf("jumping to kernel at %#x\n\r", entry);
 
+        _commit_boot_log(info);
         jump_to_kernel_32(entry, boot_info, stack);
     } else {
-        printf("Loading 64 bit kernel...\n\r");
+        printf("loading 64-bit kernel\n\r");
 
         setup_paging_64();
 
@@ -163,8 +190,9 @@ void load_kerenel(boot_info_t *info) {
 
         u64 boot_info = (uintptr_t)info + LINEAR_MAP_OFFSET_64;
 
-        serial_printf("Jumping to kernel at %#llx\n\r", entry);
+        serial_printf("jumping to kernel at %#llx\n\r", entry);
 
+        _commit_boot_log(info);
         jump_to_kernel_64(entry, boot_info, stack);
     }
 }

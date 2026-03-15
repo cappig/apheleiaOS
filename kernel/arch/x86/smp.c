@@ -241,6 +241,7 @@ NORETURN static void _smp_ap_entry(void *arg) {
     }
 
     cpu_core_t *core = cpu_find_by_lapic(lapic_id());
+
     if (!core || core->id >= MAX_CORES) {
         cpu_halt();
     }
@@ -248,6 +249,7 @@ NORETURN static void _smp_ap_entry(void *arg) {
     cpuid_regs_t regs = {0};
     cpuid(1, &regs);
     u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
+
     if (cpuid_apic_id != core->lapic_id) {
         log_warn(
             "AP core %zu APIC ID mismatch (cpuid=%u lapic=%u)",
@@ -276,11 +278,6 @@ NORETURN static void _smp_ap_entry(void *arg) {
     cpu_set_online(core, true);
 
     __atomic_store_n(&smp_ap_ready[core->id], 1, __ATOMIC_RELEASE);
-    log_info(
-        "AP core %zu booted (lapic=%u), waiting for scheduler",
-        core->id,
-        core->lapic_id
-    );
 
     while (!sched_is_running()) {
         arch_cpu_relax();
@@ -289,7 +286,7 @@ NORETURN static void _smp_ap_entry(void *arg) {
     if (smp_online_count() > 1) {
         smp_shootdown_enabled = true;
     }
-    log_info("AP core %zu online (lapic=%u)", core->id, core->lapic_id);
+
     scheduler_start_secondary();
     enable_interrupts();
     cpu_halt();
@@ -313,11 +310,12 @@ void smp_init(void) {
     set_int_handler(SMP_IPI_RESCHED_VECTOR, _resched_ipi_handler);
 
     if (core_count <= 1) {
+        log_info("online cores: 1/1");
         return;
     }
 
     if (!smp_boot_info || !smp_boot_info->smp_trampoline_paddr) {
-        log_warn("SMP trampoline page unavailable, staying uniprocessor");
+        log_warn("trampoline page unavailable, staying uniprocessor");
         return;
     }
 
@@ -327,24 +325,24 @@ void smp_init(void) {
         (trampoline_paddr & (SMP_TRAMPOLINE_PAGE_SIZE - 1)) ||
         trampoline_paddr >= 0x100000ULL
     ) {
-        log_warn("invalid SMP trampoline address %#" PRIx64, trampoline_paddr);
+        log_warn("invalid trampoline address %#" PRIx64, trampoline_paddr);
         return;
     }
 
     u8 sipi_vector = (u8)(trampoline_paddr >> 12);
-    void *trampoline = arch_phys_map(
-        trampoline_paddr, SMP_TRAMPOLINE_PAGE_SIZE, PHYS_MAP_DEFAULT
-    );
+    void *trampoline = 
+        arch_phys_map(trampoline_paddr, SMP_TRAMPOLINE_PAGE_SIZE, PHYS_MAP_DEFAULT);
 
     if (!trampoline) {
-        log_warn("failed to map SMP trampoline page");
+        log_warn("failed to map trampoline page");
         return;
     }
 
     size_t trampoline_size = _trampoline_size();
+
     if (!trampoline_size || trampoline_size > SMP_TRAMPOLINE_PAGE_SIZE) {
         arch_phys_unmap(trampoline, SMP_TRAMPOLINE_PAGE_SIZE);
-        log_warn("invalid SMP trampoline blob size");
+        log_warn("invalid trampoline blob size");
         return;
     }
 
@@ -387,12 +385,7 @@ void smp_init(void) {
         prepared = core_count;
     }
 
-    log_info(
-        "SMP bring-up prepared: %zu/%zu cores (BSP online=%zu)",
-        prepared,
-        core_count,
-        online
-    );
+    log_info("online cores: %zu/%zu", online, core_count);
 }
 
 bool smp_send_resched(size_t core_id) {
@@ -490,8 +483,9 @@ void smp_tlb_shootdown(uintptr_t addr) {
             u64 acks = __atomic_load_n(&smp_tlb_acks, __ATOMIC_ACQUIRE);
             u64 pending =
                 __atomic_load_n(&smp_tlb_targets, __ATOMIC_ACQUIRE);
+
             panic(
-                "SMP TLB shootdown timeout (self=%zu targets=%#" PRIx64
+                "TLB shootdown timeout (self=%zu targets=%#" PRIx64
                 " acks=%#" PRIx64 " online=%zu)",
                 self->id,
                 pending,
@@ -504,8 +498,9 @@ void smp_tlb_shootdown(uintptr_t addr) {
             u64 acks = __atomic_load_n(&smp_tlb_acks, __ATOMIC_ACQUIRE);
             u64 pending =
                 __atomic_load_n(&smp_tlb_targets, __ATOMIC_ACQUIRE);
+
             panic(
-                "SMP TLB shootdown timeout (self=%zu targets=%#" PRIx64
+                "TLB shootdown timeout (self=%zu targets=%#" PRIx64
                 " acks=%#" PRIx64 " online=%zu)",
                 self->id,
                 pending,

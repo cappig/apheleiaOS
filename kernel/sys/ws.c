@@ -951,7 +951,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
 
     if (!_windows_reserve((size_t)free_id + 1)) {
         log_warn(
-            "WS alloc failed: reserve id=%u caller=%ld size=%ux%u",
+            "WS allocation failed while reserving id=%u caller=%ld size=%ux%u",
             free_id,
             (long)caller_pid,
             cmd->width,
@@ -961,13 +961,21 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     }
 
     if (!_ensure_slot_nodes(free_id)) {
-        log_warn("WS alloc failed: slot node registration id=%u caller=%ld", free_id, (long)caller_pid);
+        log_warn(
+            "WS allocation failed during slot node registration id=%u caller=%ld",
+            free_id,
+            (long)caller_pid
+        );
         return -ENOMEM;
     }
 
     ws_window_t *window = _window_slot(free_id);
     if (!window) {
-        log_warn("WS alloc failed: slot lookup id=%u caller=%ld", free_id, (long)caller_pid);
+        log_warn(
+            "WS allocation failed during slot lookup id=%u caller=%ld",
+            free_id,
+            (long)caller_pid
+        );
         return -ENOMEM;
     }
 
@@ -976,7 +984,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     window->fb = calloc(1, (size_t)fb_size_u64);
     if (!window->fb) {
         log_warn(
-            "WS alloc failed: fb allocation id=%u caller=%ld bytes=%" PRIu64,
+            "WS allocation failed during fb allocation id=%u caller=%ld bytes=%" PRIu64,
             free_id,
             (long)caller_pid,
             fb_size_u64
@@ -990,7 +998,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     if (!window->ev_queue) {
         _window_slot_reinit(window);
         log_warn(
-            "WS alloc failed: ev reserve id=%u caller=%ld",
+            "WS allocation failed during event queue reserve id=%u caller=%ld",
             free_id,
             (long)caller_pid
         );
@@ -1119,6 +1127,7 @@ static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
     if (cmd->width > need_store_width) {
         need_store_width = cmd->width;
     }
+
     if (!need_store_width) {
         need_store_width = cmd->width;
     }
@@ -1127,6 +1136,7 @@ static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
     if (cmd->height > need_store_height) {
         need_store_height = cmd->height;
     }
+
     if (!need_store_height) {
         need_store_height = cmd->height;
     }
@@ -1426,7 +1436,7 @@ static void _ws_start_reaper(void) {
     ws_reaper_thread =
         sched_create_kernel_thread("ws-reaper", _ws_reaper_entry, NULL);
     if (!ws_reaper_thread) {
-        log_warn("WS failed to create reaper thread");
+        log_warn("failed to create reaper thread");
         return;
     }
 
@@ -1534,7 +1544,7 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (!_ws_state_init()) {
-        log_warn("WS init failed");
+        log_warn("init failed");
         return false;
     }
 
@@ -1797,7 +1807,7 @@ _ws_mgr_read_as(
             return -EINTR;
         }
 
-        // Capture sequence under ws_lock to avoid sleeping past an already queued event.
+        // capture sequence under ws_lock to avoid sleeping past an already queued event
         wait_seq = sched_wait_seq(&ws_state.mgr_wait);
         mutex_unlock(&ws_lock);
 
@@ -1983,6 +1993,7 @@ void ws_notify_screen_active(void) {
 
     for (u32 i = 0; i < vec_size(ws_state.windows); i++) {
         ws_window_t *window = _window_slot(i);
+
         if (!window || !window->allocated) {
             continue;
         }
@@ -2010,19 +2021,23 @@ static short _ws_window_poll_as(
 
     ws_window_t *window = NULL;
     int status = _window_lookup(id, caller_pid, &window);
+
     if (status == -ENOENT) {
         mutex_unlock(&ws_lock);
         return POLLHUP;
     }
+
     if (status) {
         mutex_unlock(&ws_lock);
         return POLLNVAL;
     }
 
     short revents = 0;
+
     if ((events & POLLIN) && (!for_ev || ring_queue_count(window->ev_queue))) {
         revents |= POLLIN;
     }
+
     if (!for_ev && (events & POLLOUT)) {
         revents |= POLLOUT;
     }
@@ -2073,6 +2088,7 @@ _ws_ev_read_as(
 
         ws_window_t *window = NULL;
         int status = _window_lookup(id, caller_pid, &window);
+
         if (status) {
             mutex_unlock(&ws_lock);
             return status;
@@ -2082,6 +2098,7 @@ _ws_ev_read_as(
 
         while (copied < max_events && ring_queue_count(window->ev_queue) > 0) {
             ws_input_event_t *slot = ring_queue_at(window->ev_queue, 0);
+
             if (!slot) {
                 mutex_unlock(&ws_lock);
                 return -EIO;

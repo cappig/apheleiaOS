@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <stdlib.h>
+#include <sys/procfs.h>
 #include <sys/pty.h>
 #include <sys/tty.h>
 
@@ -261,6 +262,10 @@ int sched_fd_close(sched_thread_t *thread, int fd) {
 
     sched_fd_reset(&thread->fds[fd]);
     sched_fd_release_value(&old);
+
+    if (old.kind == SCHED_FD_VFS) {
+        procfs_sweep_dead();
+    }
 
     return 0;
 }

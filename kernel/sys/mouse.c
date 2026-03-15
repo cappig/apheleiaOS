@@ -243,6 +243,6 @@ u8 mouse_register(const char *name) {
         return 0;
     }
 
-    log_debug("registered %s", mse->name ? mse->name : "device");
+    log_debug("registered mouse %s", mse->name ? mse->name : "device");
     return (u8)(mice->size - 1);
 }

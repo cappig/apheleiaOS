@@ -156,7 +156,7 @@ static void _dump_regs_from_state(const arch_int_state_t *state) {
     }
 
 #if defined(__x86_64__)
-    log_fatal("Registers:");
+    log_fatal("register dump");
     log_fatal(
         "  RIP=%#018" PRIx64 " RSP=%#018" PRIx64 " RFLAGS=%#018" PRIx64
         " CS=%#06" PRIx64 " SS=%#06" PRIx64,
@@ -197,7 +197,7 @@ static void _dump_regs_from_state(const arch_int_state_t *state) {
         state->g_regs.r15
     );
 #else
-    log_fatal("Registers:");
+    log_fatal("register dump");
     log_fatal(
         "  EIP=%#010" PRIx32 " ESP=%#010" PRIx32 " EFLAGS=%#010" PRIx32
         " CS=%#06" PRIx32 " SS=%#06" PRIx32,
@@ -305,7 +305,7 @@ static void _dump_regs_snapshot(void) {
     reg_snapshot_t regs = {0};
     _capture_regs(&regs);
 
-    log_fatal("Registers:");
+    log_fatal("register dump");
     log_fatal(
         "  RIP=%#018" PRIx64 " RSP=%#018" PRIx64 " RFLAGS=%#018" PRIx64
         " CS=%#06" PRIx64 " SS=%#06" PRIx64,
@@ -403,7 +403,7 @@ static void _dump_regs_snapshot(void) {
     reg_snapshot_t regs = {0};
     _capture_regs(&regs);
 
-    log_fatal("Registers:");
+    log_fatal("register dump");
     log_fatal(
         "  EIP=%#010" PRIx32 " ESP=%#010" PRIx32 " EFLAGS=%#010" PRIx32
         " CS=%#06" PRIx32 " SS=%#06" PRIx32,

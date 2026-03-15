@@ -12,7 +12,7 @@ typedef struct stack_frame {
 } stack_frame_t;
 
 static void _dump_stack_from(stack_frame_t *frame) {
-    log_info("Stack trace:");
+    log_info("stack trace");
 
     for (size_t i = 0; frame && i < STACKTRACE_MAX; i++) {
         uintptr_t ret = frame->ret;

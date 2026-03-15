@@ -58,7 +58,7 @@ void get_e820(e820_map_t *mmap) {
 
     e820_mmap = mmap;
 
-    printf("Got %d e820 memory regions from BIOS\n\r", mmap->count);
+    // printf("e820 regions=%d\n\r", mmap->count);
 }
 
 
@@ -76,26 +76,26 @@ void get_rsdp(u64 *rsdp) {
         }
 
         if (!strncmp((char *)(uintptr_t)addr, "RSD PTR ", 8)) {
-            printf("RSDP is at %#p\n\r", addr);
+            // printf("RSDP at %#p\n\r", addr);
             *rsdp = addr;
 
             return;
         }
     }
 
-    printf("No RSDP found\n\r");
+    // printf("no RSDP found\n\r");
 }
 
 
 void *mmap_alloc(size_t size, int type, size_t alignment) {
     if (!size) {
-        panic("Attempetd to allocate zero bytes!");
+        panic("attempted to allocate zero bytes");
     }
 
     void *ret = mmap_alloc_inner(e820_mmap, size, type, alignment, (size_t)-1);
 
     if (!ret) {
-        panic("Out of memory!");
+        panic("out of memory");
     }
 
     return ret;
@@ -103,13 +103,13 @@ void *mmap_alloc(size_t size, int type, size_t alignment) {
 
 void *mmap_alloc_top(size_t size, int type, size_t alignment, u64 top) {
     if (!size) {
-        panic("Attempetd to allocate zero bytes!");
+        panic("attempted to allocate zero bytes");
     }
 
     void *ret = mmap_alloc_inner(e820_mmap, size, type, alignment, top);
 
     if (!ret) {
-        panic("Out of memory!");
+        panic("out of memory");
     }
 
     return ret;
@@ -129,7 +129,7 @@ static void *_balloc(size_t size) {
 
 static void _bfree(void *ptr) {
     if (mmap_free_inner(e820_mmap, ptr)) {
-        panic("Attempted to free non allocated memory!");
+        panic("attempted to free non-allocated memory");
     }
 }
 

@@ -866,7 +866,11 @@ bool disk_register(disk_dev_t *dev) {
         _publish_partition_nodes(dev);
     }
 
-    log_debug("registered %s (%zu)", dev->name ? dev->name : "disk", dev->id);
+    log_debug(
+        "registered disk %s (id=%zu)",
+        dev->name ? dev->name : "disk",
+        dev->id
+    );
     dump_partitions(dev);
     mutex_unlock(&disk_registry_lock);
     return true;

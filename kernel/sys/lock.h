@@ -9,12 +9,6 @@
 struct sched_wait_queue;
 extern volatile uint32_t lock_spin_held_depth[MAX_CORES];
 
-#if defined(DEBUG) || defined(LOCK_DEBUG_FORCE)
-#define LOCK_DEBUG 1
-#else
-#define LOCK_DEBUG 0
-#endif
-
 typedef struct {
     volatile int state;
 #if LOCK_DEBUG
@@ -48,6 +42,7 @@ void lock_preempt_enable(void);
 
 static inline size_t lock_cpu_id(void) {
     cpu_core_t *core = cpu_current();
+
     if (!core || core->id >= MAX_CORES) {
         return 0;
     }
@@ -79,12 +74,15 @@ static inline bool spin_try_lock(spinlock_t *lock) {
     }
 
     size_t cpu_id = lock_cpu_id();
+
 #if LOCK_DEBUG
     lock->owner_cpu = cpu_id;
 #endif
+
     __atomic_fetch_add(
         &lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED
     );
+
     return true;
 }
 
@@ -123,18 +121,23 @@ static inline void spin_unlock(spinlock_t *lock) {
     }
 
     size_t cpu_id = lock_cpu_id();
+
 #if LOCK_DEBUG
     if (lock->owner_cpu != cpu_id) {
         __builtin_trap();
     }
+
     lock->owner_cpu = (size_t)-1;
 #endif
+
     uint32_t depth_prev =
         __atomic_fetch_sub(&lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED);
+
     if (!depth_prev) {
         __atomic_fetch_add(
             &lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED
         );
+
 #if LOCK_DEBUG
         __builtin_trap();
 #endif

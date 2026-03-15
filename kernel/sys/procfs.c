@@ -1,5 +1,6 @@
 #include "procfs.h"
 
+#include <data/list.h>
 #include <errno.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
@@ -31,10 +32,79 @@ typedef enum {
 
 static vfs_node_t *proc_root = NULL;
 static mutex_t procfs_tree_lock = MUTEX_INIT;
+static linked_list_t *procfs_dead_nodes = NULL;
 
 
 static uintptr_t _proc_key(pid_t pid, proc_field_t field) {
     return ((((uintptr_t)(u32)pid) & 0xffffffffULL) << 8) | (uintptr_t)field;
+}
+
+static void _procfs_dead_add(vfs_node_t *node) {
+    if (!node) {
+        return;
+    }
+
+    if (!procfs_dead_nodes) {
+        procfs_dead_nodes = list_create();
+        if (!procfs_dead_nodes) {
+            return;
+        }
+    }
+
+    if (list_find(procfs_dead_nodes, node)) {
+        return;
+    }
+
+    list_node_t *entry = list_create_node(node);
+    if (!entry) {
+        return;
+    }
+
+    if (!list_append(procfs_dead_nodes, entry)) {
+        list_destroy_node(entry);
+    }
+}
+
+static bool _procfs_subtree_has_refs(tree_node_t *tnode) {
+    if (!tnode) {
+        return false;
+    }
+
+    vfs_node_t *node = tnode->data;
+    if (node && sched_fd_refs_node(node)) {
+        return true;
+    }
+
+    if (!tnode->children) {
+        return false;
+    }
+
+    ll_foreach(child, tnode->children) {
+        tree_node_t *child_tnode = child->data;
+        if (_procfs_subtree_has_refs(child_tnode)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void _procfs_prune_tree(tree_node_t *tnode) {
+    if (!tnode) {
+        return;
+    }
+
+    if (tnode->children) {
+        ll_foreach(child, tnode->children) {
+            tree_node_t *child_tnode = child->data;
+            _procfs_prune_tree(child_tnode);
+        }
+    }
+
+    vfs_node_t *node = tnode->data;
+    if (node) {
+        vfs_destroy_node(node);
+    }
 }
 
 static proc_field_t _proc_key_field(uintptr_t key) {
@@ -1009,8 +1079,57 @@ void procfs_register_pid(pid_t pid) {
     mutex_unlock(&procfs_tree_lock);
 }
 
+void procfs_sweep_dead(void) {
+    if (!procfs_dead_nodes || !procfs_dead_nodes->length) {
+        return;
+    }
+
+    mutex_lock(&procfs_tree_lock);
+
+    list_node_t *node = procfs_dead_nodes->head;
+    while (node) {
+        list_node_t *next = node->next;
+        vfs_node_t *dir = node->data;
+        tree_node_t *entry = dir ? dir->tree_entry : NULL;
+
+        if (!dir || !entry || !_procfs_subtree_has_refs(entry)) {
+            list_remove(procfs_dead_nodes, node);
+            list_destroy_node(node);
+
+            if (dir && entry) {
+                _procfs_prune_tree(entry);
+            }
+        }
+
+        node = next;
+    }
+
+    mutex_unlock(&procfs_tree_lock);
+}
+
 void procfs_unregister_pid(pid_t pid) {
-    // Keep per-pid procfs nodes stable after open. VFS nodes are not refcounted
-    // yet, so unlinking a live /proc/<pid>/... node can invalidate open FDs.
-    (void)pid;
+    if (pid <= 0 || !proc_root) {
+        return;
+    }
+
+    char pid_name[24];
+    snprintf(pid_name, sizeof(pid_name), "%lld", (long long)pid);
+
+    mutex_lock(&procfs_tree_lock);
+
+    vfs_node_t *proc_dir = vfs_lookup_from(proc_root, pid_name);
+    if (!proc_dir) {
+        mutex_unlock(&procfs_tree_lock);
+        return;
+    }
+
+    if (!vfs_detach_child(proc_root, proc_dir)) {
+        mutex_unlock(&procfs_tree_lock);
+        return;
+    }
+
+    _procfs_dead_add(proc_dir);
+    mutex_unlock(&procfs_tree_lock);
+
+    procfs_sweep_dead();
 }

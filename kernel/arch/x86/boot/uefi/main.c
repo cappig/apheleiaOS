@@ -14,6 +14,8 @@
 static EFI_SYSTEM_TABLE *g_st = NULL;
 static EFI_BOOT_SERVICES *g_bs = NULL;
 static page_t *g_lvl4 = NULL;
+static char boot_log_buf[BOOT_LOG_CAP];
+static size_t boot_log_len = 0;
 
 static const EFI_GUID loaded_image_guid = {
     0x5b1b31a1,
@@ -52,8 +54,29 @@ static const EFI_GUID acpi2_guid = {
     {0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81}
 };
 
+static void _boot_log_append(const CHAR16 *s) {
+    if (!s) {
+        return;
+    }
+
+    while (*s) {
+        if (boot_log_len >= BOOT_LOG_CAP) {
+            return;
+        }
+
+        CHAR16 c = *s++;
+        boot_log_buf[boot_log_len++] = (c <= 0x7f) ? (char)c : '?';
+    }
+}
+
 static void _uefi_puts(const CHAR16 *s) {
-    if (!s || !g_st || !g_st->ConOut || !g_st->ConOut->OutputString) {
+    if (!s) {
+        return;
+    }
+
+    _boot_log_append(s);
+
+    if (!g_st || !g_st->ConOut || !g_st->ConOut->OutputString) {
         return;
     }
 
@@ -770,7 +793,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
         return EFI_LOAD_ERROR;
     }
 
-    _uefi_puts((const CHAR16 *)L"apheleiaOS UEFI: start\r\n");
+    _uefi_puts((const CHAR16 *)L"UEFI boot starting\r\n");
 
     if (g_bs->SetWatchdogTimer) {
         g_bs->SetWatchdogTimer(0, 0, 0, NULL);
@@ -790,9 +813,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     );
 
     if (efi_error(status)) {
-        _uefi_puts(
-            (const CHAR16 *)L"apheleiaOS: failed to open kernel64.elf\r\n"
-        );
+        _uefi_puts((const CHAR16 *)L"failed to open kernel64.elf\r\n");
         return status;
     }
 
@@ -801,12 +822,14 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
     if (efi_error(status)) {
         return _uefi_fail(
-            (const CHAR16 *)L"apheleiaOS: alloc boot info failed: ", status
+            (const CHAR16 *)L"boot info allocation failed ", status
         );
     }
 
     boot_info_t *info = (boot_info_t *)(uintptr_t)info_phys;
     uefi_mem_zero(info, sizeof(*info));
+    info->boot_log_paddr = (u64)(uintptr_t)boot_log_buf;
+    info->boot_log_cap = BOOT_LOG_CAP;
 
     EFI_PHYSICAL_ADDRESS smp_trampoline = 0;
     status = _alloc_pages_below(1, 0x000FFFFFULL, &smp_trampoline);
@@ -823,28 +846,28 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     status = _alloc_table(&g_lvl4);
     if (efi_error(status)) {
         return _uefi_fail(
-            (const CHAR16 *)L"apheleiaOS: alloc page tables failed: ", status
+            (const CHAR16 *)L"page table allocation failed ", status
         );
     }
 
     status = _map_identity_and_linear();
     if (efi_error(status)) {
         return _uefi_fail(
-            (const CHAR16 *)L"apheleiaOS: map low memory failed: ", status
+            (const CHAR16 *)L"low memory map failed ", status
         );
     }
 
     status = _map_loader_runtime(image);
     if (efi_error(status)) {
         return _uefi_fail(
-            (const CHAR16 *)L"apheleiaOS: map loader runtime failed: ", status
+            (const CHAR16 *)L"loader runtime map failed ", status
         );
     }
 
     status = _map_framebuffer_linear(info);
     if (efi_error(status)) {
         return _uefi_fail(
-            (const CHAR16 *)L"apheleiaOS: map framebuffer failed: ", status
+            (const CHAR16 *)L"framebuffer map failed ", status
         );
     }
 
@@ -852,9 +875,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     status = _load_kernel_elf(kernel_file, kernel_file_size, &kernel_entry);
 
     if (efi_error(status)) {
-        _uefi_puts(
-            (const CHAR16 *)L"apheleiaOS: failed to load kernel ELF\r\n"
-        );
+        _uefi_puts((const CHAR16 *)L"failed to load kernel ELF\r\n");
         return status;
     }
 
@@ -863,7 +884,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     status = _alloc_pages_low(stack_pages, &stack_phys);
     if (efi_error(status)) {
         return _uefi_fail(
-            (const CHAR16 *)L"apheleiaOS: alloc kernel stack failed: ", status
+            (const CHAR16 *)L"kernel stack allocation failed ", status
         );
     }
 
@@ -886,7 +907,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
         if (efi_error(status)) {
             return _uefi_fail(
-                (const CHAR16 *)L"apheleiaOS: get memory map failed: ", status
+                (const CHAR16 *)L"memory map fetch failed ", status
             );
         }
 
@@ -898,10 +919,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
     if (efi_error(status)) {
         return _uefi_fail(
-            (const CHAR16 *)L"apheleiaOS: ExitBootServices failed: ", status
+            (const CHAR16 *)L"ExitBootServices failed ", status
         );
     }
 
+    info->boot_log_len = (u32)boot_log_len;
     pat_init();
 
     write_cr3((u64)(uintptr_t)g_lvl4);

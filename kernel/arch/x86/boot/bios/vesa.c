@@ -202,7 +202,7 @@ void init_graphics(boot_info_t *info) {
         video->width = min(args->vesa_width, edid->monitor_width);
         video->height = min(args->vesa_height, edid->monitor_height);
 
-        printf("detected monitor: %dx%d\n\r", video->width, video->height);
+        printf("detected monitor %dx%d\n\r", video->width, video->height);
     }
 
     if (info->args.video == VIDEO_GRAPHICS) {
@@ -224,7 +224,7 @@ void init_graphics(boot_info_t *info) {
             video->blue_size = vesa.blue.mask;
 
             printf(
-                "video output: graphics %hdx%hd\n\r",
+                "video output graphics %hdx%hd\n\r",
                 video->width,
                 video->height
             );
@@ -233,5 +233,5 @@ void init_graphics(boot_info_t *info) {
         }
     }
 
-    printf("video output: vga text\n\r");
+    printf("video output vga text\n\r");
 }

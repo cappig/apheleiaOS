@@ -185,7 +185,7 @@ static void *_map_mmio(u64 paddr) {
     apic_mmio_next_vaddr += APIC_MMIO_STRIDE_32;
 
     if (apic_mmio_next_vaddr >= PHYS_WINDOW_BASE_32) {
-        log_warn("apic MMIO mapping space exhausted");
+        log_warn("MMIO mapping space exhausted");
         return NULL;
     }
 

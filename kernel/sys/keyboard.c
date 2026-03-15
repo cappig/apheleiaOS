@@ -357,6 +357,6 @@ u8 keyboard_register(const char *name, ascii_keymap *keymap) {
         return 0;
     }
 
-    log_debug("registered %s", kbd->name ? kbd->name : "device");
+    log_debug("registered keyboard %s", kbd->name ? kbd->name : "device");
     return (u8)(kbds->size - 1);
 }

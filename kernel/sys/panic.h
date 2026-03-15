@@ -11,7 +11,7 @@ void panic_dump_state(const arch_int_state_t *state);
 #define panic(...)                              \
     ({                                          \
         panic_prepare();                        \
-        log_fatal("Kernel panic: "__VA_ARGS__); \
+        log_fatal("kernel panic "__VA_ARGS__); \
         panic_dump_state(NULL);                 \
         panic_halt();                           \
     })
@@ -21,5 +21,5 @@ void panic_dump_state(const arch_int_state_t *state);
         typeof(expression) __as_e = (expression);       \
                                                         \
         if (UNLIKELY(!__as_e))                          \
-            panic("Assertion failed: %s", #expression); \
+            panic("assertion failed (%s)", #expression); \
     })

@@ -2,15 +2,15 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 static const char *lvl_strings[6] =
-    {"NONE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"};
+    {"none", "debug", "info", "warn", "error", "fatal"};
 static const char *lvl_colors[6] = {"37", "36", "32", "33", "31", "41;97"};
 
 static int min_log_lvl = LOG_DEBUG;
 
 static puts_fn puts_ptr = NULL;
-
 
 void vslog(
     char *restrict buf,
@@ -24,15 +24,25 @@ void vslog(
         return;
     }
 
+#ifndef LOG_HIDE_LOCATION
     int prefix = snprintf(
         buf,
         LOG_BUF_SIZE,
-        "\x1b[%s;1m%-5s\x1b[0;2;37m %s:%d:\x1b[0m ",
+        "\x1b[%s;1m%-5s\x1b[0m \x1b[90m%s:%d\x1b[0m ",
         lvl_colors[lvl],
         lvl_strings[lvl],
         file,
         line
     );
+#else
+    int prefix = snprintf(
+        buf,
+        LOG_BUF_SIZE,
+        "\x1b[%s;1m%-5s\x1b[0m ",
+        lvl_colors[lvl],
+        lvl_strings[lvl]
+    );
+#endif
 
     if (prefix < 0) {
         return;

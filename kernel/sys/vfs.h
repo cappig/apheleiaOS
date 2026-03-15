@@ -162,6 +162,7 @@ bool vfs_chown(vfs_node_t *node, uid_t uid, gid_t gid);
 bool vfs_link(const char *target, const char *link_path);
 MUST_USE bool vfs_unlink(const char *path);
 MUST_USE bool vfs_rmdir(const char *path);
+bool vfs_detach_child(vfs_node_t *parent, vfs_node_t *child);
 bool vfs_rename(const char *old_path, const char *new_path);
 
 bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child);

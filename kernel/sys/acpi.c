@@ -190,7 +190,7 @@ void dump_acpi_tables(void) {
         return;
     }
 
-    log_debug("dump of %s tables:", acpi_xsdt ? "XSDT" : "RSDT");
+    log_debug("detected %s tables", acpi_xsdt ? "XSDT" : "RSDT");
 
     ll_foreach(node, acpi_tables) {
         sdt_header_t *header = node->data;
@@ -199,6 +199,6 @@ void dump_acpi_tables(void) {
             continue;
         }
 
-        log_debug("[ id: %.4s oem: %.6s ]", header->signature, header->oem_id);
+        log_debug("[ id=%.4s oem=%.6s ]", header->signature, header->oem_id);
     }
 }

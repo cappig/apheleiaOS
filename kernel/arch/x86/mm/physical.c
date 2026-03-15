@@ -2,6 +2,7 @@
 
 #include <alloc/bitmap.h>
 #include <base/macros.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <log/log.h>
 #include <stdlib.h>
@@ -46,7 +47,7 @@ static void _pmm_ref_set_range(void *ptr, size_t blocks, u16 value) {
 
 
 void pmm_init(e820_map_t *mmap) {
-    log_debug("initializing PMM");
+    log_debug("initializing physical memory manager");
     unsigned long irq_flags = spin_lock_irqsave(&pmm_lock);
 
     if (!bitmap_alloc_init_mmap(&frame_alloc, mmap, PAGE_4KIB)) {
@@ -132,7 +133,9 @@ void *alloc_frames(size_t count) {
 
 #ifdef MMU_DEBUG
     log_debug(
-        "[MMU DEBUG] allocated %zu new frames: paddr = %#lx", count, (u64)ret
+        "[MMU DEBUG] allocated %zu new frames paddr=%#" PRIx64,
+        count,
+        (u64)(uintptr_t)ret
     );
 #endif
 
@@ -154,9 +157,9 @@ void *alloc_frames_high(size_t count) {
 
 #ifdef MMU_DEBUG
     log_debug(
-        "[MMU DEBUG] allocated %zu new frames (high): paddr = %#lx",
+        "[MMU DEBUG] allocated %zu new frames (high) paddr=%#" PRIx64,
         count,
-        (u64)ret
+        (u64)(uintptr_t)ret
     );
 #endif
 
@@ -208,7 +211,11 @@ void free_frames(void *ptr, size_t size) {
     }
 
 #ifdef MMU_DEBUG
-    log_debug("[MMU DEBUG] freed %zu frames: paddr = %#lx", size, (u64)ptr);
+    log_debug(
+        "[MMU DEBUG] freed %zu frames paddr=%#" PRIx64,
+        size,
+        (u64)(uintptr_t)ptr
+    );
 #endif
 
     spin_unlock_irqrestore(&pmm_lock, irq_flags);

@@ -97,7 +97,7 @@ static driver_err_t _driver_load_entry(size_t index) {
     entry->loading = false;
 
     if (err == DRIVER_OK) {
-        log_debug("driver loaded: %s", desc->name);
+        log_debug("driver loaded %s", desc->name);
     }
 
     return err;
@@ -213,7 +213,7 @@ driver_err_t driver_unload(const char *name) {
     }
 
     entry->loaded = false;
-    log_debug("driver unloaded: %s", desc->name);
+    log_debug("driver unloaded %s", desc->name);
 
     return DRIVER_OK;
 }
@@ -245,7 +245,7 @@ void driver_load_stage(driver_stage_t stage) {
         }
 
         log_warn(
-            "driver stage load failed (%s/%s): %s",
+            "driver stage load failed (%s/%s) error=%s",
             _driver_stage_name(stage),
             desc->name,
             driver_err_string(err)

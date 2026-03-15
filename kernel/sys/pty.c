@@ -662,8 +662,8 @@ void pty_put(size_t index) {
     spin_unlock_irqrestore(&pty_state_lock, irq_flags);
 
     if (hup_pgrp > 0) {
-        (void)sched_signal_send_pgrp(hup_pgrp, SIGHUP);
-        (void)sched_signal_send_pgrp(hup_pgrp, SIGCONT);
+        sched_signal_send_pgrp(hup_pgrp, SIGHUP);
+        sched_signal_send_pgrp(hup_pgrp, SIGCONT);
     }
 }
 

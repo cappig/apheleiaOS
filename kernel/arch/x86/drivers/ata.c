@@ -66,7 +66,7 @@ typedef struct {
     bool irq_enabled;
     bool irq_force_poll;
     bool irq_error;
-    u64 irq_seq;
+    u32 irq_seq;
     u32 irq_timeout_count;
     bool io_busy;
     spinlock_t io_lock;
@@ -135,7 +135,7 @@ static void ata_lock(ata_device_t *dev) {
             u64 elapsed = arch_timer_ticks() - wait_start;
             if (hz && elapsed > hz * 2ULL) {
                 log_warn(
-                    "ata lock wait >2s io=%#x ctrl=%#x busy=%d",
+                    "lock wait >2s io=%#x ctrl=%#x busy=%d",
                     ch->io_base,
                     ch->ctrl_base,
                     ch->io_busy ? 1 : 0
@@ -170,7 +170,7 @@ static void ata_unlock(ata_device_t *dev) {
     }
 }
 
-static u64 ata_irq_seq_load(const ata_channel_t *ch) {
+static u32 ata_irq_seq_load(const ata_channel_t *ch) {
     if (!ch) {
         return 0;
     }
@@ -186,18 +186,19 @@ static bool ata_irq_error_exchange_clear(ata_channel_t *ch) {
     return __atomic_exchange_n(&ch->irq_error, false, __ATOMIC_ACQ_REL);
 }
 
-static u64 ata_irq_snapshot(ata_device_t *dev) {
+static u32 ata_irq_snapshot(ata_device_t *dev) {
     if (!dev || !dev->channel) {
         return 0;
     }
 
     ata_channel_t *ch = dev->channel;
-    u64 seq = ata_irq_seq_load(ch);
-    (void)ata_irq_error_exchange_clear(ch);
+    u32 seq = ata_irq_seq_load(ch);
+    ata_irq_error_exchange_clear(ch);
+
     return seq;
 }
 
-static bool ata_wait_irq_event(ata_device_t *dev, u64 *seq) {
+static bool ata_wait_irq_event(ata_device_t *dev, u32 *seq) {
     if (!dev || !dev->channel || !seq) {
         return false;
     }
@@ -210,16 +211,19 @@ static bool ata_wait_irq_event(ata_device_t *dev, u64 *seq) {
     u64 start = arch_timer_ticks();
     u64 timeout = ms_to_ticks(ATA_IRQ_TIMEOUT_MS);
     u64 max_wait = ms_to_ticks(ATA_IRQ_MAX_WAIT_MS);
+
     if (!timeout) {
         timeout = 1;
     }
+
     if (!max_wait) {
         max_wait = timeout;
     }
+
     bool timeout_warned = false;
 
     for (;;) {
-        u64 now = ata_irq_seq_load(ch);
+        u32 now = ata_irq_seq_load(ch);
         if (now != *seq) {
             *seq = now;
             return !ata_irq_error_exchange_clear(ch);
@@ -240,20 +244,20 @@ static bool ata_wait_irq_event(ata_device_t *dev, u64 *seq) {
 
             if (!timeout_warned) {
                 log_warn(
-                    "ata irq delayed io=%#x ctrl=%#x seq=%llu",
+                    "irq delayed io=%#x ctrl=%#x seq=%u",
                     ch->io_base,
                     ch->ctrl_base,
-                    (unsigned long long)*seq
+                    (unsigned)*seq
                 );
                 timeout_warned = true;
             }
 
             if (elapsed >= max_wait) {
                 log_warn(
-                    "ata irq timeout io=%#x ctrl=%#x seq=%llu, switching to poll mode",
+                    "irq timeout io=%#x ctrl=%#x seq=%u, switching to poll mode",
                     ch->io_base,
                     ch->ctrl_base,
-                    (unsigned long long)*seq
+                    (unsigned)*seq
                 );
                 ch->irq_timeout_count++;
                 ch->irq_force_poll = true;
@@ -286,9 +290,11 @@ static bool ata_wait_irq_event(ata_device_t *dev, u64 *seq) {
                 deadline,
                 SCHED_WAIT_INTERRUPTIBLE
             );
+
             if (wait_result == SCHED_WAIT_INTR) {
                 return false;
             }
+
             continue;
         }
 
@@ -352,7 +358,7 @@ static bool ata_wait_ready(ata_device_t *dev) {
     return false;
 }
 
-static bool ata_wait_drq(ata_device_t *dev, u64 *seq) {
+static bool ata_wait_drq(ata_device_t *dev, u32 *seq) {
     if (!dev || !dev->channel) {
         return false;
     }
@@ -386,7 +392,7 @@ static bool ata_wait_drq(ata_device_t *dev, u64 *seq) {
     }
 }
 
-static bool ata_wait_ready_event(ata_device_t *dev, u64 *seq) {
+static bool ata_wait_ready_event(ata_device_t *dev, u32 *seq) {
     if (!dev || !dev->channel) {
         return false;
     }
@@ -543,7 +549,7 @@ atapi_read_sectors(ata_device_t *dev, u32 lba, u16 count, void *buffer) {
             dev->channel->io_base + ATA_REG_LBA2, (u8)(ATAPI_SECTOR_SIZE >> 8)
         );
 
-        u64 seq = ata_irq_snapshot(dev);
+        u32 seq = ata_irq_snapshot(dev);
 
         outb(dev->channel->io_base + ATA_REG_COMMAND, ATA_CMD_PACKET);
 
@@ -601,7 +607,7 @@ ata_read_sectors(ata_device_t *dev, u32 lba, u8 count, u16 *buffer) {
     outb(dev->channel->io_base + ATA_REG_LBA1, (u8)((lba >> 8) & 0xff));
     outb(dev->channel->io_base + ATA_REG_LBA2, (u8)((lba >> 16) & 0xff));
 
-    u64 seq = ata_irq_snapshot(dev);
+    u32 seq = ata_irq_snapshot(dev);
 
     outb(dev->channel->io_base + ATA_REG_COMMAND, ATA_CMD_READ_PIO);
 
@@ -637,7 +643,7 @@ ata_write_sectors(ata_device_t *dev, u32 lba, u8 count, const u16 *buffer) {
     outb(dev->channel->io_base + ATA_REG_LBA1, (u8)((lba >> 8) & 0xff));
     outb(dev->channel->io_base + ATA_REG_LBA2, (u8)((lba >> 16) & 0xff));
 
-    u64 seq = ata_irq_snapshot(dev);
+    u32 seq = ata_irq_snapshot(dev);
 
     outb(dev->channel->io_base + ATA_REG_COMMAND, ATA_CMD_WRITE_PIO);
 
@@ -994,7 +1000,7 @@ ata_probe_device(ata_channel_t *ch, bool is_master, size_t dev_index) {
     }
 
     if (found_atapi) {
-        log_info("%s: ATAPI CD-ROM", ata_pos_names[dev_index]);
+        log_info("ATAPI CD-ROM on %s", ata_pos_names[dev_index]);
     } else {
         log_info(
             "%s ready (%zu sectors)",
@@ -1043,8 +1049,7 @@ ata_probe_channel(u16 io_base, u16 ctrl_base, bool is_primary, bool use_irq) {
         ata_channel_irq_done[ch_index] = true;
     }
 
-    // 0 = primary master, 1 = primary slave, 2 = secondary master, 3 =
-    // secondary slave
+    // 0 = primary master, 1 = primary slave, 2 = secondary master, 3 = secondary slave
     size_t master_index = is_primary ? 0 : 2;
     size_t slave_index = master_index + 1;
 
@@ -1239,6 +1244,7 @@ driver_err_t ata_driver_unload(void) {
     if (ata_channel_irq_done[0]) {
         irq_unregister(IRQ_PRIMARY_ATA);
     }
+
     if (ata_channel_irq_done[1]) {
         irq_unregister(IRQ_SECONDARY_ATA);
     }

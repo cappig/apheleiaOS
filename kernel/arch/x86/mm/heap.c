@@ -4,6 +4,7 @@
 #include <alloc/bitmap.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <inttypes.h>
 #include <log/log.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -184,7 +185,7 @@ static heap_arena_t *_find_arena_by_ptr(const void *ptr) {
 
 
 void heap_init() {
-    log_debug("initializing heap");
+    log_debug("initializing kernel heap");
     unsigned long irq_flags = spin_lock_irqsave(&heap_lock);
     size_t free_pages = pmm_free_mem() / PAGE_4KIB;
 
@@ -206,7 +207,7 @@ void heap_init() {
 static void *_kmalloc(size_t size) {
     if (!size) {
 #ifdef KMALLOC_DEBUG
-        log_warn("[KMALLOC_DEBUG] malloc: bytes = 0");
+        log_warn("[KMALLOC_DEBUG] malloc bytes=0");
 #endif
         return NULL;
     }
@@ -235,7 +236,7 @@ static void *_kmalloc(size_t size) {
 
     if (!space) {
         if (!_grow(total_blocks)) {
-            panic("kmalloc: out of heap memory (requested=%zu bytes)", size);
+            panic("kmalloc out of heap memory (requested=%zu bytes)", size);
         }
 
         heap_arena_t *arena = &heap_arenas[heap_arena_count - 1];
@@ -244,7 +245,7 @@ static void *_kmalloc(size_t size) {
 
     if (!space) {
         panic(
-            "kmalloc: out of heap memory after _grow (requested=%zu bytes)",
+            "kmalloc out of heap memory after _grow (requested=%zu bytes)",
             size
         );
     }
@@ -259,7 +260,9 @@ static void *_kmalloc(size_t size) {
 
 #ifdef KMALLOC_DEBUG
     log_debug(
-        "[KMALLOC_DEBUG] malloc: bytes = %zd, ptr = %#lx", size, (u64)ret
+        "[KMALLOC_DEBUG] malloc bytes=%zd ptr=%#" PRIx64,
+        size,
+        (u64)(uintptr_t)ret
     );
 #endif
 
@@ -270,7 +273,7 @@ static void *_kmalloc(size_t size) {
 static void _kfree(void *ptr) {
     if (!ptr) {
 #ifdef KMALLOC_DEBUG
-        log_warn("[KMALLOC_DEBUG] free: ptr = NULL");
+        log_warn("[KMALLOC_DEBUG] free ptr is NULL");
 #endif
         return;
     }
@@ -279,7 +282,7 @@ static void _kfree(void *ptr) {
     kheap_header *header = (kheap_header *)((u8 *)ptr - sizeof(kheap_header));
 
     if (header->magic != KERNEL_HEAP_MAGIC) {
-        panic("kfree: invalid heap header");
+        panic("kfree invalid heap header");
     }
 
     size_t header_blocks =
@@ -289,14 +292,18 @@ static void _kfree(void *ptr) {
     heap_arena_t *arena = _find_arena_by_ptr(header);
 
     if (!arena) {
-        panic("kfree: pointer does not belong to any heap arena");
+        panic("kfree pointer does not belong to any heap arena");
     }
 
     bitmap_alloc_free(&arena->alloc, header, blocks);
 
 #ifdef KMALLOC_DEBUG
     size_t size = header->size * KERNEL_HEAP_BLOCK_SIZE;
-    log_debug("[KMALLOC_DEBUG] free: bytes = %zd, ptr = %#lx", size, (u64)ptr);
+    log_debug(
+        "[KMALLOC_DEBUG] free bytes=%zd ptr=%#" PRIx64,
+        size,
+        (u64)(uintptr_t)ptr
+    );
 #endif
 
     spin_unlock_irqrestore(&heap_lock, irq_flags);
@@ -304,7 +311,7 @@ static void _kfree(void *ptr) {
 
 
 void arch_init_alloc() {
-    log_debug("initializing malloc");
+    log_debug("initializing kernel malloc");
 
     libc_alloc_ops_t ops = {
         .malloc_fn = _kmalloc,

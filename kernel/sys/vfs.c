@@ -222,6 +222,19 @@ static bool _remove_child(vfs_node_t *parent, vfs_node_t *child) {
     return true;
 }
 
+static bool _detach_child(vfs_node_t *parent, vfs_node_t *child) {
+    if (!parent || !child || !parent->tree_entry || !child->tree_entry) {
+        return false;
+    }
+
+    if (!tree_remove_child(parent->tree_entry, child->tree_entry)) {
+        return false;
+    }
+
+    _child_index_remove(parent, child->name);
+    return true;
+}
+
 static bool _split_path(const char *path, char **dir_out, char **base_out) {
     if (!path || !dir_out || !base_out) {
         return false;
@@ -935,6 +948,22 @@ bool vfs_rmdir(const char *path) {
     return ok;
 }
 
+bool vfs_detach_child(vfs_node_t *parent, vfs_node_t *child) {
+    if (!parent || !child) {
+        return false;
+    }
+
+    mutex_lock(&vfs_tree_lock);
+
+    if (VFS_IS_LINK(parent->type)) {
+        parent = parent->link;
+    }
+
+    bool ok = _detach_child(parent, child);
+    mutex_unlock(&vfs_tree_lock);
+    return ok;
+}
+
 bool vfs_rename(const char *old_path, const char *new_path) {
     if (!old_path || !new_path) {
         return false;
@@ -1225,8 +1254,7 @@ static void _dump_recursive(tree_node_t *parent, size_t depth) {
 void dump_vfs(void) {
     assert(vfs);
 
-    log_debug("Recursive dump of the virtual file system:");
-
+    log_debug("recursive dump of the virtual file system:");
     _dump_recursive(vfs->tree->root, 0);
 }
 

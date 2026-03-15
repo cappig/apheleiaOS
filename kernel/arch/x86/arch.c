@@ -119,6 +119,38 @@ static void _log_history_append(const char *s, size_t len) {
     boot_log_history_len += len;
 }
 
+static const char *_boot_log_ptr(u64 paddr) {
+#if defined(__x86_64__)
+    return (const char *)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
+#else
+    return (const char *)(uintptr_t)paddr;
+#endif
+}
+
+static void _append_bootloader_log(const boot_info_t *info) {
+    if (!info || !info->boot_log_paddr || !info->boot_log_len) {
+        return;
+    }
+
+    size_t len = info->boot_log_len;
+    if (info->boot_log_cap && len > info->boot_log_cap) {
+        len = info->boot_log_cap;
+    }
+
+    if (!len) {
+        return;
+    }
+
+    const char *buf = _boot_log_ptr(info->boot_log_paddr);
+    if (!buf) {
+        return;
+    }
+
+    unsigned long flags = spin_lock_irqsave(&boot_log_lock);
+    _log_history_append(buf, len);
+    spin_unlock_irqrestore(&boot_log_lock, flags);
+}
+
 static void _log_history_replay_console(void) {
     if (!log_console_ready || !boot_log_history_len) {
         return;
@@ -558,7 +590,7 @@ static void _page_fault_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
+            "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
             " rip=%#" PRIx64 " rsp=%#" PRIx64 " cs=%#" PRIx64,
             addr,
             code,
@@ -569,7 +601,7 @@ static void _page_fault_handler(int_state_t *state) {
         );
     } else {
         log_fatal(
-            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
+            "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
             addr,
             code,
             cr3
@@ -582,7 +614,7 @@ static void _page_fault_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
+            "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
             " eip=%#" PRIx64 " esp=%#" PRIx64 " cs=%#" PRIx64,
             addr,
             code,
@@ -593,7 +625,7 @@ static void _page_fault_handler(int_state_t *state) {
         );
     } else {
         log_fatal(
-            "page fault: addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
+            "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
             addr,
             code,
             cr3
@@ -622,14 +654,14 @@ static void _gp_fault_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "general protection fault: err=%#" PRIx64 " rip=%#" PRIx64
+            "general protection fault err=%#" PRIx64 " rip=%#" PRIx64
             " cs=%#" PRIx64,
             code,
             rip,
             cs
         );
     } else {
-        log_fatal("general protection fault: err=%#" PRIx64, code);
+        log_fatal("general protection fault err=%#" PRIx64, code);
     }
 #else
     if (state) {
@@ -637,14 +669,14 @@ static void _gp_fault_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal(
-            "general protection fault: err=%#" PRIx64 " eip=%#" PRIx64
+            "general protection fault err=%#" PRIx64 " eip=%#" PRIx64
             " cs=%#" PRIx64,
             code,
             eip,
             cs
         );
     } else {
-        log_fatal("general protection fault: err=%#" PRIx64, code);
+        log_fatal("general protection fault err=%#" PRIx64, code);
     }
 #endif
 
@@ -681,7 +713,7 @@ static void _invalid_opcode_handler(int_state_t *state) {
         u64 rip = state->s_regs.rip;
         u64 cs = state->s_regs.cs;
 
-        log_fatal("invalid opcode: rip=%#" PRIx64 " cs=%#" PRIx64, rip, cs);
+        log_fatal("invalid opcode rip=%#" PRIx64 " cs=%#" PRIx64, rip, cs);
         // log_fatal("fault frame rbp=%#" PRIx64, state->g_regs.rbp);
     } else {
         log_fatal("invalid opcode");
@@ -691,7 +723,7 @@ static void _invalid_opcode_handler(int_state_t *state) {
         u64 eip = state->s_regs.eip;
         u64 cs = state->s_regs.cs;
 
-        log_fatal("invalid opcode: eip=%#" PRIx64 " cs=%#" PRIx64, eip, cs);
+        log_fatal("invalid opcode eip=%#" PRIx64 " cs=%#" PRIx64, eip, cs);
         // log_fatal("fault frame ebp=%#" PRIx32, state->g_regs.ebp);
     } else {
         log_fatal("invalid opcode");
@@ -920,6 +952,7 @@ const kernel_args_t *arch_init(void *boot_info) {
 
     memcpy(&boot_args, &info->args, sizeof(boot_args));
     smp_set_boot_info(info);
+    _append_bootloader_log(info);
 
     boot_rootfs_paddr = info->boot_rootfs_paddr;
     boot_rootfs_size = 0;

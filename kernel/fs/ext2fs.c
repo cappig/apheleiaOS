@@ -1704,7 +1704,10 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     mutex_lock(&priv->lock);
 
     if (!ext2_is_type(&parent_info->inode, EXT2_IT_DIR)) {
-        log_warn("create '%s' failed: parent is not a directory", child->name);
+        log_warn(
+            "failed to create '%s' because parent is not a directory",
+            child->name
+        );
         mutex_unlock(&priv->lock);
         return -1;
     }
@@ -1712,7 +1715,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     u16 inode_type = _vfs_to_inode_type(child->type);
     if (!inode_type) {
         log_warn(
-            "create '%s' failed: unsupported vnode type %u",
+            "failed to create '%s' because vnode type %u is unsupported",
             child->name,
             child->type
         );
@@ -1722,7 +1725,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
 
     u32 inode_num = 0;
     if (!_alloc_inode(priv, part, &inode_num)) {
-        log_warn("create '%s' failed: no free inode", child->name);
+        log_warn("failed to create '%s' because no free inode", child->name);
         mutex_unlock(&priv->lock);
         return -1;
     }
@@ -1742,7 +1745,10 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         u32 block = 0;
 
         if (!_alloc_block(priv, part, &block)) {
-            log_warn("create '%s' failed: no free data block", child->name);
+            log_warn(
+                "failed to create '%s' because no free data block",
+                child->name
+            );
             _free_inode(priv, part, inode_num);
             mutex_unlock(&priv->lock);
             return -1;
@@ -1761,7 +1767,10 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         );
 
         if (!wrote_dots) {
-            log_warn("create '%s' failed: dot entries write", child->name);
+            log_warn(
+                "failed to create '%s' because dot entries write failed",
+                child->name
+            );
             _free_block(priv, part, block);
             _free_inode(priv, part, inode_num);
             mutex_unlock(&priv->lock);
@@ -1770,7 +1779,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     }
 
     if (!_write_inode(priv, part, inode_num, &inode)) {
-        log_warn("create '%s' failed: inode write", child->name);
+        log_warn("failed to create '%s' because inode write failed", child->name);
         _release_inode_blocks(priv, part, &inode);
         _free_inode(priv, part, inode_num);
         mutex_unlock(&priv->lock);
@@ -1789,7 +1798,10 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     );
 
     if (!added_parent_entry) {
-        log_warn("create '%s' failed: parent entry insert", child->name);
+        log_warn(
+            "failed to create '%s' because parent entry insert failed",
+            child->name
+        );
         _release_inode_blocks(priv, part, &inode);
         _clear_inode(priv, part, inode_num);
         _free_inode(priv, part, inode_num);
@@ -1812,21 +1824,25 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     );
 
     if (!wrote_parent_inode) {
-        log_warn("create '%s' failed: parent inode write", child->name);
+        log_warn(
+            "failed to create '%s' because parent inode write failed",
+            child->name
+        );
         mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_update_super_write_time(priv, part, now)) {
         log_warn(
-            "create '%s' failed: superblock write time update", child->name
+            "failed to create '%s' because superblock write time update failed",
+            child->name
         );
         mutex_unlock(&priv->lock);
         return -1;
     }
 
     if (!_init_vnode(child, node->fs, inode_num, &inode)) {
-        log_warn("create '%s' failed: vnode init", child->name);
+        log_warn("failed to create '%s' because vnode init failed", child->name);
         mutex_unlock(&priv->lock);
         return -1;
     }
@@ -1844,7 +1860,10 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     }
 
     if ((child->type == VFS_FILE || child->type == VFS_DIR) && !iface) {
-        log_warn("create '%s' failed: interface alloc", child->name);
+        log_warn(
+            "failed to create '%s' because interface allocation failed",
+            child->name
+        );
         mutex_unlock(&priv->lock);
         return -1;
     }
@@ -1943,13 +1962,9 @@ static bool _build_dir(
             }
 
             ext2_directory_t *entry = (ext2_directory_t *)(block + pos);
-
             size_t entry_size = entry->size;
-            if (entry_size < 8) {
-                break;
-            }
 
-            if (entry_size > block_size - pos) {
+            if (entry_size < 8 || entry_size > block_size - pos) {
                 break;
             }
 
@@ -1958,84 +1973,75 @@ static bool _build_dir(
                 break;
             }
 
-            if (entry->inode && entry->name_size) {
-                size_t name_len = entry->name_size;
-                if (name_len > entry_size - 8) {
-                    pos += entry_size;
-                    continue;
-                }
+            pos += entry_size;
 
-                if (name_len >= 256) {
-                    name_len = 255;
-                }
-
-                char name[256];
-                memcpy(name, entry->name, name_len);
-                name[name_len] = '\0';
-
-                if (strcmp(name, ".") && strcmp(name, "..")) {
-                    ext2_inode_t child_inode;
-
-                    bool read_child_inode = _read_inode(
-                        priv,
-                        instance->partition,
-                        entry->inode,
-                        &child_inode
-                    );
-
-                    if (read_child_inode) {
-                        u32 vfs_type = _inode_type_to_vfs(&child_inode);
-                        vfs_node_t *child = vfs_create_virtual(
-                            parent,
-                            name,
-                            vfs_type,
-                            child_inode.type & EXT2_IP_MASK
-                        );
-
-                        if (child) {
-                            bool inited_child_vnode = _init_vnode(
-                                child,
-                                instance,
-                                entry->inode,
-                                &child_inode
-                            );
-
-                            if (!inited_child_vnode) {
-                                log_warn("failed to init node %s", name);
-                            }
-
-                            if (vfs_type == VFS_FILE) {
-                                if (!_assign_interface(child, VFS_FILE)) {
-                                    log_warn(
-                                        "failed to allocate interface for %s",
-                                        name
-                                    );
-                                }
-                            }
-
-                            if (vfs_type == VFS_DIR) {
-                                bool built_child_dir = _build_dir(
-                                    instance,
-                                    child,
-                                    &child_inode
-                                );
-                                if (!built_child_dir) {
-                                    log_warn("failed to build dir %s", name);
-                                }
-
-                                if (!_assign_interface(child, VFS_DIR)) {
-                                    log_warn(
-                                        "failed to allocate interface for %s",
-                                        name
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
+            if (!entry->inode || !entry->name_size) {
+                continue;
             }
 
-            pos += entry_size;
+            size_t name_len = entry->name_size;
+            if (name_len > entry_size - 8) {
+                continue;
+            }
+
+            if (name_len >= 256) {
+                name_len = 255;
+            }
+
+            char name[256];
+            memcpy(name, entry->name, name_len);
+            name[name_len] = '\0';
+
+            if (!strcmp(name, ".") || !strcmp(name, "..")) {
+                continue;
+            }
+
+            ext2_inode_t child_inode;
+            if (
+                !_read_inode(
+                    priv,
+                    instance->partition,
+                    entry->inode,
+                    &child_inode
+                )
+            ) {
+                continue;
+            }
+
+            u32 vfs_type = _inode_type_to_vfs(&child_inode);
+            vfs_node_t *child = vfs_create_virtual(
+                parent,
+                name,
+                vfs_type,
+                child_inode.type & EXT2_IP_MASK
+            );
+
+            if (!child) {
+                continue;
+            }
+
+            if (!_init_vnode(child, instance, entry->inode, &child_inode)) {
+                log_warn("failed to init node %s", name);
+            }
+
+            if (vfs_type == VFS_FILE) {
+                if (!_assign_interface(child, VFS_FILE)) {
+                    log_warn("failed to allocate interface for %s", name);
+                }
+                continue;
+            }
+
+            if (vfs_type != VFS_DIR) {
+                continue;
+            }
+
+            if (!_build_dir(instance, child, &child_inode)) {
+                log_warn("failed to build dir %s", name);
+            }
+
+            if (!_assign_interface(child, VFS_DIR)) {
+                log_warn("failed to allocate interface for %s", name);
+            }
         }
     }
 
@@ -2317,7 +2323,7 @@ bool ext2fs_init(void) {
     bool ok = file_system_register(&ext2_fs);
 
     if (ok) {
-        log_debug("registered");
+        log_debug("registered ext2 file system");
     }
 
     return ok;

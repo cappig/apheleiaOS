@@ -1002,9 +1002,7 @@ static bool ahci_disk_init(void) {
         set_int_handler(AHCI_MSI_VECTOR, ahci_primary_irq);
         log_debug("AHCI using MSI vector %#x", AHCI_MSI_VECTOR);
     } else if (!ahci_irq_line_supported(dev->irq_line)) {
-        log_warn(
-            "IRQ line %u out of range, falling back to polling", dev->irq_line
-        );
+        log_warn("IRQ line %u out of range, falling back to polling", dev->irq_line);
         dev->irq_enabled = false;
     } else {
         ahci_primary = dev;
@@ -1029,8 +1027,8 @@ static bool ahci_disk_init(void) {
 
     u64 sector_count = 0;
     if (identify[83] & (1U << 10)) {
-        sector_count = (u64)identify[100] | ((u64)identify[101] << 16) |
-                       ((u64)identify[102] << 32) | ((u64)identify[103] << 48);
+        sector_count = 
+            (u64)identify[100] | ((u64)identify[101] << 16) | ((u64)identify[102] << 32) | ((u64)identify[103] << 48);
     }
 
     if (!sector_count) {
