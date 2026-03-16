@@ -64,6 +64,7 @@ jobs:
         run: make ARCH=${{ matrix.arch }} IMAGE_FORMAT=iso
 
       - name: upload iso
+        if: ${{ env.ACTIONS_RUNTIME_TOKEN != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: apheleia-${{ matrix.arch }}-iso

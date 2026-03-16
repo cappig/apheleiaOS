@@ -1,12 +1,13 @@
 SHELL := /bin/sh
 
 DOOM_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-ROOT_DIR := $(abspath $(DOOM_DIR)/../..)
+ROOT_DIR := $(abspath $(DOOM_DIR)/../../..)
 
 UPSTREAM_REPO  ?= https://github.com/ozkl/doomgeneric.git
 UPSTREAM_REF   ?= fc601639494e089702a1ada082eb51aaafc03722
 UPSTREAM_DIR   ?= $(DOOM_DIR)/.local/upstream
 UPSTREAM_STAMP := $(UPSTREAM_DIR)/.apheleia_sync
+UPSTREAM_SRC_MK := $(UPSTREAM_DIR)/.apheleia_sources.mk
 
 WAD_URL   ?= https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad
 WAD_SHA1  ?= 5b2e249b9c5133ec987b3ea77596381dc0d6bc1d
@@ -49,7 +50,7 @@ SUPPORT_SRC := \
 
 SUPPORT_OBJ := $(patsubst $(ROOT_DIR)/%.c,$(OBJ_DIR)/root/%.o,$(SUPPORT_SRC))
 
-DOOM_SRC_UPSTREAM_ALL = $(wildcard $(UPSTREAM_DIR)/doomgeneric/*.c)
+-include $(UPSTREAM_SRC_MK)
 DOOM_SRC_EXCLUDE = \
 	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_allegro.c \
 	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_emscripten.c \
@@ -88,6 +89,12 @@ $(UPSTREAM_STAMP):
 	fi
 	@touch "$@"
 
+$(UPSTREAM_SRC_MK): $(UPSTREAM_STAMP)
+	@mkdir -p "$(@D)"
+	@printf 'DOOM_SRC_UPSTREAM_ALL :=' > "$@"
+	@printf ' %s' "$(UPSTREAM_DIR)"/doomgeneric/*.c >> "$@"
+	@printf '\n' >> "$@"
+
 $(WAD_FILE):
 	@mkdir -p "$(ASSET_DIR)"
 	@curl -L --fail --retry 3 --retry-delay 1 -o "$@" "$(WAD_URL)"
@@ -98,6 +105,9 @@ $(SUPPORT_OBJ): | $(UPSTREAM_STAMP)
 $(OBJ_DIR)/root/%.o: $(ROOT_DIR)/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS_SUPPORT) -c $< -o $@
+
+$(UPSTREAM_DIR)/doomgeneric/%.c: | $(UPSTREAM_STAMP)
+	@:
 
 $(OBJ_DIR)/upstream/%.o: $(UPSTREAM_DIR)/doomgeneric/%.c | $(UPSTREAM_STAMP)
 	@mkdir -p $(@D)

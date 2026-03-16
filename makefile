@@ -37,9 +37,6 @@ CC_BASE := \
 	-fno-pie
 
 AS_BASE := \
-	-Wall \
-	-w-reloc-abs \
-	-w-reloc-rel-dword \
 	-w-label-orphan
 
 LD_BASE := \
