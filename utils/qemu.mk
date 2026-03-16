@@ -4,6 +4,8 @@ ifeq ($(ARCH), x86_32)
 QEMU_ARCH := i386
 else ifeq ($(ARCH), riscv_64)
 QEMU_ARCH := riscv64
+else ifeq ($(ARCH), riscv_32)
+QEMU_ARCH := riscv32
 endif
 
 QEMU := qemu-system-$(QEMU_ARCH)
@@ -15,6 +17,14 @@ QEMU_CPU     ?= max
 QEMU_SMP     ?= 1
 KVM          ?= false
 QEMU_SNAPSHOT ?= false
+QEMU_MACHINE ?=
+
+ifeq ($(ARCH), riscv_64)
+QEMU_MACHINE := virt
+endif
+ifeq ($(ARCH), riscv_32)
+QEMU_MACHINE := virt
+endif
 
 ifeq ($(KVM), true)
 ifeq ($(QEMU_CPU), max)
@@ -55,6 +65,10 @@ ifeq ($(KVM), true)
 QEMU_ARGS += -enable-kvm
 endif
 
+ifneq ($(QEMU_MACHINE),)
+QEMU_ARGS += -machine $(QEMU_MACHINE)
+endif
+
 ifeq ($(QEMU_SNAPSHOT), true)
 QEMU_ARGS += -snapshot
 endif
@@ -84,6 +98,17 @@ QEMU_USB_IMAGE_ARGS := \
 	-drive if=none,id=usbstick,format=raw,file=bin/$(IMAGE_NAME).img \
 	-device qemu-xhci,id=xhci \
 	-device usb-storage,bus=xhci.0,drive=usbstick
+
+ifeq ($(ARCH), riscv_64)
+QEMU_BOOT_ARGS := -bios bin/$(IMAGE_NAME).img
+QEMU_IMAGE_ARGS :=
+QEMU_USB_IMAGE_ARGS :=
+endif
+ifeq ($(ARCH), riscv_32)
+QEMU_BOOT_ARGS := -bios bin/$(IMAGE_NAME).img
+QEMU_IMAGE_ARGS :=
+QEMU_USB_IMAGE_ARGS :=
+endif
 
 .PHONY: ovmf-fetch ovmf-clean run run-usb run-usb-bios run-usb-uefi
 

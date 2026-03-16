@@ -1,3 +1,8 @@
+# HACK: for now
+ifeq ($(ARCH_TREE), riscv)
+USERLAND_DISABLED := true
+else
+
 USERLAND_TOOLS  ?= all
 USERLAND_EXTRAS ?= all
 USERLAND_GAMES  ?= all
@@ -249,3 +254,5 @@ $(USER_STAGE_DIR)/%: $(USER_BIN_DIR)/%
 
 bin/$(IMAGE_NAME).img: $(USER_BINARIES)
 bin/$(IMAGE_NAME).iso: $(USER_BINARIES)
+
+endif

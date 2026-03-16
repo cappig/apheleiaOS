@@ -96,9 +96,9 @@ endif
 
 IMAGE_SCRIPT_DEPS := \
 	kernel/build_image_common.py \
-	kernel/build_bios_disk_image.py \
-	kernel/build_hybrid_disk_image.py \
-	kernel/build_hybrid_iso_image.py
+	kernel/arch/x86/build/build_bios_disk_image.py \
+	kernel/arch/x86/build/build_hybrid_disk_image.py \
+	kernel/arch/x86/build/build_hybrid_iso_image.py
 
 IMAGE_ROOT_DEPS := $(shell find root -type f -o -type l)
 
@@ -115,19 +115,19 @@ endef
 bin/$(IMAGE_NAME).img: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
 	$(call stage_image)
 ifeq ($(ARCH_VARIANT), 64)
-	@python3 kernel/build_hybrid_disk_image.py $@ \
+	@python3 kernel/arch/x86/build/build_hybrid_disk_image.py $@ \
 		bin/boot/mbr.bin \
 		bin/boot/bios.bin \
 		bin/boot/BOOTX64.EFI \
 		$(KERNEL_ELF) \
 		$(IMAGE_STAGE_DIR)
 else
-	@python3 kernel/build_bios_disk_image.py $@ bin/boot/mbr.bin bin/boot/bios.bin $(IMAGE_STAGE_DIR)
+	@python3 kernel/arch/x86/build/build_bios_disk_image.py $@ bin/boot/mbr.bin bin/boot/bios.bin $(IMAGE_STAGE_DIR)
 endif
 
 bin/$(IMAGE_NAME).iso: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
 	$(call stage_image)
-	@python3 kernel/build_hybrid_iso_image.py $@ \
+	@python3 kernel/arch/x86/build/build_hybrid_iso_image.py $@ \
 		bin/boot/mbr.bin \
 		bin/boot/bios.bin \
 		"$(IMAGE_UEFI_BOOTLOADER)" \

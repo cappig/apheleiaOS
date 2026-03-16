@@ -20,16 +20,9 @@ class BuildError(RuntimeError):
     pass
 
 
-ROOT_UID = 0
-ROOT_GID = 0
-USER_UID = 1000
-USER_GID = 1000
-JOHN_UID = 1001
-JOHN_GID = 1001
-
-ROOT_OWNER = (ROOT_UID, ROOT_GID)
-USER_OWNER = (USER_UID, USER_GID)
-JOHN_OWNER = (JOHN_UID, JOHN_GID)
+ROOT_OWNER = (0, 0)
+USER_OWNER = (1000, 1000)
+JOHN_OWNER = (1001, 1001)
 
 
 def _meta(mode: int, owner: tuple[int, int] = ROOT_OWNER) -> dict[str, int]:
@@ -37,26 +30,18 @@ def _meta(mode: int, owner: tuple[int, int] = ROOT_OWNER) -> dict[str, int]:
     return {"mode": mode, "uid": uid, "gid": gid}
 
 
-ROOTFS_SYSTEM_DIRS = ("", "bin", "boot", "dev", "etc", "home")
-
 ROOTFS_METADATA_OVERRIDES: dict[str, dict[str, int]] = {
-    rel: _meta(0o755)
-    for rel in ROOTFS_SYSTEM_DIRS
+    **{rel: _meta(0o755) for rel in ("", "bin", "boot", "dev", "etc", "home")},
+    "home/user": _meta(0o755, USER_OWNER),
+    "home/john": _meta(0o755, JOHN_OWNER),
+    "etc/passwd": _meta(0o644),
+    "etc/group": _meta(0o644),
+    "etc/shadow": _meta(0o600),
+    "etc/cozette.psf": _meta(0o644),
+    "etc/font.psf": _meta(0o644),
+    "boot/loader.conf": _meta(0o644),
+    "bin/su": _meta(0o4755),
 }
-
-ROOTFS_METADATA_OVERRIDES.update(
-    {
-        "home/user": _meta(0o755, USER_OWNER),
-        "home/john": _meta(0o755, JOHN_OWNER),
-        "etc/passwd": _meta(0o644),
-        "etc/group": _meta(0o644),
-        "etc/shadow": _meta(0o600),
-        "etc/cozette.psf": _meta(0o644),
-        "etc/font.psf": _meta(0o644),
-        "boot/loader.conf": _meta(0o644),
-        "bin/su": _meta(0o4755),
-    }
-)
 
 ROOTFS_OWNER_PREFIX_OVERRIDES: dict[str, tuple[int, int]] = {
     "home/user": USER_OWNER,
@@ -256,16 +241,14 @@ def _node_rel_path(node: _Ext2Node) -> str:
 
 
 def _default_owner_for_rel_path(rel_path: str) -> tuple[int, int]:
-    best_prefix = ""
-    best_owner = ROOT_OWNER
-
-    for prefix, owner in ROOTFS_OWNER_PREFIX_OVERRIDES.items():
-        if rel_path == prefix or rel_path.startswith(prefix + "/"):
-            if len(prefix) > len(best_prefix):
-                best_prefix = prefix
-                best_owner = owner
-
-    return best_owner
+    matches = [
+        prefix
+        for prefix in ROOTFS_OWNER_PREFIX_OVERRIDES
+        if rel_path == prefix or rel_path.startswith(prefix + "/")
+    ]
+    if not matches:
+        return ROOT_OWNER
+    return ROOTFS_OWNER_PREFIX_OVERRIDES[max(matches, key=len)]
 
 
 def _scan_tree(path: Path, parent: _Ext2Node | None, name: str) -> _Ext2Node:
@@ -666,9 +649,7 @@ def build_ext2_image(
         alloc.image[1024 : 1024 + 1024] = sb
         return bytes(alloc.image)
 
-    attempts = 0
-    while attempts < 8:
-        attempts += 1
+    for _ in range(8):
         try:
             image = try_build(block_count)
             out_ext2.write_bytes(image)
