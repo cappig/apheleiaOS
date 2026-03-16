@@ -6,7 +6,7 @@
 
 #define E820_MAX 128
 
-typedef enum : u32 {
+typedef enum {
     E820_AVAILABLE = 1,
     E820_RESERVED = 2,
     E820_ACPI = 3,

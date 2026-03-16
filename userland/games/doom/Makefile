@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 
 DOOM_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
-ROOT_DIR := $(abspath $(DOOM_DIR)/../../..)
+ROOT_DIR ?= $(abspath $(DOOM_DIR)/../../..)
 
 UPSTREAM_REPO  ?= https://github.com/ozkl/doomgeneric.git
 UPSTREAM_REF   ?= fc601639494e089702a1ada082eb51aaafc03722

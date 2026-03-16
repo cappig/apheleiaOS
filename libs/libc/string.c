@@ -5,6 +5,7 @@
 #include "errno.h"
 #include "stddef.h"
 #include "stdint.h"
+#include <stdbool.h>
 
 
 void *memcpy(void *restrict dest, const void *restrict src, size_t len) {

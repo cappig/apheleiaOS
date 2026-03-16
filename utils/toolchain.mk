@@ -4,15 +4,19 @@ ST := strip
 
 GNU_CC           ?= gcc
 GNU_CC_x86_64    ?= x86_64-linux-gnu-gcc
-GNU_CC_x86_32    ?= $(GNU_CC)
-GNU_CC_riscv_64  ?= riscv64-unknown-elf-gcc
-GNU_LD_riscv_64  ?= riscv64-unknown-elf-ld
-GNU_OC_riscv_64  ?= riscv64-unknown-elf-objcopy
-GNU_ST_riscv_64  ?= riscv64-unknown-elf-strip
-GNU_CC_riscv_32  ?= riscv32-unknown-elf-gcc
-GNU_LD_riscv_32  ?= riscv32-unknown-elf-ld
-GNU_OC_riscv_32  ?= riscv32-unknown-elf-objcopy
-GNU_ST_riscv_32  ?= riscv32-unknown-elf-strip
+GNU_CC_x86_32    ?= i686-elf-gcc
+GNU_LD_x86_32    ?= i686-elf-ld
+GNU_OC_x86_32    ?= i686-elf-objcopy
+GNU_ST_x86_32    ?= i686-elf-strip
+
+GNU_CC_riscv_64  ?= riscv64-elf-gcc
+GNU_LD_riscv_64  ?= riscv64-elf-ld
+GNU_OC_riscv_64  ?= riscv64-elf-objcopy
+GNU_ST_riscv_64  ?= riscv64-elf-strip
+GNU_CC_riscv_32  ?= riscv64-elf-gcc
+GNU_LD_riscv_32  ?= riscv64-elf-ld
+GNU_OC_riscv_32  ?= riscv64-elf-objcopy
+GNU_ST_riscv_32  ?= riscv64-elf-strip
 
 LLVM_CC           ?= clang
 LLVM_CC_x86_64    ?= $(LLVM_CC)
@@ -36,6 +40,9 @@ ifeq ($(ARCH), x86_64)
 	CC := $(GNU_CC_x86_64)
 else ifeq ($(ARCH), x86_32)
 	CC := $(GNU_CC_x86_32)
+	LD := $(GNU_LD_x86_32)
+	OC := $(GNU_OC_x86_32)
+	ST := $(GNU_ST_x86_32)
 else ifeq ($(ARCH), riscv_64)
 	CC := $(GNU_CC_riscv_64)
 	LD := $(GNU_LD_riscv_64)

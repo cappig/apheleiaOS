@@ -2,6 +2,7 @@
 
 #include <limits.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 static const char digits[36] __attribute__((nonstring)) =
@@ -81,13 +82,29 @@ int itobcd(int num) {
 
 
 unsigned short bswaps(unsigned short num) {
-    return __builtin_bswap16(num);
+    uint16_t v = (uint16_t)num;
+    v = (uint16_t)((v << 8) | (v >> 8));
+    return (unsigned short)v;
 }
 
 unsigned long bswapl(unsigned long num) {
-    return __builtin_bswap32(num);
+    uint32_t v = (uint32_t)num;
+    v = ((v & 0x000000ffU) << 24) |
+        ((v & 0x0000ff00U) << 8) |
+        ((v & 0x00ff0000U) >> 8) |
+        ((v & 0xff000000U) >> 24);
+    return (unsigned long)v;
 }
 
 unsigned long long bswapll(unsigned long long num) {
-    return __builtin_bswap64(num);
+    uint64_t v = (uint64_t)num;
+    v = ((v & 0x00000000000000ffULL) << 56) |
+        ((v & 0x000000000000ff00ULL) << 40) |
+        ((v & 0x0000000000ff0000ULL) << 24) |
+        ((v & 0x00000000ff000000ULL) << 8) |
+        ((v & 0x000000ff00000000ULL) >> 8) |
+        ((v & 0x0000ff0000000000ULL) >> 24) |
+        ((v & 0x00ff000000000000ULL) >> 40) |
+        ((v & 0xff00000000000000ULL) >> 56);
+    return (unsigned long long)v;
 }

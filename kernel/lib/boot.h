@@ -3,17 +3,17 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-enum debug_levels : u8 {
+typedef enum {
     DEBUG_NONE = 0,
     DEBUG_MINIMAL = 1,
     DEBUG_ALL = 2,
-};
+} debug_levels_t;
 
-enum video_mode : u8 {
+typedef enum {
     VIDEO_NONE = 0,
     VIDEO_TEXT = 1,
     VIDEO_GRAPHICS = 2,
-};
+} video_mode_t;
 
 // -1 means that the bootloader will attempt to autodetect
 #define BOOT_DEFAULT_DEBUG       DEBUG_MINIMAL

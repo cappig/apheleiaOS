@@ -2,48 +2,16 @@
 
 #include <base/attributes.h>
 #include <base/types.h>
+#include <riscv/asm.h>
+#include <riscv/serial.h>
+#include <stdarg.h>
 #include <stdio.h>
-#include <x86/asm.h>
-#include <x86/boot.h>
-#include <x86/regs.h>
-#include <x86/serial.h>
-
-#include "bios.h"
-#include "stdarg.h"
-
-static char boot_log_buf[BOOT_LOG_CAP];
-static size_t boot_log_len = 0;
-
-static void _boot_log_putc(char c) {
-    if (boot_log_len >= BOOT_LOG_CAP) {
-        return;
-    }
-
-    boot_log_buf[boot_log_len++] = c;
-}
-
-const char *boot_log_buffer(size_t *len, size_t *cap) {
-    if (len) {
-        *len = boot_log_len;
-    }
-
-    if (cap) {
-        *cap = BOOT_LOG_CAP;
-    }
-
-    return boot_log_buf;
-}
 
 int puts(const char *str) {
-    regs32_t regs = {.ah = 0x0e};
     int count = 0;
 
     while (*str) {
-        regs.al = *str;
-        _boot_log_putc(*str);
-        send_serial(SERIAL_COM1, *str);
-        bios_call(0x10, &regs, &regs);
-        str++;
+        send_serial(SERIAL_UART0, *str++);
         count++;
     }
 
@@ -51,11 +19,7 @@ int puts(const char *str) {
 }
 
 void serial_puts(const char *str) {
-    while (*str) {
-        _boot_log_putc(*str);
-        send_serial(SERIAL_COM1, *str);
-        str++;
-    }
+    send_serial_string(SERIAL_UART0, str);
 }
 
 int printf(const char *fmt, ...) {

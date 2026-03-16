@@ -2,15 +2,35 @@ ARCH_DIR        := kernel/arch/riscv
 IMAGE_STAGE_DIR := bin/image/$(ARCH)
 IMAGE_BOOT_DIR  := $(IMAGE_STAGE_DIR)/boot
 
-BOOT_ENTRY_DIR     := $(ARCH_DIR)/boot/entry
+BOOT_ENTRY_DIR     := $(ARCH_DIR)/boot
 BOOT_ENTRY_LINKER  := $(BOOT_ENTRY_DIR)/linker.ld
-BOOT_ENTRY_SRC     := $(wildcard $(BOOT_ENTRY_DIR)/*.S) $(wildcard $(BOOT_ENTRY_DIR)/*.c)
-BOOT_ENTRY_OBJ_DIR := bin/boot
+ARCH_COMMON_SRC := \
+	$(ARCH_DIR)/serial.c
+BOOT_LIBC_SRC := \
+	libs/libc/arch/riscv/div64.c \
+	libs/libc/ctype.c \
+	libs/libc/errno.c \
+	libs/libc/sprintf.c \
+	libs/libc/stdlib.c \
+	libs/libc/string.c \
+	libs/libc_ext/stdlib.c
+
+BOOT_ENTRY_SRC := \
+	$(wildcard $(BOOT_ENTRY_DIR)/*.S) \
+	$(wildcard $(BOOT_ENTRY_DIR)/*.c) \
+	$(ARCH_COMMON_SRC) \
+	$(BOOT_LIBC_SRC)
+BOOT_ENTRY_OBJ_DIR := bin/boot/$(ARCH)
 BOOT_ENTRY_OBJ     := $(patsubst %, $(BOOT_ENTRY_OBJ_DIR)/%.o, $(BOOT_ENTRY_SRC))
-BOOT_ENTRY_ELF     := bin/boot/riscv_boot.elf
-BOOT_ENTRY_BIN     := bin/boot/riscv_boot.bin
+BOOT_ENTRY_ELF     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.elf
+BOOT_ENTRY_BIN     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.bin
 
 BOOT_ENTRY_CFLAGS := \
+	-Ilibs \
+	-Ilibs/libc \
+	-Ikernel \
+	-Ikernel/arch \
+	-include stdbool.h \
 	-ffreestanding \
 	-nostdlib \
 	-nostdinc \
@@ -20,9 +40,9 @@ BOOT_ENTRY_CFLAGS := \
 	-mcmodel=medany
 
 ifeq ($(ARCH_VARIANT), 64)
-BOOT_ENTRY_CFLAGS += -march=rv64imac -mabi=lp64
+BOOT_ENTRY_CFLAGS += -march=rv64imac_zicsr -mabi=lp64
 else ifeq ($(ARCH_VARIANT), 32)
-BOOT_ENTRY_CFLAGS += -march=rv32imac -mabi=ilp32
+BOOT_ENTRY_CFLAGS += -march=rv32imac_zicsr -mabi=ilp32
 else
 $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)' for ARCH '$(ARCH)')
 endif
@@ -31,6 +51,10 @@ BOOT_ENTRY_LDFLAGS := \
 	-nostdlib \
 	-Wl,-T$(BOOT_ENTRY_LINKER) \
 	-Wl,--gc-sections
+
+ifeq ($(TOOLCHAIN), llvm)
+BOOT_ENTRY_LDFLAGS += -fuse-ld=lld
+endif
 
 ifneq ($(IMAGE_FORMAT),img)
 $(error Unsupported IMAGE_FORMAT '$(IMAGE_FORMAT)' for ARCH '$(ARCH)')
