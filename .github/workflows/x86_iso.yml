@@ -36,6 +36,30 @@ jobs:
       - name: make test build
         run: make ARCH=${{ matrix.arch }} IMAGE_FORMAT=img
 
+  build_riscv:
+    name: build-riscv (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [riscv_64, riscv_32]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            lld \
+            llvm \
+            make \
+            python3
+
+      - name: make riscv image
+        run: make ARCH=${{ matrix.arch }} IMAGE_FORMAT=img TOOLCHAIN=llvm
+
   build_iso:
     name: iso (${{ matrix.arch }})
     runs-on: ubuntu-latest

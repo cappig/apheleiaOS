@@ -5,7 +5,16 @@
 #include <stdint.h>
 #include <string.h>
 
-static const char digits[36] __attribute__((nonstring)) =
+#if defined(__has_attribute)
+#if __has_attribute(nonstring)
+#define NONSTRING_ATTR __attribute__((nonstring))
+#endif
+#endif
+#ifndef NONSTRING_ATTR
+#define NONSTRING_ATTR
+#endif
+
+static const char digits[36] NONSTRING_ATTR =
     "0123456789abcdefghijklmnopqrstuvwxyz";
 
 
