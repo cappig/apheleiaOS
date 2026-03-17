@@ -263,7 +263,7 @@ void _xhci_log_port_snapshot(xhci_controller_t *ctrl, volatile u8 *op) {
             ctrl->slot,
             ctrl->func,
             port,
-            portsc,
+            (unsigned int)portsc,
             (unsigned)((portsc >> XHCI_PORTSC_SPEED_SHIFT) & XHCI_PORTSC_SPEED_MASK)
         );
     }

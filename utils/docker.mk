@@ -9,4 +9,8 @@ docker_build:
 		-v "$$PWD":/usr/src/apheleia \
 		apheleia:latest $(MAKE) ARCH=$(ARCH) TOOLCHAIN=$(TOOLCHAIN) \
 		IMAGE_FORMAT=$(IMAGE_FORMAT) PROFILE=$(PROFILE) \
-		GNU_CC_x86_64=gcc GNU_CC_x86_32=gcc
+		GNU_CC_x86_64=gcc \
+		GNU_CC_x86_32=gcc \
+		GNU_LD_x86_32=ld \
+		GNU_OC_x86_32=objcopy \
+		GNU_ST_x86_32=strip

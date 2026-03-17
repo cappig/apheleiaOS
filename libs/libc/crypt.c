@@ -26,7 +26,7 @@ char *crypt(const char *key, const char *salt) {
         hash *= fnv_prime;
     }
 
-    int written = snprintf(buf, sizeof(buf), CRYPT_PREFIX "%08x", hash);
+    int written = snprintf(buf, sizeof(buf), CRYPT_PREFIX "%08x", (unsigned int)hash);
     if (written <= 0) {
         return NULL;
     }

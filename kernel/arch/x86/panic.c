@@ -1,5 +1,6 @@
 #include <arch/arch.h>
 #include <inttypes.h>
+#include <stddef.h>
 #include <log/log.h>
 
 #include "x86/asm.h"
@@ -142,10 +143,10 @@ static void _log_segs_ctrl(const segs_ctrl_t *sc) {
     log_fatal(
         "  CR0=%#010" PRIx32 " CR2=%#010" PRIx32
         " CR3=%#010" PRIx32 " CR4=%#010" PRIx32,
-        sc->cr0,
-        sc->cr2,
-        sc->cr3,
-        sc->cr4
+        (unsigned int)sc->cr0,
+        (unsigned int)sc->cr2,
+        (unsigned int)sc->cr3,
+        (unsigned int)sc->cr4
     );
 }
 #endif
@@ -201,25 +202,25 @@ static void _dump_regs_from_state(const arch_int_state_t *state) {
     log_fatal(
         "  EIP=%#010" PRIx32 " ESP=%#010" PRIx32 " EFLAGS=%#010" PRIx32
         " CS=%#06" PRIx32 " SS=%#06" PRIx32,
-        state->s_regs.eip,
-        state->s_regs.esp,
-        state->s_regs.eflags,
-        state->s_regs.cs,
-        state->s_regs.ss
+        (unsigned int)state->s_regs.eip,
+        (unsigned int)state->s_regs.esp,
+        (unsigned int)state->s_regs.eflags,
+        (unsigned int)state->s_regs.cs,
+        (unsigned int)state->s_regs.ss
     );
     log_fatal(
         "  ESI=%#010" PRIx32 " EDI=%#010" PRIx32 " EBP=%#010" PRIx32,
-        state->g_regs.esi,
-        state->g_regs.edi,
-        state->g_regs.ebp
+        (unsigned int)state->g_regs.esi,
+        (unsigned int)state->g_regs.edi,
+        (unsigned int)state->g_regs.ebp
     );
     log_fatal(
         "  EAX=%#010" PRIx32 " EBX=%#010" PRIx32
         " ECX=%#010" PRIx32 " EDX=%#010" PRIx32,
-        state->g_regs.eax,
-        state->g_regs.ebx,
-        state->g_regs.ecx,
-        state->g_regs.edx
+        (unsigned int)state->g_regs.eax,
+        (unsigned int)state->g_regs.ebx,
+        (unsigned int)state->g_regs.ecx,
+        (unsigned int)state->g_regs.edx
     );
 #endif
 }
@@ -254,49 +255,50 @@ static void _capture_regs(reg_snapshot_t *out) {
     }
 
     __asm__ volatile(
-        "mov %%rax, %0\n\t"
-        "mov %%rbx, %1\n\t"
-        "mov %%rcx, %2\n\t"
-        "mov %%rdx, %3\n\t"
-        "mov %%rsi, %4\n\t"
-        "mov %%rdi, %5\n\t"
-        "mov %%rbp, %6\n\t"
-        "mov %%rsp, %7\n\t"
-        "mov %%r8,  %8\n\t"
-        "mov %%r9,  %9\n\t"
-        "mov %%r10, %10\n\t"
-        "mov %%r11, %11\n\t"
-        "mov %%r12, %12\n\t"
-        "mov %%r13, %13\n\t"
-        "mov %%r14, %14\n\t"
-        "mov %%r15, %15\n\t"
+        "mov %%rax, %c[rax](%0)\n\t"
+        "mov %%rbx, %c[rbx](%0)\n\t"
+        "mov %%rcx, %c[rcx](%0)\n\t"
+        "mov %%rdx, %c[rdx](%0)\n\t"
+        "mov %%rsi, %c[rsi](%0)\n\t"
+        "mov %%rdi, %c[rdi](%0)\n\t"
+        "mov %%rbp, %c[rbp](%0)\n\t"
+        "mov %%rsp, %c[rsp](%0)\n\t"
+        "mov %%r8,  %c[r8](%0)\n\t"
+        "mov %%r9,  %c[r9](%0)\n\t"
+        "mov %%r10, %c[r10](%0)\n\t"
+        "mov %%r11, %c[r11](%0)\n\t"
+        "mov %%r12, %c[r12](%0)\n\t"
+        "mov %%r13, %c[r13](%0)\n\t"
+        "mov %%r14, %c[r14](%0)\n\t"
+        "mov %%r15, %c[r15](%0)\n\t"
         "pushfq\n\t"
-        "popq %16\n\t"
-        "mov %%cs, %17\n\t"
-        "mov %%ss, %18\n\t"
+        "popq %c[rflags](%0)\n\t"
+        "mov %%cs, %c[cs](%0)\n\t"
+        "mov %%ss, %c[ss](%0)\n\t"
         "call 1f\n\t"
-        "1: popq %19\n\t"
-        : "=m"(out->rax),
-          "=m"(out->rbx),
-          "=m"(out->rcx),
-          "=m"(out->rdx),
-          "=m"(out->rsi),
-          "=m"(out->rdi),
-          "=m"(out->rbp),
-          "=m"(out->rsp),
-          "=m"(out->r8),
-          "=m"(out->r9),
-          "=m"(out->r10),
-          "=m"(out->r11),
-          "=m"(out->r12),
-          "=m"(out->r13),
-          "=m"(out->r14),
-          "=m"(out->r15),
-          "=m"(out->rflags),
-          "=m"(out->cs),
-          "=m"(out->ss),
-          "=m"(out->rip)
+        "1: popq %c[rip](%0)\n\t"
         :
+        : "r"(out),
+          [rax] "i"(offsetof(reg_snapshot_t, rax)),
+          [rbx] "i"(offsetof(reg_snapshot_t, rbx)),
+          [rcx] "i"(offsetof(reg_snapshot_t, rcx)),
+          [rdx] "i"(offsetof(reg_snapshot_t, rdx)),
+          [rsi] "i"(offsetof(reg_snapshot_t, rsi)),
+          [rdi] "i"(offsetof(reg_snapshot_t, rdi)),
+          [rbp] "i"(offsetof(reg_snapshot_t, rbp)),
+          [rsp] "i"(offsetof(reg_snapshot_t, rsp)),
+          [r8] "i"(offsetof(reg_snapshot_t, r8)),
+          [r9] "i"(offsetof(reg_snapshot_t, r9)),
+          [r10] "i"(offsetof(reg_snapshot_t, r10)),
+          [r11] "i"(offsetof(reg_snapshot_t, r11)),
+          [r12] "i"(offsetof(reg_snapshot_t, r12)),
+          [r13] "i"(offsetof(reg_snapshot_t, r13)),
+          [r14] "i"(offsetof(reg_snapshot_t, r14)),
+          [r15] "i"(offsetof(reg_snapshot_t, r15)),
+          [rflags] "i"(offsetof(reg_snapshot_t, rflags)),
+          [cs] "i"(offsetof(reg_snapshot_t, cs)),
+          [ss] "i"(offsetof(reg_snapshot_t, ss)),
+          [rip] "i"(offsetof(reg_snapshot_t, rip))
         : "memory"
     );
 }
@@ -368,33 +370,34 @@ static void _capture_regs(reg_snapshot_t *out) {
     }
 
     __asm__ volatile(
-        "mov %%eax, %0\n\t"
-        "mov %%ebx, %1\n\t"
-        "mov %%ecx, %2\n\t"
-        "mov %%edx, %3\n\t"
-        "mov %%esi, %4\n\t"
-        "mov %%edi, %5\n\t"
-        "mov %%ebp, %6\n\t"
-        "mov %%esp, %7\n\t"
+        "mov %%eax, %c[eax](%0)\n\t"
+        "mov %%ebx, %c[ebx](%0)\n\t"
+        "mov %%ecx, %c[ecx](%0)\n\t"
+        "mov %%edx, %c[edx](%0)\n\t"
+        "mov %%esi, %c[esi](%0)\n\t"
+        "mov %%edi, %c[edi](%0)\n\t"
+        "mov %%ebp, %c[ebp](%0)\n\t"
+        "mov %%esp, %c[esp](%0)\n\t"
         "pushfl\n\t"
-        "popl %8\n\t"
-        "mov %%cs, %9\n\t"
-        "mov %%ss, %10\n\t"
+        "popl %c[eflags](%0)\n\t"
+        "mov %%cs, %c[cs](%0)\n\t"
+        "mov %%ss, %c[ss](%0)\n\t"
         "call 1f\n\t"
-        "1: popl %11\n\t"
-        : "=m"(out->eax),
-          "=m"(out->ebx),
-          "=m"(out->ecx),
-          "=m"(out->edx),
-          "=m"(out->esi),
-          "=m"(out->edi),
-          "=m"(out->ebp),
-          "=m"(out->esp),
-          "=m"(out->eflags),
-          "=m"(out->cs),
-          "=m"(out->ss),
-          "=m"(out->eip)
+        "1: popl %c[eip](%0)\n\t"
         :
+        : "r"(out),
+          [eax] "i"(offsetof(reg_snapshot_t, eax)),
+          [ebx] "i"(offsetof(reg_snapshot_t, ebx)),
+          [ecx] "i"(offsetof(reg_snapshot_t, ecx)),
+          [edx] "i"(offsetof(reg_snapshot_t, edx)),
+          [esi] "i"(offsetof(reg_snapshot_t, esi)),
+          [edi] "i"(offsetof(reg_snapshot_t, edi)),
+          [ebp] "i"(offsetof(reg_snapshot_t, ebp)),
+          [esp] "i"(offsetof(reg_snapshot_t, esp)),
+          [eflags] "i"(offsetof(reg_snapshot_t, eflags)),
+          [cs] "i"(offsetof(reg_snapshot_t, cs)),
+          [ss] "i"(offsetof(reg_snapshot_t, ss)),
+          [eip] "i"(offsetof(reg_snapshot_t, eip))
         : "memory"
     );
 }
@@ -407,25 +410,25 @@ static void _dump_regs_snapshot(void) {
     log_fatal(
         "  EIP=%#010" PRIx32 " ESP=%#010" PRIx32 " EFLAGS=%#010" PRIx32
         " CS=%#06" PRIx32 " SS=%#06" PRIx32,
-        regs.eip,
-        regs.esp,
-        regs.eflags,
-        (u32)regs.cs,
-        (u32)regs.ss
+        (unsigned int)regs.eip,
+        (unsigned int)regs.esp,
+        (unsigned int)regs.eflags,
+        (unsigned int)regs.cs,
+        (unsigned int)regs.ss
     );
     log_fatal(
         "  ESI=%#010" PRIx32 " EDI=%#010" PRIx32 " EBP=%#010" PRIx32,
-        regs.esi,
-        regs.edi,
-        regs.ebp
+        (unsigned int)regs.esi,
+        (unsigned int)regs.edi,
+        (unsigned int)regs.ebp
     );
     log_fatal(
         "  EAX=%#010" PRIx32 " EBX=%#010" PRIx32
         " ECX=%#010" PRIx32 " EDX=%#010" PRIx32,
-        regs.eax,
-        regs.ebx,
-        regs.ecx,
-        regs.edx
+        (unsigned int)regs.eax,
+        (unsigned int)regs.ebx,
+        (unsigned int)regs.ecx,
+        (unsigned int)regs.edx
     );
 }
 #endif

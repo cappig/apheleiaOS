@@ -11,6 +11,8 @@ RUN apk add --no-cache \
     lld~17 \
     llvm18 \
     make~4 \
+    mingw-w64-gcc~13 \
+    mingw-w64-binutils~2 \
     nasm~2 \
     python3~3 \
     xorriso~1 && \

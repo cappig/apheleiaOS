@@ -51,19 +51,10 @@ SUPPORT_OBJ := $(patsubst $(ROOT_DIR)/%.c,$(OBJ_DIR)/root/%.o,$(SUPPORT_SRC))
 
 DOOM_SRC_UPSTREAM_ALL = $(wildcard $(UPSTREAM_DIR)/doomgeneric/*.c)
 DOOM_SRC_EXCLUDE = \
-	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_allegro.c \
-	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_emscripten.c \
-	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_linuxvt.c \
-	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_sdl.c \
-	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_soso.c \
-	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_sosox.c \
-	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_win.c \
-	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_xlib.c \
+	$(UPSTREAM_DIR)/doomgeneric/doomgeneric_%.c \
+	$(UPSTREAM_DIR)/doomgeneric/i_allegro%.c \
+	$(UPSTREAM_DIR)/doomgeneric/i_sdl%.c \
 	$(UPSTREAM_DIR)/doomgeneric/gusconf.c \
-	$(UPSTREAM_DIR)/doomgeneric/i_allegromusic.c \
-	$(UPSTREAM_DIR)/doomgeneric/i_allegrosound.c \
-	$(UPSTREAM_DIR)/doomgeneric/i_sdlmusic.c \
-	$(UPSTREAM_DIR)/doomgeneric/i_sdlsound.c \
 	$(UPSTREAM_DIR)/doomgeneric/icon.c \
 	$(UPSTREAM_DIR)/doomgeneric/mus2mid.c
 DOOM_SRC_UPSTREAM = $(filter-out $(DOOM_SRC_EXCLUDE),$(DOOM_SRC_UPSTREAM_ALL))
@@ -115,6 +106,7 @@ $(CRT_OBJ): $(USER_CRT_SRC)
 	@mkdir -p $(@D)
 	$(AS) $(ASFLAGS) -o $@ $<
 
+ifeq ($(DOOM_RECURSE),1)
 .SECONDEXPANSION:
 $(OUT_BIN): $(SUPPORT_OBJ) $$(DOOM_OBJ) $(CRT_OBJ) $(USER_LIBGCC) | $(UPSTREAM_STAMP)
 	@mkdir -p $(@D)
@@ -122,6 +114,10 @@ $(OUT_BIN): $(SUPPORT_OBJ) $$(DOOM_OBJ) $(CRT_OBJ) $(USER_LIBGCC) | $(UPSTREAM_S
 	@if [ "$(STRIP_USER)" = "true" ]; then \
 		$(ST) $(USER_STRIP_FLAGS) $@; \
 	fi
+else
+$(OUT_BIN): | $(UPSTREAM_STAMP)
+	@$(MAKE) --no-print-directory DOOM_RECURSE=1 $(OUT_BIN)
+endif
 
 $(OUT_BUNDLE_BIN): $(OUT_BIN)
 	@mkdir -p "$(BUNDLE_DIR)"

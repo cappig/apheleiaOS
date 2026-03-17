@@ -254,8 +254,8 @@ NORETURN static void _smp_ap_entry(void *arg) {
         log_warn(
             "AP core %zu APIC ID mismatch (cpuid=%u lapic=%u)",
             core->id,
-            cpuid_apic_id,
-            core->lapic_id
+            (unsigned int)cpuid_apic_id,
+            (unsigned int)core->lapic_id
         );
     }
 
@@ -361,12 +361,20 @@ void smp_init(void) {
         _patch_trampoline(trampoline, core);
 
         if (!_start_ap(core, sipi_vector)) {
-            log_warn("AP start IPI failed for core %zu (lapic=%u)", i, core->lapic_id);
+            log_warn(
+                "AP start IPI failed for core %zu (lapic=%u)",
+                i,
+                (unsigned int)core->lapic_id
+            );
             continue;
         }
 
         if (!_wait_ap_ready(i, SMP_AP_START_TIMEOUT_MS)) {
-            log_warn("AP bring-up timed out for core %zu (lapic=%u)", i, core->lapic_id);
+            log_warn(
+                "AP bring-up timed out for core %zu (lapic=%u)",
+                i,
+                (unsigned int)core->lapic_id
+            );
             continue;
         }
 

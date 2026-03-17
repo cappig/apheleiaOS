@@ -380,7 +380,7 @@ static void *_read_inode(ext2_inode_t *inode) {
     size_t n = 0;
 
     // Direct blocks
-    int direct_count = min(12, inode_blocks);
+    int direct_count = (inode_blocks < 12) ? (int)inode_blocks : 12;
     memcpy(blocks, inode->direct_block_ptr, direct_count * sizeof(u32));
     n = direct_count;
 

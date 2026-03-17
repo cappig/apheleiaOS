@@ -319,8 +319,8 @@ static int window_open_fds(window_t *window) {
     char fb_path[64];
     char ev_path[64];
 
-    snprintf(fb_path, sizeof(fb_path), "/dev/ws/%u/fb", window->id);
-    snprintf(ev_path, sizeof(ev_path), "/dev/ws/%u/ev", window->id);
+    snprintf(fb_path, sizeof(fb_path), "/dev/ws/%u/fb", (unsigned int)window->id);
+    snprintf(ev_path, sizeof(ev_path), "/dev/ws/%u/ev", (unsigned int)window->id);
 
     window->fb_fd = open(fb_path, O_RDWR, 0);
     if (window->fb_fd < 0) {

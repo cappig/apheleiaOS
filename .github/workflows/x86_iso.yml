@@ -12,6 +12,11 @@ jobs:
   build_test:
     name: build-test (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    env:
+      GNU_CC_x86_32: gcc
+      GNU_LD_x86_32: ld
+      GNU_OC_x86_32: objcopy
+      GNU_ST_x86_32: strip
     strategy:
       fail-fast: false
       matrix:
@@ -63,6 +68,11 @@ jobs:
   build_iso:
     name: iso (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    env:
+      GNU_CC_x86_32: gcc
+      GNU_LD_x86_32: ld
+      GNU_OC_x86_32: objcopy
+      GNU_ST_x86_32: strip
     strategy:
       fail-fast: false
       matrix:

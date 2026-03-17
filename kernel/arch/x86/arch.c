@@ -764,16 +764,16 @@ static void _publish_framebuffer(const boot_info_t *info) {
 
     log_info(
         "framebuffer %ux%u bpp=%u pitch=%u rgb(r:%u/%u g:%u/%u b:%u/%u)",
-        fb.width,
-        fb.height,
-        fb.bpp,
-        fb.pitch,
-        fb.red_shift,
-        fb.red_size,
-        fb.green_shift,
-        fb.green_size,
-        fb.blue_shift,
-        fb.blue_size
+        (unsigned int)fb.width,
+        (unsigned int)fb.height,
+        (unsigned int)fb.bpp,
+        (unsigned int)fb.pitch,
+        (unsigned int)fb.red_shift,
+        (unsigned int)fb.red_size,
+        (unsigned int)fb.green_shift,
+        (unsigned int)fb.green_size,
+        (unsigned int)fb.blue_shift,
+        (unsigned int)fb.blue_size
     );
 
     framebuffer_set_info(&fb);

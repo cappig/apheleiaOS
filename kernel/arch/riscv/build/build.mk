@@ -7,7 +7,7 @@ BOOT_ENTRY_LINKER  := $(BOOT_ENTRY_DIR)/linker.ld
 ARCH_COMMON_SRC := \
 	$(ARCH_DIR)/serial.c
 BOOT_LIBC_SRC := \
-	libs/libc/arch/riscv/div64.c \
+	libs/libc/div64.c \
 	libs/libc/ctype.c \
 	libs/libc/errno.c \
 	libs/libc/sprintf.c \

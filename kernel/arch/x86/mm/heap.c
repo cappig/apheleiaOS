@@ -190,7 +190,7 @@ void heap_init() {
     size_t free_pages = pmm_free_mem() / PAGE_4KIB;
 
     // Aim to take ~33% of the memory for the kernel heap
-    size_t min_heap = min(free_pages, HEAP_MIN);
+    size_t min_heap = min(free_pages, (size_t)HEAP_MIN);
     size_t max_heap = HEAP_MAX;
 
     size_t heap_pages = clamp(free_pages / 3, min_heap, max_heap);

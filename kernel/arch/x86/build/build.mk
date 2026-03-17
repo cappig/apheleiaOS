@@ -25,7 +25,9 @@ include kernel/drivers/build.mk
 KERNEL_ALL_SRC := $(sort $(KERNEL_ALL_SRC) $(KERNEL_DRIVER_SRC))
 
 KERNEL_COMMON_SRC := $(filter-out %32.c %64.c %32.asm %64.asm, $(KERNEL_ALL_SRC))
-KERNEL_SRC_64     := $(filter %64.c %64.asm, $(KERNEL_ALL_SRC)) $(KERNEL_COMMON_SRC)
+KERNEL_COMMON_SRC += $(filter %/div64.c, $(KERNEL_ALL_SRC))
+KERNEL_ARCH64_SRC := $(filter %64.c %64.asm, $(KERNEL_ALL_SRC))
+KERNEL_SRC_64     := $(filter-out %/div64.c, $(KERNEL_ARCH64_SRC)) $(KERNEL_COMMON_SRC)
 KERNEL_SRC_32     := $(filter %32.c %32.asm, $(KERNEL_ALL_SRC)) $(KERNEL_COMMON_SRC)
 
 include kernel/arch/x86/boot/bios/build.mk

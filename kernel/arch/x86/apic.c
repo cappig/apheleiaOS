@@ -359,7 +359,7 @@ static bool _lapic_send_ipi(u32 dest_apic, u32 low) {
     }
 
     if (dest_apic > 0xffU) {
-        log_warn("unsupported destination LAPIC id %u", dest_apic);
+        log_warn("unsupported destination LAPIC id %u", (unsigned int)dest_apic);
         return false;
     }
 
@@ -577,7 +577,7 @@ bool apic_init(void) {
             }
         }
 
-        log_info("local APIC enabled (id=%u)", id);
+        log_info("local APIC enabled (id=%u)", (unsigned int)id);
         return true;
     }
 
@@ -619,7 +619,7 @@ bool apic_init(void) {
     }
 
     apic_enabled = true;
-    log_info("local APIC enabled (id=%u)", id);
+    log_info("local APIC enabled (id=%u)", (unsigned int)id);
 
     return true;
 }

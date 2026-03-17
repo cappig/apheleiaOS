@@ -867,7 +867,7 @@ static bool _ensure_slot_nodes(u32 id) {
     }
 
     char slot_name[16];
-    snprintf(slot_name, sizeof(slot_name), "%u", id);
+    snprintf(slot_name, sizeof(slot_name), "%u", (unsigned int)id);
 
     vfs_node_t *slot = devfs_register_dir(ws_state.ws_dir, slot_name, 0755);
     if (!slot) {
@@ -952,10 +952,10 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     if (!_windows_reserve((size_t)free_id + 1)) {
         log_warn(
             "WS allocation failed while reserving id=%u caller=%ld size=%ux%u",
-            free_id,
+            (unsigned int)free_id,
             (long)caller_pid,
-            cmd->width,
-            cmd->height
+            (unsigned int)cmd->width,
+            (unsigned int)cmd->height
         );
         return -ENOMEM;
     }
@@ -963,7 +963,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     if (!_ensure_slot_nodes(free_id)) {
         log_warn(
             "WS allocation failed during slot node registration id=%u caller=%ld",
-            free_id,
+            (unsigned int)free_id,
             (long)caller_pid
         );
         return -ENOMEM;
@@ -973,7 +973,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     if (!window) {
         log_warn(
             "WS allocation failed during slot lookup id=%u caller=%ld",
-            free_id,
+            (unsigned int)free_id,
             (long)caller_pid
         );
         return -ENOMEM;
@@ -985,7 +985,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     if (!window->fb) {
         log_warn(
             "WS allocation failed during fb allocation id=%u caller=%ld bytes=%" PRIu64,
-            free_id,
+            (unsigned int)free_id,
             (long)caller_pid,
             fb_size_u64
         );
@@ -999,7 +999,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
         _window_slot_reinit(window);
         log_warn(
             "WS allocation failed during event queue reserve id=%u caller=%ld",
-            free_id,
+            (unsigned int)free_id,
             (long)caller_pid
         );
         return -ENOMEM;

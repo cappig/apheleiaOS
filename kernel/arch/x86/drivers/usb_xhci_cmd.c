@@ -306,10 +306,10 @@ bool _xhci_submit_command(
             ctrl->slot,
             ctrl->func,
             cmd_name,
-            usbsts,
+            (unsigned int)usbsts,
             trb_paddr,
-            ctrl->event_dequeue,
-            ctrl->event_cycle
+            (unsigned int)ctrl->event_dequeue,
+            (unsigned int)ctrl->event_cycle
         );
 
         _xhci_log_fault_snapshot(ctrl, "command timeout");

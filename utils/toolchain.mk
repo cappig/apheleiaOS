@@ -2,80 +2,63 @@ AS := nasm
 OC := objcopy
 ST := strip
 
-GNU_CC           ?= gcc
-GNU_CC_x86_64    ?= x86_64-linux-gnu-gcc
-GNU_CC_x86_32    ?= i686-elf-gcc
-GNU_LD_x86_32    ?= i686-elf-ld
-GNU_OC_x86_32    ?= i686-elf-objcopy
-GNU_ST_x86_32    ?= i686-elf-strip
+GNU_CC_x86_64   ?= x86_64-linux-gnu-gcc
+GNU_LD_x86_64   ?= ld
+GNU_OC_x86_64   ?= objcopy
+GNU_ST_x86_64   ?= strip
 
-GNU_CC_riscv_64  ?= riscv64-elf-gcc
-GNU_LD_riscv_64  ?= riscv64-elf-ld
-GNU_OC_riscv_64  ?= riscv64-elf-objcopy
-GNU_ST_riscv_64  ?= riscv64-elf-strip
-GNU_CC_riscv_32  ?= riscv64-elf-gcc
-GNU_LD_riscv_32  ?= riscv64-elf-ld
-GNU_OC_riscv_32  ?= riscv64-elf-objcopy
-GNU_ST_riscv_32  ?= riscv64-elf-strip
+GNU_CC_x86_32   ?= i686-elf-gcc
+GNU_LD_x86_32   ?= i686-elf-ld
+GNU_OC_x86_32   ?= i686-elf-objcopy
+GNU_ST_x86_32   ?= i686-elf-strip
 
-LLVM_CC           ?= clang
-LLVM_CC_x86_64    ?= $(LLVM_CC)
-LLVM_CC_x86_32    ?= $(LLVM_CC)
-LLVM_CC_riscv_64  ?= clang --target=riscv64-unknown-elf
-LLVM_LD_riscv_64  ?= ld.lld
-LLVM_OC_riscv_64  ?= llvm-objcopy
-LLVM_ST_riscv_64  ?= llvm-strip
-LLVM_CC_riscv_32  ?= clang --target=riscv32-unknown-elf
-LLVM_LD_riscv_32  ?= ld.lld
-LLVM_OC_riscv_32  ?= llvm-objcopy
-LLVM_ST_riscv_32  ?= llvm-strip
+GNU_CC_riscv_64 ?= riscv64-elf-gcc
+GNU_LD_riscv_64 ?= riscv64-elf-ld
+GNU_OC_riscv_64 ?= riscv64-elf-objcopy
+GNU_ST_riscv_64 ?= riscv64-elf-strip
+
+GNU_CC_riscv_32 ?= riscv64-elf-gcc
+GNU_LD_riscv_32 ?= riscv64-elf-ld
+GNU_OC_riscv_32 ?= riscv64-elf-objcopy
+GNU_ST_riscv_32 ?= riscv64-elf-strip
+
+LLVM_CC_x86_64   ?= clang
+LLVM_LD_x86_64   ?= ld.lld
+LLVM_OC_x86_64   ?= llvm-objcopy
+LLVM_ST_x86_64   ?= llvm-strip
+
+LLVM_CC_x86_32   ?= clang
+LLVM_LD_x86_32   ?= ld.lld
+LLVM_OC_x86_32   ?= llvm-objcopy
+LLVM_ST_x86_32   ?= llvm-strip
+
+LLVM_CC_riscv_64 ?= clang --target=riscv64-unknown-elf
+LLVM_LD_riscv_64 ?= ld.lld
+LLVM_OC_riscv_64 ?= llvm-objcopy
+LLVM_ST_riscv_64 ?= llvm-strip
+
+LLVM_CC_riscv_32 ?= clang --target=riscv32-unknown-elf
+LLVM_LD_riscv_32 ?= ld.lld
+LLVM_OC_riscv_32 ?= llvm-objcopy
+LLVM_ST_riscv_32 ?= llvm-strip
 
 
 ifeq ($(TOOLCHAIN), gnu)
-	CC := $(GNU_CC)
-	LD := ld
-	OC := objcopy
-	ST := strip
-ifeq ($(ARCH), x86_64)
-	CC := $(GNU_CC_x86_64)
-else ifeq ($(ARCH), x86_32)
-	CC := $(GNU_CC_x86_32)
-	LD := $(GNU_LD_x86_32)
-	OC := $(GNU_OC_x86_32)
-	ST := $(GNU_ST_x86_32)
-else ifeq ($(ARCH), riscv_64)
-	CC := $(GNU_CC_riscv_64)
-	LD := $(GNU_LD_riscv_64)
-	OC := $(GNU_OC_riscv_64)
-	ST := $(GNU_ST_riscv_64)
-else ifeq ($(ARCH), riscv_32)
-	CC := $(GNU_CC_riscv_32)
-	LD := $(GNU_LD_riscv_32)
-	OC := $(GNU_OC_riscv_32)
-	ST := $(GNU_ST_riscv_32)
-endif
+	CC := $(GNU_CC_$(ARCH))
+	LD := $(GNU_LD_$(ARCH))
+	OC := $(GNU_OC_$(ARCH))
+	ST := $(GNU_ST_$(ARCH))
 else ifeq ($(TOOLCHAIN), llvm)
-	CC := $(LLVM_CC)
-	LD := ld.lld
-	OC := llvm-objcopy
-	ST := llvm-strip
-ifeq ($(ARCH), x86_64)
-	CC := $(LLVM_CC_x86_64)
-else ifeq ($(ARCH), x86_32)
-	CC := $(LLVM_CC_x86_32)
-else ifeq ($(ARCH), riscv_64)
-	CC := $(LLVM_CC_riscv_64)
-	LD := $(LLVM_LD_riscv_64)
-	OC := $(LLVM_OC_riscv_64)
-	ST := $(LLVM_ST_riscv_64)
-else ifeq ($(ARCH), riscv_32)
-	CC := $(LLVM_CC_riscv_32)
-	LD := $(LLVM_LD_riscv_32)
-	OC := $(LLVM_OC_riscv_32)
-	ST := $(LLVM_ST_riscv_32)
-endif
+	CC := $(LLVM_CC_$(ARCH))
+	LD := $(LLVM_LD_$(ARCH))
+	OC := $(LLVM_OC_$(ARCH))
+	ST := $(LLVM_ST_$(ARCH))
 else
 $(error Unsupported TOOLCHAIN '$(TOOLCHAIN)')
+endif
+
+ifeq ($(strip $(CC)),)
+$(error Unsupported ARCH '$(ARCH)' for TOOLCHAIN '$(TOOLCHAIN)')
 endif
 
 define cc
@@ -104,7 +87,8 @@ define st
 endef
 
 
-LIBGCC = $(shell $(CC) $(CC_BASE) $(1) -print-libgcc-file-name)
+LIBGCC = $(shell lib=$$($(CC) $(CC_BASE) $(1) -print-libgcc-file-name 2>/dev/null); \
+	if [ -f "$$lib" ]; then echo "$$lib"; fi)
 
 LIBC_DIRS := libs/libc libs/libc_ext
 

@@ -1717,7 +1717,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         log_warn(
             "failed to create '%s' because vnode type %u is unsupported",
             child->name,
-            child->type
+            (unsigned int)child->type
         );
         mutex_unlock(&priv->lock);
         return -1;
