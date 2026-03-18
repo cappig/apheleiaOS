@@ -257,6 +257,29 @@ static bool split_region_for_page(
     return false;
 }
 
+static bool upgrade_cow_region(page_t *root, sched_user_region_t *region) {
+    if (!root || !region || !region->pages) {
+        return false;
+    }
+
+    region->flags = (region->flags & ~SCHED_REGION_COW) | PT_WRITE;
+
+    for (size_t i = 0; i < region->pages; i++) {
+        uintptr_t vaddr = region->vaddr + i * PAGE_4KIB;
+        page_t *entry = NULL;
+        size_t size = arch_get_page(root, vaddr, &entry);
+
+        if (!entry || size != PAGE_4KIB) {
+            continue;
+        }
+
+        *entry |= PT_WRITE;
+        arch_tlb_flush(vaddr);
+    }
+
+    return true;
+}
+
 bool sched_handle_cow_fault(
     sched_thread_t *thread,
     uintptr_t addr,
@@ -277,6 +300,22 @@ bool sched_handle_cow_fault(
     }
 
     if (!(region->flags & SCHED_REGION_COW)) {
+        if (region->flags & PT_WRITE) {
+            page_t *root = arch_vm_root(thread->vm_space);
+
+            if (root) {
+                page_t *entry = NULL;
+                size_t size = arch_get_page(root, page_addr, &entry);
+
+                if (entry && size == PAGE_4KIB && !(*entry & PT_WRITE)) {
+                    *entry |= PT_WRITE;
+                    arch_tlb_flush(page_addr);
+                    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+                    return true;
+                }
+            }
+        }
+
         spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return false;
     }
@@ -309,6 +348,12 @@ bool sched_handle_cow_fault(
         refs = 2;
     }
 
+    if (refs <= 1) {
+        bool upgraded = upgrade_cow_region(root, region);
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+        return upgraded;
+    }
+
     if (refs > 1) {
         uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(1);
 
@@ -331,18 +376,6 @@ bool sched_handle_cow_fault(
         arch_page_set_paddr(entry, new_paddr);
         *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
         arch_free_frames((void *)(uintptr_t)old_paddr, 1);
-    } else {
-        bool split_ok =
-            split_region_for_page(region, page_index, (uintptr_t)old_paddr, new_flags);
-
-        if (!split_ok) {
-            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-            return false;
-        }
-
-        *entry = 0;
-        arch_page_set_paddr(entry, old_paddr);
-        *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
     }
 
     arch_tlb_flush(page_addr);

@@ -22,6 +22,7 @@
 
 static volatile sig_atomic_t got_sigint = 0;
 static volatile sig_atomic_t got_sigwinch = 0;
+static volatile sig_atomic_t got_sigchld = 0;
 
 #define SH_ENV_MAX       32
 #define SH_ENV_KEY_MAX   32
@@ -99,6 +100,11 @@ static void sigint_handler(int signum) {
 static void sigwinch_handler(int signum) {
     (void)signum;
     got_sigwinch = 1;
+}
+
+static void sigchld_handler(int signum) {
+    (void)signum;
+    got_sigchld = 1;
 }
 
 static void tty_set_pgrp(pid_t pid) {
@@ -247,6 +253,10 @@ static void reap_jobs(bool report) {
     }
 }
 
+static void reap_jobs_signal(void) {
+    reap_jobs(false);
+}
+
 static void print_jobs(void) {
     reap_jobs(false);
 
@@ -325,6 +335,7 @@ static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
         }
 
         if (errno == EINTR) {
+            reap_jobs(false);
             continue;
         }
 
@@ -1937,12 +1948,15 @@ int main(int argc, char **argv) {
 
     signal(SIGINT, sigint_handler);
     signal(SIGWINCH, sigwinch_handler);
+    signal(SIGCHLD, sigchld_handler);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
 
     input_set_sigint_flag(&got_sigint);
     input_set_sigwinch_flag(&got_sigwinch);
+    input_set_sigchld_flag(&got_sigchld);
+    input_set_sigchld_callback(reap_jobs_signal);
 
     env_set("PATH", "/bin");
     env_set("HOME", "/");

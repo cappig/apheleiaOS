@@ -58,7 +58,6 @@
 #define APIC_TIMER_INITIAL_MAX 0xffffffffU
 
 #if defined(__i386__)
-#define APIC_MMIO_BASE_32   0xfec00000U
 #define APIC_MMIO_STRIDE_32 0x00010000U
 #endif
 

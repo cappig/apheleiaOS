@@ -38,6 +38,35 @@
 
 #define SYSCALL_INT 0x80
 
+static bool _user_buf_ok(const void *buf, size_t len) {
+    if (!buf) {
+        return false;
+    }
+
+    if (!len) {
+        return true;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!thread || !thread->user_thread) {
+        return true;
+    }
+
+    uintptr_t start = (uintptr_t)buf;
+    uintptr_t end = start + len - 1;
+
+    if (end < start) {
+        return false;
+    }
+
+    uintptr_t kernel_base = (uintptr_t)arch_kernel_vaddr_base();
+    if (kernel_base && (start >= kernel_base || end >= kernel_base)) {
+        return false;
+    }
+
+    return true;
+}
+
 static mode_t _apply_umask(mode_t mode, mode_t mask) {
     mode_t special = mode & 07000;
     mode_t perms = (mode & 0777) & ~(mask & 0777);
@@ -799,7 +828,7 @@ static ssize_t _fd_write_vfs(
 }
 
 static ssize_t sys_read(int fd, void *buf, size_t len) {
-    if (!buf) {
+    if (!_user_buf_ok(buf, len)) {
         return -EFAULT;
     }
 
@@ -835,7 +864,7 @@ static ssize_t sys_read(int fd, void *buf, size_t len) {
 }
 
 static ssize_t sys_pread(int fd, void *buf, size_t len, off_t offset) {
-    if (!buf) {
+    if (!_user_buf_ok(buf, len)) {
         return -EFAULT;
     }
 
@@ -860,7 +889,7 @@ static ssize_t sys_pread(int fd, void *buf, size_t len, off_t offset) {
 }
 
 static ssize_t sys_write(int fd, const void *buf, size_t len) {
-    if (!buf) {
+    if (!_user_buf_ok(buf, len)) {
         return -EFAULT;
     }
 
@@ -898,7 +927,7 @@ static ssize_t sys_write(int fd, const void *buf, size_t len) {
 }
 
 static ssize_t sys_pwrite(int fd, const void *buf, size_t len, off_t offset) {
-    if (!buf) {
+    if (!_user_buf_ok(buf, len)) {
         return -EFAULT;
     }
 
@@ -927,6 +956,12 @@ static ssize_t sys_pwrite(int fd, const void *buf, size_t len, off_t offset) {
 static ssize_t sys_ioctl(int fd, u64 request, void *args) {
     sched_thread_t *thread = sched_current();
     sched_fd_t *entry = NULL;
+
+    if (args && thread && thread->user_thread) {
+        if (!_user_buf_ok(args, 1)) {
+            return -EFAULT;
+        }
+    }
 
     if (thread && _fd_lookup(thread, fd, &entry)) {
         if (entry->kind == SCHED_FD_VFS && entry->node) {
@@ -2016,6 +2051,10 @@ static ssize_t sys_readlink(const char *path, char *buf, size_t bufsiz) {
 
     if (!bufsiz) {
         return 0;
+    }
+
+    if (!_user_buf_ok(buf, bufsiz)) {
+        return -EFAULT;
     }
 
     sched_thread_t *thread = sched_current();

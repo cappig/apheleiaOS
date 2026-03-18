@@ -1,6 +1,8 @@
 #include "heap.h"
 
 #include <arch/arch.h>
+#include <arch/mm.h>
+#include <arch/paging.h>
 #include <alloc/bitmap.h>
 #include <base/macros.h>
 #include <base/types.h>
@@ -17,6 +19,7 @@
 #include "x86/paging64.h"
 #else
 #include "x86/paging32.h"
+#include "x86/boot.h"
 #endif
 
 #include "physical.h"
@@ -36,17 +39,16 @@ typedef struct {
 static heap_arena_t heap_arenas[HEAP_MAX_ARENAS] = {0};
 static size_t heap_arena_count = 0;
 static spinlock_t heap_lock = SPINLOCK_INIT;
-
-
-static uintptr_t _linear_offset(void) {
-#if defined(__x86_64__)
-    return LINEAR_MAP_OFFSET_64;
-#else
-    // 32-bit uses a limited phys window, so keep heap identity-mapped for now
-    // FIXME: is this ok??
-    return 0;
+#if defined(__i386__)
+static uintptr_t heap_vaddr_next = 0;
+static uintptr_t heap_vaddr_limit = 0;
 #endif
+
+#if defined(__x86_64__)
+static uintptr_t _linear_offset(void) {
+    return LINEAR_MAP_OFFSET_64;
 }
+#endif
 
 static size_t _usable_blocks_for_pages(size_t pages) {
     if (!pages) {
@@ -103,7 +105,36 @@ static bool _add_arena(size_t pages) {
         return false;
     }
 
+#if defined(__i386__)
+    void *root = arch_vm_root(arch_vm_kernel());
+    if (!root) {
+        free_frames(paddr, pages);
+        return false;
+    }
+
+    if (!heap_vaddr_limit) {
+        extern char __kernel_end;
+        heap_vaddr_next = ALIGN((uintptr_t)&__kernel_end, PAGE_4KIB);
+        heap_vaddr_limit = KSTACK_REGION_BASE_32;
+    }
+
+    size_t size = pages * PAGE_4KIB;
+    uintptr_t vaddr = heap_vaddr_next;
+
+    if (!heap_vaddr_limit || vaddr + size < vaddr ||
+        vaddr + size > heap_vaddr_limit) {
+        free_frames(paddr, pages);
+        return false;
+    }
+
+    arch_map_region(root, pages, vaddr, (uintptr_t)paddr, PT_WRITE);
+    heap_vaddr_next = vaddr + size;
+
+    void *start = (void *)vaddr;
+#else
     void *start = (void *)((uintptr_t)paddr + _linear_offset());
+#endif
+
     heap_arena_t *arena = &heap_arenas[heap_arena_count];
 
     bool alloc_inited = bitmap_alloc_init(

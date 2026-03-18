@@ -16,6 +16,8 @@
 
 static volatile sig_atomic_t *sh_sigint = NULL;
 static volatile sig_atomic_t *sh_sigwinch = NULL;
+static volatile sig_atomic_t *sh_sigchld = NULL;
+static void (*sh_sigchld_cb)(void) = NULL;
 static char *sh_history[SH_HISTORY_MAX];
 static size_t sh_history_count = 0;
 static termios_t sh_tty_saved = {0};
@@ -102,6 +104,14 @@ void input_set_sigwinch_flag(volatile sig_atomic_t *flag) {
     sh_sigwinch = flag;
 }
 
+void input_set_sigchld_flag(volatile sig_atomic_t *flag) {
+    sh_sigchld = flag;
+}
+
+void input_set_sigchld_callback(void (*callback)(void)) {
+    sh_sigchld_cb = callback;
+}
+
 static bool tty_read(termios_t *out) {
     if (!out) {
         return false;
@@ -164,6 +174,16 @@ static bool got_sigwinch(void) {
 static void clear_sigwinch(void) {
     if (sh_sigwinch) {
         *sh_sigwinch = 0;
+    }
+}
+
+static bool got_sigchld(void) {
+    return sh_sigchld && *sh_sigchld;
+}
+
+static void clear_sigchld(void) {
+    if (sh_sigchld) {
+        *sh_sigchld = 0;
     }
 }
 
@@ -466,6 +486,14 @@ int read_line_interactive(
             clear_sigwinch();
             layout.cols = normalize_cols(term_cols());
             redraw_line(prompt, &layout, buf, pos, cursor, &render);
+        }
+
+        if (got_sigchld()) {
+            clear_sigchld();
+
+            if (sh_sigchld_cb) {
+                sh_sigchld_cb();
+            }
         }
 
         char ch = 0;

@@ -1,5 +1,53 @@
 #include "internal.h"
 
+static void sched_finish_exit_pending(void) {
+    sched_thread_t *pending = sched_local()->exit_pending;
+    if (!pending) {
+        return;
+    }
+
+    unsigned long flags = 0;
+    if (!sched_lock_try_save(&flags)) {
+        return;
+    }
+
+    sched_local()->exit_pending = NULL;
+
+    pid_t exited_pid = pending->pid;
+    bool notify_parent = false;
+    sched_thread_t *parent = NULL;
+
+    thread_unclaim(pending);
+
+    if (
+        pending != sched_local_idle() &&
+        sched_state.zombie_list &&
+        !pending->in_zombie_list
+    ) {
+        pending->zombie_node.data = pending;
+        list_append(sched_state.zombie_list, &pending->zombie_node);
+        pending->in_zombie_list = true;
+    }
+
+    if (pending->user_thread) {
+        parent = find_thread(pending->ppid);
+        if (parent) {
+            notify_parent = true;
+        }
+    }
+
+    sched_lock_restore(flags);
+
+    if (notify_parent) {
+        sched_wake_one(&parent->wait_queue);
+        sched_signal_send_thread(parent, SIGCHLD);
+    }
+
+    if (exited_pid > 0) {
+        exit_event_push(exited_pid);
+    }
+}
+
 static bool sched_eval_policy(sched_thread_t *thread, size_t cpu_id) {
     size_t rq_depth = sched_rq_depth(cpu_id);
 
@@ -178,6 +226,8 @@ void sched_capture_context(arch_int_state_t *state) {
     if (!sched_running_get() || !state) {
         return;
     }
+
+    sched_finish_exit_pending();
 
     sched_thread_t *current = sched_local_current();
     if (!current) {
@@ -423,7 +473,6 @@ static void sched_reparent_children(sched_thread_t *parent) {
 void sched_exit(void) {
     arch_irq_save();
     sched_thread_t *self = sched_local_current();
-    pid_t exited_pid = 0;
 
     if (sched_thread_is_idle(self)) {
         panic("idle thread attempted to exit");
@@ -432,27 +481,12 @@ void sched_exit(void) {
     unsigned long flags = sched_lock_save();
 
     if (self) {
-        exited_pid = self->pid;
         wq_dequeue(self);
         sleep_heap_remove(self);
         sched_reparent_children(self);
         thread_unclaim(self);
         thread_set_state(self, THREAD_ZOMBIE);
-
-        if (self != sched_local_idle() && !self->in_zombie_list) {
-            self->zombie_node.data = self;
-            list_append(sched_state.zombie_list, &self->zombie_node);
-            self->in_zombie_list = true;
-        }
-
-        if (self->user_thread) {
-            sched_thread_t *parent = find_thread(self->ppid);
-
-            if (parent) {
-                sched_wake_one(&parent->wait_queue);
-                sched_signal_send_thread(parent, SIGCHLD);
-            }
-        }
+        sched_local()->exit_pending = self;
     }
 
     sched_thread_t *next = pick_next_thread();
@@ -475,10 +509,6 @@ void sched_exit(void) {
 
         sched_local_set_current(next);
         thread_claim(next, sched_cpu_id());
-    }
-
-    if (exited_pid > 0) {
-        exit_event_push(exited_pid);
     }
 
     sched_lock_restore(flags);

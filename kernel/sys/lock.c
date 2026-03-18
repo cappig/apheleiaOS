@@ -64,8 +64,9 @@ void mutex_init(mutex_t *mutex) {
     spinlock_init(&mutex->lock);
     mutex->held = 0;
     __atomic_store_n(&mutex->wait_queue, NULL, __ATOMIC_RELEASE);
+
 #if LOCK_DEBUG
-    mutex->owner_cpu = (size_t)-1;
+    mutex->owner_thread = NULL;
 #endif
 }
 
@@ -78,9 +79,11 @@ bool mutex_try_lock(mutex_t *mutex) {
     bool ok = false;
     if (!mutex->held) {
         mutex->held = 1;
+
 #if LOCK_DEBUG
-        mutex->owner_cpu = lock_cpu_id();
+        mutex->owner_thread = sched_is_running() ? sched_current() : NULL;
 #endif
+
         ok = true;
     }
     spin_unlock_irqrestore(&mutex->lock, flags);
@@ -97,9 +100,11 @@ void mutex_lock(mutex_t *mutex) {
         unsigned long flags = spin_lock_irqsave(&mutex->lock);
         if (!mutex->held) {
             mutex->held = 1;
+
 #if LOCK_DEBUG
-            mutex->owner_cpu = lock_cpu_id();
+            mutex->owner_thread = sched_is_running() ? sched_current() : NULL;
 #endif
+
             spin_unlock_irqrestore(&mutex->lock, flags);
             return;
         }
@@ -145,16 +150,27 @@ void mutex_unlock(mutex_t *mutex) {
 
     sched_wait_queue_t *queue = mutex_wait_queue_get(mutex, false);
     unsigned long flags = spin_lock_irqsave(&mutex->lock);
+
 #if LOCK_DEBUG
-    if (!mutex->held || mutex->owner_cpu != lock_cpu_id()) {
+    if (!mutex->held) {
         spin_unlock_irqrestore(&mutex->lock, flags);
         __builtin_trap();
+    }
+
+    if (sched_is_running()) {
+        sched_thread_t *current = sched_current();
+
+        if (current && mutex->owner_thread != current) {
+            spin_unlock_irqrestore(&mutex->lock, flags);
+            __builtin_trap();
+        }
     }
 #endif
     mutex->held = 0;
 #if LOCK_DEBUG
-    mutex->owner_cpu = (size_t)-1;
+    mutex->owner_thread = NULL;
 #endif
+
     spin_unlock_irqrestore(&mutex->lock, flags);
 
     if (queue && sched_is_running()) {

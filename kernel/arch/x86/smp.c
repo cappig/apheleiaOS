@@ -83,6 +83,28 @@ static inline bool _tsc_timed_out(u64 deadline) {
     return read_tsc() >= deadline;
 }
 
+#ifdef MMU_DEBUG
+static void _log_tlb_timeout_state(u64 targets, u64 acks) {
+    for (size_t i = 0; i < core_count && i < SMP_TLB_MAX_TARGET_CORES; i++) {
+        if (!(targets & (1ULL << i))) {
+            continue;
+        }
+
+        sched_thread_t *thread = sched_current_core(i);
+        const char *name = thread ? thread->name : "<none>";
+        pid_t pid = thread ? thread->pid : -1;
+
+        log_warn(
+            "tlb wait core=%zu acked=%u current=%s pid=%d",
+            i,
+            (acks & (1ULL << i)) ? 1 : 0,
+            name,
+            pid
+        );
+    }
+}
+#endif
+
 static void _fpu_enable_local(void) {
     u64 cr0 = read_cr0();
     cr0 &= ~(u64)(CR0_EM | CR0_TS);
@@ -484,6 +506,10 @@ void smp_tlb_shootdown(uintptr_t addr) {
             u64 pending =
                 __atomic_load_n(&smp_tlb_targets, __ATOMIC_ACQUIRE);
 
+#ifdef MMU_DEBUG
+            _log_tlb_timeout_state(pending, acks);
+#endif
+
             panic(
                 "TLB shootdown timeout (self=%zu targets=%#" PRIx64
                 " acks=%#" PRIx64 " online=%zu)",
@@ -498,6 +524,10 @@ void smp_tlb_shootdown(uintptr_t addr) {
             u64 acks = __atomic_load_n(&smp_tlb_acks, __ATOMIC_ACQUIRE);
             u64 pending =
                 __atomic_load_n(&smp_tlb_targets, __ATOMIC_ACQUIRE);
+
+#ifdef MMU_DEBUG
+            _log_tlb_timeout_state(pending, acks);
+#endif
 
             panic(
                 "TLB shootdown timeout (self=%zu targets=%#" PRIx64

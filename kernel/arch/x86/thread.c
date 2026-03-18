@@ -1,4 +1,5 @@
 #include <arch/thread.h>
+#include <arch/signal.h>
 #include <base/macros.h>
 #include <sched/scheduler.h>
 #include <x86/gdt.h>
@@ -72,11 +73,11 @@ arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     uintptr_t entry_rsp = stack_top - 24;
 
     sp -= sizeof(u64);
-    *(u64 *)sp = 0; // padding
+    *(u64 *)sp = 0;
     sp -= sizeof(u64);
-    *(u64 *)sp = GDT_KERNEL_DATA; // ss
+    *(u64 *)sp = GDT_KERNEL_DATA;
     sp -= sizeof(u64);
-    *(u64 *)sp = (u64)entry_rsp; // rsp
+    *(u64 *)sp = (u64)entry_rsp;
     sp -= sizeof(u64);
     *(u64 *)sp = 0x202; // RFLAGS with IF set
     sp -= sizeof(u64);
@@ -146,14 +147,6 @@ arch_word_t arch_state_sp(const arch_int_state_t *state) {
 #endif
 }
 
-arch_word_t arch_state_cs(const arch_int_state_t *state) {
-    return (arch_word_t)state->s_regs.cs;
-}
-
-arch_word_t arch_state_ss(const arch_int_state_t *state) {
-    return (arch_word_t)state->s_regs.ss;
-}
-
 static arch_word_t arch_state_flags(const arch_int_state_t *state) {
 #if defined(__x86_64__)
     return (arch_word_t)state->s_regs.rflags;
@@ -162,9 +155,22 @@ static arch_word_t arch_state_flags(const arch_int_state_t *state) {
 #endif
 }
 
-bool arch_state_flags_sane(const arch_int_state_t *state) {
+bool arch_state_is_valid(const arch_int_state_t *state) {
+    if (!state) {
+        return false;
+    }
+
     // bit 1 of FLAGS/EFLAGS/RFLAGS is architecturally reserved and must be 1
-    return (arch_state_flags(state) & 0x2) != 0;
+    if ((arch_state_flags(state) & 0x2) == 0) {
+        return false;
+    }
+
+    if (arch_signal_is_user(state)) {
+        return state->s_regs.cs == (arch_word_t)(GDT_USER_CODE | 3) &&
+               state->s_regs.ss == (arch_word_t)(GDT_USER_DATA | 3);
+    }
+
+    return state->s_regs.cs == (arch_word_t)GDT_KERNEL_CODE;
 }
 
 arch_word_t arch_kernel_vaddr_base(void) {
@@ -173,16 +179,4 @@ arch_word_t arch_kernel_vaddr_base(void) {
 #else
     return (arch_word_t)0xc0000000U;
 #endif
-}
-
-arch_word_t arch_kernel_cs(void) {
-    return (arch_word_t)GDT_KERNEL_CODE;
-}
-
-arch_word_t arch_user_cs(void) {
-    return (arch_word_t)(GDT_USER_CODE | 3);
-}
-
-arch_word_t arch_user_ss(void) {
-    return (arch_word_t)(GDT_USER_DATA | 3);
 }

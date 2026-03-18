@@ -29,18 +29,16 @@ cpu_core_t *cpu_current(void) {
         return core;
     }
 
-    return cpu_boot_local;
+    if (_cpu_ptr_is_core(cpu_boot_local)) {
+        return cpu_boot_local;
+    }
+
+    return &cores_local[0];
 }
 
 void cpu_set_current(cpu_core_t *core) {
-#if defined(__i386__)
-    if (core && core->id == 0) {
-        cpu_boot_local = core;
-    }
-#else
     cpu_boot_local = core;
     arch_cpu_set_local(core);
-#endif
 }
 
 NORETURN void cpu_halt(void) {

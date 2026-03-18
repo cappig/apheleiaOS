@@ -55,6 +55,7 @@ typedef struct {
     sched_thread_t *current;
     sched_thread_t *idle_thread;
     sched_thread_t *handoff_ready;
+    sched_thread_t *exit_pending;
     size_t preempt_depth;
     size_t sched_lock_depth;
     unsigned long sched_lock_irq_flags;

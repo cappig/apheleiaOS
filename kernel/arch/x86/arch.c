@@ -64,6 +64,20 @@ static volatile u64 wallclock_base_ticks ALIGNED(8) = 0;
 static volatile u64 wallclock_last_sync_ticks ALIGNED(8) = 0;
 static volatile u32 wallclock_sync_inflight = 0;
 
+#if defined(__x86_64__)
+static bool _cpu_ptr_is_core_local(const cpu_core_t *core) {
+    uintptr_t ptr = (uintptr_t)core;
+    uintptr_t first = (uintptr_t)&cores_local[0];
+    uintptr_t last = (uintptr_t)&cores_local[MAX_CORES];
+
+    if (ptr < first || ptr >= last) {
+        return false;
+    }
+
+    return ((ptr - first) % sizeof(cpu_core_t)) == 0;
+}
+#endif
+
 typedef struct {
     u64 paddr;
     size_t size;
@@ -586,19 +600,32 @@ static void _page_fault_handler(int_state_t *state) {
 #if defined(__x86_64__)
     if (state) {
         u64 rip = state->s_regs.rip;
-        u64 rsp = state->s_regs.rsp;
         u64 cs = state->s_regs.cs;
+        bool user_frame = (cs & 0x3) == 3;
 
-        log_fatal(
-            "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
-            " rip=%#" PRIx64 " rsp=%#" PRIx64 " cs=%#" PRIx64,
-            addr,
-            code,
-            cr3,
-            rip,
-            rsp,
-            cs
-        );
+        if (user_frame) {
+            log_fatal(
+                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
+                " rip=%#" PRIx64 " rsp=%#" PRIx64 " cs=%#" PRIx64,
+                addr,
+                code,
+                cr3,
+                rip,
+                (u64)state->s_regs.rsp,
+                cs
+            );
+        } else {
+            log_fatal(
+                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
+                " rip=%#" PRIx64 " ksp=%#" PRIx64 " cs=%#" PRIx64,
+                addr,
+                code,
+                cr3,
+                rip,
+                (u64)_read_stack_ptr(),
+                cs
+            );
+        }
     } else {
         log_fatal(
             "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
@@ -610,19 +637,32 @@ static void _page_fault_handler(int_state_t *state) {
 #else
     if (state) {
         u64 eip = state->s_regs.eip;
-        u64 esp = state->s_regs.esp;
         u64 cs = state->s_regs.cs;
+        bool user_frame = (cs & 0x3) == 3;
 
-        log_fatal(
-            "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
-            " eip=%#" PRIx64 " esp=%#" PRIx64 " cs=%#" PRIx64,
-            addr,
-            code,
-            cr3,
-            eip,
-            esp,
-            cs
-        );
+        if (user_frame) {
+            log_fatal(
+                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
+                " eip=%#" PRIx64 " esp=%#" PRIx64 " cs=%#" PRIx64,
+                addr,
+                code,
+                cr3,
+                eip,
+                (u64)state->s_regs.esp,
+                cs
+            );
+        } else {
+            log_fatal(
+                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
+                " eip=%#" PRIx64 " ksp=%#" PRIx64 " cs=%#" PRIx64,
+                addr,
+                code,
+                cr3,
+                eip,
+                (u64)_read_stack_ptr(),
+                cs
+            );
+        }
     } else {
         log_fatal(
             "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
@@ -707,6 +747,24 @@ static void _invalid_opcode_handler(int_state_t *state) {
 #endif
 
     panic_prepare();
+
+#ifdef INT_DEBUG
+    sched_thread_t *current = sched_current();
+
+    if (current) {
+        log_fatal(
+            "current thread pid=%d name=%s context=%#" PRIx64
+            " stack=%#" PRIx64 " stack_size=%zu cpu=%d state=%d",
+            current->pid,
+            current->name,
+            (u64)(uintptr_t)current->context,
+            (u64)(uintptr_t)current->stack,
+            current->stack_size,
+            current->running_cpu,
+            current->state
+        );
+    }
+#endif
 
 #if defined(__x86_64__)
     if (state) {
@@ -1108,12 +1166,32 @@ void arch_cpu_set_local(void *ptr) {
 void *arch_cpu_get_local(void) {
 #if defined(__x86_64__)
     u64 gs_base = read_msr(GS_BASE);
+    cpu_core_t *core = (cpu_core_t *)(uintptr_t)gs_base;
 
-    if (gs_base) {
-        return (void *)(uintptr_t)gs_base;
+    if (_cpu_ptr_is_core_local(core)) {
+        return core;
     }
 
-    return (void *)(uintptr_t)read_msr(KERNEL_GS_BASE);
+    u64 kernel_gs_base = read_msr(KERNEL_GS_BASE);
+    core = (cpu_core_t *)(uintptr_t)kernel_gs_base;
+
+    if (_cpu_ptr_is_core_local(core)) {
+        return core;
+    }
+
+    cpuid_regs_t regs = {0};
+    cpuid(1, &regs);
+    u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
+    u32 live_apic_id = lapic_id();
+
+    if (live_apic_id || live_apic_id == cpuid_apic_id) {
+        core = cpu_find_by_lapic(live_apic_id);
+        if (core) {
+            return core;
+        }
+    }
+
+    return cpu_find_by_lapic(cpuid_apic_id);
 #else
     size_t core_id = 0;
     if (gdt_current_core_id(&core_id) && core_id < MAX_CORES) {

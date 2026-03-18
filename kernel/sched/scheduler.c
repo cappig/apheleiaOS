@@ -141,6 +141,22 @@ void scheduler_start(void) {
     if (!current || !next || next == current) {
         sched_lock_restore(flags);
         sched_secondary_released_set(true);
+
+        if (
+            current == sched_local_idle() &&
+            thread_ctx_ok(current) &&
+            ctx_valid(current)
+        ) {
+            arch_set_kernel_stack((uintptr_t)current->stack + current->stack_size);
+            arch_vm_switch(current->vm_space);
+
+            if (current->fpu_initialized) {
+                arch_fpu_restore(current->fpu_state);
+            }
+
+            arch_context_switch(current->context);
+        }
+
         arch_irq_restore(irq_flags);
         return;
     }
@@ -212,6 +228,22 @@ void scheduler_start_secondary(void) {
 
     if (!current || !next || next == current) {
         sched_lock_restore(flags);
+
+        if (
+            current == sched_local_idle() &&
+            thread_ctx_ok(current) &&
+            ctx_valid(current)
+        ) {
+            arch_set_kernel_stack((uintptr_t)current->stack + current->stack_size);
+            arch_vm_switch(current->vm_space);
+
+            if (current->fpu_initialized) {
+                arch_fpu_restore(current->fpu_state);
+            }
+
+            arch_context_switch(current->context);
+        }
+
         arch_irq_restore(irq_flags);
         return;
     }

@@ -243,9 +243,7 @@ void thread_destroy(sched_thread_t *thread) {
 
     sched_wait_queue_destroy(&thread->wait_queue);
 
-    if (thread->stack) {
-        free(thread->stack);
-    }
+    arch_kernel_stack_free(thread);
 
     free(thread);
 }
@@ -312,4 +310,3 @@ void sched_reap(void) {
 
     sched_lock_restore(flags);
 }
-

@@ -1,9 +1,14 @@
 #include "internal.h"
 #include <arch/signal.h>
+#include <arch/thread.h>
 
 static bool
 ctx_stack_valid(const sched_thread_t *thread, size_t need_bytes) {
     if (!thread || !thread->context || !thread->stack || !thread->stack_size) {
+        return false;
+    }
+
+    if (!arch_kernel_stack_valid(thread)) {
         return false;
     }
 
@@ -24,6 +29,10 @@ bool ctx_candidate_valid(
     const arch_int_state_t *state
 ) {
     if (!thread || !state || !thread->stack || !thread->stack_size) {
+        return false;
+    }
+
+    if (!arch_kernel_stack_valid(thread)) {
         return false;
     }
 
@@ -68,19 +77,19 @@ bool ctx_valid(const sched_thread_t *thread) {
         return false;
     }
 
-    arch_word_t cs = arch_state_cs(state);
-    bool kernel_cs = cs == arch_kernel_cs();
-    bool user_cs = cs == arch_user_cs();
+    bool is_user = arch_signal_is_user(state);
 
-    if (!kernel_cs && !user_cs) {
+    if (!arch_state_is_valid(state)) {
         return false;
     }
 
-    if (kernel_cs && arch_state_ip(state) < arch_kernel_vaddr_base()) {
-        return false;
+    if (!is_user && arch_kernel_vaddr_base()) {
+        if (arch_state_ip(state) < arch_kernel_vaddr_base()) {
+            return false;
+        }
     }
 
-    if (user_cs) {
+    if (is_user) {
         if (!thread->user_thread) {
             return false;
         }
@@ -90,20 +99,10 @@ bool ctx_valid(const sched_thread_t *thread) {
             return false;
         }
 
-        // Will these translate well to other  arches??
         arch_word_t ip = arch_state_ip(state);
         arch_word_t sp = arch_state_sp(state);
-        arch_word_t ss = arch_state_ss(state);
 
         if (ip == 0 || sp == 0) {
-            return false;
-        }
-
-        if (ss != arch_user_ss()) {
-            return false;
-        }
-
-        if (!arch_state_flags_sane(state)) {
             return false;
         }
 

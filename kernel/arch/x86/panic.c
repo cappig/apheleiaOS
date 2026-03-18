@@ -1,4 +1,5 @@
 #include <arch/arch.h>
+#include <arch/signal.h>
 #include <inttypes.h>
 #include <log/log.h>
 
@@ -37,6 +38,18 @@ static inline u16 _read_fs(void) {
 static inline u16 _read_gs(void) {
     u16 value = 0;
     __asm__ volatile("mov %%gs, %0" : "=r"(value));
+    return value;
+}
+
+static inline u64 _read_stack_ptr_live(void) {
+    u64 value = 0;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(value));
+    return value;
+}
+
+static inline u16 _read_ss(void) {
+    u16 value = 0;
+    __asm__ volatile("mov %%ss, %0" : "=r"(value));
     return value;
 }
 
@@ -112,6 +125,18 @@ static inline u16 _read_gs(void) {
     return value;
 }
 
+static inline u32 _read_stack_ptr_live(void) {
+    u32 value = 0;
+    __asm__ volatile("mov %%esp, %0" : "=r"(value));
+    return value;
+}
+
+static inline u16 _read_ss(void) {
+    u16 value = 0;
+    __asm__ volatile("mov %%ss, %0" : "=r"(value));
+    return value;
+}
+
 static void _capture_segs_ctrl(segs_ctrl_t *out) {
     if (!out) {
         return;
@@ -155,16 +180,21 @@ static void _dump_regs_from_state(const arch_int_state_t *state) {
         return;
     }
 
+    bool user_frame = arch_signal_is_user(state);
+
 #if defined(__x86_64__)
+    u64 stack_ptr = user_frame ? state->s_regs.rsp : _read_stack_ptr_live();
+    u64 stack_seg = user_frame ? state->s_regs.ss : (u64)_read_ss();
+
     log_fatal("register dump");
     log_fatal(
         "  RIP=%#018" PRIx64 " RSP=%#018" PRIx64 " RFLAGS=%#018" PRIx64
         " CS=%#06" PRIx64 " SS=%#06" PRIx64,
         state->s_regs.rip,
-        state->s_regs.rsp,
+        stack_ptr,
         state->s_regs.rflags,
         state->s_regs.cs,
-        state->s_regs.ss
+        stack_seg
     );
     log_fatal(
         "  RSI=%#018" PRIx64 " RDI=%#018" PRIx64 " RBP=%#018" PRIx64,
@@ -197,15 +227,18 @@ static void _dump_regs_from_state(const arch_int_state_t *state) {
         state->g_regs.r15
     );
 #else
+    u32 stack_ptr = user_frame ? state->s_regs.esp : _read_stack_ptr_live();
+    u32 stack_seg = user_frame ? state->s_regs.ss : (u32)_read_ss();
+
     log_fatal("register dump");
     log_fatal(
         "  EIP=%#010" PRIx32 " ESP=%#010" PRIx32 " EFLAGS=%#010" PRIx32
         " CS=%#06" PRIx32 " SS=%#06" PRIx32,
         state->s_regs.eip,
-        state->s_regs.esp,
+        stack_ptr,
         state->s_regs.eflags,
         state->s_regs.cs,
-        state->s_regs.ss
+        stack_seg
     );
     log_fatal(
         "  ESI=%#010" PRIx32 " EDI=%#010" PRIx32 " EBP=%#010" PRIx32,

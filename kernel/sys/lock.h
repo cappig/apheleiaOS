@@ -16,22 +16,34 @@ typedef struct {
 #endif
 } spinlock_t;
 
+#if LOCK_DEBUG
+struct sched_thread;
+#endif
+
 typedef struct {
     spinlock_t lock;
     volatile int held;
     struct sched_wait_queue *wait_queue;
 #if LOCK_DEBUG
-    size_t owner_cpu;
+    struct sched_thread *owner_thread;
 #endif
 } mutex_t;
 
 void lock_preempt_disable(void);
 void lock_preempt_enable(void);
 
+#if LOCK_DEBUG
+#define SPINLOCK_INIT \
+    { \
+        .state = 0, \
+        .owner_cpu = (size_t)-1 \
+    }
+#else
 #define SPINLOCK_INIT \
     { \
         .state = 0 \
     }
+#endif
 
 #define MUTEX_INIT \
     { \
@@ -96,7 +108,7 @@ static inline void spin_lock(spinlock_t *lock) {
     size_t cpu_id = lock_cpu_id();
 
 #if LOCK_DEBUG
-    if (lock->owner_cpu == cpu_id) {
+    if (lock->state && lock->owner_cpu == cpu_id) {
         __builtin_trap();
     }
 #endif

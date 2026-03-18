@@ -319,15 +319,24 @@ sched_thread_t *create_thread(
     thread->uid = parent ? parent->uid : 0;
     thread->gid = parent ? parent->gid : 0;
     thread->group_count = parent ? parent->group_count : 0;
+
     if (parent && parent->group_count) {
         memcpy(thread->groups, parent->groups, sizeof(thread->groups));
     }
+
     thread->umask = parent ? parent->umask : 0022;
+
     thread->stack_size = SCHED_STACK_SIZE;
-    thread->stack = malloc(thread->stack_size);
+    if (!arch_kernel_stack_alloc(thread)) {
+        free(thread);
+        return NULL;
+    }
+
     thread->tty_index = parent ? parent->tty_index : -1;
+
     thread->sleep_queued = false;
     thread->sleep_index = 0;
+
     thread->wait_deadline_tick = 0;
     thread->wait_flags = 0;
     thread->wait_result = (u8)SCHED_WAIT_ABORTED;
@@ -348,7 +357,7 @@ sched_thread_t *create_thread(
     if (user_thread) {
         thread->vm_space = arch_vm_create_user();
         if (!thread->vm_space) {
-            free(thread->stack);
+            arch_kernel_stack_free(thread);
             free(thread);
             return NULL;
         }

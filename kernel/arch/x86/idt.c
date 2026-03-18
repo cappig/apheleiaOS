@@ -143,8 +143,6 @@ void isr_handler(int_state_t *state) {
         halt();
     }
 
-    sched_capture_context((arch_int_state_t *)state);
-
     if (state->int_num < ISR_COUNT && int_handlers[state->int_num]) {
         int_handlers[state->int_num](state);
         return;
