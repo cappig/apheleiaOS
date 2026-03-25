@@ -96,7 +96,6 @@ const driver_desc_t ata_driver_desc = {
     .is_busy = ata_driver_busy,
 };
 
-
 static void ata_delay(ata_device_t *dev) {
     if (!dev || !dev->channel) {
         return;

@@ -43,6 +43,7 @@ static size_t _window_cpu_id(void) {
 }
 
 static void _window_lock_acquire(void) {
+    unsigned long irq_flags = arch_irq_save();
     size_t cpu_id = _window_cpu_id();
 
     if (window_lock_depth[cpu_id]) {
@@ -50,7 +51,6 @@ static void _window_lock_acquire(void) {
         return;
     }
 
-    unsigned long irq_flags = arch_irq_save();
     spin_lock(&window_lock);
 
     window_lock_depth[cpu_id] = 1;
@@ -281,6 +281,7 @@ static size_t _window_cpu_id(void) {
 }
 
 static void _window_lock_acquire(void) {
+    unsigned long irq_flags = arch_irq_save();
     size_t cpu_id = _window_cpu_id();
 
     if (window_lock_depth[cpu_id]) {
@@ -288,7 +289,6 @@ static void _window_lock_acquire(void) {
         return;
     }
 
-    unsigned long irq_flags = arch_irq_save();
     spin_lock(&window_lock);
 
     window_lock_depth[cpu_id] = 1;

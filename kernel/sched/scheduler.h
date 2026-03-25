@@ -22,6 +22,7 @@ typedef struct vfs_node vfs_node_t;
 
 #define SCHED_PIPE_CAPACITY 4096
 #define SCHED_FD_FLAG_CLOEXEC (1u << 0)
+#define SCHED_THREAD_MAGIC 0x54485244u
 
 typedef enum {
     SCHED_FD_NONE = 0,
@@ -92,6 +93,7 @@ typedef u32 sched_wait_flags_t;
 
 typedef struct sched_thread {
     char name[PROC_NAME_MAX];
+    u32 magic;
     thread_state_t state;
     size_t affinity_core;
     size_t last_cpu;
@@ -231,6 +233,7 @@ sched_thread_t *sched_find_thread(pid_t pid);
 bool sched_pid_alive(pid_t pid);
 void thread_get(sched_thread_t *thread);
 void thread_put(sched_thread_t *thread);
+void sched_release_retired_current_cpu(void);
 int sched_set_affinity(pid_t pid, u64 mask);
 int sched_get_affinity(pid_t pid, u64 *mask_out);
 pid_t sched_getpid(void);
@@ -268,6 +271,10 @@ void thread_prepare_user(
     sched_thread_t *thread,
     uintptr_t entry,
     uintptr_t user_stack_top
+);
+bool sched_save_user_context(
+    sched_thread_t *thread,
+    const arch_int_state_t *state
 );
 void sched_discard_thread(sched_thread_t *thread);
 void sched_make_runnable(sched_thread_t *thread);

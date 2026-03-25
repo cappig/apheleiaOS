@@ -36,6 +36,12 @@ void wake_sleepers(u64 now) {
                 continue;
             }
 
+            if (thread_in_handoff(thread)) {
+                thread_set_state(thread, THREAD_READY);
+                sched_nudge_thread(thread);
+                continue;
+            }
+
             if (thread_on_local_cpu(thread)) {
                 sched_nudge_thread(thread);
                 continue;
@@ -250,6 +256,13 @@ void sched_make_runnable(sched_thread_t *thread) {
         return;
     }
 
+    if (thread_in_handoff(thread)) {
+        thread_set_state(thread, THREAD_READY);
+        sched_nudge_thread(thread);
+        sched_lock_restore(flags);
+        return;
+    }
+
     if (thread_on_local_cpu(thread)) {
         sched_nudge_thread(thread);
         sched_lock_restore(flags);
@@ -294,6 +307,13 @@ void sched_unblock_thread(sched_thread_t *thread) {
         if (sched_reclaim_handoff(thread)) {
             thread_set_state(thread, THREAD_READY);
             enqueue_thread(thread);
+            sched_lock_restore(flags);
+            return;
+        }
+
+        if (thread_in_handoff(thread)) {
+            thread_set_state(thread, THREAD_READY);
+            sched_nudge_thread(thread);
             sched_lock_restore(flags);
             return;
         }

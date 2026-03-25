@@ -31,6 +31,8 @@ SECTIONS
         *(COMMON)
     } :data
 
+    __kernel_end = .;
+
 
     /DISCARD/ :
     {

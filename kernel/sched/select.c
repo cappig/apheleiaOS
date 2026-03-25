@@ -215,14 +215,11 @@ void sched_flush_handoff(size_t cpu_id) {
         return;
     }
 
-    sched_cpu_state_t *local = &sched_state.cpu[cpu_id];
-
-    sched_thread_t *pending = local->handoff_ready;
+    sched_thread_t *pending = sched_take_handoff_cpu(cpu_id);
     if (!pending) {
         return;
     }
 
-    local->handoff_ready = NULL;
     sched_publish_handoff(pending, cpu_id);
 }
 

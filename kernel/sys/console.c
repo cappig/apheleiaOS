@@ -2028,7 +2028,11 @@ void console_panic(void) {
         return;
     }
 
-    unsigned long irq_flags = spin_lock_irqsave(&console_lock);
+    unsigned long irq_flags = arch_irq_save();
+    if (!spin_try_lock(&console_lock)) {
+        arch_irq_restore(irq_flags);
+        return;
+    }
 
     if (console_state.mode == CONSOLE_FRAMEBUFFER && _has_back_buffer()) {
         console_state.fb_owned = false;

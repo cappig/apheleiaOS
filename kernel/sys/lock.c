@@ -1,10 +1,65 @@
 #include "lock.h"
 
+#include <arch/arch.h>
+#include <inttypes.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
+#include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
+#include <sys/cpu.h>
+#include <sys/panic.h>
+#if defined(__x86_64__) || defined(__i386__)
+#include <x86/serial.h>
+#endif
 
 volatile uint32_t lock_spin_held_depth[MAX_CORES] = {0};
+
+#if LOCK_DEBUG
+void lock_debug_trap(
+    const char *site,
+    const void *lock_ptr,
+    const void *caller,
+    size_t owner_cpu,
+    int lock_state
+) {
+    size_t cpu_id = lock_cpu_id();
+    sched_thread_t *current = sched_is_running() ? sched_current() : NULL;
+    char buf[LOG_BUF_SIZE] = {0};
+    int len = snprintf(
+        buf,
+        sizeof(buf),
+        "fatal %s:%d lock debug trap site=%s lock=%#" PRIx64
+        " caller=%#" PRIx64 " owner_cpu=%zu cpu=%zu state=%d held_depth=%u"
+        " current=%#" PRIx64 " pid=%d name=%s\n",
+        __FILE__,
+        __LINE__,
+        site ? site : "?",
+        (u64)(uintptr_t)lock_ptr,
+        (u64)(uintptr_t)caller,
+        owner_cpu,
+        cpu_id,
+        lock_state,
+        (unsigned)__atomic_load_n(&lock_spin_held_depth[cpu_id], __ATOMIC_RELAXED),
+        (u64)(uintptr_t)current,
+        current ? current->pid : 0,
+        current ? current->name : "none"
+    );
+
+#if defined(__x86_64__) || defined(__i386__)
+    if (len > 0) {
+        size_t size = (size_t)len;
+        if (size > sizeof(buf)) {
+            size = sizeof(buf);
+        }
+        send_serial_sized_string(SERIAL_COM1, buf, size);
+    }
+#endif
+
+    (void)arch_irq_save();
+    cpu_halt();
+}
+#endif
 
 static sched_wait_queue_t *mutex_wait_queue_get(mutex_t *mutex, bool create) {
     if (!mutex) {
@@ -128,7 +183,13 @@ void mutex_lock(mutex_t *mutex) {
 
         if (lock_spin_held_on_cpu()) {
 #if LOCK_DEBUG
-            __builtin_trap();
+            lock_debug_trap(
+                "mutex_lock:spin-depth-held",
+                mutex,
+                __builtin_return_address(0),
+                (size_t)-1,
+                mutex->held
+            );
 #else
             arch_cpu_relax();
 #endif
@@ -154,7 +215,13 @@ void mutex_unlock(mutex_t *mutex) {
 #if LOCK_DEBUG
     if (!mutex->held) {
         spin_unlock_irqrestore(&mutex->lock, flags);
-        __builtin_trap();
+        lock_debug_trap(
+            "mutex_unlock:not-held",
+            mutex,
+            __builtin_return_address(0),
+            (size_t)-1,
+            mutex->held
+        );
     }
 
     if (sched_is_running()) {
@@ -162,7 +229,13 @@ void mutex_unlock(mutex_t *mutex) {
 
         if (current && mutex->owner_thread != current) {
             spin_unlock_irqrestore(&mutex->lock, flags);
-            __builtin_trap();
+            lock_debug_trap(
+                "mutex_unlock:foreign-owner",
+                mutex,
+                __builtin_return_address(0),
+                (size_t)-1,
+                mutex->held
+            );
         }
     }
 #endif

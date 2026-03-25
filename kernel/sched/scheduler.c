@@ -57,6 +57,7 @@ void scheduler_init_core(void) {
 
     sched_cpu_state_t *local = sched_local();
     local->handoff_ready = NULL;
+    local->retired_thread = NULL;
     local->preempt_depth = 0;
     local->sched_lock_depth = 0;
     local->sched_lock_irq_flags = 0;
@@ -172,8 +173,6 @@ void scheduler_start(void) {
     thread_unclaim(current);
     next->exec_start_ns = next->sum_exec_ns;
     sched_local_set_slice_ns(0);
-    sched_local_set_current(next);
-    thread_claim(next, sched_cpu_id());
 
     if (current->fpu_initialized) {
         arch_fpu_save(current->fpu_state);
@@ -188,6 +187,8 @@ void scheduler_start(void) {
         arch_fpu_restore(next->fpu_state);
     }
 
+    sched_local_set_current(next);
+    thread_claim(next, sched_cpu_id());
     __atomic_fetch_add(&sched_state.metrics.switch_count, 1, __ATOMIC_RELAXED);
     sched_secondary_released_set(true);
     arch_context_switch(next->context);
@@ -259,8 +260,6 @@ void scheduler_start_secondary(void) {
     thread_unclaim(current);
     next->exec_start_ns = next->sum_exec_ns;
     sched_local_set_slice_ns(0);
-    sched_local_set_current(next);
-    thread_claim(next, sched_cpu_id());
 
     if (current->fpu_initialized) {
         arch_fpu_save(current->fpu_state);
@@ -275,6 +274,8 @@ void scheduler_start_secondary(void) {
         arch_fpu_restore(next->fpu_state);
     }
 
+    sched_local_set_current(next);
+    thread_claim(next, sched_cpu_id());
     __atomic_fetch_add(&sched_state.metrics.switch_count, 1, __ATOMIC_RELAXED);
     arch_context_switch(next->context);
     arch_irq_restore(irq_flags);

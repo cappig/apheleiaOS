@@ -6,6 +6,7 @@
 
 extern void panic_prepare(void);
 extern void panic_halt(void);
+bool panic_in_progress(void);
 void panic_dump_state(const arch_int_state_t *state);
 
 #define panic(...)                              \

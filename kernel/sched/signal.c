@@ -247,7 +247,9 @@ bool sched_signal_sigreturn(sched_thread_t *thread, arch_int_state_t *state) {
     *state = thread->signal_saved_state;
     __atomic_store_n(&thread->signal_saved_valid, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&thread->current_signal, 0, __ATOMIC_RELEASE);
-    thread->context = (uintptr_t)state;
+    if (!sched_save_user_context(thread, state)) {
+        thread->context = (uintptr_t)state;
+    }
 
     return true;
 }

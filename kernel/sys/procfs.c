@@ -71,7 +71,7 @@ static bool _procfs_subtree_has_refs(tree_node_t *tnode) {
     }
 
     vfs_node_t *node = tnode->data;
-    if (node && sched_fd_refs_node(node)) {
+    if (node && __atomic_load_n(&node->open_refs, __ATOMIC_ACQUIRE) != 0) {
         return true;
     }
 
@@ -381,6 +381,26 @@ static bool _procfs_contains_node(vfs_node_t *node) {
     }
 
     return false;
+}
+
+bool procfs_path_lock_if_needed(const char *path, unsigned long *flags_out) {
+    if (!flags_out) {
+        return false;
+    }
+
+    *flags_out = 0;
+
+    if (!path || strncmp(path, "/proc", 5) != 0) {
+        return false;
+    }
+
+    char next = path[5];
+    if (next != '\0' && next != '/') {
+        return false;
+    }
+
+    mutex_lock(&procfs_tree_lock);
+    return true;
 }
 
 bool procfs_dir_lock_if_needed(vfs_node_t *node, unsigned long *flags_out) {

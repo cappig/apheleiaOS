@@ -447,7 +447,6 @@ int main(int argc, char **argv) {
         io_write_str("wm: failed to allocate frame buffer\n");
         goto out;
     }
-
     wm_config_t cfg = {0};
     _load_wm_config(&cfg);
 
@@ -510,7 +509,6 @@ int main(int argc, char **argv) {
             cursor_path = cursor_default_path;
         }
     }
-
     wm_init();
     wm_inited = true;
 

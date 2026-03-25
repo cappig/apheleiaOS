@@ -109,6 +109,7 @@ struct vfs_node {
 
     tree_node_t *tree_entry;
     hashmap_str_t *children_index;
+    volatile u32 open_refs;
 
     void *private;
 };

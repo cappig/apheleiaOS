@@ -174,9 +174,36 @@ static void _log_history_replay_console(void) {
 }
 
 void arch_log_replay_console(void) {
+    if (!log_console_ready) {
+        return;
+    }
+
+    size_t snapshot_len = 0;
     unsigned long flags = spin_lock_irqsave(&boot_log_lock);
-    _log_history_replay_console();
+    snapshot_len = boot_log_history_len;
     spin_unlock_irqrestore(&boot_log_lock, flags);
+
+    if (!snapshot_len) {
+        return;
+    }
+
+    char chunk[512];
+    size_t offset = 0;
+
+    while (offset < snapshot_len) {
+        size_t chunk_len = snapshot_len - offset;
+        if (chunk_len > sizeof(chunk)) {
+            chunk_len = sizeof(chunk);
+        }
+
+        ssize_t read_len = arch_log_ring_read(chunk, offset, chunk_len);
+        if (read_len <= 0) {
+            break;
+        }
+
+        console_write_screen(TTY_CONSOLE, chunk, (size_t)read_len);
+        offset += (size_t)read_len;
+    }
 }
 
 ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
@@ -237,15 +264,14 @@ static void _log_puts(const char *s) {
 
     unsigned long flags = spin_lock_irqsave(&boot_log_lock);
     _log_history_append(s, len);
+    spin_unlock_irqrestore(&boot_log_lock, flags);
 
     if (!logsink_is_bound()) {
         _log_write_early(s, len);
-        spin_unlock_irqrestore(&boot_log_lock, flags);
         return;
     }
 
     logsink_write(s, len);
-    spin_unlock_irqrestore(&boot_log_lock, flags);
 }
 
 void arch_panic_enter(void) {
@@ -748,23 +774,69 @@ static void _invalid_opcode_handler(int_state_t *state) {
 
     panic_prepare();
 
-#ifdef INT_DEBUG
     sched_thread_t *current = sched_current();
-
     if (current) {
+#if defined(__x86_64__)
+        u64 ctx_ip = 0;
+        u64 ctx_cs = 0;
+        uintptr_t stack_base = (uintptr_t)current->stack;
+        uintptr_t stack_end = stack_base + current->stack_size;
+        uintptr_t ctx_ptr = current->context;
+        size_t kernel_frame_need =
+            offsetof(arch_int_state_t, s_regs) + (3U * sizeof(arch_word_t));
+        if (
+            current->context &&
+            arch_kernel_stack_valid(current) &&
+            stack_end >= stack_base &&
+            ctx_ptr >= stack_base &&
+            ctx_ptr < stack_end &&
+            (size_t)(stack_end - ctx_ptr) >= kernel_frame_need
+        ) {
+            const arch_int_state_t *ctx =
+                (const arch_int_state_t *)(uintptr_t)current->context;
+            ctx_ip = ctx->s_regs.rip;
+            ctx_cs = ctx->s_regs.cs;
+        }
+#else
+        u64 ctx_ip = 0;
+        u64 ctx_cs = 0;
+        uintptr_t stack_base = (uintptr_t)current->stack;
+        uintptr_t stack_end = stack_base + current->stack_size;
+        uintptr_t ctx_ptr = current->context;
+        size_t kernel_frame_need =
+            offsetof(arch_int_state_t, s_regs) + (3U * sizeof(arch_word_t));
+        if (
+            current->context &&
+            arch_kernel_stack_valid(current) &&
+            stack_end >= stack_base &&
+            ctx_ptr >= stack_base &&
+            ctx_ptr < stack_end &&
+            (size_t)(stack_end - ctx_ptr) >= kernel_frame_need
+        ) {
+            const arch_int_state_t *ctx =
+                (const arch_int_state_t *)(uintptr_t)current->context;
+            ctx_ip = ctx->s_regs.eip;
+            ctx_cs = ctx->s_regs.cs;
+        }
+#endif
+
         log_fatal(
             "current thread pid=%d name=%s context=%#" PRIx64
-            " stack=%#" PRIx64 " stack_size=%zu cpu=%d state=%d",
+            " stack=%#" PRIx64 " stack_size=%zu cpu=%d state=%d"
+            " ctx_ip=%#" PRIx64 " ctx_cs=%#" PRIx64,
             current->pid,
             current->name,
             (u64)(uintptr_t)current->context,
             (u64)(uintptr_t)current->stack,
             current->stack_size,
             current->running_cpu,
-            current->state
+            current->state,
+            ctx_ip,
+            ctx_cs
         );
+    } else {
+        log_fatal("current thread none");
     }
-#endif
 
 #if defined(__x86_64__)
     if (state) {
@@ -772,7 +844,6 @@ static void _invalid_opcode_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal("invalid opcode rip=%#" PRIx64 " cs=%#" PRIx64, rip, cs);
-        // log_fatal("fault frame rbp=%#" PRIx64, state->g_regs.rbp);
     } else {
         log_fatal("invalid opcode");
     }
@@ -782,7 +853,6 @@ static void _invalid_opcode_handler(int_state_t *state) {
         u64 cs = state->s_regs.cs;
 
         log_fatal("invalid opcode eip=%#" PRIx64 " cs=%#" PRIx64, eip, cs);
-        // log_fatal("fault frame ebp=%#" PRIx32, state->g_regs.ebp);
     } else {
         log_fatal("invalid opcode");
     }
@@ -1222,6 +1292,53 @@ void *arch_cpu_get_local(void) {
 #endif
 }
 
+bool arch_current_cpu_id(size_t *out) {
+    if (!out) {
+        return false;
+    }
+
+#if defined(__x86_64__)
+    cpu_core_t *local_core = (cpu_core_t *)arch_cpu_get_local();
+    if (
+        _cpu_ptr_is_core_local(local_core) && local_core->valid &&
+        local_core->id < MAX_CORES
+    ) {
+        *out = local_core->id;
+        return true;
+    }
+#else
+    size_t core_id = 0;
+    if (gdt_current_core_id(&core_id) && core_id < MAX_CORES) {
+        cpu_core_t *core = &cores_local[core_id];
+        if (core->valid) {
+            *out = core_id;
+            return true;
+        }
+    }
+#endif
+
+    cpuid_regs_t regs = {0};
+    cpuid(1, &regs);
+    u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
+    u32 live_apic_id = lapic_id();
+
+    if (live_apic_id || live_apic_id == cpuid_apic_id) {
+        cpu_core_t *apic_core = cpu_find_by_lapic(live_apic_id);
+        if (apic_core && apic_core->valid && apic_core->id < MAX_CORES) {
+            *out = apic_core->id;
+            return true;
+        }
+    }
+
+    cpu_core_t *cpuid_core = cpu_find_by_lapic(cpuid_apic_id);
+    if (cpuid_core && cpuid_core->valid && cpuid_core->id < MAX_CORES) {
+        *out = cpuid_core->id;
+        return true;
+    }
+
+    return false;
+}
+
 unsigned long arch_irq_save(void) {
     return irq_save();
 }
@@ -1435,3 +1552,24 @@ void arch_syscall_install(int vector, arch_syscall_handler_t handler) {
 void arch_set_kernel_stack(uintptr_t sp) {
     set_tss_stack(sp);
 }
+
+#if defined(__i386__)
+NORETURN void
+arch_context_switch_bad_frame(uintptr_t ctx, u32 eip, u32 cs) {
+    sched_thread_t *current = sched_is_running() ? sched_current() : NULL;
+    panic(
+        "bad i386 kernel return frame ctx=%#lx eip=%#x cs=%#x"
+        " current=%#lx pid=%d name=%s current_ctx=%#lx stack=%#lx stack_size=%zu",
+        (unsigned long)ctx,
+        eip,
+        cs,
+        (unsigned long)(uintptr_t)current,
+        current ? current->pid : 0,
+        current ? current->name : "none",
+        current ? (unsigned long)current->context : 0UL,
+        current ? (unsigned long)(uintptr_t)current->stack : 0UL,
+        current ? current->stack_size : 0U
+    );
+    __builtin_unreachable();
+}
+#endif

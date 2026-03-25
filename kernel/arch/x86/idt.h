@@ -77,6 +77,9 @@ enum exception_numbers {
 
 typedef struct PACKED {
     gen_regs_t g_regs;
+#if defined(__i386__)
+    seg_regs_t seg_regs;
+#endif
 
     // Pushed by the isr_stub_xx
 #if defined(__x86_64__)

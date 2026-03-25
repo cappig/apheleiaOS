@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/cpu.h>
+#include <sys/panic.h>
 
 struct sched_wait_queue;
 extern volatile uint32_t lock_spin_held_depth[MAX_CORES];
@@ -18,6 +19,13 @@ typedef struct {
 
 #if LOCK_DEBUG
 struct sched_thread;
+void lock_debug_trap(
+    const char *site,
+    const void *lock_ptr,
+    const void *caller,
+    size_t owner_cpu,
+    int lock_state
+);
 #endif
 
 typedef struct {
@@ -108,8 +116,14 @@ static inline void spin_lock(spinlock_t *lock) {
     size_t cpu_id = lock_cpu_id();
 
 #if LOCK_DEBUG
-    if (lock->state && lock->owner_cpu == cpu_id) {
-        __builtin_trap();
+    if (!panic_in_progress() && lock->state && lock->owner_cpu == cpu_id) {
+        lock_debug_trap(
+            "spin_lock:recursive",
+            lock,
+            __builtin_return_address(0),
+            lock->owner_cpu,
+            lock->state
+        );
     }
 #endif
 
@@ -135,8 +149,14 @@ static inline void spin_unlock(spinlock_t *lock) {
     size_t cpu_id = lock_cpu_id();
 
 #if LOCK_DEBUG
-    if (lock->owner_cpu != cpu_id) {
-        __builtin_trap();
+    if (!panic_in_progress() && lock->owner_cpu != cpu_id) {
+        lock_debug_trap(
+            "spin_unlock:foreign",
+            lock,
+            __builtin_return_address(0),
+            lock->owner_cpu,
+            lock->state
+        );
     }
 
     lock->owner_cpu = (size_t)-1;
@@ -151,7 +171,15 @@ static inline void spin_unlock(spinlock_t *lock) {
         );
 
 #if LOCK_DEBUG
-        __builtin_trap();
+        if (!panic_in_progress()) {
+            lock_debug_trap(
+                "spin_unlock:depth-underflow",
+                lock,
+                __builtin_return_address(0),
+                lock->owner_cpu,
+                lock->state
+            );
+        }
 #endif
     }
 

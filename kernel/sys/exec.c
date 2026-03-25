@@ -8,6 +8,7 @@
 #include <base/macros.h>
 #include <ctype.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <log/log.h>
 #include <parse/elf.h>
 #include <sched/signal.h>
@@ -111,7 +112,11 @@ static bool _map_user_region(
 
     arch_map_region(root, pages, vaddr, paddr, flags);
 
-    if (sched_add_user_region(thread, vaddr, paddr, pages, flags)) {
+    unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
+    bool added = sched_add_user_region(thread, vaddr, paddr, pages, flags);
+    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+
+    if (added) {
         return true;
     }
 
@@ -971,21 +976,36 @@ int user_exec(
 
     exec_args_t args = {0};
     exec_env_t env = {0};
+    char trace_path[PATH_MAX];
+    strncpy(trace_path, path, sizeof(trace_path) - 1);
+    trace_path[sizeof(trace_path) - 1] = '\0';
 
     if (!_copy_args(argv, &args)) {
+        log_warn("exec failed for '%s': unable to copy argv", trace_path);
         return -ENOMEM;
     }
 
     if (!_copy_env(envp, &env)) {
         _free_args(&args);
+        log_warn("exec failed for '%s': unable to copy env", trace_path);
         return -ENOMEM;
+    }
+
+    bool exec_preempt_disabled = false;
+    if (state) {
+        sched_preempt_disable();
+        exec_preempt_disabled = true;
     }
 
     exec_file_t file = {0};
     int err = _open_file(thread, path, &file, true);
     if (err) {
+        log_warn("exec failed for '%s': open error %d", trace_path, err);
         _free_args(&args);
         _free_env(&env);
+        if (exec_preempt_disabled) {
+            sched_preempt_enable();
+        }
         return err;
     }
 
@@ -1010,6 +1030,10 @@ int user_exec(
             _free_args(&args);
             _free_env(&env);
             _close_file(&file);
+            log_warn("exec failed for '%s': shebang argv build failed", trace_path);
+            if (exec_preempt_disabled) {
+                sched_preempt_enable();
+            }
             return -ENOMEM;
         }
 
@@ -1022,6 +1046,15 @@ int user_exec(
             _free_args(&args);
             _free_env(&env);
             _close_file(&file);
+            log_warn(
+                "exec failed for '%s': shebang interpreter '%s' open error %d",
+                trace_path,
+                shebang.path,
+                err
+            );
+            if (exec_preempt_disabled) {
+                sched_preempt_enable();
+            }
             return err;
         }
 
@@ -1035,9 +1068,14 @@ int user_exec(
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
+        log_warn("exec failed for '%s': unable to allocate user vm", trace_path);
+        if (exec_preempt_disabled) {
+            sched_preempt_enable();
+        }
         return -ENOMEM;
     }
 
+    unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
     sched_user_region_t *old_regions = thread->regions;
     uintptr_t old_stack_base = thread->user_stack_base;
     size_t old_stack_size = thread->user_stack_size;
@@ -1048,6 +1086,7 @@ int user_exec(
     thread->user_stack_base = old_stack_base;
     thread->user_stack_size = old_stack_size;
     sched_user_mem_set_kib(thread, 0);
+    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
     uintptr_t entry_point = 0;
     arch_word_t entry_raw = 0;
@@ -1061,32 +1100,43 @@ int user_exec(
         log_warn("'%s' is not a valid executable for this arch", file.resolved);
         sched_clear_user_regions(thread);
 
+        vm_flags = spin_lock_irqsave(&thread->vm_lock);
         thread->regions = old_regions;
         thread->vm_space = old_vm;
         sched_user_mem_set_kib(thread, old_user_mem_kib);
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
         arch_vm_destroy(fresh);
 
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
+        if (exec_preempt_disabled) {
+            sched_preempt_enable();
+        }
 
         return -ENOEXEC;
     }
 
     uintptr_t stack_top = 0;
     if (!_map_user_stack(thread, &stack_top)) {
+        log_warn("exec failed for '%s': unable to map user stack", trace_path);
         _free_regions_list(thread->regions);
 
+        vm_flags = spin_lock_irqsave(&thread->vm_lock);
         thread->regions = old_regions;
         thread->vm_space = old_vm;
         sched_user_mem_set_kib(thread, old_user_mem_kib);
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
         arch_vm_destroy(fresh);
 
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
+        if (exec_preempt_disabled) {
+            sched_preempt_enable();
+        }
 
         return -ENOMEM;
     }
@@ -1110,7 +1160,9 @@ int user_exec(
         memset(state, 0, sizeof(*state));
         arch_state_set_user_entry(state, entry_point, stack_top);
         arch_state_set_return(state, 0);
-        thread->context = (uintptr_t)state;
+        if (!sched_save_user_context(thread, state)) {
+            thread->context = (uintptr_t)state;
+        }
     } else {
         thread_prepare_user(thread, entry_point, stack_top);
     }
@@ -1120,7 +1172,7 @@ int user_exec(
     if (!is_script && args.argv[0]) {
         thread_name = args.argv[0];
     } else if (!is_script) {
-        thread_name = path;
+        thread_name = trace_path;
     }
 
     thread_set_name(thread, _basename(thread_name));
@@ -1128,6 +1180,10 @@ int user_exec(
     _free_args(&args);
     _free_env(&env);
     _close_file(&file);
+
+    if (exec_preempt_disabled) {
+        sched_preempt_enable();
+    }
 
     return 0;
 }

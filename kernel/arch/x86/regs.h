@@ -54,12 +54,21 @@ typedef union PACKED {
     };
 } regs32_t;
 
+#if defined(__x86_64__)
 typedef struct PACKED {
     u16 gs;
     u16 fs;
     u16 es;
     u16 ds;
 } seg_regs_t;
+#else
+typedef struct PACKED {
+    u32 gs;
+    u32 fs;
+    u32 es;
+    u32 ds;
+} seg_regs_t;
+#endif
 
 #if defined(__x86_64__)
 typedef struct PACKED {

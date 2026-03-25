@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/proc.h>
 #include <sys/wait.h>
@@ -30,6 +31,21 @@ static void term_exit_signal(int signum) {
     term_exit_requested = 1;
 }
 
+static void term_log_errno(const char *message) {
+    int saved = errno;
+    if (!saved) {
+        saved = EIO;
+    }
+
+    fprintf(
+        stderr,
+        "term: %s (%d: %s)\n",
+        message ? message : "error",
+        saved,
+        strerror(saved)
+    );
+}
+
 static bool child_alive(pid_t child) {
     if (child <= 0) {
         return false;
@@ -42,6 +58,21 @@ static bool child_alive(pid_t child) {
     }
 
     if (done == child) {
+        if (WIFEXITED(status)) {
+            fprintf(
+                stderr,
+                "term: child %ld exited with status %d\n",
+                (long)child,
+                WEXITSTATUS(status)
+            );
+        } else {
+            fprintf(
+                stderr,
+                "term: child %ld exited with raw status %#x\n",
+                (long)child,
+                status
+            );
+        }
         return false;
     }
 
@@ -458,27 +489,32 @@ static bool read_window(window_t *window, int master_fd) {
 int main(void) {
     window_t window = {0};
     if (window_init(&window, 800, 500, "term")) {
+        term_log_errno("failed to create window");
         return 1;
     }
 
     framebuffer_t *fb = window_buffer(&window);
     if (!fb || !fb->pixels) {
+        term_log_errno("failed to acquire window framebuffer");
         window_deinit(&window);
         return 1;
     }
 
     if (!term_screen_init(fb)) {
+        term_log_errno("failed to initialize terminal screen");
         window_deinit(&window);
         return 1;
     }
 
     if (window_flush(&window) < 0) {
+        term_log_errno("failed to flush initial frame");
         window_deinit(&window);
         return 1;
     }
 
-    int master_fd = open("/dev/ptmx", O_RDWR | O_NONBLOCK, 0);
+    int master_fd = open("/dev/ptmx", O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
     if (master_fd < 0) {
+        term_log_errno("failed to open /dev/ptmx");
         window_deinit(&window);
         return 1;
     }
@@ -491,6 +527,7 @@ int main(void) {
         window.height
     );
     if (child < 0) {
+        term_log_errno("failed to spawn shell");
         close(master_fd);
         window_deinit(&window);
         return 1;

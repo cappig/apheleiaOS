@@ -1,10 +1,9 @@
-#include <io.h>
 #include <stdlib.h>
 #include <unistd.h>
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        io_write_str("usage: sleep SECONDS\n");
+        write(STDERR_FILENO, "usage: sleep SECONDS\n", 21);
         return 1;
     }
 
@@ -14,6 +13,5 @@ int main(int argc, char **argv) {
     }
 
     sleep((unsigned int)seconds);
-
     return 0;
 }

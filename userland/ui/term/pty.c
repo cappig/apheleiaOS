@@ -230,8 +230,15 @@ pid_t term_spawn_shell(
         setsid();
         setpgid(0, 0);
 
-        int slave_fd = open(path, O_RDWR, 0);
+        int slave_fd = open(path, O_RDWR | O_CLOEXEC, 0);
         if (slave_fd < 0) {
+            fprintf(
+                stderr,
+                "term: failed to open %s (%d: %s)\n",
+                path,
+                errno,
+                strerror(errno)
+            );
             _exit(127);
         }
 
@@ -245,12 +252,14 @@ pid_t term_spawn_shell(
         close(slave_fd);
         close(master_fd);
 
-        for (int fd = 3; fd < 64; fd++) {
-            close(fd);
-        }
-
         char *argv[] = {"/bin/sh", NULL};
         execve("/bin/sh", argv, environ);
+        fprintf(
+            stderr,
+            "term: failed to exec /bin/sh (%d: %s)\n",
+            errno,
+            strerror(errno)
+        );
         _exit(127);
     }
 

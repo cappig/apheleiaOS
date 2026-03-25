@@ -56,7 +56,26 @@ void arch_state_set_user_entry(
     state->s_regs.eflags = 0x202;
     state->s_regs.esp = (u32)stack_top;
     state->s_regs.ss = (arch_word_t)(GDT_USER_DATA | 3);
+    state->seg_regs.ds = (u32)(GDT_USER_DATA | 3);
+    state->seg_regs.es = (u32)(GDT_USER_DATA | 3);
+    state->seg_regs.fs = (u32)(GDT_USER_DATA | 3);
+    state->seg_regs.gs = (u32)(GDT_USER_DATA | 3);
 #endif
+}
+
+arch_int_state_t *arch_thread_user_context(struct sched_thread *thread) {
+    if (!thread || !thread->stack || !thread->stack_size) {
+        return NULL;
+    }
+
+    uintptr_t base = ALIGN((uintptr_t)thread->stack, 16);
+    uintptr_t end = (uintptr_t)thread->stack + thread->stack_size;
+
+    if (end < base || (size_t)(end - base) < sizeof(arch_int_state_t)) {
+        return NULL;
+    }
+
+    return (arch_int_state_t *)base;
 }
 
 uintptr_t
@@ -119,6 +138,16 @@ arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     sp -= sizeof(u32);
     *(u32 *)sp = 0;
 
+    // Saved segment registers
+    sp -= sizeof(u32);
+    *(u32 *)sp = (u32)GDT_KERNEL_DATA;
+    sp -= sizeof(u32);
+    *(u32 *)sp = (u32)GDT_KERNEL_DATA;
+    sp -= sizeof(u32);
+    *(u32 *)sp = (u32)GDT_KERNEL_DATA;
+    sp -= sizeof(u32);
+    *(u32 *)sp = (u32)GDT_KERNEL_DATA;
+
     // General registers in push order
     u32 regs[7] = {0};
 
@@ -170,7 +199,19 @@ bool arch_state_is_valid(const arch_int_state_t *state) {
                state->s_regs.ss == (arch_word_t)(GDT_USER_DATA | 3);
     }
 
-    return state->s_regs.cs == (arch_word_t)GDT_KERNEL_CODE;
+    if (state->s_regs.cs != (arch_word_t)GDT_KERNEL_CODE) {
+        return false;
+    }
+
+    extern char __kernel_end;
+    arch_word_t ip = arch_state_ip(state);
+    arch_word_t image_end = (arch_word_t)(uintptr_t)&__kernel_end;
+
+    if (!ip || ip < arch_kernel_vaddr_base()) {
+        return false;
+    }
+
+    return !image_end || ip < image_end;
 }
 
 arch_word_t arch_kernel_vaddr_base(void) {

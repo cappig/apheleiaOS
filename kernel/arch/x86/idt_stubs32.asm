@@ -52,8 +52,23 @@ isr_stub_table:
 %endrep
 
 extern isr_handler
+extern arch_context_switch_bad_frame
+extern __kernel_end
 
 isr_common_stub:
+    sub esp, 16
+    mov word [esp + 12], ds
+    mov word [esp + 8], es
+    mov word [esp + 4], fs
+    mov word [esp], gs
+    push eax
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    pop eax
+
     push eax
     push ebx
     push ecx
@@ -67,6 +82,31 @@ isr_common_stub:
     call isr_handler
     add esp, 4
 
+    mov eax, esp
+    cmp dword [esp + 56], 0x8
+    jne .resume_frame
+    mov edx, [esp + 52]
+    cmp edx, 0xc0000000
+    jb .bad_frame
+    cmp edx, __kernel_end
+    jb .resume_frame
+.bad_frame:
+    mov ecx, [esp + 56]
+    push ecx
+    push edx
+    push eax
+    call arch_context_switch_bad_frame
+.resume_frame:
+
+    mov ax, [esp + 40]
+    mov ds, ax
+    mov ax, [esp + 36]
+    mov es, ax
+    mov ax, [esp + 32]
+    mov fs, ax
+    mov ax, [esp + 28]
+    mov gs, ax
+
     pop ebp
     pop edi
     pop esi
@@ -75,5 +115,6 @@ isr_common_stub:
     pop ebx
     pop eax
 
+    add esp, 16
     add esp, 8
     iret

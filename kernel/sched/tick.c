@@ -1,53 +1,5 @@
 #include "internal.h"
 
-static void sched_finish_exit_pending(void) {
-    sched_thread_t *pending = sched_local()->exit_pending;
-    if (!pending) {
-        return;
-    }
-
-    unsigned long flags = 0;
-    if (!sched_lock_try_save(&flags)) {
-        return;
-    }
-
-    sched_local()->exit_pending = NULL;
-
-    pid_t exited_pid = pending->pid;
-    bool notify_parent = false;
-    sched_thread_t *parent = NULL;
-
-    thread_unclaim(pending);
-
-    if (
-        pending != sched_local_idle() &&
-        sched_state.zombie_list &&
-        !pending->in_zombie_list
-    ) {
-        pending->zombie_node.data = pending;
-        list_append(sched_state.zombie_list, &pending->zombie_node);
-        pending->in_zombie_list = true;
-    }
-
-    if (pending->user_thread) {
-        parent = find_thread(pending->ppid);
-        if (parent) {
-            notify_parent = true;
-        }
-    }
-
-    sched_lock_restore(flags);
-
-    if (notify_parent) {
-        sched_wake_one(&parent->wait_queue);
-        sched_signal_send_thread(parent, SIGCHLD);
-    }
-
-    if (exited_pid > 0) {
-        exit_event_push(exited_pid);
-    }
-}
-
 static bool sched_eval_policy(sched_thread_t *thread, size_t cpu_id) {
     size_t rq_depth = sched_rq_depth(cpu_id);
 
@@ -84,16 +36,32 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         return;
     }
 
-    sched_capture_context(state);
+    uintptr_t prior_context = thread->context;
+    bool captured_context = false;
+
     __atomic_store_n(
         &sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE
     );
 
-    bool force_resched = __atomic_exchange_n(
+    bool user_in_kernel = thread->user_thread && !arch_signal_is_user(state);
+    bool force_resched =
+        __atomic_load_n(&sched_local()->force_resched, __ATOMIC_ACQUIRE);
+
+    if (user_in_kernel && !force_resched) {
+        return;
+    }
+
+    sched_capture_context(state);
+    captured_context = true;
+
+    force_resched = __atomic_exchange_n(
         &sched_local()->force_resched, false, __ATOMIC_ACQ_REL
     );
 
     if (sched_preempt_disabled()) {
+        if (captured_context) {
+            thread->context = prior_context;
+        }
         return;
     }
 
@@ -101,6 +69,9 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         sched_local_set_need_resched(true);
         if (force_resched) {
             __atomic_store_n(&sched_local()->force_resched, true, __ATOMIC_RELEASE);
+        }
+        if (captured_context) {
+            thread->context = prior_context;
         }
         return;
     }
@@ -113,6 +84,9 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
     }
 
     if (!should_resched) {
+        if (captured_context) {
+            thread->context = prior_context;
+        }
         return;
     }
 
@@ -121,6 +95,9 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         sched_local_set_need_resched(true);
         if (force_resched) {
             __atomic_store_n(&sched_local()->force_resched, true, __ATOMIC_RELEASE);
+        }
+        if (captured_context) {
+            thread->context = prior_context;
         }
         return;
     }
@@ -134,6 +111,9 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
     }
 
     if (!should_resched) {
+        if (captured_context) {
+            thread->context = prior_context;
+        }
         sched_lock_restore(flags);
         return;
     }
@@ -154,6 +134,9 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         next = dequeue_thread();
         if (!next) {
             thread_claim(thread, cpu_id);
+            if (captured_context) {
+                thread->context = prior_context;
+            }
             sched_lock_restore(flags);
             return;
         }
@@ -161,48 +144,42 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         next = pick_next_thread();
     }
 
-    while (
-        next && next != thread &&
-        thread_ctx_ok(next) &&
-        (!next->context || !ctx_valid(next))
-    ) {
-        thread_unclaim(next);
-        thread_set_state(next, THREAD_ZOMBIE);
-        next->exit_code = -EFAULT;
-
-        if (sched_state.zombie_list && !next->in_zombie_list) {
-            next->zombie_node.data = next;
-            list_append(sched_state.zombie_list, &next->zombie_node);
-            next->in_zombie_list = true;
+    while (next && next != thread && thread_ctx_ok(next)) {
+        if (next->context && ctx_valid(next)) {
+            break;
         }
 
-        exit_event_push(next->pid);
+        sched_cull_invalid_thread_locked(next, "tick");
         next = pick_next_thread();
     }
 
     if (!next || next == thread) {
         thread_claim(thread, cpu_id);
+        if (captured_context) {
+            thread->context = prior_context;
+        }
         sched_lock_restore(flags);
         return;
     }
 
-    if (preempted_running) {
+    bool handoff_current =
+        thread != sched_local_idle() &&
+        (preempted_running || thread_get_state(thread) != THREAD_RUNNING);
+
+    if (handoff_current) {
         // do not enqueue the currently running thread before we actually
         // switch away; otherwise another core can run it concurrently
-        sched_thread_t *pending = sched_local()->handoff_ready;
+        sched_thread_t *pending = sched_take_handoff_cpu(cpu_id);
 
         if (pending && pending != thread) {
-            sched_local()->handoff_ready = NULL;
             sched_publish_handoff(pending, cpu_id);
         }
 
-        sched_local()->handoff_ready = thread;
+        __atomic_store_n(&sched_local()->handoff_ready, thread, __ATOMIC_RELEASE);
     } else {
-        thread_unclaim(thread);
+        thread_set_cpu(thread, -1);
     }
 
-    sched_local_set_current(next);
-    thread_claim(next, cpu_id);
     next->exec_start_ns = next->sum_exec_ns;
 
     if (thread->fpu_initialized) {
@@ -218,6 +195,8 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         arch_fpu_restore(next->fpu_state);
     }
 
+    sched_local_set_current(next);
+    thread_claim(next, cpu_id);
     __atomic_fetch_add(&sched_state.metrics.switch_count, 1, __ATOMIC_RELAXED);
     arch_context_switch(next->context);
 }
@@ -226,8 +205,6 @@ void sched_capture_context(arch_int_state_t *state) {
     if (!sched_running_get() || !state) {
         return;
     }
-
-    sched_finish_exit_pending();
 
     sched_thread_t *current = sched_local_current();
     if (!current) {
@@ -238,7 +215,7 @@ void sched_capture_context(arch_int_state_t *state) {
     int running_cpu = thread_cpu(current);
 
     if (running_cpu >= 0 && (size_t)running_cpu != cpu_id) {
-        if (thread_is_owned(current)) {
+        if (thread_on_local_cpu(current) || thread_in_handoff(current)) {
             return;
         }
 
@@ -247,6 +224,12 @@ void sched_capture_context(arch_int_state_t *state) {
 
     if (!ctx_candidate_valid(current, state)) {
         return;
+    }
+
+    if (current->user_thread && arch_signal_is_user(state)) {
+        if (sched_save_user_context(current, state)) {
+            return;
+        }
     }
 
     current->context = (uintptr_t)state;
@@ -258,6 +241,8 @@ void sched_tick(arch_int_state_t *state) {
     if (!sched_running_get() || !state || !thread) {
         return;
     }
+
+    sched_release_retired_current_cpu();
 
     size_t cpu_id = sched_cpu_id();
 
@@ -312,7 +297,6 @@ void sched_tick(arch_int_state_t *state) {
         }
     }
 
-    sched_capture_context(state);
     sched_signal_deliver_current(state);
 
     sched_local_inc_local_ticks();
@@ -420,7 +404,8 @@ void sched_sleep(u64 ticks) {
         return;
     }
 
-    sched_wait_deadline(arch_timer_ticks() + ticks, 0);
+    u64 deadline = arch_timer_ticks() + ticks;
+    sched_wait_deadline(deadline, 0);
 }
 
 static void sched_reparent_children(sched_thread_t *parent) {
@@ -472,6 +457,7 @@ static void sched_reparent_children(sched_thread_t *parent) {
 
 void sched_exit(void) {
     arch_irq_save();
+    sched_release_retired_current_cpu();
     sched_thread_t *self = sched_local_current();
 
     if (sched_thread_is_idle(self)) {
@@ -479,14 +465,35 @@ void sched_exit(void) {
     }
 
     unsigned long flags = sched_lock_save();
+    sched_thread_t *parent = NULL;
+    bool notify_parent = false;
+    pid_t exited_pid = 0;
 
     if (self) {
         wq_dequeue(self);
         sleep_heap_remove(self);
         sched_reparent_children(self);
-        thread_unclaim(self);
+        thread_set_cpu(self, -1);
         thread_set_state(self, THREAD_ZOMBIE);
-        sched_local()->exit_pending = self;
+        exited_pid = self->pid;
+
+        if (
+            self != sched_local_idle() &&
+            sched_state.zombie_list &&
+            !self->in_zombie_list
+        ) {
+            self->zombie_node.data = self;
+            list_append(sched_state.zombie_list, &self->zombie_node);
+            self->in_zombie_list = true;
+        }
+
+        if (self->user_thread) {
+            parent = find_thread(self->ppid);
+            if (parent) {
+                thread_get(parent);
+                notify_parent = true;
+            }
+        }
     }
 
     sched_thread_t *next = pick_next_thread();
@@ -507,11 +514,24 @@ void sched_exit(void) {
             panic("scheduler exit switched to invalid context thread");
         }
 
-        sched_local_set_current(next);
-        thread_claim(next, sched_cpu_id());
+        if (self) {
+            thread_get(self);
+            sched_local()->retired_thread = self;
+        }
+
     }
 
     sched_lock_restore(flags);
+
+    if (notify_parent) {
+        sched_wake_one(&parent->wait_queue);
+        sched_signal_send_thread(parent, SIGCHLD);
+        thread_put(parent);
+    }
+
+    if (exited_pid > 0) {
+        exit_event_push(exited_pid);
+    }
 
     if (!next) {
         cpu_halt();
@@ -524,6 +544,8 @@ void sched_exit(void) {
         arch_fpu_restore(next->fpu_state);
     }
 
+    sched_local_set_current(next);
+    thread_claim(next, sched_cpu_id());
     __atomic_fetch_add(&sched_state.metrics.switch_count, 1, __ATOMIC_RELAXED);
     arch_context_switch(next->context);
 }

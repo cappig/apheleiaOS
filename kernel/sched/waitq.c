@@ -34,6 +34,18 @@ static void wake_waiter(sched_thread_t *thread) {
         return;
     }
 
+    if (thread_in_handoff(thread)) {
+        thread_state_t state = thread_get_state(thread);
+
+        if (state == THREAD_ZOMBIE || state == THREAD_STOPPED) {
+            return;
+        }
+
+        thread_set_state(thread, THREAD_READY);
+        sched_nudge_thread(thread);
+        return;
+    }
+
     if (thread_on_local_cpu(thread)) {
         sched_nudge_thread(thread);
         return;
@@ -438,7 +450,7 @@ sched_wait_deadline(u64 deadline_tick, sched_wait_flags_t flags) {
     );
 }
 
-void sched_wake_one(sched_wait_queue_t *queue) {
+void sched_wake_one_locked(sched_wait_queue_t *queue) {
     if (!queue || !queue->list) {
         return;
     }
@@ -460,8 +472,6 @@ void sched_wake_one(sched_wait_queue_t *queue) {
         return;
     }
 
-    unsigned long flags = sched_lock_save();
-
     if (wake_queue) {
         wake_queue_one(queue);
     }
@@ -469,7 +479,15 @@ void sched_wake_one(sched_wait_queue_t *queue) {
     if (wake_pollers) {
         wake_queue_all(&sched_state.poll_wait_queue);
     }
+}
 
+void sched_wake_one(sched_wait_queue_t *queue) {
+    if (!queue || !queue->list) {
+        return;
+    }
+
+    unsigned long flags = sched_lock_save();
+    sched_wake_one_locked(queue);
     sched_lock_restore(flags);
 }
 

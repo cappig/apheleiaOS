@@ -2,9 +2,11 @@
 
 #include <errno.h>
 #include <stdlib.h>
+#include <sys/panic.h>
 #include <sys/procfs.h>
 #include <sys/pty.h>
 #include <sys/tty.h>
+#include <sys/vfs.h>
 
 static void sched_fd_reset(sched_fd_t *fd) {
     if (!fd) {
@@ -197,6 +199,10 @@ static void sched_fd_retain(const sched_fd_t *fd) {
         return;
     }
 
+    if (fd->kind == SCHED_FD_VFS && fd->node) {
+        __atomic_fetch_add(&fd->node->open_refs, 1, __ATOMIC_ACQ_REL);
+    }
+
     if (fd->pty_index >= 0) {
         pty_hold((size_t)fd->pty_index);
     }
@@ -211,6 +217,13 @@ static void sched_fd_retain(const sched_fd_t *fd) {
 static void sched_fd_release_value(sched_fd_t *fd) {
     if (!fd) {
         return;
+    }
+
+    if (fd->kind == SCHED_FD_VFS && fd->node) {
+        u32 prev = __atomic_fetch_sub(&fd->node->open_refs, 1, __ATOMIC_ACQ_REL);
+        if (!prev) {
+            panic("sched fd release underflow on vfs node");
+        }
     }
 
     if (fd->pty_index >= 0) {

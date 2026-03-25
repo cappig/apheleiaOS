@@ -75,6 +75,7 @@ static int sh_next_job_id = 1;
 static pid_t sh_pgid = 0;
 static int sh_last_status = 0;
 static pid_t sh_last_bg_pid = 0;
+static bool sh_interactive = false;
 
 
 static void sh_printf(const char *format, ...) {
@@ -343,7 +344,6 @@ static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
             if (!have_tracked_status) {
                 result.exit_status = 1;
             }
-
             return result;
         }
 
@@ -356,7 +356,7 @@ static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
 }
 
 static job_t *
-select_job(int argc, char **argv, const char *cmd, size_t *index_out) {
+select_job(int argc, char *const argv[], const char *cmd, size_t *index_out) {
     if (!sh_job_count) {
         sh_printf("%s: no jobs\n", cmd);
         return NULL;
@@ -400,7 +400,7 @@ static bool continue_job(job_t *job, size_t index, const char *cmd) {
     return true;
 }
 
-static int fg(int argc, char **argv) {
+static int fg(int argc, char *const argv[]) {
     size_t index = 0;
     job_t *job = select_job(argc, argv, "fg", &index);
     if (!job) {
@@ -424,7 +424,7 @@ static int fg(int argc, char **argv) {
     return wait_result.stopped ? (128 + SIGTSTP) : wait_result.exit_status;
 }
 
-static int bg(int argc, char **argv) {
+static int bg(int argc, char *const argv[]) {
     size_t index = 0;
     job_t *job = select_job(argc, argv, "bg", &index);
     if (!job) {
@@ -1242,7 +1242,7 @@ static bool is_builtin_name(const char *name) {
     return false;
 }
 
-static int builtin_where(int argc, char **argv) {
+static int builtin_where(int argc, char *const argv[]) {
     if (argc < 2) {
         io_write_str("where: usage: where NAME...\n");
         return 1;
@@ -1306,7 +1306,7 @@ static int builtin_where(int argc, char **argv) {
     return status;
 }
 
-static bool handle_builtin(int argc, char **argv, int *status_out) {
+static bool handle_builtin(int argc, char *const argv[], int *status_out) {
     if (status_out) {
         *status_out = 0;
     }
@@ -1557,6 +1557,76 @@ static int open_redirection(const sh_stage_t *stage) {
     return 0;
 }
 
+static int restore_redirected_fd(int saved_fd, int target_fd) {
+    if (saved_fd < 0) {
+        return 0;
+    }
+
+    int rc = 0;
+    if (dup2(saved_fd, target_fd) < 0) {
+        io_write_str("sh: failed to restore redirected fd\n");
+        rc = -1;
+    }
+
+    close(saved_fd);
+    return rc;
+}
+
+static int run_builtin_in_shell(const sh_stage_t *stage, int *status_out) {
+    if (!stage) {
+        return -1;
+    }
+
+    int saved_stdin = -1;
+    int saved_stdout = -1;
+
+    if (stage->in_path && stage->in_path[0]) {
+        saved_stdin = dup(STDIN_FILENO);
+        if (saved_stdin < 0) {
+            io_write_str("sh: failed to save stdin\n");
+            return -1;
+        }
+    }
+
+    if (stage->out_path && stage->out_path[0]) {
+        saved_stdout = dup(STDOUT_FILENO);
+        if (saved_stdout < 0) {
+            if (saved_stdin >= 0) {
+                close(saved_stdin);
+            }
+            io_write_str("sh: failed to save stdout\n");
+            return -1;
+        }
+    }
+
+    if (open_redirection(stage) < 0) {
+        (void)restore_redirected_fd(saved_stdin, STDIN_FILENO);
+        (void)restore_redirected_fd(saved_stdout, STDOUT_FILENO);
+        return -1;
+    }
+
+    int builtin_status = 0;
+    bool handled = handle_builtin(stage->argc, stage->argv, &builtin_status);
+
+    int restore_rc = 0;
+    if (restore_redirected_fd(saved_stdin, STDIN_FILENO) < 0) {
+        restore_rc = -1;
+    }
+    if (restore_redirected_fd(saved_stdout, STDOUT_FILENO) < 0) {
+        restore_rc = -1;
+    }
+
+    if (!handled || restore_rc < 0) {
+        return -1;
+    }
+
+    if (status_out) {
+        *status_out = builtin_status;
+    }
+
+    return 0;
+}
+
 static int run_pipeline(
     sh_stage_t *stages,
     int stage_count,
@@ -1646,20 +1716,25 @@ static int run_pipeline(
 
     if (background) {
         sh_last_bg_pid = pgid;
-        job_t *job = job_add(pgid, cmdline, JOB_RUNNING);
+        if (sh_interactive) {
+            job_t *job = job_add(pgid, cmdline, JOB_RUNNING);
 
-        if (job) {
-            sh_printf("[%d] %d\n", job->id, (int)pgid);
+            if (job) {
+                sh_printf("[%d] %d\n", job->id, (int)pgid);
+            }
         }
 
         return 0;
     }
 
-    tty_set_pgrp(pgid);
+    if (sh_interactive) {
+        tty_set_pgrp(pgid);
+    }
 
     sh_wait_result_t wait_result = wait_foreground_pgrp(pgid, last_pid);
-
-    tty_set_pgrp(sh_pgid);
+    if (sh_interactive) {
+        tty_set_pgrp(sh_pgid);
+    }
 
     if (wait_result.stopped) {
         job_add(pgid, cmdline, JOB_STOPPED);
@@ -1844,8 +1919,7 @@ static int run_single_command(char *line) {
         stages, stage_count, exp->expanded, exp->in_paths, exp->out_paths
     );
 
-    bool simple_builtin =
-        stage_count == 1 && !background && !stages[0].in_path && !stages[0].out_path;
+    bool simple_builtin = stage_count == 1 && !background;
 
     if (simple_builtin && stages[0].argc == 1) {
         if (apply_assignment_token(stages[0].argv[0])) {
@@ -1856,7 +1930,7 @@ static int run_single_command(char *line) {
 
     if (simple_builtin) {
         int builtin_status = 0;
-        if (handle_builtin(stages[0].argc, stages[0].argv, &builtin_status)) {
+        if (run_builtin_in_shell(&stages[0], &builtin_status) == 0) {
             free(exp);
             return builtin_status;
         }
@@ -1941,10 +2015,13 @@ static int run_script(const char *path) {
 
 int main(int argc, char **argv) {
     char line[SH_LINE_MAX];
+    sh_interactive = argc <= 1;
 
     sh_pgid = getpid();
-    setpgid(0, 0);
-    tty_set_pgrp(sh_pgid);
+    if (sh_interactive) {
+        setpgid(0, 0);
+        tty_set_pgrp(sh_pgid);
+    }
 
     signal(SIGINT, sigint_handler);
     signal(SIGWINCH, sigwinch_handler);

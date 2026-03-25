@@ -1,5 +1,7 @@
 #include "internal.h"
 
+#include <inttypes.h>
+
 void idle_entry(UNUSED void *arg) {
     for (;;) {
         if (sched_cpu_id() == 0) {
@@ -19,17 +21,17 @@ static uintptr_t build_user_stack(
     uintptr_t entry,
     uintptr_t user_stack_top
 ) {
-    uintptr_t sp = (uintptr_t)thread->stack + thread->stack_size;
-    sp = ALIGN_DOWN(sp, 16);
+    arch_int_state_t *frame = arch_thread_user_context(thread);
+    if (!frame) {
+        return 0;
+    }
 
-    sp -= sizeof(arch_int_state_t);
-    arch_int_state_t *frame = (arch_int_state_t *)sp;
     memset(frame, 0, sizeof(*frame));
 
     arch_word_t user_sp = (arch_word_t)ALIGN_DOWN(user_stack_top, 16);
     arch_state_set_user_entry(frame, (arch_word_t)entry, user_sp);
 
-    return sp;
+    return (uintptr_t)frame;
 }
 
 static uintptr_t
@@ -38,17 +40,16 @@ build_fork_stack(sched_thread_t *thread, arch_int_state_t *state) {
         return 0;
     }
 
-    uintptr_t sp = (uintptr_t)thread->stack + thread->stack_size;
-    sp = ALIGN_DOWN(sp, 16);
+    arch_int_state_t *child_state = arch_thread_user_context(thread);
+    if (!child_state) {
+        return 0;
+    }
 
-    sp -= sizeof(*state);
-    memcpy((void *)sp, state, sizeof(*state));
-
-    arch_int_state_t *child_state = (arch_int_state_t *)sp;
+    memcpy(child_state, state, sizeof(*state));
 
     arch_state_set_return(child_state, 0);
 
-    return sp;
+    return (uintptr_t)child_state;
 }
 
 void thread_prepare_user(
@@ -278,6 +279,8 @@ sched_thread_t *create_thread(
         return NULL;
     }
 
+    thread->magic = SCHED_THREAD_MAGIC;
+
     thread_set_name(thread, name);
 
     thread->entry = entry;
@@ -428,11 +431,13 @@ pid_t sched_fork(arch_int_state_t *state) {
     sched_thread_t *parent = sched_local_current();
 
     if (!parent || !parent->user_thread || !state) {
+        log_warn("fork rejected: invalid parent/context");
         return -1;
     }
 
     sched_thread_t *child = sched_create_user_thread(parent->name);
     if (!child) {
+        log_warn("fork failed: unable to create child for pid=%d", parent->pid);
         return -1;
     }
 
@@ -444,6 +449,7 @@ pid_t sched_fork(arch_int_state_t *state) {
     child->user_stack_size = parent->user_stack_size;
 
     if (!sched_fd_clone_table(child, parent)) {
+        log_warn("fork failed: fd table clone failed for pid=%d", parent->pid);
         sched_discard_thread(child);
         return -1;
     }
@@ -479,6 +485,7 @@ pid_t sched_fork(arch_int_state_t *state) {
         void *root = arch_vm_root(child->vm_space);
 
         if (!root) {
+            log_warn("fork failed: missing child vm root for pid=%d", parent->pid);
             spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
             sched_discard_thread(child);
             return -1;
@@ -497,6 +504,12 @@ pid_t sched_fork(arch_int_state_t *state) {
 
             void *dst = arch_phys_map(new_paddr, size, 0);
             if (!dst) {
+                log_warn(
+                    "fork failed: phys map failed for pid=%d region=%#lx pages=%zu",
+                    parent->pid,
+                    (unsigned long)region->vaddr,
+                    pages
+                );
                 spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
                 sched_discard_thread(child);
                 return -1;

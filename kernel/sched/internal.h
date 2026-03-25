@@ -55,7 +55,7 @@ typedef struct {
     sched_thread_t *current;
     sched_thread_t *idle_thread;
     sched_thread_t *handoff_ready;
-    sched_thread_t *exit_pending;
+    sched_thread_t *retired_thread;
     size_t preempt_depth;
     size_t sched_lock_depth;
     unsigned long sched_lock_irq_flags;
@@ -151,6 +151,12 @@ static inline u64 sched_ticks_to_ms(u64 ticks) {
 }
 
 static inline size_t sched_cpu_id(void) {
+    size_t core_id = 0;
+
+    if (arch_current_cpu_id(&core_id) && core_id < MAX_CORES) {
+        return core_id;
+    }
+
     cpu_core_t *core = cpu_current();
 
     if (!core || core->id >= MAX_CORES) {
@@ -375,6 +381,48 @@ static inline bool thread_is_owned(const sched_thread_t *thread) {
     return thread_on_local_cpu(thread) || thread_in_handoff(thread);
 }
 
+static inline bool sched_thread_has_active_cpu_slot(
+    const sched_thread_t *thread
+) {
+    if (!thread) {
+        return false;
+    }
+
+    for (size_t cpu_id = 0; cpu_id < MAX_CORES; cpu_id++) {
+        if (__atomic_load_n(&sched_state.cpu[cpu_id].current, __ATOMIC_ACQUIRE) == thread) {
+            return true;
+        }
+
+        if (
+            __atomic_load_n(&sched_state.cpu[cpu_id].handoff_ready, __ATOMIC_ACQUIRE) ==
+            thread
+        ) {
+            return true;
+        }
+
+        if (
+            __atomic_load_n(&sched_state.cpu[cpu_id].retired_thread, __ATOMIC_ACQUIRE) ==
+            thread
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static inline sched_thread_t *sched_take_handoff_cpu(size_t cpu_id) {
+    if (cpu_id >= MAX_CORES) {
+        return NULL;
+    }
+
+    return __atomic_exchange_n(
+        &sched_state.cpu[cpu_id].handoff_ready,
+        NULL,
+        __ATOMIC_ACQ_REL
+    );
+}
+
 static inline bool
 sched_reclaim_handoff(sched_thread_t *thread) {
     int running_cpu = thread_cpu(thread);
@@ -384,16 +432,23 @@ sched_reclaim_handoff(sched_thread_t *thread) {
     }
 
     size_t cpu_id = (size_t)running_cpu;
-    sched_thread_t *handoff = __atomic_load_n(
-        &sched_state.cpu[cpu_id].handoff_ready,
-        __ATOMIC_ACQUIRE
-    );
-
-    if (handoff != thread) {
+    if (sched_cpu_id() != cpu_id) {
         return false;
     }
 
-    __atomic_store_n(&sched_state.cpu[cpu_id].handoff_ready, NULL, __ATOMIC_RELEASE);
+    sched_thread_t *handoff = thread;
+
+    if (!__atomic_compare_exchange_n(
+            &sched_state.cpu[cpu_id].handoff_ready,
+            &handoff,
+            NULL,
+            false,
+            __ATOMIC_ACQ_REL,
+            __ATOMIC_ACQUIRE
+        )) {
+        return false;
+    }
+
     thread_unclaim(thread);
 
     return true;
@@ -452,6 +507,10 @@ bool ctx_candidate_valid(
     const arch_int_state_t *state
 );
 bool ctx_valid(const sched_thread_t *thread);
+void sched_cull_invalid_thread_locked(
+    sched_thread_t *thread,
+    const char *site
+);
 
 size_t sched_cpu_load(size_t cpu_id);
 size_t sched_rq_depth(size_t cpu_id);
@@ -464,6 +523,7 @@ void rq_note_depth(size_t depth);
 void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id);
 bool rq_remove_thread(sched_thread_t *thread);
 bool rq_remove_index(sched_rq_t *rq, u32 index);
+bool rq_purge_thread(sched_thread_t *thread);
 sched_thread_t *rq_peek_best(size_t cpu_id);
 sched_thread_t *rq_pop_best_allowed(size_t cpu_id);
 sched_thread_t *rq_pop_disallowed_from_cpu(size_t cpu_id, size_t allowed_cpu);
@@ -491,6 +551,7 @@ void thread_cleanup(sched_thread_t *thread);
 sched_thread_t *find_thread(pid_t pid);
 void thread_get(sched_thread_t *thread);
 void thread_put(sched_thread_t *thread);
+void sched_release_retired_current_cpu(void);
 void thread_destroy(sched_thread_t *thread);
 void sched_reap_deferred(void);
 void sched_reap(void);
@@ -500,6 +561,10 @@ void thread_prepare_user(
     sched_thread_t *thread,
     uintptr_t entry,
     uintptr_t user_stack_top
+);
+bool sched_save_user_context(
+    sched_thread_t *thread,
+    const arch_int_state_t *state
 );
 sched_thread_t *create_thread(
     const char *name,
@@ -514,6 +579,7 @@ void wake_sleepers(u64 now);
 void sched_wake_sleepers(u64 now);
 void wq_dequeue(sched_thread_t *thread);
 void wq_remove(sched_thread_t *thread);
+void sched_wake_one_locked(sched_wait_queue_t *queue);
 bool wait_running(sched_thread_t *self);
 void exit_event_push(pid_t pid);
 

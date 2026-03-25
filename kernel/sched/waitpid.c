@@ -42,6 +42,7 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
     for (;;) {
         sched_thread_t *found = NULL;
         sched_thread_t *stopped = NULL;
+        sched_thread_t *active_zombie = NULL;
         bool has_matching_child = false;
 
         unsigned long flags = sched_lock_save();
@@ -60,6 +61,11 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
 
             found = thread;
             break;
+        }
+
+        if (found && sched_thread_has_active_cpu_slot(found)) {
+            active_zombie = found;
+            found = NULL;
         }
 
         if (found) {
@@ -124,6 +130,22 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
         if (!has_matching_child) {
             sched_lock_restore(flags);
             return -ECHILD;
+        }
+
+        if (active_zombie) {
+            if (options & WNOHANG) {
+                sched_lock_restore(flags);
+                return 0;
+            }
+
+            sched_lock_restore(flags);
+
+            while (sched_thread_has_active_cpu_slot(active_zombie)) {
+                force_resched();
+                sched_spin_wait();
+            }
+
+            continue;
         }
 
         if (options & WNOHANG) {

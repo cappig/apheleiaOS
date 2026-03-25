@@ -1,5 +1,112 @@
 #include "internal.h"
 
+static void rq_sift_down(sched_rq_t *rq, u32 index);
+
+static bool rq_thread_ptr_plausible(const sched_thread_t *thread) {
+    uintptr_t addr = (uintptr_t)thread;
+
+    if (!thread) {
+        return false;
+    }
+
+#if defined(__x86_64__)
+    if ((intptr_t)addr >= 0) {
+        return false;
+    }
+#else
+    if (addr < arch_kernel_vaddr_base()) {
+        return false;
+    }
+#endif
+
+    if ((addr & (sizeof(void *) - 1U)) != 0) {
+        return false;
+    }
+
+    return thread->magic == SCHED_THREAD_MAGIC;
+}
+
+static void rq_sanitize_locked(sched_rq_t *rq, size_t cpu_id, const char *site) {
+    if (!rq || !rq->heap) {
+        return;
+    }
+
+    size_t write = 0;
+    size_t old_count = rq->nr_running;
+
+    for (size_t read = 0; read < old_count; read++) {
+        sched_thread_t *thread = rq->heap[read];
+        if (!thread) {
+            continue;
+        }
+
+        if (!rq_thread_ptr_plausible(thread)) {
+            log_warn(
+                "rq sanitize cpu=%zu site=%s index=%zu ptr=%#" PRIx64 " nr=%zu",
+                cpu_id,
+                site ? site : "?",
+                read,
+                (u64)(uintptr_t)thread,
+                old_count
+            );
+            continue;
+        }
+
+        bool duplicate = false;
+        for (size_t i = 0; i < write; i++) {
+            if (rq->heap[i] != thread) {
+                continue;
+            }
+
+            log_warn(
+                "rq duplicate cpu=%zu site=%s index=%zu first=%zu"
+                " thread=%#" PRIx64 " pid=%d name=%s state=%d"
+                " running_cpu=%d on_rq=%d rq_index=%u",
+                cpu_id,
+                site ? site : "?",
+                read,
+                i,
+                (u64)(uintptr_t)thread,
+                thread->pid,
+                thread->name,
+                thread_get_state(thread),
+                thread_cpu(thread),
+                thread->on_rq ? 1 : 0,
+                thread->rq_index
+            );
+            duplicate = true;
+            break;
+        }
+
+        if (duplicate) {
+            continue;
+        }
+
+        rq->heap[write] = thread;
+        thread->rq_index = (u32)write;
+        thread->on_rq = true;
+        thread->in_run_queue = true;
+        write++;
+    }
+
+    for (size_t i = write; i < old_count; i++) {
+        rq->heap[i] = NULL;
+    }
+
+    rq->nr_running = write;
+
+    if (!rq->nr_running) {
+        rq->min_vruntime = 0;
+        return;
+    }
+
+    for (size_t i = rq->nr_running / 2; i > 0; i--) {
+        rq_sift_down(rq, (u32)(i - 1));
+    }
+
+    rq->min_vruntime = rq->heap[0] ? rq->heap[0]->vruntime_ns : 0;
+}
+
 static inline bool rq_less(const sched_thread_t *a, const sched_thread_t *b) {
     if (!a) {
         return false;
@@ -299,6 +406,7 @@ sched_thread_t *rq_pop_best_allowed(size_t cpu_id) {
 
     sched_rq_t *rq = &sched_state.runqueues[cpu_id];
     unsigned long flags = spin_lock_irqsave(&rq->lock);
+    rq_sanitize_locked(rq, cpu_id, "pop-best");
 
     if (rq->nr_running) {
         sched_thread_t *root = rq->heap[0];
@@ -345,6 +453,7 @@ sched_thread_t *rq_peek_best(size_t cpu_id) {
 
     sched_rq_t *rq = &sched_state.runqueues[cpu_id];
     unsigned long flags = spin_lock_irqsave(&rq->lock);
+    rq_sanitize_locked(rq, cpu_id, "peek-best");
     sched_thread_t *thread = NULL;
 
     if (rq->nr_running) {
@@ -381,6 +490,7 @@ rq_pop_worst_allowed_from_cpu(size_t source_cpu, size_t target_cpu) {
 
     sched_rq_t *rq = &sched_state.runqueues[source_cpu];
     unsigned long flags = spin_lock_irqsave(&rq->lock);
+    rq_sanitize_locked(rq, source_cpu, "pop-worst");
 
     sched_thread_t *candidate = NULL;
     u32 candidate_index = UINT32_MAX;
@@ -424,6 +534,7 @@ rq_pop_disallowed_from_cpu(size_t source_cpu, size_t disallowed_cpu) {
 
     sched_rq_t *rq = &sched_state.runqueues[source_cpu];
     unsigned long flags = spin_lock_irqsave(&rq->lock);
+    rq_sanitize_locked(rq, source_cpu, "pop-disallowed");
 
     sched_thread_t *candidate = NULL;
     u32 candidate_index = UINT32_MAX;
@@ -456,4 +567,31 @@ rq_pop_disallowed_from_cpu(size_t source_cpu, size_t disallowed_cpu) {
 
     spin_unlock_irqrestore(&rq->lock, flags);
     return candidate;
+}
+
+bool rq_purge_thread(sched_thread_t *thread) {
+    if (!thread) {
+        return false;
+    }
+
+    bool removed = false;
+
+    for (size_t cpu_id = 0; cpu_id < MAX_CORES; cpu_id++) {
+        sched_rq_t *rq = &sched_state.runqueues[cpu_id];
+        unsigned long flags = spin_lock_irqsave(&rq->lock);
+
+        for (;;) {
+            int found = rq_find_index(rq, thread);
+            if (found < 0) {
+                break;
+            }
+
+            rq_remove_index(rq, (u32)found);
+            removed = true;
+        }
+
+        spin_unlock_irqrestore(&rq->lock, flags);
+    }
+
+    return removed;
 }

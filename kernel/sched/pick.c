@@ -22,17 +22,7 @@ sched_thread_t *dequeue_thread(void) {
             thread_ctx_ok(thread) &&
             !ctx_valid(thread)
         ) {
-            thread_unclaim(thread);
-            thread_set_state(thread, THREAD_ZOMBIE);
-            thread->exit_code = -EFAULT;
-
-            if (sched_state.zombie_list && !thread->in_zombie_list) {
-                thread->zombie_node.data = thread;
-                list_append(sched_state.zombie_list, &thread->zombie_node);
-                thread->in_zombie_list = true;
-            }
-
-            exit_event_push(thread->pid);
+            sched_cull_invalid_thread_locked(thread, "dequeue");
             continue;
         }
 

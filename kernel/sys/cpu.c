@@ -22,18 +22,38 @@ static bool _cpu_ptr_is_core(cpu_core_t *core) {
     return ((ptr - first) % sizeof(cpu_core_t)) == 0;
 }
 
-cpu_core_t *cpu_current(void) {
-    cpu_core_t *core = arch_cpu_get_local();
+static cpu_core_t *_cpu_canonicalize(cpu_core_t *core) {
+    if (!_cpu_ptr_is_core(core)) {
+        return NULL;
+    }
 
-    if (_cpu_ptr_is_core(core)) {
+    size_t index =
+        ((uintptr_t)core - (uintptr_t)&cores_local[0]) / sizeof(cpu_core_t);
+    if (index < MAX_CORES && core->id != index) {
+        core->id = index;
+    }
+
+    return core;
+}
+
+cpu_core_t *cpu_current(void) {
+    size_t core_id = 0;
+    if (arch_current_cpu_id(&core_id) && core_id < MAX_CORES) {
+        return _cpu_canonicalize(&cores_local[core_id]);
+    }
+
+    cpu_core_t *core = _cpu_canonicalize(arch_cpu_get_local());
+
+    if (core) {
         return core;
     }
 
-    if (_cpu_ptr_is_core(cpu_boot_local)) {
-        return cpu_boot_local;
+    core = _cpu_canonicalize(cpu_boot_local);
+    if (core) {
+        return core;
     }
 
-    return &cores_local[0];
+    return _cpu_canonicalize(&cores_local[0]);
 }
 
 void cpu_set_current(cpu_core_t *core) {

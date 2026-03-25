@@ -12,6 +12,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <log/log.h>
 #include <poll.h>
 #include <sched/scheduler.h>
@@ -37,6 +38,52 @@
 #include <unistd.h>
 
 #define SYSCALL_INT 0x80
+#define MMAP_INIT_CHUNK_BYTES (64U * 1024U)
+#define USER_IO_CHUNK_BYTES  (64U * 1024U)
+
+static bool _mmap_init_chunked(
+    uintptr_t paddr,
+    size_t size,
+    vfs_node_t *file,
+    off_t file_offset
+) {
+    size_t offset = 0;
+
+    while (offset < size) {
+        size_t chunk = size - offset;
+        if (chunk > MMAP_INIT_CHUNK_BYTES) {
+            chunk = MMAP_INIT_CHUNK_BYTES;
+        }
+
+        void *dst = arch_phys_map((u64)paddr + offset, chunk, 0);
+        if (!dst) {
+            return false;
+        }
+
+        memset(dst, 0, chunk);
+
+        if (file) {
+            ssize_t read_len =
+                vfs_read(file, dst, (size_t)file_offset + offset, chunk, 0);
+            if (read_len < 0) {
+                arch_phys_unmap(dst, chunk);
+                return false;
+            }
+
+            arch_phys_unmap(dst, chunk);
+
+            if ((size_t)read_len < chunk) {
+                return true;
+            }
+        } else {
+            arch_phys_unmap(dst, chunk);
+        }
+
+        offset += chunk;
+    }
+
+    return true;
+}
 
 static bool _user_buf_ok(const void *buf, size_t len) {
     if (!buf) {
@@ -62,6 +109,155 @@ static bool _user_buf_ok(const void *buf, size_t len) {
     uintptr_t kernel_base = (uintptr_t)arch_kernel_vaddr_base();
     if (kernel_base && (start >= kernel_base || end >= kernel_base)) {
         return false;
+    }
+
+    return true;
+}
+
+static sched_user_region_t *
+_find_user_region_locked(sched_thread_t *thread, uintptr_t addr) {
+    if (!thread) {
+        return NULL;
+    }
+
+    for (sched_user_region_t *region = thread->regions; region; region = region->next) {
+        uintptr_t start = region->vaddr;
+        uintptr_t end = region->vaddr + region->pages * PAGE_4KIB;
+
+        if (addr >= start && addr < end) {
+            return region;
+        }
+    }
+
+    return NULL;
+}
+
+static bool _user_copy_from_mapping(
+    sched_thread_t *thread,
+    void *kernel_dst,
+    const void *user_src,
+    size_t len
+) {
+    if (!len) {
+        return true;
+    }
+
+    if (!_user_buf_ok(user_src, len) || !kernel_dst) {
+        return false;
+    }
+
+    if (!thread || !thread->user_thread) {
+        memcpy(kernel_dst, user_src, len);
+        return true;
+    }
+
+    u8 *dst = kernel_dst;
+    uintptr_t addr = (uintptr_t)user_src;
+    size_t remaining = len;
+
+    while (remaining) {
+        unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
+        sched_user_region_t *region = _find_user_region_locked(thread, addr);
+        if (!region) {
+            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+            return false;
+        }
+
+        uintptr_t region_end = region->vaddr + region->pages * PAGE_4KIB;
+        uintptr_t offset = addr - region->vaddr;
+        uintptr_t paddr = region->paddr + offset;
+        size_t chunk = (size_t)(region_end - addr);
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+        if (chunk > USER_IO_CHUNK_BYTES) {
+            chunk = USER_IO_CHUNK_BYTES;
+        }
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+
+        void *map = arch_phys_map((u64)paddr, chunk, 0);
+        if (!map) {
+            return false;
+        }
+
+        memcpy(dst, map, chunk);
+        arch_phys_unmap(map, chunk);
+
+        dst += chunk;
+        addr += chunk;
+        remaining -= chunk;
+    }
+
+    return true;
+}
+
+static bool _user_copy_to_mapping(
+    sched_thread_t *thread,
+    void *user_dst,
+    const void *kernel_src,
+    size_t len
+) {
+    if (!len) {
+        return true;
+    }
+
+    if (!_user_buf_ok(user_dst, len) || !kernel_src) {
+        return false;
+    }
+
+    if (!thread || !thread->user_thread) {
+        memcpy(user_dst, kernel_src, len);
+        return true;
+    }
+
+    const u8 *src = kernel_src;
+    uintptr_t addr = (uintptr_t)user_dst;
+    size_t remaining = len;
+
+    while (remaining) {
+        unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
+        sched_user_region_t *region = _find_user_region_locked(thread, addr);
+        if (!region) {
+            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+            return false;
+        }
+
+        if (region->flags & SCHED_REGION_COW) {
+            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+            if (!sched_handle_cow_fault(thread, addr, true)) {
+                return false;
+            }
+            continue;
+        }
+
+        if (!(region->flags & PT_WRITE)) {
+            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+            return false;
+        }
+
+        uintptr_t region_end = region->vaddr + region->pages * PAGE_4KIB;
+        uintptr_t offset = addr - region->vaddr;
+        uintptr_t paddr = region->paddr + offset;
+        size_t chunk = (size_t)(region_end - addr);
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+        if (chunk > USER_IO_CHUNK_BYTES) {
+            chunk = USER_IO_CHUNK_BYTES;
+        }
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+
+        void *map = arch_phys_map((u64)paddr, chunk, 0);
+        if (!map) {
+            return false;
+        }
+
+        memcpy(map, src, chunk);
+        arch_phys_unmap(map, chunk);
+
+        src += chunk;
+        addr += chunk;
+        remaining -= chunk;
     }
 
     return true;
@@ -260,7 +456,30 @@ static int _resolve_user_path(
         return -EINVAL;
     }
 
-    if (!path_resolve(thread->cwd, path, out, out_len)) {
+    char kernel_path[PATH_MAX];
+    if (thread->user_thread) {
+        for (size_t i = 0; i < sizeof(kernel_path); i++) {
+            char ch = '\0';
+            if (!_user_copy_from_mapping((sched_thread_t *)thread, &ch, path + i, 1)) {
+                return -EFAULT;
+            }
+            kernel_path[i] = ch;
+            if (!ch) {
+                break;
+            }
+            if (i + 1 == sizeof(kernel_path)) {
+                return -ENAMETOOLONG;
+            }
+        }
+    } else {
+        size_t len = strnlen(path, sizeof(kernel_path));
+        if (len >= sizeof(kernel_path)) {
+            return -ENAMETOOLONG;
+        }
+        memcpy(kernel_path, path, len + 1);
+    }
+
+    if (!path_resolve(thread->cwd, kernel_path, out, out_len)) {
         return -ENOENT;
     }
 
@@ -838,16 +1057,55 @@ static ssize_t sys_read(int fd, void *buf, size_t len) {
 
     sched_thread_t *thread = sched_current();
     sched_fd_t *entry = NULL;
+    size_t bounce_len = len;
+    if (bounce_len > USER_IO_CHUNK_BYTES) {
+        bounce_len = USER_IO_CHUNK_BYTES;
+    }
+
+    u8 *bounce = malloc(bounce_len);
+    if (!bounce) {
+        return -ENOMEM;
+    }
+
+    size_t total = 0;
+    ssize_t result = 0;
 
     if (thread && _fd_lookup(thread, fd, &entry)) {
         _sync_thread_tty(thread, entry);
+        while (total < len) {
+            size_t chunk = len - total;
+            if (chunk > bounce_len) {
+                chunk = bounce_len;
+            }
 
-        if (entry->kind == SCHED_FD_PIPE_READ) {
-            bool nonblock = (entry->flags & O_NONBLOCK) != 0;
-            return _pipe_read(entry->pipe, buf, len, nonblock);
+            ssize_t got = 0;
+            if (entry->kind == SCHED_FD_PIPE_READ) {
+                bool nonblock = (entry->flags & O_NONBLOCK) != 0;
+                got = _pipe_read(entry->pipe, bounce, chunk, nonblock);
+            } else {
+                got = _fd_read_vfs(
+                    thread, entry, bounce, chunk, entry->offset, true, -EBADF
+                );
+            }
+
+            if (got <= 0) {
+                result = total > 0 ? (ssize_t)total : got;
+                goto out;
+            }
+
+            if (!_user_copy_to_mapping(thread, (u8 *)buf + total, bounce, (size_t)got)) {
+                result = total > 0 ? (ssize_t)total : -EFAULT;
+                goto out;
+            }
+
+            total += (size_t)got;
+            if ((size_t)got < chunk) {
+                break;
+            }
         }
 
-        return _fd_read_vfs(thread, entry, buf, len, entry->offset, true, -EBADF);
+        result = (ssize_t)total;
+        goto out;
     }
 
     if (fd == STDIN_FILENO) {
@@ -856,11 +1114,38 @@ static ssize_t sys_read(int fd, void *buf, size_t len) {
         }
 
         tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+        while (total < len) {
+            size_t chunk = len - total;
+            if (chunk > bounce_len) {
+                chunk = bounce_len;
+            }
 
-        return tty_read_handle(&handle, buf, len);
+            ssize_t got = tty_read_handle(&handle, bounce, chunk);
+            if (got <= 0) {
+                result = total > 0 ? (ssize_t)total : got;
+                goto out;
+            }
+
+            if (!_user_copy_to_mapping(thread, (u8 *)buf + total, bounce, (size_t)got)) {
+                result = total > 0 ? (ssize_t)total : -EFAULT;
+                goto out;
+            }
+
+            total += (size_t)got;
+            if ((size_t)got < chunk) {
+                break;
+            }
+        }
+
+        result = (ssize_t)total;
+        goto out;
     }
 
-    return -EBADF;
+    result = -EBADF;
+
+out:
+    free(bounce);
+    return result;
 }
 
 static ssize_t sys_pread(int fd, void *buf, size_t len, off_t offset) {
@@ -884,8 +1169,51 @@ static ssize_t sys_pread(int fd, void *buf, size_t len, off_t offset) {
     }
 
     _sync_thread_tty(thread, entry);
+    size_t bounce_len = len;
+    if (bounce_len > USER_IO_CHUNK_BYTES) {
+        bounce_len = USER_IO_CHUNK_BYTES;
+    }
 
-    return _fd_read_vfs(thread, entry, buf, len, (size_t)offset, false, -ESPIPE);
+    u8 *bounce = malloc(bounce_len);
+    if (!bounce) {
+        return -ENOMEM;
+    }
+
+    size_t total = 0;
+    ssize_t result = 0;
+    size_t current_offset = (size_t)offset;
+
+    while (total < len) {
+        size_t chunk = len - total;
+        if (chunk > bounce_len) {
+            chunk = bounce_len;
+        }
+
+        ssize_t got = _fd_read_vfs(
+            thread, entry, bounce, chunk, current_offset, false, -ESPIPE
+        );
+        if (got <= 0) {
+            result = total > 0 ? (ssize_t)total : got;
+            goto out_pread;
+        }
+
+        if (!_user_copy_to_mapping(thread, (u8 *)buf + total, bounce, (size_t)got)) {
+            result = total > 0 ? (ssize_t)total : -EFAULT;
+            goto out_pread;
+        }
+
+        total += (size_t)got;
+        current_offset += (size_t)got;
+        if ((size_t)got < chunk) {
+            break;
+        }
+    }
+
+    result = (ssize_t)total;
+
+out_pread:
+    free(bounce);
+    return result;
 }
 
 static ssize_t sys_write(int fd, const void *buf, size_t len) {
@@ -899,18 +1227,55 @@ static ssize_t sys_write(int fd, const void *buf, size_t len) {
 
     sched_thread_t *thread = sched_current();
     sched_fd_t *entry = NULL;
+    size_t bounce_len = len;
+    if (bounce_len > USER_IO_CHUNK_BYTES) {
+        bounce_len = USER_IO_CHUNK_BYTES;
+    }
+
+    u8 *bounce = malloc(bounce_len);
+    if (!bounce) {
+        return -ENOMEM;
+    }
+
+    size_t total = 0;
+    ssize_t result = 0;
 
     if (thread && _fd_lookup(thread, fd, &entry)) {
         _sync_thread_tty(thread, entry);
+        while (total < len) {
+            size_t chunk = len - total;
+            if (chunk > bounce_len) {
+                chunk = bounce_len;
+            }
 
-        if (entry->kind == SCHED_FD_PIPE_WRITE) {
-            bool nonblock = (entry->flags & O_NONBLOCK) != 0;
-            return _pipe_write(entry->pipe, buf, len, nonblock);
+            if (!_user_copy_from_mapping(thread, bounce, (const u8 *)buf + total, chunk)) {
+                result = total > 0 ? (ssize_t)total : -EFAULT;
+                goto out_write;
+            }
+
+            ssize_t wrote = 0;
+            if (entry->kind == SCHED_FD_PIPE_WRITE) {
+                bool nonblock = (entry->flags & O_NONBLOCK) != 0;
+                wrote = _pipe_write(entry->pipe, bounce, chunk, nonblock);
+            } else {
+                wrote = _fd_write_vfs(
+                    thread, entry, bounce, chunk, entry->offset, true, true, -EBADF
+                );
+            }
+
+            if (wrote <= 0) {
+                result = total > 0 ? (ssize_t)total : wrote;
+                goto out_write;
+            }
+
+            total += (size_t)wrote;
+            if ((size_t)wrote < chunk) {
+                break;
+            }
         }
 
-        return _fd_write_vfs(
-            thread, entry, buf, len, entry->offset, true, true, -EBADF
-        );
+        result = (ssize_t)total;
+        goto out_write;
     }
 
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO || fd == STDIN_FILENO) {
@@ -919,11 +1284,38 @@ static ssize_t sys_write(int fd, const void *buf, size_t len) {
         }
 
         tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+        while (total < len) {
+            size_t chunk = len - total;
+            if (chunk > bounce_len) {
+                chunk = bounce_len;
+            }
 
-        return tty_write_handle(&handle, buf, len);
+            if (!_user_copy_from_mapping(thread, bounce, (const u8 *)buf + total, chunk)) {
+                result = total > 0 ? (ssize_t)total : -EFAULT;
+                goto out_write;
+            }
+
+            ssize_t wrote = tty_write_handle(&handle, bounce, chunk);
+            if (wrote <= 0) {
+                result = total > 0 ? (ssize_t)total : wrote;
+                goto out_write;
+            }
+
+            total += (size_t)wrote;
+            if ((size_t)wrote < chunk) {
+                break;
+            }
+        }
+
+        result = (ssize_t)total;
+        goto out_write;
     }
 
-    return -EBADF;
+    result = -EBADF;
+
+out_write:
+    free(bounce);
+    return result;
 }
 
 static ssize_t sys_pwrite(int fd, const void *buf, size_t len, off_t offset) {
@@ -947,10 +1339,51 @@ static ssize_t sys_pwrite(int fd, const void *buf, size_t len, off_t offset) {
     }
 
     _sync_thread_tty(thread, entry);
+    size_t bounce_len = len;
+    if (bounce_len > USER_IO_CHUNK_BYTES) {
+        bounce_len = USER_IO_CHUNK_BYTES;
+    }
 
-    return _fd_write_vfs(
-        thread, entry, buf, len, (size_t)offset, false, false, -ESPIPE
-    );
+    u8 *bounce = malloc(bounce_len);
+    if (!bounce) {
+        return -ENOMEM;
+    }
+
+    size_t total = 0;
+    ssize_t result = 0;
+    size_t current_offset = (size_t)offset;
+
+    while (total < len) {
+        size_t chunk = len - total;
+        if (chunk > bounce_len) {
+            chunk = bounce_len;
+        }
+
+        if (!_user_copy_from_mapping(thread, bounce, (const u8 *)buf + total, chunk)) {
+            result = total > 0 ? (ssize_t)total : -EFAULT;
+            goto out_pwrite;
+        }
+
+        ssize_t wrote = _fd_write_vfs(
+            thread, entry, bounce, chunk, current_offset, false, false, -ESPIPE
+        );
+        if (wrote <= 0) {
+            result = total > 0 ? (ssize_t)total : wrote;
+            goto out_pwrite;
+        }
+
+        total += (size_t)wrote;
+        current_offset += (size_t)wrote;
+        if ((size_t)wrote < chunk) {
+            break;
+        }
+    }
+
+    result = (ssize_t)total;
+
+out_pwrite:
+    free(bounce);
+    return result;
 }
 
 static ssize_t sys_ioctl(int fd, u64 request, void *args) {
@@ -1051,9 +1484,12 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         fd_pty_index = _pty_index_from_dev_name(dev);
     }
 
+    unsigned long procfs_irq_flags = 0;
+    bool procfs_locked = procfs_path_lock_if_needed(resolved, &procfs_irq_flags);
     vfs_node_t *node = vfs_lookup(resolved);
     if (node) {
         if ((flags & O_EXCL) && (flags & O_CREAT)) {
+            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, -EEXIST);
         }
     } else if (flags & O_CREAT) {
@@ -1072,21 +1508,25 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         );
 
         if (parent_err < 0) {
+            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, parent_err);
         }
 
         mode_t create_mode = _apply_umask(mode & 07777, thread->umask);
         node = vfs_create(parent, base, VFS_FILE, create_mode);
         if (!node) {
+            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, -EIO);
         }
 
         if (!vfs_chown(node, thread->uid, thread->gid)) {
+            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, -EIO);
         }
     }
 
     if (!node) {
+        procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
         return _open_fail(ptmx_open, ptmx_index, -ENOENT);
     }
 
@@ -1096,6 +1536,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     }
 
     if (!resolved_node) {
+        procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
         return _open_fail(ptmx_open, ptmx_index, -EINVAL);
     }
 
@@ -1109,20 +1550,24 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     }
 
     if (resolved_node->type == VFS_DIR && _open_has_write(flags)) {
+        procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
         return _open_fail(ptmx_open, ptmx_index, -EISDIR);
     }
 
     if (need && !vfs_access(resolved_node, thread->uid, thread->gid, need)) {
+        procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
         return _open_fail(ptmx_open, ptmx_index, -EACCES);
     }
 
     if (flags & O_TRUNC) {
         if (resolved_node->type == VFS_DIR) {
+            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, -EISDIR);
         }
 
         if (resolved_node->type == VFS_FILE) {
             if (vfs_truncate(resolved_node, 0) < 0) {
+                procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
                 return _open_fail(ptmx_open, ptmx_index, -EIO);
             }
 
@@ -1149,6 +1594,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         .fd_flags = fd_flags,
     };
     int ret = sched_fd_alloc(thread, &fd, 3);
+    procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
 
     if (ret < 0 && ptmx_open) {
         pty_unreserve(ptmx_index);
@@ -1507,7 +1953,6 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
     size_t size = args->len;
     size = ALIGN(size, PAGE_4KIB);
     size_t pages = size / PAGE_4KIB;
-
     if (args->offset < 0) {
         return (uintptr_t)-EINVAL;
     }
@@ -1544,16 +1989,20 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
         return (uintptr_t)-EINVAL;
     }
 
+    unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
+
     if (!addr) {
         addr = _pick_mmap_base(thread, size);
     }
 
     if (!addr) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return (uintptr_t)-ENOMEM;
     }
 
     uintptr_t end = addr + size;
     if (end < addr) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return (uintptr_t)-EINVAL;
     }
 
@@ -1563,12 +2012,14 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
     }
 
     if (end > stack_top) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return (uintptr_t)-ENOMEM;
     }
 
     if (fixed) {
         for (sched_user_region_t *region = thread->regions; region; region = region->next) {
             if (_region_overlaps(region, addr, end)) {
+                spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
                 return (uintptr_t)-ENOMEM;
             }
         }
@@ -1579,10 +2030,16 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
             }
 
             addr = _pick_mmap_base(thread, size);
+            if (!addr) {
+                spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+                return (uintptr_t)-ENOMEM;
+            }
             end = addr + size;
             break;
         }
     }
+
+    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
     if (!addr || end > stack_top) {
         return (uintptr_t)-ENOMEM;
@@ -1637,7 +2094,9 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
 
     arch_map_region(root, pages, addr, paddr, page_flags);
 
+    vm_flags = spin_lock_irqsave(&thread->vm_lock);
     if (!sched_add_user_region(thread, addr, paddr, pages, page_flags)) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         for (size_t i = 0; i < pages; i++) {
             unmap_page((page_t *)root, addr + i * PAGE_4KIB);
             arch_tlb_flush(addr + i * PAGE_4KIB);
@@ -1647,10 +2106,11 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
 
         return (uintptr_t)-ENOMEM;
     }
+    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
-    void *dst = arch_phys_map(paddr, pages * PAGE_4KIB, 0);
-    if (!dst) {
+    if (!_mmap_init_chunked(paddr, pages * PAGE_4KIB, file, args->offset)) {
         sched_user_region_t *prev = NULL;
+        vm_flags = spin_lock_irqsave(&thread->vm_lock);
         sched_user_region_t *region =
             _find_region_exact(thread, addr, pages, &prev);
 
@@ -1664,6 +2124,7 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
             free(region);
             sched_user_mem_sub(thread, pages);
         }
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
         for (size_t i = 0; i < pages; i++) {
             uintptr_t vaddr = addr + i * PAGE_4KIB;
@@ -1673,44 +2134,8 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
 
         arch_free_frames((void *)paddr, pages);
 
-        return (uintptr_t)-ENOMEM;
+        return (uintptr_t)(file ? -EIO : -ENOMEM);
     }
-
-    memset(dst, 0, pages * PAGE_4KIB);
-
-    if (file) {
-        ssize_t read_len = vfs_read(file, dst, (size_t)args->offset, size, 0);
-        if (read_len < 0) {
-            arch_phys_unmap(dst, pages * PAGE_4KIB);
-
-            sched_user_region_t *prev = NULL;
-            sched_user_region_t *region =
-                _find_region_exact(thread, addr, pages, &prev);
-
-            if (region) {
-                if (prev) {
-                    prev->next = region->next;
-                } else {
-                    thread->regions = region->next;
-                }
-
-                free(region);
-                sched_user_mem_sub(thread, pages);
-            }
-
-            for (size_t i = 0; i < pages; i++) {
-                uintptr_t vaddr = addr + i * PAGE_4KIB;
-                unmap_page((page_t *)root, vaddr);
-                arch_tlb_flush(vaddr);
-            }
-
-            arch_free_frames((void *)paddr, pages);
-
-            return (uintptr_t)-EIO;
-        }
-    }
-
-    arch_phys_unmap(dst, pages * PAGE_4KIB);
 
     return addr;
 }
@@ -1743,6 +2168,7 @@ static int sys_munmap(void *addr, size_t len) {
 
     bool unmapped = false;
     sched_user_region_t *prev = NULL;
+    unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
     sched_user_region_t *region = thread->regions;
 
     while (region) {
@@ -1768,6 +2194,7 @@ static int sys_munmap(void *addr, size_t len) {
         if (before_pages && after_pages) {
             tail = calloc(1, sizeof(*tail));
             if (!tail) {
+                spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
                 return -ENOMEM;
             }
 
@@ -1829,9 +2256,11 @@ static int sys_munmap(void *addr, size_t len) {
     }
 
     if (!unmapped) {
+        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return -EINVAL;
     }
 
+    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
     return 0;
 }
 
@@ -2888,11 +3317,13 @@ static void _syscall_handler(arch_int_state_t *state) {
         return;
     }
 
+    sched_release_retired_current_cpu();
     sched_capture_context(state);
     sched_metrics_record_syscall();
 
     u64 num = (u64)arch_syscall_num(state);
     u64 ret = _syscall_dispatch(state);
+    sched_capture_context(state);
 
     if (num == SYS_SIGRETURN && !ret) {
         return;

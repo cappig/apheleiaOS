@@ -322,12 +322,12 @@ static int window_open_fds(window_t *window) {
     snprintf(fb_path, sizeof(fb_path), "/dev/ws/%u/fb", window->id);
     snprintf(ev_path, sizeof(ev_path), "/dev/ws/%u/ev", window->id);
 
-    window->fb_fd = open(fb_path, O_RDWR, 0);
+    window->fb_fd = open(fb_path, O_RDWR | O_CLOEXEC, 0);
     if (window->fb_fd < 0) {
         return -1;
     }
 
-    window->ev_fd = open(ev_path, O_RDONLY | O_NONBLOCK, 0);
+    window->ev_fd = open(ev_path, O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
     if (window->ev_fd >= 0) {
         return 0;
     }
@@ -353,7 +353,7 @@ int ui_open(ui_t *ui, u32 flags) {
     ui->input_round_robin = false;
     _pending_reset(ui);
 
-    ui->ctl_fd = open("/dev/wsctl", O_RDWR | O_NONBLOCK, 0);
+    ui->ctl_fd = open("/dev/wsctl", O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
     if (ui->ctl_fd < 0) {
         return -1;
     }
@@ -362,7 +362,7 @@ int ui_open(ui_t *ui, u32 flags) {
         return 0;
     }
 
-    ui->keyboard_fd = open("/dev/keyboard", O_RDONLY | O_NONBLOCK, 0);
+    ui->keyboard_fd = open("/dev/keyboard", O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
     if (ui->keyboard_fd < 0) {
         int saved = errno;
         ui_close(ui);
@@ -370,7 +370,7 @@ int ui_open(ui_t *ui, u32 flags) {
         return -1;
     }
 
-    ui->mouse_fd = open("/dev/mouse", O_RDONLY | O_NONBLOCK, 0);
+    ui->mouse_fd = open("/dev/mouse", O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
     if (ui->mouse_fd >= 0) {
         return 0;
     }
@@ -522,7 +522,7 @@ int ui_mgr_claim(ui_t *ui) {
         return 0;
     }
 
-    ui->mgr_fd = open("/dev/wsmgr", O_RDONLY | O_NONBLOCK, 0);
+    ui->mgr_fd = open("/dev/wsmgr", O_RDONLY | O_NONBLOCK | O_CLOEXEC, 0);
     if (ui->mgr_fd >= 0) {
         return 0;
     }

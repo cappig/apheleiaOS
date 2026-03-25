@@ -6,6 +6,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <sys/cpu.h>
+#include <x86/apic.h>
 
 static tss_entry_t tss_entries[MAX_CORES] = {0};
 static gdt_desc_t gdt_descs[MAX_CORES] = {0};
@@ -39,10 +40,31 @@ bool gdt_current_core_id(size_t *out) {
     return false;
 }
 
+#if defined(__i386__)
+static bool _lapic_core_id(size_t *out) {
+    if (!out) {
+        return false;
+    }
+
+    cpu_core_t *core = cpu_find_by_lapic(lapic_id());
+    if (!core || !core->valid || core->id >= MAX_CORES) {
+        return false;
+    }
+
+    *out = core->id;
+    return true;
+}
+#endif
+
 static size_t _gdt_core_id(void) {
-    // Prefer deriving the core from the active GDTR so TSS/GDT updates
-    // never depend on scheduler-local CPU bookkeeping.
     size_t core_id = 0;
+
+#if defined(__i386__)
+    if (_lapic_core_id(&core_id)) {
+        return core_id;
+    }
+#endif
+
     if (gdt_current_core_id(&core_id)) {
         return core_id;
     }

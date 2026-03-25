@@ -5,6 +5,8 @@
 
 #include "x86/asm.h"
 
+static volatile u32 panic_active = 0;
+
 #if defined(__x86_64__)
 typedef struct {
     u16 ds;
@@ -477,9 +479,16 @@ void arch_dump_registers(const arch_int_state_t *state) {
     _log_segs_ctrl(&sc);
 }
 
+bool panic_in_progress(void) {
+    return __atomic_load_n(&panic_active, __ATOMIC_ACQUIRE) != 0;
+}
+
 void panic_prepare(void) {
     disable_interrupts();
-    arch_panic_enter();
+
+    if (__atomic_exchange_n(&panic_active, 1, __ATOMIC_ACQ_REL) == 0) {
+        arch_panic_enter();
+    }
 }
 
 void panic_halt(void) {
