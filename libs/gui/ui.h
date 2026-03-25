@@ -47,7 +47,6 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count);
 
 int ui_mgr_claim(ui_t *ui);
 int ui_mgr_release(ui_t *ui);
-int ui_mgr_transfer(ui_t *ui, pid_t pid);
 ssize_t ui_mgr_events(ui_t *ui, ws_event_t *events, size_t count);
 int ui_mgr_focus(ui_t *ui, u32 id);
 int ui_mgr_move(ui_t *ui, u32 id, i32 x, i32 y);
@@ -56,19 +55,8 @@ int ui_mgr_raise(ui_t *ui, u32 id, u32 z);
 int ui_mgr_close(ui_t *ui, u32 id);
 int ui_mgr_send(ui_t *ui, u32 id, const input_event_t *event);
 
-int window_alloc(
-    ui_t *ui,
-    window_t *window,
-    u32 width,
-    u32 height,
-    const char *title
-);
 int window_set_title(window_t *window, const char *title);
-int window_from_env(ui_t *ui, window_t *window);
-int window_free(window_t *window);
 void window_close(window_t *window);
-ssize_t
-window_blit(window_t *window, const void *pixels, size_t len, size_t offset);
 ssize_t window_events(window_t *window, ws_input_event_t *events, size_t count);
 
 int window_init(window_t *window, u32 width, u32 height, const char *title);

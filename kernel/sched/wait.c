@@ -47,7 +47,7 @@ void wake_sleepers(u64 now) {
                 continue;
             }
 
-            thread_unclaim(thread);
+            thread_set_cpu(thread, -1);
             thread_set_state(thread, THREAD_READY);
 
             enqueue_ipi(thread, true);
@@ -219,7 +219,7 @@ void sched_discard_thread(sched_thread_t *thread) {
     rq_remove(thread);
     wq_remove(thread);
     sleep_heap_remove(thread);
-    thread_unclaim(thread);
+    thread_set_cpu(thread, -1);
 
     if (thread->in_zombie_list && sched_state.zombie_list) {
         unsigned long flags = sched_lock_save();
@@ -275,7 +275,7 @@ void sched_make_runnable(sched_thread_t *thread) {
         return;
     }
 
-    thread_unclaim(thread);
+    thread_set_cpu(thread, -1);
     thread_set_state(thread, THREAD_READY);
     enqueue_thread(thread);
 
@@ -324,7 +324,7 @@ void sched_unblock_thread(sched_thread_t *thread) {
             return;
         }
 
-        thread_unclaim(thread);
+        thread_set_cpu(thread, -1);
         thread_set_state(thread, THREAD_READY);
         enqueue_thread(thread);
     } else if (state == THREAD_RUNNING) {
@@ -355,7 +355,7 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
         !stopping_current &&
         state == THREAD_RUNNING &&
         thread_cpu(thread) >= 0 &&
-        thread_is_owned(thread)
+        (thread_on_local_cpu(thread) || thread_in_handoff(thread))
     ) {
         if (signum > 0 && signum < NSIG) {
             u32 mask = 1u << (signum - 1);
@@ -394,7 +394,7 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
     thread->stop_reported = false;
 
     if (!stopping_current) {
-        thread_unclaim(thread);
+        thread_set_cpu(thread, -1);
     }
 
     if (thread->user_thread) {
@@ -424,7 +424,7 @@ void sched_continue_thread(sched_thread_t *thread) {
         return;
     }
 
-    thread_unclaim(thread);
+    thread_set_cpu(thread, -1);
     thread_set_state(thread, THREAD_READY);
     thread->stop_signal = 0;
     thread->stop_reported = false;

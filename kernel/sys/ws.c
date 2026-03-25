@@ -1281,7 +1281,7 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
     }
 
     switch (request) {
-    case WSIOC_CLAIM_MANAGER:
+    case WSIOCCLAIMMGR:
         if (ws_state.manager_pid && ws_state.manager_pid != caller_pid) {
             return -EBUSY;
         }
@@ -1290,7 +1290,7 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
         _cmd_fill_from_window(cmd, cmd->id);
 
         return 0;
-    case WSIOC_TRANSFER_MANAGER:
+    case WSIOCTRANSFERMGR:
         if (!_is_manager(caller_pid)) {
             return -EPERM;
         }
@@ -1302,7 +1302,7 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
         ws_state.manager_pid = cmd->pid;
         _cmd_fill_from_window(cmd, cmd->id);
         return 0;
-    case WSIOC_RELEASE_MANAGER:
+    case WSIOCRELEASEMGR:
         if (!_is_manager(caller_pid)) {
             return -EPERM;
         }
@@ -1329,23 +1329,23 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
     }
 
     switch (request) {
-    case WSIOC_SET_FOCUS:
+    case WSIOCSFOCUS:
         _clear_focus();
         window->flags |= WS_WINDOW_FOCUSED;
         _cmd_fill_from_window(cmd, cmd->id);
         return 0;
-    case WSIOC_SET_POS:
+    case WSIOCSPOS:
         window->x = cmd->x;
         window->y = cmd->y;
         _cmd_fill_from_window(cmd, cmd->id);
         return 0;
-    case WSIOC_SET_SIZE:
+    case WSIOCSSIZE:
         return _handle_set_size(cmd->id, window, cmd);
-    case WSIOC_SET_Z:
+    case WSIOCSZ:
         window->z = cmd->flags;
         _cmd_fill_from_window(cmd, cmd->id);
         return 0;
-    case WSIOC_SEND_INPUT:
+    case WSIOCSINPUT:
         bool ev_was_empty = ring_queue_count(window->ev_queue) == 0;
         if (!_window_ev_push(window, &cmd->input)) {
             return -ENOMEM;
@@ -1357,7 +1357,7 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
         _cmd_fill_from_window(cmd, cmd->id);
 
         return 0;
-    case WSIOC_CLOSE:
+    case WSIOCCLOSE:
         _free_window(cmd->id, true);
         _cmd_fill_from_window(cmd, cmd->id);
 
@@ -1663,7 +1663,7 @@ static ssize_t _ws_ctl_ioctl_as(pid_t caller_pid, u64 request, void *args) {
 
     ws_cmd_t *cmd = args;
 
-    if (request == WSIOC_TRANSFER_MANAGER) {
+    if (request == WSIOCTRANSFERMGR) {
         if (cmd->pid <= 0 || !sched_pid_alive(cmd->pid)) {
             return -ESRCH;
         }
@@ -1674,27 +1674,27 @@ static ssize_t _ws_ctl_ioctl_as(pid_t caller_pid, u64 request, void *args) {
     mutex_lock(&ws_lock);
 
     switch (request) {
-    case WSIOC_ALLOC:
+    case WSIOCALLOC:
         status = _handle_alloc(caller_pid, cmd);
         break;
-    case WSIOC_FREE:
+    case WSIOCFREE:
         status = _handle_free(caller_pid, cmd);
         break;
-    case WSIOC_QUERY:
+    case WSIOCGINFO:
         status = _handle_query(caller_pid, cmd);
         break;
-    case WSIOC_SET_TITLE:
+    case WSIOCSTITLE:
         status = _handle_set_title(caller_pid, cmd);
         break;
-    case WSIOC_CLAIM_MANAGER:
-    case WSIOC_RELEASE_MANAGER:
-    case WSIOC_TRANSFER_MANAGER:
-    case WSIOC_SET_FOCUS:
-    case WSIOC_SET_POS:
-    case WSIOC_SET_SIZE:
-    case WSIOC_SET_Z:
-    case WSIOC_SEND_INPUT:
-    case WSIOC_CLOSE:
+    case WSIOCCLAIMMGR:
+    case WSIOCRELEASEMGR:
+    case WSIOCTRANSFERMGR:
+    case WSIOCSFOCUS:
+    case WSIOCSPOS:
+    case WSIOCSSIZE:
+    case WSIOCSZ:
+    case WSIOCSINPUT:
+    case WSIOCCLOSE:
         status = _handle_manager_op(caller_pid, request, cmd);
         break;
     default:

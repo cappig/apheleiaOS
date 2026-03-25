@@ -163,7 +163,7 @@ void sched_publish_handoff(
         return;
     }
 
-    thread_unclaim(thread);
+    thread_set_cpu(thread, -1);
 
     if (thread_get_state(thread) == THREAD_RUNNING) {
         thread_set_state(thread, THREAD_READY);

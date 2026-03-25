@@ -53,9 +53,6 @@ extern const u8 smp_trampoline32_entry;
 extern const u8 smp_trampoline32_arg;
 extern const u8 smp_trampoline32_stack;
 #endif
-
-NORETURN static void _smp_ap_entry(void *arg);
-
 static uintptr_t _read_stack_ptr(void) {
     uintptr_t sp = 0;
 #if defined(__x86_64__)
@@ -116,6 +113,66 @@ static void _fpu_enable_local(void) {
     write_cr4(cr4);
 
     asm volatile("fninit");
+}
+
+NORETURN static void _smp_ap_entry(void *arg) {
+    size_t expected = (size_t)(uintptr_t)arg;
+    disable_interrupts();
+
+    if (!apic_init()) {
+        cpu_halt();
+    }
+
+    cpu_core_t *core = cpu_find_by_lapic(lapic_id());
+
+    if (!core || core->id >= MAX_CORES) {
+        cpu_halt();
+    }
+
+    cpuid_regs_t regs = {0};
+    cpuid(1, &regs);
+    u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
+
+    if (cpuid_apic_id != core->lapic_id) {
+        log_warn(
+            "AP core %zu APIC ID mismatch (cpuid=%u lapic=%u)",
+            core->id,
+            cpuid_apic_id,
+            core->lapic_id
+        );
+    }
+
+    if (expected < MAX_CORES && core->id != expected) {
+        log_warn(
+            "AP core mismatch (expected=%zu, actual=%zu)",
+            expected,
+            core->id
+        );
+    }
+
+    cpu_set_current(core);
+    _fpu_enable_local();
+
+    gdt_init();
+    tss_init(_read_stack_ptr());
+    idt_load();
+    irq_init_ap();
+    scheduler_init_core();
+    cpu_set_online(core, true);
+
+    __atomic_store_n(&smp_ap_ready[core->id], 1, __ATOMIC_RELEASE);
+
+    while (!sched_is_running()) {
+        arch_cpu_relax();
+    }
+
+    if (smp_online_count() > 1) {
+        smp_shootdown_enabled = true;
+    }
+
+    scheduler_start_secondary();
+    enable_interrupts();
+    cpu_halt();
 }
 
 static void _write32(void *base, size_t off, u32 value) {
@@ -252,66 +309,6 @@ static void _tlb_ipi_handler(UNUSED int_state_t *state) {
 static void _resched_ipi_handler(UNUSED int_state_t *state) {
     lapic_end_int();
     sched_resched_softirq((arch_int_state_t *)state);
-}
-
-NORETURN static void _smp_ap_entry(void *arg) {
-    size_t expected = (size_t)(uintptr_t)arg;
-    disable_interrupts();
-
-    if (!apic_init()) {
-        cpu_halt();
-    }
-
-    cpu_core_t *core = cpu_find_by_lapic(lapic_id());
-
-    if (!core || core->id >= MAX_CORES) {
-        cpu_halt();
-    }
-
-    cpuid_regs_t regs = {0};
-    cpuid(1, &regs);
-    u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
-
-    if (cpuid_apic_id != core->lapic_id) {
-        log_warn(
-            "AP core %zu APIC ID mismatch (cpuid=%u lapic=%u)",
-            core->id,
-            cpuid_apic_id,
-            core->lapic_id
-        );
-    }
-
-    if (expected < MAX_CORES && core->id != expected) {
-        log_warn(
-            "AP core mismatch (expected=%zu, actual=%zu)",
-            expected,
-            core->id
-        );
-    }
-
-    cpu_set_current(core);
-    _fpu_enable_local();
-
-    gdt_init();
-    tss_init(_read_stack_ptr());
-    idt_load();
-    irq_init_ap();
-    scheduler_init_core();
-    cpu_set_online(core, true);
-
-    __atomic_store_n(&smp_ap_ready[core->id], 1, __ATOMIC_RELEASE);
-
-    while (!sched_is_running()) {
-        arch_cpu_relax();
-    }
-
-    if (smp_online_count() > 1) {
-        smp_shootdown_enabled = true;
-    }
-
-    scheduler_start_secondary();
-    enable_interrupts();
-    cpu_halt();
 }
 
 void smp_set_boot_info(const boot_info_t *info) {

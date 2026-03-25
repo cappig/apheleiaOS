@@ -334,10 +334,6 @@ static inline void thread_set_cpu(
     __atomic_store_n(&thread->running_cpu, cpu_id, __ATOMIC_RELEASE);
 }
 
-static inline void thread_unclaim(sched_thread_t *thread) {
-    thread_set_cpu(thread, -1);
-}
-
 static inline void thread_claim(sched_thread_t *thread, size_t cpu_id) {
     if (!thread) {
         return;
@@ -375,10 +371,6 @@ static inline bool thread_in_handoff(const sched_thread_t *thread) {
     );
 
     return handoff == thread;
-}
-
-static inline bool thread_is_owned(const sched_thread_t *thread) {
-    return thread_on_local_cpu(thread) || thread_in_handoff(thread);
 }
 
 static inline bool sched_thread_has_active_cpu_slot(
@@ -449,7 +441,7 @@ sched_reclaim_handoff(sched_thread_t *thread) {
         return false;
     }
 
-    thread_unclaim(thread);
+    thread_set_cpu(thread, -1);
 
     return true;
 }
@@ -485,7 +477,7 @@ sched_repair_thread(
         return true;
     }
 
-    thread_unclaim(thread);
+    thread_set_cpu(thread, -1);
     thread_set_state(thread, THREAD_READY);
     enqueue_ipi(thread, send_ipi);
     return true;

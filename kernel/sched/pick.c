@@ -29,7 +29,7 @@ sched_thread_t *dequeue_thread(void) {
         if (thread_get_state(thread) != THREAD_READY) {
             if (
                 thread_get_state(thread) == THREAD_RUNNING &&
-                !thread_is_owned(thread)
+                !(thread_on_local_cpu(thread) || thread_in_handoff(thread))
             ) {
                 sched_repair_thread(thread, true);
             }
@@ -38,7 +38,7 @@ sched_thread_t *dequeue_thread(void) {
         }
 
         if (thread_cpu(thread) >= 0) {
-            if (thread_is_owned(thread)) {
+            if (thread_on_local_cpu(thread) || thread_in_handoff(thread)) {
                 continue;
             }
 

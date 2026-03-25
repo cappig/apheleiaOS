@@ -9,9 +9,6 @@
 #include <stdlib.h>
 #include <sys/cpu.h>
 #include <sys/panic.h>
-#if defined(__x86_64__) || defined(__i386__)
-#include <x86/serial.h>
-#endif
 
 volatile uint32_t lock_spin_held_depth[MAX_CORES] = {0};
 
@@ -46,15 +43,13 @@ void lock_debug_trap(
         current ? current->name : "none"
     );
 
-#if defined(__x86_64__) || defined(__i386__)
     if (len > 0) {
         size_t size = (size_t)len;
         if (size > sizeof(buf)) {
             size = sizeof(buf);
         }
-        send_serial_sized_string(SERIAL_COM1, buf, size);
+        arch_debug_write(buf, size);
     }
-#endif
 
     (void)arch_irq_save();
     cpu_halt();

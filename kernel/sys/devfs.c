@@ -309,7 +309,7 @@ static ssize_t _dev_clock_read(
 static ssize_t _dev_clock_ioctl(vfs_node_t *node, u64 request, void *args) {
     (void)node;
 
-    if (request != CLOCKIO_GETSNAPSHOT) {
+    if (request != CLOCKIOCGSNAPSHOT) {
         return -ENOTTY;
     }
 

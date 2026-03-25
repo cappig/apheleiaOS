@@ -62,7 +62,7 @@ static void wake_waiter(sched_thread_t *thread) {
         return;
     }
 
-    thread_unclaim(thread);
+    thread_set_cpu(thread, -1);
     thread_set_state(thread, THREAD_READY);
 
     enqueue_thread(thread);

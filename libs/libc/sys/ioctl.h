@@ -21,21 +21,21 @@
 #define FBIOPRESENT      13
 #define FBIOPRESENT_RECT 14
 
-#define WSIOC_CLAIM_MANAGER   64
-#define WSIOC_RELEASE_MANAGER 65
-#define WSIOC_SET_FOCUS       66
-#define WSIOC_SET_POS         67
-#define WSIOC_SET_Z           68
-#define WSIOC_SEND_INPUT      69
-#define WSIOC_CLOSE           70
-#define WSIOC_ALLOC           71
-#define WSIOC_FREE            72
-#define WSIOC_QUERY           73
-#define WSIOC_SET_SIZE        74
-#define WSIOC_TRANSFER_MANAGER 75
-#define WSIOC_SET_TITLE       76
+#define WSIOCCLAIMMGR     64
+#define WSIOCRELEASEMGR   65
+#define WSIOCSFOCUS       66
+#define WSIOCSPOS         67
+#define WSIOCSZ           68
+#define WSIOCSINPUT       69
+#define WSIOCCLOSE        70
+#define WSIOCALLOC        71
+#define WSIOCFREE         72
+#define WSIOCGINFO        73
+#define WSIOCSSIZE        74
+#define WSIOCTRANSFERMGR  75
+#define WSIOCSTITLE       76
 
-#define CLOCKIO_GETSNAPSHOT   80
+#define CLOCKIOCGSNAPSHOT 80
 #endif
 
 int ioctl(int fd, unsigned long request, ...);

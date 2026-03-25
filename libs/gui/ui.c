@@ -16,9 +16,6 @@ extern char **environ;
 
 #define UI_PENDING_EVENTS_CAP 3
 
-static void
-_window_apply_resize_default(window_t *window, const ws_input_event_t *event);
-
 static const char *env_lookup(const char *key) {
     if (!key || !key[0] || !environ) {
         return NULL;
@@ -514,7 +511,7 @@ int ui_mgr_claim(ui_t *ui) {
         return -1;
     }
 
-    if (ui_simple(ui, WSIOC_CLAIM_MANAGER, 0, 0, 0, 0) < 0) {
+    if (ui_simple(ui, WSIOCCLAIMMGR, 0, 0, 0, 0) < 0) {
         return -1;
     }
 
@@ -528,7 +525,7 @@ int ui_mgr_claim(ui_t *ui) {
     }
 
     int saved = errno;
-    ui_simple(ui, WSIOC_RELEASE_MANAGER, 0, 0, 0, 0);
+    ui_simple(ui, WSIOCRELEASEMGR, 0, 0, 0, 0);
     errno = saved;
     return -1;
 }
@@ -540,18 +537,7 @@ int ui_mgr_release(ui_t *ui) {
     }
 
     close_fd(&ui->mgr_fd);
-    return ui_simple(ui, WSIOC_RELEASE_MANAGER, 0, 0, 0, 0);
-}
-
-int ui_mgr_transfer(ui_t *ui, pid_t pid) {
-    if (!ui || ui->ctl_fd < 0 || pid <= 0) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    ws_cmd_t cmd = {0};
-    cmd.pid = pid;
-    return ioctl(ui->ctl_fd, WSIOC_TRANSFER_MANAGER, &cmd);
+    return ui_simple(ui, WSIOCRELEASEMGR, 0, 0, 0, 0);
 }
 
 ssize_t ui_mgr_events(ui_t *ui, ws_event_t *events, size_t count) {
@@ -564,11 +550,11 @@ ssize_t ui_mgr_events(ui_t *ui, ws_event_t *events, size_t count) {
 }
 
 int ui_mgr_focus(ui_t *ui, u32 id) {
-    return ui_simple(ui, WSIOC_SET_FOCUS, id, 0, 0, 0);
+    return ui_simple(ui, WSIOCSFOCUS, id, 0, 0, 0);
 }
 
 int ui_mgr_move(ui_t *ui, u32 id, i32 x, i32 y) {
-    return ui_simple(ui, WSIOC_SET_POS, id, x, y, 0);
+    return ui_simple(ui, WSIOCSPOS, id, x, y, 0);
 }
 
 int ui_mgr_resize(ui_t *ui, u32 id, u32 width, u32 height) {
@@ -582,15 +568,15 @@ int ui_mgr_resize(ui_t *ui, u32 id, u32 width, u32 height) {
     cmd.width = width;
     cmd.height = height;
 
-    return ioctl(ui->ctl_fd, WSIOC_SET_SIZE, &cmd);
+    return ioctl(ui->ctl_fd, WSIOCSSIZE, &cmd);
 }
 
 int ui_mgr_raise(ui_t *ui, u32 id, u32 z) {
-    return ui_simple(ui, WSIOC_SET_Z, id, 0, 0, z);
+    return ui_simple(ui, WSIOCSZ, id, 0, 0, z);
 }
 
 int ui_mgr_close(ui_t *ui, u32 id) {
-    return ui_simple(ui, WSIOC_CLOSE, id, 0, 0, 0);
+    return ui_simple(ui, WSIOCCLOSE, id, 0, 0, 0);
 }
 
 int ui_mgr_send(ui_t *ui, u32 id, const input_event_t *event) {
@@ -603,10 +589,10 @@ int ui_mgr_send(ui_t *ui, u32 id, const input_event_t *event) {
     cmd.id = id;
     memcpy(&cmd.input, event, sizeof(cmd.input));
 
-    return ioctl(ui->ctl_fd, WSIOC_SEND_INPUT, &cmd);
+    return ioctl(ui->ctl_fd, WSIOCSINPUT, &cmd);
 }
 
-int window_alloc(
+static int window_alloc(
     ui_t *ui,
     window_t *window,
     u32 width,
@@ -628,7 +614,7 @@ int window_alloc(
         snprintf(cmd.title, sizeof(cmd.title), "%s", title);
     }
 
-    if (ioctl(ui->ctl_fd, WSIOC_ALLOC, &cmd) < 0) {
+    if (ioctl(ui->ctl_fd, WSIOCALLOC, &cmd) < 0) {
         if (errno == EPIPE) {
             errno = ENOENT;
         }
@@ -646,13 +632,13 @@ int window_alloc(
     }
 
     int saved = errno;
-    ui_simple(ui, WSIOC_FREE, window->id, 0, 0, 0);
+    ui_simple(ui, WSIOCFREE, window->id, 0, 0, 0);
     window_reset(window, ui);
     errno = saved;
     return -1;
 }
 
-int window_from_env(ui_t *ui, window_t *window) {
+static int window_from_env(ui_t *ui, window_t *window) {
     if (!ui || !window) {
         errno = EINVAL;
         return -1;
@@ -681,13 +667,13 @@ int window_from_env(ui_t *ui, window_t *window) {
     return window_open_fds(window);
 }
 
-int window_free(window_t *window) {
+static int window_free(window_t *window) {
     if (!window || !window->ui) {
         errno = EINVAL;
         return -1;
     }
 
-    int ret = ui_simple(window->ui, WSIOC_FREE, window->id, 0, 0, 0);
+    int ret = ui_simple(window->ui, WSIOCFREE, window->id, 0, 0, 0);
     window_close(window);
     return ret;
 }
@@ -705,7 +691,7 @@ int window_set_title(window_t *window, const char *title) {
         snprintf(cmd.title, sizeof(cmd.title), "%s", title);
     }
 
-    return ioctl(window->ui->ctl_fd, WSIOC_SET_TITLE, &cmd);
+    return ioctl(window->ui->ctl_fd, WSIOCSTITLE, &cmd);
 }
 
 void window_close(window_t *window) {
@@ -717,7 +703,7 @@ void window_close(window_t *window) {
     window_reset_runtime(window);
 }
 
-ssize_t
+static ssize_t
 window_blit(window_t *window, const void *pixels, size_t len, size_t offset) {
     if (!window || window->fb_fd < 0 || !pixels) {
         errno = EINVAL;
@@ -843,68 +829,6 @@ framebuffer_t *window_buffer(window_t *window) {
     window_sync_framebuffer(window);
 
     return &window->framebuffer;
-}
-
-int window_flush(window_t *window) {
-    if (!window || !window->pixels || !window->pixels_count) {
-        errno = EINVAL;
-        return -1;
-    }
-
-    for (size_t attempt = 0; attempt < 8; attempt++) {
-        size_t bytes = window->pixels_count * sizeof(pixel_t);
-        if (!bytes) {
-            errno = EINVAL;
-            return -1;
-        }
-
-        ssize_t n = window_blit(window, window->pixels, bytes, 0);
-        if (n == (ssize_t)bytes) {
-            return 0;
-        }
-
-        if (n >= 0) {
-            errno = EAGAIN;
-        }
-
-        if (errno == ENOENT) {
-            return -1;
-        }
-
-        if (errno != EAGAIN && errno != EINTR) {
-            return -1;
-        }
-
-        // Resize events can race flush writes; pull pending events and retry.
-        ws_input_event_t event_batch[8];
-        for (;;) {
-            ssize_t m = read(window->ev_fd, event_batch, sizeof(event_batch));
-            if (m < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                break;
-            }
-
-            if (!m || ((size_t)m % sizeof(ws_input_event_t))) {
-                break;
-            }
-
-            size_t count = (size_t)m / sizeof(ws_input_event_t);
-            for (size_t i = 0; i < count; i++) {
-                if (event_batch[i].type == INPUT_EVENT_WINDOW_RESIZE) {
-                    _window_apply_resize_default(window, &event_batch[i]);
-                }
-            }
-
-            if (count < (sizeof(event_batch) / sizeof(event_batch[0]))) {
-                break;
-            }
-        }
-    }
-
-    errno = EAGAIN;
-    return -1;
 }
 
 static int
@@ -1061,6 +985,68 @@ _window_apply_resize_default(window_t *window, const ws_input_event_t *event) {
     }
 
     window_sync_framebuffer(window);
+}
+
+int window_flush(window_t *window) {
+    if (!window || !window->pixels || !window->pixels_count) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for (size_t attempt = 0; attempt < 8; attempt++) {
+        size_t bytes = window->pixels_count * sizeof(pixel_t);
+        if (!bytes) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        ssize_t n = window_blit(window, window->pixels, bytes, 0);
+        if (n == (ssize_t)bytes) {
+            return 0;
+        }
+
+        if (n >= 0) {
+            errno = EAGAIN;
+        }
+
+        if (errno == ENOENT) {
+            return -1;
+        }
+
+        if (errno != EAGAIN && errno != EINTR) {
+            return -1;
+        }
+
+        // Resize events can race flush writes; pull pending events and retry.
+        ws_input_event_t event_batch[8];
+        for (;;) {
+            ssize_t m = read(window->ev_fd, event_batch, sizeof(event_batch));
+            if (m < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                break;
+            }
+
+            if (!m || ((size_t)m % sizeof(ws_input_event_t))) {
+                break;
+            }
+
+            size_t count = (size_t)m / sizeof(ws_input_event_t);
+            for (size_t i = 0; i < count; i++) {
+                if (event_batch[i].type == INPUT_EVENT_WINDOW_RESIZE) {
+                    _window_apply_resize_default(window, &event_batch[i]);
+                }
+            }
+
+            if (count < (sizeof(event_batch) / sizeof(event_batch[0]))) {
+                break;
+            }
+        }
+    }
+
+    errno = EAGAIN;
+    return -1;
 }
 
 ssize_t

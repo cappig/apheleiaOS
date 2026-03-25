@@ -339,7 +339,7 @@ void sched_cull_invalid_thread_locked(
         }
     }
 
-    thread_unclaim(thread);
+    thread_set_cpu(thread, -1);
     thread_set_state(thread, THREAD_ZOMBIE);
     thread->exit_code = -EFAULT;
 
@@ -380,7 +380,7 @@ void thread_cleanup(sched_thread_t *thread) {
     rq_remove_thread(thread);
     wq_dequeue(thread);
     sleep_heap_remove(thread);
-    thread_unclaim(thread);
+    thread_set_cpu(thread, -1);
     cleanup_thread(thread);
     sched_lock_restore(flags);
 }

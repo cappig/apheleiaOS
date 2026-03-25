@@ -1,7 +1,5 @@
 #include "internal.h"
 
-static void rq_sift_down(sched_rq_t *rq, u32 index);
-
 static bool rq_thread_ptr_plausible(const sched_thread_t *thread) {
     uintptr_t addr = (uintptr_t)thread;
 
@@ -9,21 +7,81 @@ static bool rq_thread_ptr_plausible(const sched_thread_t *thread) {
         return false;
     }
 
-#if defined(__x86_64__)
-    if ((intptr_t)addr >= 0) {
-        return false;
-    }
-#else
     if (addr < arch_kernel_vaddr_base()) {
         return false;
     }
-#endif
 
     if ((addr & (sizeof(void *) - 1U)) != 0) {
         return false;
     }
 
     return thread->magic == SCHED_THREAD_MAGIC;
+}
+
+static inline bool rq_less(const sched_thread_t *a, const sched_thread_t *b) {
+    if (!a) {
+        return false;
+    }
+
+    if (!b) {
+        return true;
+    }
+
+    if (a->vruntime_ns != b->vruntime_ns) {
+        return a->vruntime_ns < b->vruntime_ns;
+    }
+
+    return a->pid < b->pid;
+}
+
+static inline void rq_swap(sched_rq_t *rq, u32 left, u32 right) {
+    sched_thread_t *tmp = rq->heap[left];
+    rq->heap[left] = rq->heap[right];
+    rq->heap[right] = tmp;
+
+    if (rq->heap[left]) {
+        rq->heap[left]->rq_index = left;
+    }
+
+    if (rq->heap[right]) {
+        rq->heap[right]->rq_index = right;
+    }
+}
+
+static void rq_sift_up(sched_rq_t *rq, u32 index) {
+    while (index > 0) {
+        u32 parent = (index - 1U) / 2U;
+
+        if (!rq_less(rq->heap[index], rq->heap[parent])) {
+            break;
+        }
+
+        rq_swap(rq, index, parent);
+        index = parent;
+    }
+}
+
+static void rq_sift_down(sched_rq_t *rq, u32 index) {
+    for (;;) {
+        u32 left = index * 2U + 1U;
+        u32 right = left + 1U;
+        u32 best = index;
+
+        if ((size_t)left < rq->nr_running && rq_less(rq->heap[left], rq->heap[best])) {
+            best = left;
+        }
+
+        if ((size_t)right < rq->nr_running && rq_less(rq->heap[right], rq->heap[best])) {
+            best = right;
+        }
+
+        if (best == index) {
+            return;
+        }
+
+        rq_swap(rq, index, best);
+        index = best;
+    }
 }
 
 static void rq_sanitize_locked(sched_rq_t *rq, size_t cpu_id, const char *site) {
@@ -105,72 +163,6 @@ static void rq_sanitize_locked(sched_rq_t *rq, size_t cpu_id, const char *site) 
     }
 
     rq->min_vruntime = rq->heap[0] ? rq->heap[0]->vruntime_ns : 0;
-}
-
-static inline bool rq_less(const sched_thread_t *a, const sched_thread_t *b) {
-    if (!a) {
-        return false;
-    }
-
-    if (!b) {
-        return true;
-    }
-
-    if (a->vruntime_ns != b->vruntime_ns) {
-        return a->vruntime_ns < b->vruntime_ns;
-    }
-
-    return a->pid < b->pid;
-}
-
-static inline void rq_swap(sched_rq_t *rq, u32 left, u32 right) {
-    sched_thread_t *tmp = rq->heap[left];
-    rq->heap[left] = rq->heap[right];
-    rq->heap[right] = tmp;
-
-    if (rq->heap[left]) {
-        rq->heap[left]->rq_index = left;
-    }
-
-    if (rq->heap[right]) {
-        rq->heap[right]->rq_index = right;
-    }
-}
-
-static void rq_sift_up(sched_rq_t *rq, u32 index) {
-    while (index > 0) {
-        u32 parent = (index - 1U) / 2U;
-
-        if (!rq_less(rq->heap[index], rq->heap[parent])) {
-            break;
-        }
-
-        rq_swap(rq, index, parent);
-        index = parent;
-    }
-}
-
-static void rq_sift_down(sched_rq_t *rq, u32 index) {
-    for (;;) {
-        u32 left = index * 2U + 1U;
-        u32 right = left + 1U;
-        u32 best = index;
-
-        if ((size_t)left < rq->nr_running && rq_less(rq->heap[left], rq->heap[best])) {
-            best = left;
-        }
-
-        if ((size_t)right < rq->nr_running && rq_less(rq->heap[right], rq->heap[best])) {
-            best = right;
-        }
-
-        if (best == index) {
-            return;
-        }
-
-        rq_swap(rq, index, best);
-        index = best;
-    }
 }
 
 static bool rq_insert(sched_rq_t *rq, sched_thread_t *thread) {
@@ -291,7 +283,7 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
 
     if (thread_cpu(thread) >= 0) {
         if (
-            thread_is_owned(thread) ||
+            thread_on_local_cpu(thread) || thread_in_handoff(thread) ||
             thread_get_state(thread) == THREAD_RUNNING
         ) {
             return;

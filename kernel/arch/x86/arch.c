@@ -206,6 +206,14 @@ void arch_log_replay_console(void) {
     }
 }
 
+void arch_debug_write(const char *s, size_t len) {
+    if (!s || !len) {
+        return;
+    }
+
+    send_serial_sized_string(SERIAL_COM1, s, len);
+}
+
 ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
     if (!buf) {
         return -1;

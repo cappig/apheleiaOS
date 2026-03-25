@@ -170,7 +170,7 @@ void scheduler_start(void) {
         panic("scheduler selected invalid thread context on BSP");
     }
 
-    thread_unclaim(current);
+    thread_set_cpu(current, -1);
     next->exec_start_ns = next->sum_exec_ns;
     sched_local_set_slice_ns(0);
 
@@ -257,7 +257,7 @@ void scheduler_start_secondary(void) {
         panic("scheduler selected invalid thread context on AP");
     }
 
-    thread_unclaim(current);
+    thread_set_cpu(current, -1);
     next->exec_start_ns = next->sum_exec_ns;
     sched_local_set_slice_ns(0);
 
