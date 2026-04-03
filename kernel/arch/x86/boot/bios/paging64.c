@@ -11,6 +11,8 @@
 #include "x86/asm.h"
 #include "x86/paging64.h"
 
+#include <common/elf.h>
+
 static page_t *lvl4;
 static bool nx_supported = false;
 
@@ -157,43 +159,50 @@ static page_t _elf_to_page_flags(u32 elf_flags) {
     return flags;
 }
 
+struct elf_load_ctx64 {
+    void *elf;
+};
+
+static bool load_segment_64(const elf_segment_t *seg, void *ctx_ptr) {
+    struct elf_load_ctx64 *load_ctx = ctx_ptr;
+
+    u64 size = ALIGN(seg->mem_size, PAGE_4KIB);
+    u64 flags = _elf_to_page_flags(seg->flags);
+
+    u64 pbase =
+        (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, (size_t)seg->align);
+    u64 vbase = seg->vaddr;
+
+    // Map the segment
+    map_region_64(size, vbase, pbase, flags, true);
+
+    // Copy all loadable data from the file
+    memcpy(
+        (void *)(uintptr_t)pbase,
+        (u8 *)load_ctx->elf + seg->offset,
+        (size_t)seg->file_size
+    );
+
+    // Zero out any additional space
+    size_t zero_len = (size_t)(seg->mem_size - seg->file_size);
+    memset((void *)(uintptr_t)pbase + seg->file_size, 0, zero_len);
+
+    return true;
+}
+
 u64 load_elf_sections_64(void *elf_file) {
-    elf_header_t *header = elf_file;
+    struct elf_load_ctx64 ctx = {
+        .elf = elf_file,
+    };
+    elf_info_t info = {0};
 
-    for (size_t i = 0; i < header->ph_num; i++) {
-        elf_prog_header_t *p_header =
-            elf_file + header->phoff + i * header->phent_size;
-
-        if (p_header->type != PT_LOAD) {
-            continue;
-        }
-
-        if (!p_header->file_size && !p_header->mem_size) {
-            continue;
-        }
-
-        u64 size = ALIGN(p_header->mem_size, PAGE_4KIB);
-
-        u64 flags = _elf_to_page_flags(p_header->flags);
-
-        u64 pbase =
-            (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, p_header->align);
-        u64 vbase = p_header->vaddr;
-
-        // Map the segment
-        map_region_64(size, vbase, pbase, flags, true);
-
-        // Copy all loadable data from the file
-        memcpy(
-            (void *)(uintptr_t)pbase,
-            elf_file + p_header->offset,
-            p_header->file_size
-        );
-
-        // Zero out any additional space
-        size_t zero_len = p_header->mem_size - p_header->file_size;
-        memset((void *)(uintptr_t)pbase + p_header->file_size, 0, zero_len);
+    if (!elf_foreach_segment(elf_file, 0, load_segment_64, &ctx, &info)) {
+        return 0;
     }
 
-    return header->entry;
+    if (!info.is_64) {
+        return 0;
+    }
+
+    return info.entry;
 }

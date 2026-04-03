@@ -12,6 +12,8 @@
 #include "x86/asm.h"
 #include "x86/paging32.h"
 
+#include <common/elf.h>
+
 static page_t *pdpt;
 
 static page_t *_walk_pdpt_once(size_t index, bool is_kernel) {
@@ -174,44 +176,50 @@ static page_t _elf_to_page_flags(u32 elf_flags) {
     return flags;
 }
 
+struct elf_load_ctx32 {
+    void *elf;
+};
+
+static bool load_segment_32(const elf_segment_t *seg, void *ctx_ptr) {
+    struct elf_load_ctx32 *load_ctx = ctx_ptr;
+
+    u32 size = ALIGN((u32)seg->mem_size, PAGE_4KIB);
+    u64 flags = _elf_to_page_flags(seg->flags);
+
+    u64 pbase =
+        (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, (size_t)seg->align);
+    u32 vbase = (u32)seg->vaddr;
+
+    // Map the segment
+    map_region_32(size, vbase, pbase, flags, true);
+
+    // Copy all loadable data from the file
+    memcpy(
+        (void *)(uintptr_t)pbase,
+        (u8 *)load_ctx->elf + seg->offset,
+        (size_t)seg->file_size
+    );
+
+    // Zero out any additional space
+    size_t zero_len = (size_t)(seg->mem_size - seg->file_size);
+    memset((void *)(uintptr_t)pbase + seg->file_size, 0, zero_len);
+
+    return true;
+}
+
 u32 load_elf_sections_32(void *elf_file) {
-    elf32_header_t *header = elf_file;
+    struct elf_load_ctx32 ctx = {
+        .elf = elf_file,
+    };
 
-    for (size_t i = 0; i < header->ph_num; i++) {
-        size_t offset = header->phoff + i * header->phent_size;
-        elf32_prog_header_t *p_header =
-            (elf32_prog_header_t *)((u8 *)elf_file + offset);
-
-        if (p_header->type != PT_LOAD) {
-            continue;
-        }
-
-        if (!p_header->file_size && !p_header->mem_size) {
-            continue;
-        }
-
-        u32 size = ALIGN(p_header->mem_size, PAGE_4KIB);
-
-        u64 flags = _elf_to_page_flags(p_header->flags);
-
-        u64 pbase =
-            (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, p_header->align);
-        u32 vbase = p_header->vaddr;
-
-        // Map the segment
-        map_region_32(size, vbase, pbase, flags, true);
-
-        // Copy all loadable data from the file
-        memcpy(
-            (void *)(uintptr_t)pbase,
-            (u8 *)elf_file + p_header->offset,
-            p_header->file_size
-        );
-
-        // Zero out any additional space
-        size_t zero_len = p_header->mem_size - p_header->file_size;
-        memset((void *)(uintptr_t)pbase + p_header->file_size, 0, zero_len);
+    elf_info_t info = {0};
+    if (!elf_foreach_segment(elf_file, 0, load_segment_32, &ctx, &info)) {
+        return 0;
     }
 
-    return header->entry;
+    if (info.is_64) {
+        return 0;
+    }
+
+    return (u32)info.entry;
 }

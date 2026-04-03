@@ -1,6 +1,6 @@
 BIOS_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 MBR_DIR  := $(dir $(BIOS_DIR))mbr
-BOOT_LIB_DIRS := $(ARCH_DIR) kernel/lib
+BOOT_LIB_DIRS := $(ARCH_DIR) kernel/lib kernel/arch/common
 
 
 BIOS_SRC_DIRS := \

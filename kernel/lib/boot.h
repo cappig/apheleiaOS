@@ -24,6 +24,13 @@ typedef enum {
 #define BOOT_DEFAULT_FONT        "/etc/font.psf"
 #define BOOT_DEFAULT_STAGE_ROOTFS 0
 
+#define BOOT_KERNEL_PATH_32 "/boot/kernel32.elf"
+#define BOOT_KERNEL_PATH_64 "/boot/kernel64.elf"
+
+static inline const char *boot_kernel_path(bool is_64) {
+    return is_64 ? BOOT_KERNEL_PATH_64 : BOOT_KERNEL_PATH_32;
+}
+
 typedef struct PACKED {
     u8 debug;
     u8 stage_rootfs;
