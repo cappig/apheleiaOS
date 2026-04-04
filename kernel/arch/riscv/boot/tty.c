@@ -7,11 +7,19 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+static uintptr_t tty_uart_base = SERIAL_UART0;
+
+void tty_set_uart_base(uintptr_t base) {
+    if (base) {
+        tty_uart_base = base;
+    }
+}
+
 int puts(const char *str) {
     int count = 0;
 
     while (*str) {
-        send_serial(SERIAL_UART0, *str++);
+        send_serial(tty_uart_base, *str++);
         count++;
     }
 
@@ -19,7 +27,7 @@ int puts(const char *str) {
 }
 
 void serial_puts(const char *str) {
-    send_serial_string(SERIAL_UART0, str);
+    send_serial_string(tty_uart_base, str);
 }
 
 int printf(const char *fmt, ...) {

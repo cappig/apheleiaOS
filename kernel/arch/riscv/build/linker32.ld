@@ -9,11 +9,9 @@ PHDRS
 
 SECTIONS
 {
-    . = 0x80000000;
-    PROVIDE(__image_start = .);
+    . = 0x80200000;
 
     .text : ALIGN(16) {
-        KEEP(*(.init))
         *(.text .text.*)
     } : text_segment
 
@@ -25,8 +23,6 @@ SECTIONS
         *(.data .data.*)
     } : data_segment
 
-    PROVIDE(__image_end = .);
-
     PROVIDE(__global_pointer$ = . + 0x800);
 
     .bss : ALIGN(16) {
@@ -34,18 +30,10 @@ SECTIONS
         *(.bss .bss.*)
         *(COMMON)
         . = ALIGN(16);
+        . += (64 * 1024);
+        __stack_top = .;
         __bss_end = .;
     } : data_segment
-
-    .boot_heap : ALIGN(16) {
-        __heap_start = .;
-        . += 1024 * 1024;
-        __heap_end = .;
-    } : data_segment
-
-    . = ALIGN(16);
-    . += 64 * 1024;
-    __stack_top = .;
 
     /DISCARD/ : {
         *(.comment)

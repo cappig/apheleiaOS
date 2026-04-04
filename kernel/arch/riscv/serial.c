@@ -37,6 +37,20 @@ char receive_serial(uintptr_t base) {
     return (char)(*rbr);
 }
 
+bool serial_try_receive(uintptr_t base, char *out) {
+    if (!_uart_has_data(base)) {
+        return false;
+    }
+
+    if (out) {
+        *out = receive_serial(base);
+    } else {
+        (void)receive_serial(base);
+    }
+
+    return true;
+}
+
 void send_serial_string(uintptr_t base, const char *s) {
     while (*s) {
         send_serial(base, *s++);
