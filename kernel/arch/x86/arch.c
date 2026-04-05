@@ -1078,6 +1078,9 @@ void arch_storage_init(void) {
     }
 }
 
+void arch_late_init(void) {
+}
+
 bool arch_phys_map_can_persist(void) {
 #if defined(__x86_64__)
     return true;
