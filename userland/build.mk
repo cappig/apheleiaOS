@@ -1,13 +1,9 @@
-# HACK: for now
-ifeq ($(ARCH_TREE), riscv)
-USERLAND_DISABLED := true
-else
-
 USERLAND_TOOLS  ?= all
+USERLAND_UI     ?= all
 USERLAND_EXTRAS ?= all
 USERLAND_GAMES  ?= all
 
-USER_OBJ_DIR                := bin/user/$(ARCH_VARIANT)
+USER_OBJ_DIR                := bin/user/$(ARCH)
 USER_BIN_DIR                := $(USER_OBJ_DIR)/bin
 USER_STAGE_ROOT_DIR         := $(USER_OBJ_DIR)/root
 USER_STAGE_DIR              := $(USER_STAGE_ROOT_DIR)/bin
@@ -20,45 +16,76 @@ USER_LIBC_SRC := \
 	$(wildcard libs/libc/*.c) \
 	$(wildcard libs/libc_ext/*.c) \
 	$(wildcard libs/libc_usr/*.c)
+
+ifeq ($(ARCH_TREE), riscv)
+USER_LIBC_SRC := $(filter-out \
+	libs/libc/math.c \
+	libs/libc_usr/strtod.c, \
+	$(USER_LIBC_SRC))
+endif
 USER_COMMON_SRC := $(wildcard libs/user/*.c)
 USER_DATA_SRC   := $(wildcard libs/data/*.c)
 USER_GUI_SRC    := $(wildcard libs/gui/*.c)
 USER_TERM_SRC   := $(wildcard libs/term/*.c)
 USER_PARSE_SRC  := libs/parse/psf.c libs/parse/ppm.c libs/parse/textdb.c
 
+ifeq ($(ARCH_TREE), riscv)
+USER_CRT_SRC  := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crt0.S
+USER_CRTI_SRC := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crti.S
+USER_CRTN_SRC := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crtn.S
+USER_LD_SCRIPT := userland/linker_riscv$(ARCH_VARIANT).ld
+
+ifeq ($(ARCH_VARIANT), 64)
+USER_ARCH_NAME := riscv_64
+USER_LD_EMU    := -melf64lriscv
+USER_ARCH_CFLAGS := -march=rv64imac_zicsr -mabi=lp64 -mcmodel=medlow
+else ifeq ($(ARCH_VARIANT), 32)
+USER_ARCH_NAME := riscv_32
+USER_LD_EMU    := -melf32lriscv
+USER_ARCH_CFLAGS := -march=rv32imac_zicsr -mabi=ilp32 -mcmodel=medlow
+else
+$(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
+endif
+else
 USER_CRT_SRC  := libs/libc_usr/arch/x86_$(ARCH_VARIANT)/crt0.asm
 USER_CRTI_SRC := libs/libc_usr/arch/x86_$(ARCH_VARIANT)/crti.asm
 USER_CRTN_SRC := libs/libc_usr/arch/x86_$(ARCH_VARIANT)/crtn.asm
+USER_LD_SCRIPT := userland/linker$(ARCH_VARIANT).ld
 
 ifeq ($(ARCH_VARIANT), 64)
 USER_ARCH_NAME := x86_64
 USER_LD_EMU    := -melf_x86_64
+USER_ARCH_CFLAGS := -m64
 else ifeq ($(ARCH_VARIANT), 32)
 USER_ARCH_NAME := x86_32
 USER_LD_EMU    := -melf_i386
+USER_ARCH_CFLAGS := -m32
 else
 $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
+endif
 endif
 
 USER_CC := \
 	-nostdlib \
+	-ffunction-sections \
+	-fdata-sections \
 	-Ilibs/libc_usr \
 	-Ilibs/user \
 	-Ilibs/gui \
-	-m$(ARCH_VARIANT) \
+	$(USER_ARCH_CFLAGS) \
 	-DARCH_NAME=\"$(USER_ARCH_NAME)\"
 
 USER_AS := -felf$(ARCH_VARIANT)
 
 USER_LD := \
 	--gc-sections \
-	-Tuserland/linker$(ARCH_VARIANT).ld \
+	-T$(USER_LD_SCRIPT) \
 	$(USER_LD_EMU)
 
 USER_LIBGCC := $(call LIBGCC, $(USER_CC))
 
 USER_CORE_PROG_DIRS  := $(sort $(patsubst %/main.c, %, $(wildcard userland/core/*/main.c)))
-USER_UI_PROG_DIRS    := $(sort $(patsubst %/main.c, %, $(wildcard userland/ui/*/main.c)))
+USER_UI_ALL_DIRS     := $(sort $(patsubst %/main.c, %, $(wildcard userland/ui/*/main.c)))
 USER_TOOLS_ALL_DIRS  := $(sort $(patsubst %/main.c, %, $(wildcard userland/tools/*/main.c)))
 USER_EXTRA_ALL_DIRS  := $(sort $(patsubst %/main.c, %, $(wildcard userland/extra/*/main.c)))
 USER_GAMES_ALL_DIRS  := $(sort $(patsubst %/main.c, %, $(wildcard userland/games/*/main.c)))
@@ -71,6 +98,7 @@ USER_TOOLS_OPTION_NAMES := $(sort \
 	$(notdir $(USER_TOOLS_ALL_DIRS)) \
 	$(call user_makefile_dirs,userland/tools) \
 )
+USER_UI_OPTION_NAMES := $(sort $(notdir $(USER_UI_ALL_DIRS)))
 USER_EXTRA_OPTION_NAMES := $(sort \
 	$(notdir $(USER_EXTRA_ALL_DIRS)) \
 	$(call user_makefile_dirs,userland/extra) \
@@ -85,6 +113,13 @@ ifeq ($(USERLAND_TOOLS), all)
 USER_TOOLS_SELECTED_NAMES := $(USER_TOOLS_OPTION_NAMES)
 else ifeq ($(USERLAND_TOOLS), none)
 USER_TOOLS_SELECTED_NAMES :=
+endif
+
+USER_UI_SELECTED_NAMES := $(USERLAND_UI)
+ifeq ($(USERLAND_UI), all)
+USER_UI_SELECTED_NAMES := $(USER_UI_OPTION_NAMES)
+else ifeq ($(USERLAND_UI), none)
+USER_UI_SELECTED_NAMES :=
 endif
 
 USER_EXTRA_SELECTED_NAMES := $(USERLAND_EXTRAS)
@@ -106,6 +141,11 @@ ifneq ($(strip $(USER_TOOLS_UNKNOWN)),)
 $(error Unknown tools selection(s) in USERLAND_TOOLS: $(USER_TOOLS_UNKNOWN))
 endif
 
+USER_UI_UNKNOWN := $(filter-out $(USER_UI_OPTION_NAMES),$(USER_UI_SELECTED_NAMES))
+ifneq ($(strip $(USER_UI_UNKNOWN)),)
+$(error Unknown UI selection(s) in USERLAND_UI: $(USER_UI_UNKNOWN))
+endif
+
 USER_EXTRA_UNKNOWN := $(filter-out $(USER_EXTRA_OPTION_NAMES),$(USER_EXTRA_SELECTED_NAMES))
 ifneq ($(strip $(USER_EXTRA_UNKNOWN)),)
 $(error Unknown extra selection(s) in USERLAND_EXTRAS: $(USER_EXTRA_UNKNOWN))
@@ -117,6 +157,7 @@ $(error Unknown game selection(s) in USERLAND_GAMES: $(USER_GAMES_UNKNOWN))
 endif
 
 USER_TOOLS_PROG_DIRS := $(filter $(addprefix userland/tools/,$(USER_TOOLS_SELECTED_NAMES)),$(USER_TOOLS_ALL_DIRS))
+USER_UI_PROG_DIRS    := $(filter $(addprefix userland/ui/,$(USER_UI_SELECTED_NAMES)),$(USER_UI_ALL_DIRS))
 USER_EXTRA_PROG_DIRS := $(filter $(addprefix userland/extra/,$(USER_EXTRA_SELECTED_NAMES)),$(USER_EXTRA_ALL_DIRS))
 USER_GAMES_PROG_DIRS := $(filter $(addprefix userland/games/,$(USER_GAMES_SELECTED_NAMES)),$(USER_GAMES_ALL_DIRS))
 
@@ -134,9 +175,9 @@ ifneq ($(words $(USER_PROGS)), $(words $(sort $(USER_PROGS))))
 $(error Duplicate userspace program names found across userland subdirectories)
 endif
 
-USER_CRT_OBJ  := $(patsubst %.asm, $(USER_OBJ_DIR)/%.asm.o, $(USER_CRT_SRC))
-USER_CRTI_OBJ := $(patsubst %.asm, $(USER_OBJ_DIR)/%.asm.o, $(USER_CRTI_SRC))
-USER_CRTN_OBJ := $(patsubst %.asm, $(USER_OBJ_DIR)/%.asm.o, $(USER_CRTN_SRC))
+USER_CRT_OBJ  := $(patsubst %, $(USER_OBJ_DIR)/%.o, $(USER_CRT_SRC))
+USER_CRTI_OBJ := $(patsubst %, $(USER_OBJ_DIR)/%.o, $(USER_CRTI_SRC))
+USER_CRTN_OBJ := $(patsubst %, $(USER_OBJ_DIR)/%.o, $(USER_CRTN_SRC))
 
 USER_LIBC_OBJ   := $(patsubst %.c, $(USER_OBJ_DIR)/%.c.o, $(USER_LIBC_SRC))
 USER_COMMON_OBJ := $(patsubst %.c, $(USER_OBJ_DIR)/%.c.o, $(USER_COMMON_SRC))
@@ -233,6 +274,10 @@ $(USER_OBJ_DIR)/%.c.o: %.c
 	@mkdir -p $(@D)
 	$(call cc, $(USER_CC), $@, $<)
 
+$(USER_OBJ_DIR)/%.S.o: %.S
+	@mkdir -p $(@D)
+	$(call cc, $(USER_CC), $@, $<)
+
 $(USER_OBJ_DIR)/%.asm.o: %.asm
 	@mkdir -p $(@D)
 	$(call as, $(USER_AS), $@, $<)
@@ -254,5 +299,3 @@ $(USER_STAGE_DIR)/%: $(USER_BIN_DIR)/%
 
 bin/$(IMAGE_NAME).img: $(USER_BINARIES)
 bin/$(IMAGE_NAME).iso: $(USER_BINARIES)
-
-endif

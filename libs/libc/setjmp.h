@@ -4,6 +4,8 @@
 typedef unsigned long jmp_buf[8];
 #elif defined(__i386__)
 typedef unsigned int jmp_buf[6];
+#elif defined(__riscv)
+typedef unsigned long jmp_buf[14];
 #else
 #error "Unsupported architecture for setjmp/longjmp"
 #endif

@@ -111,7 +111,7 @@ define stage_image
 	@mkdir -p $(IMAGE_BOOT_DIR)
 	@cp -f $(KERNEL_ELF) $(IMAGE_BOOT_DIR)/
 	@cp -r root/* $(IMAGE_STAGE_DIR)
-	@cp -a bin/user/$(ARCH_VARIANT)/root/. $(IMAGE_STAGE_DIR)/
+	@cp -a bin/user/$(ARCH)/root/. $(IMAGE_STAGE_DIR)/
 endef
 
 bin/$(IMAGE_NAME).img: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)

@@ -32,9 +32,12 @@ CC_BASE := \
 	-DEXTEND_LIBC \
 	-D_APHELEIA_SOURCE \
 	-nostdinc \
-	-mno-red-zone \
 	-fno-pic \
 	-fno-pie
+
+ifeq ($(word 1, $(subst _, ,$(ARCH))),x86)
+CC_BASE += -mno-red-zone
+endif
 
 AS_BASE := \
 	-w-label-orphan

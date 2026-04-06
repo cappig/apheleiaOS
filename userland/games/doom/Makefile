@@ -104,7 +104,11 @@ $(OBJ_DIR)/port/%.o: $(DOOM_DIR)/%.c
 
 $(CRT_OBJ): $(USER_CRT_SRC)
 	@mkdir -p $(@D)
+ifeq ($(ARCH_TREE),riscv)
+	$(CC) $(CFLAGS_SUPPORT) -c $< -o $@
+else
 	$(AS) $(ASFLAGS) -o $@ $<
+endif
 
 ifeq ($(DOOM_RECURSE),1)
 .SECONDEXPANSION:
