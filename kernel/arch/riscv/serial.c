@@ -2,10 +2,12 @@
 
 #define UART_THR 0x00
 #define UART_RBR 0x00
+#define UART_IER 0x01
 #define UART_LSR 0x05
 
 #define UART_LSR_RX_READY 0x01
 #define UART_LSR_TX_IDLE  0x20
+#define UART_IER_RX_READY 0x01
 
 static inline volatile u8 *_uart_reg(uintptr_t base, uintptr_t reg) {
     return (volatile u8 *)(base + reg);
@@ -49,6 +51,16 @@ bool serial_try_receive(uintptr_t base, char *out) {
     }
 
     return true;
+}
+
+void serial_set_rx_interrupt(uintptr_t base, bool enable) {
+    volatile u8 *ier = _uart_reg(base, UART_IER);
+
+    if (enable) {
+        *ier |= UART_IER_RX_READY;
+    } else {
+        *ier &= (u8)~UART_IER_RX_READY;
+    }
 }
 
 void send_serial_string(uintptr_t base, const char *s) {

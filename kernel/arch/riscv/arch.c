@@ -7,15 +7,20 @@
 #include <errno.h>
 #include <fs/ext2.h>
 #include <inttypes.h>
+#include <libc_ext/string.h>
 #include <log/log.h>
+#include <parse/fdt.h>
 #include <riscv/asm.h>
 #include <riscv/boot.h>
 #include <riscv/console.h>
+#include <riscv/drivers/serial.h>
 #include <riscv/mm/heap.h>
 #include <riscv/mm/physical.h>
+#include <riscv/platform.h>
 #include <riscv/mm/virtual.h>
 #include <riscv/serial.h>
 #include <riscv/trap.h>
+#include <riscv/vm.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
 #include <signal.h>
@@ -25,20 +30,39 @@
 #include <sys/cpu.h>
 #include <sys/disk.h>
 #include <sys/framebuffer.h>
+#include <sys/logsink.h>
 #include <sys/panic.h>
+#include <sys/symbols.h>
+#include <sys/tty.h>
 #include <sys/tty_input.h>
 
+#define LOG_BOOT_HISTORY_CAP   (128 * 1024)
 #define BOOT_ROOTFS_SECTOR_SIZE 512
 #define RISCV_TIMEBASE_HZ       10000000ULL
 #define RISCV_UART_WINDOW_SIZE  PAGE_4KIB
+#define RISCV_MMIO_MAX_REGIONS  24
+#define RISCV_MMIO_SCAN_MAX     16
 #define RISCV_IRQ_SOFT          1
 #define RISCV_IRQ_TIMER         5
+#define RISCV_IRQ_EXTERNAL      9
 #define RISCV_EXC_ILL           2
 #define RISCV_EXC_BREAK         3
 #define RISCV_EXC_U_ECALL       8
 #define RISCV_EXC_INST_PAGE     12
 #define RISCV_EXC_LOAD_PAGE     13
 #define RISCV_EXC_STORE_PAGE    15
+#define RISCV_UART_DEFAULT_IRQ  10
+
+#define RISCV_PLIC_MAX_IRQS       128U
+#define RISCV_PLIC_PRIORITY_BASE  0x000000U
+#define RISCV_PLIC_ENABLE_BASE    0x002000U
+#define RISCV_PLIC_ENABLE_STRIDE  0x000080U
+#define RISCV_PLIC_CONTEXT_BASE   0x200000U
+#define RISCV_PLIC_CONTEXT_STRIDE 0x001000U
+#define RISCV_PLIC_THRESHOLD_OFF  0x0U
+#define RISCV_PLIC_CLAIM_OFF      0x4U
+
+#define RISCV_REG_FMT "%#lx"
 
 #define SBI_EXT_BASE  0x10
 #define SBI_EXT_TIME  0x54494d45
@@ -60,6 +84,86 @@ typedef struct {
     u64 paddr;
     size_t size;
 } boot_rootfs_t;
+
+typedef struct {
+    u64 paddr;
+    size_t size;
+    uintptr_t vaddr;
+} riscv_mmio_region_t;
+
+typedef struct {
+    riscv_irq_handler_t handler;
+    void *ctx;
+} riscv_irq_slot_t;
+
+typedef struct stack_frame {
+    struct stack_frame *next;
+    uintptr_t ret;
+} riscv_stack_frame_t;
+
+typedef struct {
+    bool console_ready;
+    bool mirror_console_target;
+    char history[LOG_BOOT_HISTORY_CAP];
+    size_t history_len;
+    spinlock_t lock;
+} riscv_log_state_t;
+
+typedef struct {
+    kernel_args_t args;
+    u64 memory_paddr;
+    u64 memory_size;
+    const void *dtb;
+    size_t dtb_size;
+    u64 boot_rootfs_paddr;
+    size_t boot_rootfs_size;
+    bool boot_rootfs_registered;
+} riscv_boot_state_t;
+
+typedef struct {
+    page_t *kernel_root;
+    uintptr_t early_alloc_cursor;
+    uintptr_t early_alloc_limit;
+    uintptr_t uart_phys_base;
+    uintptr_t uart_io_base;
+    riscv_mmio_region_t regions[RISCV_MMIO_MAX_REGIONS];
+    size_t region_count;
+    uintptr_t next_vaddr;
+} riscv_mmio_state_t;
+
+typedef struct {
+    uintptr_t plic_phys_base;
+    size_t plic_span;
+    uintptr_t plic_virt_base;
+    u32 uart_irq;
+    bool plic_ready;
+    riscv_irq_slot_t table[RISCV_PLIC_MAX_IRQS];
+} riscv_irq_state_t;
+
+typedef struct {
+    arch_syscall_handler_t syscall_handler;
+    volatile u64 tick_count;
+    u32 user_irq_log_count;
+    u32 user_fault_log_count;
+    u32 user_ill_log_count;
+    u32 trap_log_count;
+    u32 external_irq_log_count;
+} riscv_runtime_state_t;
+
+typedef struct {
+    u64 hartid;
+    bool hartid_valid;
+    bool late_init_pending;
+} riscv_cpu_state_t;
+
+typedef struct {
+    riscv_boot_state_t boot;
+    riscv_log_state_t log;
+    riscv_mmio_state_t mmio;
+    riscv_irq_state_t irq;
+    riscv_runtime_state_t runtime;
+    riscv_cpu_state_t cpu[MAX_CORES];
+} riscv_arch_state_t;
 
 static ssize_t
 _boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, size_t bytes) {
@@ -91,41 +195,263 @@ static disk_interface_t boot_rootfs_interface = {
 uintptr_t riscv_kernel_sp = 0;
 uintptr_t riscv_cpu_local_ptr = 0;
 
-static kernel_args_t boot_args = {0};
-static arch_syscall_handler_t syscall_handler = NULL;
-
-static page_t *kernel_root = NULL;
-static uintptr_t early_alloc_cursor = 0;
-static uintptr_t early_alloc_limit = 0;
-static uintptr_t uart_phys_base = SERIAL_UART0;
-static uintptr_t uart_phys_page = SERIAL_UART0;
-static uintptr_t uart_virt_base = RISCV_MMIO_BASE;
-static uintptr_t uart_io_base = SERIAL_UART0;
-static u64 memory_paddr = RISCV_KERNEL_BASE;
-static u64 memory_size = 0;
-static u64 boot_rootfs_paddr = 0;
-static size_t boot_rootfs_size = 0;
-static bool boot_rootfs_registered = false;
-static bool irq_late_ready = false;
-static volatile u64 tick_count = 0;
-static u32 user_irq_log_count = 0;
-static u32 user_syscall_log_count = 0;
-static u32 user_fault_log_count = 0;
-static u32 user_ill_log_count = 0;
-static u32 trap_log_count = 0;
+static riscv_arch_state_t riscv_arch = {
+    .boot = {
+        .memory_paddr = RISCV_KERNEL_BASE,
+    },
+    .log = {
+        .lock = SPINLOCK_INIT,
+    },
+    .mmio = {
+        .uart_phys_base = SERIAL_UART0,
+        .uart_io_base = SERIAL_UART0,
+        .next_vaddr = RISCV_MMIO_BASE,
+    },
+};
 
 extern char __bss_end;
 extern char __stack_top;
 extern void riscv_trap_entry(void);
 
-void riscv_vm_init_kernel(page_t *root);
+static inline size_t _current_cpu_id(void) {
+    cpu_core_t *core = cpu_current();
+
+    if (core && core->id < MAX_CORES) {
+        return core->id;
+    }
+
+    return 0;
+}
+
+static inline riscv_cpu_state_t *_cpu_state(size_t cpu_id) {
+    if (cpu_id >= MAX_CORES) {
+        return NULL;
+    }
+
+    return &riscv_arch.cpu[cpu_id];
+}
+
+static void _record_cpu_boot_state(size_t cpu_id, u64 hartid, bool late_init_pending) {
+    riscv_cpu_state_t *cpu = _cpu_state(cpu_id);
+    if (!cpu) {
+        return;
+    }
+
+    cpu->hartid = hartid;
+    cpu->hartid_valid = true;
+    cpu->late_init_pending = late_init_pending;
+}
+
+static u64 _cpu_hartid(size_t cpu_id) {
+    riscv_cpu_state_t *cpu = _cpu_state(cpu_id);
+    if (cpu && cpu->hartid_valid) {
+        return cpu->hartid;
+    }
+
+    cpu = _cpu_state(0);
+    return cpu ? cpu->hartid : 0;
+}
+
+static bool _cpu_late_init_pending(size_t cpu_id) {
+    riscv_cpu_state_t *cpu = _cpu_state(cpu_id);
+    return cpu ? cpu->late_init_pending : false;
+}
+
+static void _set_cpu_late_init_pending(size_t cpu_id, bool pending) {
+    riscv_cpu_state_t *cpu = _cpu_state(cpu_id);
+    if (!cpu) {
+        return;
+    }
+
+    cpu->late_init_pending = pending;
+}
+
+static void _log_history_append(const char *s, size_t len) {
+    if (!s || !len || !LOG_BOOT_HISTORY_CAP) {
+        return;
+    }
+
+    if (len >= LOG_BOOT_HISTORY_CAP) {
+        memcpy(
+            riscv_arch.log.history,
+            s + (len - LOG_BOOT_HISTORY_CAP),
+            LOG_BOOT_HISTORY_CAP
+        );
+        riscv_arch.log.history_len = LOG_BOOT_HISTORY_CAP;
+        return;
+    }
+
+    if (riscv_arch.log.history_len + len > LOG_BOOT_HISTORY_CAP) {
+        size_t drop =
+            (riscv_arch.log.history_len + len) - LOG_BOOT_HISTORY_CAP;
+
+        memmove(
+            riscv_arch.log.history,
+            riscv_arch.log.history + drop,
+            riscv_arch.log.history_len - drop
+        );
+        riscv_arch.log.history_len -= drop;
+    }
+
+    memcpy(riscv_arch.log.history + riscv_arch.log.history_len, s, len);
+    riscv_arch.log.history_len += len;
+}
+
+static void _log_history_replay_console(void) {
+    if (!riscv_arch.log.console_ready || !riscv_arch.log.history_len) {
+        return;
+    }
+
+    console_write_screen(
+        TTY_CONSOLE,
+        riscv_arch.log.history,
+        riscv_arch.log.history_len
+    );
+}
+
+static void _log_write_early(const char *s, size_t len) {
+    if (!s || !len) {
+        return;
+    }
+
+    send_serial_sized_string(riscv_console_uart_base(), s, len);
+}
+
+static void _log_mirror_console(const char *s, size_t len) {
+    if (!s || !len || !riscv_arch.log.console_ready) {
+        return;
+    }
+
+    size_t text_cols = 0;
+    size_t text_rows = 0;
+    if (!console_get_size(&text_cols, &text_rows) || !text_cols || !text_rows) {
+        return;
+    }
+
+    riscv_console_set_output_suppressed(true);
+    console_write_screen(TTY_CONSOLE, s, len);
+    riscv_console_set_output_suppressed(false);
+}
 
 static void _log_puts(const char *s) {
     if (!s) {
         return;
     }
 
-    send_serial_string(riscv_console_uart_base(), s);
+    size_t len = strlen(s);
+    if (!len) {
+        return;
+    }
+
+    unsigned long irq_flags = spin_lock_irqsave(&riscv_arch.log.lock);
+    _log_history_append(s, len);
+    spin_unlock_irqrestore(&riscv_arch.log.lock, irq_flags);
+
+    if (!logsink_is_bound()) {
+        _log_write_early(s, len);
+        _log_mirror_console(s, len);
+        return;
+    }
+
+    logsink_write(s, len);
+
+    if (riscv_arch.log.mirror_console_target) {
+        _log_mirror_console(s, len);
+    }
+}
+
+static void _configure_log_sinks(const boot_info_t *info) {
+    if (!info) {
+        return;
+    }
+
+    logsink_reset();
+    riscv_arch.log.mirror_console_target = false;
+
+    if (!info->args.console[0]) {
+        logsink_add_target("/dev/console");
+        return;
+    }
+
+    char devices[sizeof(info->args.console)];
+    bool want_serial_console = false;
+    bool want_console_screen = false;
+    bool have_target = false;
+
+    strncpy(devices, info->args.console, sizeof(devices) - 1);
+    devices[sizeof(devices) - 1] = '\0';
+
+    char *cursor = devices;
+
+    while (cursor && *cursor) {
+        char *next = strchr(cursor, ',');
+        if (next) {
+            *next = '\0';
+        }
+
+        char *token = strtrim(cursor);
+        strtrunc(token);
+
+        if (token[0]) {
+            have_target = true;
+
+            if (!strcmp(token, "/dev/ttyS0")) {
+                want_serial_console = true;
+            } else if (!strcmp(token, "/dev/console")) {
+                want_console_screen = true;
+            }
+        }
+
+        if (!next) {
+            break;
+        }
+
+        cursor = next + 1;
+    }
+
+    if (!have_target) {
+        logsink_add_target("/dev/console");
+        return;
+    }
+
+    riscv_arch.log.mirror_console_target =
+        want_serial_console && want_console_screen;
+
+    strncpy(devices, info->args.console, sizeof(devices) - 1);
+    devices[sizeof(devices) - 1] = '\0';
+
+    cursor = devices;
+
+    while (cursor && *cursor) {
+        char *next = strchr(cursor, ',');
+        if (next) {
+            *next = '\0';
+        }
+
+        char *token = strtrim(cursor);
+        strtrunc(token);
+
+        if (token[0]) {
+            bool skip_console_target =
+                riscv_arch.log.mirror_console_target &&
+                !strcmp(token, "/dev/console");
+
+            if (!skip_console_target) {
+                logsink_add_target(token);
+            }
+        }
+
+        if (!next) {
+            break;
+        }
+
+        cursor = next + 1;
+    }
+
+    if (!logsink_has_targets()) {
+        logsink_add_target("/dev/console");
+        riscv_arch.log.mirror_console_target = false;
+    }
 }
 
 static void
@@ -134,7 +460,7 @@ _log_user_trap_once(
     u32 limit,
     const char *label,
     arch_int_state_t *state,
-    u64 cause
+    uintptr_t cause
 ) {
     if (!counter || !label || !state || !arch_signal_is_user(state)) {
         return;
@@ -151,58 +477,221 @@ _log_user_trap_once(
 
     sched_thread_t *thread = sched_current();
     log_info(
-        "%s pid=%ld cause=%#" PRIx64 " sepc=%#" PRIx64
-        " sp=%#" PRIx64 " stval=%#" PRIx64
-        " a7=%#" PRIx64 " a0=%#" PRIx64 " a1=%#" PRIx64,
+        "%s pid=%ld cause=" RISCV_REG_FMT " sepc=" RISCV_REG_FMT
+        " sp=" RISCV_REG_FMT " stval=" RISCV_REG_FMT
+        " a7=" RISCV_REG_FMT " a0=" RISCV_REG_FMT " a1=" RISCV_REG_FMT,
         label,
         thread ? (long)thread->pid : 0L,
-        cause,
-        (u64)state->s_regs.sepc,
-        (u64)state->s_regs.sp,
-        (u64)state->s_regs.stval,
-        (u64)state->g_regs.a7,
-        (u64)state->g_regs.a0,
-        (u64)state->g_regs.a1
+        (unsigned long)cause,
+        (unsigned long)state->s_regs.sepc,
+        (unsigned long)state->s_regs.sp,
+        (unsigned long)state->s_regs.stval,
+        (unsigned long)state->g_regs.a7,
+        (unsigned long)state->g_regs.a0,
+        (unsigned long)state->g_regs.a1
     );
 }
 
-static void
-_log_trap_once(
-    u32 *counter,
-    u32 limit,
-    const char *label,
-    arch_int_state_t *state,
-    u64 cause,
-    bool interrupt
-) {
-    if (!counter || !label || !state) {
-        return;
-    }
+static inline uintptr_t _plic_context_base(size_t cpu_id) {
+    return riscv_arch.irq.plic_virt_base +
+           RISCV_PLIC_CONTEXT_BASE +
+           (((uintptr_t)_cpu_hartid(cpu_id) * 2U) + 1U) *
+               RISCV_PLIC_CONTEXT_STRIDE;
+}
 
-    u32 seen = __atomic_load_n(counter, __ATOMIC_RELAXED);
-    if (seen >= limit) {
-        return;
-    }
-
-    if (__atomic_fetch_add(counter, 1, __ATOMIC_RELAXED) >= limit) {
-        return;
-    }
-
-    sched_thread_t *thread = sched_current();
-    log_info(
-        "%s pid=%ld irq=%d cause=%#" PRIx64 " sepc=%#" PRIx64
-        " sp=%#" PRIx64 " stval=%#" PRIx64 " sstatus=%#" PRIx64
-        " user=%d",
-        label,
-        thread ? (long)thread->pid : 0L,
-        interrupt ? 1 : 0,
-        cause,
-        (u64)state->s_regs.sepc,
-        (u64)state->s_regs.sp,
-        (u64)state->s_regs.stval,
-        (u64)state->s_regs.sstatus,
-        arch_signal_is_user(state) ? 1 : 0
+static inline volatile u32 *_plic_priority_reg(u32 irq) {
+    return (volatile u32 *)(
+        riscv_arch.irq.plic_virt_base + RISCV_PLIC_PRIORITY_BASE + irq * 4U
     );
+}
+
+static inline volatile u32 *_plic_enable_reg(size_t cpu_id, u32 irq) {
+    uintptr_t enable_base =
+        riscv_arch.irq.plic_virt_base +
+        RISCV_PLIC_ENABLE_BASE +
+        (((uintptr_t)_cpu_hartid(cpu_id) * 2U) + 1U) *
+            RISCV_PLIC_ENABLE_STRIDE;
+    return (volatile u32 *)(enable_base + ((irq / 32U) * sizeof(u32)));
+}
+
+static inline volatile u32 *_plic_threshold_reg(size_t cpu_id) {
+    return (volatile u32 *)(_plic_context_base(cpu_id) + RISCV_PLIC_THRESHOLD_OFF);
+}
+
+static inline volatile u32 *_plic_claim_reg(size_t cpu_id) {
+    return (volatile u32 *)(_plic_context_base(cpu_id) + RISCV_PLIC_CLAIM_OFF);
+}
+
+static void _plic_toggle_irq_for_cpu(size_t cpu_id, u32 irq, bool enable) {
+    if (!riscv_arch.irq.plic_ready || !irq || irq >= RISCV_PLIC_MAX_IRQS) {
+        return;
+    }
+
+    *_plic_priority_reg(irq) = enable ? 1U : 0U;
+
+    volatile u32 *enable_reg = _plic_enable_reg(cpu_id, irq);
+    u32 mask = 1U << (irq % 32U);
+    u32 value = *enable_reg;
+
+    if (enable) {
+        value |= mask;
+    } else {
+        value &= ~mask;
+    }
+
+    *enable_reg = value;
+}
+
+static void _plic_toggle_irq(u32 irq, bool enable) {
+    size_t max_cpu = core_count;
+    if (!max_cpu || max_cpu > MAX_CORES) {
+        max_cpu = MAX_CORES;
+    }
+
+    bool applied = false;
+    for (size_t cpu_id = 0; cpu_id < max_cpu; cpu_id++) {
+        riscv_cpu_state_t *cpu = _cpu_state(cpu_id);
+        if (!cpu || !cpu->hartid_valid) {
+            continue;
+        }
+
+        if (!cores_local[cpu_id].valid) {
+            continue;
+        }
+
+        _plic_toggle_irq_for_cpu(cpu_id, irq, enable);
+        applied = true;
+    }
+
+    if (!applied) {
+        _plic_toggle_irq_for_cpu(0, irq, enable);
+    }
+}
+
+static void _plic_sync_irqs_for_cpu(size_t cpu_id) {
+    if (!riscv_arch.irq.plic_ready) {
+        return;
+    }
+
+    for (u32 irq = 1; irq < RISCV_PLIC_MAX_IRQS; irq++) {
+        if (riscv_arch.irq.table[irq].handler) {
+            _plic_toggle_irq_for_cpu(cpu_id, irq, true);
+        }
+    }
+}
+
+static void _plic_init_context(size_t cpu_id) {
+    if (!riscv_arch.irq.plic_ready) {
+        return;
+    }
+
+    uintptr_t enable_base =
+        riscv_arch.irq.plic_virt_base +
+        RISCV_PLIC_ENABLE_BASE +
+        (((uintptr_t)_cpu_hartid(cpu_id) * 2U) + 1U) *
+            RISCV_PLIC_ENABLE_STRIDE;
+
+    for (size_t i = 0; i < RISCV_PLIC_MAX_IRQS / 32U; i++) {
+        *(volatile u32 *)(enable_base + i * sizeof(u32)) = 0;
+    }
+
+    *_plic_threshold_reg(cpu_id) = 0;
+    _plic_sync_irqs_for_cpu(cpu_id);
+}
+
+static void _serial_drain_input(void) {
+    for (size_t i = 0; i < 64; i++) {
+        char ch = 0;
+        if (!serial_try_receive(riscv_console_uart_base(), &ch)) {
+            break;
+        }
+
+        tty_input_push(ch);
+        riscv_serial_rx_push(ch);
+    }
+}
+
+static void _uart_irq_handler(u32 irq, void *ctx) {
+    (void)irq;
+    (void)ctx;
+    _serial_drain_input();
+}
+
+static void _plic_init(void) {
+    if (!riscv_arch.boot.dtb) {
+        return;
+    }
+
+    if (!riscv_arch.irq.plic_ready) {
+        fdt_reg_t reg = {0};
+        if (!fdt_find_compatible_reg(
+                riscv_arch.boot.dtb,
+                "sifive,plic-1.0.0",
+                &reg
+            ) ||
+            !reg.addr || !reg.size) {
+            if (!fdt_find_compatible_reg(
+                    riscv_arch.boot.dtb,
+                    "riscv,plic0",
+                    &reg
+                ) ||
+                !reg.addr || !reg.size) {
+                return;
+            }
+        }
+
+        riscv_arch.irq.plic_phys_base = (uintptr_t)reg.addr;
+        riscv_arch.irq.plic_span = (size_t)reg.size;
+        riscv_arch.irq.plic_virt_base = (uintptr_t)arch_phys_map(
+            riscv_arch.irq.plic_phys_base,
+            riscv_arch.irq.plic_span,
+            PHYS_MAP_MMIO
+        );
+        if (!riscv_arch.irq.plic_virt_base) {
+            log_warn("failed to map RISC-V PLIC");
+            return;
+        }
+
+        riscv_arch.irq.plic_ready = true;
+
+        if (riscv_arch.irq.uart_irq) {
+            (void)riscv_irq_register(
+                riscv_arch.irq.uart_irq,
+                _uart_irq_handler,
+                NULL
+            );
+            serial_set_rx_interrupt(riscv_console_uart_base(), true);
+        }
+    }
+
+    size_t cpu_id = _current_cpu_id();
+    _plic_init_context(cpu_id);
+
+}
+
+static bool _plic_handle_external(void) {
+    if (!riscv_arch.irq.plic_ready) {
+        return false;
+    }
+
+    size_t cpu_id = _current_cpu_id();
+    u32 irq = *_plic_claim_reg(cpu_id);
+    if (!irq) {
+        return false;
+    }
+
+    if (irq < RISCV_PLIC_MAX_IRQS && riscv_arch.irq.table[irq].handler) {
+        riscv_arch.irq.table[irq].handler(irq, riscv_arch.irq.table[irq].ctx);
+    } else if (__atomic_fetch_add(
+                   &riscv_arch.runtime.external_irq_log_count,
+                   1,
+                   __ATOMIC_RELAXED
+               ) < 8U) {
+        log_warn("unhandled RISC-V external irq %u", (unsigned int)irq);
+    }
+
+    *_plic_claim_reg(cpu_id) = irq;
+    return true;
 }
 
 static sbi_ret_t _sbi_call(
@@ -254,14 +743,15 @@ static void *_early_alloc(size_t size, size_t align) {
         return NULL;
     }
 
-    uintptr_t cursor = _align_up(early_alloc_cursor, align ? align : 16);
+    uintptr_t cursor =
+        _align_up(riscv_arch.mmio.early_alloc_cursor, align ? align : 16);
     uintptr_t next = cursor + ALIGN(size, align ? align : 16);
 
-    if (next < cursor || next > early_alloc_limit) {
+    if (next < cursor || next > riscv_arch.mmio.early_alloc_limit) {
         panic("RISC-V early allocator exhausted");
     }
 
-    early_alloc_cursor = next;
+    riscv_arch.mmio.early_alloc_cursor = next;
     memset((void *)cursor, 0, next - cursor);
     return (void *)cursor;
 }
@@ -324,6 +814,103 @@ static void _early_map_range(page_t *root, u64 vaddr, u64 paddr, u64 size, u64 f
     }
 }
 
+static uintptr_t _mmio_register_region(u64 paddr, size_t size) {
+    if (!paddr || !size) {
+        return 0;
+    }
+
+    u64 base = ALIGN_DOWN(paddr, PAGE_4KIB);
+    u64 end = ALIGN(paddr + size, PAGE_4KIB);
+    if (end <= base) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < riscv_arch.mmio.region_count; i++) {
+        riscv_mmio_region_t *region = &riscv_arch.mmio.regions[i];
+        u64 region_end = region->paddr + region->size;
+        if (base >= region->paddr && end <= region_end) {
+            return region->vaddr + (uintptr_t)(paddr - region->paddr);
+        }
+    }
+
+    if (riscv_arch.mmio.region_count >= RISCV_MMIO_MAX_REGIONS) {
+        log_warn("RISC-V MMIO region table full");
+        return 0;
+    }
+
+    uintptr_t vaddr = ALIGN(riscv_arch.mmio.next_vaddr, PAGE_4KIB);
+    size_t span = (size_t)(end - base);
+
+    riscv_arch.mmio.regions[riscv_arch.mmio.region_count++] =
+        (riscv_mmio_region_t){
+        .paddr = base,
+        .size = span,
+        .vaddr = vaddr,
+    };
+    riscv_arch.mmio.next_vaddr = vaddr + span;
+    return vaddr + (uintptr_t)(paddr - base);
+}
+
+static uintptr_t _mmio_translate(u64 paddr, size_t size) {
+    if (!paddr) {
+        return 0;
+    }
+
+    u64 end = paddr + size;
+    if (end < paddr) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < riscv_arch.mmio.region_count; i++) {
+        riscv_mmio_region_t *region = &riscv_arch.mmio.regions[i];
+        u64 region_end = region->paddr + region->size;
+        if (paddr >= region->paddr && end <= region_end) {
+            return region->vaddr + (uintptr_t)(paddr - region->paddr);
+        }
+    }
+
+    return 0;
+}
+
+static void _mmio_register_compatible(const void *dtb, const char *compatible) {
+    if (!dtb || !compatible || !compatible[0]) {
+        return;
+    }
+
+    fdt_reg_t regs[RISCV_MMIO_SCAN_MAX];
+    size_t count = 0;
+    if (!fdt_find_compatible_regs(
+            dtb,
+            compatible,
+            regs,
+            sizeof(regs) / sizeof(regs[0]),
+            &count
+        )) {
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        if (!regs[i].addr || !regs[i].size) {
+            continue;
+        }
+
+        (void)_mmio_register_region(regs[i].addr, (size_t)regs[i].size);
+    }
+}
+
+static void _mmio_map_regions(page_t *root) {
+    for (size_t i = 0; i < riscv_arch.mmio.region_count; i++) {
+        riscv_mmio_region_t *region = &riscv_arch.mmio.regions[i];
+        _early_map_range(
+            root,
+            region->vaddr,
+            region->paddr,
+            region->size,
+            PT_WRITE | PT_GLOBAL | PT_NO_EXECUTE
+        );
+    }
+}
+
 static void _timer_program_next(void) {
     u64 interval = RISCV_TIMEBASE_HZ / (TIMER_FREQ ? TIMER_FREQ : 1U);
     if (!interval) {
@@ -331,17 +918,6 @@ static void _timer_program_next(void) {
     }
 
     _sbi_set_timer(riscv_read_time() + interval);
-}
-
-static void _serial_drain_input(void) {
-    for (size_t i = 0; i < 64; i++) {
-        char ch = 0;
-        if (!serial_try_receive(riscv_console_uart_base(), &ch)) {
-            break;
-        }
-
-        tty_input_push(ch);
-    }
 }
 
 static bool _handle_user_signal(int signum, arch_int_state_t *state) {
@@ -359,20 +935,10 @@ static bool _handle_user_signal(int signum, arch_int_state_t *state) {
     return true;
 }
 
-static void _handle_page_fault(arch_int_state_t *state, u64 cause) {
+static void _handle_page_fault(arch_int_state_t *state, uintptr_t cause) {
     uintptr_t addr = state ? state->s_regs.stval : 0;
     bool write = cause == RISCV_EXC_STORE_PAGE;
     bool user = arch_signal_is_user(state);
-
-    if (user) {
-        _log_user_trap_once(
-            &user_fault_log_count,
-            8,
-            "riscv user page fault",
-            state,
-            cause
-        );
-    }
 
     if (write && user && sched_is_running()) {
         sched_thread_t *thread = sched_current();
@@ -382,23 +948,36 @@ static void _handle_page_fault(arch_int_state_t *state, u64 cause) {
         }
     }
 
+    if (user) {
+        _log_user_trap_once(
+            &riscv_arch.runtime.user_fault_log_count,
+            8,
+            "riscv user page fault",
+            state,
+            cause
+        );
+    }
+
     if (_handle_user_signal(SIGSEGV, state)) {
         return;
     }
 
     panic_prepare();
     log_fatal(
-        "page fault cause=%#" PRIx64 " addr=%#" PRIx64 " sepc=%#" PRIx64,
-        cause,
-        (u64)addr,
-        state ? (u64)state->s_regs.sepc : 0
+        "page fault cause=" RISCV_REG_FMT " addr=" RISCV_REG_FMT
+        " sepc=" RISCV_REG_FMT,
+        (unsigned long)cause,
+        (unsigned long)addr,
+        state ? (unsigned long)state->s_regs.sepc : 0UL
     );
     panic_dump_state(state);
     panic_halt();
 }
 
 static void _register_boot_rootfs(void) {
-    if (!boot_rootfs_paddr || !boot_rootfs_size || boot_rootfs_registered) {
+    if (!riscv_arch.boot.boot_rootfs_paddr ||
+        !riscv_arch.boot.boot_rootfs_size ||
+        riscv_arch.boot.boot_rootfs_registered) {
         return;
     }
 
@@ -412,8 +991,8 @@ static void _register_boot_rootfs(void) {
         return;
     }
 
-    rootfs->paddr = boot_rootfs_paddr;
-    rootfs->size = boot_rootfs_size;
+    rootfs->paddr = riscv_arch.boot.boot_rootfs_paddr;
+    rootfs->size = riscv_arch.boot.boot_rootfs_size;
 
     disk->name = strdup("ram0");
     disk->type = DISK_VIRTUAL;
@@ -431,12 +1010,52 @@ static void _register_boot_rootfs(void) {
         return;
     }
 
-    boot_rootfs_registered = true;
+    riscv_arch.boot.boot_rootfs_registered = true;
     log_info(
         "registered /dev/%s from boot image (%zu KiB)",
         disk->name,
         rootfs->size / 1024
     );
+}
+
+static void _relocate_boot_dtb(boot_info_t *info, uintptr_t *reserved_end) {
+    if (!info || !reserved_end || !info->dtb_paddr || !info->dtb_size) {
+        return;
+    }
+
+    size_t dtb_size = 0;
+    if (info->dtb_size <= (u64)(size_t)-1) {
+        dtb_size = (size_t)info->dtb_size;
+    }
+
+    if (!dtb_size) {
+        return;
+    }
+
+    uintptr_t src = (uintptr_t)info->dtb_paddr;
+    uintptr_t dst = ALIGN(*reserved_end, PAGE_4KIB);
+    uintptr_t next = ALIGN(dst + dtb_size, PAGE_4KIB);
+
+    if (next <= dst ||
+        next > (uintptr_t)(riscv_arch.boot.memory_paddr +
+                           riscv_arch.boot.memory_size)) {
+        panic("boot DTB relocation exceeds RAM");
+    }
+
+    if (dst != src) {
+        memmove((void *)dst, (const void *)src, dtb_size);
+    }
+
+    info->dtb_paddr = (u64)dst;
+    info->dtb_size = (u64)dtb_size;
+    riscv_arch.boot.dtb = (const void *)dst;
+    riscv_arch.boot.dtb_size = dtb_size;
+
+    if (!fdt_valid(riscv_arch.boot.dtb)) {
+        panic("relocated boot DTB is invalid");
+    }
+
+    *reserved_end = next;
 }
 
 const kernel_args_t *arch_init(void *boot_info_ptr) {
@@ -446,36 +1065,71 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         panic("boot info missing");
     }
 
-    send_serial_string(
-        info->uart_paddr ? (uintptr_t)info->uart_paddr : SERIAL_UART0,
-        "riscv: arch_init\n\r"
-    );
+    memcpy(&riscv_arch.boot.args, &info->args, sizeof(riscv_arch.boot.args));
+    _configure_log_sinks(info);
 
-    memcpy(&boot_args, &info->args, sizeof(boot_args));
-
-    uart_phys_base = info->uart_paddr ? (uintptr_t)info->uart_paddr : SERIAL_UART0;
-    uart_phys_page = ALIGN_DOWN(uart_phys_base, PAGE_4KIB);
-    uart_virt_base = RISCV_MMIO_BASE + (uart_phys_base - uart_phys_page);
-    uart_io_base = uart_virt_base;
-    riscv_console_set_uart_base(uart_phys_base);
-
-    log_init(_log_puts);
-    log_set_lvl(info->args.debug == DEBUG_ALL ? LOG_DEBUG : LOG_INFO);
-    send_serial_string(uart_phys_base, "riscv: arch_init/log\n\r");
-
-    memory_paddr = info->memory_paddr ? info->memory_paddr : RISCV_KERNEL_BASE;
-    memory_size = info->memory_size ? info->memory_size : (256ULL * MIB);
-    boot_rootfs_paddr = info->boot_rootfs_paddr;
-    boot_rootfs_size = 0;
-    if (info->boot_rootfs_size <= (u64)(size_t)-1) {
-        boot_rootfs_size = (size_t)info->boot_rootfs_size;
+    riscv_arch.mmio.uart_phys_base =
+        info->uart_paddr ? (uintptr_t)info->uart_paddr : SERIAL_UART0;
+    _record_cpu_boot_state(0, info->hartid, true);
+    riscv_arch.boot.dtb =
+        info->dtb_paddr ? (const void *)(uintptr_t)info->dtb_paddr : NULL;
+    riscv_arch.boot.dtb_size = 0;
+    if (info->dtb_size <= (u64)(size_t)-1) {
+        riscv_arch.boot.dtb_size = (size_t)info->dtb_size;
+    }
+    riscv_arch.irq.uart_irq = 0;
+    if (riscv_arch.boot.dtb) {
+        (void)fdt_find_compatible_irq(
+            riscv_arch.boot.dtb,
+            "ns16550a",
+            &riscv_arch.irq.uart_irq
+        );
+    }
+    if (!riscv_arch.irq.uart_irq &&
+        riscv_arch.mmio.uart_phys_base == SERIAL_UART0) {
+        riscv_arch.irq.uart_irq = RISCV_UART_DEFAULT_IRQ;
     }
 
-    log_info(
-        "riscv boot memory paddr=%#" PRIx64 " size=%#" PRIx64,
-        memory_paddr,
-        memory_size
+    riscv_arch.mmio.region_count = 0;
+    riscv_arch.mmio.next_vaddr = RISCV_MMIO_BASE;
+    riscv_arch.mmio.uart_io_base = _mmio_register_region(
+        riscv_arch.mmio.uart_phys_base,
+        RISCV_UART_WINDOW_SIZE
     );
+    if (!riscv_arch.mmio.uart_io_base) {
+        panic("failed to register UART MMIO window");
+    }
+    riscv_console_set_uart_base(riscv_arch.mmio.uart_phys_base);
+
+    log_init(_log_puts);
+    log_set_lvl(
+        info->args.debug == DEBUG_ALL ? LOG_DEBUG : LOG_INFO
+    );
+
+#if __riscv_xlen == 64
+    log_info("apheleiaOS kernel (riscv_64) booting");
+#else
+    log_info("apheleiaOS kernel (riscv_32) booting");
+#endif
+
+    riscv_arch.boot.memory_paddr =
+        info->memory_paddr ? info->memory_paddr : RISCV_KERNEL_BASE;
+    riscv_arch.boot.memory_size =
+        info->memory_size ? info->memory_size : (256ULL * MIB);
+    riscv_arch.boot.boot_rootfs_paddr = info->boot_rootfs_paddr;
+    riscv_arch.boot.boot_rootfs_size = 0;
+    if (info->boot_rootfs_size <= (u64)(size_t)-1) {
+        riscv_arch.boot.boot_rootfs_size = (size_t)info->boot_rootfs_size;
+    }
+    riscv_arch.boot.boot_rootfs_registered = false;
+
+    if (riscv_arch.boot.boot_rootfs_paddr && riscv_arch.boot.boot_rootfs_size) {
+        log_info(
+            "staged rootfs at %#llx (%zu KiB)",
+            (unsigned long long)riscv_arch.boot.boot_rootfs_paddr,
+            riscv_arch.boot.boot_rootfs_size / 1024
+        );
+    }
 
     cpu_init_boot();
     arch_cpu_set_local(&cores_local[0]);
@@ -489,95 +1143,112 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         reserved_end = info_end;
     }
 
-    if (info->dtb_paddr && info->dtb_size) {
-        uintptr_t dtb_end = (uintptr_t)(info->dtb_paddr + info->dtb_size);
-        if (dtb_end > reserved_end) {
-            reserved_end = dtb_end;
-        }
-    }
-    if (boot_rootfs_paddr && boot_rootfs_size) {
-        uintptr_t rootfs_end = (uintptr_t)(boot_rootfs_paddr + boot_rootfs_size);
+    _relocate_boot_dtb(info, &reserved_end);
+    if (riscv_arch.boot.boot_rootfs_paddr &&
+        riscv_arch.boot.boot_rootfs_size) {
+        uintptr_t rootfs_end = (uintptr_t)(
+            riscv_arch.boot.boot_rootfs_paddr +
+            riscv_arch.boot.boot_rootfs_size
+        );
         if (rootfs_end > reserved_end) {
             reserved_end = rootfs_end;
         }
     }
 
-    early_alloc_cursor = ALIGN(reserved_end, PAGE_4KIB);
-    early_alloc_limit = (uintptr_t)(memory_paddr + memory_size);
+    riscv_arch.mmio.early_alloc_cursor = ALIGN(reserved_end, PAGE_4KIB);
+    riscv_arch.mmio.early_alloc_limit = (uintptr_t)(
+        riscv_arch.boot.memory_paddr + riscv_arch.boot.memory_size
+    );
 
-    kernel_root = _early_alloc(PAGE_4KIB, PAGE_4KIB);
+    riscv_arch.mmio.kernel_root = _early_alloc(PAGE_4KIB, PAGE_4KIB);
     _early_map_range(
-        kernel_root,
-        memory_paddr,
-        memory_paddr,
-        memory_size,
+        riscv_arch.mmio.kernel_root,
+        riscv_arch.boot.memory_paddr,
+        riscv_arch.boot.memory_paddr,
+        riscv_arch.boot.memory_size,
         PT_WRITE | PT_GLOBAL
     );
-    _early_map_range(
-        kernel_root,
-        RISCV_MMIO_BASE,
-        uart_phys_page,
-        RISCV_UART_WINDOW_SIZE,
-        PT_WRITE | PT_GLOBAL | PT_NO_EXECUTE
-    );
-    send_serial_string(uart_phys_base, "riscv: arch_init/map\n\r");
+
+    _mmio_register_compatible(riscv_arch.boot.dtb, "virtio,mmio");
+    _mmio_map_regions(riscv_arch.mmio.kernel_root);
 
     riscv_trap_init();
-    riscv_vm_init_kernel(kernel_root);
+    riscv_vm_init_kernel(riscv_arch.mmio.kernel_root);
     arch_vm_switch(arch_vm_kernel());
-    riscv_console_set_uart_base(uart_io_base);
-    send_serial_string(uart_io_base, "riscv: arch_init/vm\n\r");
+    riscv_console_set_uart_base(riscv_arch.mmio.uart_io_base);
+    _plic_init();
 
-    pmm_init(memory_paddr, memory_size, early_alloc_cursor);
+    pmm_init(
+        riscv_arch.boot.memory_paddr,
+        riscv_arch.boot.memory_size,
+        riscv_arch.mmio.early_alloc_cursor
+    );
     heap_init();
     arch_init_alloc();
     pmm_ref_init();
     if (!pmm_ref_ready()) {
         panic("PMM refcount table unavailable");
     }
-    send_serial_string(uart_io_base, "riscv: arch_init/mm\n\r");
 
     framebuffer_set_info(NULL);
-    riscv_console_backend_init(uart_io_base);
+    riscv_console_backend_init(riscv_arch.mmio.uart_io_base);
     console_init(info);
+    riscv_arch.log.console_ready = true;
+
+    size_t text_cols = 0;
+    size_t text_rows = 0;
+    if (console_get_size(&text_cols, &text_rows) && text_cols && text_rows) {
+        riscv_console_set_output_suppressed(true);
+        arch_log_replay_console();
+        riscv_console_set_output_suppressed(false);
+    }
 
     if (!driver_registry_init()) {
         log_warn("driver registry init failed");
     } else {
         driver_load_stage(DRIVER_STAGE_ARCH_EARLY);
     }
-    send_serial_string(uart_io_base, "riscv: arch_init/dev\n\r");
 
     riscv_write_scounteren(
         RISCV_COUNTEREN_CY | RISCV_COUNTEREN_TM | RISCV_COUNTEREN_IR
     );
-    irq_late_ready = true;
+    _set_cpu_late_init_pending(0, true);
 
-    log_info("apheleiaOS kernel (%s) booted", arch_name());
-    return &boot_args;
+#if __riscv_xlen == 64
+    log_info("apheleiaOS kernel (riscv_64) booted");
+#else
+    log_info("apheleiaOS kernel (riscv_32) booted");
+#endif
+    return &riscv_arch.boot.args;
 }
 
 void arch_storage_init(void) {
+    driver_load_stage(DRIVER_STAGE_STORAGE);
     _register_boot_rootfs();
 }
 
 void arch_late_init(void) {
-    if (!irq_late_ready) {
+    size_t cpu_id = _current_cpu_id();
+    if (!_cpu_late_init_pending(cpu_id)) {
         return;
     }
 
-    send_serial_string(uart_io_base, "riscv: late_init/timer-set\n\r");
     _timer_program_next();
-    send_serial_string(uart_io_base, "riscv: late_init/timer-ok\n\r");
-    riscv_set_sie_bits(SIE_SSIE | SIE_STIE);
-    send_serial_string(uart_io_base, "riscv: late_init/armed\n\r");
-    irq_late_ready = false;
+    riscv_set_sie_bits(
+        SIE_SSIE | SIE_STIE |
+        (riscv_arch.irq.plic_ready ? SIE_SEIE : 0)
+    );
+    _set_cpu_late_init_pending(cpu_id, false);
 }
 
 void arch_log_replay_console(void) {
+    unsigned long irq_flags = spin_lock_irqsave(&riscv_arch.log.lock);
+    _log_history_replay_console();
+    spin_unlock_irqrestore(&riscv_arch.log.lock, irq_flags);
 }
 
 void arch_smp_init(void) {
+    // RISC-V stays single-hart until real SMP bring-up lands.
 }
 
 bool arch_supports_nx(void) {
@@ -585,17 +1256,31 @@ bool arch_supports_nx(void) {
 }
 
 void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
-    (void)flags;
-
-    if (paddr >= memory_paddr && paddr + size <= memory_paddr + memory_size) {
+    if (paddr >= riscv_arch.boot.memory_paddr &&
+        paddr + size <= riscv_arch.boot.memory_paddr + riscv_arch.boot.memory_size) {
         return (void *)(uintptr_t)paddr;
     }
 
-    if (
-        paddr >= uart_phys_page &&
-        paddr + size <= uart_phys_page + RISCV_UART_WINDOW_SIZE
-    ) {
-        return (void *)(uintptr_t)(RISCV_MMIO_BASE + (paddr - uart_phys_page));
+    uintptr_t mmio = _mmio_translate(paddr, size);
+    if (mmio) {
+        return (void *)mmio;
+    }
+
+    if ((flags & PHYS_MAP_MMIO) && size) {
+        mmio = _mmio_register_region(paddr, size);
+        if (mmio && riscv_arch.mmio.kernel_root && riscv_arch.mmio.region_count) {
+            riscv_mmio_region_t *region =
+                &riscv_arch.mmio.regions[riscv_arch.mmio.region_count - 1];
+            map_region(
+                riscv_arch.mmio.kernel_root,
+                DIV_ROUND_UP(region->size, PAGE_4KIB),
+                region->vaddr,
+                region->paddr,
+                PT_WRITE | PT_GLOBAL | PT_NO_EXECUTE
+            );
+            sfence_vma();
+            return (void *)mmio;
+        }
     }
 
     return NULL;
@@ -622,6 +1307,37 @@ bool arch_phys_map_can_persist(void) {
 }
 
 void arch_dump_stack_trace(void) {
+    riscv_stack_frame_t *frame =
+        (riscv_stack_frame_t *)__builtin_frame_address(0);
+
+    if (frame) {
+        frame = frame->next;
+    }
+
+    log_info("stack trace");
+
+    for (size_t i = 0; frame && i < 32; i++) {
+        uintptr_t ret = frame->ret;
+        symbol_entry_t *sym = resolve_symbol((u64)ret);
+
+        if (!sym) {
+            log_info("<%#llx> (unknown symbol)", (unsigned long long)ret);
+        } else {
+            u64 offset = (u64)ret - sym->addr;
+            log_info(
+                "<%#llx> %s+%#llx",
+                (unsigned long long)ret,
+                sym->name,
+                (unsigned long long)offset
+            );
+        }
+
+        if (frame->next <= frame) {
+            break;
+        }
+
+        frame = frame->next;
+    }
 }
 
 void arch_dump_registers(const arch_int_state_t *state) {
@@ -630,13 +1346,13 @@ void arch_dump_registers(const arch_int_state_t *state) {
     }
 
     log_fatal(
-        "sepc=%#" PRIx64 " sp=%#" PRIx64 " sstatus=%#" PRIx64
-        " scause=%#" PRIx64 " stval=%#" PRIx64,
-        (u64)state->s_regs.sepc,
-        (u64)state->s_regs.sp,
-        (u64)state->s_regs.sstatus,
-        (u64)state->s_regs.scause,
-        (u64)state->s_regs.stval
+        "sepc=" RISCV_REG_FMT " sp=" RISCV_REG_FMT " sstatus=" RISCV_REG_FMT
+        " scause=" RISCV_REG_FMT " stval=" RISCV_REG_FMT,
+        (unsigned long)state->s_regs.sepc,
+        (unsigned long)state->s_regs.sp,
+        (unsigned long)state->s_regs.sstatus,
+        (unsigned long)state->s_regs.scause,
+        (unsigned long)state->s_regs.stval
     );
 }
 
@@ -702,7 +1418,7 @@ bool arch_resched_cpu(size_t cpu_id) {
 }
 
 u64 arch_timer_ticks(void) {
-    return __atomic_load_n(&tick_count, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&riscv_arch.runtime.tick_count, __ATOMIC_ACQUIRE);
 }
 
 u32 arch_timer_hz(void) {
@@ -729,6 +1445,20 @@ u64 arch_cpu_khz(void) {
     return RISCV_TIMEBASE_HZ / 1000ULL;
 }
 
+const void *riscv_boot_dtb(void) {
+    if (riscv_arch.boot.dtb &&
+        riscv_arch.boot.dtb_size &&
+        fdt_valid(riscv_arch.boot.dtb)) {
+        return riscv_arch.boot.dtb;
+    }
+
+    return NULL;
+}
+
+u64 riscv_boot_hartid(void) {
+    return _cpu_hartid(0);
+}
+
 void arch_mem_info(size_t *total, size_t *free_mem) {
     if (total) {
         *total = pmm_total_mem();
@@ -740,7 +1470,7 @@ void arch_mem_info(size_t *total, size_t *free_mem) {
 
 void arch_syscall_install(int vector, arch_syscall_handler_t handler) {
     (void)vector;
-    syscall_handler = handler;
+    riscv_arch.runtime.syscall_handler = handler;
 }
 
 void arch_set_kernel_stack(uintptr_t sp) {
@@ -749,6 +1479,10 @@ void arch_set_kernel_stack(uintptr_t sp) {
 }
 
 void arch_panic_enter(void) {
+    if (riscv_console_uart_base()) {
+        serial_set_rx_interrupt(riscv_console_uart_base(), false);
+    }
+    logsink_unbind_devices();
     console_panic();
 }
 
@@ -765,14 +1499,37 @@ void arch_fpu_restore(const void *buf) {
 }
 
 ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
-    (void)buf;
-    (void)offset;
-    (void)len;
-    return 0;
+    if (!buf) {
+        return -1;
+    }
+
+    if (!len) {
+        return 0;
+    }
+
+    unsigned long irq_flags = spin_lock_irqsave(&riscv_arch.log.lock);
+    size_t history_len = riscv_arch.log.history_len;
+
+    if (offset >= history_len) {
+        spin_unlock_irqrestore(&riscv_arch.log.lock, irq_flags);
+        return 0;
+    }
+
+    size_t copy_len = history_len - offset;
+    if (copy_len > len) {
+        copy_len = len;
+    }
+
+    memcpy(buf, riscv_arch.log.history + offset, copy_len);
+    spin_unlock_irqrestore(&riscv_arch.log.lock, irq_flags);
+    return (ssize_t)copy_len;
 }
 
 size_t arch_log_ring_size(void) {
-    return 0;
+    unsigned long irq_flags = spin_lock_irqsave(&riscv_arch.log.lock);
+    size_t history_len = riscv_arch.log.history_len;
+    spin_unlock_irqrestore(&riscv_arch.log.lock, irq_flags);
+    return history_len;
 }
 
 void panic_prepare(void) {
@@ -800,20 +1557,11 @@ void riscv_handle_trap(arch_int_state_t *state) {
 
 #if __riscv_xlen == 64
     bool interrupt = (state->s_regs.scause >> 63) != 0;
-    u64 cause = state->s_regs.scause & ~(1ULL << 63);
+    uintptr_t cause = state->s_regs.scause & ~(1UL << 63);
 #else
     bool interrupt = (state->s_regs.scause >> 31) != 0;
-    u64 cause = state->s_regs.scause & ~(1ULL << 31);
+    uintptr_t cause = state->s_regs.scause & ~(1UL << 31);
 #endif
-
-    _log_trap_once(
-        &trap_log_count,
-        16,
-        "riscv trap",
-        state,
-        cause,
-        interrupt
-    );
 
     if (interrupt) {
         switch (cause) {
@@ -822,17 +1570,19 @@ void riscv_handle_trap(arch_int_state_t *state) {
             sched_resched_softirq(state);
             return;
         case RISCV_IRQ_TIMER:
-            __atomic_add_fetch(&tick_count, 1, __ATOMIC_RELAXED);
+            __atomic_add_fetch(
+                &riscv_arch.runtime.tick_count,
+                1,
+                __ATOMIC_RELAXED
+            );
             _timer_program_next();
             _serial_drain_input();
-            _log_user_trap_once(
-                &user_irq_log_count,
-                8,
-                "riscv user timer irq",
-                state,
-                cause
-            );
             sched_tick(state);
+            return;
+        case RISCV_IRQ_EXTERNAL:
+            if (_plic_handle_external()) {
+                return;
+            }
             return;
         default:
             return;
@@ -851,22 +1601,15 @@ void riscv_handle_trap(arch_int_state_t *state) {
         }
         break;
     case RISCV_EXC_U_ECALL:
-        _log_user_trap_once(
-            &user_syscall_log_count,
-            16,
-            "riscv user ecall",
-            state,
-            cause
-        );
         sched_capture_context(state);
         state->s_regs.sepc += 4;
-        if (syscall_handler) {
+        if (riscv_arch.runtime.syscall_handler) {
             unsigned long irq_flags = arch_irq_save();
 
             // The generic scheduler expects blocking syscalls to be
             // preemptible while they wait in kernel context.
             riscv_enable_irqs();
-            syscall_handler(state);
+            riscv_arch.runtime.syscall_handler(state);
             arch_irq_restore(irq_flags);
         } else {
             state->g_regs.a0 = (uintptr_t)-ENOSYS;
@@ -879,7 +1622,7 @@ void riscv_handle_trap(arch_int_state_t *state) {
         return;
     case RISCV_EXC_ILL:
         _log_user_trap_once(
-            &user_ill_log_count,
+            &riscv_arch.runtime.user_ill_log_count,
             8,
             "riscv user illegal instruction",
             state,
@@ -889,20 +1632,49 @@ void riscv_handle_trap(arch_int_state_t *state) {
             return;
         }
         panic_prepare();
-        log_fatal("illegal instruction at %#" PRIx64, (u64)state->s_regs.sepc);
+        log_fatal(
+            "illegal instruction at " RISCV_REG_FMT,
+            (unsigned long)state->s_regs.sepc
+        );
         panic_dump_state(state);
         panic_halt();
         return;
     default:
         panic_prepare();
         log_fatal(
-            "unhandled trap cause=%#" PRIx64 " sepc=%#" PRIx64 " stval=%#" PRIx64,
-            cause,
-            (u64)state->s_regs.sepc,
-            (u64)state->s_regs.stval
+            "unhandled trap cause=" RISCV_REG_FMT " sepc=" RISCV_REG_FMT
+            " stval=" RISCV_REG_FMT,
+            (unsigned long)cause,
+            (unsigned long)state->s_regs.sepc,
+            (unsigned long)state->s_regs.stval
         );
         panic_dump_state(state);
         panic_halt();
         return;
     }
+}
+
+bool riscv_irq_register(u32 irq, riscv_irq_handler_t handler, void *ctx) {
+    if (!irq || irq >= RISCV_PLIC_MAX_IRQS || !handler) {
+        return false;
+    }
+
+    unsigned long flags = arch_irq_save();
+    riscv_arch.irq.table[irq].handler = handler;
+    riscv_arch.irq.table[irq].ctx = ctx;
+    _plic_toggle_irq(irq, true);
+    arch_irq_restore(flags);
+    return true;
+}
+
+void riscv_irq_unregister(u32 irq) {
+    if (!irq || irq >= RISCV_PLIC_MAX_IRQS) {
+        return;
+    }
+
+    unsigned long flags = arch_irq_save();
+    _plic_toggle_irq(irq, false);
+    riscv_arch.irq.table[irq].handler = NULL;
+    riscv_arch.irq.table[irq].ctx = NULL;
+    arch_irq_restore(flags);
 }
