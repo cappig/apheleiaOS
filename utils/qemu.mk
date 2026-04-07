@@ -101,30 +101,32 @@ QEMU_USB_IMAGE_ARGS := \
 
 ifeq ($(ARCH), riscv_64)
 ifeq ($(BOOT), opensbi)
-QEMU_BOOT_ARGS := -kernel bin/kernel_riscv64/boot/kernel64.elf
+QEMU_BOOT_ARGS := \
+	-kernel bin/kernel_riscv64/boot/kernel64.elf \
+	-initrd bin/$(IMAGE_NAME).rootfs.img
 else ifeq ($(BOOT), bios)
-QEMU_BOOT_ARGS := -bios bin/boot/$(ARCH)/riscv_boot.elf
+QEMU_BOOT_ARGS := \
+	-bios none \
+	-device loader,file=bin/$(IMAGE_NAME).img,addr=0x80000000,cpu-num=0,force-raw=on
 else
 $(error Unsupported BOOT='$(BOOT)' for $(ARCH))
 endif
-QEMU_ARGS += -global virtio-mmio.force-legacy=off
-QEMU_IMAGE_ARGS := \
-	-drive if=none,id=vdisk,format=raw,file=bin/$(IMAGE_NAME).img \
-	-device virtio-blk-device,drive=vdisk
+QEMU_IMAGE_ARGS :=
 QEMU_USB_IMAGE_ARGS :=
 endif
 ifeq ($(ARCH), riscv_32)
 ifeq ($(BOOT), opensbi)
-QEMU_BOOT_ARGS := -kernel bin/kernel_riscv32/boot/kernel32.elf
+QEMU_BOOT_ARGS := \
+	-kernel bin/kernel_riscv32/boot/kernel32.elf \
+	-initrd bin/$(IMAGE_NAME).rootfs.img
 else ifeq ($(BOOT), bios)
-QEMU_BOOT_ARGS := -bios bin/boot/$(ARCH)/riscv_boot.elf
+QEMU_BOOT_ARGS := \
+	-bios none \
+	-device loader,file=bin/$(IMAGE_NAME).img,addr=0x80000000,cpu-num=0,force-raw=on
 else
 $(error Unsupported BOOT='$(BOOT)' for $(ARCH))
 endif
-QEMU_ARGS += -global virtio-mmio.force-legacy=off
-QEMU_IMAGE_ARGS := \
-	-drive if=none,id=vdisk,format=raw,file=bin/$(IMAGE_NAME).img \
-	-device virtio-blk-device,drive=vdisk
+QEMU_IMAGE_ARGS :=
 QEMU_USB_IMAGE_ARGS :=
 endif
 

@@ -21,7 +21,7 @@ from build_image_common import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Create RISC-V image (boot entry + ext2 rootfs)."
+        description="Create a RISC-V ext2 rootfs image."
     )
     parser.add_argument("output_img", type=Path)
     parser.add_argument("rootfs_dir", type=Path)

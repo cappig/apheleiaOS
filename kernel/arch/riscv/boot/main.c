@@ -17,9 +17,13 @@
 #include "virtio.h"
 
 extern char __stack_top;
+extern char __image_start;
 
 #define RISCV_BOOT_PAGE_SIZE     4096UL
 #define RISCV_BOOT_SCRATCH_OFFSET (32ULL * MIB)
+#ifndef RISCV_BOOT_IMAGE_ROOTFS_OFFSET
+#define RISCV_BOOT_IMAGE_ROOTFS_OFFSET (8ULL * MIB)
+#endif
 #define RISCV_MCAUSE_ECALL_S     9
 #define RISCV_MCAUSE_M_TIMER     7
 #define RISCV_CLINT_MTIMECMP_OFF 0x4000UL
@@ -399,10 +403,29 @@ static bool read_rootfs_disk(
     return true;
 }
 
+static bool read_rootfs_image(
+    void *dest,
+    size_t offset,
+    size_t bytes,
+    void *ctx
+) {
+    const u8 *image = (const u8 *)ctx;
+
+    if (!dest || !image) {
+        return false;
+    }
+
+    memcpy(dest, image + offset, bytes);
+    return true;
+}
+
 NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     boot_ext2_t rootfs = {0};
     fdt_reg_t virtio_regs[16];
     size_t virtio_count = 0;
+    uintptr_t embedded_rootfs_addr =
+        (uintptr_t)&__image_start + RISCV_BOOT_IMAGE_ROOTFS_OFFSET;
+    const u8 *embedded_rootfs = (const u8 *)embedded_rootfs_addr;
     fdt_reg_t memory_reg = detect_memory(dtb);
     uintptr_t uart_base = detect_uart_base(dtb);
     uintptr_t heap_start = (uintptr_t)&__stack_top;
@@ -447,11 +470,14 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     }
 
     printf("starting apheleiaOS\n\r");
-    if (!virtio_init(virtio_regs, virtio_count)) {
-        panic("storage device not available");
-    }
-    if (!boot_ext2_init(&rootfs, read_rootfs_disk, NULL, 0)) {
-        panic("not an ext2 filesystem");
+
+    if (!boot_ext2_init(&rootfs, read_rootfs_image, (void *)embedded_rootfs, 0)) {
+        if (!virtio_init(virtio_regs, virtio_count)) {
+            panic("storage device not available");
+        }
+        if (!boot_ext2_init(&rootfs, read_rootfs_disk, NULL, 0)) {
+            panic("not an ext2 filesystem");
+        }
     }
 
     const char *kernel_path = boot_kernel_path(true);
@@ -478,7 +504,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     if (!rootfs_copy) {
         panic("failed to stage rootfs");
     }
-    if (!read_rootfs_disk(rootfs_copy, 0, rootfs.size, NULL)) {
+    if (!rootfs.read(rootfs_copy, 0, rootfs.size, rootfs.ctx)) {
         panic("failed to read rootfs image");
     }
 

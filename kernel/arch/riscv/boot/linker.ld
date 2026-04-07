@@ -19,10 +19,12 @@ SECTIONS
 
     .rodata : ALIGN(16) {
         *(.rodata .rodata.*)
+        *(.srodata .srodata.*)
     } : text_segment
 
     .data : ALIGN(16) {
         *(.data .data.*)
+        *(.sdata .sdata.*)
     } : data_segment
 
     PROVIDE(__image_end = .);

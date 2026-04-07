@@ -31,6 +31,7 @@ typedef struct {
     bool compatible;
     bool enabled;
     bool memory;
+    bool chosen;
 } fdt_node_state_t;
 
 enum {
@@ -251,6 +252,7 @@ bool fdt_find_memory_reg(const void *dtb, fdt_reg_t *out) {
             stack[depth].child_size_cells = stack[depth].size_cells;
             stack[depth].compatible = false;
             stack[depth].memory = fdt_name_is_memory(name);
+            stack[depth].chosen = depth == 1 && !strcmp(name, "chosen");
             continue;
         }
 
@@ -431,6 +433,7 @@ bool fdt_find_compatible_regs(
             stack[depth].child_size_cells = stack[depth].size_cells;
             stack[depth].compatible = false;
             stack[depth].enabled = true;
+            stack[depth].chosen = depth == 1 && !strcmp(name, "chosen");
 
             (void)name;
             continue;
@@ -640,6 +643,7 @@ bool fdt_find_compatible_irqs(
             stack[depth].child_size_cells = stack[depth].size_cells;
             stack[depth].compatible = false;
             stack[depth].enabled = true;
+            stack[depth].chosen = depth == 1 && !strcmp(name, "chosen");
 
             (void)name;
             continue;
@@ -767,4 +771,167 @@ bool fdt_find_compatible_irq(
     }
 
     return count > 0;
+}
+
+bool fdt_find_initrd(const void *dtb, fdt_reg_t *out) {
+    if (!out) {
+        return false;
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    const fdt_header_t *hdr = NULL;
+    if (!fdt_header(dtb, &hdr) || !fdt_valid(dtb)) {
+        return false;
+    }
+
+    u32 off_struct = fdt_be32(&hdr->off_dt_struct);
+    u32 off_strings = fdt_be32(&hdr->off_dt_strings);
+    u32 size_struct = fdt_be32(&hdr->size_dt_struct);
+    u32 size_strings = fdt_be32(&hdr->size_dt_strings);
+
+    const u8 *struct_ptr = (const u8 *)dtb + off_struct;
+    const u8 *struct_end = struct_ptr + size_struct;
+    const char *strings = (const char *)dtb + off_strings;
+
+    fdt_node_state_t stack[FDT_STACK_DEPTH];
+    int depth = -1;
+    u32 root_addr_cells = FDT_DEFAULT_ADDR_CELLS;
+    u64 initrd_start = 0;
+    u64 initrd_end = 0;
+    bool have_start = false;
+    bool have_end = false;
+
+    const u8 *p = struct_ptr;
+    while (p + 4 <= struct_end) {
+        u32 token = fdt_be32(p);
+        p += 4;
+
+        if (token == FDT_BEGIN_NODE) {
+            const char *name = (const char *)p;
+            size_t len = 0;
+            while (p + len < struct_end && name[len]) {
+                len++;
+            }
+            if (p + len >= struct_end) {
+                return false;
+            }
+            p += len + 1;
+            p = fdt_align4(p);
+
+            depth++;
+            if (depth >= FDT_STACK_DEPTH) {
+                return false;
+            }
+
+            if (depth == 0) {
+                stack[depth].addr_cells = FDT_DEFAULT_ADDR_CELLS;
+                stack[depth].size_cells = FDT_DEFAULT_SIZE_CELLS;
+            } else {
+                stack[depth].addr_cells = stack[depth - 1].child_addr_cells;
+                stack[depth].size_cells = stack[depth - 1].child_size_cells;
+            }
+
+            stack[depth].child_addr_cells = stack[depth].addr_cells;
+            stack[depth].child_size_cells = stack[depth].size_cells;
+            stack[depth].compatible = false;
+            stack[depth].enabled = true;
+            stack[depth].memory = false;
+            stack[depth].chosen = depth == 1 && !strcmp(name, "chosen");
+            continue;
+        }
+
+        if (token == FDT_END_NODE) {
+            if (depth < 0) {
+                return false;
+            }
+            depth--;
+            continue;
+        }
+
+        if (token == FDT_PROP) {
+            if (p + 8 > struct_end) {
+                return false;
+            }
+            u32 len = fdt_be32(p);
+            u32 nameoff = fdt_be32(p + 4);
+            p += 8;
+            const u8 *data = p;
+            if (p + len > struct_end) {
+                return false;
+            }
+            p += len;
+            p = fdt_align4(p);
+
+            if (depth < 0) {
+                continue;
+            }
+
+            const char *pname = NULL;
+            if (!fdt_lookup_string(strings, size_strings, nameoff, &pname)) {
+                return false;
+            }
+
+            if (!strcmp(pname, "#address-cells")) {
+                if (len != sizeof(u32)) {
+                    return false;
+                }
+                stack[depth].child_addr_cells = fdt_be32(data);
+                if (depth == 0) {
+                    root_addr_cells = stack[depth].child_addr_cells;
+                }
+                continue;
+            }
+
+            if (!strcmp(pname, "#size-cells")) {
+                if (len != sizeof(u32)) {
+                    return false;
+                }
+                stack[depth].child_size_cells = fdt_be32(data);
+                continue;
+            }
+
+            if (!stack[depth].chosen) {
+                continue;
+            }
+
+            if (!strcmp(pname, "linux,initrd-start")) {
+                if (len != root_addr_cells * sizeof(u32)) {
+                    return false;
+                }
+                initrd_start = read_cells(data, root_addr_cells);
+                have_start = true;
+                continue;
+            }
+
+            if (!strcmp(pname, "linux,initrd-end")) {
+                if (len != root_addr_cells * sizeof(u32)) {
+                    return false;
+                }
+                initrd_end = read_cells(data, root_addr_cells);
+                have_end = true;
+                continue;
+            }
+
+            continue;
+        }
+
+        if (token == FDT_NOP) {
+            continue;
+        }
+
+        if (token == FDT_END) {
+            break;
+        }
+
+        return false;
+    }
+
+    if (depth != -1 || !have_start || !have_end || initrd_end <= initrd_start) {
+        return false;
+    }
+
+    out->addr = initrd_start;
+    out->size = initrd_end - initrd_start;
+    return true;
 }

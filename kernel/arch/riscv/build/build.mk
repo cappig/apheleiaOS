@@ -63,6 +63,9 @@ BOOT_ENTRY_SRC := \
 BOOT_ENTRY_OBJ_DIR := bin/boot/$(ARCH)
 BOOT_ENTRY_OBJ     := $(patsubst %, $(BOOT_ENTRY_OBJ_DIR)/%.o, $(BOOT_ENTRY_SRC))
 BOOT_ENTRY_ELF     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.elf
+BOOT_ENTRY_BIN     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.bin
+ROOTFS_IMAGE       := bin/$(IMAGE_NAME).rootfs.img
+RISCV_BOOT_IMAGE_ROOTFS_OFFSET := 8388608
 
 KERNEL_CC_COMMON := \
 	-I$(ARCH_DIR) \
@@ -94,11 +97,12 @@ BOOT_ENTRY_CFLAGS := \
 	-ffreestanding \
 	-nostdlib \
 	-nostdinc \
-	-fno-builtin \
-	-fno-pic \
-	-fno-pie \
-	$(RISCV_64_ISA_FLAGS) \
-	-mcmodel=medany
+		-fno-builtin \
+		-fno-pic \
+		-fno-pie \
+		-DRISCV_BOOT_IMAGE_ROOTFS_OFFSET=$(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) \
+		$(RISCV_64_ISA_FLAGS) \
+		-mcmodel=medany
 
 BOOT_ENTRY_LDFLAGS := \
 	-nostdlib \
@@ -121,11 +125,12 @@ BOOT_ENTRY_CFLAGS := \
 	-ffreestanding \
 	-nostdlib \
 	-nostdinc \
-	-fno-builtin \
-	-fno-pic \
-	-fno-pie \
-	$(RISCV_32_ISA_FLAGS) \
-	-mcmodel=medany
+		-fno-builtin \
+		-fno-pic \
+		-fno-pie \
+		-DRISCV_BOOT_IMAGE_ROOTFS_OFFSET=$(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) \
+		$(RISCV_32_ISA_FLAGS) \
+		-mcmodel=medany
 
 BOOT_ENTRY_LDFLAGS := \
 	-nostdlib \
@@ -159,6 +164,9 @@ $(BOOT_ENTRY_ELF): $(BOOT_ENTRY_OBJ) $(call LIBGCC, $(BOOT_ENTRY_CFLAGS)) | $(BO
 	@$(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) $(BOOT_ENTRY_LDFLAGS) -o $@ $^
 	@printf "%s  %s\n" "LD" "$@"
 
+$(BOOT_ENTRY_BIN): $(BOOT_ENTRY_ELF)
+	$(call oc, -O binary, $<, $@)
+
 $(KERNEL_OBJ_DIR)/%.S.o: %.S
 	@mkdir -p $(@D)
 	$(call cc, $(KERNEL_CC_FLAGS), $@, $<)
@@ -189,6 +197,19 @@ define stage_image
 	@cp -a bin/user/$(ARCH)/root/. $(IMAGE_STAGE_DIR)/
 endef
 
-bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
+$(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
 	$(call stage_image)
 	@python3 kernel/arch/riscv/build/build_riscv_disk_image.py $@ $(IMAGE_STAGE_DIR)
+	@printf "%s  %s\n" "IM" "$@"
+
+bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE)
+	@mkdir -p $(@D)
+	@size=$$(wc -c < $(BOOT_ENTRY_BIN)); \
+	if [ "$$size" -gt "$(RISCV_BOOT_IMAGE_ROOTFS_OFFSET)" ]; then \
+		echo "boot image exceeds embedded rootfs offset"; \
+		exit 1; \
+	fi
+	@cp $(BOOT_ENTRY_BIN) $@
+	@truncate -s $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) $@
+	@cat $(ROOTFS_IMAGE) >> $@
+	@printf "%s  %s\n" "IM" "$@"

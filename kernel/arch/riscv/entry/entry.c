@@ -44,6 +44,16 @@ static fdt_reg_t detect_memory(const void *dtb) {
     return reg;
 }
 
+static fdt_reg_t detect_initrd(const void *dtb) {
+    fdt_reg_t reg = {0};
+
+    if (dtb) {
+        (void)fdt_find_initrd(dtb, &reg);
+    }
+
+    return reg;
+}
+
 static void init_boot_args(kernel_args_t *args) {
     if (!args) {
         return;
@@ -51,7 +61,7 @@ static void init_boot_args(kernel_args_t *args) {
 
     memset(args, 0, sizeof(*args));
     args->debug = BOOT_DEFAULT_DEBUG;
-    args->stage_rootfs = 0;
+    args->stage_rootfs = 1;
     args->video = BOOT_DEFAULT_VIDEO;
     args->vesa_width = (u16)BOOT_DEFAULT_VESA_WIDTH;
     args->vesa_height = (u16)BOOT_DEFAULT_VESA_HEIGHT;
@@ -93,6 +103,7 @@ static NORETURN void park_secondary_hart(uintptr_t uart_base, uintptr_t hartid) 
 
 static boot_info_t *direct_boot_info_build(uintptr_t hartid, const void *dtb) {
     fdt_reg_t memory_reg = detect_memory(dtb);
+    fdt_reg_t initrd_reg = detect_initrd(dtb);
 
     memset(&direct_boot_info, 0, sizeof(direct_boot_info));
     init_boot_args(&direct_boot_info.args);
@@ -101,6 +112,8 @@ static boot_info_t *direct_boot_info_build(uintptr_t hartid, const void *dtb) {
     direct_boot_info.dtb_size = fdt_size(dtb);
     direct_boot_info.memory_paddr = memory_reg.addr;
     direct_boot_info.memory_size = memory_reg.size;
+    direct_boot_info.boot_rootfs_paddr = initrd_reg.addr;
+    direct_boot_info.boot_rootfs_size = initrd_reg.size;
     direct_boot_info.uart_paddr = detect_uart_base(dtb);
 
     return &direct_boot_info;

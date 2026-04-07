@@ -44,3 +44,5 @@ bool fdt_find_compatible_irq(
     const char *compatible,
     u32 *out
 );
+
+bool fdt_find_initrd(const void *dtb, fdt_reg_t *out);
