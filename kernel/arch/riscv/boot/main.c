@@ -23,6 +23,7 @@ extern char __stack_top;
 #define RISCV_MCAUSE_ECALL_S     9
 #define RISCV_MCAUSE_M_TIMER     7
 #define RISCV_CLINT_MTIMECMP_OFF 0x4000UL
+#define RISCV_CLINT_DEFAULT_BASE 0x02000000UL
 #define RISCV_SIFIVE_TEST_SHUTDOWN 0x5555U
 #define RISCV_SIFIVE_TEST_REBOOT   0x7777U
 
@@ -46,7 +47,6 @@ static uintptr_t sbi_uart_base = SERIAL_UART0;
 static uintptr_t sbi_clint_base = 0;
 static uintptr_t sbi_test_base = 0;
 static uintptr_t sbi_hartid = 0;
-static u32 sbi_timer_debug_count = 0;
 
 static void clint_set_timer(u64 next);
 
@@ -193,7 +193,11 @@ static uintptr_t detect_clint_base(const void *dtb) {
         return (uintptr_t)reg.addr;
     }
 
-    return 0;
+    if (dtb && fdt_find_compatible_reg(dtb, "riscv,aclint-mtimer", &reg) && reg.addr) {
+        return (uintptr_t)reg.addr;
+    }
+
+    return RISCV_CLINT_DEFAULT_BASE;
 }
 
 static uintptr_t detect_test_base(const void *dtb) {
@@ -290,12 +294,8 @@ void riscv_boot_handle_trap(riscv_mtrap_frame_t *frame) {
 
     if (interrupt) {
         if (cause == RISCV_MCAUSE_M_TIMER) {
-            if (sbi_timer_debug_count < 4) {
-                sbi_timer_debug_count++;
-                serial_printf("mtrap: timer irq %u\n\r", (unsigned int)sbi_timer_debug_count);
-            }
             clint_set_timer(~0ULL);
-            riscv_write_mie(0);
+            riscv_clear_mie_bits(MIE_MTIE);
             riscv_set_mip_bits(MIP_STIP);
             return;
         }
@@ -320,14 +320,10 @@ void riscv_boot_handle_trap(riscv_mtrap_frame_t *frame) {
 #else
             u64 next = ((u64)frame->g_regs.a1 << 32) | (u32)frame->g_regs.a0;
 #endif
-            serial_printf("mtrap: sbi set_timer %#lx\n\r", (unsigned long)next);
             riscv_clear_mip_bits(MIP_STIP);
             clint_set_timer(next);
-            serial_printf("mtrap: sbi timer programmed\n\r");
-            riscv_write_mie(MIE_MTIE);
-            serial_printf("mtrap: sbi timer mie on\n\r");
+            riscv_set_mie_bits(MIE_MTIE);
             sbi_return(frame, SBI_SUCCESS, 0);
-            serial_printf("mtrap: sbi timer return\n\r");
             return;
         }
         case SBI_EXT_SRST:
@@ -336,12 +332,10 @@ void riscv_boot_handle_trap(riscv_mtrap_frame_t *frame) {
         case SBI_EXT_APHE:
             switch (fid) {
             case SBI_APHE_FID_SOFTIRQ_SET:
-                serial_printf("mtrap: sbi softirq set\n\r");
                 riscv_set_sip_bits(SIP_SSIP);
                 sbi_return(frame, SBI_SUCCESS, 0);
                 return;
             case SBI_APHE_FID_SOFTIRQ_CLEAR:
-                serial_printf("mtrap: sbi softirq clear\n\r");
                 riscv_clear_sip_bits(SIP_SSIP);
                 sbi_return(frame, SBI_SUCCESS, 0);
                 return;

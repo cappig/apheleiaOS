@@ -103,6 +103,14 @@ static inline void riscv_write_mie(unsigned long value) {
     asm volatile("csrw mie, %0" : : "r"(value) : "memory");
 }
 
+static inline void riscv_set_mie_bits(unsigned long value) {
+    asm volatile("csrs mie, %0" : : "r"(value) : "memory");
+}
+
+static inline void riscv_clear_mie_bits(unsigned long value) {
+    asm volatile("csrc mie, %0" : : "r"(value) : "memory");
+}
+
 static inline void riscv_write_mcounteren(unsigned long value) {
     asm volatile("csrw mcounteren, %0" : : "r"(value) : "memory");
 }

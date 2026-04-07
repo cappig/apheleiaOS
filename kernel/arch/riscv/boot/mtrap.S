@@ -52,9 +52,10 @@
 #define FRAME_SIZE   (FRAME_WORDS * REGBYTES)
 #define SCRATCH_T1   (-2 * REGBYTES)
 #define SCRATCH_T2   (-3 * REGBYTES)
-#define FRAME_BIAS   (FRAME_SIZE + (3 * REGBYTES))
+#define FRAME_BIAS   (((FRAME_SIZE + (3 * REGBYTES)) + 15) & ~15)
 
 .globl riscv_boot_mtrap_entry
+.balign 4
 .type riscv_boot_mtrap_entry, @function
 riscv_boot_mtrap_entry:
     csrrw t0, mscratch, t0
@@ -111,6 +112,11 @@ riscv_boot_mtrap_entry:
     STORE t1, OFF_MTVAL(sp)
     csrr t1, mhartid
     STORE t1, OFF_MHARTID(sp)
+
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
 
     mv a0, sp
     call riscv_boot_handle_trap

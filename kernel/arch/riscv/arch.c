@@ -567,14 +567,9 @@ void arch_late_init(void) {
     }
 
     send_serial_string(uart_io_base, "riscv: late_init/timer-set\n\r");
-#if __riscv_xlen == 32
-    log_warn("riscv32: SBI timer arm skipped");
-    riscv_set_sie_bits(SIE_SSIE);
-#else
     _timer_program_next();
     send_serial_string(uart_io_base, "riscv: late_init/timer-ok\n\r");
     riscv_set_sie_bits(SIE_SSIE | SIE_STIE);
-#endif
     send_serial_string(uart_io_base, "riscv: late_init/armed\n\r");
     irq_late_ready = false;
 }

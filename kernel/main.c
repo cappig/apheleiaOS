@@ -61,6 +61,7 @@ NORETURN void kernel_main(void *boot_info) {
     logsink_bind_devices();
 
     init_spawn();
+    arch_late_init();
     arch_smp_init();
     scheduler_start();
 

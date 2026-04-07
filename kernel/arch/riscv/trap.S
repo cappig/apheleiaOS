@@ -135,6 +135,11 @@ riscv_trap_entry:
     li t1, SSTATUS_SUM
     csrs sstatus, t1
 
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
+
     mv a0, sp
     call riscv_handle_trap
     j 3f
