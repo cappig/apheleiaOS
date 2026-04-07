@@ -39,6 +39,7 @@ KERNEL_SRC_64     := $(filter-out %/div64.c, $(KERNEL_ARCH64_SRC)) $(KERNEL_COMM
 KERNEL_SRC_32     := $(filter %32.c %32.S, $(KERNEL_ALL_SRC)) $(KERNEL_COMMON_SRC)
 
 BOOT_LIBC_SRC := \
+	libs/libc/builtins.c \
 	libs/libc/div64.c \
 	libs/libc/ctype.c \
 	libs/libc/errno.c \
@@ -73,11 +74,14 @@ KERNEL_CC_COMMON := \
 
 KERNEL_LD_COMMON := --gc-sections
 
+RISCV_64_ISA_FLAGS := -march=rv64ia_zicsr -mabi=lp64
+RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr -mabi=ilp32
+
 ifeq ($(ARCH_VARIANT), 64)
 KERNEL_SRC      := $(KERNEL_SRC_64)
 KERNEL_OBJ_DIR  := bin/kernel_riscv64
 KERNEL_ELF      := $(KERNEL_OBJ_DIR)/boot/kernel64.elf
-KERNEL_CC_FLAGS := $(KERNEL_CC_COMMON) -march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany
+KERNEL_CC_FLAGS := $(KERNEL_CC_COMMON) $(RISCV_64_ISA_FLAGS) -mcmodel=medany
 KERNEL_LD_FLAGS := $(KERNEL_LD_COMMON) -m elf64lriscv -T$(ARCH_DIR)/build/linker64.ld
 
 BOOT_ENTRY_CFLAGS := \
@@ -93,8 +97,7 @@ BOOT_ENTRY_CFLAGS := \
 	-fno-builtin \
 	-fno-pic \
 	-fno-pie \
-	-march=rv64imac_zicsr \
-	-mabi=lp64 \
+	$(RISCV_64_ISA_FLAGS) \
 	-mcmodel=medany
 
 BOOT_ENTRY_LDFLAGS := \
@@ -105,7 +108,7 @@ else ifeq ($(ARCH_VARIANT), 32)
 KERNEL_SRC      := $(KERNEL_SRC_32)
 KERNEL_OBJ_DIR  := bin/kernel_riscv32
 KERNEL_ELF      := $(KERNEL_OBJ_DIR)/boot/kernel32.elf
-KERNEL_CC_FLAGS := $(KERNEL_CC_COMMON) -march=rv32imac_zicsr -mabi=ilp32 -mcmodel=medany
+KERNEL_CC_FLAGS := $(KERNEL_CC_COMMON) $(RISCV_32_ISA_FLAGS) -mcmodel=medany
 KERNEL_LD_FLAGS := $(KERNEL_LD_COMMON) -m elf32lriscv -T$(ARCH_DIR)/build/linker32.ld
 
 BOOT_ENTRY_CFLAGS := \
@@ -121,8 +124,7 @@ BOOT_ENTRY_CFLAGS := \
 	-fno-builtin \
 	-fno-pic \
 	-fno-pie \
-	-march=rv32imac_zicsr \
-	-mabi=ilp32 \
+	$(RISCV_32_ISA_FLAGS) \
 	-mcmodel=medany
 
 BOOT_ENTRY_LDFLAGS := \
@@ -135,6 +137,9 @@ endif
 
 ifeq ($(TOOLCHAIN), llvm)
 BOOT_ENTRY_LDFLAGS += -fuse-ld=lld
+ifeq ($(ARCH_VARIANT), 32)
+KERNEL_CC_FLAGS += -Wno-atomic-alignment
+endif
 endif
 
 KERNEL_OBJ := $(patsubst %, $(KERNEL_OBJ_DIR)/%.o, $(KERNEL_SRC))
@@ -142,17 +147,17 @@ KERNEL_OBJ := $(patsubst %, $(KERNEL_OBJ_DIR)/%.o, $(KERNEL_SRC))
 $(BOOT_ENTRY_OBJ_DIR)/%.S.o: %.S
 	@mkdir -p $(@D)
 	@$(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) -c -o $@ $<
-	@echo "CC $<"
+	@printf "%s  %s\n" "CC" "$<"
 
 $(BOOT_ENTRY_OBJ_DIR)/%.c.o: %.c
 	@mkdir -p $(@D)
 	@$(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) -c -o $@ $<
-	@echo "CC $<"
+	@printf "%s  %s\n" "CC" "$<"
 
-$(BOOT_ENTRY_ELF): $(BOOT_ENTRY_OBJ) | $(BOOT_ENTRY_LINKER)
+$(BOOT_ENTRY_ELF): $(BOOT_ENTRY_OBJ) $(call LIBGCC, $(BOOT_ENTRY_CFLAGS)) | $(BOOT_ENTRY_LINKER)
 	@mkdir -p $(@D)
 	@$(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) $(BOOT_ENTRY_LDFLAGS) -o $@ $^
-	@echo "LD $@"
+	@printf "%s  %s\n" "LD" "$@"
 
 $(KERNEL_OBJ_DIR)/%.S.o: %.S
 	@mkdir -p $(@D)

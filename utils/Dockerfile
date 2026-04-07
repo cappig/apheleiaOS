@@ -17,4 +17,8 @@ RUN apk add --no-cache \
     python3~3 \
     xorriso~1 && \
     ln -sf /usr/bin/clang-18 /usr/bin/clang && \
-    ln -sf /usr/bin/clang++-18 /usr/bin/clang++
+    ln -sf /usr/bin/clang++-18 /usr/bin/clang++ && \
+    ln -sf /usr/bin/llvm18-ar /usr/bin/llvm-ar && \
+    ln -sf /usr/bin/llvm18-objcopy /usr/bin/llvm-objcopy && \
+    ln -sf /usr/bin/llvm18-ranlib /usr/bin/llvm-ranlib && \
+    ln -sf /usr/bin/llvm18-strip /usr/bin/llvm-strip

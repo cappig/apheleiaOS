@@ -35,14 +35,17 @@ USER_CRTI_SRC := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crti.S
 USER_CRTN_SRC := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crtn.S
 USER_LD_SCRIPT := userland/linker_riscv$(ARCH_VARIANT).ld
 
+USER_RISCV_64_ISA_FLAGS := -march=rv64ia_zicsr -mabi=lp64
+USER_RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr -mabi=ilp32
+
 ifeq ($(ARCH_VARIANT), 64)
 USER_ARCH_NAME := riscv_64
 USER_LD_EMU    := -melf64lriscv
-USER_ARCH_CFLAGS := -march=rv64imac_zicsr -mabi=lp64 -mcmodel=medlow
+USER_ARCH_CFLAGS := $(USER_RISCV_64_ISA_FLAGS) -mcmodel=medlow
 else ifeq ($(ARCH_VARIANT), 32)
 USER_ARCH_NAME := riscv_32
 USER_LD_EMU    := -melf32lriscv
-USER_ARCH_CFLAGS := -march=rv32imac_zicsr -mabi=ilp32 -mcmodel=medlow
+USER_ARCH_CFLAGS := $(USER_RISCV_32_ISA_FLAGS) -mcmodel=medlow
 else
 $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
 endif
@@ -283,9 +286,9 @@ $(USER_OBJ_DIR)/%.asm.o: %.asm
 	$(call as, $(USER_AS), $@, $<)
 
 define user_link_rule
-$(USER_BIN_DIR)/$(1): $(USER_SHARED_OBJ) $(USER_LIBGCC) $(call user_prog_objs,$(1))
+$(USER_BIN_DIR)/$(1): $(USER_SHARED_OBJ) $(USER_LIBGCC) $(call user_prog_objs,$(1)) $(USER_LD_SCRIPT)
 	@mkdir -p $$(@D)
-	$(call ld, $(USER_LD), $$@, $$^)
+	$(call ld, $(USER_LD), $$@, $$(filter-out $(USER_LD_SCRIPT),$$^))
 	@if [ "$(STRIP_USER)" = "true" ]; then \
 		$(ST) $(USER_STRIP_FLAGS) $$@; \
 	fi

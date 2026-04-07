@@ -81,40 +81,56 @@ bool __atomic_compare_exchange_8(
     return false;
 }
 
-u64 __sync_fetch_and_add_8(volatile void *ptr, u64 value) {
+long long rv32_sync_fetch_and_add_8(volatile long long *ptr, long long value, ...)
+    __asm__("__sync_fetch_and_add_8");
+long long rv32_sync_fetch_and_add_8(volatile long long *ptr, long long value, ...) {
     volatile u64 *p = (volatile u64 *)ptr;
     unsigned long flags = arch_irq_save();
     u64 old = *p;
-    *p = old + value;
+    *p = old + (u64)value;
     arch_irq_restore(flags);
-    return old;
+    return (long long)old;
 }
 
-u64 __sync_val_compare_and_swap_8(
-    volatile void *ptr,
-    u64 old_value,
-    u64 new_value
+long long rv32_sync_val_compare_and_swap_8(
+    volatile long long *ptr,
+    long long old_value,
+    long long new_value,
+    ...
+) __asm__("__sync_val_compare_and_swap_8");
+long long rv32_sync_val_compare_and_swap_8(
+    volatile long long *ptr,
+    long long old_value,
+    long long new_value,
+    ...
 ) {
     volatile u64 *p = (volatile u64 *)ptr;
     unsigned long flags = arch_irq_save();
     u64 old = *p;
-    if (old == old_value) {
-        *p = new_value;
+    if (old == (u64)old_value) {
+        *p = (u64)new_value;
     }
     arch_irq_restore(flags);
-    return old;
+    return (long long)old;
 }
 
-bool __sync_bool_compare_and_swap_8(
-    volatile void *ptr,
-    u64 old_value,
-    u64 new_value
+bool rv32_sync_bool_compare_and_swap_8(
+    volatile long long *ptr,
+    long long old_value,
+    long long new_value,
+    ...
+) __asm__("__sync_bool_compare_and_swap_8");
+bool rv32_sync_bool_compare_and_swap_8(
+    volatile long long *ptr,
+    long long old_value,
+    long long new_value,
+    ...
 ) {
     volatile u64 *p = (volatile u64 *)ptr;
     unsigned long flags = arch_irq_save();
     bool swapped = false;
-    if (*p == old_value) {
-        *p = new_value;
+    if (*p == (u64)old_value) {
+        *p = (u64)new_value;
         swapped = true;
     }
     arch_irq_restore(flags);

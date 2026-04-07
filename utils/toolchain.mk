@@ -62,28 +62,28 @@ $(error Unsupported ARCH '$(ARCH)' for TOOLCHAIN '$(TOOLCHAIN)')
 endif
 
 define cc
-	@$(CC) $(CC_BASE) $(1) -c -o $(2) $(3)
-	@echo "CC $(3)"
+	@$(CC) $(CC_BASE) $(strip $(1)) -c -o $(strip $(2)) $(strip $(3))
+	@printf "%s  %s\n" "CC" "$(strip $(3))"
 endef
 
 define as
-	@$(AS) $(AS_BASE) $(1) -o $(2) $(3)
-	@echo "AS $(3)"
+	@$(AS) $(AS_BASE) $(strip $(1)) -o $(strip $(2)) $(strip $(3))
+	@printf "%s  %s\n" "AS" "$(strip $(3))"
 endef
 
 define ld
-	@$(LD) $(LD_BASE) $(1) -o $(2) $(3)
-	@echo "LD $(2)"
+	@$(LD) $(LD_BASE) $(strip $(1)) -o $(strip $(2)) $(strip $(3))
+	@printf "%s  %s\n" "LD" "$(strip $(2))"
 endef
 
 define oc
-	@$(OC) $(1) $(2) $(3)
-	@echo "OC $(2)"
+	@$(OC) $(strip $(1)) $(strip $(2)) $(strip $(3))
+	@printf "%s  %s\n" "OC" "$(strip $(2))"
 endef
 
 define st
-	@$(ST) $(1)
-	@echo "ST $(1)"
+	@$(ST) $(strip $(1))
+	@printf "%s  %s\n" "ST" "$(strip $(1))"
 endef
 
 

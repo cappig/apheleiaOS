@@ -7,7 +7,7 @@
 Apheleia is an x86 UNIX-like hobby operating system made for fun and as a learning opportunity.
 It aims to be as minimalistic and simple as possible while still providing basic functionality.
 
-The current tree supports `x86_64` and `x86_32` builds, BIOS boot by default, optional x86_64 UEFI boot, SMP bring-up, and a small windowed userland.
+The current tree supports `x86_64`, `x86_32`, `riscv_64`, and `riscv_32` builds, BIOS boot by default, optional x86_64 UEFI boot, early RISC-V bring-up, and a small windowed userland.
 
 ![Apheleia OS running](aos.png)
 
@@ -22,25 +22,57 @@ The current tree supports `x86_64` and `x86_32` builds, BIOS boot by default, op
 
 ### How to build and run?
 
-Build under docker (*recommended*):
+Build with Docker (*recommended for cross-platform builds*):
 
 ```bash
-make docker_image docker_build
+# Default build: x86_64
+make docker_build
+
+# 32-bit x86
+make docker_build ARCH=x86_32
+
+# RISC-V
+make docker_build ARCH=riscv_32 TOOLCHAIN=llvm
+make docker_build ARCH=riscv_64 TOOLCHAIN=llvm
 ```
 
-Build locally on a Linux machine with the GNU toolchain:
+`make docker_build` will build or refresh the Docker image automatically.
+
+For RISC-V, use `TOOLCHAIN=llvm` in Docker just like you would locally.
+
+If you want to prepare the image explicitly first:
+
+```bash
+make docker_image
+```
+
+Build locally on a Linux machine:
 
 ```bash
 make
 ```
 
-After a successful default build, a disk image will be generated at:
+Useful local variants:
 
 ```bash
-bin/apheleia_alpha-0.4_x86_64.img
+# 32-bit x86
+make ARCH=x86_32
+
+# RISC-V with LLVM
+make ARCH=riscv_32 TOOLCHAIN=llvm
+make ARCH=riscv_64 TOOLCHAIN=llvm
+
+# Build an ISO instead of the default raw disk image
+make IMAGE_FORMAT=iso
 ```
 
-You can run it using QEMU with:
+After a successful build, the disk image will be generated at:
+
+```bash
+bin/apheleia_alpha-1.1_<arch>.img
+```
+
+Run it with QEMU using the same `ARCH` you built:
 
 ```bash
 make run
@@ -49,17 +81,17 @@ make run
 Useful variants:
 
 ```bash
-# 32-bit build
-make ARCH=x86_32
+# Run RISC-V 32-bit
+make ARCH=riscv_32 run
+
+# Run RISC-V 64-bit
+make ARCH=riscv_64 run
 
 # Run with 4 virtual CPUs
 make run QEMU_SMP=4
 
 # Use KVM when available
 make run KVM=true
-
-# Build an ISO instead of the default raw disk image
-make IMAGE_FORMAT=iso
 
 # x86_64 UEFI boot
 make run BOOT=uefi

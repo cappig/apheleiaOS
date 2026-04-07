@@ -18,17 +18,21 @@ SECTIONS
     } :text
 
     .rodata : ALIGN(4K) {
+        *(.srodata .srodata.*)
         *(.rodata .rodata.*)
     } :rodata
 
     .data : ALIGN(4K) {
+        *(.sdata .sdata.*)
         *(.data .data.*)
     } :data
 
     PROVIDE(__global_pointer$ = . + 0x800);
 
     .bss : ALIGN(4K) {
+        *(.sbss .sbss.*)
         *(.bss .bss.*)
+        *(.scommon)
         *(COMMON)
     } :data
 
