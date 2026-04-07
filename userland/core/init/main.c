@@ -1,7 +1,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <stdbool.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -134,7 +133,6 @@ int main(int argc, char **argv) {
         (void)attach_stdio("/dev/console");
     }
 
-    // write_str("init: starting\n");
     (void)run_script_sync("/etc/rc");
     run_optional_script_sync("/etc/rc.local");
 

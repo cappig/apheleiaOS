@@ -136,13 +136,13 @@ ovmf-fetch:
 ovmf-clean:
 	@rm -rf "$(OVMF_DIR)"
 
-run: bin/$(IMAGE_NAME).img $(QEMU_BOOT_DEPS)
+run: all $(QEMU_BOOT_DEPS)
 	$(QEMU_BOOT_SETUP)
-	@$(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_IMAGE_ARGS)
+	@if [ -r /dev/tty ]; then exec </dev/tty >/dev/tty 2>/dev/tty; fi; $(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_IMAGE_ARGS)
 
-run-usb: bin/$(IMAGE_NAME).img $(QEMU_BOOT_DEPS)
+run-usb: all $(QEMU_BOOT_DEPS)
 	$(QEMU_BOOT_SETUP)
-	@$(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_USB_IMAGE_ARGS)
+	@if [ -r /dev/tty ]; then exec </dev/tty >/dev/tty 2>/dev/tty; fi; $(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_USB_IMAGE_ARGS)
 
 run-usb-bios:
 	@$(MAKE) run-usb BOOT=bios

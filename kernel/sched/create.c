@@ -51,6 +51,20 @@ build_fork_stack(sched_thread_t *thread, arch_int_state_t *state) {
     return sp;
 }
 
+static pid_t _fork_fail(const char *reason, int error) {
+    if (reason && reason[0]) {
+        sched_thread_t *thread = sched_local_current();
+        log_warn(
+            "fork failed for pid=%ld (%s): %s",
+            thread ? (long)thread->pid : 0L,
+            thread ? thread->name : "unknown",
+            reason
+        );
+    }
+
+    return error > 0 ? -error : -ENOMEM;
+}
+
 void thread_prepare_user(
     sched_thread_t *thread,
     uintptr_t entry,
@@ -275,6 +289,7 @@ sched_thread_t *create_thread(
 ) {
     sched_thread_t *thread = calloc(1, sizeof(*thread));
     if (!thread) {
+        log_warn("failed to allocate scheduler thread object");
         return NULL;
     }
 
@@ -334,6 +349,7 @@ sched_thread_t *create_thread(
     thread->wait_cookie = 0;
 
     if (!thread->stack) {
+        log_warn("failed to allocate scheduler thread stack");
         free(thread);
         return NULL;
     }
@@ -348,6 +364,7 @@ sched_thread_t *create_thread(
     if (user_thread) {
         thread->vm_space = arch_vm_create_user();
         if (!thread->vm_space) {
+            log_warn("failed to allocate user VM space");
             free(thread->stack);
             free(thread);
             return NULL;
@@ -419,12 +436,12 @@ pid_t sched_fork(arch_int_state_t *state) {
     sched_thread_t *parent = sched_local_current();
 
     if (!parent || !parent->user_thread || !state) {
-        return -1;
+        return _fork_fail("invalid parent or missing trap state", EINVAL);
     }
 
     sched_thread_t *child = sched_create_user_thread(parent->name);
     if (!child) {
-        return -1;
+        return _fork_fail("failed to create child thread", ENOMEM);
     }
 
     child->ppid = parent->pid;
@@ -436,7 +453,7 @@ pid_t sched_fork(arch_int_state_t *state) {
 
     if (!sched_fd_clone_table(child, parent)) {
         sched_discard_thread(child);
-        return -1;
+        return _fork_fail("failed to clone file descriptor table", ENOMEM);
     }
 
     memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
@@ -472,7 +489,7 @@ pid_t sched_fork(arch_int_state_t *state) {
         if (!root) {
             spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
             sched_discard_thread(child);
-            return -1;
+            return _fork_fail("child VM space missing root page table", ENOMEM);
         }
 
         if (!cow_enabled) {
@@ -482,15 +499,19 @@ pid_t sched_fork(arch_int_state_t *state) {
             arch_map_region(
                 root, pages, region->vaddr, new_paddr, region->flags
             );
-            sched_add_user_region(
-                child, region->vaddr, new_paddr, pages, region->flags
-            );
+            if (!sched_add_user_region(
+                    child, region->vaddr, new_paddr, pages, region->flags
+                )) {
+                spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
+                sched_discard_thread(child);
+                return _fork_fail("failed to record copied user region", ENOMEM);
+            }
 
             void *dst = arch_phys_map(new_paddr, size, 0);
             if (!dst) {
                 spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
                 sched_discard_thread(child);
-                return -1;
+                return _fork_fail("failed to map copied user pages", ENOMEM);
             }
 
             memcpy(dst, (void *)region->vaddr, size);
@@ -515,9 +536,13 @@ pid_t sched_fork(arch_int_state_t *state) {
         }
 
         arch_map_region(root, pages, region->vaddr, region->paddr, map_flags);
-        sched_add_user_region(
-            child, region->vaddr, region->paddr, pages, region_flags
-        );
+        if (!sched_add_user_region(
+                child, region->vaddr, region->paddr, pages, region_flags
+            )) {
+            spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
+            sched_discard_thread(child);
+            return _fork_fail("failed to record COW user region", ENOMEM);
+        }
 
         pmm_ref_hold((void *)(uintptr_t)region->paddr, pages);
 

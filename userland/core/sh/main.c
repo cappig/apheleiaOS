@@ -732,7 +732,11 @@ static int read_line_fd(int fd, char *buf, size_t len, bool interactive) {
         }
 
         if (read_count < 0) {
-            continue;
+            if (errno == EINTR) {
+                continue;
+            }
+
+            return -1;
         }
 
         if (ch == '\r') {

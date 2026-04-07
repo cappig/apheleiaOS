@@ -327,9 +327,7 @@ bool sched_handle_cow_fault(
             return false;
         }
 
-        *entry = 0;
-        arch_page_set_paddr(entry, new_paddr);
-        *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
+        arch_map_region(root, 1, page_addr, new_paddr, new_flags);
         arch_free_frames((void *)(uintptr_t)old_paddr, 1);
     } else {
         bool split_ok =
@@ -340,9 +338,7 @@ bool sched_handle_cow_fault(
             return false;
         }
 
-        *entry = 0;
-        arch_page_set_paddr(entry, old_paddr);
-        *entry |= (new_flags | PT_PRESENT) & FLAGS_MASK;
+        arch_map_region(root, 1, page_addr, old_paddr, new_flags);
     }
 
     arch_tlb_flush(page_addr);

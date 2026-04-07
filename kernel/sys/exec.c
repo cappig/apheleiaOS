@@ -51,6 +51,13 @@ typedef struct {
     size_t size;
 } exec_file_t;
 
+typedef struct exec_loaded_page {
+    uintptr_t vaddr;
+    uintptr_t paddr;
+    u64 flags;
+    struct exec_loaded_page *next;
+} exec_loaded_page_t;
+
 
 static u64 _elf_flags_to_page_flags(u32 elf_flags) {
     u64 flags = PT_USER;
@@ -125,6 +132,158 @@ static bool _map_user_region(
     return false;
 }
 
+static sched_user_region_t *
+_find_user_region_page(sched_thread_t *thread, uintptr_t vaddr) {
+    if (!thread) {
+        return NULL;
+    }
+
+    sched_user_region_t *region = thread->regions;
+    while (region) {
+        if (vaddr >= region->vaddr &&
+            vaddr < region->vaddr + region->pages * PAGE_4KIB) {
+            return region;
+        }
+
+        region = region->next;
+    }
+
+    return NULL;
+}
+
+static exec_loaded_page_t *
+_find_loaded_page(exec_loaded_page_t *pages, uintptr_t vaddr) {
+    while (pages) {
+        if (pages->vaddr == vaddr) {
+            return pages;
+        }
+
+        pages = pages->next;
+    }
+
+    return NULL;
+}
+
+static void _free_loaded_pages(exec_loaded_page_t *pages) {
+    while (pages) {
+        exec_loaded_page_t *next = pages->next;
+        free(pages);
+        pages = next;
+    }
+}
+
+static exec_loaded_page_t *
+_ensure_loaded_page(
+    sched_thread_t *thread,
+    exec_loaded_page_t **pages,
+    uintptr_t vaddr,
+    u64 flags
+) {
+    if (!thread || !pages) {
+        return NULL;
+    }
+
+    exec_loaded_page_t *page = _find_loaded_page(*pages, vaddr);
+    if (page) {
+        u64 merged = page->flags | flags;
+        if (merged != page->flags) {
+            page_t *root = arch_vm_root(thread->vm_space);
+            if (!root) {
+                return NULL;
+            }
+
+            page->flags = merged;
+            arch_map_region(root, 1, vaddr, page->paddr, merged);
+            arch_tlb_flush(vaddr);
+
+            sched_user_region_t *region = _find_user_region_page(thread, vaddr);
+            if (region && region->pages == 1 && region->vaddr == vaddr) {
+                region->flags = merged;
+            }
+        }
+
+        return page;
+    }
+
+    uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(1);
+    if (!paddr) {
+        return NULL;
+    }
+
+    if (!_map_user_region(thread, vaddr, paddr, 1, flags)) {
+        return NULL;
+    }
+
+    void *dst = arch_phys_map(paddr, PAGE_4KIB, 0);
+    if (!dst) {
+        return NULL;
+    }
+
+    memset(dst, 0, PAGE_4KIB);
+    arch_phys_unmap(dst, PAGE_4KIB);
+
+    page = calloc(1, sizeof(*page));
+    if (!page) {
+        return NULL;
+    }
+
+    page->vaddr = vaddr;
+    page->paddr = paddr;
+    page->flags = flags;
+    page->next = *pages;
+    *pages = page;
+    return page;
+}
+
+static bool _copy_segment_bytes(
+    const u8 *image,
+    size_t image_size,
+    u64 offset,
+    u64 file_size,
+    uintptr_t vaddr,
+    exec_loaded_page_t *pages
+) {
+    if (!file_size) {
+        return true;
+    }
+
+    if (!image || offset > image_size || file_size > image_size - offset) {
+        return false;
+    }
+
+    size_t remaining = (size_t)file_size;
+    size_t image_off = (size_t)offset;
+    uintptr_t cursor = vaddr;
+
+    while (remaining) {
+        uintptr_t page_vaddr = ALIGN_DOWN(cursor, PAGE_4KIB);
+        exec_loaded_page_t *page = _find_loaded_page(pages, page_vaddr);
+        if (!page) {
+            return false;
+        }
+
+        size_t page_off = (size_t)(cursor - page_vaddr);
+        size_t chunk = PAGE_4KIB - page_off;
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+
+        void *dst = arch_phys_map(page->paddr, PAGE_4KIB, 0);
+        if (!dst) {
+            return false;
+        }
+
+        memcpy((u8 *)dst + page_off, image + image_off, chunk);
+        arch_phys_unmap(dst, PAGE_4KIB);
+
+        cursor += chunk;
+        image_off += chunk;
+        remaining -= chunk;
+    }
+
+    return true;
+}
+
 static bool _load_segments_64(
     sched_thread_t *thread,
     const u8 *image,
@@ -147,6 +306,7 @@ static bool _load_segments_64(
 
     const elf_prog_header_t *prog =
         (const elf_prog_header_t *)(image + header->phoff);
+    exec_loaded_page_t *loaded_pages = NULL;
 
     for (size_t i = 0; i < header->ph_num; i++) {
         const elf_prog_header_t *ph =
@@ -169,6 +329,7 @@ static bool _load_segments_64(
         );
 
         if (!valid_seg) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
 
@@ -176,41 +337,41 @@ static bool _load_segments_64(
         u64 map_end = ALIGN(ph->vaddr + ph->mem_size, PAGE_4KIB);
 
         if (map_end <= map_base) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
-
-        size_t pages = (size_t)((map_end - map_base) / PAGE_4KIB);
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
-
-        uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
-        if (!paddr) {
-            return false;
+        for (u64 page_vaddr = map_base; page_vaddr < map_end; page_vaddr += PAGE_4KIB) {
+            if (!_ensure_loaded_page(
+                    thread,
+                    &loaded_pages,
+                    (uintptr_t)page_vaddr,
+                    flags
+                )) {
+                _free_loaded_pages(loaded_pages);
+                return false;
+            }
         }
 
-        if (!_map_user_region(thread, map_base, paddr, pages, flags)) {
+        if (!_copy_segment_bytes(
+                image,
+                size,
+                ph->offset,
+                ph->file_size,
+                (uintptr_t)ph->vaddr,
+                loaded_pages
+            )) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
-
-        size_t copy_off = (size_t)(ph->vaddr - map_base);
-        size_t copy_len = (size_t)ph->file_size;
-
-        void *dst = arch_phys_map(paddr, pages * PAGE_4KIB, 0);
-        if (!dst) {
-            return false;
-        }
-
-        memset(dst, 0, pages * PAGE_4KIB);
-
-        memcpy((u8 *)dst + copy_off, image + ph->offset, copy_len);
-
-        arch_phys_unmap(dst, pages * PAGE_4KIB);
     }
 
     if (entry_out) {
         *entry_out = header->entry;
     }
 
+    _free_loaded_pages(loaded_pages);
     return true;
 }
 
@@ -236,6 +397,7 @@ static bool _load_segments_32(
 
     const elf32_prog_header_t *prog =
         (const elf32_prog_header_t *)(image + header->phoff);
+    exec_loaded_page_t *loaded_pages = NULL;
 
     for (size_t i = 0; i < header->ph_num; i++) {
         const elf32_prog_header_t *ph =
@@ -258,6 +420,7 @@ static bool _load_segments_32(
         );
 
         if (!valid_seg) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
 
@@ -265,41 +428,41 @@ static bool _load_segments_32(
         u32 map_end = ALIGN(ph->vaddr + ph->mem_size, PAGE_4KIB);
 
         if (map_end <= map_base) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
-
-        size_t pages = (size_t)((map_end - map_base) / PAGE_4KIB);
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
-
-        uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
-        if (!paddr) {
-            return false;
+        for (u32 page_vaddr = map_base; page_vaddr < map_end; page_vaddr += PAGE_4KIB) {
+            if (!_ensure_loaded_page(
+                    thread,
+                    &loaded_pages,
+                    (uintptr_t)page_vaddr,
+                    flags
+                )) {
+                _free_loaded_pages(loaded_pages);
+                return false;
+            }
         }
 
-        if (!_map_user_region(thread, map_base, paddr, pages, flags)) {
+        if (!_copy_segment_bytes(
+                image,
+                size,
+                ph->offset,
+                ph->file_size,
+                (uintptr_t)ph->vaddr,
+                loaded_pages
+            )) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
-
-        size_t copy_off = (size_t)(ph->vaddr - map_base);
-        size_t copy_len = (size_t)ph->file_size;
-
-        void *dst = arch_phys_map(paddr, pages * PAGE_4KIB, 0);
-        if (!dst) {
-            return false;
-        }
-
-        memset(dst, 0, pages * PAGE_4KIB);
-
-        memcpy((u8 *)dst + copy_off, image + ph->offset, copy_len);
-
-        arch_phys_unmap(dst, pages * PAGE_4KIB);
     }
 
     if (entry_out) {
         *entry_out = header->entry;
     }
 
+    _free_loaded_pages(loaded_pages);
     return true;
 }
 
@@ -537,7 +700,13 @@ static uintptr_t _build_user_stack_args(
     sp = ALIGN_DOWN(sp, 16);
 
     size_t slots = argc + envc + 3;
-    if ((slots % 2) != 0) {
+    size_t align_slots = 16 / sizeof(uintptr_t);
+    if (!align_slots) {
+        align_slots = 1;
+    }
+
+    size_t pad_slots = (align_slots - (slots % align_slots)) % align_slots;
+    for (size_t i = 0; i < pad_slots; i++) {
         sp -= sizeof(uintptr_t);
         *(uintptr_t *)sp = 0;
     }

@@ -21,7 +21,7 @@ typedef enum {
 #define BOOT_DEFAULT_VESA_WIDTH  -1
 #define BOOT_DEFAULT_VESA_HEIGHT -1
 #define BOOT_DEFAULT_VESA_BPP    32
-#define BOOT_DEFAULT_FONT        "/etc/font.psf"
+#define BOOT_DEFAULT_FONT        "/etc/ter-116n.psf"
 #define BOOT_DEFAULT_STAGE_ROOTFS 0
 
 #define BOOT_KERNEL_PATH_32 "/boot/kernel32.elf"

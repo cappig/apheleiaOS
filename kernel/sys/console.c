@@ -156,6 +156,51 @@ static console_cell_t *_screen_cells(size_t index) {
     return console_state.cells + index * count;
 }
 
+static bool _screen_is_blank(size_t index) {
+    console_screen_t *screen = _get_screen(index);
+    console_cell_t *cells = _screen_cells(index);
+
+    if (!screen) {
+        return true;
+    }
+
+    if (screen->cursor_x || screen->cursor_y || screen->saved_cursor_valid) {
+        return false;
+    }
+
+    if (!cells) {
+        return true;
+    }
+
+    size_t count = _cell_count();
+    for (size_t i = 0; i < count; i++) {
+        if (cells[i].codepoint != ' ') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void _inherit_screen_state(size_t dst, size_t src) {
+    console_screen_t *dst_screen = _get_screen(dst);
+    console_screen_t *src_screen = _get_screen(src);
+
+    if (!dst_screen || !src_screen || dst == src) {
+        return;
+    }
+
+    *dst_screen = *src_screen;
+
+    console_cell_t *dst_cells = _screen_cells(dst);
+    console_cell_t *src_cells = _screen_cells(src);
+    size_t count = _cell_count();
+
+    if (dst_cells && src_cells && count) {
+        memcpy(dst_cells, src_cells, count * sizeof(*dst_cells));
+    }
+}
+
 static void _clear_screen_buffer(size_t index) {
     console_screen_t *screen = _get_screen(index);
     console_cell_t *cells = _screen_cells(index);
@@ -1185,6 +1230,10 @@ static void _redraw_screen(size_t index) {
         return;
     }
 
+    if (console_state.mode == CONSOLE_TEXT && _screen_is_blank(index)) {
+        return;
+    }
+
     bool temp_batch = false;
 
     if (index == console_state.active_screen && _has_back_buffer() && !console_state.flush_batch) {
@@ -1247,6 +1296,7 @@ bool console_set_active(size_t index) {
         return false;
     }
 
+    size_t previous = console_state.active_screen;
     bool screen_changed = (console_state.active_screen != index);
     if (screen_changed) {
         console_state.active_screen = index;
@@ -1254,6 +1304,14 @@ bool console_set_active(size_t index) {
 
     if (console_state.fb_owned && index == console_state.fb_owner_screen) {
         notify_ws = true;
+    } else if (
+        console_state.mode == CONSOLE_TEXT &&
+        screen_changed &&
+        previous == TTY_CONSOLE &&
+        _screen_is_blank(index)
+    ) {
+        _inherit_screen_state(index, previous);
+        console_state.handoff_refresh_pending = false;
     } else if (screen_changed || console_state.handoff_refresh_pending) {
         // Ensure the first tty-facing activation cannot inherit stale pixels.
         console_state.cursor_drawn = false;

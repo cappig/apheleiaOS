@@ -23,6 +23,7 @@
 
 NORETURN void kernel_main(void *boot_info) {
     const kernel_args_t *args = arch_init(boot_info);
+    bool has_framebuffer = framebuffer_get_info() != NULL;
 
     scheduler_init();
     syscall_init();
@@ -37,27 +38,37 @@ NORETURN void kernel_main(void *boot_info) {
         panic("failed to mount rootfs");
     }
 
+    log_info("initializing tty");
+    tty_init();
+    pty_init();
+
+    log_info("initializing devfs");
+    devfs_init();
+    disk_publish_devices();
+    driver_load_stage(DRIVER_STAGE_DEVFS);
+
+    log_info("loading kernel symbols");
     load_symbols();
 
+    log_info("initializing procfs");
     if (!procfs_init()) {
         log_warn("procfs init failed");
     }
 
-    psf_load_boot_font(args ? args->font : NULL);
+    if (has_framebuffer) {
+        if (args && args->font[0]) {
+            log_info("loading console font '%s'", args->font);
+        }
 
-    tty_init();
-    pty_init();
+        psf_load_boot_font(args ? args->font : NULL);
 
-    if (framebuffer_get_info()) {
+        log_info("initializing window system");
         if (!ws_init()) {
             log_warn("ws init failed");
         }
     }
 
-    devfs_init();
-    disk_publish_devices();
-    driver_load_stage(DRIVER_STAGE_DEVFS);
-
+    log_info("binding log devices");
     logsink_bind_devices();
 
     init_spawn();
