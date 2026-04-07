@@ -2,6 +2,7 @@
 #include <arch/paging.h>
 #include <base/macros.h>
 #include <riscv/asm.h>
+#include <riscv/vm.h>
 #include <riscv/mm/physical.h>
 #include <stdlib.h>
 #include <string.h>

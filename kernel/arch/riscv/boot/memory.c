@@ -1,4 +1,5 @@
 #include <base/types.h>
+#include <limits.h>
 #include <string.h>
 
 extern char __heap_start;
@@ -55,11 +56,11 @@ void *calloc(size_t count, size_t size) {
         return NULL;
     }
 
-    size_t total = count * size;
-    if (size && total / size != count) {
+    if (count > SIZE_MAX / size) {
         return NULL;
     }
 
+    size_t total = count * size;
     return boot_alloc_aligned(total, 16, true);
 }
 

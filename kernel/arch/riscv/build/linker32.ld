@@ -12,6 +12,7 @@ SECTIONS
     . = 0x80200000;
 
     .text : ALIGN(16) {
+        KEEP(*(.text.entry))
         *(.text .text.*)
     } : text_segment
 

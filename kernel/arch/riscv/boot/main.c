@@ -222,6 +222,7 @@ static void init_boot_args(kernel_args_t *args) {
     args->vesa_width = (u16)BOOT_DEFAULT_VESA_WIDTH;
     args->vesa_height = (u16)BOOT_DEFAULT_VESA_HEIGHT;
     args->vesa_bpp = BOOT_DEFAULT_VESA_BPP;
+    strncpy(args->console, "/dev/ttyS0,/dev/console", sizeof(args->console) - 1);
     strncpy(args->font, BOOT_DEFAULT_FONT, sizeof(args->font) - 1);
 }
 
@@ -410,6 +411,15 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     uintptr_t scratch_base = (uintptr_t)(memory_reg.addr + RISCV_BOOT_SCRATCH_OFFSET);
     if (scratch_base > heap_start) {
         heap_start = scratch_base;
+    }
+
+    u64 boot_hart = 0;
+    bool boot_hart_known = dtb && fdt_boot_cpuid_phys(dtb, &boot_hart);
+    if ((boot_hart_known && hartid != (uintptr_t)boot_hart) ||
+        (!boot_hart_known && hartid != 0)) {
+        tty_set_uart_base(uart_base);
+        printf("parking secondary hart %lu\n\r", (unsigned long)hartid);
+        halt();
     }
 
     heap_start = ALIGN(heap_start, RISCV_BOOT_PAGE_SIZE);

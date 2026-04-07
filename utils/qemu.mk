@@ -100,7 +100,13 @@ QEMU_USB_IMAGE_ARGS := \
 	-device usb-storage,bus=xhci.0,drive=usbstick
 
 ifeq ($(ARCH), riscv_64)
+ifeq ($(BOOT), opensbi)
+QEMU_BOOT_ARGS := -kernel bin/kernel_riscv64/boot/kernel64.elf
+else ifeq ($(BOOT), bios)
 QEMU_BOOT_ARGS := -bios bin/boot/$(ARCH)/riscv_boot.elf
+else
+$(error Unsupported BOOT='$(BOOT)' for $(ARCH))
+endif
 QEMU_ARGS += -global virtio-mmio.force-legacy=off
 QEMU_IMAGE_ARGS := \
 	-drive if=none,id=vdisk,format=raw,file=bin/$(IMAGE_NAME).img \
@@ -108,7 +114,13 @@ QEMU_IMAGE_ARGS := \
 QEMU_USB_IMAGE_ARGS :=
 endif
 ifeq ($(ARCH), riscv_32)
+ifeq ($(BOOT), opensbi)
+QEMU_BOOT_ARGS := -kernel bin/kernel_riscv32/boot/kernel32.elf
+else ifeq ($(BOOT), bios)
 QEMU_BOOT_ARGS := -bios bin/boot/$(ARCH)/riscv_boot.elf
+else
+$(error Unsupported BOOT='$(BOOT)' for $(ARCH))
+endif
 QEMU_ARGS += -global virtio-mmio.force-legacy=off
 QEMU_IMAGE_ARGS := \
 	-drive if=none,id=vdisk,format=raw,file=bin/$(IMAGE_NAME).img \
