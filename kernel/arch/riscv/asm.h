@@ -31,6 +31,8 @@
 #define RISCV_COUNTEREN_TM (1UL << 1)
 #define RISCV_COUNTEREN_IR (1UL << 2)
 
+#define MENVCFG_STCE (1ULL << 63) // enable Sstc (stimecmp) for S-mode
+
 #define PMP_R       0x01U
 #define PMP_W       0x02U
 #define PMP_X       0x04U
@@ -194,6 +196,25 @@ static inline void riscv_write_pmpaddr0(uintptr_t value) {
 
 static inline void riscv_write_pmpcfg0(unsigned long value) {
     asm volatile("csrw pmpcfg0, %0" : : "r"(value) : "memory");
+}
+
+static inline void riscv_write_menvcfg(u64 value) {
+#if __riscv_xlen == 64
+    asm volatile("csrw 0x30A, %0" : : "r"(value) : "memory");
+#else
+    asm volatile("csrw 0x30A, %0" : : "r"((u32)value) : "memory");
+    asm volatile("csrw 0x31A, %0" : : "r"((u32)(value >> 32)) : "memory");
+#endif
+}
+
+static inline void riscv_write_stimecmp(u64 value) {
+#if __riscv_xlen == 64
+    asm volatile("csrw 0x14D, %0" : : "r"(value) : "memory");
+#else
+    asm volatile("csrw 0x15D, %0" : : "r"(0xffffffffU) : "memory");
+    asm volatile("csrw 0x14D, %0" : : "r"((u32)value) : "memory");
+    asm volatile("csrw 0x15D, %0" : : "r"((u32)(value >> 32)) : "memory");
+#endif
 }
 
 static inline void riscv_write_satp(uintptr_t root, u64 mode) {

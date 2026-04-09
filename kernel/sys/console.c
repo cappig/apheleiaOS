@@ -98,6 +98,22 @@ void console_backend_register(const console_backend_ops_t *ops) {
     backend_ops = ops;
 }
 
+static bool _stream_passthrough_screen(size_t screen) {
+    if (!backend_ops || !backend_ops->stream_write) {
+        return false;
+    }
+
+    if (!console_state.ready || console_state.mode != CONSOLE_TEXT) {
+        return false;
+    }
+
+    if (screen == TTY_CONSOLE) {
+        return false;
+    }
+
+    return screen == console_state.active_screen;
+}
+
 static void _screen_reset_colors(console_screen_t *screen) {
     if (!screen) {
         return;
@@ -1972,6 +1988,23 @@ ssize_t console_write_screen(size_t screen, const void *buf, size_t len) {
     }
 
     unsigned long flags = spin_lock_irqsave(&console_lock);
+
+    if (_stream_passthrough_screen(screen)) {
+        if (backend_ops->set_output_suppressed) {
+            backend_ops->set_output_suppressed(true);
+        }
+
+        _write_screen_locked(screen, buf, len);
+
+        if (backend_ops->set_output_suppressed) {
+            backend_ops->set_output_suppressed(false);
+        }
+
+        ssize_t ret = backend_ops->stream_write(buf, len);
+        spin_unlock_irqrestore(&console_lock, flags);
+        return ret < 0 ? ret : (ssize_t)len;
+    }
+
     _write_screen_locked(screen, buf, len);
     spin_unlock_irqrestore(&console_lock, flags);
 

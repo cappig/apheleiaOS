@@ -2,11 +2,9 @@
 #include <drivers/registry.h>
 
 #include <riscv/drivers/serial.h>
-#include <riscv/drivers/virtio_blk.h>
 
 static const driver_desc_t *const drivers[] = {
-    &riscv_virtio_blk_driver_desc,
-    &riscv_serial_driver_desc,
+    &serial_driver_desc,
 };
 
 bool register_drivers(void) {

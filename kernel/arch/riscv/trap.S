@@ -57,10 +57,10 @@
 #define SCRATCH_T2  (-3 * REGBYTES)
 #define USER_FRAME_BIAS (FRAME_SIZE + (3 * REGBYTES))
 
-.globl riscv_trap_entry
+.globl trap_entry
 .balign 4
-.type riscv_trap_entry, @function
-riscv_trap_entry:
+.type trap_entry, @function
+trap_entry:
     csrrw t0, sscratch, t0
     STORE t1, SCRATCH_T1(t0)
     STORE t2, SCRATCH_T2(t0)
@@ -124,11 +124,11 @@ riscv_trap_entry:
     csrr t1, stval
     STORE t1, OFF_STVAL(sp)
 
-    la t1, riscv_cpu_local_ptr
+    la t1, cpu_local_ptr
     LOAD t1, 0(t1)
     mv tp, t1
 
-    la t1, riscv_kernel_sp
+    la t1, kernel_sp
     LOAD t1, 0(t1)
     csrw sscratch, t1
 
@@ -141,13 +141,13 @@ riscv_trap_entry:
     .option pop
 
     mv a0, sp
-    call riscv_handle_trap
+    call trap_handle
     j 3f
 
-.globl riscv_resched_trap
+.globl trap_resched
 .balign 4
-.type riscv_resched_trap, @function
-riscv_resched_trap:
+.type trap_resched, @function
+trap_resched:
     ebreak
     ret
 
@@ -165,7 +165,7 @@ arch_context_switch:
     LOAD t0, OFF_SSTATUS(t6)
     csrw sstatus, t0
 
-    la t0, riscv_kernel_sp
+    la t0, kernel_sp
     LOAD t0, 0(t0)
     csrw sscratch, t0
 

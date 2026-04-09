@@ -33,6 +33,8 @@ KERNEL_SRC_32     := $(filter %32.c %32.asm, $(KERNEL_ALL_SRC)) $(KERNEL_COMMON_
 include kernel/arch/x86/boot/bios/build.mk
 include kernel/arch/x86/boot/uefi/build.mk
 
+CC_BASE += -mno-red-zone
+
 KERNEL_CC_COMMON := \
 	-I$(ARCH_DIR) \
 	-D_KERNEL \

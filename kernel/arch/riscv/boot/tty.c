@@ -26,10 +26,6 @@ int puts(const char *str) {
     return count;
 }
 
-void serial_puts(const char *str) {
-    send_serial_string(tty_uart_base, str);
-}
-
 int printf(const char *fmt, ...) {
     char buf[PRINTF_BUF_SIZE];
 
@@ -39,19 +35,6 @@ int printf(const char *fmt, ...) {
     va_end(args);
 
     puts(buf);
-
-    return ret;
-}
-
-int serial_printf(const char *fmt, ...) {
-    char buf[PRINTF_BUF_SIZE];
-
-    va_list args;
-    va_start(args, fmt);
-    int ret = vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-
-    serial_puts(buf);
 
     return ret;
 }

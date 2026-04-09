@@ -35,10 +35,6 @@ CC_BASE := \
 	-fno-pic \
 	-fno-pie
 
-ifeq ($(word 1, $(subst _, ,$(ARCH))),x86)
-CC_BASE += -mno-red-zone
-endif
-
 AS_BASE := \
 	-w-label-orphan
 

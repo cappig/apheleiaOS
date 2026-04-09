@@ -17,7 +17,7 @@ static bool _leaf_pte(page_t entry) {
     return (entry & (PT_READ | PT_WRITE | PT_EXECUTE)) != 0;
 }
 
-void riscv_vm_init_kernel(page_t *root) {
+void vm_init_kernel(page_t *root) {
     kernel_space.root = root;
 }
 

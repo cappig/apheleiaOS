@@ -49,9 +49,9 @@ typedef struct PACKED {
     riscv_sreg_state_t s_regs;
 } arch_int_state_t;
 
-void riscv_trap_init(void);
-void riscv_handle_trap(arch_int_state_t *state);
-void riscv_resched_trap(void);
+void trap_init(void);
+void trap_handle(arch_int_state_t *state);
+void trap_resched(void);
 
-extern uintptr_t riscv_kernel_sp;
-extern uintptr_t riscv_cpu_local_ptr;
+extern uintptr_t kernel_sp;
+extern uintptr_t cpu_local_ptr;

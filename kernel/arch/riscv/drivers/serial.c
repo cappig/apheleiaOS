@@ -10,34 +10,37 @@
 
 #include "serial.h"
 
-#define RISCV_SERIAL_RX_QUEUE_CAP 1024
+#define RX_CAP 1024
 
 typedef struct {
-    char rx_queue[RISCV_SERIAL_RX_QUEUE_CAP];
+    char rx_buf[RX_CAP];
     size_t rx_head;
     size_t rx_tail;
     size_t rx_count;
+
     spinlock_t rx_lock;
     spinlock_t tx_lock;
-    sched_wait_queue_t rx_wait;
-    bool ready;
-    bool devfs_ready;
-} riscv_serial_port_t;
 
-static riscv_serial_port_t serial_port = {
+    sched_wait_queue_t rx_wait;
+
+    bool ready;
+    bool registered;
+} serial_port_t;
+
+static serial_port_t port = {
     .rx_lock = SPINLOCK_INIT,
     .tx_lock = SPINLOCK_INIT,
 };
 
-static bool serial_driver_loaded = false;
+static bool driver_loaded = false;
 
-const driver_desc_t riscv_serial_driver_desc = {
+const driver_desc_t serial_driver_desc = {
     .name = "riscv-serial",
     .deps = NULL,
     .stage = DRIVER_STAGE_DEVFS,
-    .load = riscv_serial_driver_load,
-    .unload = riscv_serial_driver_unload,
-    .is_busy = riscv_serial_driver_busy,
+    .load = serial_driver_load,
+    .unload = serial_driver_unload,
+    .is_busy = serial_driver_busy,
 };
 
 static ssize_t
@@ -47,7 +50,6 @@ _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     if (!node || !buf) {
         return -EINVAL;
     }
-
     if (!len) {
         return 0;
     }
@@ -56,17 +58,16 @@ _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
 
     for (;;) {
         size_t copied = 0;
-        u32 wait_seq = sched_wait_seq(&serial_port.rx_wait);
-        unsigned long irq_flags = spin_lock_irqsave(&serial_port.rx_lock);
+        u32 wait_seq = sched_wait_seq(&port.rx_wait);
+        unsigned long irq_flags = spin_lock_irqsave(&port.rx_lock);
 
-        while (copied < len && serial_port.rx_count) {
-            out[copied++] = serial_port.rx_queue[serial_port.rx_head];
-            serial_port.rx_head =
-                (serial_port.rx_head + 1) % RISCV_SERIAL_RX_QUEUE_CAP;
-            serial_port.rx_count--;
+        while (copied < len && port.rx_count) {
+            out[copied++] = port.rx_buf[port.rx_head];
+            port.rx_head = (port.rx_head + 1) % RX_CAP;
+            port.rx_count--;
         }
 
-        spin_unlock_irqrestore(&serial_port.rx_lock, irq_flags);
+        spin_unlock_irqrestore(&port.rx_lock, irq_flags);
 
         if (copied) {
             return (ssize_t)copied;
@@ -85,7 +86,7 @@ _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
             return -EINTR;
         }
 
-        (void)sched_block_if_unchanged(&serial_port.rx_wait, wait_seq);
+        (void)sched_block_if_unchanged(&port.rx_wait, wait_seq);
     }
 }
 
@@ -98,14 +99,13 @@ _write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     if (!buf) {
         return -EINVAL;
     }
-
     if (!len) {
         return 0;
     }
 
-    unsigned long irq_flags = spin_lock_irqsave(&serial_port.tx_lock);
-    send_serial_sized_string(riscv_console_uart_base(), buf, len);
-    spin_unlock_irqrestore(&serial_port.tx_lock, irq_flags);
+    unsigned long irq_flags = spin_lock_irqsave(&port.tx_lock);
+    send_serial_sized_string(uart_console_base(), buf, len);
+    spin_unlock_irqrestore(&port.tx_lock, irq_flags);
     return (ssize_t)len;
 }
 
@@ -117,17 +117,16 @@ static short _poll(vfs_node_t *node, short events, u32 flags) {
     }
 
     short ready = 0;
-    unsigned long irq_flags = spin_lock_irqsave(&serial_port.rx_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&port.rx_lock);
 
-    if ((events & POLLIN) && serial_port.rx_count) {
+    if ((events & POLLIN) && port.rx_count) {
         ready |= POLLIN;
     }
-
     if (events & POLLOUT) {
         ready |= POLLOUT;
     }
 
-    spin_unlock_irqrestore(&serial_port.rx_lock, irq_flags);
+    spin_unlock_irqrestore(&port.rx_lock, irq_flags);
     return ready;
 }
 
@@ -135,11 +134,11 @@ static sched_wait_queue_t *_wait_queue(vfs_node_t *node, short events, u32 flags
     (void)node;
     (void)flags;
 
-    if ((events & POLLIN) == 0 || (events & ~POLLIN) != 0) {
+    if (events != POLLIN) {
         return NULL;
     }
 
-    return &serial_port.rx_wait;
+    return &port.rx_wait;
 }
 
 static bool _register_devfs(vfs_node_t *dev_dir) {
@@ -147,13 +146,13 @@ static bool _register_devfs(vfs_node_t *dev_dir) {
         return false;
     }
 
-    vfs_interface_t *serial_if = vfs_create_interface(_read, _write, NULL);
-    if (!serial_if) {
+    vfs_interface_t *iface = vfs_create_interface(_read, _write, NULL);
+    if (!iface) {
         return false;
     }
 
-    serial_if->poll = _poll;
-    serial_if->wait_queue = _wait_queue;
+    iface->poll = _poll;
+    iface->wait_queue = _wait_queue;
 
     vfs_node_t *node = vfs_lookup_from(dev_dir, "ttyS0");
     if (!node) {
@@ -166,37 +165,38 @@ static bool _register_devfs(vfs_node_t *dev_dir) {
 
     node->type = VFS_CHARDEV;
     node->mode = 0600;
-    node->interface = serial_if;
-    node->private = &serial_port;
-    serial_port.devfs_ready = true;
+    node->interface = iface;
+    node->private = &port;
+
+    port.registered = true;
     return true;
 }
 
-driver_err_t riscv_serial_driver_load(void) {
-    if (serial_driver_loaded) {
+driver_err_t serial_driver_load(void) {
+    if (driver_loaded) {
         return DRIVER_ERR_ALREADY_LOADED;
     }
 
-    if (!serial_port.ready) {
-        sched_wait_queue_init(&serial_port.rx_wait);
-        sched_wait_queue_set_poll_link(&serial_port.rx_wait, true);
-        serial_port.ready = true;
+    if (!port.ready) {
+        sched_wait_queue_init(&port.rx_wait);
+        sched_wait_queue_set_poll_link(&port.rx_wait, true);
+        port.ready = true;
     }
 
     if (!devfs_register_device("riscv-serial", _register_devfs)) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
-    serial_driver_loaded = true;
+    driver_loaded = true;
     return DRIVER_OK;
 }
 
-driver_err_t riscv_serial_driver_unload(void) {
-    if (!serial_driver_loaded) {
+driver_err_t serial_driver_unload(void) {
+    if (!driver_loaded) {
         return DRIVER_ERR_NOT_LOADED;
     }
 
-    if (serial_port.devfs_ready) {
+    if (port.registered) {
         vfs_node_t *node = vfs_lookup("/dev/ttyS0");
         if (node && !devfs_unregister_node("/dev/ttyS0")) {
             return DRIVER_ERR_BUSY;
@@ -207,33 +207,32 @@ driver_err_t riscv_serial_driver_unload(void) {
         return DRIVER_ERR_BUSY;
     }
 
-    serial_port.devfs_ready = false;
-    serial_driver_loaded = false;
+    port.registered = false;
+    driver_loaded = false;
     return DRIVER_OK;
 }
 
-bool riscv_serial_driver_busy(void) {
+bool serial_driver_busy(void) {
     vfs_node_t *node = vfs_lookup("/dev/ttyS0");
     return node && sched_fd_refs_node(node);
 }
 
-void riscv_serial_rx_push(char ch) {
-    if (!serial_port.ready) {
+void serial_rx_push(char ch) {
+    if (!port.ready) {
         return;
     }
 
-    unsigned long irq_flags = spin_lock_irqsave(&serial_port.rx_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&port.rx_lock);
 
-    if (serial_port.rx_count == RISCV_SERIAL_RX_QUEUE_CAP) {
-        serial_port.rx_head =
-            (serial_port.rx_head + 1) % RISCV_SERIAL_RX_QUEUE_CAP;
-        serial_port.rx_count--;
+    if (port.rx_count == RX_CAP) {
+        port.rx_head = (port.rx_head + 1) % RX_CAP;
+        port.rx_count--;
     }
 
-    serial_port.rx_queue[serial_port.rx_tail] = ch;
-    serial_port.rx_tail = (serial_port.rx_tail + 1) % RISCV_SERIAL_RX_QUEUE_CAP;
-    serial_port.rx_count++;
+    port.rx_buf[port.rx_tail] = ch;
+    port.rx_tail = (port.rx_tail + 1) % RX_CAP;
+    port.rx_count++;
 
-    spin_unlock_irqrestore(&serial_port.rx_lock, irq_flags);
-    sched_wake_all(&serial_port.rx_wait);
+    spin_unlock_irqrestore(&port.rx_lock, irq_flags);
+    sched_wake_all(&port.rx_wait);
 }

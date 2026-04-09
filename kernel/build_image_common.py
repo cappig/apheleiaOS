@@ -397,6 +397,7 @@ def build_ext2_image(
     inode_count: int | None = None,
     growth_numerator: int = 3,
     growth_denominator: int = 2,
+    minimum_bytes: int = 16 * 1024 * 1024,
 ) -> None:
     if block_size not in (1024, 2048, 4096):
         raise BuildError("ext2 builder currently supports block sizes 1024/2048/4096")
@@ -442,7 +443,7 @@ def build_ext2_image(
     data_start_block = inode_table_block + inode_table_blocks
 
     root_bytes = max(path_size(root_tree), 1)
-    target_bytes = max(root_bytes * growth_numerator // growth_denominator, 16 * 1024 * 1024)
+    target_bytes = max(root_bytes * growth_numerator // growth_denominator, minimum_bytes)
     block_count = div_round_up(target_bytes, block_size)
 
     max_blocks_one_group = block_size * 8
