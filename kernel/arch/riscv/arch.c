@@ -123,6 +123,11 @@ static arch_syscall_handler_t syscall_handler = NULL;
 static volatile u64 tick_count = 0;
 static u32 user_fault_log_count = 0;
 static u32 user_ill_log_count = 0;
+static u32 timer_arm_log_count = 0;
+static u32 soft_irq_log_count = 0;
+static u32 timer_irq_log_count = 0;
+static u32 trap_log_count = 0;
+static u32 ext_irq_claim_log_count = 0;
 static u32 ext_irq_log_count = 0;
 
 static u64 cpu_hartid[MAX_CORES];
@@ -274,6 +279,32 @@ static void _configure_log_sinks(const boot_info_t *info) {
     }
 }
 
+static void _log_boot_info(const boot_info_t *info) {
+    if (!info) {
+        return;
+    }
+
+    log_info(
+        "boot info hart=%llu uart=%#llx dtb=%#llx (%zu bytes) memory=%#llx (%#llx bytes) rootfs=%#llx (%zu bytes)",
+        (unsigned long long)info->hartid,
+        (unsigned long long)info->uart_paddr,
+        (unsigned long long)info->dtb_paddr,
+        boot_dtb_size,
+        (unsigned long long)boot_memory_paddr,
+        (unsigned long long)boot_memory_size,
+        (unsigned long long)boot_rootfs_paddr,
+        boot_rootfs_size
+    );
+    log_info(
+        "boot args debug=%u video=%u stage_rootfs=%u console='%s' font='%s'",
+        (unsigned int)info->args.debug,
+        (unsigned int)info->args.video,
+        (unsigned int)info->args.stage_rootfs,
+        info->args.console,
+        info->args.font
+    );
+}
+
 static void
 _log_user_trap_once(
     u32 *counter,
@@ -309,6 +340,48 @@ _log_user_trap_once(
         (unsigned long)frame->g_regs.a7,
         (unsigned long)frame->g_regs.a0,
         (unsigned long)frame->g_regs.a1
+    );
+}
+
+static void
+_log_trap_once(
+    u32 *counter,
+    u32 limit,
+    const char *label,
+    arch_int_state_t *frame,
+    uintptr_t cause
+) {
+    if (!counter || !label || !frame) {
+        return;
+    }
+
+    u32 seen = __atomic_load_n(counter, __ATOMIC_RELAXED);
+    if (seen >= limit) {
+        return;
+    }
+
+    if (__atomic_fetch_add(counter, 1, __ATOMIC_RELAXED) >= limit) {
+        return;
+    }
+
+    size_t cpu_id = _current_cpu_id();
+    log_info(
+        "%s cpu=%zu hart=%llu cause=" RISCV_REG_FMT " sepc=" RISCV_REG_FMT
+        " stval=" RISCV_REG_FMT " sp=" RISCV_REG_FMT
+        " sstatus=" RISCV_REG_FMT " a0=" RISCV_REG_FMT
+        " a1=" RISCV_REG_FMT " a7=" RISCV_REG_FMT " user=%s",
+        label,
+        cpu_id,
+        (unsigned long long)_cpu_hartid(cpu_id),
+        (unsigned long)cause,
+        (unsigned long)frame->s_regs.sepc,
+        (unsigned long)frame->s_regs.stval,
+        (unsigned long)frame->s_regs.sp,
+        (unsigned long)frame->s_regs.sstatus,
+        (unsigned long)frame->g_regs.a0,
+        (unsigned long)frame->g_regs.a1,
+        (unsigned long)frame->g_regs.a7,
+        arch_signal_is_user(frame) ? "yes" : "no"
     );
 }
 
@@ -420,6 +493,7 @@ static void _uart_irq_handler(u32 irq, void *ctx) {
 
 static void _plic_init(void) {
     if (!boot_dtb) {
+        log_info("PLIC init skipped: no boot DTB");
         return;
     }
 
@@ -439,6 +513,7 @@ static void _plic_init(void) {
             }
         }
         if (!found) {
+            log_info("PLIC not described by boot DTB");
             return;
         }
 
@@ -451,15 +526,32 @@ static void _plic_init(void) {
         }
 
         plic_ready = true;
+        log_info(
+            "PLIC mapped phys=%#lx span=%#zx virt=%#lx",
+            (unsigned long)plic_phys,
+            plic_span,
+            (unsigned long)plic_virt
+        );
 
         if (uart_irq) {
-            (void)irq_register(uart_irq, _uart_irq_handler, NULL);
-            serial_set_rx_interrupt(uart_console_base(), true);
+            if (irq_register(uart_irq, _uart_irq_handler, NULL)) {
+                serial_set_rx_interrupt(uart_console_base(), true);
+                log_info("UART IRQ %u registered on PLIC", (unsigned int)uart_irq);
+            } else {
+                log_warn("failed to register UART IRQ %u", (unsigned int)uart_irq);
+            }
+        } else {
+            log_info("UART IRQ unavailable; polling only");
         }
     }
 
     size_t cpu_id = _current_cpu_id();
     _plic_init_context(cpu_id);
+    log_info(
+        "PLIC context ready cpu=%zu hart=%llu",
+        cpu_id,
+        (unsigned long long)_cpu_hartid(cpu_id)
+    );
 }
 
 static bool _plic_handle_external(void) {
@@ -471,6 +563,16 @@ static bool _plic_handle_external(void) {
     u32 irq = *_plic_claim_reg(cpu_id);
     if (!irq) {
         return false;
+    }
+
+    u32 claim_cnt = __atomic_fetch_add(&ext_irq_claim_log_count, 1, __ATOMIC_RELAXED);
+    if (claim_cnt < 8U) {
+        log_info(
+            "external irq claim=%u cpu=%zu hart=%llu",
+            (unsigned int)irq,
+            cpu_id,
+            (unsigned long long)_cpu_hartid(cpu_id)
+        );
     }
 
     if (irq < RISCV_PLIC_MAX_IRQS && irq_table[irq].handler) {
@@ -616,7 +718,23 @@ static void _timer_program_next(void) {
         interval = 1;
     }
 
-    riscv_write_stimecmp(riscv_read_time() + interval);
+    u64 now = riscv_read_time();
+    u64 next = now + interval;
+    u32 cnt = __atomic_fetch_add(&timer_arm_log_count, 1, __ATOMIC_RELAXED);
+
+    if (cnt < 4U) {
+        size_t cpu_id = _current_cpu_id();
+        log_info(
+            "timer arm cpu=%zu hart=%llu now=%llu next=%llu interval=%llu",
+            cpu_id,
+            (unsigned long long)_cpu_hartid(cpu_id),
+            (unsigned long long)now,
+            (unsigned long long)next,
+            (unsigned long long)interval
+        );
+    }
+
+    riscv_write_stimecmp(next);
 }
 
 static bool _handle_user_signal(int signum, arch_int_state_t *frame) {
@@ -701,9 +819,20 @@ static disk_interface_t boot_rootfs_interface = {
 };
 
 static void _register_boot_rootfs(void) {
-    if (!boot_rootfs_paddr || !boot_rootfs_size || boot_rootfs_registered) {
+    if (!boot_rootfs_paddr || !boot_rootfs_size) {
+        log_info("no staged boot rootfs available");
         return;
     }
+
+    if (boot_rootfs_registered) {
+        return;
+    }
+
+    log_info(
+        "register staged rootfs paddr=%#llx size=%zu KiB",
+        (unsigned long long)boot_rootfs_paddr,
+        boot_rootfs_size / 1024
+    );
 
     boot_rootfs_t *rootfs = calloc(1, sizeof(*rootfs));
     disk_dev_t *disk = calloc(1, sizeof(*disk));
@@ -777,6 +906,13 @@ static void _relocate_boot_dtb(boot_info_t *info, uintptr_t *reserved_end) {
         panic("relocated boot DTB is invalid");
     }
 
+    log_info(
+        "relocated DTB %#lx -> %#lx (%zu bytes)",
+        (unsigned long)src,
+        (unsigned long)dst,
+        dtb_size
+    );
+
     *reserved_end = next;
 }
 
@@ -803,6 +939,10 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     boot_rootfs_size = info->boot_rootfs_size <= (u64)(size_t)-1
         ? (size_t)info->boot_rootfs_size : 0;
 
+    uart_console_set_base(uart_phys);
+    log_init(_log_puts);
+    log_set_lvl(info->args.debug == DEBUG_ALL ? LOG_DEBUG : LOG_INFO);
+
     uart_irq = 0;
     if (boot_dtb) {
         (void)fdt_find_compatible_irq(boot_dtb, "ns16550a", &uart_irq);
@@ -817,16 +957,19 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     if (!uart_virt) {
         panic("failed to register UART MMIO window");
     }
-    uart_console_set_base(uart_phys);
-
-    log_init(_log_puts);
-    log_set_lvl(info->args.debug == DEBUG_ALL ? LOG_DEBUG : LOG_INFO);
 
 #if __riscv_xlen == 64
     log_info("apheleiaOS kernel (riscv_64) booting");
 #else
     log_info("apheleiaOS kernel (riscv_32) booting");
 #endif
+    _log_boot_info(info);
+    log_info(
+        "UART phys=%#lx virt=%#lx irq=%u",
+        (unsigned long)uart_phys,
+        (unsigned long)uart_virt,
+        (unsigned int)uart_irq
+    );
 
     if (boot_rootfs_paddr && boot_rootfs_size) {
         log_info(
@@ -868,23 +1011,39 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         PT_WRITE | PT_GLOBAL
     );
     _mmio_map_regions(mmio_root);
+    log_info(
+        "early layout reserved_end=%#lx early=[%#lx,%#lx) mmio_root=%#lx mmio_regions=%zu",
+        (unsigned long)reserved_end,
+        (unsigned long)early_cursor,
+        (unsigned long)early_limit,
+        (unsigned long)(uintptr_t)mmio_root,
+        mmio_region_count
+    );
 
     trap_init();
+    log_info("initialize kernel VM");
     vm_init_kernel(mmio_root);
     arch_vm_switch(arch_vm_kernel());
+    log_info("switched to kernel VM");
     uart_console_set_base(uart_virt);
     _plic_init();
 
+    log_info("initialize PMM");
     pmm_init(boot_memory_paddr, boot_memory_size, early_cursor);
+    log_info("initialize heap");
     heap_init();
+    log_info("initialize arch allocator");
     arch_init_alloc();
+    log_info("initialize PMM refcounts");
     pmm_ref_init();
     if (!pmm_ref_ready()) {
         panic("PMM refcount table unavailable");
     }
 
     framebuffer_set_info(NULL);
+    log_info("initialize UART console backend");
     uart_console_init(uart_virt);
+    log_info("initialize console");
     console_init(info);
     log_console_ready = true;
 
@@ -898,6 +1057,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     if (!driver_registry_init()) {
         log_warn("driver registry init failed");
     } else {
+        log_info("load arch-early drivers");
         driver_load_stage(DRIVER_STAGE_ARCH_EARLY);
     }
 
@@ -913,6 +1073,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 }
 
 void arch_storage_init(void) {
+    log_info("load storage drivers");
     driver_load_stage(DRIVER_STAGE_STORAGE);
     _register_boot_rootfs();
 }
@@ -923,9 +1084,16 @@ void arch_late_init(void) {
         return;
     }
 
+    log_info(
+        "late init cpu=%zu hart=%llu plic=%s",
+        cpu_id,
+        (unsigned long long)_cpu_hartid(cpu_id),
+        plic_ready ? "yes" : "no"
+    );
     _timer_program_next();
     riscv_set_sie_bits(SIE_SSIE | SIE_STIE | (plic_ready ? SIE_SEIE : 0));
     cpu_late_init[cpu_id] = false;
+    log_info("late init cpu=%zu complete", cpu_id);
 }
 
 void arch_log_replay_console(void) {
@@ -1209,6 +1377,7 @@ void trap_init(void) {
     }
 
     riscv_write_stvec((uintptr_t)trap_entry);
+    log_info("trap vector stvec=%#lx", (unsigned long)(uintptr_t)trap_entry);
 }
 
 void trap_handle(arch_int_state_t *frame) {
@@ -1227,21 +1396,53 @@ void trap_handle(arch_int_state_t *frame) {
     if (interrupt) {
         switch (cause) {
         case RISCV_IRQ_SOFT:
+            _log_trap_once(
+                &soft_irq_log_count,
+                4,
+                "RISC-V soft IRQ",
+                frame,
+                cause
+            );
             riscv_clear_sip_bits(SIP_SSIP);
             sched_resched_softirq(frame);
             return;
         case RISCV_IRQ_TIMER:
+            _log_trap_once(
+                &timer_irq_log_count,
+                2,
+                "RISC-V timer IRQ",
+                frame,
+                cause
+            );
             __atomic_add_fetch(&tick_count, 1, __ATOMIC_RELAXED);
             _timer_program_next();
             _serial_drain_input();
             sched_tick(frame);
             return;
         case RISCV_IRQ_EXTERNAL:
+            _log_trap_once(
+                &trap_log_count,
+                8,
+                "RISC-V external IRQ trap",
+                frame,
+                cause
+            );
             _plic_handle_external();
             return;
         default:
+            _log_trap_once(
+                &trap_log_count,
+                8,
+                "RISC-V interrupt",
+                frame,
+                cause
+            );
             return;
         }
+    }
+
+    if (cause != RISCV_EXC_U_ECALL) {
+        _log_trap_once(&trap_log_count, 8, "RISC-V exception", frame, cause);
     }
 
     switch (cause) {
