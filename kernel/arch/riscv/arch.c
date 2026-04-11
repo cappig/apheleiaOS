@@ -431,6 +431,7 @@ static void _uart_irq_handler(u32 irq, void *ctx) {
 
 static void _plic_init(u32 uart_irq) {
     if (!boot.dtb) {
+        log_debug("plic: no DTB, skipping");
         return;
     }
 
@@ -443,13 +444,16 @@ static void _plic_init(u32 uart_irq) {
         fdt_reg_t reg = {0};
         bool found = false;
         for (size_t i = 0; i < sizeof(plic_compat) / sizeof(plic_compat[0]); i++) {
+            log_debug("plic: probing compatible \"%s\"", plic_compat[i]);
             if (fdt_find_compatible_reg(boot.dtb, plic_compat[i], &reg) &&
                 reg.addr && reg.size) {
+                log_debug("plic: found \"%s\" at %#llx size=%#llx", plic_compat[i], (unsigned long long)reg.addr, (unsigned long long)reg.size);
                 found = true;
                 break;
             }
         }
         if (!found) {
+            log_debug("plic: no compatible node in DTB");
             return;
         }
 
@@ -457,23 +461,29 @@ static void _plic_init(u32 uart_irq) {
         size_t span = (size_t)reg.size;
         plic.virt = (uintptr_t)arch_phys_map(phys, span, PHYS_MAP_MMIO);
         if (!plic.virt) {
-            log_warn("failed to map RISC-V PLIC");
+            log_warn("plic: failed to map phys=%#lx span=%zu", (unsigned long)phys, span);
             return;
         }
 
         plic.ready = true;
-        log_debug("PLIC phys=%#lx virt=%#lx", (unsigned long)phys, (unsigned long)plic.virt);
+        log_debug("plic: mapped phys=%#lx virt=%#lx span=%zu", (unsigned long)phys, (unsigned long)plic.virt, span);
 
         if (uart_irq) {
+            log_debug("plic: registering UART IRQ %u", (unsigned int)uart_irq);
             if (irq_register(uart_irq, _uart_irq_handler, NULL)) {
                 serial_set_rx_interrupt(uart_console_base(), true);
+                log_debug("plic: UART RX interrupt enabled");
             } else {
-                log_warn("failed to register UART IRQ %u", (unsigned int)uart_irq);
+                log_warn("plic: failed to register UART IRQ %u", (unsigned int)uart_irq);
             }
+        } else {
+            log_debug("plic: no UART IRQ, polling mode");
         }
     }
 
-    _plic_init_context(_current_cpu_id());
+    size_t cpu_id = _current_cpu_id();
+    log_debug("plic: init context for cpu %zu hart=%llu", cpu_id, (unsigned long long)_cpu_hartid(cpu_id));
+    _plic_init_context(cpu_id);
 }
 
 static bool _plic_handle_external(void) {
@@ -817,7 +827,24 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     uart_console_set_base(uart_phys);
     log_init(_log_puts);
-    log_set_lvl(info->args.debug == DEBUG_ALL ? LOG_DEBUG : LOG_INFO);
+    log_set_lvl(info->args.debug == DEBUG_NONE ? LOG_INFO : LOG_DEBUG);
+
+#if __riscv_xlen == 64
+    log_info("apheleiaOS kernel (riscv_64) booting");
+#else
+    log_info("apheleiaOS kernel (riscv_32) booting");
+#endif
+
+    log_debug(
+        "boot_info: hart=%llu uart=%#llx dtb=%#llx memory=%#llx+%#llx rootfs=%#llx+%zu",
+        (unsigned long long)info->hartid,
+        (unsigned long long)info->uart_paddr,
+        (unsigned long long)info->dtb_paddr,
+        (unsigned long long)boot.mem_paddr,
+        (unsigned long long)boot.mem_size,
+        (unsigned long long)boot.rootfs_paddr,
+        boot.rootfs_size
+    );
 
     u32 uart_irq = 0;
     if (boot.dtb) {
@@ -826,6 +853,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     if (!uart_irq && uart_phys == SERIAL_UART0) {
         uart_irq = RISCV_UART_DEFAULT_IRQ;
     }
+    log_debug("uart: phys=%#lx irq=%u stride=%d", (unsigned long)uart_phys, (unsigned int)uart_irq, RISCV_UART_STRIDE);
 
     mmio.count = 0;
     mmio.next_vaddr = RISCV_MMIO_BASE;
@@ -833,12 +861,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     if (!mmio.uart_virt) {
         panic("failed to register UART MMIO window");
     }
-
-#if __riscv_xlen == 64
-    log_info("apheleiaOS kernel (riscv_64) booting");
-#else
-    log_info("apheleiaOS kernel (riscv_32) booting");
-#endif
+    log_debug("uart: virt=%#lx", (unsigned long)mmio.uart_virt);
 
     if (boot.rootfs_paddr && boot.rootfs_size) {
         log_info(
@@ -852,26 +875,33 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     arch_cpu_set_local(&cores_local[0]);
     arch_set_kernel_stack((uintptr_t)&__stack_top);
     riscv_write_sstatus(riscv_read_sstatus() | SSTATUS_SUM);
+    log_debug("cpu: hart=%llu stack_top=%#lx sstatus=%#lx", (unsigned long long)cpu.hartid[0], (unsigned long)(uintptr_t)&__stack_top, (unsigned long)riscv_read_sstatus());
 
     uintptr_t reserved_end = (uintptr_t)&__bss_end;
     uintptr_t info_end = (uintptr_t)info + sizeof(*info);
     if (info_end > reserved_end) {
         reserved_end = info_end;
     }
+    log_debug("reserved: bss_end=%#lx info_end=%#lx reserved_end=%#lx", (unsigned long)(uintptr_t)&__bss_end, (unsigned long)info_end, (unsigned long)reserved_end);
 
     _relocate_boot_dtb(info, &reserved_end);
+    log_debug("dtb: relocated to %#lx reserved_end now %#lx", (unsigned long)(uintptr_t)boot.dtb, (unsigned long)reserved_end);
+
     if (boot.rootfs_paddr && boot.rootfs_size) {
         uintptr_t rootfs_end = (uintptr_t)(boot.rootfs_paddr + boot.rootfs_size);
         if (rootfs_end > reserved_end) {
             reserved_end = rootfs_end;
         }
+        log_debug("rootfs: paddr=%#llx size=%zu end=%#lx", (unsigned long long)boot.rootfs_paddr, boot.rootfs_size, (unsigned long)rootfs_end);
     }
 
     uintptr_t mem_end = (uintptr_t)(boot.mem_paddr + boot.mem_size);
     mmio.early_cursor = ALIGN(reserved_end, PAGE_4KIB);
     mmio.early_limit = mem_end;
+    log_debug("early alloc: cursor=%#lx limit=%#lx available=%zu KiB", (unsigned long)mmio.early_cursor, (unsigned long)mmio.early_limit, (mem_end - mmio.early_cursor) / 1024);
 
     mmio.root = _early_alloc(PAGE_4KIB, PAGE_4KIB);
+    log_debug("page table: root=%#lx", (unsigned long)(uintptr_t)mmio.root);
     _early_map_range(
         mmio.root,
         boot.mem_paddr,
@@ -879,21 +909,29 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         boot.mem_size,
         PT_WRITE | PT_GLOBAL
     );
+    log_debug("page table: identity mapped memory %#llx+%#llx", (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size);
     _mmio_map_regions(mmio.root);
+    log_debug("page table: mapped %zu MMIO regions", mmio.count);
 
     trap_init();
+    log_debug("trap: handler installed");
     vm_init_kernel(mmio.root);
+    log_debug("vm: kernel vm initialized");
     uart_console_set_base(mmio.uart_virt);
     arch_vm_switch(arch_vm_kernel());
+    log_debug("vm: switched to kernel address space");
     _plic_init(uart_irq);
 
     pmm_init(boot.mem_paddr, boot.mem_size, mmio.early_cursor);
+    log_debug("pmm: initialized base=%#llx size=%#llx", (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size);
     heap_init();
+    log_debug("heap: initialized");
     arch_init_alloc();
     pmm_ref_init();
     if (!pmm_ref_ready()) {
         panic("PMM refcount table unavailable");
     }
+    log_debug("pmm: refcount table ready");
 
     framebuffer_set_info(NULL);
     uart_console_init(mmio.uart_virt);
