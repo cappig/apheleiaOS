@@ -14,15 +14,15 @@ GNU_LD_x86_32   ?= i686-elf-ld
 GNU_OC_x86_32   ?= i686-elf-objcopy
 GNU_ST_x86_32   ?= i686-elf-strip
 
-GNU_CC_riscv_64 ?= riscv64-elf-gcc
-GNU_LD_riscv_64 ?= riscv64-elf-ld
-GNU_OC_riscv_64 ?= riscv64-elf-objcopy
-GNU_ST_riscv_64 ?= riscv64-elf-strip
+GNU_CC_riscv_64 ?= riscv64-unknown-elf-gcc
+GNU_LD_riscv_64 ?= riscv64-unknown-elf-ld
+GNU_OC_riscv_64 ?= riscv64-unknown-elf-objcopy
+GNU_ST_riscv_64 ?= riscv64-unknown-elf-strip
 
-GNU_CC_riscv_32 ?= riscv64-elf-gcc
-GNU_LD_riscv_32 ?= riscv64-elf-ld
-GNU_OC_riscv_32 ?= riscv64-elf-objcopy
-GNU_ST_riscv_32 ?= riscv64-elf-strip
+GNU_CC_riscv_32 ?= riscv64-unknown-elf-gcc
+GNU_LD_riscv_32 ?= riscv64-unknown-elf-ld
+GNU_OC_riscv_32 ?= riscv64-unknown-elf-objcopy
+GNU_ST_riscv_32 ?= riscv64-unknown-elf-strip
 
 LLVM_CC_x86_64   ?= clang
 LLVM_LD_x86_64   ?= ld.lld
@@ -44,6 +44,8 @@ LLVM_LD_riscv_32 ?= ld.lld
 LLVM_OC_riscv_32 ?= llvm-objcopy
 LLVM_ST_riscv_32 ?= llvm-strip
 
+ifneq ($(ARCH),)
+
 ifeq ($(TOOLCHAIN), gnu)
 CC := $(GNU_CC_$(ARCH))
 LD := $(GNU_LD_$(ARCH))
@@ -60,6 +62,8 @@ endif
 
 ifeq ($(strip $(CC)),)
 $(error Unsupported ARCH '$(ARCH)' for TOOLCHAIN '$(TOOLCHAIN)')
+endif
+
 endif
 
 # Compiler / assembler / linker wrappers used by arch build.mk files.
@@ -98,7 +102,9 @@ LIBC_DIRS := libs/libc libs/libc_ext
 ARCH_TREE    := $(word 1, $(subst _, ,$(ARCH)))
 ARCH_VARIANT := $(word 2, $(subst _, ,$(ARCH)))
 
+ifneq ($(ARCH),)
 include kernel/arch/$(ARCH_TREE)/build/build.mk
+endif
 
 CC_DEBUG := \
 	-DDISK_DEBUG \
