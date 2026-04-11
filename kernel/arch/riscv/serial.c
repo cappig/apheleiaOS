@@ -9,8 +9,12 @@
 #define UART_LSR_TX_IDLE  0x20
 #define UART_IER_RX_READY 0x01
 
+#ifndef RISCV_UART_STRIDE
+#define RISCV_UART_STRIDE 1
+#endif
+
 static inline volatile u8 *_uart_reg(uintptr_t base, uintptr_t reg) {
-    return (volatile u8 *)(base + reg);
+    return (volatile u8 *)(base + reg * RISCV_UART_STRIDE);
 }
 
 static inline bool _uart_has_data(uintptr_t base) {

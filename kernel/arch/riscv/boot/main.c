@@ -46,23 +46,8 @@ static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
 
     u64 dst = seg->paddr ? seg->paddr : seg->vaddr;
     if (!dst) {
-        boot_logf(
-            "kernel segment missing load address off=%#llx filesz=%#llx memsz=%#llx",
-            (unsigned long long)seg->offset,
-            (unsigned long long)seg->file_size,
-            (unsigned long long)seg->mem_size
-        );
         return false;
     }
-
-    boot_logf(
-        "load kernel segment off=%#llx dst=%#llx filesz=%#llx memsz=%#llx flags=%#x",
-        (unsigned long long)seg->offset,
-        (unsigned long long)dst,
-        (unsigned long long)seg->file_size,
-        (unsigned long long)seg->mem_size,
-        seg->flags
-    );
 
     memcpy((void *)(uintptr_t)dst, blob + seg->offset, seg->file_size);
 
@@ -78,23 +63,11 @@ static bool load_kernel_elf(const u8 *blob, size_t blob_size, uintptr_t *out_ent
     struct riscv_elf_load_ctx ctx = { .blob = blob };
     elf_info_t info = {0};
 
-    boot_logf(
-        "parse kernel ELF blob=%#lx size=%zu",
-        (unsigned long)(uintptr_t)blob,
-        blob_size
-    );
-
     if (!elf_foreach_segment(blob, blob_size, load_kernel_segment, &ctx, &info)) {
-        boot_logf("kernel ELF parsing failed");
         return false;
     }
 
     *out_entry = (uintptr_t)info.entry;
-    boot_logf(
-        "kernel ELF parsed entry=%#lx class=%s",
-        (unsigned long)*out_entry,
-        info.is_64 ? "elf64" : "elf32"
-    );
     return true;
 }
 
@@ -105,16 +78,6 @@ NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
         (1UL << 8)  | (1UL << 12) | (1UL << 13) | (1UL << 15);
     unsigned long mideleg = MIP_SSIP | MIP_STIP | (1UL << 9);
     unsigned long mstatus = riscv_read_mstatus();
-
-    boot_logf(
-        "enter supervisor hart=%lu entry=%#lx info=%#lx medeleg=%#lx mideleg=%#lx mstatus=%#lx",
-        (unsigned long)(info ? info->hartid : 0),
-        (unsigned long)entry,
-        (unsigned long)(uintptr_t)info,
-        medeleg,
-        mideleg,
-        mstatus
-    );
 
     riscv_write_medeleg(medeleg);
     riscv_write_mideleg(mideleg);
@@ -207,24 +170,6 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     uintptr_t memory_end = (uintptr_t)(memory_reg.addr + memory_reg.size);
     uintptr_t scratch_base = (uintptr_t)(memory_reg.addr + RISCV_BOOT_SCRATCH_OFFSET);
 
-    boot_logf(
-        "entry hart=%lu dtb=%#lx valid=%s size=%zu image=%#lx rootfs=%#lx",
-        (unsigned long)hartid,
-        (unsigned long)(uintptr_t)dtb,
-        dtb_valid ? "yes" : "no",
-        dtb_size,
-        (unsigned long)(uintptr_t)&__image_start,
-        (unsigned long)(uintptr_t)embedded_rootfs
-    );
-    boot_logf(
-        "memory base=%#llx size=%#llx uart=%#lx stack_top=%#lx scratch=%#lx",
-        (unsigned long long)memory_reg.addr,
-        (unsigned long long)memory_reg.size,
-        (unsigned long)uart_base,
-        (unsigned long)(uintptr_t)&__stack_top,
-        (unsigned long)scratch_base
-    );
-
     tty_set_uart_base(uart_base);
 
     if (scratch_base > heap_start) {
@@ -234,19 +179,8 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     u64 boot_hart = 0;
     bool boot_hart_known = boot_dtb && fdt_boot_cpuid_phys(boot_dtb, &boot_hart);
 
-    if (boot_hart_known) {
-        boot_logf(
-            "boot hart from DTB=%llu current hart=%lu",
-            (unsigned long long)boot_hart,
-            (unsigned long)hartid
-        );
-    } else {
-        boot_logf("boot hart not described by DTB, defaulting to hart 0");
-    }
-
     if ((boot_hart_known && hartid != (uintptr_t)boot_hart) ||
         (!boot_hart_known && hartid != 0)) {
-        boot_logf("parking secondary hart %lu", (unsigned long)hartid);
         halt();
     }
 
@@ -256,27 +190,11 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         panic("no boot heap space available");
     }
 
-    boot_logf(
-        "boot heap [%#lx, %#lx) (%lu KiB)",
-        (unsigned long)heap_start,
-        (unsigned long)memory_end,
-        (unsigned long)((memory_end - heap_start) / 1024UL)
-    );
     boot_heap_init(heap_start, memory_end);
-
-    boot_logf("starting apheleiaOS");
-    boot_logf("mount embedded rootfs from %#lx", (unsigned long)(uintptr_t)embedded_rootfs);
 
     if (!boot_ext2_init(&rootfs, read_rootfs_image, (void *)embedded_rootfs, 0)) {
         panic("storage device not available");
     }
-
-    boot_logf(
-        "rootfs ready block_size=%u blocks=%u size=%zu KiB",
-        ext2_block_size(&rootfs.superblock),
-        rootfs.superblock.block_count,
-        rootfs.size / 1024
-    );
 
 #if __riscv_xlen == 64
     const char *kernel_path = boot_kernel_path(true);
@@ -284,20 +202,13 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     const char *kernel_path = boot_kernel_path(false);
 #endif
 
-    boot_logf("read kernel image %s", kernel_path);
-
     size_t kernel_size = 0;
     void *kernel_blob = boot_ext2_read_file(&rootfs, kernel_path, &kernel_size);
-
     if (!kernel_blob) {
         panic("no kernel image found");
     }
 
-    boot_logf(
-        "kernel image loaded at %#lx size=%zu",
-        (unsigned long)(uintptr_t)kernel_blob,
-        kernel_size
-    );
+    boot_logf("kernel %s (%zu KiB)", kernel_path, kernel_size / 1024);
 
     uintptr_t elf_entry = 0;
     if (!load_kernel_elf(kernel_blob, kernel_size, &elf_entry)) {
@@ -305,15 +216,12 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     }
 
     void *dtb_copy = NULL;
-
     if (boot_dtb && dtb_size) {
-        boot_logf("copy DTB size=%zu", dtb_size);
         dtb_copy = boot_alloc_aligned(dtb_size, RISCV_BOOT_PAGE_SIZE, false);
         if (!dtb_copy) {
             panic("failed to copy dtb");
         }
         memcpy(dtb_copy, boot_dtb, dtb_size);
-        boot_logf("DTB copied to %#lx", (unsigned long)(uintptr_t)dtb_copy);
     }
 
     boot_info_t *info = boot_alloc_aligned(sizeof(*info), 16, true);
@@ -331,21 +239,5 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     info->memory_size = memory_reg.size;
     info->uart_paddr = uart_base;
 
-    boot_logf(
-        "boot info hart=%llu uart=%#llx dtb=%#llx/%zu memory=%#llx+%#llx rootfs=%#llx+%zu",
-        (unsigned long long)info->hartid,
-        (unsigned long long)info->uart_paddr,
-        (unsigned long long)info->dtb_paddr,
-        dtb_size,
-        (unsigned long long)info->memory_paddr,
-        (unsigned long long)info->memory_size,
-        (unsigned long long)info->boot_rootfs_paddr,
-        rootfs.size
-    );
-    boot_logf(
-        "jump to kernel entry=%#lx boot_info=%#lx",
-        (unsigned long)elf_entry,
-        (unsigned long)(uintptr_t)info
-    );
     enter_supervisor(elf_entry, info);
 }

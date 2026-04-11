@@ -63,15 +63,8 @@ ROOTFS_IMAGE       := bin/$(IMAGE_NAME).rootfs.img
 # The boot stub must fit below it; the kernel loads above it.
 RISCV_BOOT_IMAGE_ROOTFS_OFFSET := 2097152
 
-# RISCV_BOARD controls the fallback UART address used when the DTB is absent.
-#   qemu (default)  →  0x10000000  (virt machine ns16550a)
-#   fpga            →  0x40600000  (custom FPGA board)
-RISCV_BOARD ?= qemu
-ifeq ($(RISCV_BOARD), fpga)
-RISCV_UART0 := 0x40600000UL
-else
-RISCV_UART0 := 0x10000000UL
-endif
+RISCV_UART0        := 0x10000000UL
+RISCV_UART_STRIDE  ?= 1
 
 RISCV_64_ISA_FLAGS := -march=rv64ia_zicsr -mabi=lp64
 RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr -mabi=ilp32
@@ -81,6 +74,7 @@ KERNEL_CC_COMMON := \
 	-D_KERNEL \
 	-DEXTERNAL_ALLOC \
 	-DSERIAL_UART0=$(RISCV_UART0) \
+	-DRISCV_UART_STRIDE=$(RISCV_UART_STRIDE) \
 	-fdata-sections \
 	-ffunction-sections \
 	-fno-omit-frame-pointer
@@ -104,6 +98,7 @@ BOOT_ENTRY_CFLAGS_COMMON := \
 	-fno-pie \
 	-DRISCV_BOOT_IMAGE_ROOTFS_OFFSET=$(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) \
 	-DSERIAL_UART0=$(RISCV_UART0) \
+	-DRISCV_UART_STRIDE=$(RISCV_UART_STRIDE) \
 	-mcmodel=medany
 
 BOOT_ENTRY_LDFLAGS := \
