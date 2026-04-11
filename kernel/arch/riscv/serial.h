@@ -2,9 +2,12 @@
 
 #include <base/types.h>
 
-// qemu virt machine uart; override with RISCV_BOARD=
 #ifndef SERIAL_UART0
 #define SERIAL_UART0 0x10000000UL
+#endif
+
+#ifndef RISCV_UART_STRIDE
+#define RISCV_UART_STRIDE 1
 #endif
 
 void send_serial(uintptr_t base, char c);

@@ -9,10 +9,6 @@
 #define UART_LSR_TX_IDLE  0x20
 #define UART_IER_RX_READY 0x01
 
-#ifndef RISCV_UART_STRIDE
-#define RISCV_UART_STRIDE 1
-#endif
-
 static inline volatile u8 *_uart_reg(uintptr_t base, uintptr_t reg) {
     return (volatile u8 *)(base + reg * RISCV_UART_STRIDE);
 }
@@ -26,10 +22,12 @@ void send_serial(uintptr_t base, char c) {
     volatile u8 *lsr = _uart_reg(base, UART_LSR);
     volatile u8 *thr = _uart_reg(base, UART_THR);
 
-    while ((*lsr & UART_LSR_TX_IDLE) == 0) {
-        continue;
+    if (c == '\n') {
+        while ((*lsr & UART_LSR_TX_IDLE) == 0) {}
+        *thr = '\r';
     }
 
+    while ((*lsr & UART_LSR_TX_IDLE) == 0) {}
     *thr = (u8)c;
 }
 
