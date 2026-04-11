@@ -307,6 +307,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         panic("failed to allocate boot info");
     }
 
+    info->magic = BOOT_INFO_MAGIC;
     init_boot_args(&info->args);
     info->hartid = hartid;
     info->dtb_paddr = (uintptr_t)dtb_copy;

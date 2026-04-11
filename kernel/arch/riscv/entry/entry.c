@@ -71,7 +71,7 @@ static void init_boot_args(kernel_args_t *args) {
 }
 
 static bool boot_info_valid(const boot_info_t *info) {
-    if (!info || (uintptr_t)info < RISCV_KERNEL_BASE) {
+    if (!info || info->magic != BOOT_INFO_MAGIC) {
         return false;
     }
 
