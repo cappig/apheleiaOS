@@ -9,36 +9,39 @@
 #define UART_LSR_TX_IDLE  0x20
 #define UART_IER_RX_READY 0x01
 
-static inline volatile u8 *_uart_reg(uintptr_t base, uintptr_t reg) {
-    return (volatile u8 *)(base + reg * RISCV_UART_STRIDE);
+static inline u8 _uart_read(uintptr_t base, uintptr_t reg) {
+#if RISCV_UART_STRIDE == 4
+    return (u8)(*(volatile u32 *)(base + reg * 4));
+#else
+    return *(volatile u8 *)(base + reg * RISCV_UART_STRIDE);
+#endif
+}
+
+static inline void _uart_write(uintptr_t base, uintptr_t reg, u8 val) {
+#if RISCV_UART_STRIDE == 4
+    *(volatile u32 *)(base + reg * 4) = val;
+#else
+    *(volatile u8 *)(base + reg * RISCV_UART_STRIDE) = val;
+#endif
 }
 
 static inline bool _uart_has_data(uintptr_t base) {
-    volatile u8 *lsr = _uart_reg(base, UART_LSR);
-    return (*lsr & UART_LSR_RX_READY) != 0;
+    return (_uart_read(base, UART_LSR) & UART_LSR_RX_READY) != 0;
 }
 
 void send_serial(uintptr_t base, char c) {
-    volatile u8 *lsr = _uart_reg(base, UART_LSR);
-    volatile u8 *thr = _uart_reg(base, UART_THR);
-
     if (c == '\n') {
-        while ((*lsr & UART_LSR_TX_IDLE) == 0) {}
-        *thr = '\r';
+        while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
+        _uart_write(base, UART_THR, '\r');
     }
 
-    while ((*lsr & UART_LSR_TX_IDLE) == 0) {}
-    *thr = (u8)c;
+    while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
+    _uart_write(base, UART_THR, (u8)c);
 }
 
 char receive_serial(uintptr_t base) {
-    volatile u8 *rbr = _uart_reg(base, UART_RBR);
-
-    while (!_uart_has_data(base)) {
-        continue;
-    }
-
-    return (char)(*rbr);
+    while (!_uart_has_data(base)) {}
+    return (char)_uart_read(base, UART_RBR);
 }
 
 bool serial_try_receive(uintptr_t base, char *out) {
@@ -47,22 +50,24 @@ bool serial_try_receive(uintptr_t base, char *out) {
     }
 
     if (out) {
-        *out = receive_serial(base);
+        *out = (char)_uart_read(base, UART_RBR);
     } else {
-        (void)receive_serial(base);
+        (void)_uart_read(base, UART_RBR);
     }
 
     return true;
 }
 
 void serial_set_rx_interrupt(uintptr_t base, bool enable) {
-    volatile u8 *ier = _uart_reg(base, UART_IER);
+    u8 ier = _uart_read(base, UART_IER);
 
     if (enable) {
-        *ier |= UART_IER_RX_READY;
+        ier |= UART_IER_RX_READY;
     } else {
-        *ier &= (u8)~UART_IER_RX_READY;
+        ier &= (u8)~UART_IER_RX_READY;
     }
+
+    _uart_write(base, UART_IER, ier);
 }
 
 void send_serial_string(uintptr_t base, const char *s) {

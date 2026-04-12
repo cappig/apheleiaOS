@@ -28,10 +28,10 @@ size_t ulltoa(unsigned long long value, char *buf, int base) {
     char *pos = &buffer[sizeof(buffer) - 1];
     *pos = '\0';
 
+    unsigned long long ubase = (unsigned long long)(unsigned)base;
     do {
-        lldiv_t div = ulldiv(value, base);
-        *(--pos) = digits[div.rem];
-        value = div.quot;
+        *(--pos) = digits[value % ubase];
+        value = value / ubase;
     } while (value);
 
     size_t size_used = &buffer[sizeof(buffer)] - pos;
