@@ -563,6 +563,10 @@ pid_t sched_fork(arch_int_state_t *state) {
 
     child->context = build_fork_stack(child, state);
 
+    // Let freshly forked children compete at current rq baseline instead of
+    // inheriting a potentially stale/high vruntime from interactive parents.
+    child->vruntime_ns = 0;
+
     enqueue_thread(child);
 
     return child->pid;

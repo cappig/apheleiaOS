@@ -96,6 +96,15 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
     );
     sched_local_set_slice_ns(0);
 
+    if (
+        thread != sched_local_idle() &&
+        thread_get_state(thread) == THREAD_RUNNING
+    ) {
+        thread->sum_exec_ns += 1;
+        thread->vruntime_ns += 1;
+        thread->exec_start_ns = thread->sum_exec_ns;
+    }
+
     sched_thread_t *next = NULL;
     bool preempted_running = (
         thread_get_state(thread) == THREAD_RUNNING &&

@@ -13,6 +13,10 @@ static inline bool rq_less(const sched_thread_t *a, const sched_thread_t *b) {
         return a->vruntime_ns < b->vruntime_ns;
     }
 
+    if (a->sum_exec_ns != b->sum_exec_ns) {
+        return a->sum_exec_ns < b->sum_exec_ns;
+    }
+
     return a->pid < b->pid;
 }
 
@@ -222,7 +226,7 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
         thread->rq_index = UINT32_MAX;
     }
 
-    if (thread->vruntime_ns < rq->min_vruntime) {
+    if (!thread->user_thread && thread->vruntime_ns < rq->min_vruntime) {
         thread->vruntime_ns = rq->min_vruntime;
     }
 

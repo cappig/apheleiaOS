@@ -43,7 +43,7 @@ LD_BASE := \
 
 include utils/toolchain.mk
 include utils/docker.mk
-include utils/qemu.mk
+include utils/emu.mk
 include userland/build.mk
 
 .DEFAULT_GOAL := all

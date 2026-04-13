@@ -117,7 +117,10 @@ NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
     riscv_write_mcounteren(
         RISCV_COUNTEREN_CY | RISCV_COUNTEREN_TM | RISCV_COUNTEREN_IR
     );
+#if __riscv_xlen == 64
+    /* STCE depends on menvcfg support; keep rv32 bring-up portable across sims. */
     riscv_write_menvcfg(MENVCFG_STCE);
+#endif
 
     riscv_write_pmpaddr0((uintptr_t)-1);
     riscv_write_pmpcfg0(PMP_R | PMP_W | PMP_X | PMP_A_NAPOT);
@@ -143,8 +146,19 @@ NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
 static uintptr_t detect_uart_base(const void *dtb) {
     fdt_reg_t reg = {0};
 
-    if (dtb && fdt_valid(dtb) && fdt_find_compatible_reg(dtb, "ns16550a", &reg) && reg.addr) {
-        return (uintptr_t)reg.addr;
+    if (dtb && fdt_valid(dtb)) {
+        if (fdt_find_compatible_reg(dtb, "ns16550a", &reg) && reg.addr) {
+            return (uintptr_t)reg.addr;
+        }
+
+        if (fdt_has_compatible(dtb, "ucbbar,spike-bare-dev") ||
+            fdt_has_compatible(dtb, "ucbbar,spike-bare")) {
+            /* run-spike wires an NS16550-compatible MMIO plugin at UART0. */
+            return SERIAL_UART0;
+        }
+
+        /* Valid DTB with no NS16550 means "no MMIO UART" on this platform. */
+        return 0;
     }
 
     return SERIAL_UART0;
@@ -193,9 +207,13 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     bool dtb_valid = dtb && fdt_valid(dtb);
     const void *boot_dtb = dtb_valid ? dtb : NULL;
     size_t dtb_size = boot_dtb ? fdt_size(boot_dtb) : 0;
+    fdt_reg_t initrd_reg = {0};
 
     const u8 *embedded_rootfs =
         (const u8 *)((uintptr_t)&__image_start + RISCV_BOOT_IMAGE_ROOTFS_OFFSET);
+    const u8 *rootfs_image = embedded_rootfs;
+    size_t rootfs_limit = 0;
+    bool rootfs_from_initrd = false;
 
     fdt_reg_t memory_reg = detect_memory(boot_dtb);
     uintptr_t uart_base = detect_uart_base(boot_dtb);
@@ -231,6 +249,15 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         heap_start = scratch_base;
     }
 
+    if (boot_dtb && fdt_find_initrd(boot_dtb, &initrd_reg) &&
+        initrd_reg.addr &&
+        initrd_reg.size &&
+        initrd_reg.size <= (u64)(size_t)-1) {
+        rootfs_image = (const u8 *)(uintptr_t)initrd_reg.addr;
+        rootfs_limit = (size_t)initrd_reg.size;
+        rootfs_from_initrd = true;
+    }
+
     u64 boot_hart = 0;
     bool boot_hart_known = boot_dtb && fdt_boot_cpuid_phys(boot_dtb, &boot_hart);
 
@@ -260,8 +287,20 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     );
     boot_heap_init(heap_start, memory_end);
 
-    boot_logf("rootfs: init from embedded image at %#lx", (unsigned long)(uintptr_t)embedded_rootfs);
-    if (!boot_ext2_init(&rootfs, read_rootfs_image, (void *)embedded_rootfs, 0)) {
+    if (rootfs_from_initrd) {
+        boot_logf(
+            "rootfs: init from DTB initrd at %#lx limit=%zu KiB",
+            (unsigned long)(uintptr_t)rootfs_image,
+            rootfs_limit / 1024
+        );
+    } else {
+        boot_logf(
+            "rootfs: init from embedded image at %#lx",
+            (unsigned long)(uintptr_t)rootfs_image
+        );
+    }
+
+    if (!boot_ext2_init(&rootfs, read_rootfs_image, (void *)rootfs_image, rootfs_limit)) {
         panic("storage device not available");
     }
     boot_logf(
@@ -312,7 +351,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     info->hartid = hartid;
     info->dtb_paddr = (uintptr_t)dtb_copy;
     info->dtb_size = dtb_size;
-    info->boot_rootfs_paddr = (uintptr_t)embedded_rootfs;
+    info->boot_rootfs_paddr = (uintptr_t)rootfs_image;
     info->boot_rootfs_size = rootfs.size;
     info->memory_paddr = memory_reg.addr;
     info->memory_size = memory_reg.size;

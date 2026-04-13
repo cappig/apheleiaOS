@@ -103,6 +103,44 @@ static bool fdt_name_is_memory(const char *name) {
     return name[6] == '\0' || name[6] == '@';
 }
 
+static bool prop_has_string(
+    const void *data,
+    u32 len,
+    const char *needle
+) {
+    if (!data || !len || !needle) {
+        return false;
+    }
+
+    const char *ptr = (const char *)data;
+    const char *end = ptr + len;
+    size_t needle_len = strlen(needle);
+
+    while (ptr < end && *ptr) {
+        size_t item_len = fdt_strnlen(ptr, (size_t)(end - ptr));
+
+        if (item_len == needle_len && !memcmp(ptr, needle, item_len)) {
+            return true;
+        }
+
+        ptr += item_len + 1;
+    }
+
+    return false;
+}
+
+static u64 read_cells(const u8 *ptr, u32 cells) {
+    u64 value = 0;
+    for (u32 i = 0; i < cells; i++) {
+        value = (value << 32) | fdt_be32(ptr + i * 4);
+    }
+    return value;
+}
+
+static bool prop_status_ok(const char *data, u32 len) {
+    return prop_has_string(data, len, "ok") || prop_has_string(data, len, "okay");
+}
+
 bool fdt_valid(const void *dtb) {
     const fdt_header_t *hdr = NULL;
     if (!fdt_header(dtb, &hdr)) {
@@ -153,42 +191,126 @@ bool fdt_boot_cpuid_phys(const void *dtb, u64 *out) {
     return true;
 }
 
-static bool prop_has_string(
-    const void *data,
-    u32 len,
-    const char *needle
-) {
-    if (!data || !len || !needle) {
+bool fdt_has_compatible(const void *dtb, const char *compatible) {
+    if (!compatible || !compatible[0]) {
         return false;
     }
 
-    const char *ptr = (const char *)data;
-    const char *end = ptr + len;
-    size_t needle_len = strlen(needle);
+    const fdt_header_t *hdr = NULL;
+    if (!fdt_header(dtb, &hdr) || !fdt_valid(dtb)) {
+        return false;
+    }
 
-    while (ptr < end && *ptr) {
-        size_t item_len = fdt_strnlen(ptr, (size_t)(end - ptr));
+    u32 off_struct = fdt_be32(&hdr->off_dt_struct);
+    u32 off_strings = fdt_be32(&hdr->off_dt_strings);
+    u32 size_struct = fdt_be32(&hdr->size_dt_struct);
+    u32 size_strings = fdt_be32(&hdr->size_dt_strings);
 
-        if (item_len == needle_len && !memcmp(ptr, needle, item_len)) {
-            return true;
+    const u8 *struct_ptr = (const u8 *)dtb + off_struct;
+    const u8 *struct_end = struct_ptr + size_struct;
+    const char *strings = (const char *)dtb + off_strings;
+
+    fdt_node_state_t stack[FDT_STACK_DEPTH];
+    int depth = -1;
+
+    const u8 *p = struct_ptr;
+    while (p + 4 <= struct_end) {
+        u32 token = fdt_be32(p);
+        p += 4;
+
+        if (token == FDT_BEGIN_NODE) {
+            const char *name = (const char *)p;
+            size_t len = 0;
+            while (p + len < struct_end && name[len]) {
+                len++;
+            }
+            if (p + len >= struct_end) {
+                return false;
+            }
+            p += len + 1;
+            p = fdt_align4(p);
+
+            depth++;
+            if (depth >= FDT_STACK_DEPTH) {
+                return false;
+            }
+
+            if (depth == 0) {
+                stack[depth].enabled = true;
+            } else {
+                stack[depth].enabled = stack[depth - 1].enabled;
+            }
+            stack[depth].compatible = false;
+            continue;
         }
 
-        ptr += item_len + 1;
+        if (token == FDT_END_NODE) {
+            if (depth < 0) {
+                return false;
+            }
+
+            if (stack[depth].compatible && stack[depth].enabled) {
+                return true;
+            }
+
+            depth--;
+            continue;
+        }
+
+        if (token == FDT_PROP) {
+            if (p + 8 > struct_end) {
+                return false;
+            }
+
+            u32 len = fdt_be32(p);
+            u32 nameoff = fdt_be32(p + 4);
+            p += 8;
+
+            const u8 *data = p;
+            if (p + len > struct_end) {
+                return false;
+            }
+            p += len;
+            p = fdt_align4(p);
+
+            if (depth < 0) {
+                continue;
+            }
+
+            const char *pname = NULL;
+            if (!fdt_lookup_string(strings, size_strings, nameoff, &pname)) {
+                return false;
+            }
+
+            if (!strcmp(pname, "compatible")) {
+                if (prop_has_string(data, len, compatible)) {
+                    stack[depth].compatible = true;
+                }
+                continue;
+            }
+
+            if (!strcmp(pname, "status")) {
+                if (!prop_status_ok((const char *)data, len)) {
+                    stack[depth].enabled = false;
+                }
+                continue;
+            }
+
+            continue;
+        }
+
+        if (token == FDT_NOP) {
+            continue;
+        }
+
+        if (token == FDT_END) {
+            break;
+        }
+
+        return false;
     }
 
     return false;
-}
-
-static u64 read_cells(const u8 *ptr, u32 cells) {
-    u64 value = 0;
-    for (u32 i = 0; i < cells; i++) {
-        value = (value << 32) | fdt_be32(ptr + i * 4);
-    }
-    return value;
-}
-
-static bool prop_status_ok(const char *data, u32 len) {
-    return prop_has_string(data, len, "ok") || prop_has_string(data, len, "okay");
 }
 
 bool fdt_find_memory_reg(const void *dtb, fdt_reg_t *out) {
@@ -896,19 +1018,35 @@ bool fdt_find_initrd(const void *dtb, fdt_reg_t *out) {
             }
 
             if (!strcmp(pname, "linux,initrd-start")) {
-                if (len != root_addr_cells * sizeof(u32)) {
+                u32 initrd_cells = 0;
+
+                if (len == sizeof(u32)) {
+                    initrd_cells = 1;
+                } else if (root_addr_cells <= 2 &&
+                           len == root_addr_cells * sizeof(u32)) {
+                    initrd_cells = root_addr_cells;
+                } else {
                     return false;
                 }
-                initrd_start = read_cells(data, root_addr_cells);
+
+                initrd_start = read_cells(data, initrd_cells);
                 have_start = true;
                 continue;
             }
 
             if (!strcmp(pname, "linux,initrd-end")) {
-                if (len != root_addr_cells * sizeof(u32)) {
+                u32 initrd_cells = 0;
+
+                if (len == sizeof(u32)) {
+                    initrd_cells = 1;
+                } else if (root_addr_cells <= 2 &&
+                           len == root_addr_cells * sizeof(u32)) {
+                    initrd_cells = root_addr_cells;
+                } else {
                     return false;
                 }
-                initrd_end = read_cells(data, root_addr_cells);
+
+                initrd_end = read_cells(data, initrd_cells);
                 have_end = true;
                 continue;
             }

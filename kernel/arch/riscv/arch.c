@@ -812,7 +812,12 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     memcpy(&boot.args, &info->args, sizeof(boot.args));
     _configure_log_sinks(info);
 
-    uintptr_t uart_phys = info->uart_paddr ? (uintptr_t)info->uart_paddr : SERIAL_UART0;
+    uintptr_t uart_phys = 0;
+    if (info->uart_paddr) {
+        uart_phys = (uintptr_t)info->uart_paddr;
+    } else if (!(info->dtb_paddr && fdt_valid((const void *)(uintptr_t)info->dtb_paddr))) {
+        uart_phys = SERIAL_UART0;
+    }
 
     memset(cpu.hartid, 0xff, sizeof(cpu.hartid));
     cpu.hartid[0] = info->hartid;
@@ -857,11 +862,16 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     mmio.count = 0;
     mmio.next_vaddr = RISCV_MMIO_BASE;
-    mmio.uart_virt = _mmio_register_region(uart_phys, RISCV_UART_WINDOW_SIZE);
-    if (!mmio.uart_virt) {
-        panic("failed to register UART MMIO window");
+    mmio.uart_virt = 0;
+    if (uart_phys) {
+        mmio.uart_virt = _mmio_register_region(uart_phys, RISCV_UART_WINDOW_SIZE);
+        if (!mmio.uart_virt) {
+            panic("failed to register UART MMIO window");
+        }
+        log_debug("uart: virt=%#lx", (unsigned long)mmio.uart_virt);
+    } else {
+        log_debug("uart: no MMIO UART configured");
     }
-    log_debug("uart: virt=%#lx", (unsigned long)mmio.uart_virt);
 
     if (boot.rootfs_paddr && boot.rootfs_size) {
         log_info(
@@ -887,18 +897,36 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     _relocate_boot_dtb(info, &reserved_end);
     log_debug("dtb: relocated to %#lx reserved_end now %#lx", (unsigned long)(uintptr_t)boot.dtb, (unsigned long)reserved_end);
 
+    uintptr_t mem_end = (uintptr_t)(boot.mem_paddr + boot.mem_size);
+    uintptr_t early_limit = mem_end;
+
     if (boot.rootfs_paddr && boot.rootfs_size) {
+        uintptr_t rootfs_start = (uintptr_t)boot.rootfs_paddr;
         uintptr_t rootfs_end = (uintptr_t)(boot.rootfs_paddr + boot.rootfs_size);
-        if (rootfs_end > reserved_end) {
+
+        if (rootfs_end <= rootfs_start || rootfs_end > mem_end) {
+            panic("boot rootfs range exceeds RAM");
+        }
+
+        if (rootfs_end <= reserved_end) {
+            /* Rootfs lies below reserved memory and is already excluded. */
+        } else if (rootfs_start >= reserved_end) {
+            /* Keep early allocator below high initrd-style rootfs blobs. */
+            early_limit = rootfs_start;
+        } else {
+            /* Rootfs overlaps reserved area; advance cursor past it. */
             reserved_end = rootfs_end;
         }
+
         log_debug("rootfs: paddr=%#llx size=%zu end=%#lx", (unsigned long long)boot.rootfs_paddr, boot.rootfs_size, (unsigned long)rootfs_end);
     }
 
-    uintptr_t mem_end = (uintptr_t)(boot.mem_paddr + boot.mem_size);
     mmio.early_cursor = ALIGN(reserved_end, PAGE_4KIB);
-    mmio.early_limit = mem_end;
-    log_debug("early alloc: cursor=%#lx limit=%#lx available=%zu KiB", (unsigned long)mmio.early_cursor, (unsigned long)mmio.early_limit, (mem_end - mmio.early_cursor) / 1024);
+    mmio.early_limit = ALIGN_DOWN(early_limit, PAGE_4KIB);
+    if (mmio.early_cursor >= mmio.early_limit) {
+        panic("RISC-V early allocator exhausted");
+    }
+    log_debug("early alloc: cursor=%#lx limit=%#lx available=%zu KiB", (unsigned long)mmio.early_cursor, (unsigned long)mmio.early_limit, (mmio.early_limit - mmio.early_cursor) / 1024);
 
     mmio.root = _early_alloc(PAGE_4KIB, PAGE_4KIB);
     log_debug("page table: root=%#lx", (unsigned long)(uintptr_t)mmio.root);
@@ -973,8 +1001,13 @@ void arch_late_init(void) {
         return;
     }
 
+#if __riscv_xlen == 64
     _timer_program_next();
     riscv_set_sie_bits(SIE_SSIE | SIE_STIE | (plic.ready ? SIE_SEIE : 0));
+#else
+    /* rv32 simulator targets may not implement Sstc CSR 0x14D/0x15D. */
+    riscv_set_sie_bits(SIE_SSIE | (plic.ready ? SIE_SEIE : 0));
+#endif
     cpu.late_init[cpu_id] = false;
 }
 
@@ -1176,6 +1209,12 @@ bool arch_irq_enabled(void) {
 }
 
 void arch_cpu_wait(void) {
+    if (arch_timer_ticks() == 0) {
+        _serial_drain_input();
+        asm volatile("nop" ::: "memory");
+        return;
+    }
+
     asm volatile("wfi" ::: "memory");
 }
 
@@ -1207,6 +1246,11 @@ u32 arch_timer_hz(void) {
 }
 
 u64 arch_realtime_ns(void) {
+    if (uart_console_base() == 0 || arch_timer_ticks() == 0) {
+        u64 hz = TIMER_FREQ ? (u64)TIMER_FREQ : 1ULL;
+        return (arch_timer_ticks() * 1000000000ULL) / hz;
+    }
+
     return (riscv_read_time() * 1000000000ULL) / RISCV_TIMEBASE_HZ;
 }
 
@@ -1334,6 +1378,7 @@ void trap_handle(arch_int_state_t *frame) {
         switch (cause) {
         case RISCV_IRQ_SOFT:
             riscv_clear_sip_bits(SIP_SSIP);
+            _serial_drain_input();
             sched_resched_softirq(frame);
             return;
         case RISCV_IRQ_TIMER:

@@ -12,11 +12,13 @@ void *memcpy(void *restrict dest, const void *restrict src, size_t len) {
     unsigned char *d = (unsigned char *)dest;
     const unsigned char *s = (const unsigned char *)src;
 
-    while (len >= sizeof(unsigned long)) {
-        *(unsigned long *)d = *(const unsigned long *)s;
-        d += sizeof(unsigned long);
-        s += sizeof(unsigned long);
-        len -= sizeof(unsigned long);
+    if ((((uintptr_t)d | (uintptr_t)s) & (sizeof(unsigned long) - 1)) == 0) {
+        while (len >= sizeof(unsigned long)) {
+            *(unsigned long *)d = *(const unsigned long *)s;
+            d += sizeof(unsigned long);
+            s += sizeof(unsigned long);
+            len -= sizeof(unsigned long);
+        }
     }
 
     while (len--) {
@@ -241,10 +243,12 @@ void *memset(void *dest, int val, size_t len) {
         fill |= fill << i;
     }
 
-    while (len >= sizeof(unsigned long)) {
-        *(unsigned long *)d = fill;
-        d += sizeof(unsigned long);
-        len -= sizeof(unsigned long);
+    if (((uintptr_t)d & (sizeof(unsigned long) - 1)) == 0) {
+        while (len >= sizeof(unsigned long)) {
+            *(unsigned long *)d = fill;
+            d += sizeof(unsigned long);
+            len -= sizeof(unsigned long);
+        }
     }
 
     while (len--) {

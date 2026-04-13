@@ -10,9 +10,7 @@
 static uintptr_t tty_uart_base = SERIAL_UART0;
 
 void tty_set_uart_base(uintptr_t base) {
-    if (base) {
-        tty_uart_base = base;
-    }
+    tty_uart_base = base;
 }
 
 int puts(const char *str) {

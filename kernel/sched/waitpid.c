@@ -139,6 +139,12 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
         u32 wait_seq = sched_wait_seq(&self->wait_queue);
         sched_lock_restore(flags);
 
+        if (!arch_timer_ticks()) {
+            arch_cpu_wait();
+            sched_yield();
+            continue;
+        }
+
         sched_wait_result_t wait_result = sched_wait_on_queue(
             &self->wait_queue,
             wait_seq,
@@ -148,6 +154,10 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
 
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;
+        }
+
+        if (wait_result == SCHED_WAIT_ABORTED && sched_running_get()) {
+            sched_yield();
         }
     }
 }

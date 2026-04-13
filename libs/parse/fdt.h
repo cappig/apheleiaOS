@@ -14,6 +14,7 @@ typedef struct {
 bool fdt_valid(const void *dtb);
 size_t fdt_size(const void *dtb);
 bool fdt_boot_cpuid_phys(const void *dtb, u64 *out);
+bool fdt_has_compatible(const void *dtb, const char *compatible);
 
 bool fdt_find_memory_reg(const void *dtb, fdt_reg_t *out);
 

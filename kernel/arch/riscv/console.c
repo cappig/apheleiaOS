@@ -272,9 +272,7 @@ static const console_backend_ops_t uart_console_ops = {
 };
 
 void uart_console_set_base(uintptr_t base) {
-    if (base) {
-        uart_base = base;
-    }
+    uart_base = base;
 }
 
 uintptr_t uart_console_base(void) {

@@ -410,6 +410,7 @@ static ssize_t _input_read_raw(
     }
 
     for (;;) {
+
         u32 wait_seq = sched_wait_seq(&tty_state[screen].wait);
         unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
         size_t popped =
@@ -452,6 +453,12 @@ static ssize_t _input_read_raw(
         sched_thread_t *current = sched_current();
         if (current && sched_signal_has_pending(current)) {
             return -EINTR;
+        }
+
+        if (!arch_timer_ticks()) {
+            arch_cpu_wait();
+            sched_yield();
+            continue;
         }
 
         if (timer_started && timeout_ticks) {
@@ -770,6 +777,7 @@ ssize_t tty_input_read(size_t screen, void *buf, size_t len) {
     }
 
     for (;;) {
+
         u32 wait_seq = sched_wait_seq(&tty_state[screen].wait);
         unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
         size_t popped = ring_buffer_pop_array(buffer, out, len);
@@ -806,6 +814,12 @@ ssize_t tty_input_read(size_t screen, void *buf, size_t len) {
         sched_thread_t *current = sched_current();
         if (current && sched_signal_has_pending(current)) {
             return -EINTR;
+        }
+
+        if (!arch_timer_ticks()) {
+            arch_cpu_wait();
+            sched_yield();
+            continue;
         }
 
         sched_wait_result_t wait_result = sched_wait_on_queue(

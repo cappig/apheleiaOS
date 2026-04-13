@@ -30,6 +30,10 @@ static inline bool _uart_has_data(uintptr_t base) {
 }
 
 void send_serial(uintptr_t base, char c) {
+    if (!base) {
+        return;
+    }
+
     if (c == '\n') {
         while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
         _uart_write(base, UART_THR, '\r');
@@ -40,11 +44,19 @@ void send_serial(uintptr_t base, char c) {
 }
 
 char receive_serial(uintptr_t base) {
+    if (!base) {
+        return 0;
+    }
+
     while (!_uart_has_data(base)) {}
     return (char)_uart_read(base, UART_RBR);
 }
 
 bool serial_try_receive(uintptr_t base, char *out) {
+    if (!base) {
+        return false;
+    }
+
     if (!_uart_has_data(base)) {
         return false;
     }
@@ -59,6 +71,10 @@ bool serial_try_receive(uintptr_t base, char *out) {
 }
 
 void serial_set_rx_interrupt(uintptr_t base, bool enable) {
+    if (!base) {
+        return;
+    }
+
     u8 ier = _uart_read(base, UART_IER);
 
     if (enable) {

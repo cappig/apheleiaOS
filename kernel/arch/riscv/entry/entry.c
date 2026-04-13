@@ -2,6 +2,7 @@
 #include <base/units.h>
 #include <kernel.h>
 #include <parse/fdt.h>
+#include <riscv/arch_paging.h>
 #include <riscv/asm.h>
 #include <riscv/boot.h>
 #include <riscv/serial.h>
@@ -27,7 +28,8 @@ static uintptr_t detect_uart_base(const void *dtb) {
         }
     }
 
-    return SERIAL_UART0;
+    /* Valid DTB with no known UART means "no MMIO UART" on this platform. */
+    return 0;
 }
 
 static fdt_reg_t detect_memory(const void *dtb) {
