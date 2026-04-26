@@ -65,7 +65,7 @@ static void boot_logf(const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
-    printf("[riscv boot] %s\n", buf);
+    printf("[riscv boot] %s\n\r", buf);
 }
 
 static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
@@ -81,6 +81,7 @@ static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
             (unsigned long long)seg->mem_size,
             seg->flags
         );
+
         return false;
     }
 
@@ -98,10 +99,12 @@ static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
     if (seg->mem_size > seg->file_size) {
         void *bss = (void *)(uintptr_t)(dst + seg->file_size);
         size_t bss_len = seg->mem_size - seg->file_size;
+
         boot_logf(
             "segment bss:  addr=%#llx len=%#zx",
             (unsigned long long)(dst + seg->file_size), bss_len
         );
+
         memset(bss, 0, bss_len);
     }
 
@@ -124,6 +127,7 @@ static bool load_kernel_elf(const u8 *blob, size_t blob_size, uintptr_t *out_ent
         "elf parse: entry=%#lx class=%s",
         (unsigned long)*out_entry, info.is_64 ? "elf64" : "elf32"
     );
+
     return true;
 }
 
@@ -157,12 +161,15 @@ static bool detect_mtimer(
     if (mtime_addr_out) {
         *mtime_addr_out = 0;
     }
+
     if (mtimecmp_addr_out) {
         *mtimecmp_addr_out = 0;
     }
+
     if (timebase_hz_out) {
         *timebase_hz_out = RISCV_TIMEBASE_HZ_DEFAULT;
     }
+
     if (kind_out) {
         *kind_out = "none";
     }
@@ -185,15 +192,20 @@ static bool detect_mtimer(
         if (mtime_addr_out) {
             *mtime_addr_out = (uintptr_t)(reg.addr + reg.size - 8ULL);
         }
+
         if (mtimecmp_addr_out) {
             *mtimecmp_addr_out = (uintptr_t)(reg.addr + (u64)hartid * 8ULL);
         }
+
         if (timebase_hz_out) {
             *timebase_hz_out = timebase_hz;
+
         }
+
         if (kind_out) {
             *kind_out = "aclint-mtimer";
         }
+
         return true;
     }
 
@@ -207,17 +219,21 @@ static bool detect_mtimer(
         if (mtime_addr_out) {
             *mtime_addr_out = (uintptr_t)(reg.addr + RISCV_CLINT_MTIME_OFF);
         }
+
         if (mtimecmp_addr_out) {
             *mtimecmp_addr_out = (uintptr_t)(
                 reg.addr + RISCV_CLINT_MTIMECMP_OFF + (u64)hartid * 8ULL
             );
         }
+
         if (timebase_hz_out) {
             *timebase_hz_out = timebase_hz;
         }
+
         if (kind_out) {
             *kind_out = "clint";
         }
+
         return true;
     }
 
@@ -229,18 +245,22 @@ static bool detect_mtimer(
         if (mtime_addr_out) {
             *mtime_addr_out = (uintptr_t)(RISCV_CLINT_DEFAULT_BASE + RISCV_CLINT_MTIME_OFF);
         }
+
         if (mtimecmp_addr_out) {
             *mtimecmp_addr_out = (uintptr_t)(
                 RISCV_CLINT_DEFAULT_BASE + RISCV_CLINT_MTIMECMP_OFF +
                 (u64)hartid * 8ULL
             );
         }
+
         if (timebase_hz_out) {
             *timebase_hz_out = timebase_hz;
         }
+
         if (kind_out) {
             *kind_out = "clint-default";
         }
+
         return true;
     }
 
@@ -282,7 +302,8 @@ NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
 
     mstatus &= ~MSTATUS_MPP_MASK;
     mstatus |= MSTATUS_MPP_S;
-    mstatus &= ~(MSTATUS_MIE | MSTATUS_MPIE);
+    mstatus &= ~MSTATUS_MIE;
+    mstatus |= MSTATUS_MPIE;
 
     riscv_write_mstatus(mstatus);
 
@@ -373,8 +394,10 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     uintptr_t image_base = RISCV_BOOT_IMAGE_BASE_OVERRIDE ?
         (uintptr_t)RISCV_BOOT_IMAGE_BASE_OVERRIDE :
         (uintptr_t)&__image_start;
+
     const u8 *embedded_rootfs =
         (const u8 *)(image_base + RISCV_BOOT_IMAGE_ROOTFS_OFFSET);
+
     const u8 *rootfs_image = embedded_rootfs;
     size_t rootfs_limit = 0;
     bool rootfs_from_initrd = false;

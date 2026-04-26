@@ -1,5 +1,7 @@
 #include "serial.h"
 
+#include <string.h>
+
 #ifdef _KERNEL
 #include <sys/lock.h>
 static spinlock_t tx_lock = SPINLOCK_INIT;
@@ -34,6 +36,16 @@ static inline bool _uart_has_data(uintptr_t base) {
     return (_uart_read(base, UART_LSR) & UART_LSR_RX_READY) != 0;
 }
 
+static void _send_serial_unlocked(uintptr_t base, char c) {
+    if (c == '\n') {
+        while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
+        _uart_write(base, UART_THR, '\r');
+    }
+
+    while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
+    _uart_write(base, UART_THR, (u8)c);
+}
+
 void send_serial(uintptr_t base, char c) {
     if (!base) {
         return;
@@ -43,13 +55,7 @@ void send_serial(uintptr_t base, char c) {
     unsigned long flags = spin_lock_irqsave(&tx_lock);
 #endif
 
-    if (c == '\n') {
-        while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
-        _uart_write(base, UART_THR, '\r');
-    }
-
-    while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
-    _uart_write(base, UART_THR, (u8)c);
+    _send_serial_unlocked(base, c);
 
 #ifdef _KERNEL
     spin_unlock_irqrestore(&tx_lock, flags);
@@ -100,13 +106,23 @@ void serial_set_rx_interrupt(uintptr_t base, bool enable) {
 }
 
 void send_serial_string(uintptr_t base, const char *s) {
-    while (*s) {
-        send_serial(base, *s++);
-    }
+    send_serial_sized_string(base, s, s ? strlen(s) : 0);
 }
 
 void send_serial_sized_string(uintptr_t base, const char *s, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        send_serial(base, s[i]);
+    if (!base || !s || !len) {
+        return;
     }
+
+#ifdef _KERNEL
+    unsigned long flags = spin_lock_irqsave(&tx_lock);
+#endif
+
+    for (size_t i = 0; i < len; i++) {
+        _send_serial_unlocked(base, s[i]);
+    }
+
+#ifdef _KERNEL
+    spin_unlock_irqrestore(&tx_lock, flags);
+#endif
 }

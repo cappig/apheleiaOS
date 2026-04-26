@@ -481,7 +481,7 @@ static void _uart_irq_handler(u32 irq, void *ctx) {
 
 static void _plic_init(u32 uart_irq) {
     if (!boot.dtb) {
-        log_debug("plic: no DTB, skipping");
+        log_debug("skipping PLIC setup, no DTB available");
         return;
     }
 
@@ -495,7 +495,7 @@ static void _plic_init(u32 uart_irq) {
         bool found = false;
 
         for (size_t i = 0; i < sizeof(plic_compat) / sizeof(plic_compat[0]); i++) {
-            log_debug("plic: probing compatible \"%s\"", plic_compat[i]);
+            log_debug("probing PLIC compatible \"%s\"", plic_compat[i]);
 
             if (
                 fdt_find_compatible_reg(boot.dtb, plic_compat[i], &reg) &&
@@ -503,7 +503,7 @@ static void _plic_init(u32 uart_irq) {
                 reg.size
             ) {
                 log_debug(
-                    "plic: found \"%s\" at %#llx size=%#llx",
+                    "found PLIC \"%s\" at %#llx size=%#llx",
                     plic_compat[i],
                     (unsigned long long)reg.addr, (unsigned long long)reg.size
                 );
@@ -513,7 +513,7 @@ static void _plic_init(u32 uart_irq) {
         }
 
         if (!found) {
-            log_debug("plic: no compatible node in DTB");
+            log_debug("no compatible PLIC node in DTB");
             return;
         }
 
@@ -522,33 +522,33 @@ static void _plic_init(u32 uart_irq) {
 
         plic.virt = (uintptr_t)arch_phys_map(phys, span, PHYS_MAP_MMIO);
         if (!plic.virt) {
-            log_warn("plic: failed to map phys=%#lx span=%zu", (unsigned long)phys, span);
+            log_warn("failed to map PLIC phys=%#lx span=%zu", (unsigned long)phys, span);
             return;
         }
 
         plic.ready = true;
 
         log_debug(
-            "plic: mapped phys=%#lx virt=%#lx span=%zu",
+            "mapped PLIC phys=%#lx virt=%#lx span=%zu",
             (unsigned long)phys, (unsigned long)plic.virt, span
         );
 
         if (uart_irq) {
-            log_debug("plic: registering UART IRQ %u", (unsigned int)uart_irq);
+            log_debug("registering UART IRQ %u", (unsigned int)uart_irq);
             if (irq_register(uart_irq, _uart_irq_handler, NULL)) {
                 serial_set_rx_interrupt(uart_console_base(), true);
-                log_debug("plic: UART RX interrupt enabled");
+                log_debug("enabled UART RX interrupt");
             } else {
-                log_warn("plic: failed to register UART IRQ %u", (unsigned int)uart_irq);
+                log_warn("failed to register UART IRQ %u", (unsigned int)uart_irq);
             }
         } else {
-            log_debug("plic: no UART IRQ, polling mode");
+            log_debug("using UART polling mode, no IRQ configured");
         }
     }
 
     size_t cpu_id = _current_cpu_id();
     log_debug(
-        "plic: init context for cpu %zu hart=%llu",
+        "initialized PLIC context for cpu %zu hart=%llu",
         cpu_id, (unsigned long long)_cpu_hartid(cpu_id)
     );
 
@@ -932,7 +932,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 #endif
 
     log_debug(
-        "boot_info: hart=%llu uart=%#llx dtb=%#llx memory=%#llx+%#llx rootfs=%#llx+%zu",
+        "boot info hart=%llu uart=%#llx dtb=%#llx memory=%#llx+%#llx rootfs=%#llx+%zu",
         (unsigned long long)info->hartid,
         (unsigned long long)info->uart_paddr,
         (unsigned long long)info->dtb_paddr,
@@ -952,7 +952,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     log_debug(
-        "uart: phys=%#lx irq=%u stride=%d",
+        "UART phys=%#lx irq=%u stride=%d",
         (unsigned long)uart_phys, (unsigned int)uart_irq, RISCV_UART_STRIDE
     );
 
@@ -966,9 +966,9 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
             panic("failed to register UART MMIO window");
         }
 
-        log_debug("uart: virt=%#lx", (unsigned long)mmio.uart_virt);
+        log_debug("mapped UART virt=%#lx", (unsigned long)mmio.uart_virt);
     } else {
-        log_debug("uart: no MMIO UART configured");
+        log_debug("no MMIO UART configured");
     }
 
     if (boot.rootfs_paddr && boot.rootfs_size) {
@@ -986,7 +986,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     riscv_write_sstatus(riscv_read_sstatus() | SSTATUS_SUM);
 
     log_debug(
-        "cpu: hart=%llu stack_top=%#lx sstatus=%#lx",
+        "boot CPU hart=%llu stack_top=%#lx sstatus=%#lx",
         (unsigned long long)cpu.hartid[0],
         (unsigned long)(uintptr_t)&__stack_top,
         (unsigned long)riscv_read_sstatus()
@@ -1000,17 +1000,21 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     log_debug(
-        "reserved: bss_end=%#lx info_end=%#lx reserved_end=%#lx",
+        "reserved memory bss_end=%#lx info_end=%#lx reserved_end=%#lx",
         (unsigned long)(uintptr_t)&__bss_end,
         (unsigned long)info_end,
         (unsigned long)reserved_end
     );
 
     _relocate_boot_dtb(info, &reserved_end);
-    log_debug(
-        "dtb: relocated to %#lx reserved_end now %#lx",
-        (unsigned long)(uintptr_t)boot.dtb, (unsigned long)reserved_end
-    );
+    if (boot.dtb) {
+        log_debug(
+            "relocated DTB to %#lx reserved_end=%#lx",
+            (unsigned long)(uintptr_t)boot.dtb, (unsigned long)reserved_end
+        );
+    } else {
+        log_debug("no DTB to relocate");
+    }
 
     timer.timebase_hz = RISCV_TIMEBASE_HZ;
     timer.platform_name[0] = '\0';
@@ -1031,7 +1035,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     log_info(
-        "platform: model=%s timebase=%llu Hz",
+        "platform model=%s timebase=%llu Hz",
         timer.platform_name,
         (unsigned long long)timer.timebase_hz
     );
@@ -1058,7 +1062,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         }
 
         log_debug(
-            "rootfs: paddr=%#llx size=%zu end=%#lx",
+            "rootfs paddr=%#llx size=%zu end=%#lx",
             (unsigned long long)boot.rootfs_paddr,
             boot.rootfs_size, (unsigned long)rootfs_end
         );
@@ -1070,14 +1074,14 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         panic("RISC-V early allocator exhausted");
     }
     log_debug(
-        "early alloc: cursor=%#lx limit=%#lx available=%zu KiB",
+        "early allocator cursor=%#lx limit=%#lx available=%zu KiB",
         (unsigned long)mmio.early_cursor,
         (unsigned long)mmio.early_limit,
         (mmio.early_limit - mmio.early_cursor) / 1024
     );
 
     mmio.root = _early_alloc(PAGE_4KIB, PAGE_4KIB);
-    log_debug("page table: root=%#lx", (unsigned long)(uintptr_t)mmio.root);
+    log_debug("kernel page table root=%#lx", (unsigned long)(uintptr_t)mmio.root);
 
     _early_map_range(
         mmio.root,
@@ -1087,33 +1091,33 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         PT_WRITE | PT_GLOBAL
     );
     log_debug(
-        "page table: identity mapped memory %#llx+%#llx",
+        "identity mapped memory %#llx+%#llx",
         (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size
     );
 
     _mmio_map_regions(mmio.root);
-    log_debug("page table: mapped %zu MMIO regions", mmio.count);
+    log_debug("mapped %zu MMIO regions", mmio.count);
 
     trap_init();
-    log_debug("trap: handler installed");
+    log_debug("installed trap handler");
 
     vm_init_kernel(mmio.root);
-    log_debug("vm: kernel vm initialized");
+    log_debug("initialized kernel VM");
 
     uart_console_set_base(mmio.uart_virt);
     arch_vm_switch(arch_vm_kernel());
-    log_debug("vm: switched to kernel address space");
+    log_debug("switched to kernel address space");
 
     _plic_init(uart_irq);
 
     pmm_init(boot.mem_paddr, boot.mem_size, mmio.early_cursor);
     log_debug(
-        "pmm: initialized base=%#llx size=%#llx",
+        "initialized physical memory manager base=%#llx size=%#llx",
         (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size
     );
 
     heap_init();
-    log_debug("heap: initialized");
+    log_debug("initialized heap");
 
     arch_init_alloc();
 
@@ -1123,7 +1127,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         panic("PMM refcount table unavailable");
     }
 
-    log_debug("pmm: refcount table ready");
+    log_debug("physical memory refcount table ready");
 
     framebuffer_set_info(NULL);
     uart_console_init(mmio.uart_virt);
@@ -1420,18 +1424,12 @@ u32 arch_timer_hz(void) {
 u64 arch_realtime_ns(void) {
     u64 ticks = arch_timer_ticks();
 
-    if (ticks) {
-        u64 hz = TIMER_FREQ ? (u64)TIMER_FREQ : 1ULL;
-        return (ticks * 1000000000ULL) / hz;
+    if (!ticks) {
+        return 0;
     }
 
-    u64 counter = 0;
-    if (riscv_machine_timer_read(&counter)) {
-        u64 hz = timer.timebase_hz ? timer.timebase_hz : RISCV_TIMEBASE_HZ;
-        return (counter * 1000000000ULL) / hz;
-    }
-
-    return 0;
+    u64 hz = TIMER_FREQ ? (u64)TIMER_FREQ : 1ULL;
+    return (ticks * 1000000000ULL) / hz;
 }
 
 const char *arch_name(void) {
