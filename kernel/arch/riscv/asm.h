@@ -31,6 +31,11 @@
 #define RISCV_COUNTEREN_TM (1UL << 1)
 #define RISCV_COUNTEREN_IR (1UL << 2)
 
+#define CSR_MENVCFG "0x30A"
+#define CSR_MENVCFGH "0x31A"
+#define CSR_STIMECMP "0x14D"
+#define CSR_STIMECMPH "0x15D"
+
 #define MENVCFG_STCE (1ULL << 63) // enable Sstc (stimecmp) for S-mode
 
 #define PMP_R       0x01U
@@ -200,20 +205,21 @@ static inline void riscv_write_pmpcfg0(unsigned long value) {
 
 static inline void riscv_write_menvcfg(u64 value) {
 #if __riscv_xlen == 64
-    asm volatile("csrw 0x30A, %0" : : "r"(value) : "memory");
+    asm volatile("csrw " CSR_MENVCFG ", %0" : : "r"(value) : "memory");
 #else
-    asm volatile("csrw 0x30A, %0" : : "r"((u32)value) : "memory");
-    asm volatile("csrw 0x31A, %0" : : "r"((u32)(value >> 32)) : "memory");
+    asm volatile("csrw " CSR_MENVCFG ", %0" : : "r"((u32)value) : "memory");
+    asm volatile("csrw " CSR_MENVCFGH ", %0" : : "r"((u32)(value >> 32)) : "memory");
 #endif
 }
 
 static inline void riscv_write_stimecmp(u64 value) {
 #if __riscv_xlen == 64
-    asm volatile("csrw 0x14D, %0" : : "r"(value) : "memory");
+    asm volatile("csrw " CSR_STIMECMP ", %0" : : "r"(value) : "memory");
 #else
-    asm volatile("csrw 0x15D, %0" : : "r"(0xffffffffU) : "memory");
-    asm volatile("csrw 0x14D, %0" : : "r"((u32)value) : "memory");
-    asm volatile("csrw 0x15D, %0" : : "r"((u32)(value >> 32)) : "memory");
+    // write high half first with all-ones to avoid a spurious early timer fire
+    asm volatile("csrw " CSR_STIMECMPH ", %0" : : "r"(0xffffffffU) : "memory");
+    asm volatile("csrw " CSR_STIMECMP ", %0" : : "r"((u32)value) : "memory");
+    asm volatile("csrw " CSR_STIMECMPH ", %0" : : "r"((u32)(value >> 32)) : "memory");
 #endif
 }
 

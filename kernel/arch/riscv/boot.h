@@ -4,7 +4,7 @@
 #include <base/types.h>
 #include <lib/boot.h>
 
-#define BOOT_INFO_MAGIC 0x617068656c656961ULL /* "apheleia" */
+#define BOOT_INFO_MAGIC 0x617068656c656961ULL // "apheleia"
 
 typedef struct PACKED {
     u64 magic;

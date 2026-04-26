@@ -72,15 +72,35 @@ static void _put(char ch) {
     wrap_pending = true;
 }
 
-static void _move_up(size_t n)    { if (n) { _emit_escape("\x1b[%zuA", n); } }
-static void _move_down(size_t n)  { if (n) { _emit_escape("\x1b[%zuB", n); } }
-static void _move_left(size_t n)  { if (n) { _emit_escape("\x1b[%zuD", n); } }
-static void _move_right(size_t n) { if (n) { _emit_escape("\x1b[%zuC", n); } }
+static void _move_up(size_t n) {
+    if (n) {
+        _emit_escape("\x1b[%zuA", n);
+    }
+}
+
+static void _move_down(size_t n) {
+    if (n) {
+        _emit_escape("\x1b[%zuB", n);
+    }
+}
+
+static void _move_left(size_t n) {
+    if (n) {
+        _emit_escape("\x1b[%zuD", n);
+    }
+}
+
+static void _move_right(size_t n) {
+    if (n) {
+        _emit_escape("\x1b[%zuC", n);
+    }
+}
 
 static void _sync_cursor(size_t col, size_t row) {
     if (col >= COLS) {
         col = COLS - 1;
     }
+
     if (row >= ROWS) {
         row = ROWS - 1;
     }
@@ -156,9 +176,11 @@ static u8 *_fb_map(size_t offset, size_t size) {
     if (!size || offset >= sizeof(text_shadow)) {
         return NULL;
     }
+
     if (offset + size > sizeof(text_shadow)) {
         return NULL;
     }
+
     return (u8 *)text_shadow + offset;
 }
 
@@ -175,6 +197,7 @@ static ssize_t _stream_write(const void *buf, size_t len) {
     if (!buf) {
         return -1;
     }
+
     if (!len) {
         return 0;
     }
@@ -229,10 +252,6 @@ static void _text_clear(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
 
     for (size_t i = 0; i < count; i++) {
         text[i] = blank;
-    }
-
-    if (!suppressed) {
-        send_serial_string(uart_base, "\x1b[2J\x1b[H");
     }
 
     cur_col = 0;

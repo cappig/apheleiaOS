@@ -1,5 +1,10 @@
 #include "serial.h"
 
+#ifdef _KERNEL
+#include <sys/lock.h>
+static spinlock_t tx_lock = SPINLOCK_INIT;
+#endif
+
 #define UART_THR 0x00
 #define UART_RBR 0x00
 #define UART_IER 0x01
@@ -34,6 +39,10 @@ void send_serial(uintptr_t base, char c) {
         return;
     }
 
+#ifdef _KERNEL
+    unsigned long flags = spin_lock_irqsave(&tx_lock);
+#endif
+
     if (c == '\n') {
         while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
         _uart_write(base, UART_THR, '\r');
@@ -41,6 +50,10 @@ void send_serial(uintptr_t base, char c) {
 
     while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
     _uart_write(base, UART_THR, (u8)c);
+
+#ifdef _KERNEL
+    spin_unlock_irqrestore(&tx_lock, flags);
+#endif
 }
 
 char receive_serial(uintptr_t base) {

@@ -28,7 +28,7 @@ static uintptr_t detect_uart_base(const void *dtb) {
         }
     }
 
-    /* Valid DTB with no known UART means "no MMIO UART" on this platform. */
+    // valid DTB with no known UART means "no MMIO UART" on this platform
     return 0;
 }
 
@@ -109,13 +109,17 @@ static boot_info_t *direct_boot_info_build(uintptr_t hartid, const void *dtb) {
 
     memset(&direct_boot_info, 0, sizeof(direct_boot_info));
     init_boot_args(&direct_boot_info.args);
+
     direct_boot_info.hartid = hartid;
     direct_boot_info.dtb_paddr = (uintptr_t)dtb;
     direct_boot_info.dtb_size = fdt_size(dtb);
+
     direct_boot_info.memory_paddr = memory_reg.addr;
     direct_boot_info.memory_size = memory_reg.size;
+
     direct_boot_info.boot_rootfs_paddr = initrd_reg.addr;
     direct_boot_info.boot_rootfs_size = initrd_reg.size;
+
     direct_boot_info.uart_paddr = detect_uart_base(dtb);
 
     return &direct_boot_info;
@@ -144,5 +148,6 @@ NORETURN void _kern_entry(uintptr_t arg0, uintptr_t arg1) {
     }
 
     kernel_main(info);
+
     halt();
 }

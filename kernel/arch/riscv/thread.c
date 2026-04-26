@@ -56,6 +56,7 @@ arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     state->g_regs.tp = (arch_word_t)(uintptr_t)cpu_current();
     state->s_regs.sepc = entry_point;
     state->s_regs.sstatus = SSTATUS_SPP | SSTATUS_SPIE | SSTATUS_SUM;
+
     state->s_regs.sp = (arch_word_t)ALIGN_DOWN(
         (uintptr_t)thread->stack + thread->stack_size,
         16

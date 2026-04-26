@@ -42,6 +42,7 @@ void map_page(page_t *root, u64 vaddr, u64 paddr, u64 flags) {
     *entry = 0;
     page_set_paddr(entry, paddr);
     *entry |= pte_leaf_flags(flags);
+
     sfence_vma();
 }
 
@@ -74,9 +75,11 @@ size_t get_page(page_t *root, u64 vaddr, page_t **entry) {
 
 #if __riscv_xlen == 64
     page_t lvl2e = root[GET_LVL3_INDEX(vaddr)];
+
     if (!(lvl2e & PT_PRESENT)) {
         return 0;
     }
+
     if (_leaf_pte(lvl2e)) {
         if (entry) {
             *entry = &root[GET_LVL3_INDEX(vaddr)];
@@ -86,9 +89,11 @@ size_t get_page(page_t *root, u64 vaddr, page_t **entry) {
 
     page_t *lvl2 = (page_t *)(uintptr_t)page_get_paddr(&lvl2e);
     page_t lvl1e = lvl2[GET_LVL2_INDEX(vaddr)];
+
     if (!(lvl1e & PT_PRESENT)) {
         return 0;
     }
+
     if (_leaf_pte(lvl1e)) {
         if (entry) {
             *entry = &lvl2[GET_LVL2_INDEX(vaddr)];
@@ -100,9 +105,11 @@ size_t get_page(page_t *root, u64 vaddr, page_t **entry) {
     page_t *pte = &lvl1[GET_LVL1_INDEX(vaddr)];
 #else
     page_t lvl1e = root[GET_LVL2_INDEX(vaddr)];
+
     if (!(lvl1e & PT_PRESENT)) {
         return 0;
     }
+
     if (_leaf_pte(lvl1e)) {
         if (entry) {
             *entry = &root[GET_LVL2_INDEX(vaddr)];

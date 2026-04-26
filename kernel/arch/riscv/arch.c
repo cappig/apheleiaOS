@@ -49,6 +49,8 @@
 #define RISCV_IRQ_TIMER    5
 #define RISCV_IRQ_EXTERNAL 9
 
+#define RISCV_TRAP_LOG_LIMIT 8U
+
 #define RISCV_EXC_ILL        2
 #define RISCV_EXC_BREAK      3
 #define RISCV_EXC_U_ECALL    8
@@ -58,12 +60,17 @@
 
 #define RISCV_PLIC_MAX_IRQS       128U
 #define RISCV_PLIC_PRIORITY_BASE  0x000000U
+#define RISCV_PLIC_PRIORITY_STRIDE 4U
 #define RISCV_PLIC_ENABLE_BASE    0x002000U
 #define RISCV_PLIC_ENABLE_STRIDE  0x000080U
+#define RISCV_PLIC_ENABLE_WORD_BITS 32U
 #define RISCV_PLIC_CONTEXT_BASE   0x200000U
 #define RISCV_PLIC_CONTEXT_STRIDE 0x001000U
 #define RISCV_PLIC_THRESHOLD_OFF  0x0U
 #define RISCV_PLIC_CLAIM_OFF      0x4U
+
+// S-mode PLIC context index: each hart has two contexts (M and S), S is the odd one
+#define RISCV_PLIC_SMODE_CTX(hartid) ((hartid) * 2U + 1U)
 
 #define RISCV_REG_FMT "%#lx"
 
@@ -149,6 +156,7 @@ static u64 _cpu_hartid(size_t cpu_id) {
     if (cpu_id < MAX_CORES && cpu.hartid[cpu_id] != UINT64_MAX) {
         return cpu.hartid[cpu_id];
     }
+
     return cpu.hartid[0];
 }
 
@@ -215,6 +223,7 @@ static void _log_puts(const char *s) {
     }
 
     unsigned long irq_flags = spin_lock_irqsave(&klog.lock);
+
     _log_history_append(s, len);
     spin_unlock_irqrestore(&klog.lock, irq_flags);
 
@@ -246,11 +255,22 @@ static void _configure_log_sinks(const boot_info_t *info) {
     strncpy(buf, info->args.console, sizeof(buf));
     for (char *p = buf; p && *p;) {
         char *sep = strchr(p, ',');
-        if (sep) { *sep = '\0'; }
+
+        if (sep) {
+            *sep = '\0';
+        }
+
         char *tok = strtrim(p);
         strtrunc(tok);
-        if (!strcmp(tok, "/dev/ttyS0"))   { want_serial = true; }
-        if (!strcmp(tok, "/dev/console")) { want_screen = true; }
+
+        if (!strcmp(tok, "/dev/ttyS0")) {
+            want_serial = true;
+        }
+
+        if (!strcmp(tok, "/dev/console")) {
+            want_screen = true;
+        }
+
         p = sep ? sep + 1 : NULL;
     }
 
@@ -258,14 +278,26 @@ static void _configure_log_sinks(const boot_info_t *info) {
 
     strncpy(buf, info->args.console, sizeof(buf));
     bool any = false;
+
     for (char *p = buf; p && *p;) {
         char *sep = strchr(p, ',');
-        if (sep) { *sep = '\0'; }
+
+        if (sep) {
+            *sep = '\0';
+        }
+
         char *tok = strtrim(p);
         strtrunc(tok);
         p = sep ? sep + 1 : NULL;
-        if (!tok[0]) { continue; }
-        if (klog.mirror && !strcmp(tok, "/dev/console")) { continue; }
+
+        if (!tok[0]) {
+            continue;
+        }
+
+        if (klog.mirror && !strcmp(tok, "/dev/console")) {
+            continue;
+        }
+
         logsink_add_target(tok);
         any = true;
     }
@@ -311,18 +343,19 @@ _log_user_trap_once(
 }
 
 static inline uintptr_t _plic_context_base(size_t cpu_id) {
-    uintptr_t smode_ctx = _cpu_hartid(cpu_id) * 2U + 1U; // S-mode context = hartid*2 + 1
-    return plic.virt + RISCV_PLIC_CONTEXT_BASE + smode_ctx * RISCV_PLIC_CONTEXT_STRIDE;
+    uintptr_t ctx = RISCV_PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
+    return plic.virt + RISCV_PLIC_CONTEXT_BASE + ctx * RISCV_PLIC_CONTEXT_STRIDE;
 }
 
 static inline volatile u32 *_plic_priority_reg(u32 irq) {
-    return (volatile u32 *)(plic.virt + RISCV_PLIC_PRIORITY_BASE + irq * 4U);
+    return (volatile u32 *)(plic.virt + RISCV_PLIC_PRIORITY_BASE + irq * RISCV_PLIC_PRIORITY_STRIDE);
 }
 
 static inline volatile u32 *_plic_enable_reg(size_t cpu_id, u32 irq) {
-    uintptr_t smode_ctx = _cpu_hartid(cpu_id) * 2U + 1U;
-    uintptr_t enable_base = plic.virt + RISCV_PLIC_ENABLE_BASE + smode_ctx * RISCV_PLIC_ENABLE_STRIDE;
-    return (volatile u32 *)(enable_base + (irq / 32U) * sizeof(u32));
+    uintptr_t ctx = RISCV_PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
+    uintptr_t enable_base =
+        plic.virt + RISCV_PLIC_ENABLE_BASE + ctx * RISCV_PLIC_ENABLE_STRIDE;
+    return (volatile u32 *)(enable_base + (irq / RISCV_PLIC_ENABLE_WORD_BITS) * sizeof(u32));
 }
 
 static inline volatile u32 *_plic_threshold_reg(size_t cpu_id) {
@@ -341,7 +374,7 @@ static void _plic_toggle_irq_for_cpu(size_t cpu_id, u32 irq, bool enable) {
     *_plic_priority_reg(irq) = enable ? 1U : 0U;
 
     volatile u32 *enable_reg = _plic_enable_reg(cpu_id, irq);
-    u32 mask = 1U << (irq % 32U);
+    u32 mask = 1U << (irq % RISCV_PLIC_ENABLE_WORD_BITS);
     u32 value = *enable_reg;
 
     if (enable) {
@@ -361,6 +394,7 @@ static void _plic_toggle_irq(u32 irq, bool enable) {
         if (cpu.hartid[cpu_id] == UINT64_MAX || !cores_local[cpu_id].valid) {
             continue;
         }
+
         _plic_toggle_irq_for_cpu(cpu_id, irq, enable);
         applied = true;
     }
@@ -376,10 +410,13 @@ static bool irq_register(u32 irq, irq_handler_t handler, void *ctx) {
     }
 
     unsigned long flags = arch_irq_save();
+
     plic.table[irq].handler = handler;
     plic.table[irq].ctx = ctx;
+
     _plic_toggle_irq(irq, true);
     arch_irq_restore(flags);
+
     return true;
 }
 
@@ -400,14 +437,16 @@ static void _plic_init_context(size_t cpu_id) {
         return;
     }
 
-    uintptr_t smode_ctx = _cpu_hartid(cpu_id) * 2U + 1U;
-    uintptr_t enable_base = plic.virt + RISCV_PLIC_ENABLE_BASE + smode_ctx * RISCV_PLIC_ENABLE_STRIDE;
+    uintptr_t ctx = RISCV_PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
+    uintptr_t enable_base =
+        plic.virt + RISCV_PLIC_ENABLE_BASE + ctx * RISCV_PLIC_ENABLE_STRIDE;
 
-    for (size_t i = 0; i < RISCV_PLIC_MAX_IRQS / 32U; i++) {
+    for (size_t i = 0; i < RISCV_PLIC_MAX_IRQS / RISCV_PLIC_ENABLE_WORD_BITS; i++) {
         *(volatile u32 *)(enable_base + i * sizeof(u32)) = 0;
     }
 
     *_plic_threshold_reg(cpu_id) = 0;
+
     _plic_sync_irqs_for_cpu(cpu_id);
 }
 
@@ -443,15 +482,25 @@ static void _plic_init(u32 uart_irq) {
 
         fdt_reg_t reg = {0};
         bool found = false;
+
         for (size_t i = 0; i < sizeof(plic_compat) / sizeof(plic_compat[0]); i++) {
             log_debug("plic: probing compatible \"%s\"", plic_compat[i]);
-            if (fdt_find_compatible_reg(boot.dtb, plic_compat[i], &reg) &&
-                reg.addr && reg.size) {
-                log_debug("plic: found \"%s\" at %#llx size=%#llx", plic_compat[i], (unsigned long long)reg.addr, (unsigned long long)reg.size);
+
+            if (
+                fdt_find_compatible_reg(boot.dtb, plic_compat[i], &reg) &&
+                reg.addr &&
+                reg.size
+            ) {
+                log_debug(
+                    "plic: found \"%s\" at %#llx size=%#llx",
+                    plic_compat[i],
+                    (unsigned long long)reg.addr, (unsigned long long)reg.size
+                );
                 found = true;
                 break;
             }
         }
+
         if (!found) {
             log_debug("plic: no compatible node in DTB");
             return;
@@ -459,6 +508,7 @@ static void _plic_init(u32 uart_irq) {
 
         uintptr_t phys = (uintptr_t)reg.addr;
         size_t span = (size_t)reg.size;
+
         plic.virt = (uintptr_t)arch_phys_map(phys, span, PHYS_MAP_MMIO);
         if (!plic.virt) {
             log_warn("plic: failed to map phys=%#lx span=%zu", (unsigned long)phys, span);
@@ -466,7 +516,11 @@ static void _plic_init(u32 uart_irq) {
         }
 
         plic.ready = true;
-        log_debug("plic: mapped phys=%#lx virt=%#lx span=%zu", (unsigned long)phys, (unsigned long)plic.virt, span);
+
+        log_debug(
+            "plic: mapped phys=%#lx virt=%#lx span=%zu",
+            (unsigned long)phys, (unsigned long)plic.virt, span
+        );
 
         if (uart_irq) {
             log_debug("plic: registering UART IRQ %u", (unsigned int)uart_irq);
@@ -482,7 +536,11 @@ static void _plic_init(u32 uart_irq) {
     }
 
     size_t cpu_id = _current_cpu_id();
-    log_debug("plic: init context for cpu %zu hart=%llu", cpu_id, (unsigned long long)_cpu_hartid(cpu_id));
+    log_debug(
+        "plic: init context for cpu %zu hart=%llu",
+        cpu_id, (unsigned long long)_cpu_hartid(cpu_id)
+    );
+
     _plic_init_context(cpu_id);
 }
 
@@ -493,6 +551,7 @@ static bool _plic_handle_external(void) {
 
     size_t cpu_id = _current_cpu_id();
     u32 irq = *_plic_claim_reg(cpu_id);
+
     if (!irq) {
         return false;
     }
@@ -501,12 +560,14 @@ static bool _plic_handle_external(void) {
         plic.table[irq].handler(irq, plic.table[irq].ctx);
     } else {
         u32 cnt = __atomic_fetch_add(&cpu.irq_log, 1, __ATOMIC_RELAXED);
-        if (cnt < 8U) {
+
+        if (cnt < RISCV_TRAP_LOG_LIMIT) {
             log_warn("unhandled RISC-V external irq %u", (unsigned int)irq);
         }
     }
 
     *_plic_claim_reg(cpu_id) = irq;
+
     return true;
 }
 
@@ -534,9 +595,11 @@ static page_t *_early_walk(page_t *table, size_t index) {
     }
 
     page_t *next = _early_alloc(PAGE_4KIB, PAGE_4KIB);
+
     table[index] = 0;
     page_set_paddr(&table[index], (u64)(uintptr_t)next);
     table[index] |= PT_PRESENT;
+
     return next;
 }
 
@@ -571,6 +634,7 @@ static uintptr_t _mmio_register_region(u64 paddr, size_t size) {
 
     u64 base = ALIGN_DOWN(paddr, PAGE_4KIB);
     u64 end = ALIGN(paddr + size, PAGE_4KIB);
+
     if (end <= base) {
         return 0;
     }
@@ -578,6 +642,7 @@ static uintptr_t _mmio_register_region(u64 paddr, size_t size) {
     for (size_t i = 0; i < mmio.count; i++) {
         mmio_region_t *region = &mmio.regions[i];
         u64 region_end = region->paddr + region->size;
+
         if (base >= region->paddr && end <= region_end) {
             return region->vaddr + (uintptr_t)(paddr - region->paddr);
         }
@@ -613,6 +678,7 @@ static uintptr_t _mmio_translate(u64 paddr, size_t size) {
     for (size_t i = 0; i < mmio.count; i++) {
         mmio_region_t *region = &mmio.regions[i];
         u64 region_end = region->paddr + region->size;
+
         if (paddr >= region->paddr && end <= region_end) {
             return region->vaddr + (uintptr_t)(paddr - region->paddr);
         }
@@ -655,16 +721,19 @@ static bool _handle_user_signal(int signum, arch_int_state_t *frame) {
 
     sched_signal_send_thread(thread, signum);
     sched_signal_deliver_current(frame);
+
     return true;
 }
 
 static void _handle_page_fault(arch_int_state_t *frame, uintptr_t cause) {
     uintptr_t addr = frame ? frame->s_regs.stval : 0;
+
     bool write = cause == RISCV_EXC_STORE_PAGE;
     bool user = arch_signal_is_user(frame);
 
     if (write && user && sched_is_running()) {
         sched_thread_t *thread = sched_current();
+
         if (thread && thread->user_thread &&
             sched_handle_cow_fault(thread, addr, true)) {
             return;
@@ -674,7 +743,7 @@ static void _handle_page_fault(arch_int_state_t *frame, uintptr_t cause) {
     if (user) {
         _log_user_trap_once(
             &cpu.fault_log,
-            8,
+            RISCV_TRAP_LOG_LIMIT,
             "riscv user page fault",
             frame,
             cause
@@ -686,6 +755,7 @@ static void _handle_page_fault(arch_int_state_t *frame, uintptr_t cause) {
     }
 
     panic_prepare();
+
     log_fatal(
         "page fault cause=" RISCV_REG_FMT " addr=" RISCV_REG_FMT
         " sepc=" RISCV_REG_FMT,
@@ -693,6 +763,7 @@ static void _handle_page_fault(arch_int_state_t *frame, uintptr_t cause) {
         (unsigned long)addr,
         frame ? (unsigned long)frame->s_regs.sepc : 0UL
     );
+
     panic_dump_state(frame);
     panic_halt();
 }
@@ -855,19 +926,26 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     if (boot.dtb) {
         (void)fdt_find_compatible_irq(boot.dtb, "ns16550a", &uart_irq);
     }
+
     if (!uart_irq && uart_phys == SERIAL_UART0) {
         uart_irq = RISCV_UART_DEFAULT_IRQ;
     }
-    log_debug("uart: phys=%#lx irq=%u stride=%d", (unsigned long)uart_phys, (unsigned int)uart_irq, RISCV_UART_STRIDE);
+
+    log_debug(
+        "uart: phys=%#lx irq=%u stride=%d",
+        (unsigned long)uart_phys, (unsigned int)uart_irq, RISCV_UART_STRIDE
+    );
 
     mmio.count = 0;
     mmio.next_vaddr = RISCV_MMIO_BASE;
     mmio.uart_virt = 0;
+
     if (uart_phys) {
         mmio.uart_virt = _mmio_register_region(uart_phys, RISCV_UART_WINDOW_SIZE);
         if (!mmio.uart_virt) {
             panic("failed to register UART MMIO window");
         }
+
         log_debug("uart: virt=%#lx", (unsigned long)mmio.uart_virt);
     } else {
         log_debug("uart: no MMIO UART configured");
@@ -883,19 +961,36 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     cpu_init_boot();
     arch_cpu_set_local(&cores_local[0]);
+
     arch_set_kernel_stack((uintptr_t)&__stack_top);
     riscv_write_sstatus(riscv_read_sstatus() | SSTATUS_SUM);
-    log_debug("cpu: hart=%llu stack_top=%#lx sstatus=%#lx", (unsigned long long)cpu.hartid[0], (unsigned long)(uintptr_t)&__stack_top, (unsigned long)riscv_read_sstatus());
+
+    log_debug(
+        "cpu: hart=%llu stack_top=%#lx sstatus=%#lx",
+        (unsigned long long)cpu.hartid[0],
+        (unsigned long)(uintptr_t)&__stack_top,
+        (unsigned long)riscv_read_sstatus()
+    );
 
     uintptr_t reserved_end = (uintptr_t)&__bss_end;
     uintptr_t info_end = (uintptr_t)info + sizeof(*info);
+
     if (info_end > reserved_end) {
         reserved_end = info_end;
     }
-    log_debug("reserved: bss_end=%#lx info_end=%#lx reserved_end=%#lx", (unsigned long)(uintptr_t)&__bss_end, (unsigned long)info_end, (unsigned long)reserved_end);
+
+    log_debug(
+        "reserved: bss_end=%#lx info_end=%#lx reserved_end=%#lx",
+        (unsigned long)(uintptr_t)&__bss_end,
+        (unsigned long)info_end,
+        (unsigned long)reserved_end
+    );
 
     _relocate_boot_dtb(info, &reserved_end);
-    log_debug("dtb: relocated to %#lx reserved_end now %#lx", (unsigned long)(uintptr_t)boot.dtb, (unsigned long)reserved_end);
+    log_debug(
+        "dtb: relocated to %#lx reserved_end now %#lx",
+        (unsigned long)(uintptr_t)boot.dtb, (unsigned long)reserved_end
+    );
 
     uintptr_t mem_end = (uintptr_t)(boot.mem_paddr + boot.mem_size);
     uintptr_t early_limit = mem_end;
@@ -908,17 +1003,21 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
             panic("boot rootfs range exceeds RAM");
         }
 
-        if (rootfs_end <= reserved_end) {
-            /* Rootfs lies below reserved memory and is already excluded. */
-        } else if (rootfs_start >= reserved_end) {
-            /* Keep early allocator below high initrd-style rootfs blobs. */
-            early_limit = rootfs_start;
-        } else {
-            /* Rootfs overlaps reserved area; advance cursor past it. */
-            reserved_end = rootfs_end;
+        if (rootfs_end > reserved_end) {
+            if (rootfs_start >= reserved_end) {
+                // keep the early allocator below high initrd-style rootfs blobs
+                early_limit = rootfs_start;
+            } else {
+                // rootfs overlaps the reserved area; advance cursor past it
+                reserved_end = rootfs_end;
+            }
         }
 
-        log_debug("rootfs: paddr=%#llx size=%zu end=%#lx", (unsigned long long)boot.rootfs_paddr, boot.rootfs_size, (unsigned long)rootfs_end);
+        log_debug(
+            "rootfs: paddr=%#llx size=%zu end=%#lx",
+            (unsigned long long)boot.rootfs_paddr,
+            boot.rootfs_size, (unsigned long)rootfs_end
+        );
     }
 
     mmio.early_cursor = ALIGN(reserved_end, PAGE_4KIB);
@@ -926,10 +1025,16 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     if (mmio.early_cursor >= mmio.early_limit) {
         panic("RISC-V early allocator exhausted");
     }
-    log_debug("early alloc: cursor=%#lx limit=%#lx available=%zu KiB", (unsigned long)mmio.early_cursor, (unsigned long)mmio.early_limit, (mmio.early_limit - mmio.early_cursor) / 1024);
+    log_debug(
+        "early alloc: cursor=%#lx limit=%#lx available=%zu KiB",
+        (unsigned long)mmio.early_cursor,
+        (unsigned long)mmio.early_limit,
+        (mmio.early_limit - mmio.early_cursor) / 1024
+    );
 
     mmio.root = _early_alloc(PAGE_4KIB, PAGE_4KIB);
     log_debug("page table: root=%#lx", (unsigned long)(uintptr_t)mmio.root);
+
     _early_map_range(
         mmio.root,
         boot.mem_paddr,
@@ -937,33 +1042,49 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         boot.mem_size,
         PT_WRITE | PT_GLOBAL
     );
-    log_debug("page table: identity mapped memory %#llx+%#llx", (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size);
+    log_debug(
+        "page table: identity mapped memory %#llx+%#llx",
+        (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size
+    );
+
     _mmio_map_regions(mmio.root);
     log_debug("page table: mapped %zu MMIO regions", mmio.count);
 
     trap_init();
     log_debug("trap: handler installed");
+
     vm_init_kernel(mmio.root);
     log_debug("vm: kernel vm initialized");
+
     uart_console_set_base(mmio.uart_virt);
     arch_vm_switch(arch_vm_kernel());
     log_debug("vm: switched to kernel address space");
+
     _plic_init(uart_irq);
 
     pmm_init(boot.mem_paddr, boot.mem_size, mmio.early_cursor);
-    log_debug("pmm: initialized base=%#llx size=%#llx", (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size);
+    log_debug(
+        "pmm: initialized base=%#llx size=%#llx",
+        (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size
+    );
+
     heap_init();
     log_debug("heap: initialized");
+
     arch_init_alloc();
+
     pmm_ref_init();
+
     if (!pmm_ref_ready()) {
         panic("PMM refcount table unavailable");
     }
+
     log_debug("pmm: refcount table ready");
 
     framebuffer_set_info(NULL);
     uart_console_init(mmio.uart_virt);
     console_init(info);
+
     klog.console_ready = true;
 
     size_t text_cols = 0, text_rows = 0;
@@ -982,11 +1103,13 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     riscv_write_scounteren(
         RISCV_COUNTEREN_CY | RISCV_COUNTEREN_TM | RISCV_COUNTEREN_IR
     );
+
 #if __riscv_xlen == 64
     log_info("apheleiaOS kernel (riscv_64) booted");
 #else
     log_info("apheleiaOS kernel (riscv_32) booted");
 #endif
+
     return &boot.args;
 }
 
@@ -1003,11 +1126,13 @@ void arch_late_init(void) {
 
 #if __riscv_xlen == 64
     _timer_program_next();
+
     riscv_set_sie_bits(SIE_SSIE | SIE_STIE | (plic.ready ? SIE_SEIE : 0));
 #else
-    /* rv32 simulator targets may not implement Sstc CSR 0x14D/0x15D. */
+    // rv32 simulator targets may not implement Sstc CSR 0x14D/0x15D
     riscv_set_sie_bits(SIE_SSIE | (plic.ready ? SIE_SEIE : 0));
 #endif
+
     cpu.late_init[cpu_id] = false;
 }
 
@@ -1037,6 +1162,7 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
 
     if ((flags & PHYS_MAP_MMIO) && size) {
         vaddr = _mmio_register_region(paddr, size);
+
         if (vaddr && mmio.root && mmio.count) {
             mmio_region_t *region = &mmio.regions[mmio.count - 1];
             map_region(
@@ -1046,7 +1172,9 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
                 region->paddr,
                 PT_WRITE | PT_GLOBAL | PT_NO_EXECUTE
             );
+
             sfence_vma();
+
             return (void *)vaddr;
         }
     }
@@ -1062,6 +1190,7 @@ void arch_phys_unmap(void *vaddr, size_t size) {
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
     void *dst = arch_phys_map(dst_paddr, size, 0);
     void *src = arch_phys_map(src_paddr, size, 0);
+
     if (!dst || !src) {
         return false;
     }
@@ -1080,6 +1209,7 @@ static bool _stack_trace_bounds(uintptr_t *low_out, uintptr_t *high_out) {
     }
 
     sched_thread_t *thread = sched_current();
+
     if (thread && thread->stack && thread->stack_size) {
         uintptr_t low = (uintptr_t)thread->stack;
         uintptr_t high = low + thread->stack_size;
@@ -1098,6 +1228,7 @@ static bool _stack_trace_bounds(uintptr_t *low_out, uintptr_t *high_out) {
 
     *low_out = high - RISCV_BOOT_STACK_SIZE;
     *high_out = high;
+
     return true;
 }
 
@@ -1195,12 +1326,14 @@ void *arch_cpu_get_local(void) {
 
 unsigned long arch_irq_save(void) {
     unsigned long flags = riscv_read_sstatus();
+
     riscv_disable_irqs();
     return flags;
 }
 
 void arch_irq_restore(unsigned long flags) {
     unsigned long sstatus = riscv_read_sstatus() & ~SSTATUS_SIE;
+
     riscv_write_sstatus(sstatus | (flags & SSTATUS_SIE));
 }
 
@@ -1234,6 +1367,7 @@ bool arch_resched_cpu(size_t cpu_id) {
         arch_resched_self();
         return true;
     }
+
     return false;
 }
 
@@ -1246,12 +1380,14 @@ u32 arch_timer_hz(void) {
 }
 
 u64 arch_realtime_ns(void) {
-    if (uart_console_base() == 0 || arch_timer_ticks() == 0) {
-        u64 hz = TIMER_FREQ ? (u64)TIMER_FREQ : 1ULL;
-        return (arch_timer_ticks() * 1000000000ULL) / hz;
+    u64 ticks = arch_timer_ticks();
+
+    if (!ticks) {
+        return 0;
     }
 
-    return (riscv_read_time() * 1000000000ULL) / RISCV_TIMEBASE_HZ;
+    u64 hz = TIMER_FREQ ? (u64)TIMER_FREQ : 1ULL;
+    return (ticks * 1000000000ULL) / hz;
 }
 
 const char *arch_name(void) {
@@ -1274,6 +1410,7 @@ void arch_mem_info(size_t *total, size_t *free_mem) {
     if (total) {
         *total = pmm_total_mem();
     }
+
     if (free_mem) {
         *free_mem = pmm_free_mem();
     }
@@ -1286,6 +1423,7 @@ void arch_syscall_install(int vector, arch_syscall_handler_t handler) {
 
 void arch_set_kernel_stack(uintptr_t sp) {
     kernel_sp = sp;
+
     riscv_write_sscratch(sp);
 }
 
@@ -1293,7 +1431,9 @@ void arch_panic_enter(void) {
     if (uart_console_base()) {
         serial_set_rx_interrupt(uart_console_base(), false);
     }
+
     logsink_unbind_devices();
+
     console_panic();
 }
 
@@ -1319,6 +1459,7 @@ ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
     }
 
     unsigned long irq_flags = spin_lock_irqsave(&klog.lock);
+
     size_t history_len = klog.history_len;
 
     if (offset >= history_len) {
@@ -1333,6 +1474,7 @@ ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
 
     memcpy(buf, klog.history + offset, copy_len);
     spin_unlock_irqrestore(&klog.lock, irq_flags);
+
     return (ssize_t)copy_len;
 }
 
@@ -1340,11 +1482,13 @@ size_t arch_log_ring_size(void) {
     unsigned long irq_flags = spin_lock_irqsave(&klog.lock);
     size_t history_len = klog.history_len;
     spin_unlock_irqrestore(&klog.lock, irq_flags);
+
     return history_len;
 }
 
 void panic_prepare(void) {
     arch_panic_enter();
+
     riscv_disable_irqs();
 }
 
@@ -1378,6 +1522,7 @@ void trap_handle(arch_int_state_t *frame) {
         switch (cause) {
         case RISCV_IRQ_SOFT:
             riscv_clear_sip_bits(SIP_SSIP);
+
             _serial_drain_input();
             sched_resched_softirq(frame);
             return;
@@ -1385,6 +1530,7 @@ void trap_handle(arch_int_state_t *frame) {
             __atomic_add_fetch(&cpu.ticks, 1, __ATOMIC_RELAXED);
             _timer_program_next();
             _serial_drain_input();
+
             sched_tick(frame);
             return;
         case RISCV_IRQ_EXTERNAL:
@@ -1409,10 +1555,12 @@ void trap_handle(arch_int_state_t *frame) {
     case RISCV_EXC_U_ECALL:
         sched_capture_context(frame);
         frame->s_regs.sepc += 4;
+
         if (cpu.syscall) {
             unsigned long irq_flags = arch_irq_save();
 
-            riscv_enable_irqs(); // re-enable so blocking syscalls can be preempted
+            // re-enable interrupts so blocking syscalls can be preempted
+            riscv_enable_irqs();
 
             cpu.syscall(frame);
             arch_irq_restore(irq_flags);
@@ -1428,19 +1576,22 @@ void trap_handle(arch_int_state_t *frame) {
     case RISCV_EXC_ILL:
         _log_user_trap_once(
             &cpu.ill_log,
-            8,
+            RISCV_TRAP_LOG_LIMIT,
             "riscv user illegal instruction",
             frame,
             cause
         );
+
         if (_handle_user_signal(SIGILL, frame)) {
             return;
         }
+
         panic_prepare();
         log_fatal(
             "illegal instruction at " RISCV_REG_FMT,
             (unsigned long)frame->s_regs.sepc
         );
+
         panic_dump_state(frame);
         panic_halt();
         return;
@@ -1453,6 +1604,7 @@ void trap_handle(arch_int_state_t *frame) {
             (unsigned long)frame->s_regs.sepc,
             (unsigned long)frame->s_regs.stval
         );
+
         panic_dump_state(frame);
         panic_halt();
         return;

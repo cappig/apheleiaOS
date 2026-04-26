@@ -60,6 +60,7 @@ arch_vm_space_t *arch_vm_create_user(void) {
 static void _free_tables_64(page_t *root) {
     for (size_t i = 0; i < GET_LVL3_INDEX(RISCV_KERNEL_BASE); i++) {
         page_t entry = root[i];
+
         if (!(entry & PT_PRESENT) || (kernel_space.root && entry == kernel_space.root[i])) {
             continue;
         }
@@ -69,8 +70,10 @@ static void _free_tables_64(page_t *root) {
         }
 
         page_t *lvl2 = (page_t *)(uintptr_t)page_get_paddr(&entry);
+
         for (size_t j = 0; j < 512; j++) {
             page_t lvl2e = lvl2[j];
+
             if (!(lvl2e & PT_PRESENT) || _leaf_pte(lvl2e)) {
                 continue;
             }
@@ -86,6 +89,7 @@ static void _free_tables_64(page_t *root) {
 static void _free_tables_32(page_t *root) {
     for (size_t i = 0; i < GET_LVL2_INDEX(RISCV_KERNEL_BASE); i++) {
         page_t entry = root[i];
+
         if (!(entry & PT_PRESENT) || (kernel_space.root && entry == kernel_space.root[i])) {
             continue;
         }

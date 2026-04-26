@@ -107,6 +107,7 @@ static bool _grow(size_t min_blocks) {
     if (heap_arena_count) {
         grow_pages = heap_arenas[heap_arena_count - 1].pages;
     }
+
     if (grow_pages < min_pages) {
         grow_pages = min_pages;
     }
@@ -144,6 +145,7 @@ static heap_arena_t *_find_arena_by_ptr(const void *ptr) {
 
 void heap_init(void) {
     unsigned long irq_flags = spin_lock_irqsave(&heap_lock);
+
     size_t free_pages = pmm_free_mem() / PAGE_4KIB;
     size_t min_heap = min(free_pages, (size_t)HEAP_MIN);
     size_t heap_pages = clamp(free_pages / 3, min_heap, (size_t)HEAP_MAX);
@@ -162,6 +164,7 @@ static void *_kmalloc(size_t size) {
     }
 
     unsigned long irq_flags = spin_lock_irqsave(&heap_lock);
+
     size_t header_blocks =
         DIV_ROUND_UP(sizeof(kheap_header_t), KERNEL_HEAP_BLOCK_SIZE);
     size_t blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK_SIZE);
@@ -210,6 +213,7 @@ static void _kfree(void *ptr) {
     }
 
     unsigned long irq_flags = spin_lock_irqsave(&heap_lock);
+
     kheap_header_t *header = (kheap_header_t *)((u8 *)ptr - sizeof(*header));
     if (header->magic != KERNEL_HEAP_MAGIC) {
         spin_unlock_irqrestore(&heap_lock, irq_flags);

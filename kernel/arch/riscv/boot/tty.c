@@ -40,7 +40,7 @@ int printf(const char *fmt, ...) {
 NORETURN void panic(const char *msg) {
     puts("bootloader panic ");
     puts(msg);
-    puts("\n\rexecution halted\n\r");
+    puts("\nexecution halted\n");
 
     halt();
     __builtin_unreachable();

@@ -1,5 +1,6 @@
 #include <base/units.h>
 #include <base/attributes.h>
+#include <riscv/arch_paging.h>
 #include <riscv/asm.h>
 #include <riscv/boot.h>
 #include <riscv/serial.h>
@@ -37,7 +38,7 @@ static void boot_logf(const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
-    printf("[riscv boot] %s\n\r", buf);
+    printf("[riscv boot] %s\n", buf);
 }
 
 static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
@@ -70,7 +71,10 @@ static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
     if (seg->mem_size > seg->file_size) {
         void *bss = (void *)(uintptr_t)(dst + seg->file_size);
         size_t bss_len = seg->mem_size - seg->file_size;
-        boot_logf("segment bss:  addr=%#llx len=%#zx", (unsigned long long)(dst + seg->file_size), bss_len);
+        boot_logf(
+            "segment bss:  addr=%#llx len=%#zx",
+            (unsigned long long)(dst + seg->file_size), bss_len
+        );
         memset(bss, 0, bss_len);
     }
 
@@ -89,15 +93,19 @@ static bool load_kernel_elf(const u8 *blob, size_t blob_size, uintptr_t *out_ent
     }
 
     *out_entry = (uintptr_t)info.entry;
-    boot_logf("elf parse: entry=%#lx class=%s", (unsigned long)*out_entry, info.is_64 ? "elf64" : "elf32");
+    boot_logf(
+        "elf parse: entry=%#lx class=%s",
+        (unsigned long)*out_entry, info.is_64 ? "elf64" : "elf32"
+    );
     return true;
 }
 
 NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
+    // delegate all standard exceptions to S-mode
     unsigned long medeleg =
-        (1UL << 0)  | (1UL << 1)  | (1UL << 2)  | (1UL << 3) |
-        (1UL << 4)  | (1UL << 5)  | (1UL << 6)  | (1UL << 7) |
-        (1UL << 8)  | (1UL << 12) | (1UL << 13) | (1UL << 15);
+        (1UL << 0) | (1UL << 1) | (1UL << 2) | (1UL << 3) |
+        (1UL << 4) | (1UL << 5) | (1UL << 6) | (1UL << 7) |
+        (1UL << 8) | (1UL << 12) | (1UL << 13) | (1UL << 15);
     unsigned long mideleg = MIP_SSIP | MIP_STIP | (1UL << 9);
     unsigned long mstatus = riscv_read_mstatus();
 
@@ -117,8 +125,9 @@ NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
     riscv_write_mcounteren(
         RISCV_COUNTEREN_CY | RISCV_COUNTEREN_TM | RISCV_COUNTEREN_IR
     );
+
 #if __riscv_xlen == 64
-    /* STCE depends on menvcfg support; keep rv32 bring-up portable across sims. */
+    // STCE depends on menvcfg support; keep rv32 bring-up portable across sims
     riscv_write_menvcfg(MENVCFG_STCE);
 #endif
 
@@ -128,7 +137,9 @@ NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
     mstatus &= ~MSTATUS_MPP_MASK;
     mstatus |= MSTATUS_MPP_S;
     mstatus &= ~(MSTATUS_MIE | MSTATUS_MPIE);
+
     riscv_write_mstatus(mstatus);
+
     riscv_write_mepc(entry);
 
     asm volatile(
@@ -153,11 +164,11 @@ static uintptr_t detect_uart_base(const void *dtb) {
 
         if (fdt_has_compatible(dtb, "ucbbar,spike-bare-dev") ||
             fdt_has_compatible(dtb, "ucbbar,spike-bare")) {
-            /* run-spike wires an NS16550-compatible MMIO plugin at UART0. */
+            // run-spike wires an NS16550-compatible MMIO plugin at UART0
             return SERIAL_UART0;
         }
 
-        /* Valid DTB with no NS16550 means "no MMIO UART" on this platform. */
+        // valid DTB with no NS16550 means "no MMIO UART" on this platform
         return 0;
     }
 
@@ -166,7 +177,7 @@ static uintptr_t detect_uart_base(const void *dtb) {
 
 static fdt_reg_t detect_memory(const void *dtb) {
     fdt_reg_t reg = {
-        .addr = 0x80000000ULL,
+        .addr = RISCV_KERNEL_BASE,
         .size = 256ULL * MIB,
     };
 
@@ -262,9 +273,15 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     bool boot_hart_known = boot_dtb && fdt_boot_cpuid_phys(boot_dtb, &boot_hart);
 
     if (boot_hart_known) {
-        boot_logf("boot hart: dtb says %llu, we are %lu", (unsigned long long)boot_hart, (unsigned long)hartid);
+        boot_logf(
+            "boot hart: dtb says %llu, we are %lu",
+            (unsigned long long)boot_hart, (unsigned long)hartid
+        );
     } else {
-        boot_logf("boot hart: not in DTB, defaulting to hart 0 (we are %lu)", (unsigned long)hartid);
+        boot_logf(
+            "boot hart: not in DTB, defaulting to hart 0 (we are %lu)",
+            (unsigned long)hartid
+        );
     }
 
     if ((boot_hart_known && hartid != (uintptr_t)boot_hart) ||
@@ -285,6 +302,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         (unsigned long)memory_end,
         (unsigned long)((memory_end - heap_start) / 1024UL)
     );
+
     boot_heap_init(heap_start, memory_end);
 
     if (rootfs_from_initrd) {
@@ -317,12 +335,17 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
 #endif
 
     boot_logf("kernel: reading %s", kernel_path);
+
     size_t kernel_size = 0;
     void *kernel_blob = boot_ext2_read_file(&rootfs, kernel_path, &kernel_size);
     if (!kernel_blob) {
         panic("no kernel image found");
     }
-    boot_logf("kernel: loaded at %#lx size=%zu KiB", (unsigned long)(uintptr_t)kernel_blob, kernel_size / 1024);
+
+    boot_logf(
+        "kernel: loaded at %#lx size=%zu KiB",
+        (unsigned long)(uintptr_t)kernel_blob, kernel_size / 1024
+    );
 
     uintptr_t elf_entry = 0;
     if (!load_kernel_elf(kernel_blob, kernel_size, &elf_entry)) {
@@ -336,7 +359,10 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
             panic("failed to copy dtb");
         }
         memcpy(dtb_copy, boot_dtb, dtb_size);
-        boot_logf("dtb: copied %zu bytes to %#lx", dtb_size, (unsigned long)(uintptr_t)dtb_copy);
+        boot_logf(
+            "dtb: copied %zu bytes to %#lx",
+            dtb_size, (unsigned long)(uintptr_t)dtb_copy
+        );
     } else {
         boot_logf("dtb: none available");
     }

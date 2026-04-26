@@ -24,6 +24,7 @@ bool arch_signal_setup_user_stack(
     }
 
     uintptr_t aligned = ALIGN_DOWN(sp, 16);
+
     state->s_regs.sp = aligned;
     state->g_regs.ra = (uintptr_t)thread->signal_trampoline;
     state->g_regs.a0 = (uintptr_t)signum;
