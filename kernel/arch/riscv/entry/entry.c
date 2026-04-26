@@ -10,8 +10,28 @@
 
 static boot_info_t direct_boot_info = {0};
 
+static const void *sanitize_dtb_ptr(const void *dtb) {
+    uintptr_t addr = (uintptr_t)dtb;
+
+    if (!addr || (addr & 0x3U) != 0) {
+        return NULL;
+    }
+
+    bool low_window = addr >= PAGE_4KIB && addr < (16ULL * MIB);
+    bool ram_window =
+        addr >= RISCV_KERNEL_BASE &&
+        addr < (RISCV_KERNEL_BASE + 256ULL * MIB);
+
+    if (!low_window && !ram_window) {
+        return NULL;
+    }
+
+    return fdt_valid(dtb) ? dtb : NULL;
+}
+
 static uintptr_t detect_uart_base(const void *dtb) {
-    if (!dtb || !fdt_valid(dtb)) {
+    dtb = sanitize_dtb_ptr(dtb);
+    if (!dtb) {
         return SERIAL_UART0;
     }
 
@@ -38,6 +58,7 @@ static fdt_reg_t detect_memory(const void *dtb) {
         .size = 256ULL * MIB,
     };
 
+    dtb = sanitize_dtb_ptr(dtb);
     fdt_reg_t probed = {0};
     if (dtb && fdt_find_memory_reg(dtb, &probed) && probed.addr && probed.size) {
         reg = probed;
@@ -49,6 +70,7 @@ static fdt_reg_t detect_memory(const void *dtb) {
 static fdt_reg_t detect_initrd(const void *dtb) {
     fdt_reg_t reg = {0};
 
+    dtb = sanitize_dtb_ptr(dtb);
     if (dtb) {
         (void)fdt_find_initrd(dtb, &reg);
     }
@@ -82,13 +104,14 @@ static bool boot_info_valid(const boot_info_t *info) {
     }
 
     if (info->dtb_paddr && info->dtb_size) {
-        return fdt_valid((const void *)(uintptr_t)info->dtb_paddr);
+        return sanitize_dtb_ptr((const void *)(uintptr_t)info->dtb_paddr) != NULL;
     }
 
     return info->uart_paddr != 0;
 }
 
 static bool boot_hart_matches(uintptr_t hartid, const void *dtb) {
+    dtb = sanitize_dtb_ptr(dtb);
     u64 boot_hart = 0;
     if (dtb && fdt_boot_cpuid_phys(dtb, &boot_hart)) {
         return hartid == (uintptr_t)boot_hart;
@@ -104,6 +127,7 @@ static NORETURN void park_secondary_hart(uintptr_t uart_base, uintptr_t hartid) 
 }
 
 static boot_info_t *direct_boot_info_build(uintptr_t hartid, const void *dtb) {
+    dtb = sanitize_dtb_ptr(dtb);
     fdt_reg_t memory_reg = detect_memory(dtb);
     fdt_reg_t initrd_reg = detect_initrd(dtb);
 
@@ -112,7 +136,7 @@ static boot_info_t *direct_boot_info_build(uintptr_t hartid, const void *dtb) {
 
     direct_boot_info.hartid = hartid;
     direct_boot_info.dtb_paddr = (uintptr_t)dtb;
-    direct_boot_info.dtb_size = fdt_size(dtb);
+    direct_boot_info.dtb_size = dtb ? fdt_size(dtb) : 0;
 
     direct_boot_info.memory_paddr = memory_reg.addr;
     direct_boot_info.memory_size = memory_reg.size;

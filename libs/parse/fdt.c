@@ -1073,3 +1073,241 @@ bool fdt_find_initrd(const void *dtb, fdt_reg_t *out) {
     out->size = initrd_end - initrd_start;
     return true;
 }
+
+bool fdt_find_timebase_frequency(const void *dtb, u64 *out) {
+    if (!out) {
+        return false;
+    }
+
+    *out = 0;
+
+    const fdt_header_t *hdr = NULL;
+    if (!fdt_header(dtb, &hdr) || !fdt_valid(dtb)) {
+        return false;
+    }
+
+    u32 off_struct = fdt_be32(&hdr->off_dt_struct);
+    u32 off_strings = fdt_be32(&hdr->off_dt_strings);
+    u32 size_struct = fdt_be32(&hdr->size_dt_struct);
+    u32 size_strings = fdt_be32(&hdr->size_dt_strings);
+
+    const u8 *struct_ptr = (const u8 *)dtb + off_struct;
+    const u8 *struct_end = struct_ptr + size_struct;
+    const char *strings = (const char *)dtb + off_strings;
+
+    int depth = -1;
+    bool in_cpus = false;
+
+    const u8 *p = struct_ptr;
+    while (p + 4 <= struct_end) {
+        u32 token = fdt_be32(p);
+        p += 4;
+
+        if (token == FDT_BEGIN_NODE) {
+            const char *name = (const char *)p;
+            size_t len = 0;
+            while (p + len < struct_end && name[len]) {
+                len++;
+            }
+            if (p + len >= struct_end) {
+                return false;
+            }
+
+            p += len + 1;
+            p = fdt_align4(p);
+
+            depth++;
+            if (depth == 1 && !strcmp(name, "cpus")) {
+                in_cpus = true;
+            }
+            continue;
+        }
+
+        if (token == FDT_END_NODE) {
+            if (depth < 0) {
+                return false;
+            }
+
+            if (depth == 1 && in_cpus) {
+                in_cpus = false;
+            }
+
+            depth--;
+            continue;
+        }
+
+        if (token == FDT_PROP) {
+            if (p + 8 > struct_end) {
+                return false;
+            }
+
+            u32 len = fdt_be32(p);
+            u32 nameoff = fdt_be32(p + 4);
+            p += 8;
+
+            const u8 *data = p;
+            if (p + len > struct_end) {
+                return false;
+            }
+            p += len;
+            p = fdt_align4(p);
+
+            if (!(in_cpus && depth == 1)) {
+                continue;
+            }
+
+            const char *pname = NULL;
+            if (!fdt_lookup_string(strings, size_strings, nameoff, &pname)) {
+                return false;
+            }
+
+            if (strcmp(pname, "timebase-frequency")) {
+                continue;
+            }
+
+            if (len == sizeof(u32)) {
+                *out = (u64)fdt_be32(data);
+                return *out != 0;
+            }
+
+            if (len == (2U * sizeof(u32))) {
+                *out = read_cells(data, 2);
+                return *out != 0;
+            }
+
+            return false;
+        }
+
+        if (token == FDT_NOP) {
+            continue;
+        }
+
+        if (token == FDT_END) {
+            break;
+        }
+
+        return false;
+    }
+
+    return false;
+}
+
+bool fdt_find_model(const void *dtb, char *out, size_t out_len) {
+    if (!out || !out_len) {
+        return false;
+    }
+
+    out[0] = '\0';
+
+    const fdt_header_t *hdr = NULL;
+    if (!fdt_header(dtb, &hdr) || !fdt_valid(dtb)) {
+        return false;
+    }
+
+    u32 off_struct = fdt_be32(&hdr->off_dt_struct);
+    u32 off_strings = fdt_be32(&hdr->off_dt_strings);
+    u32 size_struct = fdt_be32(&hdr->size_dt_struct);
+    u32 size_strings = fdt_be32(&hdr->size_dt_strings);
+
+    const u8 *struct_ptr = (const u8 *)dtb + off_struct;
+    const u8 *struct_end = struct_ptr + size_struct;
+    const char *strings = (const char *)dtb + off_strings;
+
+    bool have_fallback = false;
+    int depth = -1;
+
+    const u8 *p = struct_ptr;
+    while (p + 4 <= struct_end) {
+        u32 token = fdt_be32(p);
+        p += 4;
+
+        if (token == FDT_BEGIN_NODE) {
+            const char *name = (const char *)p;
+            size_t len = 0;
+            while (p + len < struct_end && name[len]) {
+                len++;
+            }
+            if (p + len >= struct_end) {
+                return false;
+            }
+
+            p += len + 1;
+            p = fdt_align4(p);
+            depth++;
+            continue;
+        }
+
+        if (token == FDT_END_NODE) {
+            if (depth < 0) {
+                return false;
+            }
+            depth--;
+            continue;
+        }
+
+        if (token == FDT_PROP) {
+            if (p + 8 > struct_end) {
+                return false;
+            }
+
+            u32 len = fdt_be32(p);
+            u32 nameoff = fdt_be32(p + 4);
+            p += 8;
+
+            const u8 *data = p;
+            if (p + len > struct_end) {
+                return false;
+            }
+            p += len;
+            p = fdt_align4(p);
+
+            if (depth != 0) {
+                continue;
+            }
+
+            const char *pname = NULL;
+            if (!fdt_lookup_string(strings, size_strings, nameoff, &pname)) {
+                return false;
+            }
+
+            if (strcmp(pname, "model") && strcmp(pname, "compatible")) {
+                continue;
+            }
+
+            size_t slen = fdt_strnlen((const char *)data, len);
+            if (!slen || slen >= len) {
+                if (!strcmp(pname, "model")) {
+                    return false;
+                }
+                continue;
+            }
+
+            size_t copy_len = slen;
+            if (copy_len >= out_len) {
+                copy_len = out_len - 1;
+            }
+
+            memcpy(out, data, copy_len);
+            out[copy_len] = '\0';
+
+            if (!strcmp(pname, "model")) {
+                return true;
+            }
+
+            have_fallback = out[0] != '\0';
+            continue;
+        }
+
+        if (token == FDT_NOP) {
+            continue;
+        }
+
+        if (token == FDT_END) {
+            break;
+        }
+
+        return false;
+    }
+
+    return have_fallback;
+}

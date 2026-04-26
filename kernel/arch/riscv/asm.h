@@ -31,12 +31,9 @@
 #define RISCV_COUNTEREN_TM (1UL << 1)
 #define RISCV_COUNTEREN_IR (1UL << 2)
 
-#define CSR_MENVCFG "0x30A"
-#define CSR_MENVCFGH "0x31A"
-#define CSR_STIMECMP "0x14D"
-#define CSR_STIMECMPH "0x15D"
-
-#define MENVCFG_STCE (1ULL << 63) // enable Sstc (stimecmp) for S-mode
+#define RISCV_MCALL_EXT_TIMER       0x4154494dUL
+#define RISCV_MCALL_TIMER_ARM_DELTA 0UL
+#define RISCV_MCALL_TIMER_READ_TIME 1UL
 
 #define PMP_R       0x01U
 #define PMP_W       0x02U
@@ -203,24 +200,62 @@ static inline void riscv_write_pmpcfg0(unsigned long value) {
     asm volatile("csrw pmpcfg0, %0" : : "r"(value) : "memory");
 }
 
-static inline void riscv_write_menvcfg(u64 value) {
+static inline bool riscv_machine_timer_arm_delta(u64 delta) {
 #if __riscv_xlen == 64
-    asm volatile("csrw " CSR_MENVCFG ", %0" : : "r"(value) : "memory");
+    register unsigned long a0 asm("a0") = (unsigned long)delta;
+    register unsigned long a1 asm("a1") = 0;
 #else
-    asm volatile("csrw " CSR_MENVCFG ", %0" : : "r"((u32)value) : "memory");
-    asm volatile("csrw " CSR_MENVCFGH ", %0" : : "r"((u32)(value >> 32)) : "memory");
+    register unsigned long a0 asm("a0") = (u32)delta;
+    register unsigned long a1 asm("a1") = (u32)(delta >> 32);
 #endif
+    register unsigned long a6 asm("a6") = RISCV_MCALL_TIMER_ARM_DELTA;
+    register unsigned long a7 asm("a7") = RISCV_MCALL_EXT_TIMER;
+
+    asm volatile(
+        "ecall"
+        : "+r"(a0), "+r"(a1)
+        : "r"(a6), "r"(a7)
+        : "memory"
+    );
+
+    return (long)a0 == 0;
 }
 
-static inline void riscv_write_stimecmp(u64 value) {
+static inline bool riscv_machine_timer_read(u64 *value) {
+    if (!value) {
+        return false;
+    }
+
 #if __riscv_xlen == 64
-    asm volatile("csrw " CSR_STIMECMP ", %0" : : "r"(value) : "memory");
+    register unsigned long a0 asm("a0") = 0;
+    register unsigned long a1 asm("a1") = 0;
+    register unsigned long a2 asm("a2") = 0;
 #else
-    // write high half first with all-ones to avoid a spurious early timer fire
-    asm volatile("csrw " CSR_STIMECMPH ", %0" : : "r"(0xffffffffU) : "memory");
-    asm volatile("csrw " CSR_STIMECMP ", %0" : : "r"((u32)value) : "memory");
-    asm volatile("csrw " CSR_STIMECMPH ", %0" : : "r"((u32)(value >> 32)) : "memory");
+    register unsigned long a0 asm("a0") = 0;
+    register unsigned long a1 asm("a1") = 0;
+    register unsigned long a2 asm("a2") = 0;
 #endif
+    register unsigned long a6 asm("a6") = RISCV_MCALL_TIMER_READ_TIME;
+    register unsigned long a7 asm("a7") = RISCV_MCALL_EXT_TIMER;
+
+    asm volatile(
+        "ecall"
+        : "+r"(a0), "+r"(a1), "+r"(a2)
+        : "r"(a6), "r"(a7)
+        : "memory"
+    );
+
+    if ((long)a0 != 0) {
+        return false;
+    }
+
+#if __riscv_xlen == 64
+    *value = (u64)a1;
+#else
+    *value = ((u64)a2 << 32) | (u32)a1;
+#endif
+
+    return true;
 }
 
 static inline void riscv_write_satp(uintptr_t root, u64 mode) {

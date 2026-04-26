@@ -26,9 +26,36 @@ extern char __image_start;
 #define RISCV_BOOT_IMAGE_ROOTFS_OFFSET (2ULL * MIB)
 #endif
 
+#define RISCV_TIMEBASE_HZ_DEFAULT 10000000ULL
+#define RISCV_CLINT_DEFAULT_BASE  0x02000000ULL
+#define RISCV_CLINT_MTIMECMP_OFF  0x00004000ULL
+#define RISCV_CLINT_MTIME_OFF     0x0000BFF8ULL
+#define RISCV_DTB_LOW_WINDOW_MAX  (16ULL * MIB)
+#define RISCV_DTB_RAM_WINDOW_SIZE (256ULL * MIB)
+
+#ifndef RISCV_BOOT_FORCE_NO_DTB
+#define RISCV_BOOT_FORCE_NO_DTB 0
+#endif
+
+#ifndef RISCV_BOOT_IMAGE_BASE_OVERRIDE
+#define RISCV_BOOT_IMAGE_BASE_OVERRIDE 0ULL
+#endif
+
+#ifndef TIMER_FREQ
+#define TIMER_FREQ 1000U
+#endif
+
 struct riscv_elf_load_ctx {
     const u8 *blob;
 };
+
+uintptr_t riscv_boot_timer_cmp_addr = 0;
+uintptr_t riscv_boot_timer_time_addr = 0;
+u64 riscv_boot_timer_timebase_hz = RISCV_TIMEBASE_HZ_DEFAULT;
+u8 riscv_boot_timer_ready = 0;
+
+extern void mtrap_entry(void);
+extern char riscv_boot_mtrap_scratch[];
 
 static void boot_logf(const char *fmt, ...) {
     char buf[PRINTF_BUF_SIZE];
@@ -100,6 +127,126 @@ static bool load_kernel_elf(const u8 *blob, size_t blob_size, uintptr_t *out_ent
     return true;
 }
 
+static const void *sanitize_dtb_ptr(const void *dtb) {
+    uintptr_t addr = (uintptr_t)dtb;
+
+    if (!addr || (addr & 0x3U) != 0) {
+        return NULL;
+    }
+
+    bool low_window = addr >= RISCV_BOOT_PAGE_SIZE && addr < RISCV_DTB_LOW_WINDOW_MAX;
+    bool ram_window =
+        addr >= RISCV_KERNEL_BASE &&
+        addr < (RISCV_KERNEL_BASE + RISCV_DTB_RAM_WINDOW_SIZE);
+
+    if (!low_window && !ram_window) {
+        return NULL;
+    }
+
+    return fdt_valid(dtb) ? dtb : NULL;
+}
+
+static bool detect_mtimer(
+    const void *dtb,
+    uintptr_t hartid,
+    uintptr_t *mtime_addr_out,
+    uintptr_t *mtimecmp_addr_out,
+    u64 *timebase_hz_out,
+    const char **kind_out
+) {
+    if (mtime_addr_out) {
+        *mtime_addr_out = 0;
+    }
+    if (mtimecmp_addr_out) {
+        *mtimecmp_addr_out = 0;
+    }
+    if (timebase_hz_out) {
+        *timebase_hz_out = RISCV_TIMEBASE_HZ_DEFAULT;
+    }
+    if (kind_out) {
+        *kind_out = "none";
+    }
+
+    u64 timebase_hz = RISCV_TIMEBASE_HZ_DEFAULT;
+    if (dtb) {
+        u64 parsed_hz = 0;
+        if (fdt_find_timebase_frequency(dtb, &parsed_hz) && parsed_hz) {
+            timebase_hz = parsed_hz;
+        }
+    }
+
+    fdt_reg_t reg = {0};
+    if (
+        dtb &&
+        fdt_find_compatible_reg(dtb, "riscv,aclint-mtimer", &reg) &&
+        reg.addr &&
+        reg.size >= ((u64)(hartid + 1U) * 8ULL + 8ULL)
+    ) {
+        if (mtime_addr_out) {
+            *mtime_addr_out = (uintptr_t)(reg.addr + reg.size - 8ULL);
+        }
+        if (mtimecmp_addr_out) {
+            *mtimecmp_addr_out = (uintptr_t)(reg.addr + (u64)hartid * 8ULL);
+        }
+        if (timebase_hz_out) {
+            *timebase_hz_out = timebase_hz;
+        }
+        if (kind_out) {
+            *kind_out = "aclint-mtimer";
+        }
+        return true;
+    }
+
+    if (
+        dtb &&
+        (
+            (fdt_find_compatible_reg(dtb, "sifive,clint0", &reg) && reg.addr) ||
+            (fdt_find_compatible_reg(dtb, "riscv,clint0", &reg) && reg.addr)
+        )
+    ) {
+        if (mtime_addr_out) {
+            *mtime_addr_out = (uintptr_t)(reg.addr + RISCV_CLINT_MTIME_OFF);
+        }
+        if (mtimecmp_addr_out) {
+            *mtimecmp_addr_out = (uintptr_t)(
+                reg.addr + RISCV_CLINT_MTIMECMP_OFF + (u64)hartid * 8ULL
+            );
+        }
+        if (timebase_hz_out) {
+            *timebase_hz_out = timebase_hz;
+        }
+        if (kind_out) {
+            *kind_out = "clint";
+        }
+        return true;
+    }
+
+    if (
+        !dtb ||
+        fdt_has_compatible(dtb, "ucbbar,spike-bare-dev") ||
+        fdt_has_compatible(dtb, "ucbbar,spike-bare")
+    ) {
+        if (mtime_addr_out) {
+            *mtime_addr_out = (uintptr_t)(RISCV_CLINT_DEFAULT_BASE + RISCV_CLINT_MTIME_OFF);
+        }
+        if (mtimecmp_addr_out) {
+            *mtimecmp_addr_out = (uintptr_t)(
+                RISCV_CLINT_DEFAULT_BASE + RISCV_CLINT_MTIMECMP_OFF +
+                (u64)hartid * 8ULL
+            );
+        }
+        if (timebase_hz_out) {
+            *timebase_hz_out = timebase_hz;
+        }
+        if (kind_out) {
+            *kind_out = "clint-default";
+        }
+        return true;
+    }
+
+    return false;
+}
+
 NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
     // delegate all standard exceptions to S-mode
     unsigned long medeleg =
@@ -125,11 +272,10 @@ NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
     riscv_write_mcounteren(
         RISCV_COUNTEREN_CY | RISCV_COUNTEREN_TM | RISCV_COUNTEREN_IR
     );
-
-#if __riscv_xlen == 64
-    // STCE depends on menvcfg support; keep rv32 bring-up portable across sims
-    riscv_write_menvcfg(MENVCFG_STCE);
-#endif
+    riscv_write_mtvec((uintptr_t)mtrap_entry);
+    riscv_write_mscratch((uintptr_t)riscv_boot_mtrap_scratch);
+    riscv_clear_mip_bits(MIP_STIP);
+    riscv_write_mie(riscv_boot_timer_ready ? MIE_MTIE : 0);
 
     riscv_write_pmpaddr0((uintptr_t)-1);
     riscv_write_pmpcfg0(PMP_R | PMP_W | PMP_X | PMP_A_NAPOT);
@@ -214,14 +360,21 @@ static bool read_rootfs_image(void *dest, size_t offset, size_t bytes, void *ctx
 }
 
 NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
+    if (RISCV_BOOT_FORCE_NO_DTB) {
+        dtb = NULL;
+    }
+
     boot_ext2_t rootfs = {0};
-    bool dtb_valid = dtb && fdt_valid(dtb);
-    const void *boot_dtb = dtb_valid ? dtb : NULL;
+    const void *boot_dtb = sanitize_dtb_ptr(dtb);
+    bool dtb_valid = boot_dtb != NULL;
     size_t dtb_size = boot_dtb ? fdt_size(boot_dtb) : 0;
     fdt_reg_t initrd_reg = {0};
 
+    uintptr_t image_base = RISCV_BOOT_IMAGE_BASE_OVERRIDE ?
+        (uintptr_t)RISCV_BOOT_IMAGE_BASE_OVERRIDE :
+        (uintptr_t)&__image_start;
     const u8 *embedded_rootfs =
-        (const u8 *)((uintptr_t)&__image_start + RISCV_BOOT_IMAGE_ROOTFS_OFFSET);
+        (const u8 *)(image_base + RISCV_BOOT_IMAGE_ROOTFS_OFFSET);
     const u8 *rootfs_image = embedded_rootfs;
     size_t rootfs_limit = 0;
     bool rootfs_from_initrd = false;
@@ -249,7 +402,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     );
     boot_logf(
         "layout: image=%#lx rootfs=%#lx stack_top=%#lx scratch=%#lx uart=%#lx",
-        (unsigned long)(uintptr_t)&__image_start,
+        (unsigned long)image_base,
         (unsigned long)(uintptr_t)embedded_rootfs,
         (unsigned long)(uintptr_t)&__stack_top,
         (unsigned long)scratch_base,
@@ -288,6 +441,34 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         (!boot_hart_known && hartid != 0)) {
         boot_logf("parking secondary hart %lu", (unsigned long)hartid);
         halt();
+    }
+
+    const char *timer_kind = "none";
+    riscv_boot_timer_ready = (u8)detect_mtimer(
+        boot_dtb,
+        hartid,
+        &riscv_boot_timer_time_addr,
+        &riscv_boot_timer_cmp_addr,
+        &riscv_boot_timer_timebase_hz,
+        &timer_kind
+    );
+
+    if (riscv_boot_timer_ready) {
+        u64 interval = riscv_boot_timer_timebase_hz / (TIMER_FREQ ? TIMER_FREQ : 1U);
+        if (!interval) {
+            interval = 1;
+        }
+
+        boot_logf(
+            "timer: %s time=%#lx cmp=%#lx timebase=%lluHz interval=%llu",
+            timer_kind,
+            (unsigned long)riscv_boot_timer_time_addr,
+            (unsigned long)riscv_boot_timer_cmp_addr,
+            (unsigned long long)riscv_boot_timer_timebase_hz,
+            (unsigned long long)interval
+        );
+    } else {
+        boot_logf("timer: no machine timer backend detected");
     }
 
     heap_start = ALIGN(heap_start, RISCV_BOOT_PAGE_SIZE);

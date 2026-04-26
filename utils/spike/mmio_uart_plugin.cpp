@@ -63,7 +63,7 @@ public:
             stdin_termios_saved_ = true;
 
             struct termios raw = stdin_termios_;
-            raw.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN);
+            raw.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN | ISIG);
             raw.c_iflag &= ~(IXON | IXOFF | ICRNL | INLCR | IGNCR);
             raw.c_cc[VMIN] = 1;
             raw.c_cc[VTIME] = 0;

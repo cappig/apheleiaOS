@@ -44,6 +44,7 @@
 #define RISCV_MMIO_MAX_REGIONS  24
 #define RISCV_UART_DEFAULT_IRQ  10
 #define RISCV_STACKTRACE_MAX    32U
+#define RISCV_PLATFORM_NAME_MAX 64U
 
 #define RISCV_IRQ_SOFT     1
 #define RISCV_IRQ_TIMER    5
@@ -105,6 +106,16 @@ static struct {
     u64 rootfs_paddr;
     size_t rootfs_size;
 } boot = { .mem_paddr = RISCV_KERNEL_BASE };
+
+static struct {
+    u64 timebase_hz;
+    char platform_name[RISCV_PLATFORM_NAME_MAX];
+    bool arm_fail_logged;
+} timer = {
+    .timebase_hz = RISCV_TIMEBASE_HZ,
+    .platform_name = "riscv",
+    .arm_fail_logged = false,
+};
 
 static struct {
     bool console_ready;
@@ -700,13 +711,22 @@ static void _mmio_map_regions(page_t *root) {
     }
 }
 
-static void _timer_program_next(void) {
-    u64 interval = RISCV_TIMEBASE_HZ / (TIMER_FREQ ? TIMER_FREQ : 1U);
+static bool _timer_program_next(void) {
+    u64 interval = timer.timebase_hz / (TIMER_FREQ ? TIMER_FREQ : 1U);
     if (!interval) {
         interval = 1;
     }
 
-    riscv_write_stimecmp(riscv_read_time() + interval);
+    if (riscv_machine_timer_arm_delta(interval)) {
+        return true;
+    }
+
+    if (!timer.arm_fail_logged) {
+        timer.arm_fail_logged = true;
+        log_warn("failed to arm machine timer");
+    }
+
+    return false;
 }
 
 static bool _handle_user_signal(int signum, arch_int_state_t *frame) {
@@ -992,6 +1012,30 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         (unsigned long)(uintptr_t)boot.dtb, (unsigned long)reserved_end
     );
 
+    timer.timebase_hz = RISCV_TIMEBASE_HZ;
+    timer.platform_name[0] = '\0';
+    timer.arm_fail_logged = false;
+    if (boot.dtb) {
+        u64 parsed_hz = 0;
+        if (fdt_find_timebase_frequency(boot.dtb, &parsed_hz) && parsed_hz) {
+            timer.timebase_hz = parsed_hz;
+        }
+
+        if (!fdt_find_model(boot.dtb, timer.platform_name, sizeof(timer.platform_name))) {
+            strncpy(timer.platform_name, "riscv", sizeof(timer.platform_name) - 1);
+            timer.platform_name[sizeof(timer.platform_name) - 1] = '\0';
+        }
+    } else {
+        strncpy(timer.platform_name, "riscv", sizeof(timer.platform_name) - 1);
+        timer.platform_name[sizeof(timer.platform_name) - 1] = '\0';
+    }
+
+    log_info(
+        "platform: model=%s timebase=%llu Hz",
+        timer.platform_name,
+        (unsigned long long)timer.timebase_hz
+    );
+
     uintptr_t mem_end = (uintptr_t)(boot.mem_paddr + boot.mem_size);
     uintptr_t early_limit = mem_end;
 
@@ -1124,14 +1168,8 @@ void arch_late_init(void) {
         return;
     }
 
-#if __riscv_xlen == 64
-    _timer_program_next();
-
+    (void)_timer_program_next();
     riscv_set_sie_bits(SIE_SSIE | SIE_STIE | (plic.ready ? SIE_SEIE : 0));
-#else
-    // rv32 simulator targets may not implement Sstc CSR 0x14D/0x15D
-    riscv_set_sie_bits(SIE_SSIE | (plic.ready ? SIE_SEIE : 0));
-#endif
 
     cpu.late_init[cpu_id] = false;
 }
@@ -1382,12 +1420,18 @@ u32 arch_timer_hz(void) {
 u64 arch_realtime_ns(void) {
     u64 ticks = arch_timer_ticks();
 
-    if (!ticks) {
-        return 0;
+    if (ticks) {
+        u64 hz = TIMER_FREQ ? (u64)TIMER_FREQ : 1ULL;
+        return (ticks * 1000000000ULL) / hz;
     }
 
-    u64 hz = TIMER_FREQ ? (u64)TIMER_FREQ : 1ULL;
-    return (ticks * 1000000000ULL) / hz;
+    u64 counter = 0;
+    if (riscv_machine_timer_read(&counter)) {
+        u64 hz = timer.timebase_hz ? timer.timebase_hz : RISCV_TIMEBASE_HZ;
+        return (counter * 1000000000ULL) / hz;
+    }
+
+    return 0;
 }
 
 const char *arch_name(void) {
@@ -1399,11 +1443,11 @@ const char *arch_name(void) {
 }
 
 const char *arch_cpu_name(void) {
-    return "qemu-virt";
+    return timer.platform_name[0] ? timer.platform_name : "riscv";
 }
 
 u64 arch_cpu_khz(void) {
-    return RISCV_TIMEBASE_HZ / 1000ULL;
+    return timer.timebase_hz / 1000ULL;
 }
 
 void arch_mem_info(size_t *total, size_t *free_mem) {
@@ -1528,7 +1572,7 @@ void trap_handle(arch_int_state_t *frame) {
             return;
         case RISCV_IRQ_TIMER:
             __atomic_add_fetch(&cpu.ticks, 1, __ATOMIC_RELAXED);
-            _timer_program_next();
+            (void)_timer_program_next();
             _serial_drain_input();
 
             sched_tick(frame);
