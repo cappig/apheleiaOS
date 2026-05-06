@@ -11,6 +11,31 @@ static inline u64 _pages_to_kib(size_t pages) {
     return ((u64)pages * PAGE_4KIB) / KIB;
 }
 
+static bool region_span(uintptr_t base, size_t pages, uintptr_t *end_out) {
+    if (!pages || pages > (uintptr_t)-1 / PAGE_4KIB) {
+        return false;
+    }
+
+    uintptr_t size = (uintptr_t)pages * PAGE_4KIB;
+    if (size > (uintptr_t)-1 - base) {
+        return false;
+    }
+
+    if (end_out) {
+        *end_out = base + size;
+    }
+
+    return true;
+}
+
+static bool region_bounds_ok(uintptr_t vaddr, uintptr_t paddr, size_t pages) {
+    if (!region_span(vaddr, pages, NULL)) {
+        return false;
+    }
+
+    return region_span(paddr, pages, NULL);
+}
+
 void sched_user_mem_add(sched_thread_t *thread, size_t pages) {
     if (!thread || !pages) {
         return;
@@ -37,16 +62,16 @@ void sched_user_mem_sub(sched_thread_t *thread, size_t pages) {
     u64 current = __atomic_load_n(&thread->user_mem_kib, __ATOMIC_RELAXED);
     while (current > 0) {
         u64 next = current > delta_kib ? (current - delta_kib) : 0;
+        bool updated = __atomic_compare_exchange_n(
+            &thread->user_mem_kib,
+            &current,
+            next,
+            false,
+            __ATOMIC_RELAXED,
+            __ATOMIC_RELAXED
+        );
 
-        if (__atomic_compare_exchange_n(
-                &thread->user_mem_kib,
-                &current,
-                next,
-                false,
-                __ATOMIC_RELAXED,
-                __ATOMIC_RELAXED
-            )) {
-
+        if (updated) {
             return;
         }
     }
@@ -75,7 +100,7 @@ bool sched_add_user_region(
     size_t pages,
     u64 flags
 ) {
-    if (!thread || !pages) {
+    if (!thread || !region_bounds_ok(vaddr, paddr, pages)) {
         return false;
     }
 
@@ -126,7 +151,12 @@ find_user_region(sched_thread_t *thread, uintptr_t addr) {
 
     while (region) {
         uintptr_t start = region->vaddr;
-        uintptr_t end = start + region->pages * PAGE_4KIB;
+        uintptr_t end = 0;
+
+        if (!region_span(start, region->pages, &end)) {
+            region = region->next;
+            continue;
+        }
 
         if (addr >= start && addr < end) {
             return region;
@@ -143,6 +173,10 @@ bool sched_user_region_mark_cow(
     sched_user_region_t *region
 ) {
     if (!thread || !region || !region->pages) {
+        return false;
+    }
+
+    if (!region_bounds_ok(region->vaddr, region->paddr, region->pages)) {
         return false;
     }
 
@@ -177,6 +211,10 @@ static bool split_region_for_page(
     u64 new_flags
 ) {
     if (!region || !region->pages || page_index >= region->pages) {
+        return false;
+    }
+
+    if (!region_bounds_ok(region->vaddr, region->paddr, region->pages)) {
         return false;
     }
 
@@ -219,8 +257,6 @@ static bool split_region_for_page(
     }
 
     if (before > 0) {
-        region->pages = before;
-
         sched_user_region_t *page_region = calloc(1, sizeof(*page_region));
         if (!page_region) {
             return false;
@@ -232,6 +268,7 @@ static bool split_region_for_page(
         page_region->flags = new_flags;
 
         if (!after) {
+            region->pages = before;
             page_region->next = next;
             region->next = page_region;
             return true;
@@ -249,6 +286,7 @@ static bool split_region_for_page(
         after_region->flags = region->flags;
         after_region->next = next;
 
+        region->pages = before;
         region->next = page_region;
         page_region->next = after_region;
         return true;
@@ -311,6 +349,10 @@ bool sched_handle_cow_fault(
 
     if (refs > 1) {
         uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(1);
+        if (!new_paddr) {
+            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+            return false;
+        }
 
         if (!arch_phys_copy(new_paddr, old_paddr, PAGE_4KIB)) {
             arch_free_frames((void *)new_paddr, 1);
@@ -318,8 +360,12 @@ bool sched_handle_cow_fault(
             return false;
         }
 
-        bool split_ok =
-            split_region_for_page(region, page_index, new_paddr, new_flags);
+        bool split_ok = split_region_for_page(
+            region,
+            page_index,
+            new_paddr,
+            new_flags
+        );
 
         if (!split_ok) {
             arch_free_frames((void *)new_paddr, 1);
@@ -330,8 +376,12 @@ bool sched_handle_cow_fault(
         arch_map_region(root, 1, page_addr, new_paddr, new_flags);
         arch_free_frames((void *)(uintptr_t)old_paddr, 1);
     } else {
-        bool split_ok =
-            split_region_for_page(region, page_index, (uintptr_t)old_paddr, new_flags);
+        bool split_ok = split_region_for_page(
+            region,
+            page_index,
+            (uintptr_t)old_paddr,
+            new_flags
+        );
 
         if (!split_ok) {
             spin_unlock_irqrestore(&thread->vm_lock, vm_flags);

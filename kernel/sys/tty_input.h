@@ -1,12 +1,12 @@
 #pragma once
 
 #include <base/types.h>
+#include <sys/config.h>
 #include <sys/types.h>
 #include <termios.h>
 
 struct sched_wait_queue;
 
-#define TTY_INPUT_BUFFER_SIZE 1024
 #define TTY_TERMIOS_SET_NONE  0u
 #define TTY_TERMIOS_SET_FLUSH 1u
 

@@ -185,10 +185,13 @@ sched_pick_target_cpu(const sched_thread_t *thread) {
             }
 
             size_t distance = sched_cpu_distance(base_cpu, cpu, ncpu);
-            if (
-                best_idle >= MAX_CORES || distance < best_distance ||
+            bool better_idle = (
+                best_idle >= MAX_CORES ||
+                distance < best_distance ||
                 (distance == best_distance && cpu < best_idle)
-            ) {
+            );
+
+            if (better_idle) {
                 best_idle = cpu;
                 best_distance = distance;
             }
@@ -209,7 +212,7 @@ sched_pick_target_cpu(const sched_thread_t *thread) {
 
     size_t min_cpu = 0;
     if (min_mask) {
-        u32 start = __atomic_fetch_add(&sched_state.wake_rr_cursor, 1, __ATOMIC_RELAXED);
+        u32 start = __atomic_fetch_add(&sched_state.cpus.wake_rr_cursor, 1, __ATOMIC_RELAXED);
 
         for (size_t step = 0; step < ncpu; step++) {
             size_t cpu = (start + step) % ncpu;
@@ -370,7 +373,7 @@ sched_thread_t *create_thread(
             return NULL;
         }
     } else {
-        thread->vm_space = sched_state.kernel_vm;
+        thread->vm_space = sched_state.core.kernel_vm;
     }
 
     spinlock_init(&thread->vm_lock);
@@ -405,7 +408,7 @@ sched_thread_t *sched_current_core(size_t core_id) {
         return NULL;
     }
 
-    return __atomic_load_n(&sched_state.cpu[core_id].current, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&sched_state.cpus.cpu[core_id].current, __ATOMIC_ACQUIRE);
 }
 
 sched_thread_t *sched_find_thread(pid_t pid) {
@@ -432,29 +435,13 @@ sched_thread_t *sched_create_user_thread(const char *name) {
     return create_thread(name, NULL, NULL, false, true, SCHED_PID_USER);
 }
 
-pid_t sched_fork(arch_int_state_t *state) {
-    sched_thread_t *parent = sched_local_current();
-
-    if (!parent || !parent->user_thread || !state) {
-        return _fork_fail("invalid parent or missing trap state", EINVAL);
-    }
-
-    sched_thread_t *child = sched_create_user_thread(parent->name);
-    if (!child) {
-        return _fork_fail("failed to create child thread", ENOMEM);
-    }
-
+static void copy_fork_state(sched_thread_t *child, sched_thread_t *parent) {
     child->ppid = parent->pid;
     child->pgid = parent->pgid;
     child->sid = parent->sid;
     child->umask = parent->umask;
     child->user_stack_base = parent->user_stack_base;
     child->user_stack_size = parent->user_stack_size;
-
-    if (!sched_fd_clone_table(child, parent)) {
-        sched_discard_thread(child);
-        return _fork_fail("failed to clone file descriptor table", ENOMEM);
-    }
 
     memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
     memcpy(
@@ -473,6 +460,26 @@ pid_t sched_fork(arch_int_state_t *state) {
     if (parent->fpu_initialized) {
         memcpy(child->fpu_state, parent->fpu_state, sizeof(child->fpu_state));
         child->fpu_initialized = true;
+    }
+}
+
+pid_t sched_fork(arch_int_state_t *state) {
+    sched_thread_t *parent = sched_local_current();
+
+    if (!parent || !parent->user_thread || !state) {
+        return _fork_fail("invalid parent or missing trap state", EINVAL);
+    }
+
+    sched_thread_t *child = sched_create_user_thread(parent->name);
+    if (!child) {
+        return _fork_fail("failed to create child thread", ENOMEM);
+    }
+
+    copy_fork_state(child, parent);
+
+    if (!sched_fd_clone_table(child, parent)) {
+        sched_discard_thread(child);
+        return _fork_fail("failed to clone file descriptor table", ENOMEM);
     }
 
     bool cow_enabled = pmm_ref_ready();
@@ -493,8 +500,24 @@ pid_t sched_fork(arch_int_state_t *state) {
         }
 
         if (!cow_enabled) {
+            bool region_overflows = (
+                pages > (uintptr_t)-1 / PAGE_4KIB ||
+                region->vaddr > (uintptr_t)-1 - (pages * PAGE_4KIB)
+            );
+
+            if (region_overflows) {
+                spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
+                sched_discard_thread(child);
+                return _fork_fail("copied user region is out of range", ENOMEM);
+            }
+
             size_t size = pages * PAGE_4KIB;
             uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(pages);
+            if (!new_paddr) {
+                spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
+                sched_discard_thread(child);
+                return _fork_fail("failed to allocate copied user pages", ENOMEM);
+            }
 
             arch_map_region(
                 root, pages, region->vaddr, new_paddr, region->flags
@@ -502,6 +525,13 @@ pid_t sched_fork(arch_int_state_t *state) {
             if (!sched_add_user_region(
                     child, region->vaddr, new_paddr, pages, region->flags
                 )) {
+                for (size_t i = 0; i < pages; i++) {
+                    uintptr_t vaddr = region->vaddr + i * PAGE_4KIB;
+                    unmap_page((page_t *)root, vaddr);
+                    arch_tlb_flush(vaddr);
+                }
+
+                arch_free_frames((void *)new_paddr, pages);
                 spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
                 sched_discard_thread(child);
                 return _fork_fail("failed to record copied user region", ENOMEM);

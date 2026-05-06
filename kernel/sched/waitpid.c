@@ -32,6 +32,62 @@ static bool waitpid_target_matches(
     return child->pgid == -pid;
 }
 
+static sched_thread_t *waitpid_find_zombie(
+    const sched_thread_t *self,
+    pid_t pid
+) {
+    ll_foreach(node, sched_state.procs.zombie_list) {
+        sched_thread_t *thread = node->data;
+
+        if (waitpid_target_matches(self, thread, pid)) {
+            return thread;
+        }
+    }
+
+    return NULL;
+}
+
+static sched_thread_t *waitpid_find_stopped(
+    const sched_thread_t *self,
+    pid_t pid,
+    bool *has_child
+) {
+    ll_foreach(node, sched_state.procs.all_list) {
+        sched_thread_t *thread = node->data;
+
+        if (!waitpid_target_matches(self, thread, pid)) {
+            continue;
+        }
+
+        if (has_child) {
+            *has_child = true;
+        }
+
+        bool stopped_child = (
+            thread_get_state(thread) == THREAD_STOPPED &&
+            !thread->stop_reported
+        );
+
+        if (stopped_child) {
+            return thread;
+        }
+    }
+
+    return NULL;
+}
+
+static bool waitpid_has_child(const sched_thread_t *self, pid_t pid) {
+    ll_foreach(node, sched_state.procs.all_list) {
+        sched_thread_t *thread = node->data;
+
+        if (waitpid_target_matches(self, thread, pid)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 pid_t sched_waitpid(pid_t pid, int *status, int options) {
     sched_thread_t *self = sched_local_current();
 
@@ -46,28 +102,19 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
 
         unsigned long flags = sched_lock_save();
 
-        if (!sched_state.zombie_list || !sched_state.all_list) {
+        if (!sched_state.procs.zombie_list || !sched_state.procs.all_list) {
             sched_lock_restore(flags);
             return -ECHILD;
         }
 
-        ll_foreach(node, sched_state.zombie_list) {
-            sched_thread_t *thread = node->data;
-
-            if (!waitpid_target_matches(self, thread, pid)) {
-                continue;
-            }
-
-            found = thread;
-            break;
-        }
+        found = waitpid_find_zombie(self, pid);
 
         if (found) {
             if (status) {
                 *status = found->exit_code;
             }
 
-            list_remove(sched_state.zombie_list, &found->zombie_node);
+            list_remove(sched_state.procs.zombie_list, &found->zombie_node);
             found->in_zombie_list = false;
 
             sched_lock_restore(flags);
@@ -80,25 +127,7 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
         }
 
         if (options & WUNTRACED) {
-            ll_foreach(node, sched_state.all_list) {
-                sched_thread_t *thread = node->data;
-
-                if (!waitpid_target_matches(self, thread, pid)) {
-                    continue;
-                }
-
-                has_matching_child = true;
-
-                if (
-                    thread_get_state(thread) != THREAD_STOPPED ||
-                    thread->stop_reported
-                ) {
-                    continue;
-                }
-
-                stopped = thread;
-                break;
-            }
+            stopped = waitpid_find_stopped(self, pid, &has_matching_child);
 
             if (stopped) {
                 stopped->stop_reported = true;
@@ -111,14 +140,7 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
                 return stopped->pid;
             }
         } else {
-            ll_foreach(node, sched_state.all_list) {
-                sched_thread_t *thread = node->data;
-
-                if (waitpid_target_matches(self, thread, pid)) {
-                    has_matching_child = true;
-                    break;
-                }
-            }
+            has_matching_child = waitpid_has_child(self, pid);
         }
 
         if (!has_matching_child) {

@@ -1,53 +1,56 @@
 #include "internal.h"
 
 void scheduler_init(void) {
-    if (sched_state.all_list) {
+    if (sched_state.procs.all_list) {
         return;
     }
 
     for (size_t i = 0; i < MAX_CORES; i++) {
-        spinlock_init(&sched_state.runqueues[i].lock);
+        spinlock_init(&sched_state.cpus.runqueues[i].lock);
 
-        sched_state.runqueues[i].capacity = SCHED_RQ_CAPACITY;
-        sched_state.runqueues[i].heap =
-            calloc(sched_state.runqueues[i].capacity, sizeof(sched_thread_t *));
+        sched_state.cpus.runqueues[i].capacity = SCHED_RQ_CAPACITY;
+        sched_state.cpus.runqueues[i].heap = calloc(
+            sched_state.cpus.runqueues[i].capacity,
+            sizeof(sched_thread_t *)
+        );
 
-        assert(sched_state.runqueues[i].heap);
+        assert(sched_state.cpus.runqueues[i].heap);
 
-        sched_state.runqueues[i].nr_running = 0;
-        sched_state.runqueues[i].min_vruntime = 0;
+        sched_state.cpus.runqueues[i].nr_running = 0;
+        sched_state.cpus.runqueues[i].min_vruntime = 0;
     }
 
-    sched_state.zombie_list = list_create();
-    assert(sched_state.zombie_list);
+    sched_state.procs.zombie_list = list_create();
+    assert(sched_state.procs.zombie_list);
 
-    sched_state.all_list = list_create();
-    assert(sched_state.all_list);
+    sched_state.procs.all_list = list_create();
+    assert(sched_state.procs.all_list);
 
-    sched_state.deferred_destroy_list = list_create();
-    assert(sched_state.deferred_destroy_list);
+    sched_state.procs.deferred_destroy_list = list_create();
+    assert(sched_state.procs.deferred_destroy_list);
 
-    sched_state.pid_index = hashmap_create();
+    sched_state.procs.pid_index = hashmap_create();
 
-    sched_wait_queue_init(&sched_state.poll_wait_queue);
-    sched_wait_queue_init(&sched_state.exit_event_wait);
-    sched_wait_queue_init(&sched_state.sleep_wait_queue);
+    sched_wait_queue_init(&sched_state.wait.poll_wait_queue);
+    sched_wait_queue_init(&sched_state.wait.exit_event_wait);
+    sched_wait_queue_init(&sched_state.wait.sleep_wait_queue);
 
-    spinlock_init(&sched_state.exit_events.lock);
-    sched_state.exit_events.ring = ring_queue_create(sizeof(pid_t), SCHED_EXIT_EVENT_CAP);
+    spinlock_init(&sched_state.wait.exit_events.lock);
+    sched_state.wait.exit_events.ring =
+        ring_queue_create(sizeof(pid_t), SCHED_EXIT_EVENT_CAP);
 
-    sched_state.kernel_vm = arch_vm_kernel();
-    assert(sched_state.kernel_vm);
+    sched_state.core.kernel_vm = arch_vm_kernel();
+    assert(sched_state.core.kernel_vm);
 
-    sched_state.next_user_pid = 1;
-    sched_state.next_kernel_pid = -1;
+    sched_state.procs.next_user_pid = 1;
+    sched_state.procs.next_kernel_pid = -1;
     scheduler_init_core();
     sched_running_set(false);
     sched_secondary_released_set(false);
 }
 
 void scheduler_init_core(void) {
-    if (!sched_state.all_list) {
+    if (!sched_state.procs.all_list) {
         return;
     }
 
@@ -86,15 +89,15 @@ void scheduler_init_core(void) {
     __atomic_store_n(&local->resched_irq_pending, false, __ATOMIC_RELEASE);
 }
 
-static void sched_expand_default_affinity_masks(void) {
-    if (!sched_state.all_list) {
+static void widen_default_affinity(void) {
+    if (!sched_state.procs.all_list) {
         return;
     }
 
     u64 online = sched_online_cpu_mask();
     unsigned long flags = sched_lock_save();
 
-    ll_foreach(node, sched_state.all_list) {
+    ll_foreach(node, sched_state.procs.all_list) {
         sched_thread_t *thread = node->data;
 
         if (!thread || thread->pid == 0 || thread->affinity_user_set) {
@@ -121,7 +124,7 @@ void scheduler_start(void) {
 
     sched_running_set(true);
     sched_secondary_released_set(false);
-    sched_expand_default_affinity_masks();
+    widen_default_affinity();
     sched_local_set_slice_ns(0);
     sched_local_set_need_resched(false);
     __atomic_store_n(&sched_local()->force_resched, false, __ATOMIC_RELEASE);
@@ -145,10 +148,8 @@ void scheduler_start(void) {
         return;
     }
 
-    if (
-        thread_ctx_ok(next) &&
-        (!next->context || !ctx_valid(next))
-    ) {
+    bool bad_next = thread_ctx_ok(next) && (!next->context || !ctx_valid(next));
+    if (bad_next) {
         sched_lock_restore(flags);
         panic("scheduler selected invalid thread context on BSP");
     }
@@ -206,7 +207,7 @@ void scheduler_start_secondary(void) {
     __atomic_store_n(
         &sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE
     );
-    sched_expand_default_affinity_masks();
+    widen_default_affinity();
 
     unsigned long flags = sched_lock_save();
 
@@ -219,10 +220,8 @@ void scheduler_start_secondary(void) {
         return;
     }
 
-    if (
-        thread_ctx_ok(next) &&
-        (!next->context || !ctx_valid(next))
-    ) {
+    bool bad_next = thread_ctx_ok(next) && (!next->context || !ctx_valid(next));
+    if (bad_next) {
         sched_lock_restore(flags);
         panic("scheduler selected invalid thread context on AP");
     }

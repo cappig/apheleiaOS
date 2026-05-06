@@ -8,19 +8,16 @@
 #include <data/ring.h>
 #include <limits.h>
 #include <signal.h>
+#include <sys/config.h>
+#include <sys/lock.h>
 #include <sys/proc.h>
 #include <sys/types.h>
-#include <sys/lock.h>
 
 typedef void (*thread_entry_t)(void *arg);
 
 typedef struct vfs_node vfs_node_t;
 
-#define SCHED_FD_MAX     256
 #define SCHED_REGION_COW (1ULL << 62)
-#define SCHED_GROUP_MAX  16
-
-#define SCHED_PIPE_CAPACITY 4096
 #define SCHED_FD_FLAG_CLOEXEC (1u << 0)
 
 typedef enum {
@@ -195,8 +192,8 @@ typedef struct {
 } sched_metrics_snapshot_t;
 
 enum {
-    SCHED_THREAD_LIFECYCLE_DEFER_QUEUED = 1U << 0,
-    SCHED_THREAD_LIFECYCLE_DESTROYING = 1U << 1,
+    SCHED_DEFER_QUEUED = 1U << 0,
+    SCHED_DESTROYING = 1U << 1,
 };
 
 typedef struct {
@@ -305,13 +302,13 @@ void sched_block(sched_wait_queue_t *queue);
 void sched_wake_one(sched_wait_queue_t *queue);
 void sched_wake_all(sched_wait_queue_t *queue);
 u32 sched_poll_wait_seq(void);
-bool sched_poll_block_if_unchanged(u32 observed_seq);
-bool sched_poll_block_if_unchanged_until(u32 observed_seq, u64 deadline_tick);
+bool sched_poll_wait_change(u32 observed_seq);
+bool sched_poll_wait_until(u32 observed_seq, u64 deadline_tick);
 void sched_poll_wait(void);
 sched_wait_result_t
 sched_wait_deadline(u64 deadline_tick, sched_wait_flags_t flags);
 u32 sched_exit_event_seq(void);
-bool sched_exit_event_block_if_unchanged(u32 observed_seq);
+bool sched_exit_wait_change(u32 observed_seq);
 bool sched_exit_event_pop(pid_t *pid_out);
 
 void sched_preempt_disable(void);
@@ -338,6 +335,11 @@ void sched_cpu_usage_snapshot_core(
 void sched_metrics_snapshot(sched_metrics_snapshot_t *out);
 void sched_metrics_record_syscall(void);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
+int sched_signal_pgrp_as(
+    pid_t pgid,
+    int signum,
+    const sched_thread_t *sender
+);
 
 bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write);
 bool sched_proc_cwd(pid_t pid, char *out, size_t out_len);

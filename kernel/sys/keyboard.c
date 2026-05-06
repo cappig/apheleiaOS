@@ -10,12 +10,12 @@
 #include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/config.h>
 #include <sys/console.h>
 #include <sys/devfs.h>
 #include <sys/tty.h>
 #include <sys/tty_input.h>
 
-#define KBD_DEV_BUFFER_SIZE 256
 #define KBD_DEV_UID         0U
 #define KBD_DEV_GID         45U
 #define KBD_DEV_MODE        0644

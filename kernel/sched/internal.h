@@ -26,17 +26,6 @@
 #include <sys/tty.h>
 #include <sys/wait.h>
 
-#define SCHED_STACK_SIZE              (64 * KIB)
-#define SCHED_LATENCY_NS              12000000ULL
-#define SCHED_MIN_GRANULARITY_NS      1000000ULL
-#define SCHED_REBALANCE_TICKS         32ULL
-#define SCHED_RQ_CAPACITY             4096U
-#define SCHED_SLEEP_HEAP_CAPACITY     SCHED_RQ_CAPACITY
-#define SCHED_IDLE_STEAL_BATCH        2U
-#define SCHED_PUSH_BATCH              2U
-#define SCHED_EXIT_EVENT_CAP          512U
-#define SCHED_WAKE_LOCAL_LOAD_SLOP    2U
-
 typedef struct {
     spinlock_t lock;
     sched_thread_t **heap;
@@ -95,28 +84,43 @@ typedef struct {
 } sched_sleep_state_t;
 
 typedef struct {
-    sched_rq_t runqueues[MAX_CORES];
+    bool running;
+    bool secondary_released;
+    spinlock_t lock;
+    arch_vm_space_t *kernel_vm;
+} sched_core_state_t;
+
+typedef struct {
     linked_list_t *zombie_list;
     linked_list_t *all_list;
     linked_list_t *deferred_destroy_list;
     hashmap_t *pid_index;
-    arch_vm_space_t *kernel_vm;
     pid_t next_user_pid;
     pid_t next_kernel_pid;
+} sched_proc_state_t;
+
+typedef struct {
+    sched_rq_t runqueues[MAX_CORES];
     volatile u32 wake_rr_cursor;
-    bool running;
-    bool secondary_released;
     sched_cpu_state_t cpu[MAX_CORES];
-    spinlock_t lock;
+} sched_cpu_set_t;
+
+typedef struct {
     sched_wait_queue_t poll_wait_queue;
     sched_wait_queue_t exit_event_wait;
     sched_wait_queue_t sleep_wait_queue;
     sched_exit_event_state_t exit_events;
     sched_sleep_state_t sleep;
+} sched_wait_state_t;
+
+typedef struct {
+    sched_core_state_t core;
+    sched_proc_state_t procs;
+    sched_cpu_set_t cpus;
+    sched_wait_state_t wait;
     sched_usage_state_t usage;
     sched_metrics_state_t metrics;
 } sched_state_t;
-
 
 extern sched_state_t sched_state;
 
@@ -129,23 +133,24 @@ static inline bool sched_thread_is_idle(const sched_thread_t *thread) {
 }
 
 static inline bool sched_running_get(void) {
-    return __atomic_load_n(&sched_state.running, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&sched_state.core.running, __ATOMIC_ACQUIRE);
 }
 
 static inline void sched_running_set(bool running) {
-    __atomic_store_n(&sched_state.running, running, __ATOMIC_RELEASE);
+    __atomic_store_n(&sched_state.core.running, running, __ATOMIC_RELEASE);
 }
 
 static inline bool sched_secondary_released_get(void) {
-    return __atomic_load_n(&sched_state.secondary_released, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&sched_state.core.secondary_released, __ATOMIC_ACQUIRE);
 }
 
 static inline void sched_secondary_released_set(bool released) {
-    __atomic_store_n(&sched_state.secondary_released, released, __ATOMIC_RELEASE);
+    __atomic_store_n(&sched_state.core.secondary_released, released, __ATOMIC_RELEASE);
 }
 
 static inline u64 sched_ticks_to_ms(u64 ticks) {
     u64 hz = arch_timer_hz();
+
     return hz ? ((ticks * 1000ULL) / hz) : 0;
 }
 
@@ -163,7 +168,7 @@ static inline size_t sched_cpu_id(void) {
 }
 
 static inline sched_cpu_state_t *sched_local(void) {
-    return &sched_state.cpu[sched_cpu_id()];
+    return &sched_state.cpus.cpu[sched_cpu_id()];
 }
 
 static inline void sched_spin_wait(void) {
@@ -204,7 +209,11 @@ static inline void sched_local_add_slice_ns(u64 delta_ns) {
 }
 
 static inline void sched_local_set_need_resched(bool need_resched) {
-    __atomic_store_n(&sched_local()->need_resched, need_resched, __ATOMIC_RELEASE);
+    __atomic_store_n(
+        &sched_local()->need_resched,
+        need_resched,
+        __ATOMIC_RELEASE
+    );
 }
 
 static inline bool sched_local_need_resched(void) {
@@ -216,7 +225,11 @@ static inline void sched_set_need_resched_cpu(size_t cpu_id, bool need_resched) 
         return;
     }
 
-    __atomic_store_n(&sched_state.cpu[cpu_id].need_resched, need_resched, __ATOMIC_RELEASE);
+    __atomic_store_n(
+        &sched_state.cpus.cpu[cpu_id].need_resched,
+        need_resched,
+        __ATOMIC_RELEASE
+    );
 }
 
 static inline bool sched_mark_need_resched_cpu(size_t cpu_id) {
@@ -225,8 +238,9 @@ static inline bool sched_mark_need_resched_cpu(size_t cpu_id) {
     }
 
     bool prior = __atomic_exchange_n(
-        &sched_state.cpu[cpu_id].need_resched, true, __ATOMIC_ACQ_REL
+        &sched_state.cpus.cpu[cpu_id].need_resched, true, __ATOMIC_ACQ_REL
     );
+
     return !prior;
 }
 
@@ -348,9 +362,10 @@ static inline bool thread_on_local_cpu(const sched_thread_t *thread) {
 
     size_t cpu_id = (size_t)running_cpu;
     sched_thread_t *current = __atomic_load_n(
-        &sched_state.cpu[cpu_id].current,
+        &sched_state.cpus.cpu[cpu_id].current,
         __ATOMIC_ACQUIRE
     );
+
     return current == thread;
 }
 
@@ -363,7 +378,7 @@ static inline bool thread_in_handoff(const sched_thread_t *thread) {
 
     size_t cpu_id = (size_t)running_cpu;
     sched_thread_t *handoff = __atomic_load_n(
-        &sched_state.cpu[cpu_id].handoff_ready,
+        &sched_state.cpus.cpu[cpu_id].handoff_ready,
         __ATOMIC_ACQUIRE
     );
 
@@ -384,7 +399,7 @@ sched_reclaim_handoff(sched_thread_t *thread) {
 
     size_t cpu_id = (size_t)running_cpu;
     sched_thread_t *handoff = __atomic_load_n(
-        &sched_state.cpu[cpu_id].handoff_ready,
+        &sched_state.cpus.cpu[cpu_id].handoff_ready,
         __ATOMIC_ACQUIRE
     );
 
@@ -392,7 +407,11 @@ sched_reclaim_handoff(sched_thread_t *thread) {
         return false;
     }
 
-    __atomic_store_n(&sched_state.cpu[cpu_id].handoff_ready, NULL, __ATOMIC_RELEASE);
+    __atomic_store_n(
+        &sched_state.cpus.cpu[cpu_id].handoff_ready,
+        NULL,
+        __ATOMIC_RELEASE
+    );
     thread_unclaim(thread);
 
     return true;
@@ -417,11 +436,13 @@ sched_repair_thread(
     if (sched_reclaim_handoff(thread)) {
         thread_set_state(thread, THREAD_READY);
         enqueue_ipi(thread, send_ipi);
+
         return true;
     }
 
     if (thread_on_local_cpu(thread)) {
         sched_nudge_thread(thread);
+
         return true;
     }
 
@@ -432,6 +453,7 @@ sched_repair_thread(
     thread_unclaim(thread);
     thread_set_state(thread, THREAD_READY);
     enqueue_ipi(thread, send_ipi);
+
     return true;
 }
 

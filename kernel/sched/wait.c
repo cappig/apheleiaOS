@@ -215,11 +215,11 @@ void sched_discard_thread(sched_thread_t *thread) {
     sleep_heap_remove(thread);
     thread_unclaim(thread);
 
-    if (thread->in_zombie_list && sched_state.zombie_list) {
+    if (thread->in_zombie_list && sched_state.procs.zombie_list) {
         unsigned long flags = sched_lock_save();
 
         if (thread->in_zombie_list) {
-            list_remove(sched_state.zombie_list, &thread->zombie_node);
+            list_remove(sched_state.procs.zombie_list, &thread->zombie_node);
             thread->in_zombie_list = false;
         }
 
@@ -330,13 +330,14 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
     bool request_local_resched = false;
     size_t request_remote_resched_cpu = MAX_CORES;
     bool stopping_current = (thread == sched_local_current());
-
-    if (
+    bool owned_running_thread = (
         !stopping_current &&
         state == THREAD_RUNNING &&
         thread_cpu(thread) >= 0 &&
         thread_is_owned(thread)
-    ) {
+    );
+
+    if (owned_running_thread) {
         if (signum > 0 && signum < NSIG) {
             u32 mask = 1u << (signum - 1);
             __atomic_fetch_or(&thread->signal_pending, mask, __ATOMIC_ACQ_REL);
@@ -355,11 +356,15 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
         sched_lock_restore(flags);
         if (request_local_resched) {
             sched_request_resched_local();
-        } else if (
-            request_remote_resched_cpu < MAX_CORES &&
-            wake_cpu(request_remote_resched_cpu)
-        ) {
-            __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
+        } else {
+            bool woke_remote = (
+                request_remote_resched_cpu < MAX_CORES &&
+                wake_cpu(request_remote_resched_cpu)
+            );
+
+            if (woke_remote) {
+                __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
+            }
         }
         return;
     }

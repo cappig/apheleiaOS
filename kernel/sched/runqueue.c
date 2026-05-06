@@ -20,6 +20,26 @@ static inline bool rq_less(const sched_thread_t *a, const sched_thread_t *b) {
     return a->pid < b->pid;
 }
 
+static bool rq_runnable(const sched_thread_t *thread) {
+    if (!thread || thread_get_state(thread) != THREAD_READY) {
+        return false;
+    }
+
+    return thread->context && thread->pid != 0;
+}
+
+static bool rq_worse_than(const sched_thread_t *thread, const sched_thread_t *best) {
+    if (!best) {
+        return true;
+    }
+
+    if (thread->vruntime_ns != best->vruntime_ns) {
+        return thread->vruntime_ns > best->vruntime_ns;
+    }
+
+    return thread->pid > best->pid;
+}
+
 static inline void rq_swap(sched_rq_t *rq, u32 left, u32 right) {
     sched_thread_t *tmp = rq->heap[left];
     rq->heap[left] = rq->heap[right];
@@ -162,23 +182,20 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
 
     if (!sched_cpu_allowed(thread, cpu_id) || !cores_local[cpu_id].online) {
         size_t allowed_cpu = pick_cpu(thread, cpu_id);
-
-        if (
+        bool bad_cpu = (
             allowed_cpu >= MAX_CORES ||
             !cores_local[allowed_cpu].online ||
             !sched_cpu_allowed(thread, allowed_cpu)
-        ) {
+        );
+
+        if (bad_cpu) {
             return;
         }
 
         cpu_id = allowed_cpu;
     }
 
-    if (
-        !thread->context ||
-        thread_get_state(thread) != THREAD_READY ||
-        thread->pid == 0
-    ) {
+    if (!rq_runnable(thread)) {
         return;
     }
 
@@ -187,10 +204,12 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
     }
 
     if (thread_cpu(thread) >= 0) {
-        if (
+        bool running_elsewhere = (
             thread_is_owned(thread) ||
             thread_get_state(thread) == THREAD_RUNNING
-        ) {
+        );
+
+        if (running_elsewhere) {
             return;
         }
 
@@ -198,14 +217,16 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
         thread_set_cpu(thread, -1);
     }
 
-    sched_rq_t *rq = &sched_state.runqueues[cpu_id];
+    sched_rq_t *rq = &sched_state.cpus.runqueues[cpu_id];
     unsigned long flags = spin_lock_irqsave(&rq->lock);
 
     if (thread->on_rq || thread->rq_index != UINT32_MAX) {
-        if (
+        bool already_here = (
             thread->last_cpu == cpu_id && thread->rq_index < rq->nr_running &&
             rq->heap[thread->rq_index] == thread
-        ) {
+        );
+
+        if (already_here) {
             spin_unlock_irqrestore(&rq->lock, flags);
             return;
         }
@@ -262,10 +283,13 @@ static bool rq_remove_cpu(sched_rq_t *rq, sched_thread_t *thread) {
         return false;
     }
 
-    if (
-        thread->rq_index == UINT32_MAX || thread->rq_index >= rq->nr_running ||
+    bool stale_index = (
+        thread->rq_index == UINT32_MAX ||
+        thread->rq_index >= rq->nr_running ||
         rq->heap[thread->rq_index] != thread
-    ) {
+    );
+
+    if (stale_index) {
         int found = rq_find_index(rq, thread);
 
         if (found < 0) {
@@ -287,7 +311,7 @@ bool rq_remove_thread(sched_thread_t *thread) {
         return false;
     }
 
-    sched_rq_t *rq = &sched_state.runqueues[thread->last_cpu];
+    sched_rq_t *rq = &sched_state.cpus.runqueues[thread->last_cpu];
 
     unsigned long flags = spin_lock_irqsave(&rq->lock);
     bool removed = rq_remove_cpu(rq, thread);
@@ -301,7 +325,7 @@ sched_thread_t *rq_pop_best_allowed(size_t cpu_id) {
         return NULL;
     }
 
-    sched_rq_t *rq = &sched_state.runqueues[cpu_id];
+    sched_rq_t *rq = &sched_state.cpus.runqueues[cpu_id];
     unsigned long flags = spin_lock_irqsave(&rq->lock);
 
     if (rq->nr_running) {
@@ -347,7 +371,7 @@ sched_thread_t *rq_peek_best(size_t cpu_id) {
         return NULL;
     }
 
-    sched_rq_t *rq = &sched_state.runqueues[cpu_id];
+    sched_rq_t *rq = &sched_state.cpus.runqueues[cpu_id];
     unsigned long flags = spin_lock_irqsave(&rq->lock);
     sched_thread_t *thread = NULL;
 
@@ -383,7 +407,7 @@ rq_pop_worst_allowed_from_cpu(size_t source_cpu, size_t target_cpu) {
         return NULL;
     }
 
-    sched_rq_t *rq = &sched_state.runqueues[source_cpu];
+    sched_rq_t *rq = &sched_state.cpus.runqueues[source_cpu];
     unsigned long flags = spin_lock_irqsave(&rq->lock);
 
     sched_thread_t *candidate = NULL;
@@ -392,18 +416,16 @@ rq_pop_worst_allowed_from_cpu(size_t source_cpu, size_t target_cpu) {
     for (u32 i = 0; (size_t)i < rq->nr_running; i++) {
         sched_thread_t *thread = rq->heap[i];
 
-        if (
-            !thread || thread_get_state(thread) != THREAD_READY ||
-            !thread->context || thread->pid == 0 ||
+        bool wrong_cpu = (
+            !rq_runnable(thread) ||
             !sched_cpu_allowed(thread, target_cpu)
-        ) {
+        );
+
+        if (wrong_cpu) {
             continue;
         }
 
-        if (
-            !candidate || thread->vruntime_ns > candidate->vruntime_ns ||
-            (thread->vruntime_ns == candidate->vruntime_ns && thread->pid > candidate->pid)
-        ) {
+        if (rq_worse_than(thread, candidate)) {
             candidate = thread;
             candidate_index = i;
         }
@@ -426,7 +448,7 @@ rq_pop_disallowed_from_cpu(size_t source_cpu, size_t disallowed_cpu) {
         return NULL;
     }
 
-    sched_rq_t *rq = &sched_state.runqueues[source_cpu];
+    sched_rq_t *rq = &sched_state.cpus.runqueues[source_cpu];
     unsigned long flags = spin_lock_irqsave(&rq->lock);
 
     sched_thread_t *candidate = NULL;
@@ -435,18 +457,16 @@ rq_pop_disallowed_from_cpu(size_t source_cpu, size_t disallowed_cpu) {
     for (u32 i = 0; (size_t)i < rq->nr_running; i++) {
         sched_thread_t *thread = rq->heap[i];
 
-        if (
-            !thread || thread_get_state(thread) != THREAD_READY ||
-            !thread->context || thread->pid == 0 ||
+        bool still_allowed = (
+            !rq_runnable(thread) ||
             sched_cpu_allowed(thread, disallowed_cpu)
-        ) {
+        );
+
+        if (still_allowed) {
             continue;
         }
 
-        if (
-            !candidate || thread->vruntime_ns > candidate->vruntime_ns ||
-            (thread->vruntime_ns == candidate->vruntime_ns && thread->pid > candidate->pid)
-        ) {
+        if (rq_worse_than(thread, candidate)) {
             candidate = thread;
             candidate_index = i;
         }

@@ -12,7 +12,7 @@ bool sched_pid_alive(pid_t pid) {
     if (thread && thread->in_all_list && thread->pid == pid) {
         alive = (
             thread_get_state(thread) != THREAD_ZOMBIE &&
-            (thread->lifecycle_flags & SCHED_THREAD_LIFECYCLE_DESTROYING) == 0
+            (thread->lifecycle_flags & SCHED_DESTROYING) == 0
         );
     }
 
@@ -269,11 +269,15 @@ int sched_set_affinity(pid_t pid, u64 mask) {
 
     if (request_local_resched) {
         sched_request_resched_local();
-    } else if (
-        request_remote_resched_cpu < MAX_CORES &&
-        wake_cpu(request_remote_resched_cpu)
-    ) {
-        __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
+    } else {
+        bool woke_remote = (
+            request_remote_resched_cpu < MAX_CORES &&
+            wake_cpu(request_remote_resched_cpu)
+        );
+
+        if (woke_remote) {
+            __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
+        }
     }
 
     if (target_has_ref) {
@@ -424,7 +428,7 @@ int sched_setpgid(pid_t pid, pid_t pgid) {
     if (pgid != target->pid) {
         bool found = false;
 
-        ll_foreach(node, sched_state.all_list) {
+        ll_foreach(node, sched_state.procs.all_list) {
             sched_thread_t *iter = node->data;
 
             if (!iter) {
@@ -459,8 +463,8 @@ pid_t sched_setsid(void) {
     unsigned long flags = sched_lock_save();
     bool pgrp_exists = false;
 
-    if (sched_state.all_list) {
-        ll_foreach(node, sched_state.all_list) {
+    if (sched_state.procs.all_list) {
+        ll_foreach(node, sched_state.procs.all_list) {
             sched_thread_t *iter = node->data;
 
             if (!iter) {
@@ -519,14 +523,14 @@ bool sched_pid_is_group_leader(pid_t pid) {
 }
 
 bool sched_pgrp_exists(pid_t pgid) {
-    if (pgid <= 0 || !sched_state.all_list) {
+    if (pgid <= 0 || !sched_state.procs.all_list) {
         return false;
     }
 
     bool found = false;
     unsigned long flags = sched_lock_save();
 
-    ll_foreach(node, sched_state.all_list) {
+    ll_foreach(node, sched_state.procs.all_list) {
         sched_thread_t *thread = node->data;
 
         if (!thread) {
@@ -546,14 +550,14 @@ bool sched_pgrp_exists(pid_t pgid) {
 }
 
 bool sched_pgrp_in_session(pid_t pgid, pid_t sid) {
-    if (pgid <= 0 || sid <= 0 || !sched_state.all_list) {
+    if (pgid <= 0 || sid <= 0 || !sched_state.procs.all_list) {
         return false;
     }
 
     bool found = false;
     unsigned long flags = sched_lock_save();
 
-    ll_foreach(node, sched_state.all_list) {
+    ll_foreach(node, sched_state.procs.all_list) {
         sched_thread_t *thread = node->data;
 
         if (!thread) {

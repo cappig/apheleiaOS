@@ -23,7 +23,6 @@
 
 #define HEAP_MIN        (KERNEL_HEAP_PAGES / 2)
 #define HEAP_MAX        (KERNEL_HEAP_PAGES * 16)
-#define HEAP_MAX_ARENAS 16
 
 // FIXME: baaaaaad. A bitmap is far from optimal for this
 
@@ -33,7 +32,7 @@ typedef struct {
     bool used;
 } heap_arena_t;
 
-static heap_arena_t heap_arenas[HEAP_MAX_ARENAS] = {0};
+static heap_arena_t heap_arenas[KERNEL_HEAP_MAX_ARENAS] = {0};
 static size_t heap_arena_count = 0;
 static spinlock_t heap_lock = SPINLOCK_INIT;
 
@@ -50,6 +49,10 @@ static uintptr_t _linear_offset(void) {
 
 static size_t _usable_blocks_for_pages(size_t pages) {
     if (!pages) {
+        return 0;
+    }
+
+    if (pages > SIZE_MAX / PAGE_4KIB) {
         return 0;
     }
 
@@ -70,6 +73,10 @@ static size_t _pages_for_blocks(size_t blocks) {
         return 0;
     }
 
+    if (blocks > SIZE_MAX / KERNEL_HEAP_BLOCK_SIZE) {
+        return 0;
+    }
+
     size_t pages = DIV_ROUND_UP(blocks * KERNEL_HEAP_BLOCK_SIZE, PAGE_4KIB);
     if (!pages) {
         pages = 1;
@@ -87,7 +94,11 @@ static size_t _pages_for_blocks(size_t blocks) {
 }
 
 static bool _add_arena(size_t pages) {
-    if (!pages || heap_arena_count >= HEAP_MAX_ARENAS) {
+    if (!pages || heap_arena_count >= KERNEL_HEAP_MAX_ARENAS) {
+        return false;
+    }
+
+    if (pages > SIZE_MAX / PAGE_4KIB) {
         return false;
     }
 
@@ -126,7 +137,7 @@ static bool _add_arena(size_t pages) {
 }
 
 static bool _grow(size_t min_blocks) {
-    if (!min_blocks || heap_arena_count >= HEAP_MAX_ARENAS) {
+    if (!min_blocks || heap_arena_count >= KERNEL_HEAP_MAX_ARENAS) {
         return false;
     }
 
@@ -175,6 +186,10 @@ static heap_arena_t *_find_arena_by_ptr(const void *ptr) {
         uintptr_t start = (uintptr_t)arena->alloc.chuck_start;
         uintptr_t end = start + arena->alloc.chunk_size;
 
+        if (end <= start) {
+            continue;
+        }
+
         if (addr >= start && addr < end) {
             return arena;
         }
@@ -217,6 +232,11 @@ static void *_kmalloc(size_t size) {
         DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
 
     size_t blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK_SIZE);
+    if (blocks > SIZE_MAX - header_blocks) {
+        spin_unlock_irqrestore(&heap_lock, irq_flags);
+        panic("kmalloc block count overflow (requested=%zu bytes)", size);
+    }
+
     size_t total_blocks = blocks + header_blocks;
 
     void *space = NULL;
@@ -281,24 +301,55 @@ static void _kfree(void *ptr) {
     unsigned long irq_flags = spin_lock_irqsave(&heap_lock);
     kheap_header *header = (kheap_header *)((u8 *)ptr - sizeof(kheap_header));
 
+    heap_arena_t *arena = _find_arena_by_ptr(header);
+    if (!arena) {
+        spin_unlock_irqrestore(&heap_lock, irq_flags);
+        panic("kfree pointer does not belong to any heap arena");
+    }
+
     if (header->magic != KERNEL_HEAP_MAGIC) {
+        spin_unlock_irqrestore(&heap_lock, irq_flags);
         panic("kfree invalid heap header");
     }
 
     size_t header_blocks =
         DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
 
-    size_t blocks = header->size + header_blocks;
-    heap_arena_t *arena = _find_arena_by_ptr(header);
-
-    if (!arena) {
-        panic("kfree pointer does not belong to any heap arena");
+    size_t user_blocks = header->size;
+    if (user_blocks > SIZE_MAX - header_blocks) {
+        spin_unlock_irqrestore(&heap_lock, irq_flags);
+        panic("kfree heap block count overflow");
     }
 
-    bitmap_alloc_free(&arena->alloc, header, blocks);
+    size_t blocks = user_blocks + header_blocks;
+    if (blocks > SIZE_MAX / KERNEL_HEAP_BLOCK_SIZE) {
+        spin_unlock_irqrestore(&heap_lock, irq_flags);
+        panic("kfree heap block count overflow");
+    }
+
+    uintptr_t arena_start = (uintptr_t)arena->alloc.chuck_start;
+    uintptr_t arena_end = arena_start + arena->alloc.chunk_size;
+    uintptr_t free_end = (uintptr_t)header + blocks * KERNEL_HEAP_BLOCK_SIZE;
+
+    if (arena_end <= arena_start) {
+        spin_unlock_irqrestore(&heap_lock, irq_flags);
+        panic("kfree heap arena range is invalid");
+    }
+
+    if (free_end < (uintptr_t)header || free_end > arena_end) {
+        spin_unlock_irqrestore(&heap_lock, irq_flags);
+        panic("kfree heap block range is invalid");
+    }
+
+    header->magic = 0;
+
+    if (!bitmap_alloc_free(&arena->alloc, header, blocks)) {
+        spin_unlock_irqrestore(&heap_lock, irq_flags);
+        panic("kfree bitmap metadata rejected pointer");
+    }
 
 #ifdef KMALLOC_DEBUG
-    size_t size = header->size * KERNEL_HEAP_BLOCK_SIZE;
+    size_t size = user_blocks * KERNEL_HEAP_BLOCK_SIZE;
     log_debug(
         "[KMALLOC_DEBUG] free bytes=%zd ptr=%#" PRIx64,
         size,

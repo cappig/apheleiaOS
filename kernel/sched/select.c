@@ -5,14 +5,14 @@ size_t sched_cpu_load(size_t cpu_id) {
         return 0;
     }
 
-    sched_rq_t *rq = &sched_state.runqueues[cpu_id];
+    sched_rq_t *rq = &sched_state.cpus.runqueues[cpu_id];
     size_t load = __atomic_load_n(&rq->nr_running, __ATOMIC_RELAXED);
 
     sched_thread_t *current = __atomic_load_n(
-        &sched_state.cpu[cpu_id].current, __ATOMIC_ACQUIRE
+        &sched_state.cpus.cpu[cpu_id].current, __ATOMIC_ACQUIRE
     );
     sched_thread_t *idle = __atomic_load_n(
-        &sched_state.cpu[cpu_id].idle_thread, __ATOMIC_ACQUIRE
+        &sched_state.cpus.cpu[cpu_id].idle_thread, __ATOMIC_ACQUIRE
     );
 
     if (current && current != idle) {
@@ -27,7 +27,7 @@ size_t sched_rq_depth(size_t cpu_id) {
         return 0;
     }
 
-    return __atomic_load_n(&sched_state.runqueues[cpu_id].nr_running, __ATOMIC_RELAXED);
+    return __atomic_load_n(&sched_state.cpus.runqueues[cpu_id].nr_running, __ATOMIC_RELAXED);
 }
 
 bool cpu_needs_ipi(size_t cpu_id) {
@@ -36,10 +36,10 @@ bool cpu_needs_ipi(size_t cpu_id) {
     }
 
     sched_thread_t *current = __atomic_load_n(
-        &sched_state.cpu[cpu_id].current, __ATOMIC_ACQUIRE
+        &sched_state.cpus.cpu[cpu_id].current, __ATOMIC_ACQUIRE
     );
     sched_thread_t *idle = __atomic_load_n(
-        &sched_state.cpu[cpu_id].idle_thread, __ATOMIC_ACQUIRE
+        &sched_state.cpus.cpu[cpu_id].idle_thread, __ATOMIC_ACQUIRE
     );
 
     return !current || current == idle;
@@ -65,11 +65,6 @@ size_t pick_cpu(
     size_t ncpu = core_count;
     if (ncpu > MAX_CORES) {
         ncpu = MAX_CORES;
-    }
-
-    // FIXME: this should not be a hard cap
-    if (ncpu > 64) {
-        ncpu = 64;
     }
 
     if (!ncpu) {
@@ -103,10 +98,13 @@ size_t pick_cpu(
         }
 
         size_t load = sched_cpu_load(cpu);
-        if (
-            best_cpu >= MAX_CORES || load < best_load ||
+        bool better_cpu = (
+            best_cpu >= MAX_CORES ||
+            load < best_load ||
             (load == best_load && cpu == fallback_cpu)
-        ) {
+        );
+
+        if (better_cpu) {
             best_cpu = cpu;
             best_load = load;
         }
@@ -167,12 +165,16 @@ void sched_publish_handoff(
 
     if (thread_get_state(thread) == THREAD_RUNNING) {
         thread_set_state(thread, THREAD_READY);
-    } else if (
-        thread_get_state(thread) == THREAD_SLEEPING &&
-        !thread->in_wait_queue &&
-        !thread->sleep_queued
-    ) {
-        thread_set_state(thread, THREAD_READY);
+    } else {
+        bool ready_sleeping = (
+            thread_get_state(thread) == THREAD_SLEEPING &&
+            !thread->in_wait_queue &&
+            !thread->sleep_queued
+        );
+
+        if (ready_sleeping) {
+            thread_set_state(thread, THREAD_READY);
+        }
     }
 
     thread_state_t state = thread_get_state(thread);
@@ -215,7 +217,7 @@ void sched_flush_handoff(size_t cpu_id) {
         return;
     }
 
-    sched_cpu_state_t *local = &sched_state.cpu[cpu_id];
+    sched_cpu_state_t *local = &sched_state.cpus.cpu[cpu_id];
 
     sched_thread_t *pending = local->handoff_ready;
     if (!pending) {

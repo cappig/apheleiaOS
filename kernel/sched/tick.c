@@ -21,12 +21,29 @@ static bool sched_eval_policy(sched_thread_t *thread, size_t cpu_id) {
 
     u64 target_ns = sched_target_slice_ns(cpu_id);
     bool has_runnable = rq_peek_best(cpu_id) != NULL;
+    bool slice_done = sched_local_slice_ns() >= target_ns;
 
-    if (has_runnable && (sched_local_slice_ns() >= target_ns || sched_has_better_runnable(thread, cpu_id))) {
-        return true;
+    if (!has_runnable) {
+        return rq_depth && slice_done;
     }
 
-    return !has_runnable && rq_depth && sched_local_slice_ns() >= target_ns;
+    return slice_done || sched_has_better_runnable(thread, cpu_id);
+}
+
+static bool tick_charges(sched_thread_t *thread) {
+    if (thread == sched_local_idle()) {
+        return false;
+    }
+
+    return thread_get_state(thread) == THREAD_RUNNING;
+}
+
+static bool bad_switch_target(sched_thread_t *next, sched_thread_t *current) {
+    if (!next || next == current || !thread_ctx_ok(next)) {
+        return false;
+    }
+
+    return !next->context || !ctx_valid(next);
 }
 
 static void
@@ -96,20 +113,14 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
     );
     sched_local_set_slice_ns(0);
 
-    if (
-        thread != sched_local_idle() &&
-        thread_get_state(thread) == THREAD_RUNNING
-    ) {
+    if (tick_charges(thread)) {
         thread->sum_exec_ns += 1;
         thread->vruntime_ns += 1;
         thread->exec_start_ns = thread->sum_exec_ns;
     }
 
     sched_thread_t *next = NULL;
-    bool preempted_running = (
-        thread_get_state(thread) == THREAD_RUNNING &&
-        thread != sched_local_idle()
-    );
+    bool preempted_running = tick_charges(thread);
 
     if (preempted_running) {
         next = dequeue_thread();
@@ -122,18 +133,14 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
         next = pick_next_thread();
     }
 
-    while (
-        next && next != thread &&
-        thread_ctx_ok(next) &&
-        (!next->context || !ctx_valid(next))
-    ) {
+    while (bad_switch_target(next, thread)) {
         thread_unclaim(next);
         thread_set_state(next, THREAD_ZOMBIE);
         next->exit_code = -EFAULT;
 
-        if (sched_state.zombie_list && !next->in_zombie_list) {
+        if (sched_state.procs.zombie_list && !next->in_zombie_list) {
             next->zombie_node.data = next;
-            list_append(sched_state.zombie_list, &next->zombie_node);
+            list_append(sched_state.procs.zombie_list, &next->zombie_node);
             next->in_zombie_list = true;
         }
 
@@ -238,17 +245,24 @@ void sched_tick(arch_int_state_t *state) {
     __atomic_fetch_add(&sched_state.usage.core_total_ticks[cpu_id], 1, __ATOMIC_RELAXED);
 
     u64 now_ticks = arch_timer_ticks();
-    u64 seen_wake_tick = __atomic_load_n(&sched_state.sleep.wake_tick, __ATOMIC_ACQUIRE);
+    u64 seen_wake_tick = __atomic_load_n(
+        &sched_state.wait.sleep.wake_tick,
+        __ATOMIC_ACQUIRE
+    );
 
     if (now_ticks > seen_wake_tick) {
         unsigned long wake_flags = 0;
 
         if (sched_lock_try_save(&wake_flags)) {
             u64 locked_seen =
-                __atomic_load_n(&sched_state.sleep.wake_tick, __ATOMIC_ACQUIRE);
+                __atomic_load_n(&sched_state.wait.sleep.wake_tick, __ATOMIC_ACQUIRE);
 
             if (now_ticks > locked_seen) {
-                __atomic_store_n(&sched_state.sleep.wake_tick, now_ticks, __ATOMIC_RELEASE);
+                __atomic_store_n(
+                    &sched_state.wait.sleep.wake_tick,
+                    now_ticks,
+                    __ATOMIC_RELEASE
+                );
                 wake_sleepers(now_ticks);
             }
 
@@ -258,12 +272,13 @@ void sched_tick(arch_int_state_t *state) {
 
     u64 tick_ns = sched_tick_ns();
 
-    if (
-        thread != sched_local_idle() &&
-        thread_get_state(thread) == THREAD_RUNNING
-    ) {
+    if (tick_charges(thread)) {
         __atomic_fetch_add(&sched_state.usage.busy_ticks, 1, __ATOMIC_RELAXED);
-        __atomic_fetch_add(&sched_state.usage.core_busy_ticks[cpu_id], 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(
+            &sched_state.usage.core_busy_ticks[cpu_id],
+            1,
+            __ATOMIC_RELAXED
+        );
         __sync_fetch_and_add(&thread->cpu_time_ticks, 1);
 
         if (tick_ns) {
@@ -386,13 +401,13 @@ void sched_sleep(u64 ticks) {
 }
 
 static void sched_reparent_children(sched_thread_t *parent) {
-    if (!parent || !sched_state.all_list) {
+    if (!parent || !sched_state.procs.all_list) {
         return;
     }
 
     sched_thread_t *reaper = NULL;
 
-    ll_foreach(node, sched_state.all_list) {
+    ll_foreach(node, sched_state.procs.all_list) {
         sched_thread_t *thread = node->data;
 
         if (!thread || thread == parent) {
@@ -408,7 +423,7 @@ static void sched_reparent_children(sched_thread_t *parent) {
     pid_t reaper_pid = reaper ? reaper->pid : 0;
     bool notify_reaper = false;
 
-    ll_foreach(node, sched_state.all_list) {
+    ll_foreach(node, sched_state.procs.all_list) {
         sched_thread_t *thread = node->data;
 
         if (!thread || thread == parent) {
@@ -453,7 +468,7 @@ void sched_exit(void) {
 
         if (self != sched_local_idle() && !self->in_zombie_list) {
             self->zombie_node.data = self;
-            list_append(sched_state.zombie_list, &self->zombie_node);
+            list_append(sched_state.procs.zombie_list, &self->zombie_node);
             self->in_zombie_list = true;
         }
 
@@ -477,10 +492,7 @@ void sched_exit(void) {
         sched_local_set_slice_ns(0);
         next->exec_start_ns = next->sum_exec_ns;
 
-        if (
-            thread_ctx_ok(next) &&
-            (!next->context || !ctx_valid(next))
-        ) {
+        if (thread_ctx_ok(next) && (!next->context || !ctx_valid(next))) {
             sched_lock_restore(flags);
             panic("scheduler exit switched to invalid context thread");
         }

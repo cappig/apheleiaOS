@@ -31,14 +31,16 @@ static inline void _align_core_tick_floor(size_t cpu_id) {
     u64 global = __atomic_load_n(&irq_tick_count, __ATOMIC_ACQUIRE);
     u64 local = __atomic_load_n(&irq_core_tick_count[cpu_id], __ATOMIC_RELAXED);
     while (local < global) {
-        if (__atomic_compare_exchange_n(
-                &irq_core_tick_count[cpu_id],
-                &local,
-                global,
-                false,
-                __ATOMIC_RELEASE,
-                __ATOMIC_RELAXED
-            )) {
+        bool raised_floor = __atomic_compare_exchange_n(
+            &irq_core_tick_count[cpu_id],
+            &local,
+            global,
+            false,
+            __ATOMIC_RELEASE,
+            __ATOMIC_RELAXED
+        );
+
+        if (raised_floor) {
             return;
         }
     }
@@ -54,14 +56,16 @@ static inline void _publish_tick(size_t cpu_id) {
     u64 observed = __atomic_load_n(&irq_tick_count, __ATOMIC_RELAXED);
 
     while (core_ticks > observed) {
-        if (__atomic_compare_exchange_n(
-                &irq_tick_count,
-                &observed,
-                core_ticks,
-                false,
-                __ATOMIC_RELEASE,
-                __ATOMIC_RELAXED
-            )) {
+        bool published = __atomic_compare_exchange_n(
+            &irq_tick_count,
+            &observed,
+            core_ticks,
+            false,
+            __ATOMIC_RELEASE,
+            __ATOMIC_RELAXED
+        );
+
+        if (published) {
             break;
         }
     }
@@ -148,7 +152,7 @@ static void _soft_resched_handler(int_state_t *state) {
 }
 
 static void _init_timer_source(bool apic_ok) {
-    const u32 timer_hz = TIMER_FREQ ? TIMER_FREQ : 1U;
+    const u32 timer_hz = TIMER_FREQ;
 
     use_apic_timer = false;
 
@@ -158,6 +162,7 @@ static void _init_timer_source(bool apic_ok) {
             "APIC timer initialized at %u Hz",
             (unsigned int)apic_timer_hz()
         );
+
         return;
     }
 

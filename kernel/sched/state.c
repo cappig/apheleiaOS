@@ -1,10 +1,14 @@
 #include "internal.h"
 
 sched_state_t sched_state = {
-    .next_user_pid = 1,
-    .next_kernel_pid = -1,
-    .lock = SPINLOCK_INIT,
-    .exit_events = {
+    .core = {
+        .lock = SPINLOCK_INIT,
+    },
+    .procs = {
+        .next_user_pid = 1,
+        .next_kernel_pid = -1,
+    },
+    .wait.exit_events = {
         .lock = SPINLOCK_INIT,
     },
 };
@@ -15,7 +19,7 @@ bool sched_reconcile_lock(void) {
         return false;
     }
 
-    if (__atomic_load_n(&sched_state.lock.state, __ATOMIC_RELAXED)) {
+    if (__atomic_load_n(&sched_state.core.lock.state, __ATOMIC_RELAXED)) {
         return true;
     }
 
@@ -39,7 +43,7 @@ unsigned long sched_lock_save(void) {
     }
 
     for (;;) {
-        if (spin_try_lock(&sched_state.lock)) {
+        if (spin_try_lock(&sched_state.core.lock)) {
             local = sched_local();
             local->sched_lock_depth = 1;
             local->sched_lock_irq_flags = initial_flags;
@@ -72,7 +76,7 @@ bool sched_lock_try_save(unsigned long *flags_out) {
         return true;
     }
 
-    if (!spin_try_lock(&sched_state.lock)) {
+    if (!spin_try_lock(&sched_state.core.lock)) {
         arch_irq_restore(flags);
         return false;
     }
@@ -97,7 +101,7 @@ void sched_lock_restore(unsigned long flags) {
 
         local->sched_lock_depth = 0;
         local->sched_lock_irq_flags = 0;
-        spin_unlock(&sched_state.lock);
+        spin_unlock(&sched_state.core.lock);
 
         arch_irq_restore(irq_flags);
         return;
@@ -107,8 +111,8 @@ void sched_lock_restore(unsigned long flags) {
 }
 
 static bool sleep_heap_less(size_t left, size_t right) {
-    sched_thread_t *a = sched_state.sleep.heap[left];
-    sched_thread_t *b = sched_state.sleep.heap[right];
+    sched_thread_t *a = sched_state.wait.sleep.heap[left];
+    sched_thread_t *b = sched_state.wait.sleep.heap[right];
 
     if (!a) {
         return false;
@@ -126,17 +130,17 @@ static bool sleep_heap_less(size_t left, size_t right) {
 }
 
 static void sleep_heap_swap(size_t left, size_t right) {
-    sched_thread_t *tmp = sched_state.sleep.heap[left];
+    sched_thread_t *tmp = sched_state.wait.sleep.heap[left];
 
-    sched_state.sleep.heap[left] = sched_state.sleep.heap[right];
-    sched_state.sleep.heap[right] = tmp;
+    sched_state.wait.sleep.heap[left] = sched_state.wait.sleep.heap[right];
+    sched_state.wait.sleep.heap[right] = tmp;
 
-    if (sched_state.sleep.heap[left]) {
-        sched_state.sleep.heap[left]->sleep_index = left;
+    if (sched_state.wait.sleep.heap[left]) {
+        sched_state.wait.sleep.heap[left]->sleep_index = left;
     }
 
-    if (sched_state.sleep.heap[right]) {
-        sched_state.sleep.heap[right]->sleep_index = right;
+    if (sched_state.wait.sleep.heap[right]) {
+        sched_state.wait.sleep.heap[right]->sleep_index = right;
     }
 }
 
@@ -159,11 +163,11 @@ static void sleep_heap_sift_down(size_t index) {
         size_t right = left + 1;
         size_t best = index;
 
-        if (left < sched_state.sleep.count && sleep_heap_less(left, best)) {
+        if (left < sched_state.wait.sleep.count && sleep_heap_less(left, best)) {
             best = left;
         }
 
-        if (right < sched_state.sleep.count && sleep_heap_less(right, best)) {
+        if (right < sched_state.wait.sleep.count && sleep_heap_less(right, best)) {
             best = right;
         }
 
@@ -181,8 +185,8 @@ static ssize_t sleep_heap_find_thread(const sched_thread_t *thread) {
         return -1;
     }
 
-    for (size_t i = 0; i < sched_state.sleep.count; i++) {
-        if (sched_state.sleep.heap[i] == thread) {
+    for (size_t i = 0; i < sched_state.wait.sleep.count; i++) {
+        if (sched_state.wait.sleep.heap[i] == thread) {
             return (ssize_t)i;
         }
     }
@@ -196,10 +200,12 @@ bool sleep_heap_insert(sched_thread_t *thread) {
     }
 
     if (thread->sleep_queued) {
-        if (
-            thread->sleep_index < sched_state.sleep.count &&
-            sched_state.sleep.heap[thread->sleep_index] == thread
-        ) {
+        bool queued_here = (
+            thread->sleep_index < sched_state.wait.sleep.count &&
+            sched_state.wait.sleep.heap[thread->sleep_index] == thread
+        );
+
+        if (queued_here) {
             sleep_heap_remove_at(thread->sleep_index);
         } else {
             ssize_t found = sleep_heap_find_thread(thread);
@@ -218,13 +224,13 @@ bool sleep_heap_insert(sched_thread_t *thread) {
         sleep_heap_remove_at((size_t)found);
     }
 
-    if (sched_state.sleep.count >= SCHED_SLEEP_HEAP_CAPACITY) {
+    if (sched_state.wait.sleep.count >= SCHED_SLEEP_HEAP_CAPACITY) {
         return false;
     }
 
-    size_t index = sched_state.sleep.count++;
+    size_t index = sched_state.wait.sleep.count++;
 
-    sched_state.sleep.heap[index] = thread;
+    sched_state.wait.sleep.heap[index] = thread;
     thread->sleep_queued = true;
     thread->sleep_index = index;
     sleep_heap_sift_up(index);
@@ -233,25 +239,26 @@ bool sleep_heap_insert(sched_thread_t *thread) {
 }
 
 void sleep_heap_remove_at(size_t index) {
-    if (index >= sched_state.sleep.count) {
+    if (index >= sched_state.wait.sleep.count) {
         return;
     }
 
-    sched_thread_t *removed = sched_state.sleep.heap[index];
-    sched_state.sleep.count--;
+    sched_thread_t *removed = sched_state.wait.sleep.heap[index];
+    sched_state.wait.sleep.count--;
 
-    if (index != sched_state.sleep.count) {
-        sched_state.sleep.heap[index] = sched_state.sleep.heap[sched_state.sleep.count];
+    if (index != sched_state.wait.sleep.count) {
+        size_t last = sched_state.wait.sleep.count;
+        sched_state.wait.sleep.heap[index] = sched_state.wait.sleep.heap[last];
 
-        if (sched_state.sleep.heap[index]) {
-            sched_state.sleep.heap[index]->sleep_index = index;
+        if (sched_state.wait.sleep.heap[index]) {
+            sched_state.wait.sleep.heap[index]->sleep_index = index;
         }
 
         sleep_heap_sift_down(index);
         sleep_heap_sift_up(index);
     }
 
-    sched_state.sleep.heap[sched_state.sleep.count] = NULL;
+    sched_state.wait.sleep.heap[sched_state.wait.sleep.count] = NULL;
 
     if (removed) {
         removed->sleep_queued = false;
@@ -264,11 +271,13 @@ void sleep_heap_remove(sched_thread_t *thread) {
         return;
     }
 
-    if (
+    bool queued_here = (
         thread->sleep_queued &&
-        thread->sleep_index < sched_state.sleep.count &&
-        sched_state.sleep.heap[thread->sleep_index] == thread
-    ) {
+        thread->sleep_index < sched_state.wait.sleep.count &&
+        sched_state.wait.sleep.heap[thread->sleep_index] == thread
+    );
+
+    if (queued_here) {
         sleep_heap_remove_at(thread->sleep_index);
         return;
     }
@@ -286,11 +295,11 @@ void sleep_heap_remove(sched_thread_t *thread) {
 }
 
 sched_thread_t *sleep_heap_top(void) {
-    if (!sched_state.sleep.count) {
+    if (!sched_state.wait.sleep.count) {
         return NULL;
     }
 
-    return sched_state.sleep.heap[0];
+    return sched_state.wait.sleep.heap[0];
 }
 
 pid_t sched_next_pid(sched_pid_class_t pid_class) {
@@ -301,16 +310,21 @@ pid_t sched_next_pid(sched_pid_class_t pid_class) {
     case SCHED_PID_IDLE:
         break;
     case SCHED_PID_USER:
-        if (sched_state.next_user_pid <= 0 || sched_state.next_user_pid == INT_MAX) {
+        if (sched_state.procs.next_user_pid <= 0 || sched_state.procs.next_user_pid == INT_MAX) {
             panic("user PID space exhausted");
         }
-        pid = sched_state.next_user_pid++;
+        pid = sched_state.procs.next_user_pid++;
         break;
     case SCHED_PID_KERNEL:
-        if (sched_state.next_kernel_pid >= 0 || sched_state.next_kernel_pid == INT_MIN) {
+        bool exhausted = (
+            sched_state.procs.next_kernel_pid >= 0 ||
+            sched_state.procs.next_kernel_pid == INT_MIN
+        );
+
+        if (exhausted) {
             panic("kernel PID space exhausted");
         }
-        pid = sched_state.next_kernel_pid--;
+        pid = sched_state.procs.next_kernel_pid--;
         break;
     default:
         panic("invalid scheduler PID class");
