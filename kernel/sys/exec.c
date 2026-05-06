@@ -11,6 +11,7 @@
 #include <log/log.h>
 #include <parse/elf.h>
 #include <sched/signal.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/lock.h>
@@ -18,12 +19,6 @@
 #include <sys/stat.h>
 #include <sys/vfs.h>
 #include <unistd.h>
-
-#define USER_STACK_PAGES 64
-#define EXEC_MAX_ARGS    16
-#define EXEC_MAX_ARG_LEN 128
-#define EXEC_MAX_ENV     32
-#define EXEC_MAX_ENV_LEN 128
 
 static uintptr_t next_stack_top;
 static spinlock_t stack_lock = SPINLOCK_INIT;
@@ -73,14 +68,64 @@ static u64 _elf_flags_to_page_flags(u32 elf_flags) {
     return flags;
 }
 
-static bool _elf_segment_is_valid(
+static bool _u64_add(u64 a, u64 b, u64 *out) {
+    if (!out || b > UINT64_MAX - a) {
+        return false;
+    }
+
+    *out = a + b;
+    return true;
+}
+
+static bool _u64_mul(u64 a, u64 b, u64 *out) {
+    if (!out || (a && b > UINT64_MAX / a)) {
+        return false;
+    }
+
+    *out = a * b;
+    return true;
+}
+
+static bool _phdr_table_ok(
+    u64 phoff,
+    u64 ph_num,
+    u64 phent_size,
+    size_t image_size,
+    size_t min_entry_size
+) {
+    if (phent_size < min_entry_size) {
+        return false;
+    }
+
+    u64 ph_bytes = 0;
+    u64 ph_end = 0;
+
+    if (!_u64_mul(ph_num, phent_size, &ph_bytes)) {
+        return false;
+    }
+
+    if (!_u64_add(phoff, ph_bytes, &ph_end)) {
+        return false;
+    }
+
+    return phoff <= image_size && ph_end <= image_size;
+}
+
+static bool _elf_segment_ok(
     u64 file_size,
     u64 mem_size,
     u64 offset,
     u64 image_size,
     u64 vaddr
 ) {
+    uintptr_t user_top = (uintptr_t)arch_user_stack_top();
+    u64 mem_end = 0;
+
     if (!mem_size) {
+        return false;
+    }
+
+    if (!user_top || vaddr < PAGE_4KIB || vaddr >= (u64)user_top) {
         return false;
     }
 
@@ -92,10 +137,67 @@ static bool _elf_segment_is_valid(
         return false;
     }
 
-    if (vaddr + mem_size < vaddr) {
+    if (!_u64_add(vaddr, mem_size, &mem_end)) {
         return false;
     }
 
+    if (mem_end > (u64)user_top) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool _segment_range(
+    u64 vaddr,
+    u64 mem_size,
+    u64 max_addr,
+    u64 *base_out,
+    u64 *end_out
+) {
+    if (!base_out || !end_out || max_addr < PAGE_4KIB - 1) {
+        return false;
+    }
+
+    // Keep this in u64 until the range is proven sane; 32-bit ELFs can wrap too.
+    u64 mem_end = 0;
+    if (!_u64_add(vaddr, mem_size, &mem_end)) {
+        return false;
+    }
+
+    if (mem_end > max_addr - (PAGE_4KIB - 1)) {
+        return false;
+    }
+
+    u64 base = ALIGN_DOWN(vaddr, PAGE_4KIB);
+    u64 end = ALIGN(mem_end, PAGE_4KIB);
+    if (end <= base) {
+        return false;
+    }
+
+    *base_out = base;
+    *end_out = end;
+    return true;
+}
+
+static bool _user_region_end(
+    const sched_user_region_t *region,
+    uintptr_t *out
+) {
+    if (!region || !region->pages || !out) {
+        return false;
+    }
+
+    if (region->pages > SIZE_MAX / PAGE_4KIB) {
+        return false;
+    }
+
+    uintptr_t size = region->pages * PAGE_4KIB;
+    if (size > (uintptr_t)-1 - region->vaddr) {
+        return false;
+    }
+
+    *out = region->vaddr + size;
     return true;
 }
 
@@ -140,8 +242,12 @@ _find_user_region_page(sched_thread_t *thread, uintptr_t vaddr) {
 
     sched_user_region_t *region = thread->regions;
     while (region) {
-        if (vaddr >= region->vaddr &&
-            vaddr < region->vaddr + region->pages * PAGE_4KIB) {
+        uintptr_t region_end = 0;
+        if (
+            _user_region_end(region, &region_end) &&
+            vaddr >= region->vaddr &&
+            vaddr < region_end
+        ) {
             return region;
         }
 
@@ -162,6 +268,15 @@ _find_loaded_page(exec_loaded_page_t *pages, uintptr_t vaddr) {
     }
 
     return NULL;
+}
+
+static bool _entry_loaded(exec_loaded_page_t *pages, u64 entry) {
+    if (entry > (u64)(uintptr_t)-1 || entry < PAGE_4KIB) {
+        return false;
+    }
+
+    uintptr_t page_vaddr = ALIGN_DOWN((uintptr_t)entry, PAGE_4KIB);
+    return _find_loaded_page(pages, page_vaddr) != NULL;
 }
 
 static void _free_loaded_pages(exec_loaded_page_t *pages) {
@@ -300,7 +415,13 @@ static bool _load_segments_64(
         return false;
     }
 
-    if (header->phoff + (u64)header->ph_num * header->phent_size > size) {
+    if (!_phdr_table_ok(
+            header->phoff,
+            header->ph_num,
+            header->phent_size,
+            size,
+            sizeof(elf_prog_header_t)
+        )) {
         return false;
     }
 
@@ -309,8 +430,8 @@ static bool _load_segments_64(
     exec_loaded_page_t *loaded_pages = NULL;
 
     for (size_t i = 0; i < header->ph_num; i++) {
-        const elf_prog_header_t *ph =
-            (const elf_prog_header_t *)((const u8 *)prog + i * header->phent_size);
+        const u8 *ph_ptr = (const u8 *)prog + i * header->phent_size;
+        const elf_prog_header_t *ph = (const elf_prog_header_t *)ph_ptr;
 
         if (ph->type != PT_LOAD) {
             continue;
@@ -320,7 +441,7 @@ static bool _load_segments_64(
             continue;
         }
 
-        bool valid_seg = _elf_segment_is_valid(
+        bool segment_ok = _elf_segment_ok(
             ph->file_size,
             ph->mem_size,
             ph->offset,
@@ -328,21 +449,30 @@ static bool _load_segments_64(
             ph->vaddr
         );
 
-        if (!valid_seg) {
+        if (!segment_ok) {
             _free_loaded_pages(loaded_pages);
             return false;
         }
 
-        u64 map_base = ALIGN_DOWN(ph->vaddr, PAGE_4KIB);
-        u64 map_end = ALIGN(ph->vaddr + ph->mem_size, PAGE_4KIB);
-
-        if (map_end <= map_base) {
+        u64 map_base = 0;
+        u64 map_end = 0;
+        if (!_segment_range(
+                ph->vaddr,
+                ph->mem_size,
+                UINT64_MAX,
+                &map_base,
+                &map_end
+            )) {
             _free_loaded_pages(loaded_pages);
             return false;
         }
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
-        for (u64 page_vaddr = map_base; page_vaddr < map_end; page_vaddr += PAGE_4KIB) {
+        for (
+            u64 page_vaddr = map_base;
+            page_vaddr < map_end;
+            page_vaddr += PAGE_4KIB
+        ) {
             if (!_ensure_loaded_page(
                     thread,
                     &loaded_pages,
@@ -365,6 +495,11 @@ static bool _load_segments_64(
             _free_loaded_pages(loaded_pages);
             return false;
         }
+    }
+
+    if (!_entry_loaded(loaded_pages, header->entry)) {
+        _free_loaded_pages(loaded_pages);
+        return false;
     }
 
     if (entry_out) {
@@ -391,7 +526,13 @@ static bool _load_segments_32(
         return false;
     }
 
-    if ((u64)header->phoff + (u64)header->ph_num * header->phent_size > size) {
+    if (!_phdr_table_ok(
+            header->phoff,
+            header->ph_num,
+            header->phent_size,
+            size,
+            sizeof(elf32_prog_header_t)
+        )) {
         return false;
     }
 
@@ -400,8 +541,8 @@ static bool _load_segments_32(
     exec_loaded_page_t *loaded_pages = NULL;
 
     for (size_t i = 0; i < header->ph_num; i++) {
-        const elf32_prog_header_t *ph =
-            (const elf32_prog_header_t *)((const u8 *)prog + i * header->phent_size);
+        const u8 *ph_ptr = (const u8 *)prog + i * header->phent_size;
+        const elf32_prog_header_t *ph = (const elf32_prog_header_t *)ph_ptr;
 
         if (ph->type != PT_LOAD) {
             continue;
@@ -411,7 +552,7 @@ static bool _load_segments_32(
             continue;
         }
 
-        bool valid_seg = _elf_segment_is_valid(
+        bool segment_ok = _elf_segment_ok(
             ph->file_size,
             ph->mem_size,
             ph->offset,
@@ -419,21 +560,30 @@ static bool _load_segments_32(
             ph->vaddr
         );
 
-        if (!valid_seg) {
+        if (!segment_ok) {
             _free_loaded_pages(loaded_pages);
             return false;
         }
 
-        u32 map_base = ALIGN_DOWN(ph->vaddr, PAGE_4KIB);
-        u32 map_end = ALIGN(ph->vaddr + ph->mem_size, PAGE_4KIB);
-
-        if (map_end <= map_base) {
+        u64 map_base = 0;
+        u64 map_end = 0;
+        if (!_segment_range(
+                ph->vaddr,
+                ph->mem_size,
+                UINT32_MAX,
+                &map_base,
+                &map_end
+            )) {
             _free_loaded_pages(loaded_pages);
             return false;
         }
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
-        for (u32 page_vaddr = map_base; page_vaddr < map_end; page_vaddr += PAGE_4KIB) {
+        for (
+            u64 page_vaddr = map_base;
+            page_vaddr < map_end;
+            page_vaddr += PAGE_4KIB
+        ) {
             if (!_ensure_loaded_page(
                     thread,
                     &loaded_pages,
@@ -456,6 +606,11 @@ static bool _load_segments_32(
             _free_loaded_pages(loaded_pages);
             return false;
         }
+    }
+
+    if (!_entry_loaded(loaded_pages, header->entry)) {
+        _free_loaded_pages(loaded_pages);
+        return false;
     }
 
     if (entry_out) {

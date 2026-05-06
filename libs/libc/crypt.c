@@ -4,6 +4,8 @@
 #include <string.h>
 
 #define CRYPT_PREFIX "fnv1a$"
+#define FNV1A_OFFSET 2166136261u
+#define FNV1A_PRIME  16777619u
 
 // WARN: simple non crytographic hash for the simple toy os :^)
 char *crypt(const char *key, const char *salt) {
@@ -17,13 +19,11 @@ char *crypt(const char *key, const char *salt) {
         salt = CRYPT_PREFIX;
     }
 
-    const uint32_t fnv_offset = 2166136261u;
-    const uint32_t fnv_prime = 16777619u;
-    uint32_t hash = fnv_offset;
+    uint32_t hash = FNV1A_OFFSET;
 
     for (const unsigned char *p = (const unsigned char *)key; *p; p++) {
         hash ^= *p;
-        hash *= fnv_prime;
+        hash *= FNV1A_PRIME;
     }
 
     int written = snprintf(buf, sizeof(buf), CRYPT_PREFIX "%08x", (unsigned int)hash);

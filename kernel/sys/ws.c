@@ -12,16 +12,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/config.h>
 #include <sys/devfs.h>
 #include <sys/framebuffer.h>
 #include <sys/ioctl.h>
 #include <sys/lock.h>
 #include <sys/time.h>
+#include <sys/usercopy.h>
 
-#define WS_MGR_QUEUE_INIT_CAP 1024
-#define WS_EV_QUEUE_INIT_CAP  256
-#define WS_MAX_FB_BYTES       (16U * 1024U * 1024U)
-#define WS_WINDOW_INIT_CAP    256
 #define WS_DEV_UID            0U
 #define WS_DEV_GID            46U
 
@@ -30,16 +28,20 @@ typedef struct {
     bool allocated;
     pid_t owner_pid;
     char title[WS_TITLE_MAX];
+
     i32 x;
     i32 y;
     u32 width;
     u32 height;
     u32 stride;
+
     u32 io_width;
     u32 io_height;
     u32 io_stride;
+
     u32 z;
     u32 flags;
+
     u8 *fb;
     u32 fb_store_width;
     u32 fb_store_height;
@@ -51,13 +53,16 @@ typedef struct {
     mutex_t fb_io_lock;
     u32 io_refs;
     bool pending_free;
+
     bool pending_notify_manager;
     bool pending_ev_wake;
+
     bool mgr_dirty_pending;
     u32 mgr_dirty_x;
     u32 mgr_dirty_y;
     u32 mgr_dirty_width;
     u32 mgr_dirty_height;
+
     ring_queue_t *ev_queue;
     size_t ev_high_water;
     sched_wait_queue_t ev_wait;
@@ -89,6 +94,14 @@ static inline bool _event_is_lossy(const ws_input_event_t *event) {
             event->type == INPUT_EVENT_MOUSE_WHEEL);
 }
 
+static u32 _rect_end(u32 start, u32 size) {
+    if (size > (u32)-1 - start) {
+        return (u32)-1;
+    }
+
+    return start + size;
+}
+
 static bool _set_ws_owner(vfs_node_t *node, const char *path) {
     if (!node || !vfs_chown(node, WS_DEV_UID, WS_DEV_GID)) {
         log_warn("failed to set %s ownership to root:ws", path ? path : "node");
@@ -108,10 +121,6 @@ static bool _slot_priv_decode(void *priv, u32 *id_out) {
     }
 
     uintptr_t raw = (uintptr_t)priv;
-    if (!raw) {
-        return false;
-    }
-
     *id_out = (u32)(raw - 1);
     return true;
 }
@@ -383,6 +392,7 @@ static void _window_dirty_merge_pending(
         return;
     }
 
+    // The manager only needs one dirty event; keep folding the damage into it.
     if (!window->mgr_dirty_pending || !window->mgr_dirty_width || !window->mgr_dirty_height) {
         window->mgr_dirty_pending = true;
         window->mgr_dirty_x = x;
@@ -395,11 +405,13 @@ static void _window_dirty_merge_pending(
     u32 x0 = window->mgr_dirty_x < x ? window->mgr_dirty_x : x;
     u32 y0 = window->mgr_dirty_y < y ? window->mgr_dirty_y : y;
 
-    u32 dx = window->mgr_dirty_x + window->mgr_dirty_width;
-    u32 x1 = dx > (x + width) ? dx : (x + width);
+    u32 dx = _rect_end(window->mgr_dirty_x, window->mgr_dirty_width);
+    u32 new_dx = _rect_end(x, width);
+    u32 x1 = dx > new_dx ? dx : new_dx;
 
-    u32 dy = window->mgr_dirty_y + window->mgr_dirty_height;
-    u32 y1 = dy > (y + height) ? dy : (y + height);
+    u32 dy = _rect_end(window->mgr_dirty_y, window->mgr_dirty_height);
+    u32 new_dy = _rect_end(y, height);
+    u32 y1 = dy > new_dy ? dy : new_dy;
 
     window->mgr_dirty_x = x0;
     window->mgr_dirty_y = y0;
@@ -517,12 +529,14 @@ static void _queue_manager_dirty_event(
         return;
     }
 
-    if (x + width > window->width) {
-        width = window->width - x;
+    u32 max_width = window->width - x;
+    if (width > max_width) {
+        width = max_width;
     }
 
-    if (y + height > window->height) {
-        height = window->height - y;
+    u32 max_height = window->height - y;
+    if (height > max_height) {
+        height = max_height;
     }
 
     if (!width || !height) {
@@ -568,8 +582,13 @@ static void _queue_manager_dirty_write(
         return;
     }
 
+    size_t last_byte = len - 1;
+    if (last_byte > SIZE_MAX - offset) {
+        return;
+    }
+
     size_t start_pixel = offset / sizeof(u32);
-    size_t end_pixel = (offset + len - 1) / sizeof(u32);
+    size_t end_pixel = (offset + last_byte) / sizeof(u32);
 
     u32 y0 = (u32)(start_pixel / view_width);
     u32 x0 = (u32)(start_pixel % view_width);
@@ -957,6 +976,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
             (unsigned int)cmd->width,
             (unsigned int)cmd->height
         );
+
         return -ENOMEM;
     }
 
@@ -966,6 +986,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
             (unsigned int)free_id,
             (long)caller_pid
         );
+
         return -ENOMEM;
     }
 
@@ -976,6 +997,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
             (unsigned int)free_id,
             (long)caller_pid
         );
+
         return -ENOMEM;
     }
 
@@ -989,6 +1011,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
             (long)caller_pid,
             fb_size_u64
         );
+
         return -ENOMEM;
     }
 
@@ -1002,6 +1025,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
             (unsigned int)free_id,
             (long)caller_pid
         );
+
         return -ENOMEM;
     }
 
@@ -1183,7 +1207,12 @@ static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
             return -ENOMEM;
         }
 
-        if (window->fb && old_store_width && old_store_height && old_store_stride) {
+        if (
+            window->fb &&
+            old_store_width &&
+            old_store_height &&
+            old_store_stride
+        ) {
             size_t row_bytes = (size_t)old_store_width * sizeof(u32);
 
             for (u32 row = 0; row < old_store_height; row++) {
@@ -1217,11 +1246,17 @@ static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
         free(old_fb);
     }
 
-    if (window->fb && old_store_width && old_store_height && need_store_width > old_store_width) {
+    if (
+        window->fb &&
+        old_store_width &&
+        old_store_height &&
+        need_store_width > old_store_width
+    ) {
         for (u32 row = 0; row < old_store_height; row++) {
             u8 *row_base = window->fb + ((size_t)row * need_store_stride);
-            const u32 *edge =
-                (const u32 *)(row_base + ((size_t)(old_store_width - 1) * sizeof(u32)));
+            const u8 *edge_addr =
+                row_base + ((size_t)(old_store_width - 1) * sizeof(u32));
+            const u32 *edge = (const u32 *)edge_addr;
 
             u32 fill = *edge;
 
@@ -1236,7 +1271,7 @@ static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
 
     if (window->fb && need_store_height > old_store_height) {
         if (old_store_height > 0) {
-            const u8 *src_row = 
+            const u8 *src_row =
                 window->fb + ((size_t)(old_store_height - 1) * need_store_stride);
 
             for (u32 row = old_store_height; row < need_store_height; row++) {
@@ -1247,7 +1282,7 @@ static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
             u8 *dst =
                 window->fb + ((size_t)old_store_height * need_store_stride);
 
-            size_t grow_bytes = 
+            size_t grow_bytes =
                 (size_t)(need_store_height - old_store_height) * need_store_stride;
 
             memset(dst, 0, grow_bytes);
@@ -1424,7 +1459,7 @@ static void _ws_reaper_entry(void *arg) {
             continue;
         }
 
-        sched_exit_event_block_if_unchanged(wait_seq);
+        sched_exit_wait_change(wait_seq);
     }
 }
 
@@ -1661,10 +1696,18 @@ static ssize_t _ws_ctl_ioctl_as(pid_t caller_pid, u64 request, void *args) {
         return -EPERM;
     }
 
-    ws_cmd_t *cmd = args;
+    sched_thread_t *current = sched_current();
+    if (!user_write_prepare(current, args, sizeof(ws_cmd_t))) {
+        return -EFAULT;
+    }
+
+    ws_cmd_t cmd = {0};
+    if (!user_copy_from(current, &cmd, args, sizeof(cmd))) {
+        return -EFAULT;
+    }
 
     if (request == WSIOC_TRANSFER_MANAGER) {
-        if (cmd->pid <= 0 || !sched_pid_alive(cmd->pid)) {
+        if (cmd.pid <= 0 || !sched_pid_alive(cmd.pid)) {
             return -ESRCH;
         }
     }
@@ -1675,16 +1718,16 @@ static ssize_t _ws_ctl_ioctl_as(pid_t caller_pid, u64 request, void *args) {
 
     switch (request) {
     case WSIOC_ALLOC:
-        status = _handle_alloc(caller_pid, cmd);
+        status = _handle_alloc(caller_pid, &cmd);
         break;
     case WSIOC_FREE:
-        status = _handle_free(caller_pid, cmd);
+        status = _handle_free(caller_pid, &cmd);
         break;
     case WSIOC_QUERY:
-        status = _handle_query(caller_pid, cmd);
+        status = _handle_query(caller_pid, &cmd);
         break;
     case WSIOC_SET_TITLE:
-        status = _handle_set_title(caller_pid, cmd);
+        status = _handle_set_title(caller_pid, &cmd);
         break;
     case WSIOC_CLAIM_MANAGER:
     case WSIOC_RELEASE_MANAGER:
@@ -1695,7 +1738,7 @@ static ssize_t _ws_ctl_ioctl_as(pid_t caller_pid, u64 request, void *args) {
     case WSIOC_SET_Z:
     case WSIOC_SEND_INPUT:
     case WSIOC_CLOSE:
-        status = _handle_manager_op(caller_pid, request, cmd);
+        status = _handle_manager_op(caller_pid, request, &cmd);
         break;
     default:
         status = -ENOTTY;
@@ -1704,6 +1747,11 @@ static ssize_t _ws_ctl_ioctl_as(pid_t caller_pid, u64 request, void *args) {
 
     mutex_unlock(&ws_lock);
     _flush_deferred_wakes();
+
+    if (status >= 0 && !user_copy_to(current, args, &cmd, sizeof(cmd))) {
+        return -EFAULT;
+    }
+
     return status;
 }
 
