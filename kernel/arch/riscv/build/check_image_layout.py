@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that kernel ELF load segments don't overlap the embedded rootfs."""
+"""Verify that RISC-V image regions do not overlap."""
 
 import os
 import subprocess
@@ -17,13 +17,17 @@ def load_segments(elf_path):
 
 
 def main():
-    if len(sys.argv) != 4:
-        print(f"usage: {sys.argv[0]} <kernel.elf> <rootfs.img> <rootfs_offset>")
+    if len(sys.argv) not in (4, 5):
+        print(
+            f"usage: {sys.argv[0]} <kernel.elf> <rootfs.img> "
+            "<rootfs_offset> [scratch_offset]"
+        )
         sys.exit(1)
 
     kernel_elf = sys.argv[1]
     rootfs_img = sys.argv[2]
     rootfs_off = int(sys.argv[3])
+    scratch_off = int(sys.argv[4]) if len(sys.argv) == 5 else 0
 
     segs = load_segments(kernel_elf)
     if not segs:
@@ -35,11 +39,28 @@ def main():
 
     rootfs_start = 0x80000000 + rootfs_off
     rootfs_end = rootfs_start + os.path.getsize(rootfs_img)
+    scratch_start = 0x80000000 + scratch_off if scratch_off else 0
 
     if kernel_end > rootfs_start and kernel_start < rootfs_end:
         print(
             f"error: kernel [{kernel_start:#x}, {kernel_end:#x}) overlaps "
             f"rootfs [{rootfs_start:#x}, {rootfs_end:#x})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if scratch_start and rootfs_end > scratch_start:
+        print(
+            f"error: rootfs [{rootfs_start:#x}, {rootfs_end:#x}) overlaps "
+            f"boot scratch [{scratch_start:#x}, ...)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if scratch_start and kernel_end > scratch_start:
+        print(
+            f"error: kernel [{kernel_start:#x}, {kernel_end:#x}) overlaps "
+            f"boot scratch [{scratch_start:#x}, ...)",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -36,7 +36,7 @@ def main() -> None:
         build_ext2_image(
             root_tree,
             ext2_img,
-            block_size=1024,
+            block_size=4096,
             growth_numerator=1,
             growth_denominator=1,
             minimum_bytes=0,

@@ -1,11 +1,12 @@
 #include "ext2.h"
 
+#include <base/attributes.h>
 #include <base/macros.h>
 #include <stdlib.h>
 #include <string.h>
 
 int printf(const char *fmt, ...);
-void panic(const char *msg);
+NORETURN void panic(const char *msg);
 
 static size_t _strnlen_delim(const char *str, char delim, size_t max) {
     size_t len = 0;

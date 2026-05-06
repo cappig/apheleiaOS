@@ -360,7 +360,10 @@ static inline uintptr_t _plic_context_base(size_t cpu_id) {
 }
 
 static inline volatile u32 *_plic_priority_reg(u32 irq) {
-    return (volatile u32 *)(plic.virt + RISCV_PLIC_PRIORITY_BASE + irq * RISCV_PLIC_PRIORITY_STRIDE);
+    uintptr_t offset =
+        RISCV_PLIC_PRIORITY_BASE + irq * RISCV_PLIC_PRIORITY_STRIDE;
+
+    return (volatile u32 *)(plic.virt + offset);
 }
 
 static inline volatile u32 *_plic_enable_reg(size_t cpu_id, u32 irq) {
@@ -713,7 +716,7 @@ static void _mmio_map_regions(page_t *root) {
 }
 
 static bool _timer_program_next(void) {
-    u64 interval = timer.timebase_hz / (TIMER_FREQ ? TIMER_FREQ : 1U);
+    u64 interval = timer.timebase_hz / TIMER_FREQ;
     if (!interval) {
         interval = 1;
     }
@@ -1435,7 +1438,7 @@ u64 arch_timer_ticks(void) {
 }
 
 u32 arch_timer_hz(void) {
-    return TIMER_FREQ ? TIMER_FREQ : 1U;
+    return TIMER_FREQ;
 }
 
 u64 arch_realtime_ns(void) {
@@ -1445,8 +1448,7 @@ u64 arch_realtime_ns(void) {
         return 0;
     }
 
-    u64 hz = TIMER_FREQ ? (u64)TIMER_FREQ : 1ULL;
-    return (ticks * 1000000000ULL) / hz;
+    return (ticks * 1000000000ULL) / TIMER_FREQ;
 }
 
 const char *arch_name(void) {

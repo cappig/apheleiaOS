@@ -16,20 +16,16 @@ static spinlock_t tx_lock = SPINLOCK_INIT;
 #define UART_LSR_TX_IDLE  0x20
 #define UART_IER_RX_READY 0x01
 
+static inline uintptr_t _uart_reg(uintptr_t base, uintptr_t reg) {
+    return base + reg * RISCV_UART_STRIDE;
+}
+
 static inline u8 _uart_read(uintptr_t base, uintptr_t reg) {
-#if RISCV_UART_STRIDE == 4
-    return (u8)(*(volatile u32 *)(base + reg * 4));
-#else
-    return *(volatile u8 *)(base + reg * RISCV_UART_STRIDE);
-#endif
+    return *(volatile u8 *)_uart_reg(base, reg);
 }
 
 static inline void _uart_write(uintptr_t base, uintptr_t reg, u8 val) {
-#if RISCV_UART_STRIDE == 4
-    *(volatile u32 *)(base + reg * 4) = val;
-#else
-    *(volatile u8 *)(base + reg * RISCV_UART_STRIDE) = val;
-#endif
+    *(volatile u8 *)_uart_reg(base, reg) = val;
 }
 
 static inline bool _uart_has_data(uintptr_t base) {

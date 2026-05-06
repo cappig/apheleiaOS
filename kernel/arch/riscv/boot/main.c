@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/config.h>
 
 #include <common/ext2.h>
 
@@ -20,8 +21,10 @@
 extern char __stack_top;
 extern char __image_start;
 
-#define RISCV_BOOT_PAGE_SIZE     4096UL
-#define RISCV_BOOT_SCRATCH_OFFSET (32ULL * MIB)
+#define RISCV_BOOT_PAGE_SIZE 4096UL
+#ifndef RISCV_BOOT_SCRATCH_OFFSET
+#define RISCV_BOOT_SCRATCH_OFFSET (48ULL * MIB)
+#endif
 #ifndef RISCV_BOOT_IMAGE_ROOTFS_OFFSET
 #define RISCV_BOOT_IMAGE_ROOTFS_OFFSET (2ULL * MIB)
 #endif
@@ -39,10 +42,6 @@ extern char __image_start;
 
 #ifndef RISCV_BOOT_IMAGE_BASE_OVERRIDE
 #define RISCV_BOOT_IMAGE_BASE_OVERRIDE 0ULL
-#endif
-
-#ifndef TIMER_FREQ
-#define TIMER_FREQ 1000U
 #endif
 
 struct riscv_elf_load_ctx {
@@ -477,7 +476,9 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     );
 
     if (riscv_boot_timer_ready) {
-        u64 interval = riscv_boot_timer_timebase_hz / (TIMER_FREQ ? TIMER_FREQ : 1U);
+        u64 timebase_hz = riscv_boot_timer_timebase_hz;
+        u64 interval = timebase_hz / TIMER_FREQ;
+
         if (!interval) {
             interval = 1;
         }

@@ -62,10 +62,10 @@ ROOTFS_IMAGE       := bin/$(IMAGE_NAME).rootfs.img
 # The embedded rootfs sits at this byte offset inside the flat image.
 # The boot stub must fit below it; the kernel loads above it.
 RISCV_BOOT_IMAGE_ROOTFS_OFFSET := 2097152
+RISCV_BOOT_SCRATCH_OFFSET      := 50331648
 
 RISCV_UART0        := 0x10000000UL
 RISCV_UART_STRIDE  ?= 1
-TIMER_FREQ         ?= 250
 
 RISCV_64_ISA_FLAGS := -march=rv64ia_zicsr -mabi=lp64
 RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr -mabi=ilp32
@@ -76,7 +76,6 @@ KERNEL_CC_COMMON := \
 	-DEXTERNAL_ALLOC \
 	-DSERIAL_UART0=$(RISCV_UART0) \
 	-DRISCV_UART_STRIDE=$(RISCV_UART_STRIDE) \
-	-DTIMER_FREQ=$(TIMER_FREQ) \
 	-fdata-sections \
 	-ffunction-sections \
 	-fno-omit-frame-pointer
@@ -99,9 +98,9 @@ BOOT_ENTRY_CFLAGS_COMMON := \
 	-fno-pic \
 	-fno-pie \
 	-DRISCV_BOOT_IMAGE_ROOTFS_OFFSET=$(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) \
+	-DRISCV_BOOT_SCRATCH_OFFSET=$(RISCV_BOOT_SCRATCH_OFFSET) \
 	-DSERIAL_UART0=$(RISCV_UART0) \
 	-DRISCV_UART_STRIDE=$(RISCV_UART_STRIDE) \
-	-DTIMER_FREQ=$(TIMER_FREQ) \
 	-mcmodel=medany
 
 ifeq ($(RISCV_BOOT_FORCE_NO_DTB), true)
@@ -170,7 +169,8 @@ $(KERNEL_OBJ_DIR)/%.c.o: %.c
 	@mkdir -p $(@D)
 	$(call cc, $(KERNEL_CC_FLAGS), $@, $<)
 
-$(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS)) $(ARCH_DIR)/build/linker$(ARCH_VARIANT).ld
+$(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS)) \
+	$(ARCH_DIR)/build/linker$(ARCH_VARIANT).ld
 	@mkdir -p $(@D)
 	$(call ld, $(KERNEL_LD_FLAGS), $@, $(filter-out $(ARCH_DIR)/build/linker$(ARCH_VARIANT).ld, $^))
 	@if [ "$(STRIP_KERNEL)" = "true" ]; then $(ST) --strip-debug $@; fi
@@ -209,7 +209,8 @@ bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE)
 	@[ "$$(wc -c < $(BOOT_ENTRY_BIN))" -le "$(RISCV_BOOT_IMAGE_ROOTFS_OFFSET)" ] || \
 	    { echo "boot binary exceeds embedded rootfs offset"; exit 1; }
 	@python3 kernel/arch/riscv/build/check_image_layout.py \
-	    $(KERNEL_ELF) $(ROOTFS_IMAGE) $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET)
+	    $(KERNEL_ELF) $(ROOTFS_IMAGE) $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) \
+	    $(RISCV_BOOT_SCRATCH_OFFSET)
 	@cp $(BOOT_ENTRY_BIN) $@
 	@truncate -s $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) $@
 	@cat $(ROOTFS_IMAGE) >> $@
