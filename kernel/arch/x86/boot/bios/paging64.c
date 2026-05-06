@@ -89,7 +89,6 @@ finalize:
     *entry |= (flags & FLAGS_MASK) | pat_huge;
 }
 
-// TODO: we should try to use larger pages if possible
 void map_region_64(
     size_t size,
     u64 vaddr,
@@ -97,16 +96,29 @@ void map_region_64(
     u64 flags,
     bool is_kernel
 ) {
-    for (size_t i = 0; i < DIV_ROUND_UP(size, PAGE_4KIB); i++) {
-        u64 page_vaddr = vaddr + i * PAGE_4KIB;
-        u64 page_paddr = paddr + i * PAGE_4KIB;
+    size_t remaining = ALIGN(size, PAGE_4KIB);
 
-        map_page_64(PAGE_4KIB, page_vaddr, page_paddr, flags, is_kernel);
+    while (remaining) {
+        size_t page_size = PAGE_4KIB;
+
+        if (
+            remaining >= PAGE_2MIB &&
+            (vaddr & (PAGE_2MIB - 1)) == 0 &&
+            (paddr & (PAGE_2MIB - 1)) == 0
+        ) {
+            page_size = PAGE_2MIB;
+        }
+
+        map_page_64(page_size, vaddr, paddr, flags, is_kernel);
+
+        vaddr += page_size;
+        paddr += page_size;
+        remaining -= page_size;
     }
 }
 
-// Should we be assuming the existence of huge pages?
 void identity_map_64(u64 top_address, u64 offset, bool is_kernel) {
+    // Should we be assuming the existence of huge pages?
     for (u64 i = 0; i < top_address; i += PAGE_2MIB) {
         map_page_64(PAGE_2MIB, i + offset, i, PT_WRITE, is_kernel);
     }

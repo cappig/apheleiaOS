@@ -72,6 +72,7 @@ void _xhci_set_health_state(
             _xhci_health_name(prev),
             _xhci_health_name(state)
         );
+
         return;
     }
 
@@ -85,6 +86,7 @@ void _xhci_set_health_state(
             _xhci_health_name(state),
             reason
         );
+
         return;
     }
 
@@ -854,6 +856,7 @@ static bool _xhci_validate_runtime_programming(
             erstba,
             (unsigned int)erstsz
         );
+
         return false;
     }
 
@@ -867,6 +870,7 @@ static bool _xhci_validate_runtime_programming(
             erdp,
             expected_erdp
         );
+
         return false;
     }
 
@@ -932,6 +936,7 @@ static bool _xhci_program_runtime(
             ctrl->slot,
             ctrl->func
         );
+
         return false;
     }
 
@@ -967,6 +972,7 @@ static bool _xhci_program_runtime(
             ctrl->slot,
             ctrl->func
         );
+
         return false;
     }
 
@@ -1290,6 +1296,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
                 ctrl->slot,
                 ctrl->func
             );
+
             return false;
         }
     }
@@ -1365,6 +1372,7 @@ static void _xhci_enable_legacy_irq(xhci_controller_t *ctrl) {
             ctrl->func,
             ctrl->irq_line
         );
+
         return;
     }
 
@@ -1383,6 +1391,7 @@ static void _xhci_enable_legacy_irq(xhci_controller_t *ctrl) {
             ctrl->irq_line,
             legacy_irq_line
         );
+
         return;
     }
 

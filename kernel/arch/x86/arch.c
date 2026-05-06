@@ -1348,8 +1348,13 @@ u64 arch_cpu_khz(void) {
 }
 
 void arch_mem_info(size_t *total, size_t *free) {
-    if (total) { *total = pmm_total_mem(); }
-    if (free) { *free = pmm_free_mem(); }
+    if (total) {
+        *total = pmm_total_mem();
+    }
+
+    if (free) {
+        *free = pmm_free_mem();
+    }
 }
 
 void arch_syscall_install(int vector, arch_syscall_handler_t handler) {

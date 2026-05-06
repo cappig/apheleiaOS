@@ -24,14 +24,16 @@ static sched_wait_queue_t *mutex_wait_queue_get(mutex_t *mutex, bool create) {
     sched_wait_queue_init(queue);
 
     sched_wait_queue_t *expected = NULL;
-    if (__atomic_compare_exchange_n(
-            &mutex->wait_queue,
-            &expected,
-            queue,
-            false,
-            __ATOMIC_RELEASE,
-            __ATOMIC_ACQUIRE
-        )) {
+    bool installed = __atomic_compare_exchange_n(
+        &mutex->wait_queue,
+        &expected,
+        queue,
+        false,
+        __ATOMIC_RELEASE,
+        __ATOMIC_ACQUIRE
+    );
+
+    if (installed) {
         return queue;
     }
 

@@ -18,12 +18,6 @@ USER_LIBC_SRC := \
 	$(wildcard libs/libc_ext/*.c) \
 	$(wildcard libs/libc_usr/*.c)
 
-ifeq ($(ARCH_TREE), riscv)
-USER_LIBC_SRC := $(filter-out \
-	libs/libc/math.c \
-	libs/libc_usr/strtod.c, \
-	$(USER_LIBC_SRC))
-endif
 USER_COMMON_SRC := $(wildcard libs/user/*.c)
 USER_DATA_SRC   := $(wildcard libs/data/*.c)
 USER_GUI_SRC    := $(wildcard libs/gui/*.c)
@@ -253,7 +247,8 @@ USER_SHARED_OBJ := $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_COMMON_OBJ) \
 	$(USER_DATA_OBJ) $(USER_GUI_OBJ) $(USER_TERM_OBJ) $(USER_PARSE_OBJ)
 
 USER_PROGS_BIN := $(addprefix $(USER_BIN_DIR)/,$(USER_PROGS))
-USER_BINARIES  := $(addprefix $(USER_STAGE_DIR)/,$(USER_PROGS))
+USER_STAGE_BIN_STAMP := $(USER_STAGE_DIR)/.apheleia_bins
+USER_BINARIES  := $(USER_STAGE_BIN_STAMP)
 USER_BINARIES  += $(USER_STAGE_USR_LIB_STAMP)
 
 ifeq ($(USERLAND_STAGE_HEADERS), true)
@@ -281,6 +276,7 @@ USER_STRIP_FLAGS ?= --strip-debug
 
 .SECONDARY: $(USER_SHARED_OBJ) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) \
 	$(USER_APP_OBJ) $(USER_PROGS_BIN)
+.PHONY: userland-stage-bin-force
 
 define user_prog_objs
 $(foreach obj,$(USER_APP_OBJ),$(if $(findstring /$(1)/,$(obj)),$(obj)))
@@ -312,6 +308,14 @@ $(foreach prog,$(USER_PROGS),$(eval $(call user_link_rule,$(prog))))
 $(USER_STAGE_DIR)/%: $(USER_BIN_DIR)/%
 	@mkdir -p $(@D)
 	@cp $< $@
+
+$(USER_STAGE_BIN_STAMP): $(USER_PROGS_BIN) userland-stage-bin-force
+	@mkdir -p "$(USER_STAGE_DIR)"
+	@find "$(USER_STAGE_DIR)" -mindepth 1 -maxdepth 1 ! -name '.apheleia_*' -exec rm -rf -- {} +
+	@for bin in $(USER_PROGS); do \
+		cp "$(USER_BIN_DIR)/$$bin" "$(USER_STAGE_DIR)/$$bin"; \
+	done
+	@touch $@
 
 bin/$(IMAGE_NAME).img: $(USER_BINARIES)
 bin/$(IMAGE_NAME).iso: $(USER_BINARIES)

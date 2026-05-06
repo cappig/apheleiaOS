@@ -892,6 +892,7 @@ static bool ahci_find_controller(ahci_device_t *dev) {
             }
 
             // FIXME: we should not have this limit!
+            // The current MMIO mapping path is limited to 32-bit ABARs.
             if (!abar || abar > 0xffffffffULL) {
                 continue;
             }
@@ -1030,8 +1031,10 @@ static bool ahci_disk_init(void) {
 
     u64 sector_count = 0;
     if (identify[83] & (1U << 10)) {
-        sector_count = 
-            (u64)identify[100] | ((u64)identify[101] << 16) | ((u64)identify[102] << 32) | ((u64)identify[103] << 48);
+        sector_count = (u64)identify[100] |
+                       ((u64)identify[101] << 16) |
+                       ((u64)identify[102] << 32) |
+                       ((u64)identify[103] << 48);
     }
 
     if (!sector_count) {

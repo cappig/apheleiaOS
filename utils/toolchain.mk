@@ -92,15 +92,28 @@ define st
 	@printf "%s  %s\n" "ST" "$(strip $(1))"
 endef
 
-# Returns the libgcc path for the given CFLAGS, or empty if not found.
-LIBGCC = $(shell lib=$$($(CC) $(CC_BASE) $(1) -print-libgcc-file-name 2>/dev/null); \
-	if [ -f "$$lib" ]; then echo "$$lib"; fi)
-
 LIBC_DIRS := libs/libc libs/libc_ext
 
 # Split ARCH into tree (x86, riscv) and variant (64, 32).
 ARCH_TREE    := $(word 1, $(subst _, ,$(ARCH)))
 ARCH_VARIANT := $(word 2, $(subst _, ,$(ARCH)))
+
+LIBGCC_FALLBACK_CC :=
+ifeq ($(ARCH_TREE), riscv)
+LIBGCC_FALLBACK_CC := $(GNU_CC_$(ARCH)) riscv-none-elf-gcc riscv64-unknown-elf-gcc
+endif
+
+# Returns the runtime helper archive for the given CFLAGS, or empty if missing.
+# Some Clang packages print a compiler-rt path they do not ship, so RISC-V
+# builds also try the bare-metal GCC toolchain when it is installed.
+LIBGCC = $(shell \
+	lib=$$($(CC) $(CC_BASE) $(1) -print-libgcc-file-name 2>/dev/null); \
+	if [ -f "$$lib" ]; then echo "$$lib"; exit 0; fi; \
+	for cc in $(LIBGCC_FALLBACK_CC); do \
+		if ! command -v "$$cc" >/dev/null 2>&1; then continue; fi; \
+		lib=$$($$cc $(CC_BASE) $(1) -print-libgcc-file-name 2>/dev/null); \
+		if [ -f "$$lib" ]; then echo "$$lib"; exit 0; fi; \
+	done)
 
 ifneq ($(ARCH),)
 include kernel/arch/$(ARCH_TREE)/build/build.mk

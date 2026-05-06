@@ -126,7 +126,8 @@ ifeq ($(ARCH_VARIANT), 64)
 		$(KERNEL_ELF) \
 		$(IMAGE_STAGE_DIR)
 else
-	@python3 kernel/arch/x86/build/build_bios_disk_image.py $@ bin/boot/mbr.bin bin/boot/bios.bin $(IMAGE_STAGE_DIR)
+	@python3 kernel/arch/x86/build/build_bios_disk_image.py $@ \
+		bin/boot/mbr.bin bin/boot/bios.bin $(IMAGE_STAGE_DIR)
 endif
 
 bin/$(IMAGE_NAME).iso: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)

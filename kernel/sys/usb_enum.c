@@ -50,6 +50,7 @@ static bool _usb_enum_attempt(
             req->hcd_id,
             req->port
         );
+
         return false;
     }
 
@@ -60,6 +61,7 @@ static bool _usb_enum_attempt(
             req->hcd_id,
             req->port
         );
+
         return false;
     }
 
@@ -169,7 +171,7 @@ static bool _usb_enum_attempt(
     }
 
     u8 config_value = 0;
-    ok = usb_desc_parse_identity_from_config(cfg, cfg_total, &identity, &config_value);
+    ok = usb_desc_parse_config_identity(cfg, cfg_total, &identity, &config_value);
     free(cfg);
 
     if (!ok || !config_value) {
