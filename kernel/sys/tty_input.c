@@ -506,6 +506,209 @@ void tty_input_set_current(size_t screen) {
     _input_buffer(screen);
 }
 
+static void _send_signal_char(
+    size_t screen,
+    ring_buffer_t *buffer,
+    const termios_t *tos,
+    char ch,
+    bool canon
+) {
+    int sig = 0;
+
+    if (ch == (char)tos->c_cc[VINTR]) {
+        sig = SIGINT;
+    } else if (ch == (char)tos->c_cc[VQUIT]) {
+        sig = SIGQUIT;
+    } else if (ch == (char)tos->c_cc[VSUSP]) {
+        sig = SIGTSTP;
+    }
+
+    if (!sig) {
+        return;
+    }
+
+    pid_t pgrp = tty_get_pgrp(screen);
+    if (!pgrp) {
+        sched_thread_t *current = sched_current();
+
+        if (current) {
+            pgrp = current->pid;
+        }
+    }
+
+    if (pgrp) {
+        sched_signal_send_pgrp(pgrp, sig);
+    }
+
+    if (canon) {
+        if (tos->c_lflag & ECHOCTL) {
+            _echo_control(screen, ch);
+        }
+
+        if (tos->c_lflag & ECHO) {
+            char nl = '\n';
+            tty_write_screen_output(screen, &nl, 1);
+        }
+
+        tty_state[screen].line_len = 0;
+    }
+
+    _signal_flush(screen, buffer, tos);
+}
+
+static bool _handle_signal_char(
+    size_t screen,
+    ring_buffer_t *buffer,
+    const termios_t *tos,
+    char ch,
+    bool canon
+) {
+    if (!(tos->c_lflag & ISIG)) {
+        return false;
+    }
+
+    if (
+        ch != (char)tos->c_cc[VINTR] &&
+        ch != (char)tos->c_cc[VQUIT] &&
+        ch != (char)tos->c_cc[VSUSP]
+    ) {
+        return false;
+    }
+
+    _send_signal_char(screen, buffer, tos, ch, canon);
+    return true;
+}
+
+static void _erase_prev_char(size_t screen, const termios_t *tos, char ch) {
+    size_t *line_len = &tty_state[screen].line_len;
+
+    if (!*line_len) {
+        return;
+    }
+
+    size_t erased = 0;
+    size_t erase_cols = 0;
+    u32 cp = 0;
+
+    if (!_pop_ansi_sequence(screen, tos, &erased, &erase_cols)) {
+        erased = _line_prev_cp_len(tty_state[screen].line_buf, *line_len, &cp);
+        erase_cols = _echo_columns_for_cp(tos, cp);
+    }
+
+    *line_len -= erased;
+
+    if (!(tos->c_lflag & ECHO)) {
+        return;
+    }
+
+    if (tos->c_lflag & ECHOE) {
+        _erase_columns(screen, tos, erase_cols);
+    } else {
+        _echo_char(screen, tos, ch, false);
+    }
+}
+
+static void _kill_line(size_t screen, const termios_t *tos, char ch) {
+    size_t *line_len = &tty_state[screen].line_len;
+
+    if (!*line_len) {
+        return;
+    }
+
+    size_t erase_cols = 0;
+
+    while (*line_len) {
+        u32 cp = 0;
+        size_t erased =
+            _line_prev_cp_len(tty_state[screen].line_buf, *line_len, &cp);
+
+        if (!erased) {
+            break;
+        }
+
+        *line_len -= erased;
+        erase_cols += _echo_columns_for_cp(tos, cp);
+    }
+
+    if (!(tos->c_lflag & ECHO)) {
+        return;
+    }
+
+    if (tos->c_lflag & ECHOE) {
+        _erase_columns(screen, tos, erase_cols);
+    } else {
+        _echo_char(screen, tos, ch, false);
+    }
+
+    if (tos->c_lflag & ECHOK) {
+        char nl = '\n';
+        tty_write_screen_output(screen, &nl, 1);
+    }
+}
+
+static void _erase_word(size_t screen, const termios_t *tos) {
+    size_t *line_len = &tty_state[screen].line_len;
+
+    if (!*line_len) {
+        return;
+    }
+
+    size_t erase_cols = 0;
+    u32 cp = 0;
+
+    while (*line_len) {
+        size_t erased =
+            _line_prev_cp_len(tty_state[screen].line_buf, *line_len, &cp);
+
+        if (!erased || !_cp_isspace(cp)) {
+            break;
+        }
+
+        *line_len -= erased;
+        erase_cols += _echo_columns_for_cp(tos, cp);
+    }
+
+    while (*line_len) {
+        size_t erased =
+            _line_prev_cp_len(tty_state[screen].line_buf, *line_len, &cp);
+
+        if (!erased || _cp_isspace(cp)) {
+            break;
+        }
+
+        *line_len -= erased;
+        erase_cols += _echo_columns_for_cp(tos, cp);
+    }
+
+    _erase_columns(screen, tos, erase_cols);
+}
+
+static void _push_eof(size_t screen, ring_buffer_t *buffer) {
+    if (!tty_state[screen].line_len) {
+        unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
+        ring_buffer_push(buffer, 0);
+        spin_unlock_irqrestore(&tty_state[screen].lock, flags);
+        sched_wake_one(&tty_state[screen].wait);
+        return;
+    }
+
+    _flush_line(screen, buffer, false, false);
+}
+
+static void _push_raw_char(
+    size_t screen,
+    ring_buffer_t *buffer,
+    const termios_t *tos,
+    char ch
+) {
+    unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
+    ring_buffer_push(buffer, (u8)ch);
+    spin_unlock_irqrestore(&tty_state[screen].lock, flags);
+
+    _echo_char(screen, tos, ch, ch == '\n');
+    sched_wake_one(&tty_state[screen].wait);
+}
+
 static void _input_push_impl(char ch) {
     size_t screen = tty_current_screen();
     ring_buffer_t *buffer = _input_buffer(screen);
@@ -551,152 +754,23 @@ static void _input_push_impl(char ch) {
         tty_state[screen].literal_next = false;
     }
 
-    if ((tos->c_lflag & ISIG) && !literal) {
-        int sig = 0;
-
-        if (ch == (char)tos->c_cc[VINTR]) {
-            sig = SIGINT;
-        } else if (ch == (char)tos->c_cc[VQUIT]) {
-            sig = SIGQUIT;
-        } else if (ch == (char)tos->c_cc[VSUSP]) {
-            sig = SIGTSTP;
-        }
-
-        if (sig) {
-            pid_t pgrp = tty_get_pgrp(screen);
-            if (!pgrp) {
-                sched_thread_t *current = sched_current();
-
-                if (current) {
-                    pgrp = current->pid;
-                }
-            }
-
-            if (pgrp) {
-                sched_signal_send_pgrp(pgrp, sig);
-            }
-
-            if (canon) {
-                if (tos->c_lflag & ECHOCTL) {
-                    _echo_control(screen, ch);
-                }
-
-                if (tos->c_lflag & ECHO) {
-                    char nl = '\n';
-                    tty_write_screen_output(screen, &nl, 1);
-                }
-
-                tty_state[screen].line_len = 0;
-            }
-
-            _signal_flush(screen, buffer, tos);
-            return;
-        }
+    if (!literal && _handle_signal_char(screen, buffer, tos, ch, canon)) {
+        return;
     }
 
     if (canon && !literal) {
         if (_is_erase_char(tos, ch)) {
-            size_t *line_len = &tty_state[screen].line_len;
-
-            if (*line_len) {
-                size_t erased = 0;
-                size_t erase_cols = 0;
-                u32 cp = 0;
-
-                if (!_pop_ansi_sequence(screen, tos, &erased, &erase_cols)) {
-                    erased = _line_prev_cp_len(
-                        tty_state[screen].line_buf, *line_len, &cp
-                    );
-                    erase_cols = _echo_columns_for_cp(tos, cp);
-                }
-
-                *line_len -= erased;
-
-                if (tos->c_lflag & ECHO) {
-                    if (tos->c_lflag & ECHOE) {
-                        _erase_columns(screen, tos, erase_cols);
-                    } else {
-                        _echo_char(screen, tos, ch, false);
-                    }
-                }
-            }
-
+            _erase_prev_char(screen, tos, ch);
             return;
         }
 
         if (ch == (char)tos->c_cc[VKILL]) {
-            size_t *line_len = &tty_state[screen].line_len;
-
-            if (*line_len) {
-                size_t erase_cols = 0;
-
-                while (*line_len) {
-                    u32 cp = 0;
-                    size_t erased = _line_prev_cp_len(
-                        tty_state[screen].line_buf, *line_len, &cp
-                    );
-
-                    if (!erased) {
-                        break;
-                    }
-
-                    *line_len -= erased;
-                    erase_cols += _echo_columns_for_cp(tos, cp);
-                }
-
-                if (tos->c_lflag & ECHO) {
-                    if (tos->c_lflag & ECHOE) {
-                        _erase_columns(screen, tos, erase_cols);
-                    } else {
-                        _echo_char(screen, tos, ch, false);
-                    }
-
-                    if (tos->c_lflag & ECHOK) {
-                        char nl = '\n';
-                        tty_write_screen_output(screen, &nl, 1);
-                    }
-                }
-            }
-
+            _kill_line(screen, tos, ch);
             return;
         }
 
         if (ch == (char)tos->c_cc[VWERASE]) {
-            size_t *line_len = &tty_state[screen].line_len;
-
-            if (*line_len) {
-                size_t erase_cols = 0;
-                u32 cp = 0;
-
-                while (*line_len) {
-                    size_t erased = _line_prev_cp_len(
-                        tty_state[screen].line_buf, *line_len, &cp
-                    );
-
-                    if (!erased || !_cp_isspace(cp)) {
-                        break;
-                    }
-
-                    *line_len -= erased;
-                    erase_cols += _echo_columns_for_cp(tos, cp);
-                }
-
-                while (*line_len) {
-                    size_t erased = _line_prev_cp_len(
-                        tty_state[screen].line_buf, *line_len, &cp
-                    );
-
-                    if (!erased || _cp_isspace(cp)) {
-                        break;
-                    }
-
-                    *line_len -= erased;
-                    erase_cols += _echo_columns_for_cp(tos, cp);
-                }
-
-                _erase_columns(screen, tos, erase_cols);
-            }
-
+            _erase_word(screen, tos);
             return;
         }
 
@@ -711,15 +785,7 @@ static void _input_push_impl(char ch) {
         }
 
         if (ch == (char)tos->c_cc[VEOF]) {
-            if (!tty_state[screen].line_len) {
-                unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
-                ring_buffer_push(buffer, 0);
-                spin_unlock_irqrestore(&tty_state[screen].lock, flags);
-                sched_wake_one(&tty_state[screen].wait);
-            } else {
-                _flush_line(screen, buffer, false, false);
-            }
-
+            _push_eof(screen, buffer);
             return;
         }
 
@@ -733,11 +799,7 @@ static void _input_push_impl(char ch) {
     }
 
     if (!canon) {
-        unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
-        ring_buffer_push(buffer, (u8)ch);
-        spin_unlock_irqrestore(&tty_state[screen].lock, flags);
-        _echo_char(screen, tos, ch, ch == '\n');
-        sched_wake_one(&tty_state[screen].wait);
+        _push_raw_char(screen, buffer, tos, ch);
         return;
     }
 

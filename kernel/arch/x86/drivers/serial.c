@@ -6,6 +6,7 @@
 #include <sched/signal.h>
 #include <stdio.h>
 #include <sys/devfs.h>
+#include <sys/serial_tty.h>
 #include <sys/vfs.h>
 #include <x86/serial.h>
 
@@ -23,6 +24,7 @@ typedef struct {
     spinlock_t rx_lock;
     spinlock_t tx_lock;
     sched_wait_queue_t rx_wait;
+    serial_tty_t tty;
     bool rx_wait_ready;
 } serial_port_t;
 
@@ -177,6 +179,15 @@ _wait_queue(vfs_node_t *node, short events, u32 flags) {
     return &serial->rx_wait;
 }
 
+static ssize_t _ioctl(vfs_node_t *node, u64 request, void *args) {
+    if (!node || !node->private) {
+        return -EINVAL;
+    }
+
+    serial_port_t *serial = node->private;
+    return serial_tty_ioctl(&serial->tty, request, args);
+}
+
 static bool _serial_register_devfs(vfs_node_t *dev_dir) {
     if (!dev_dir) {
         return false;
@@ -190,6 +201,7 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
 
     serial_if->poll = _poll;
     serial_if->wait_queue = _wait_queue;
+    serial_if->ioctl = _ioctl;
 
     char name[] = "ttySX";
 
@@ -203,6 +215,8 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
             sched_wait_queue_set_poll_link(&serial_devices[i].rx_wait, true);
             serial_devices[i].rx_wait_ready = true;
         }
+
+        serial_tty_init(&serial_devices[i].tty);
 
         name[4] = (char)('0' + serial_devices[i].index);
 

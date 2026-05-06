@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -6,12 +7,34 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define INIT_TTY_COUNT 4
+#define INIT_TTY_COUNT 5
+
+#ifndef ARCH_NAME
+#define ARCH_NAME "unknown"
+#endif
 
 typedef struct {
     const char *tty_path;
     pid_t pid;
+    bool optional;
 } getty_slot_t;
+
+static bool extra_serial_getty_enabled(void) {
+    // RISC-V already puts tty0 on the UART console; ttyS0 would race it.
+    return !strncmp(ARCH_NAME, "x86_", 4);
+}
+
+static bool getty_slot_enabled(const getty_slot_t *slot) {
+    if (!slot || !slot->tty_path) {
+        return false;
+    }
+
+    if (!strcmp(slot->tty_path, "/dev/ttyS0")) {
+        return extra_serial_getty_enabled();
+    }
+
+    return true;
+}
 
 static void write_str(const char *str) {
     if (!str) {
@@ -111,6 +134,10 @@ static pid_t spawn_getty(const char *tty_path) {
         return -1;
     }
 
+    if (access(tty_path, R_OK | W_OK) < 0) {
+        return -1;
+    }
+
     pid_t pid = fork();
 
     if (!pid) {
@@ -137,17 +164,24 @@ int main(int argc, char **argv) {
     run_optional_script_sync("/etc/rc.local");
 
     getty_slot_t slots[INIT_TTY_COUNT] = {
-        {.tty_path = "/dev/tty0", .pid = -1},
-        {.tty_path = "/dev/tty1", .pid = -1},
-        {.tty_path = "/dev/tty2", .pid = -1},
-        {.tty_path = "/dev/tty3", .pid = -1},
+        {.tty_path = "/dev/tty0", .pid = -1, .optional = false},
+        {.tty_path = "/dev/tty1", .pid = -1, .optional = false},
+        {.tty_path = "/dev/tty2", .pid = -1, .optional = false},
+        {.tty_path = "/dev/tty3", .pid = -1, .optional = false},
+        {.tty_path = "/dev/ttyS0", .pid = -1, .optional = true},
     };
 
     for (size_t i = 0; i < INIT_TTY_COUNT; i++) {
+        if (!getty_slot_enabled(&slots[i])) {
+            continue;
+        }
+
         slots[i].pid = spawn_getty(slots[i].tty_path);
         if (slots[i].pid < 0) {
-            write_str("init: fork failed\n");
-            sleep(1);
+            if (!slots[i].optional) {
+                write_str("init: failed to start getty\n");
+                sleep(1);
+            }
         }
     }
 
@@ -166,8 +200,10 @@ int main(int argc, char **argv) {
             slots[i].pid = spawn_getty(slots[i].tty_path);
 
             if (slots[i].pid < 0) {
-                write_str("init: fork failed\n");
-                sleep(1);
+                if (!slots[i].optional) {
+                    write_str("init: failed to restart getty\n");
+                    sleep(1);
+                }
             }
 
             break;

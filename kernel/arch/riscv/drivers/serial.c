@@ -6,6 +6,7 @@
 #include <sched/signal.h>
 #include <sys/devfs.h>
 #include <sys/lock.h>
+#include <sys/serial_tty.h>
 #include <sys/vfs.h>
 
 #include "serial.h"
@@ -22,6 +23,7 @@ typedef struct {
     spinlock_t tx_lock;
 
     sched_wait_queue_t rx_wait;
+    serial_tty_t tty;
 
     bool ready;
     bool registered;
@@ -141,6 +143,12 @@ static sched_wait_queue_t *_wait_queue(vfs_node_t *node, short events, u32 flags
     return &port.rx_wait;
 }
 
+static ssize_t _ioctl(vfs_node_t *node, u64 request, void *args) {
+    (void)node;
+
+    return serial_tty_ioctl(&port.tty, request, args);
+}
+
 static bool _register_devfs(vfs_node_t *dev_dir) {
     if (!dev_dir) {
         return false;
@@ -153,6 +161,7 @@ static bool _register_devfs(vfs_node_t *dev_dir) {
 
     iface->poll = _poll;
     iface->wait_queue = _wait_queue;
+    iface->ioctl = _ioctl;
 
     vfs_node_t *node = vfs_lookup_from(dev_dir, "ttyS0");
     if (!node) {
@@ -180,6 +189,7 @@ driver_err_t serial_driver_load(void) {
     if (!port.ready) {
         sched_wait_queue_init(&port.rx_wait);
         sched_wait_queue_set_poll_link(&port.rx_wait, true);
+        serial_tty_init(&port.tty);
         port.ready = true;
     }
 

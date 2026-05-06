@@ -33,21 +33,26 @@ typedef term_cell_t console_cell_t;
 
 typedef struct {
     console_mode_t mode;
+
     u8 *fb;
     size_t fb_size;
     u8 *fb_back;
+
     u32 width;
     u32 height;
     u32 pitch;
     u8 bytes_per_pixel;
+
     u8 red_shift;
     u8 green_shift;
     u8 blue_shift;
     u8 red_size;
     u8 green_size;
     u8 blue_size;
+
     size_t cols;
     size_t rows;
+
     const font_t *font;
     u32 font_width;
     u32 font_height;
@@ -56,9 +61,11 @@ typedef struct {
     u32 font_cell_src_x;
     u32 font_row_bytes;
     u32 font_glyph_bytes;
+
     font_map_t *font_map_sorted;
     u32 font_map_sorted_count;
     const font_t *font_map_sorted_src;
+
     bool ready;
     size_t screen_count;
     size_t active_screen;
