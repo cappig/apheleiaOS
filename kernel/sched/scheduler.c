@@ -166,7 +166,10 @@ void scheduler_start(void) {
     sched_lock_restore(flags);
 
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
-    arch_vm_switch(next->vm_space);
+
+    if (current->vm_space != next->vm_space) {
+        arch_vm_switch(next->vm_space);
+    }
 
     if (next->fpu_initialized) {
         arch_fpu_restore(next->fpu_state);
@@ -237,7 +240,10 @@ void scheduler_start_secondary(void) {
     sched_lock_restore(flags);
 
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
-    arch_vm_switch(next->vm_space);
+
+    if (current->vm_space != next->vm_space) {
+        arch_vm_switch(next->vm_space);
+    }
 
     if (next->fpu_initialized) {
         arch_fpu_restore(next->fpu_state);

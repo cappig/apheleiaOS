@@ -149,6 +149,7 @@ static struct {
     u32 irq_log;
     u64 hartid[MAX_CORES];
     bool late_init[MAX_CORES];
+    bool timer_rearm_pending[MAX_CORES];
 } cpu;
 
 uintptr_t kernel_sp = 0;
@@ -727,6 +728,22 @@ static bool _timer_program_next(void) {
     }
 
     return false;
+}
+
+static void _timer_mark_rearm_pending(void) {
+    cpu.timer_rearm_pending[_current_cpu_id()] = true;
+}
+
+void riscv_trap_return_prepare(arch_int_state_t *frame) {
+    (void)frame;
+
+    size_t cpu_id = _current_cpu_id();
+    if (!cpu.timer_rearm_pending[cpu_id]) {
+        return;
+    }
+
+    cpu.timer_rearm_pending[cpu_id] = false;
+    (void)_timer_program_next();
 }
 
 static bool _handle_user_signal(int signum, arch_int_state_t *frame) {
@@ -1570,7 +1587,7 @@ void trap_handle(arch_int_state_t *frame) {
             return;
         case RISCV_IRQ_TIMER:
             __atomic_add_fetch(&cpu.ticks, 1, __ATOMIC_RELAXED);
-            (void)_timer_program_next();
+            _timer_mark_rearm_pending();
             _serial_drain_input();
 
             sched_tick(frame);

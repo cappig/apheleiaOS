@@ -173,7 +173,10 @@ sched_reschedule_from_interrupt(arch_int_state_t *state, bool evaluate_policy) {
     sched_lock_restore(flags);
 
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
-    arch_vm_switch(next->vm_space);
+
+    if (thread->vm_space != next->vm_space) {
+        arch_vm_switch(next->vm_space);
+    }
 
     if (next->fpu_initialized) {
         arch_fpu_restore(next->fpu_state);
@@ -497,7 +500,10 @@ void sched_exit(void) {
     }
 
     arch_set_kernel_stack((uintptr_t)next->stack + next->stack_size);
-    arch_vm_switch(next->vm_space);
+
+    if (!self || self->vm_space != next->vm_space) {
+        arch_vm_switch(next->vm_space);
+    }
 
     if (next->fpu_initialized) {
         arch_fpu_restore(next->fpu_state);

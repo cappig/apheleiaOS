@@ -158,6 +158,8 @@ arch_context_switch:
     mv sp, a0
 
 3:
+    mv a0, sp
+    call riscv_trap_return_prepare
     mv t6, sp
 
     LOAD t0, OFF_SEPC(t6)

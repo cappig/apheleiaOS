@@ -6,12 +6,19 @@
 #include <riscv/mm/physical.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/cpu.h>
 
 struct arch_vm_space {
     page_t *root;
 };
 
 static struct arch_vm_space kernel_space = {0};
+static page_t *current_root[MAX_CORES] = {0};
+
+static size_t _current_cpu_id(void) {
+    cpu_core_t *core = cpu_current();
+    return (core && core->id < MAX_CORES) ? core->id : 0;
+}
 
 static bool _leaf_pte(page_t entry) {
     return (entry & (PT_READ | PT_WRITE | PT_EXECUTE)) != 0;
@@ -124,6 +131,12 @@ void arch_vm_switch(arch_vm_space_t *space) {
         return;
     }
 
+    size_t cpu_id = _current_cpu_id();
+    if (current_root[cpu_id] == space->root) {
+        return;
+    }
+
+    current_root[cpu_id] = space->root;
     riscv_write_satp((uintptr_t)space->root, RISCV_PAGING_MODE);
 }
 
