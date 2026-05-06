@@ -80,6 +80,12 @@ trap_entry:
 2:
     STORE ra, OFF_RA(sp)
     STORE gp, OFF_GP(sp)
+
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
+
     STORE tp, OFF_TP(sp)
 
     csrr t1, sscratch
@@ -134,11 +140,6 @@ trap_entry:
 
     li t1, SSTATUS_SUM
     csrs sstatus, t1
-
-    .option push
-    .option norelax
-    la gp, __global_pointer$
-    .option pop
 
     mv a0, sp
     call trap_handle

@@ -25,11 +25,12 @@
 #define SCR_T4 (3 * REGBYTES)
 #define SCR_T5 (4 * REGBYTES)
 #define SCR_T6 (5 * REGBYTES)
+#define SCR_GP (6 * REGBYTES)
 
 .balign 16
 .globl riscv_boot_mtrap_scratch
 riscv_boot_mtrap_scratch:
-    .space 6 * REGBYTES
+    .space 7 * REGBYTES
 
 .section .text
 .option norvc
@@ -44,6 +45,12 @@ mtrap_entry:
     STORE t4, SCR_T4(t0)
     STORE t5, SCR_T5(t0)
     STORE t6, SCR_T6(t0)
+    STORE gp, SCR_GP(t0)
+
+    .option push
+    .option norelax
+    la gp, __global_pointer$
+    .option pop
 
     csrr t1, mcause
     bltz t1, .Linterrupt
@@ -174,5 +181,6 @@ mtrap_entry:
     LOAD t4, SCR_T4(t0)
     LOAD t5, SCR_T5(t0)
     LOAD t6, SCR_T6(t0)
+    LOAD gp, SCR_GP(t0)
     csrrw t0, mscratch, t0
     mret
