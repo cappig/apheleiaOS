@@ -17,13 +17,16 @@ void memswap(void *a, void *b, size_t len) {
 }
 
 char *strrev(char *str) {
-    int len = strlen(str);
-
-    if (!str || len <= 1) {
+    if (!str) {
         return str;
     }
 
-    for (int i = 0; i < len / 2; i++) {
+    size_t len = strlen(str);
+    if (len <= 1) {
+        return str;
+    }
+
+    for (size_t i = 0; i < len / 2; i++) {
         char temp = str[len - 1 - i];
         str[len - 1 - i] = str[i];
         str[i] = temp;
