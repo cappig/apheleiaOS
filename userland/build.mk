@@ -30,8 +30,8 @@ USER_CRTI_SRC := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crti.S
 USER_CRTN_SRC := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crtn.S
 USER_LD_SCRIPT := userland/linker_riscv$(ARCH_VARIANT).ld
 
-USER_RISCV_64_ISA_FLAGS := -march=rv64ia_zicsr -mabi=lp64
-USER_RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr -mabi=ilp32
+USER_RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr -mabi=lp64
+USER_RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr -mabi=ilp32
 
 ifeq ($(ARCH_VARIANT), 64)
 USER_ARCH_NAME := riscv_64

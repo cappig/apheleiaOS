@@ -67,8 +67,8 @@ RISCV_BOOT_SCRATCH_OFFSET      := 50331648
 RISCV_UART0        := 0x10000000UL
 RISCV_UART_STRIDE  ?= 1
 
-RISCV_64_ISA_FLAGS := -march=rv64ia_zicsr -mabi=lp64
-RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr -mabi=ilp32
+RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr -mabi=lp64
+RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr -mabi=ilp32
 
 KERNEL_CC_COMMON := \
 	-I$(ARCH_DIR) \
