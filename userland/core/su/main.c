@@ -457,7 +457,7 @@ static bool authenticate_user(const char *name) {
 
     char pass[256] = {0};
 
-    write_str("Password: ");
+    write_str("password: ");
     (void)tty_set_echo(false);
 
     if (read_line(pass, sizeof(pass)) < 0) {

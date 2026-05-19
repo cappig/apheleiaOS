@@ -308,7 +308,7 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        write_str("Password: ");
+        write_str("password: ");
         tty_set_echo(false);
 
         if (read_line(pass, sizeof(pass)) < 0) {

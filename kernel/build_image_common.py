@@ -658,7 +658,8 @@ def build_ext2_image(
         except BuildError as e:
             if "out of space" not in str(e):
                 raise
-            new_blocks = min(block_count * 2, max_blocks_one_group)
+            step = 32
+            new_blocks = min(block_count + step, max_blocks_one_group)
             if new_blocks <= block_count:
                 raise
             block_count = new_blocks

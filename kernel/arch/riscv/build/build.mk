@@ -61,7 +61,7 @@ ROOTFS_IMAGE       := bin/$(IMAGE_NAME).rootfs.img
 
 # The embedded rootfs sits at this byte offset inside the flat image.
 # The boot stub must fit below it; the kernel loads above it.
-RISCV_BOOT_IMAGE_ROOTFS_OFFSET := 2097152
+RISCV_BOOT_IMAGE_ROOTFS_OFFSET := 1441792
 RISCV_BOOT_SCRATCH_OFFSET      := 50331648
 
 RISCV_UART0        := 0x10000000UL
