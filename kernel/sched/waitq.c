@@ -217,12 +217,13 @@ sched_wait_result_t sched_wait_on_queue(
     }
 
     sched_cpu_state_t *local = sched_local();
-
-    if (
+    bool cannot_block = (
         sched_preempt_disabled() ||
         lock_spin_held_on_cpu() ||
         local->sched_lock_depth
-    ) {
+    );
+
+    if (cannot_block) {
         return SCHED_WAIT_ABORTED;
     }
 
@@ -237,10 +238,12 @@ sched_wait_result_t sched_wait_on_queue(
         return SCHED_WAIT_INTR;
     }
 
-    if (
+    bool not_current = (
         thread_get_state(self) != THREAD_RUNNING ||
         self != sched_local_current()
-    ) {
+    );
+
+    if (not_current) {
         sched_lock_restore(sched_flags);
         return SCHED_WAIT_ABORTED;
     }
@@ -255,9 +258,10 @@ sched_wait_result_t sched_wait_on_queue(
     sleep_heap_remove(self);
     self->wake_tick = 0;
 
-    bool unchanged =
+    bool unchanged = (
         thread_get_state(self) != THREAD_ZOMBIE &&
-        __atomic_load_n(&queue->wake_seq, __ATOMIC_ACQUIRE) == observed_seq;
+        __atomic_load_n(&queue->wake_seq, __ATOMIC_ACQUIRE) == observed_seq
+    );
 
     if (unchanged) {
         u8 next_cookie = (u8)(self->wait_cookie + 1U);
@@ -359,9 +363,9 @@ void exit_event_push(pid_t pid) {
         return;
     }
 
-    unsigned long flags = spin_lock_irqsave(&sched_state.exit_events.lock);
+    unsigned long flags = spin_lock_irqsave(&sched_state.wait.exit_events.lock);
 
-    ring_queue_t *r = sched_state.exit_events.ring;
+    ring_queue_t *r = sched_state.wait.exit_events.ring;
     if (r) {
         if (ring_queue_count(r) >= ring_queue_capacity(r)) {
             ring_queue_drop_head(r);
@@ -370,10 +374,10 @@ void exit_event_push(pid_t pid) {
         ring_queue_push(r, &pid);
     }
 
-    spin_unlock_irqrestore(&sched_state.exit_events.lock, flags);
+    spin_unlock_irqrestore(&sched_state.wait.exit_events.lock, flags);
 
-    if (sched_running_get() && sched_state.exit_event_wait.list) {
-        sched_wake_all(&sched_state.exit_event_wait);
+    if (sched_running_get() && sched_state.wait.exit_event_wait.list) {
+        sched_wake_all(&sched_state.wait.exit_event_wait);
     }
 }
 
@@ -382,51 +386,54 @@ bool sched_exit_event_pop(pid_t *pid_out) {
         return false;
     }
 
-    unsigned long flags = spin_lock_irqsave(&sched_state.exit_events.lock);
+    unsigned long flags = spin_lock_irqsave(&sched_state.wait.exit_events.lock);
 
-    ring_queue_t *r = sched_state.exit_events.ring;
+    ring_queue_t *r = sched_state.wait.exit_events.ring;
     bool ok = r && ring_queue_pop(r, pid_out);
 
-    spin_unlock_irqrestore(&sched_state.exit_events.lock, flags);
+    spin_unlock_irqrestore(&sched_state.wait.exit_events.lock, flags);
 
     return ok;
 }
 
 u32 sched_exit_event_seq(void) {
-    return sched_wait_seq(&sched_state.exit_event_wait);
+    return sched_wait_seq(&sched_state.wait.exit_event_wait);
 }
 
-bool sched_exit_event_block_if_unchanged(u32 observed_seq) {
+bool sched_exit_wait_change(u32 observed_seq) {
     sched_wait_result_t result = sched_wait_on_queue(
-        &sched_state.exit_event_wait,
+        &sched_state.wait.exit_event_wait,
         observed_seq,
         0,
         SCHED_WAIT_INTERRUPTIBLE
     );
+
     return result == SCHED_WAIT_WOKEN;
 }
 
 u32 sched_poll_wait_seq(void) {
-    return sched_wait_seq(&sched_state.poll_wait_queue);
+    return sched_wait_seq(&sched_state.wait.poll_wait_queue);
 }
 
-bool sched_poll_block_if_unchanged(u32 observed_seq) {
+bool sched_poll_wait_change(u32 observed_seq) {
     sched_wait_result_t result = sched_wait_on_queue(
-        &sched_state.poll_wait_queue,
+        &sched_state.wait.poll_wait_queue,
         observed_seq,
         0,
         SCHED_WAIT_INTERRUPTIBLE | SCHED_WAIT_POLL_LINK
     );
+
     return result == SCHED_WAIT_WOKEN;
 }
 
-bool sched_poll_block_if_unchanged_until(u32 observed_seq, u64 deadline_tick) {
+bool sched_poll_wait_until(u32 observed_seq, u64 deadline_tick) {
     sched_wait_result_t result = sched_wait_on_queue(
-        &sched_state.poll_wait_queue,
+        &sched_state.wait.poll_wait_queue,
         observed_seq,
         deadline_tick,
         SCHED_WAIT_INTERRUPTIBLE | SCHED_WAIT_POLL_LINK
     );
+
     return result == SCHED_WAIT_WOKEN || result == SCHED_WAIT_TIMEOUT;
 }
 
@@ -436,14 +443,14 @@ void sched_poll_wait(void) {
     }
 
     u32 seq = sched_poll_wait_seq();
-    sched_poll_block_if_unchanged(seq);
+    sched_poll_wait_change(seq);
 }
 
 sched_wait_result_t
 sched_wait_deadline(u64 deadline_tick, sched_wait_flags_t flags) {
-    u32 observed_seq = sched_wait_seq(&sched_state.sleep_wait_queue);
+    u32 observed_seq = sched_wait_seq(&sched_state.wait.sleep_wait_queue);
     return sched_wait_on_queue(
-        &sched_state.sleep_wait_queue,
+        &sched_state.wait.sleep_wait_queue,
         observed_seq,
         deadline_tick,
         flags
@@ -459,13 +466,15 @@ void sched_wake_one_locked(sched_wait_queue_t *queue) {
 
     bool wake_queue = sched_queue_has_waiters(queue);
     bool wake_pollers = false;
+    bool wake_poll_waiters = (
+        queue != &sched_state.wait.poll_wait_queue &&
+        queue->poll_link &&
+        sched_state.wait.poll_wait_queue.list
+    );
 
-    if (
-        queue != &sched_state.poll_wait_queue && queue->poll_link &&
-        sched_state.poll_wait_queue.list
-    ) {
-        __atomic_add_fetch(&sched_state.poll_wait_queue.wake_seq, 1, __ATOMIC_RELEASE);
-        wake_pollers = sched_queue_has_waiters(&sched_state.poll_wait_queue);
+    if (wake_poll_waiters) {
+        __atomic_add_fetch(&sched_state.wait.poll_wait_queue.wake_seq, 1, __ATOMIC_RELEASE);
+        wake_pollers = sched_queue_has_waiters(&sched_state.wait.poll_wait_queue);
     }
 
     if (!wake_queue && !wake_pollers) {
@@ -477,7 +486,7 @@ void sched_wake_one_locked(sched_wait_queue_t *queue) {
     }
 
     if (wake_pollers) {
-        wake_queue_all(&sched_state.poll_wait_queue);
+        wake_queue_all(&sched_state.wait.poll_wait_queue);
     }
 }
 
@@ -500,13 +509,15 @@ void sched_wake_all(sched_wait_queue_t *queue) {
 
     bool wake_queue = sched_queue_has_waiters(queue);
     bool wake_pollers = false;
+    bool wake_poll_waiters = (
+        queue != &sched_state.wait.poll_wait_queue &&
+        queue->poll_link &&
+        sched_state.wait.poll_wait_queue.list
+    );
 
-    if (
-        queue != &sched_state.poll_wait_queue && queue->poll_link &&
-        sched_state.poll_wait_queue.list
-    ) {
-        __atomic_add_fetch(&sched_state.poll_wait_queue.wake_seq, 1, __ATOMIC_RELEASE);
-        wake_pollers = sched_queue_has_waiters(&sched_state.poll_wait_queue);
+    if (wake_poll_waiters) {
+        __atomic_add_fetch(&sched_state.wait.poll_wait_queue.wake_seq, 1, __ATOMIC_RELEASE);
+        wake_pollers = sched_queue_has_waiters(&sched_state.wait.poll_wait_queue);
     }
 
     if (!wake_queue && !wake_pollers) {
@@ -520,7 +531,7 @@ void sched_wake_all(sched_wait_queue_t *queue) {
     }
 
     if (wake_pollers) {
-        wake_queue_all(&sched_state.poll_wait_queue);
+        wake_queue_all(&sched_state.wait.poll_wait_queue);
     }
 
     sched_lock_restore(flags);

@@ -220,6 +220,59 @@ static void _string_to_buffer(
     }
 }
 
+static size_t _bounded_strlen(const char *string, int precision) {
+    if (precision < 0) {
+        return strlen(string);
+    }
+
+    size_t len = 0;
+    size_t max_len = (size_t)precision;
+
+    while (len < max_len && string[len]) {
+        len++;
+    }
+
+    return len;
+}
+
+static int _padding_for_width(int width, size_t len) {
+    if (width <= 0 || (size_t)width <= len) {
+        return 0;
+    }
+
+    return (int)((size_t)width - len);
+}
+
+static int _num_prefix_len(uintmax_t number, int flags, int base, int size) {
+    int len = 0;
+
+    if (size < 0 && (intmax_t)number < 0) {
+        len++;
+    } else if (flags & (FLAGS_PLUS | FLAGS_SPACE)) {
+        len++;
+    }
+
+    if (flags & FLAGS_HASH) {
+        if (base == 2 || base == 16) {
+            len += 2;
+        } else if (base == 8) {
+            len++;
+        }
+    }
+
+    return len;
+}
+
+static uintmax_t _signed_abs(uintmax_t number) {
+    intmax_t value = (intmax_t)number;
+    if (value >= 0) {
+        return (uintmax_t)value;
+    }
+
+    // INTMAX_MIN cannot be negated directly.
+    return (uintmax_t)(-(value + 1)) + 1;
+}
+
 static void _append_num_prefix(
     char *buffer,
     size_t max_size,
@@ -248,7 +301,6 @@ static void _append_num_prefix(
 
     if (sign) {
         _buf_putc(buffer, written, max_size, sign);
-        (*padding)--;
     }
 
     char *prefix = "";
@@ -262,7 +314,6 @@ static void _append_num_prefix(
 
     while (*prefix && (flags & FLAGS_HASH)) {
         _buf_putc(buffer, written, max_size, *prefix++);
-        (*padding)--;
     }
 
     if (flags & FLAGS_ZERO) {
@@ -316,7 +367,6 @@ static int _get_base(char type) {
 }
 
 
-// FIXME: check index bounds inside the loop!
 int vsnprintf(
     char *restrict buffer,
     size_t max_size,
@@ -397,8 +447,8 @@ int vsnprintf(
                 string = char_holder;
             }
 
-            int len = (int)strlen(string);
-            int padding = (width > len) ? width - len : 0;
+            size_t len = _bounded_strlen(string, precision);
+            int padding = _padding_for_width(width, len);
 
             _string_to_buffer(
                 buffer, max_size, &written, string, flags, precision, &padding
@@ -413,12 +463,14 @@ int vsnprintf(
             }
 
             char num_buffer[66] = {0};
-            uintmax_t absval =
-                negative ? (uintmax_t)(-(intmax_t)number) : number;
+            uintmax_t absval = negative ? _signed_abs(number) : number;
 
             int len = (int)ulltoa(absval, num_buffer, base);
+            int prefix_len = _num_prefix_len(number, flags, base, size);
+            size_t field_len = (size_t)len + (size_t)prefix_len;
 
-            int padding = (width > len) ? width - len : 0;
+            // Width includes the sign and 0x prefix, not just the digits.
+            int padding = _padding_for_width(width, field_len);
 
             _append_num_prefix(
                 buffer,

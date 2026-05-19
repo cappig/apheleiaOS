@@ -1,14 +1,9 @@
 #include "internal.h"
 #include <arch/signal.h>
-#include <arch/thread.h>
 
 static bool
 ctx_stack_valid(const sched_thread_t *thread, size_t need_bytes) {
     if (!thread || !thread->context || !thread->stack || !thread->stack_size) {
-        return false;
-    }
-
-    if (!arch_kernel_stack_valid(thread)) {
         return false;
     }
 
@@ -24,34 +19,11 @@ ctx_stack_valid(const sched_thread_t *thread, size_t need_bytes) {
     return need_bytes <= available;
 }
 
-bool sched_save_user_context(
-    sched_thread_t *thread,
-    const arch_int_state_t *state
-) {
-    if (!thread || !state || !thread->user_thread || !arch_signal_is_user(state)) {
-        return false;
-    }
-
-    arch_int_state_t *saved = arch_thread_user_context(thread);
-    if (!saved) {
-        return false;
-    }
-
-    *saved = *state;
-    thread->context = (uintptr_t)saved;
-
-    return true;
-}
-
 bool ctx_candidate_valid(
     const sched_thread_t *thread,
     const arch_int_state_t *state
 ) {
     if (!thread || !state || !thread->stack || !thread->stack_size) {
-        return false;
-    }
-
-    if (!arch_kernel_stack_valid(thread)) {
         return false;
     }
 
@@ -89,8 +61,6 @@ bool ctx_valid(const sched_thread_t *thread) {
     }
 
     const arch_int_state_t *state = (const arch_int_state_t *)thread->context;
-    uintptr_t stack_base = (uintptr_t)thread->stack;
-    uintptr_t stack_end = stack_base + thread->stack_size;
     size_t sregs_off = offsetof(arch_int_state_t, s_regs);
     size_t kernel_frame_need = sregs_off + (3U * sizeof(arch_word_t));
 
@@ -98,29 +68,18 @@ bool ctx_valid(const sched_thread_t *thread) {
         return false;
     }
 
-    bool is_user = arch_signal_is_user(state);
+    bool user_frame = arch_signal_is_user(state);
+    arch_word_t ip = arch_state_ip(state);
 
-    if (!arch_state_is_valid(state)) {
+    if (!ip) {
         return false;
     }
 
-    arch_word_t ip = arch_state_ip(state);
-
-    if (!is_user) {
-        if (!ip) {
-            return false;
-        }
-
-        if (stack_end < stack_base) {
-            return false;
-        }
-
-        if (arch_kernel_vaddr_base() && ip < arch_kernel_vaddr_base()) {
-            return false;
-        }
+    if (!user_frame && arch_kernel_vaddr_base() && ip < arch_kernel_vaddr_base()) {
+        return false;
     }
 
-    if (is_user) {
+    if (user_frame) {
         if (!thread->user_thread) {
             return false;
         }
@@ -132,7 +91,11 @@ bool ctx_valid(const sched_thread_t *thread) {
 
         arch_word_t sp = arch_state_sp(state);
 
-        if (ip == 0 || sp == 0) {
+        if (!sp) {
+            return false;
+        }
+
+        if (!arch_state_flags_sane(state)) {
             return false;
         }
 

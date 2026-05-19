@@ -475,7 +475,7 @@ static bool ahci_exec_cmd(
         log_warn(
             "AHCI slot %u still busy before issue (ci=%#x)",
             AHCI_CMD_SLOT,
-            port->ci
+            (unsigned int)port->ci
         );
         arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
         return false;
@@ -511,7 +511,7 @@ static bool ahci_exec_cmd(
         if (!ahci_warned_irq_fallback) {
             log_warn(
                 "IRQ timeout on port %u, falling back to completion polling",
-                dev->port_index
+                (unsigned int)dev->port_index
             );
             ahci_warned_irq_fallback = true;
         }
@@ -531,15 +531,15 @@ static bool ahci_exec_cmd(
         log_debug(
             "cmd=%#x port=%u tfd=%#x is=%#x ci=%#x sact=%#x "
             "serr=%#x cmdreg=%#x ssts=%#x",
-            command,
-            dev->port_index,
-            port->tfd,
-            complete_is,
-            port->ci,
-            port->sact,
-            port->serr,
-            port->cmd,
-            port->ssts
+            (unsigned int)command,
+            (unsigned int)dev->port_index,
+            (unsigned int)port->tfd,
+            (unsigned int)complete_is,
+            (unsigned int)port->ci,
+            (unsigned int)port->sact,
+            (unsigned int)port->serr,
+            (unsigned int)port->cmd,
+            (unsigned int)port->ssts
         );
     }
 
@@ -892,6 +892,7 @@ static bool ahci_find_controller(ahci_device_t *dev) {
             }
 
             // FIXME: we should not have this limit!
+            // The current MMIO mapping path is limited to 32-bit ABARs.
             if (!abar || abar > 0xffffffffULL) {
                 continue;
             }
@@ -1002,7 +1003,10 @@ static bool ahci_disk_init(void) {
         set_int_handler(AHCI_MSI_VECTOR, ahci_primary_irq);
         log_debug("AHCI using MSI vector %#x", AHCI_MSI_VECTOR);
     } else if (!ahci_irq_line_supported(dev->irq_line)) {
-        log_warn("IRQ line %u out of range, falling back to polling", dev->irq_line);
+        log_warn(
+            "IRQ line %u out of range, falling back to polling",
+            (unsigned int)dev->irq_line
+        );
         dev->irq_enabled = false;
     } else {
         ahci_primary = dev;
@@ -1012,7 +1016,7 @@ static bool ahci_disk_init(void) {
     }
 
     if (!ahci_setup_port(dev)) {
-        log_error("AHCI failed to setup port %u", dev->port_index);
+        log_error("AHCI failed to setup port %u", (unsigned int)dev->port_index);
         ahci_destroy_device(dev);
         return false;
     }
@@ -1020,15 +1024,17 @@ static bool ahci_disk_init(void) {
     u16 identify[256] = {0};
 
     if (!ahci_identify(dev, identify)) {
-        log_error("AHCI identify failed on port %u", dev->port_index);
+        log_error("AHCI identify failed on port %u", (unsigned int)dev->port_index);
         ahci_destroy_device(dev);
         return false;
     }
 
     u64 sector_count = 0;
     if (identify[83] & (1U << 10)) {
-        sector_count = 
-            (u64)identify[100] | ((u64)identify[101] << 16) | ((u64)identify[102] << 32) | ((u64)identify[103] << 48);
+        sector_count = (u64)identify[100] |
+                       ((u64)identify[101] << 16) |
+                       ((u64)identify[102] << 32) |
+                       ((u64)identify[103] << 48);
     }
 
     if (!sector_count) {
@@ -1072,8 +1078,8 @@ static bool ahci_disk_init(void) {
 
     log_info(
         "AHCI initialized port %u irq=%u (%zu sectors, %zu MiB)",
-        dev->port_index,
-        dev->irq_line,
+        (unsigned int)dev->port_index,
+        (unsigned int)dev->irq_line,
         dev->sector_count,
         (size_t)((dev->sector_count * dev->sector_size) / MIB)
     );

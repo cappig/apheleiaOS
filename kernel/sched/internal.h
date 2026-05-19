@@ -26,17 +26,6 @@
 #include <sys/tty.h>
 #include <sys/wait.h>
 
-#define SCHED_STACK_SIZE              (64 * KIB)
-#define SCHED_LATENCY_NS              12000000ULL
-#define SCHED_MIN_GRANULARITY_NS      1000000ULL
-#define SCHED_REBALANCE_TICKS         32ULL
-#define SCHED_RQ_CAPACITY             4096U
-#define SCHED_SLEEP_HEAP_CAPACITY     SCHED_RQ_CAPACITY
-#define SCHED_IDLE_STEAL_BATCH        2U
-#define SCHED_PUSH_BATCH              2U
-#define SCHED_EXIT_EVENT_CAP          512U
-#define SCHED_WAKE_LOCAL_LOAD_SLOP    2U
-
 typedef struct {
     spinlock_t lock;
     sched_thread_t **heap;
@@ -55,7 +44,6 @@ typedef struct {
     sched_thread_t *current;
     sched_thread_t *idle_thread;
     sched_thread_t *handoff_ready;
-    sched_thread_t *retired_thread;
     size_t preempt_depth;
     size_t sched_lock_depth;
     unsigned long sched_lock_irq_flags;
@@ -96,28 +84,43 @@ typedef struct {
 } sched_sleep_state_t;
 
 typedef struct {
-    sched_rq_t runqueues[MAX_CORES];
+    bool running;
+    bool secondary_released;
+    spinlock_t lock;
+    arch_vm_space_t *kernel_vm;
+} sched_core_state_t;
+
+typedef struct {
     linked_list_t *zombie_list;
     linked_list_t *all_list;
     linked_list_t *deferred_destroy_list;
     hashmap_t *pid_index;
-    arch_vm_space_t *kernel_vm;
     pid_t next_user_pid;
     pid_t next_kernel_pid;
+} sched_proc_state_t;
+
+typedef struct {
+    sched_rq_t runqueues[MAX_CORES];
     volatile u32 wake_rr_cursor;
-    bool running;
-    bool secondary_released;
     sched_cpu_state_t cpu[MAX_CORES];
-    spinlock_t lock;
+} sched_cpu_set_t;
+
+typedef struct {
     sched_wait_queue_t poll_wait_queue;
     sched_wait_queue_t exit_event_wait;
     sched_wait_queue_t sleep_wait_queue;
     sched_exit_event_state_t exit_events;
     sched_sleep_state_t sleep;
+} sched_wait_state_t;
+
+typedef struct {
+    sched_core_state_t core;
+    sched_proc_state_t procs;
+    sched_cpu_set_t cpus;
+    sched_wait_state_t wait;
     sched_usage_state_t usage;
     sched_metrics_state_t metrics;
 } sched_state_t;
-
 
 extern sched_state_t sched_state;
 
@@ -130,33 +133,28 @@ static inline bool sched_thread_is_idle(const sched_thread_t *thread) {
 }
 
 static inline bool sched_running_get(void) {
-    return __atomic_load_n(&sched_state.running, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&sched_state.core.running, __ATOMIC_ACQUIRE);
 }
 
 static inline void sched_running_set(bool running) {
-    __atomic_store_n(&sched_state.running, running, __ATOMIC_RELEASE);
+    __atomic_store_n(&sched_state.core.running, running, __ATOMIC_RELEASE);
 }
 
 static inline bool sched_secondary_released_get(void) {
-    return __atomic_load_n(&sched_state.secondary_released, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&sched_state.core.secondary_released, __ATOMIC_ACQUIRE);
 }
 
 static inline void sched_secondary_released_set(bool released) {
-    __atomic_store_n(&sched_state.secondary_released, released, __ATOMIC_RELEASE);
+    __atomic_store_n(&sched_state.core.secondary_released, released, __ATOMIC_RELEASE);
 }
 
 static inline u64 sched_ticks_to_ms(u64 ticks) {
     u64 hz = arch_timer_hz();
+
     return hz ? ((ticks * 1000ULL) / hz) : 0;
 }
 
 static inline size_t sched_cpu_id(void) {
-    size_t core_id = 0;
-
-    if (arch_current_cpu_id(&core_id) && core_id < MAX_CORES) {
-        return core_id;
-    }
-
     cpu_core_t *core = cpu_current();
 
     if (!core || core->id >= MAX_CORES) {
@@ -170,7 +168,7 @@ static inline size_t sched_cpu_id(void) {
 }
 
 static inline sched_cpu_state_t *sched_local(void) {
-    return &sched_state.cpu[sched_cpu_id()];
+    return &sched_state.cpus.cpu[sched_cpu_id()];
 }
 
 static inline void sched_spin_wait(void) {
@@ -211,7 +209,11 @@ static inline void sched_local_add_slice_ns(u64 delta_ns) {
 }
 
 static inline void sched_local_set_need_resched(bool need_resched) {
-    __atomic_store_n(&sched_local()->need_resched, need_resched, __ATOMIC_RELEASE);
+    __atomic_store_n(
+        &sched_local()->need_resched,
+        need_resched,
+        __ATOMIC_RELEASE
+    );
 }
 
 static inline bool sched_local_need_resched(void) {
@@ -223,7 +225,11 @@ static inline void sched_set_need_resched_cpu(size_t cpu_id, bool need_resched) 
         return;
     }
 
-    __atomic_store_n(&sched_state.cpu[cpu_id].need_resched, need_resched, __ATOMIC_RELEASE);
+    __atomic_store_n(
+        &sched_state.cpus.cpu[cpu_id].need_resched,
+        need_resched,
+        __ATOMIC_RELEASE
+    );
 }
 
 static inline bool sched_mark_need_resched_cpu(size_t cpu_id) {
@@ -232,8 +238,9 @@ static inline bool sched_mark_need_resched_cpu(size_t cpu_id) {
     }
 
     bool prior = __atomic_exchange_n(
-        &sched_state.cpu[cpu_id].need_resched, true, __ATOMIC_ACQ_REL
+        &sched_state.cpus.cpu[cpu_id].need_resched, true, __ATOMIC_ACQ_REL
     );
+
     return !prior;
 }
 
@@ -334,6 +341,10 @@ static inline void thread_set_cpu(
     __atomic_store_n(&thread->running_cpu, cpu_id, __ATOMIC_RELEASE);
 }
 
+static inline void thread_unclaim(sched_thread_t *thread) {
+    thread_set_cpu(thread, -1);
+}
+
 static inline void thread_claim(sched_thread_t *thread, size_t cpu_id) {
     if (!thread) {
         return;
@@ -351,9 +362,10 @@ static inline bool thread_on_local_cpu(const sched_thread_t *thread) {
 
     size_t cpu_id = (size_t)running_cpu;
     sched_thread_t *current = __atomic_load_n(
-        &sched_state.cpu[cpu_id].current,
+        &sched_state.cpus.cpu[cpu_id].current,
         __ATOMIC_ACQUIRE
     );
+
     return current == thread;
 }
 
@@ -366,53 +378,15 @@ static inline bool thread_in_handoff(const sched_thread_t *thread) {
 
     size_t cpu_id = (size_t)running_cpu;
     sched_thread_t *handoff = __atomic_load_n(
-        &sched_state.cpu[cpu_id].handoff_ready,
+        &sched_state.cpus.cpu[cpu_id].handoff_ready,
         __ATOMIC_ACQUIRE
     );
 
     return handoff == thread;
 }
 
-static inline bool sched_thread_has_active_cpu_slot(
-    const sched_thread_t *thread
-) {
-    if (!thread) {
-        return false;
-    }
-
-    for (size_t cpu_id = 0; cpu_id < MAX_CORES; cpu_id++) {
-        if (__atomic_load_n(&sched_state.cpu[cpu_id].current, __ATOMIC_ACQUIRE) == thread) {
-            return true;
-        }
-
-        if (
-            __atomic_load_n(&sched_state.cpu[cpu_id].handoff_ready, __ATOMIC_ACQUIRE) ==
-            thread
-        ) {
-            return true;
-        }
-
-        if (
-            __atomic_load_n(&sched_state.cpu[cpu_id].retired_thread, __ATOMIC_ACQUIRE) ==
-            thread
-        ) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-static inline sched_thread_t *sched_take_handoff_cpu(size_t cpu_id) {
-    if (cpu_id >= MAX_CORES) {
-        return NULL;
-    }
-
-    return __atomic_exchange_n(
-        &sched_state.cpu[cpu_id].handoff_ready,
-        NULL,
-        __ATOMIC_ACQ_REL
-    );
+static inline bool thread_is_owned(const sched_thread_t *thread) {
+    return thread_on_local_cpu(thread) || thread_in_handoff(thread);
 }
 
 static inline bool
@@ -424,24 +398,22 @@ sched_reclaim_handoff(sched_thread_t *thread) {
     }
 
     size_t cpu_id = (size_t)running_cpu;
-    if (sched_cpu_id() != cpu_id) {
+    sched_thread_t *handoff = __atomic_load_n(
+        &sched_state.cpus.cpu[cpu_id].handoff_ready,
+        __ATOMIC_ACQUIRE
+    );
+
+    if (handoff != thread) {
         return false;
     }
 
-    sched_thread_t *handoff = thread;
+    __atomic_store_n(
+        &sched_state.cpus.cpu[cpu_id].handoff_ready,
+        NULL,
+        __ATOMIC_RELEASE
+    );
 
-    if (!__atomic_compare_exchange_n(
-            &sched_state.cpu[cpu_id].handoff_ready,
-            &handoff,
-            NULL,
-            false,
-            __ATOMIC_ACQ_REL,
-            __ATOMIC_ACQUIRE
-        )) {
-        return false;
-    }
-
-    thread_set_cpu(thread, -1);
+    thread_unclaim(thread);
 
     return true;
 }
@@ -465,11 +437,13 @@ sched_repair_thread(
     if (sched_reclaim_handoff(thread)) {
         thread_set_state(thread, THREAD_READY);
         enqueue_ipi(thread, send_ipi);
+
         return true;
     }
 
     if (thread_on_local_cpu(thread)) {
         sched_nudge_thread(thread);
+
         return true;
     }
 
@@ -477,9 +451,10 @@ sched_repair_thread(
         return true;
     }
 
-    thread_set_cpu(thread, -1);
+    thread_unclaim(thread);
     thread_set_state(thread, THREAD_READY);
     enqueue_ipi(thread, send_ipi);
+
     return true;
 }
 
@@ -499,10 +474,6 @@ bool ctx_candidate_valid(
     const arch_int_state_t *state
 );
 bool ctx_valid(const sched_thread_t *thread);
-void sched_cull_invalid_thread_locked(
-    sched_thread_t *thread,
-    const char *site
-);
 
 size_t sched_cpu_load(size_t cpu_id);
 size_t sched_rq_depth(size_t cpu_id);
@@ -515,7 +486,6 @@ void rq_note_depth(size_t depth);
 void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id);
 bool rq_remove_thread(sched_thread_t *thread);
 bool rq_remove_index(sched_rq_t *rq, u32 index);
-bool rq_purge_thread(sched_thread_t *thread);
 sched_thread_t *rq_peek_best(size_t cpu_id);
 sched_thread_t *rq_pop_best_allowed(size_t cpu_id);
 sched_thread_t *rq_pop_disallowed_from_cpu(size_t cpu_id, size_t allowed_cpu);
@@ -543,7 +513,6 @@ void thread_cleanup(sched_thread_t *thread);
 sched_thread_t *find_thread(pid_t pid);
 void thread_get(sched_thread_t *thread);
 void thread_put(sched_thread_t *thread);
-void sched_release_retired_current_cpu(void);
 void thread_destroy(sched_thread_t *thread);
 void sched_reap_deferred(void);
 void sched_reap(void);
@@ -553,10 +522,6 @@ void thread_prepare_user(
     sched_thread_t *thread,
     uintptr_t entry,
     uintptr_t user_stack_top
-);
-bool sched_save_user_context(
-    sched_thread_t *thread,
-    const arch_int_state_t *state
 );
 sched_thread_t *create_thread(
     const char *name,
@@ -571,7 +536,6 @@ void wake_sleepers(u64 now);
 void sched_wake_sleepers(u64 now);
 void wq_dequeue(sched_thread_t *thread);
 void wq_remove(sched_thread_t *thread);
-void sched_wake_one_locked(sched_wait_queue_t *queue);
 bool wait_running(sched_thread_t *self);
 void exit_event_push(pid_t pid);
 

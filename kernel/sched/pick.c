@@ -18,19 +18,29 @@ sched_thread_t *dequeue_thread(void) {
             continue;
         }
 
-        if (
-            thread_ctx_ok(thread) &&
-            !ctx_valid(thread)
-        ) {
-            sched_cull_invalid_thread_locked(thread, "dequeue");
+        bool bad_context = thread_ctx_ok(thread) && !ctx_valid(thread);
+        if (bad_context) {
+            thread_unclaim(thread);
+            thread_set_state(thread, THREAD_ZOMBIE);
+            thread->exit_code = -EFAULT;
+
+            if (sched_state.procs.zombie_list && !thread->in_zombie_list) {
+                thread->zombie_node.data = thread;
+                list_append(sched_state.procs.zombie_list, &thread->zombie_node);
+                thread->in_zombie_list = true;
+            }
+
+            exit_event_push(thread->pid);
             continue;
         }
 
         if (thread_get_state(thread) != THREAD_READY) {
-            if (
+            bool lost_running_thread = (
                 thread_get_state(thread) == THREAD_RUNNING &&
-                !(thread_on_local_cpu(thread) || thread_in_handoff(thread))
-            ) {
+                !thread_is_owned(thread)
+            );
+
+            if (lost_running_thread) {
                 sched_repair_thread(thread, true);
             }
 
@@ -38,7 +48,7 @@ sched_thread_t *dequeue_thread(void) {
         }
 
         if (thread_cpu(thread) >= 0) {
-            if (thread_on_local_cpu(thread) || thread_in_handoff(thread)) {
+            if (thread_is_owned(thread)) {
                 continue;
             }
 
@@ -51,13 +61,14 @@ sched_thread_t *dequeue_thread(void) {
     sched_thread_t *stranded = rq_pop_disallowed_from_cpu(cpu_id, cpu_id);
     if (stranded) {
         size_t target_cpu = pick_cpu(stranded, cpu_id);
-
-        if (
+        bool can_move = (
             target_cpu < MAX_CORES &&
             target_cpu != cpu_id &&
             sched_cpu_allowed(stranded, target_cpu) &&
             cores_local[target_cpu].online
-        ) {
+        );
+
+        if (can_move) {
             stranded->last_cpu = target_cpu;
             stranded->affinity_core = target_cpu;
             rq_enqueue_cpu(stranded, target_cpu);
@@ -138,16 +149,19 @@ sched_thread_t *pick_init_thread(void) {
     size_t cpu_id = sched_cpu_id();
 
     for (size_t i = 0; i < core_count && i < MAX_CORES; i++) {
-        sched_rq_t *rq = &sched_state.runqueues[i];
+        sched_rq_t *rq = &sched_state.cpus.runqueues[i];
         unsigned long flags = spin_lock_irqsave(&rq->lock);
 
         for (u32 j = 0; (size_t)j < rq->nr_running; j++) {
             sched_thread_t *thread = rq->heap[j];
+            bool not_init = (
+                !thread ||
+                thread->pid != 1 ||
+                thread_get_state(thread) != THREAD_READY ||
+                !thread->context
+            );
 
-            if (
-                !thread || thread->pid != 1 ||
-                thread_get_state(thread) != THREAD_READY || !thread->context
-            ) {
+            if (not_init) {
                 continue;
             }
 

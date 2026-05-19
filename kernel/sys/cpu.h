@@ -2,8 +2,7 @@
 
 #include <base/attributes.h>
 #include <base/types.h>
-
-#define MAX_CORES 64
+#include <sys/config.h>
 
 typedef struct {
     bool valid;

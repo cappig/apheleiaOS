@@ -110,6 +110,7 @@ static bool _window_find_index(const wm_window_t *window, size_t *index_out) {
     }
 
     size_t index = off / windows->elem_size;
+
     if (index >= windows->size) {
         return false;
     }
@@ -175,6 +176,7 @@ static void _window_remove_at(size_t index) {
 
     vec_pop(windows, NULL);
     _window_index_remove(removed_id);
+
     if (focused_window_valid && focused_window_id == removed_id) {
         focused_window_valid = false;
         focused_window_id = 0;
@@ -208,17 +210,20 @@ const wm_palette_t *wm_palette_get(void) {
 
 static int _open_ws_fb(u32 id) {
     char path[64];
-    snprintf(path, sizeof(path), "/dev/ws/%u/fb", id);
+    snprintf(path, sizeof(path), "/dev/ws/%u/fb", (unsigned int)id);
+
     int fd = open(path, O_RDWR, 0);
+
     if (fd < 0) {
         fprintf(
             stderr,
             "wm: failed to open %s for id=%u errno=%d\n",
             path,
-            id,
+            (unsigned int)id,
             errno
         );
     }
+
     return fd;
 }
 
@@ -584,9 +589,9 @@ static bool _window_surface_ensure(wm_window_t *window) {
         fprintf(
             stderr,
             "wm: surface size overflow id=%u dims=%ux%u\n",
-            window->id,
-            new_width,
-            new_height
+            (unsigned int)window->id,
+            (unsigned int)new_width,
+            (unsigned int)new_height
         );
         return false;
     }
@@ -595,7 +600,7 @@ static bool _window_surface_ensure(wm_window_t *window) {
         fprintf(
             stderr,
             "wm: surface byte overflow id=%u pixels=%zu\n",
-            window->id,
+            (unsigned int)window->id,
             pixels
         );
         return false;
@@ -619,7 +624,7 @@ static bool _window_surface_ensure(wm_window_t *window) {
         fprintf(
             stderr,
             "wm: surface capacity overflow id=%u capacity=%zu\n",
-            window->id,
+            (unsigned int)window->id,
             new_capacity
         );
         return false;
@@ -630,7 +635,7 @@ static bool _window_surface_ensure(wm_window_t *window) {
         fprintf(
             stderr,
             "wm: surface allocation failed id=%u capacity=%zu bytes=%zu\n",
-            window->id,
+            (unsigned int)window->id,
             new_capacity,
             new_capacity * sizeof(pixel_t)
         );
@@ -745,10 +750,10 @@ static bool _window_refresh_surface(wm_window_t *window) {
             fprintf(
                 stderr,
                 "wm: surface ensure failed id=%u failures=%u dims=%ux%u\n",
-                window->id,
-                window->fb_read_failures,
-                window->fb_width ? window->fb_width : window->width,
-                window->fb_height ? window->fb_height : window->height
+                (unsigned int)window->id,
+                (unsigned int)window->fb_read_failures,
+                (unsigned int)(window->fb_width ? window->fb_width : window->width),
+                (unsigned int)(window->fb_height ? window->fb_height : window->height)
             );
         }
         return false;
@@ -821,14 +826,14 @@ static bool _window_refresh_surface(wm_window_t *window) {
             fprintf(
                 stderr,
                 "wm: fb read failed id=%u failures=%u rect=%u,%u %ux%u src=%ux%u\n",
-                window->id,
-                window->fb_read_failures,
-                x,
-                y,
-                width,
-                height,
-                src_width,
-                src_height
+                (unsigned int)window->id,
+                (unsigned int)window->fb_read_failures,
+                (unsigned int)x,
+                (unsigned int)y,
+                (unsigned int)width,
+                (unsigned int)height,
+                (unsigned int)src_width,
+                (unsigned int)src_height
             );
         }
         _window_mark_dirty(window, x, y, width, height);
@@ -836,8 +841,8 @@ static bool _window_refresh_surface(wm_window_t *window) {
         fprintf(
             stderr,
             "wm: fb read recovered id=%u after_failures=%u\n",
-            window->id,
-            window->fb_read_failures
+            (unsigned int)window->id,
+            (unsigned int)window->fb_read_failures
         );
         window->fb_read_failures = 0;
     }
@@ -1267,6 +1272,7 @@ wm_window_t *wm_window_by_id(u32 id) {
     size_t cached_index = 0;
     if (_window_index_get(id, &cached_index) && cached_index < windows->size) {
         wm_window_t *cached = vec_at(windows, cached_index);
+
         if (cached && cached->id == id) {
             return cached;
         }
@@ -1276,6 +1282,7 @@ wm_window_t *wm_window_by_id(u32 id) {
 
     for (size_t i = 0; i < windows->size; i++) {
         wm_window_t *window = vec_at(windows, i);
+
         if (window->id == id) {
             _window_index_set(id, i);
             return window;
@@ -1335,6 +1342,7 @@ void wm_collect_raise_damage(
 
     for (size_t i = 0; i < windows->size; i++) {
         wm_window_t *other = vec_at(windows, i);
+
         if (!other || other == window) {
             continue;
         }
@@ -1363,10 +1371,12 @@ wm_window_t *wm_top_window_at(i32 px, i32 py) {
     if (_render_order_refresh()) {
         for (size_t i = render_order_count; i > 0; i--) {
             wm_window_t *window = render_order[i - 1];
+
             if (_point_in_window(window, px, py)) {
                 return window;
             }
         }
+
         return NULL;
     }
 
@@ -1450,6 +1460,7 @@ bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage) {
 
         _window_remove_at(index);
         render_order_dirty = true;
+
         return true;
     }
 

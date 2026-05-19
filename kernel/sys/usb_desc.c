@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-bool usb_desc_parse_identity_from_config(
+bool usb_desc_parse_config_identity(
     const u8 *cfg,
     size_t cfg_len,
     usb_device_identity_t *identity,

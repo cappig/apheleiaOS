@@ -3,17 +3,17 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-enum debug_levels : u8 {
+typedef enum {
     DEBUG_NONE = 0,
     DEBUG_MINIMAL = 1,
     DEBUG_ALL = 2,
-};
+} debug_levels_t;
 
-enum video_mode : u8 {
+typedef enum {
     VIDEO_NONE = 0,
     VIDEO_TEXT = 1,
     VIDEO_GRAPHICS = 2,
-};
+} video_mode_t;
 
 // -1 means that the bootloader will attempt to autodetect
 #define BOOT_DEFAULT_DEBUG       DEBUG_MINIMAL
@@ -21,8 +21,15 @@ enum video_mode : u8 {
 #define BOOT_DEFAULT_VESA_WIDTH  -1
 #define BOOT_DEFAULT_VESA_HEIGHT -1
 #define BOOT_DEFAULT_VESA_BPP    32
-#define BOOT_DEFAULT_FONT        "/etc/font.psf"
+#define BOOT_DEFAULT_FONT        "/etc/ter-116n.psf"
 #define BOOT_DEFAULT_STAGE_ROOTFS 0
+
+#define BOOT_KERNEL_PATH_32 "/boot/kernel32.elf"
+#define BOOT_KERNEL_PATH_64 "/boot/kernel64.elf"
+
+static inline const char *boot_kernel_path(bool is_64) {
+    return is_64 ? BOOT_KERNEL_PATH_64 : BOOT_KERNEL_PATH_32;
+}
 
 typedef struct PACKED {
     u8 debug;

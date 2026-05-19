@@ -7,9 +7,9 @@
 #include <sched/scheduler.h>
 #include <sched/signal.h>
 #include <signal.h>
-#include <string.h>
 #include <sys/devfs.h>
 #include <sys/ioctl.h>
+#include <sys/usercopy.h>
 
 #include "vfs.h"
 
@@ -701,6 +701,157 @@ ssize_t pty_write_handle(
     return _queue_write(tx, buf, len, (flags & VFS_NONBLOCK) != 0);
 }
 
+static int _pty_get_termios(pty_t *pty, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *current = sched_current();
+    if (!user_copy_to(current, args, &pty->termios, sizeof(pty->termios))) {
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
+static int _pty_set_termios(pty_t *pty, u64 request, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *current = sched_current();
+    termios_t tos = {0};
+    if (!user_copy_from(current, &tos, args, sizeof(tos))) {
+        return -EFAULT;
+    }
+
+    pty->termios = tos;
+
+    if (request == TCSETSF) {
+        _queue_clear(&pty->master_rx);
+        _queue_clear(&pty->slave_rx);
+        sched_wake_all(&pty->master_rx.write_wait);
+        sched_wake_all(&pty->slave_rx.write_wait);
+    }
+
+    return 0;
+}
+
+static int _pty_get_winsize(pty_t *pty, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *current = sched_current();
+    if (!user_copy_to(current, args, &pty->winsize, sizeof(pty->winsize))) {
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
+static bool _pty_winsize_changed(
+    const winsize_t *before,
+    const winsize_t *after
+) {
+    return before->ws_row != after->ws_row || before->ws_col != after->ws_col;
+}
+
+static int _pty_set_winsize(pty_t *pty, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *current = sched_current();
+    winsize_t winsize = {0};
+    if (!user_copy_from(current, &winsize, args, sizeof(winsize))) {
+        return -EFAULT;
+    }
+
+    pid_t winch_pgrp = 0;
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
+    winsize_t old_ws = pty->winsize;
+    pty->winsize = winsize;
+
+    if (pty->pgrp > 0 && _pty_winsize_changed(&old_ws, &pty->winsize)) {
+        winch_pgrp = pty->pgrp;
+    }
+
+    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
+
+    if (winch_pgrp > 0) {
+        sched_signal_send_pgrp(winch_pgrp, SIGWINCH);
+    }
+
+    return 0;
+}
+
+static int _pty_set_pgrp(pty_t *pty, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *current = sched_current();
+    pid_t requested = 0;
+    if (!user_copy_from(current, &requested, args, sizeof(requested))) {
+        return -EFAULT;
+    }
+
+    if (requested <= 0) {
+        return -EINVAL;
+    }
+
+    if (!current || !current->user_thread) {
+        return -EPERM;
+    }
+
+    if (!sched_pgrp_in_session(requested, current->sid)) {
+        return -EPERM;
+    }
+
+    unsigned long pty_flags = spin_lock_irqsave(&pty_state_lock);
+    if (!pty->allocated) {
+        spin_unlock_irqrestore(&pty_state_lock, pty_flags);
+        return -EIO;
+    }
+
+    pty->pgrp = requested;
+    spin_unlock_irqrestore(&pty_state_lock, pty_flags);
+
+    return 0;
+}
+
+static int _pty_get_pgrp(pty_t *pty, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    unsigned long pty_flags = spin_lock_irqsave(&pty_state_lock);
+    pid_t pgrp = pty->pgrp;
+    spin_unlock_irqrestore(&pty_state_lock, pty_flags);
+
+    sched_thread_t *current = sched_current();
+    if (!user_copy_to(current, args, &pgrp, sizeof(pgrp))) {
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
+static int _pty_get_index(const pty_handle_t *handle, void *args) {
+    if (!args || !handle) {
+        return -EINVAL;
+    }
+
+    int index = (int)handle->index;
+    sched_thread_t *current = sched_current();
+    if (!user_copy_to(current, args, &index, sizeof(index))) {
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
 ssize_t pty_ioctl_handle(const pty_handle_t *handle, u64 request, void *args) {
     pty_t *pty = _handle_pty(handle);
     if (!pty) {
@@ -709,115 +860,21 @@ ssize_t pty_ioctl_handle(const pty_handle_t *handle, u64 request, void *args) {
 
     switch (request) {
     case TCGETS:
-        if (!args) {
-            return -EINVAL;
-        }
-
-        memcpy(args, &pty->termios, sizeof(pty->termios));
-        return 0;
+        return _pty_get_termios(pty, args);
     case TCSETS:
-        if (!args) {
-            return -EINVAL;
-        }
-
-        memcpy(&pty->termios, args, sizeof(pty->termios));
-        return 0;
     case TCSETSW:
-        if (!args) {
-            return -EINVAL;
-        }
-
-        memcpy(&pty->termios, args, sizeof(pty->termios));
-        return 0;
     case TCSETSF:
-        if (!args) {
-            return -EINVAL;
-        }
-
-        memcpy(&pty->termios, args, sizeof(pty->termios));
-        _queue_clear(&pty->master_rx);
-        _queue_clear(&pty->slave_rx);
-        sched_wake_all(&pty->master_rx.write_wait);
-        sched_wake_all(&pty->slave_rx.write_wait);
-        return 0;
+        return _pty_set_termios(pty, request, args);
     case TIOCGWINSZ:
-        if (!args) {
-            return -EINVAL;
-        }
-
-        memcpy(args, &pty->winsize, sizeof(pty->winsize));
-        return 0;
-    case TIOCSWINSZ: {
-        if (!args) {
-            return -EINVAL;
-        }
-
-        pid_t winch_pgrp = 0;
-        unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
-        winsize_t old_ws = pty->winsize;
-        memcpy(&pty->winsize, args, sizeof(pty->winsize));
-
-        if (
-            pty->pgrp > 0 &&
-            (
-                old_ws.ws_row != pty->winsize.ws_row ||
-                old_ws.ws_col != pty->winsize.ws_col
-            )
-        ) {
-            winch_pgrp = pty->pgrp;
-        }
-        spin_unlock_irqrestore(&pty_state_lock, irq_flags);
-
-        if (winch_pgrp > 0) {
-            sched_signal_send_pgrp(winch_pgrp, SIGWINCH);
-        }
-
-        return 0;
-    }
-    case TIOCSPGRP: {
-        if (!args) {
-            return -EINVAL;
-        }
-
-        if (*(pid_t *)args <= 0) {
-            return -EINVAL;
-        }
-
-        sched_thread_t *current = sched_current();
-        if (!current || !current->user_thread) {
-            return -EPERM;
-        }
-
-        if (!sched_pgrp_in_session(*(pid_t *)args, current->sid)) {
-            return -EPERM;
-        }
-
-        unsigned long pty_flags = spin_lock_irqsave(&pty_state_lock);
-        if (!pty->allocated) {
-            spin_unlock_irqrestore(&pty_state_lock, pty_flags);
-            return -EIO;
-        }
-        pty->pgrp = *(pid_t *)args;
-        spin_unlock_irqrestore(&pty_state_lock, pty_flags);
-        return 0;
-    }
-    case TIOCGPGRP: {
-        if (!args) {
-            return -EINVAL;
-        }
-
-        unsigned long pty_flags = spin_lock_irqsave(&pty_state_lock);
-        *(pid_t *)args = pty->pgrp;
-        spin_unlock_irqrestore(&pty_state_lock, pty_flags);
-        return 0;
-    }
+        return _pty_get_winsize(pty, args);
+    case TIOCSWINSZ:
+        return _pty_set_winsize(pty, args);
+    case TIOCSPGRP:
+        return _pty_set_pgrp(pty, args);
+    case TIOCGPGRP:
+        return _pty_get_pgrp(pty, args);
     case TIOCGPTN:
-        if (!args || !handle) {
-            return -EINVAL;
-        }
-
-        *(int *)args = (int)handle->index;
-        return 0;
+        return _pty_get_index(handle, args);
     default:
         return -ENOTTY;
     }

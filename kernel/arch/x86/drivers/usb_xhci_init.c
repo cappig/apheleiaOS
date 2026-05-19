@@ -72,6 +72,7 @@ void _xhci_set_health_state(
             _xhci_health_name(prev),
             _xhci_health_name(state)
         );
+
         return;
     }
 
@@ -85,6 +86,7 @@ void _xhci_set_health_state(
             _xhci_health_name(state),
             reason
         );
+
         return;
     }
 
@@ -486,7 +488,7 @@ bool _xhci_ensure_running(xhci_controller_t *ctrl) {
                 ctrl->bus,
                 ctrl->slot,
                 ctrl->func,
-                now
+                (unsigned int)now
             );
 
             _xhci_log_fault_snapshot(ctrl, "controller not ready");
@@ -529,7 +531,7 @@ bool _xhci_ensure_running(xhci_controller_t *ctrl) {
             ctrl->bus,
             ctrl->slot,
             ctrl->func,
-            now
+            (unsigned int)now
         );
 
         _xhci_log_fault_snapshot(ctrl, "controller halted");
@@ -553,7 +555,7 @@ bool _xhci_ensure_running(xhci_controller_t *ctrl) {
                 ctrl->bus,
                 ctrl->slot,
                 ctrl->func,
-                now
+                (unsigned int)now
             );
 
             _xhci_log_fault_snapshot(ctrl, "controller never became ready");
@@ -852,8 +854,9 @@ static bool _xhci_validate_runtime_programming(
             ctrl->func,
             dcbaap,
             erstba,
-            erstsz
+            (unsigned int)erstsz
         );
+
         return false;
     }
 
@@ -867,6 +870,7 @@ static bool _xhci_validate_runtime_programming(
             erdp,
             expected_erdp
         );
+
         return false;
     }
 
@@ -932,6 +936,7 @@ static bool _xhci_program_runtime(
             ctrl->slot,
             ctrl->func
         );
+
         return false;
     }
 
@@ -967,6 +972,7 @@ static bool _xhci_program_runtime(
             ctrl->slot,
             ctrl->func
         );
+
         return false;
     }
 
@@ -1110,7 +1116,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
         ctrl->max_slots,
         ctrl->max_ports,
         ctrl->scratchpad_count,
-        hcsp2
+        (unsigned int)hcsp2
     );
 
     u32 hccparams1 = _read32(mmio, XHCI_HCCPARAMS1_OFF);
@@ -1143,7 +1149,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
             ctrl->bus,
             ctrl->slot,
             ctrl->func,
-            pagesize
+            (unsigned int)pagesize
         );
     }
 
@@ -1199,7 +1205,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
             ctrl->bus,
             ctrl->slot,
             ctrl->func,
-            now
+            (unsigned int)now
         );
         arch_phys_unmap(map, XHCI_MMIO_SIZE);
         return false;
@@ -1249,7 +1255,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
             ctrl->bus,
             ctrl->slot,
             ctrl->func,
-            now
+            (unsigned int)now
         );
         arch_phys_unmap(map, XHCI_MMIO_SIZE);
         return false;
@@ -1269,7 +1275,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
             ctrl->bus,
             ctrl->slot,
             ctrl->func,
-            now
+            (unsigned int)now
         );
         arch_phys_unmap(map, XHCI_MMIO_SIZE);
         return false;
@@ -1290,6 +1296,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
                 ctrl->slot,
                 ctrl->func
             );
+
             return false;
         }
     }
@@ -1365,6 +1372,7 @@ static void _xhci_enable_legacy_irq(xhci_controller_t *ctrl) {
             ctrl->func,
             ctrl->irq_line
         );
+
         return;
     }
 
@@ -1383,6 +1391,7 @@ static void _xhci_enable_legacy_irq(xhci_controller_t *ctrl) {
             ctrl->irq_line,
             legacy_irq_line
         );
+
         return;
     }
 

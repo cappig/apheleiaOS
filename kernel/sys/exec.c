@@ -8,10 +8,10 @@
 #include <base/macros.h>
 #include <ctype.h>
 #include <errno.h>
-#include <inttypes.h>
 #include <log/log.h>
 #include <parse/elf.h>
 #include <sched/signal.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/lock.h>
@@ -19,12 +19,6 @@
 #include <sys/stat.h>
 #include <sys/vfs.h>
 #include <unistd.h>
-
-#define USER_STACK_PAGES 64
-#define EXEC_MAX_ARGS    16
-#define EXEC_MAX_ARG_LEN 128
-#define EXEC_MAX_ENV     32
-#define EXEC_MAX_ENV_LEN 128
 
 static uintptr_t next_stack_top;
 static spinlock_t stack_lock = SPINLOCK_INIT;
@@ -52,6 +46,13 @@ typedef struct {
     size_t size;
 } exec_file_t;
 
+typedef struct exec_loaded_page {
+    uintptr_t vaddr;
+    uintptr_t paddr;
+    u64 flags;
+    struct exec_loaded_page *next;
+} exec_loaded_page_t;
+
 
 static u64 _elf_flags_to_page_flags(u32 elf_flags) {
     u64 flags = PT_USER;
@@ -67,14 +68,64 @@ static u64 _elf_flags_to_page_flags(u32 elf_flags) {
     return flags;
 }
 
-static bool _elf_segment_is_valid(
+static bool _u64_add(u64 a, u64 b, u64 *out) {
+    if (!out || b > UINT64_MAX - a) {
+        return false;
+    }
+
+    *out = a + b;
+    return true;
+}
+
+static bool _u64_mul(u64 a, u64 b, u64 *out) {
+    if (!out || (a && b > UINT64_MAX / a)) {
+        return false;
+    }
+
+    *out = a * b;
+    return true;
+}
+
+static bool _phdr_table_ok(
+    u64 phoff,
+    u64 ph_num,
+    u64 phent_size,
+    size_t image_size,
+    size_t min_entry_size
+) {
+    if (phent_size < min_entry_size) {
+        return false;
+    }
+
+    u64 ph_bytes = 0;
+    u64 ph_end = 0;
+
+    if (!_u64_mul(ph_num, phent_size, &ph_bytes)) {
+        return false;
+    }
+
+    if (!_u64_add(phoff, ph_bytes, &ph_end)) {
+        return false;
+    }
+
+    return phoff <= image_size && ph_end <= image_size;
+}
+
+static bool _elf_segment_ok(
     u64 file_size,
     u64 mem_size,
     u64 offset,
     u64 image_size,
     u64 vaddr
 ) {
+    uintptr_t user_top = (uintptr_t)arch_user_stack_top();
+    u64 mem_end = 0;
+
     if (!mem_size) {
+        return false;
+    }
+
+    if (!user_top || vaddr < PAGE_4KIB || vaddr >= (u64)user_top) {
         return false;
     }
 
@@ -86,10 +137,67 @@ static bool _elf_segment_is_valid(
         return false;
     }
 
-    if (vaddr + mem_size < vaddr) {
+    if (!_u64_add(vaddr, mem_size, &mem_end)) {
         return false;
     }
 
+    if (mem_end > (u64)user_top) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool _segment_range(
+    u64 vaddr,
+    u64 mem_size,
+    u64 max_addr,
+    u64 *base_out,
+    u64 *end_out
+) {
+    if (!base_out || !end_out || max_addr < PAGE_4KIB - 1) {
+        return false;
+    }
+
+    // Keep this in u64 until the range is proven sane; 32-bit ELFs can wrap too.
+    u64 mem_end = 0;
+    if (!_u64_add(vaddr, mem_size, &mem_end)) {
+        return false;
+    }
+
+    if (mem_end > max_addr - (PAGE_4KIB - 1)) {
+        return false;
+    }
+
+    u64 base = ALIGN_DOWN(vaddr, PAGE_4KIB);
+    u64 end = ALIGN(mem_end, PAGE_4KIB);
+    if (end <= base) {
+        return false;
+    }
+
+    *base_out = base;
+    *end_out = end;
+    return true;
+}
+
+static bool _user_region_end(
+    const sched_user_region_t *region,
+    uintptr_t *out
+) {
+    if (!region || !region->pages || !out) {
+        return false;
+    }
+
+    if (region->pages > SIZE_MAX / PAGE_4KIB) {
+        return false;
+    }
+
+    uintptr_t size = region->pages * PAGE_4KIB;
+    if (size > (uintptr_t)-1 - region->vaddr) {
+        return false;
+    }
+
+    *out = region->vaddr + size;
     return true;
 }
 
@@ -112,11 +220,7 @@ static bool _map_user_region(
 
     arch_map_region(root, pages, vaddr, paddr, flags);
 
-    unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
-    bool added = sched_add_user_region(thread, vaddr, paddr, pages, flags);
-    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-
-    if (added) {
+    if (sched_add_user_region(thread, vaddr, paddr, pages, flags)) {
         return true;
     }
 
@@ -128,6 +232,171 @@ static bool _map_user_region(
 
     arch_free_frames((void *)paddr, pages);
     return false;
+}
+
+static sched_user_region_t *
+_find_user_region_page(sched_thread_t *thread, uintptr_t vaddr) {
+    if (!thread) {
+        return NULL;
+    }
+
+    sched_user_region_t *region = thread->regions;
+    while (region) {
+        uintptr_t region_end = 0;
+        if (
+            _user_region_end(region, &region_end) &&
+            vaddr >= region->vaddr &&
+            vaddr < region_end
+        ) {
+            return region;
+        }
+
+        region = region->next;
+    }
+
+    return NULL;
+}
+
+static exec_loaded_page_t *
+_find_loaded_page(exec_loaded_page_t *pages, uintptr_t vaddr) {
+    while (pages) {
+        if (pages->vaddr == vaddr) {
+            return pages;
+        }
+
+        pages = pages->next;
+    }
+
+    return NULL;
+}
+
+static bool _entry_loaded(exec_loaded_page_t *pages, u64 entry) {
+    if (entry > (u64)(uintptr_t)-1 || entry < PAGE_4KIB) {
+        return false;
+    }
+
+    uintptr_t page_vaddr = ALIGN_DOWN((uintptr_t)entry, PAGE_4KIB);
+    return _find_loaded_page(pages, page_vaddr) != NULL;
+}
+
+static void _free_loaded_pages(exec_loaded_page_t *pages) {
+    while (pages) {
+        exec_loaded_page_t *next = pages->next;
+        free(pages);
+        pages = next;
+    }
+}
+
+static exec_loaded_page_t *
+_ensure_loaded_page(
+    sched_thread_t *thread,
+    exec_loaded_page_t **pages,
+    uintptr_t vaddr,
+    u64 flags
+) {
+    if (!thread || !pages) {
+        return NULL;
+    }
+
+    exec_loaded_page_t *page = _find_loaded_page(*pages, vaddr);
+    if (page) {
+        u64 merged = page->flags | flags;
+        if (merged != page->flags) {
+            page_t *root = arch_vm_root(thread->vm_space);
+            if (!root) {
+                return NULL;
+            }
+
+            page->flags = merged;
+            arch_map_region(root, 1, vaddr, page->paddr, merged);
+            arch_tlb_flush(vaddr);
+
+            sched_user_region_t *region = _find_user_region_page(thread, vaddr);
+            if (region && region->pages == 1 && region->vaddr == vaddr) {
+                region->flags = merged;
+            }
+        }
+
+        return page;
+    }
+
+    uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(1);
+    if (!paddr) {
+        return NULL;
+    }
+
+    if (!_map_user_region(thread, vaddr, paddr, 1, flags)) {
+        return NULL;
+    }
+
+    void *dst = arch_phys_map(paddr, PAGE_4KIB, 0);
+    if (!dst) {
+        return NULL;
+    }
+
+    memset(dst, 0, PAGE_4KIB);
+    arch_phys_unmap(dst, PAGE_4KIB);
+
+    page = calloc(1, sizeof(*page));
+    if (!page) {
+        return NULL;
+    }
+
+    page->vaddr = vaddr;
+    page->paddr = paddr;
+    page->flags = flags;
+    page->next = *pages;
+    *pages = page;
+    return page;
+}
+
+static bool _copy_segment_bytes(
+    const u8 *image,
+    size_t image_size,
+    u64 offset,
+    u64 file_size,
+    uintptr_t vaddr,
+    exec_loaded_page_t *pages
+) {
+    if (!file_size) {
+        return true;
+    }
+
+    if (!image || offset > image_size || file_size > image_size - offset) {
+        return false;
+    }
+
+    size_t remaining = (size_t)file_size;
+    size_t image_off = (size_t)offset;
+    uintptr_t cursor = vaddr;
+
+    while (remaining) {
+        uintptr_t page_vaddr = ALIGN_DOWN(cursor, PAGE_4KIB);
+        exec_loaded_page_t *page = _find_loaded_page(pages, page_vaddr);
+        if (!page) {
+            return false;
+        }
+
+        size_t page_off = (size_t)(cursor - page_vaddr);
+        size_t chunk = PAGE_4KIB - page_off;
+        if (chunk > remaining) {
+            chunk = remaining;
+        }
+
+        void *dst = arch_phys_map(page->paddr, PAGE_4KIB, 0);
+        if (!dst) {
+            return false;
+        }
+
+        memcpy((u8 *)dst + page_off, image + image_off, chunk);
+        arch_phys_unmap(dst, PAGE_4KIB);
+
+        cursor += chunk;
+        image_off += chunk;
+        remaining -= chunk;
+    }
+
+    return true;
 }
 
 static bool _load_segments_64(
@@ -146,16 +415,23 @@ static bool _load_segments_64(
         return false;
     }
 
-    if (header->phoff + (u64)header->ph_num * header->phent_size > size) {
+    if (!_phdr_table_ok(
+            header->phoff,
+            header->ph_num,
+            header->phent_size,
+            size,
+            sizeof(elf_prog_header_t)
+        )) {
         return false;
     }
 
     const elf_prog_header_t *prog =
         (const elf_prog_header_t *)(image + header->phoff);
+    exec_loaded_page_t *loaded_pages = NULL;
 
     for (size_t i = 0; i < header->ph_num; i++) {
-        const elf_prog_header_t *ph =
-            (const elf_prog_header_t *)((const u8 *)prog + i * header->phent_size);
+        const u8 *ph_ptr = (const u8 *)prog + i * header->phent_size;
+        const elf_prog_header_t *ph = (const elf_prog_header_t *)ph_ptr;
 
         if (ph->type != PT_LOAD) {
             continue;
@@ -165,7 +441,7 @@ static bool _load_segments_64(
             continue;
         }
 
-        bool valid_seg = _elf_segment_is_valid(
+        bool segment_ok = _elf_segment_ok(
             ph->file_size,
             ph->mem_size,
             ph->offset,
@@ -173,49 +449,64 @@ static bool _load_segments_64(
             ph->vaddr
         );
 
-        if (!valid_seg) {
+        if (!segment_ok) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
 
-        u64 map_base = ALIGN_DOWN(ph->vaddr, PAGE_4KIB);
-        u64 map_end = ALIGN(ph->vaddr + ph->mem_size, PAGE_4KIB);
-
-        if (map_end <= map_base) {
+        u64 map_base = 0;
+        u64 map_end = 0;
+        if (!_segment_range(
+                ph->vaddr,
+                ph->mem_size,
+                UINT64_MAX,
+                &map_base,
+                &map_end
+            )) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
-
-        size_t pages = (size_t)((map_end - map_base) / PAGE_4KIB);
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
-
-        uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
-        if (!paddr) {
-            return false;
+        for (
+            u64 page_vaddr = map_base;
+            page_vaddr < map_end;
+            page_vaddr += PAGE_4KIB
+        ) {
+            if (!_ensure_loaded_page(
+                    thread,
+                    &loaded_pages,
+                    (uintptr_t)page_vaddr,
+                    flags
+                )) {
+                _free_loaded_pages(loaded_pages);
+                return false;
+            }
         }
 
-        if (!_map_user_region(thread, map_base, paddr, pages, flags)) {
+        if (!_copy_segment_bytes(
+                image,
+                size,
+                ph->offset,
+                ph->file_size,
+                (uintptr_t)ph->vaddr,
+                loaded_pages
+            )) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
+    }
 
-        size_t copy_off = (size_t)(ph->vaddr - map_base);
-        size_t copy_len = (size_t)ph->file_size;
-
-        void *dst = arch_phys_map(paddr, pages * PAGE_4KIB, 0);
-        if (!dst) {
-            return false;
-        }
-
-        memset(dst, 0, pages * PAGE_4KIB);
-
-        memcpy((u8 *)dst + copy_off, image + ph->offset, copy_len);
-
-        arch_phys_unmap(dst, pages * PAGE_4KIB);
+    if (!_entry_loaded(loaded_pages, header->entry)) {
+        _free_loaded_pages(loaded_pages);
+        return false;
     }
 
     if (entry_out) {
         *entry_out = header->entry;
     }
 
+    _free_loaded_pages(loaded_pages);
     return true;
 }
 
@@ -235,16 +526,23 @@ static bool _load_segments_32(
         return false;
     }
 
-    if ((u64)header->phoff + (u64)header->ph_num * header->phent_size > size) {
+    if (!_phdr_table_ok(
+            header->phoff,
+            header->ph_num,
+            header->phent_size,
+            size,
+            sizeof(elf32_prog_header_t)
+        )) {
         return false;
     }
 
     const elf32_prog_header_t *prog =
         (const elf32_prog_header_t *)(image + header->phoff);
+    exec_loaded_page_t *loaded_pages = NULL;
 
     for (size_t i = 0; i < header->ph_num; i++) {
-        const elf32_prog_header_t *ph =
-            (const elf32_prog_header_t *)((const u8 *)prog + i * header->phent_size);
+        const u8 *ph_ptr = (const u8 *)prog + i * header->phent_size;
+        const elf32_prog_header_t *ph = (const elf32_prog_header_t *)ph_ptr;
 
         if (ph->type != PT_LOAD) {
             continue;
@@ -254,7 +552,7 @@ static bool _load_segments_32(
             continue;
         }
 
-        bool valid_seg = _elf_segment_is_valid(
+        bool segment_ok = _elf_segment_ok(
             ph->file_size,
             ph->mem_size,
             ph->offset,
@@ -262,49 +560,64 @@ static bool _load_segments_32(
             ph->vaddr
         );
 
-        if (!valid_seg) {
+        if (!segment_ok) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
 
-        u32 map_base = ALIGN_DOWN(ph->vaddr, PAGE_4KIB);
-        u32 map_end = ALIGN(ph->vaddr + ph->mem_size, PAGE_4KIB);
-
-        if (map_end <= map_base) {
+        u64 map_base = 0;
+        u64 map_end = 0;
+        if (!_segment_range(
+                ph->vaddr,
+                ph->mem_size,
+                UINT32_MAX,
+                &map_base,
+                &map_end
+            )) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
-
-        size_t pages = (size_t)((map_end - map_base) / PAGE_4KIB);
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
-
-        uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
-        if (!paddr) {
-            return false;
+        for (
+            u64 page_vaddr = map_base;
+            page_vaddr < map_end;
+            page_vaddr += PAGE_4KIB
+        ) {
+            if (!_ensure_loaded_page(
+                    thread,
+                    &loaded_pages,
+                    (uintptr_t)page_vaddr,
+                    flags
+                )) {
+                _free_loaded_pages(loaded_pages);
+                return false;
+            }
         }
 
-        if (!_map_user_region(thread, map_base, paddr, pages, flags)) {
+        if (!_copy_segment_bytes(
+                image,
+                size,
+                ph->offset,
+                ph->file_size,
+                (uintptr_t)ph->vaddr,
+                loaded_pages
+            )) {
+            _free_loaded_pages(loaded_pages);
             return false;
         }
+    }
 
-        size_t copy_off = (size_t)(ph->vaddr - map_base);
-        size_t copy_len = (size_t)ph->file_size;
-
-        void *dst = arch_phys_map(paddr, pages * PAGE_4KIB, 0);
-        if (!dst) {
-            return false;
-        }
-
-        memset(dst, 0, pages * PAGE_4KIB);
-
-        memcpy((u8 *)dst + copy_off, image + ph->offset, copy_len);
-
-        arch_phys_unmap(dst, pages * PAGE_4KIB);
+    if (!_entry_loaded(loaded_pages, header->entry)) {
+        _free_loaded_pages(loaded_pages);
+        return false;
     }
 
     if (entry_out) {
         *entry_out = header->entry;
     }
 
+    _free_loaded_pages(loaded_pages);
     return true;
 }
 
@@ -542,7 +855,13 @@ static uintptr_t _build_user_stack_args(
     sp = ALIGN_DOWN(sp, 16);
 
     size_t slots = argc + envc + 3;
-    if ((slots % 2) != 0) {
+    size_t align_slots = 16 / sizeof(uintptr_t);
+    if (!align_slots) {
+        align_slots = 1;
+    }
+
+    size_t pad_slots = (align_slots - (slots % align_slots)) % align_slots;
+    for (size_t i = 0; i < pad_slots; i++) {
         sp -= sizeof(uintptr_t);
         *(uintptr_t *)sp = 0;
     }
@@ -976,36 +1295,21 @@ int user_exec(
 
     exec_args_t args = {0};
     exec_env_t env = {0};
-    char trace_path[PATH_MAX];
-    strncpy(trace_path, path, sizeof(trace_path) - 1);
-    trace_path[sizeof(trace_path) - 1] = '\0';
 
     if (!_copy_args(argv, &args)) {
-        log_warn("exec failed for '%s': unable to copy argv", trace_path);
         return -ENOMEM;
     }
 
     if (!_copy_env(envp, &env)) {
         _free_args(&args);
-        log_warn("exec failed for '%s': unable to copy env", trace_path);
         return -ENOMEM;
-    }
-
-    bool exec_preempt_disabled = false;
-    if (state) {
-        sched_preempt_disable();
-        exec_preempt_disabled = true;
     }
 
     exec_file_t file = {0};
     int err = _open_file(thread, path, &file, true);
     if (err) {
-        log_warn("exec failed for '%s': open error %d", trace_path, err);
         _free_args(&args);
         _free_env(&env);
-        if (exec_preempt_disabled) {
-            sched_preempt_enable();
-        }
         return err;
     }
 
@@ -1030,10 +1334,6 @@ int user_exec(
             _free_args(&args);
             _free_env(&env);
             _close_file(&file);
-            log_warn("exec failed for '%s': shebang argv build failed", trace_path);
-            if (exec_preempt_disabled) {
-                sched_preempt_enable();
-            }
             return -ENOMEM;
         }
 
@@ -1046,15 +1346,6 @@ int user_exec(
             _free_args(&args);
             _free_env(&env);
             _close_file(&file);
-            log_warn(
-                "exec failed for '%s': shebang interpreter '%s' open error %d",
-                trace_path,
-                shebang.path,
-                err
-            );
-            if (exec_preempt_disabled) {
-                sched_preempt_enable();
-            }
             return err;
         }
 
@@ -1068,14 +1359,9 @@ int user_exec(
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
-        log_warn("exec failed for '%s': unable to allocate user vm", trace_path);
-        if (exec_preempt_disabled) {
-            sched_preempt_enable();
-        }
         return -ENOMEM;
     }
 
-    unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
     sched_user_region_t *old_regions = thread->regions;
     uintptr_t old_stack_base = thread->user_stack_base;
     size_t old_stack_size = thread->user_stack_size;
@@ -1086,7 +1372,6 @@ int user_exec(
     thread->user_stack_base = old_stack_base;
     thread->user_stack_size = old_stack_size;
     sched_user_mem_set_kib(thread, 0);
-    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
     uintptr_t entry_point = 0;
     arch_word_t entry_raw = 0;
@@ -1100,43 +1385,32 @@ int user_exec(
         log_warn("'%s' is not a valid executable for this arch", file.resolved);
         sched_clear_user_regions(thread);
 
-        vm_flags = spin_lock_irqsave(&thread->vm_lock);
         thread->regions = old_regions;
         thread->vm_space = old_vm;
         sched_user_mem_set_kib(thread, old_user_mem_kib);
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
         arch_vm_destroy(fresh);
 
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
-        if (exec_preempt_disabled) {
-            sched_preempt_enable();
-        }
 
         return -ENOEXEC;
     }
 
     uintptr_t stack_top = 0;
     if (!_map_user_stack(thread, &stack_top)) {
-        log_warn("exec failed for '%s': unable to map user stack", trace_path);
         _free_regions_list(thread->regions);
 
-        vm_flags = spin_lock_irqsave(&thread->vm_lock);
         thread->regions = old_regions;
         thread->vm_space = old_vm;
         sched_user_mem_set_kib(thread, old_user_mem_kib);
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
         arch_vm_destroy(fresh);
 
         _free_args(&args);
         _free_env(&env);
         _close_file(&file);
-        if (exec_preempt_disabled) {
-            sched_preempt_enable();
-        }
 
         return -ENOMEM;
     }
@@ -1160,9 +1434,7 @@ int user_exec(
         memset(state, 0, sizeof(*state));
         arch_state_set_user_entry(state, entry_point, stack_top);
         arch_state_set_return(state, 0);
-        if (!sched_save_user_context(thread, state)) {
-            thread->context = (uintptr_t)state;
-        }
+        thread->context = (uintptr_t)state;
     } else {
         thread_prepare_user(thread, entry_point, stack_top);
     }
@@ -1172,7 +1444,7 @@ int user_exec(
     if (!is_script && args.argv[0]) {
         thread_name = args.argv[0];
     } else if (!is_script) {
-        thread_name = trace_path;
+        thread_name = path;
     }
 
     thread_set_name(thread, _basename(thread_name));
@@ -1180,10 +1452,6 @@ int user_exec(
     _free_args(&args);
     _free_env(&env);
     _close_file(&file);
-
-    if (exec_preempt_disabled) {
-        sched_preempt_enable();
-    }
 
     return 0;
 }

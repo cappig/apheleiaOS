@@ -47,7 +47,7 @@ static int print_one(const char *path) {
         (unsigned long long)st.st_size,
         (unsigned long long)st.st_nlink,
         (unsigned long long)st.st_ino,
-        st.st_mode & 07777,
+        (unsigned int)(st.st_mode & 07777),
         mode_buf,
         (unsigned long long)st.st_uid,
         account_uid_name(st.st_uid, uid_buf, sizeof(uid_buf)),

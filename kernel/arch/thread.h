@@ -22,10 +22,9 @@ void arch_state_set_user_entry(
     arch_word_t entry,
     arch_word_t stack_top
 );
-arch_int_state_t *arch_thread_user_context(struct sched_thread *thread);
 
 arch_word_t arch_state_ip(const arch_int_state_t *state);
 arch_word_t arch_state_sp(const arch_int_state_t *state);
-bool arch_state_is_valid(const arch_int_state_t *state);
+bool arch_state_flags_sane(const arch_int_state_t *state);
 
 arch_word_t arch_kernel_vaddr_base(void);

@@ -14,6 +14,7 @@
 #include <sys/ioctl.h>
 #include <sys/lock.h>
 #include <sys/tty.h>
+#include <sys/usercopy.h>
 #include <sys/vfs.h>
 
 #include "framebuffer.h"
@@ -181,15 +182,38 @@ static bool _clip_present_rect(
     *width = req->width;
     *height = req->height;
 
-    if (*x + *width > fb->width) {
-        *width = fb->width - *x;
+    u32 max_width = fb->width - *x;
+    if (*width > max_width) {
+        *width = max_width;
     }
 
-    if (*y + *height > fb->height) {
-        *height = fb->height - *y;
+    u32 max_height = fb->height - *y;
+    if (*height > max_height) {
+        *height = max_height;
     }
 
     return *width && *height;
+}
+
+static bool _fb_frame_ok(const framebuffer_info_t *fb, const pixel_t *frame) {
+    if (!fb || !fb->available || !frame) {
+        return false;
+    }
+
+    size_t width = fb->width;
+    size_t height = fb->height;
+
+    if (!width || !height || width > (size_t)-1 / height) {
+        return false;
+    }
+
+    size_t pixels = width * height;
+    if (pixels > (size_t)-1 / sizeof(pixel_t)) {
+        return false;
+    }
+
+    sched_thread_t *current = sched_current();
+    return user_range_ok(current, frame, pixels * sizeof(pixel_t), false);
 }
 
 static ssize_t _dev_fb_present_rect(
@@ -361,25 +385,35 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
     const framebuffer_info_t *fb = framebuffer_get_info();
 
     switch (request) {
-    case FBIOGETINFO:
+    case FBIOGETINFO: {
         if (!args) {
             return -EINVAL;
         }
 
-        fb_info_t *info = args;
-        memset(info, 0, sizeof(*info));
+        fb_info_t info = {0};
 
         if (!fb) {
+            sched_thread_t *current = sched_current();
+            if (!user_copy_to(current, args, &info, sizeof(info))) {
+                return -EFAULT;
+            }
+
             return 0;
         }
 
-        info->width = fb->width;
-        info->height = fb->height;
-        info->pitch = fb->pitch;
-        info->bpp = fb->bpp;
-        info->available = fb->available;
+        info.width = fb->width;
+        info.height = fb->height;
+        info.pitch = fb->pitch;
+        info.bpp = fb->bpp;
+        info.available = fb->available;
+
+        sched_thread_t *current = sched_current();
+        if (!user_copy_to(current, args, &info, sizeof(info))) {
+            return -EFAULT;
+        }
 
         return 0;
+    }
     case FBIOACQUIRE: {
         sched_thread_t *current = sched_current();
         if (!current) {
@@ -420,6 +454,10 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
             return -EAGAIN;
         }
 
+        if (fb && fb->available && !_fb_frame_ok(fb, args)) {
+            return -EFAULT;
+        }
+
         return _dev_fb_present(fb, args);
     }
     case FBIOPRESENT_RECT: {
@@ -427,12 +465,22 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
             return -EINVAL;
         }
 
+        sched_thread_t *current = sched_current();
+        fb_present_rect_t req = {0};
+        if (!user_copy_from(current, &req, args, sizeof(req))) {
+            return -EFAULT;
+        }
+
         ssize_t owner_screen = console_fb_owner_screen();
         if (owner_screen != TTY_NONE && tty_current_screen() != (size_t)owner_screen) {
             return -EAGAIN;
         }
 
-        return _dev_fb_present_rect(fb, (const fb_present_rect_t *)args);
+        if (fb && fb->available && !_fb_frame_ok(fb, req.frame)) {
+            return -EFAULT;
+        }
+
+        return _dev_fb_present_rect(fb, &req);
     }
     default:
         return -ENOTTY;

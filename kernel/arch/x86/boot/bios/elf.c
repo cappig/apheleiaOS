@@ -66,53 +66,47 @@ static void _commit_boot_log(boot_info_t *info) {
 }
 
 static elf_header_t *_load_kernel_image(bool want_64, bool *is_64) {
-    const char *paths64[] = {"/boot/kernel64.elf", "/boot/kernel32.elf"};
-    const char *paths32[] = {"/boot/kernel32.elf", "/boot/kernel64.elf"};
-    const char **paths = want_64 ? paths64 : paths32;
+    const char *path = boot_kernel_path(want_64);
+    elf_header_t *kernel = read_rootfs(path);
 
-    for (size_t i = 0; i < ARRAY_LEN(paths64); i++) {
-        elf_header_t *kernel = read_rootfs(paths[i]);
-
-        if (!kernel) {
-            continue;
-        }
-
-        elf_validity_t validity = elf_verify(kernel);
-        if (validity) {
-            printf("invalid ELF file %s (error %d)\n\r", paths[i], validity);
-            free(kernel);
-            continue;
-        }
-
-        if (kernel->machine == EM_X86_64) {
-            if (!want_64) {
-                printf(
-                    "64-bit kernel %s but CPU lacks long mode\n\r",
-                    paths[i]
-                );
-
-                free(kernel);
-                continue;
-            }
-
-            *is_64 = true;
-            return kernel;
-        }
-
-        if (kernel->machine == EM_X86) {
-            *is_64 = false;
-            return kernel;
-        }
-
-        printf(
-            "unsupported machine type 0x%x for %s\n\r",
-            kernel->machine,
-            paths[i]
-        );
-        free(kernel);
+    if (!kernel) {
+        return NULL;
     }
 
-    return NULL;
+    elf_validity_t validity = elf_verify(kernel);
+    if (validity) {
+        printf("invalid ELF file %s (error %d)\n\r", path, validity);
+        free(kernel);
+        return NULL;
+    }
+
+    if (want_64) {
+        if (kernel->machine != EM_X86_64) {
+            printf(
+                "expected 64-bit kernel at %s, found machine type 0x%x\n\r",
+                path,
+                kernel->machine
+            );
+            free(kernel);
+            return NULL;
+        }
+
+        *is_64 = true;
+        return kernel;
+    }
+
+    if (kernel->machine != EM_X86) {
+        printf(
+            "expected 32-bit kernel at %s, found machine type 0x%x\n\r",
+            path,
+            kernel->machine
+        );
+        free(kernel);
+        return NULL;
+    }
+
+    *is_64 = false;
+    return kernel;
 }
 
 void load_kerenel(boot_info_t *info) {

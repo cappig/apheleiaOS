@@ -900,16 +900,16 @@ static void _publish_framebuffer(const boot_info_t *info) {
 
     log_info(
         "framebuffer %ux%u bpp=%u pitch=%u rgb(r:%u/%u g:%u/%u b:%u/%u)",
-        fb.width,
-        fb.height,
-        fb.bpp,
-        fb.pitch,
-        fb.red_shift,
-        fb.red_size,
-        fb.green_shift,
-        fb.green_size,
-        fb.blue_shift,
-        fb.blue_size
+        (unsigned int)fb.width,
+        (unsigned int)fb.height,
+        (unsigned int)fb.bpp,
+        (unsigned int)fb.pitch,
+        (unsigned int)fb.red_shift,
+        (unsigned int)fb.red_size,
+        (unsigned int)fb.green_shift,
+        (unsigned int)fb.green_size,
+        (unsigned int)fb.blue_shift,
+        (unsigned int)fb.blue_size
     );
 
     framebuffer_set_info(&fb);
@@ -1212,6 +1212,9 @@ void arch_storage_init(void) {
     if (boot_rootfs_paddr && boot_rootfs_size && !_register_boot_rootfs()) {
         log_warn("failed to register staged rootfs fallback");
     }
+}
+
+void arch_late_init(void) {
 }
 
 bool arch_phys_map_can_persist(void) {
@@ -1548,8 +1551,13 @@ u64 arch_cpu_khz(void) {
 }
 
 void arch_mem_info(size_t *total, size_t *free) {
-    if (total) { *total = pmm_total_mem(); }
-    if (free) { *free = pmm_free_mem(); }
+    if (total) {
+        *total = pmm_total_mem();
+    }
+
+    if (free) {
+        *free = pmm_free_mem();
+    }
 }
 
 void arch_syscall_install(int vector, arch_syscall_handler_t handler) {
@@ -1569,8 +1577,8 @@ arch_context_switch_bad_frame(uintptr_t ctx, u32 eip, u32 cs) {
         "bad i386 kernel return frame ctx=%#lx eip=%#x cs=%#x"
         " current=%#lx pid=%d name=%s current_ctx=%#lx stack=%#lx stack_size=%zu",
         (unsigned long)ctx,
-        eip,
-        cs,
+        (unsigned int)eip,
+        (unsigned int)cs,
         (unsigned long)(uintptr_t)current,
         current ? current->pid : 0,
         current ? current->name : "none",

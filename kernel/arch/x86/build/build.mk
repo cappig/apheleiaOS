@@ -25,11 +25,15 @@ include kernel/drivers/build.mk
 KERNEL_ALL_SRC := $(sort $(KERNEL_ALL_SRC) $(KERNEL_DRIVER_SRC))
 
 KERNEL_COMMON_SRC := $(filter-out %32.c %64.c %32.asm %64.asm, $(KERNEL_ALL_SRC))
-KERNEL_SRC_64     := $(filter %64.c %64.asm, $(KERNEL_ALL_SRC)) $(KERNEL_COMMON_SRC)
+KERNEL_COMMON_SRC += $(filter %/div64.c, $(KERNEL_ALL_SRC))
+KERNEL_ARCH64_SRC := $(filter %64.c %64.asm, $(KERNEL_ALL_SRC))
+KERNEL_SRC_64     := $(filter-out %/div64.c, $(KERNEL_ARCH64_SRC)) $(KERNEL_COMMON_SRC)
 KERNEL_SRC_32     := $(filter %32.c %32.asm, $(KERNEL_ALL_SRC)) $(KERNEL_COMMON_SRC)
 
 include kernel/arch/x86/boot/bios/build.mk
 include kernel/arch/x86/boot/uefi/build.mk
+
+CC_BASE += -mno-red-zone
 
 KERNEL_CC_COMMON := \
 	-I$(ARCH_DIR) \
@@ -96,9 +100,9 @@ endif
 
 IMAGE_SCRIPT_DEPS := \
 	kernel/build_image_common.py \
-	kernel/build_bios_disk_image.py \
-	kernel/build_hybrid_disk_image.py \
-	kernel/build_hybrid_iso_image.py
+	kernel/arch/x86/build/build_bios_disk_image.py \
+	kernel/arch/x86/build/build_hybrid_disk_image.py \
+	kernel/arch/x86/build/build_hybrid_iso_image.py
 
 IMAGE_ROOT_DEPS := $(shell find root -type f -o -type l)
 
@@ -109,25 +113,26 @@ define stage_image
 	@mkdir -p $(IMAGE_BOOT_DIR)
 	@cp -f $(KERNEL_ELF) $(IMAGE_BOOT_DIR)/
 	@cp -r root/* $(IMAGE_STAGE_DIR)
-	@cp -a bin/user/$(ARCH_VARIANT)/root/. $(IMAGE_STAGE_DIR)/
+	@cp -a bin/user/$(ARCH)/root/. $(IMAGE_STAGE_DIR)/
 endef
 
 bin/$(IMAGE_NAME).img: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
 	$(call stage_image)
 ifeq ($(ARCH_VARIANT), 64)
-	@python3 kernel/build_hybrid_disk_image.py $@ \
+	@python3 kernel/arch/x86/build/build_hybrid_disk_image.py $@ \
 		bin/boot/mbr.bin \
 		bin/boot/bios.bin \
 		bin/boot/BOOTX64.EFI \
 		$(KERNEL_ELF) \
 		$(IMAGE_STAGE_DIR)
 else
-	@python3 kernel/build_bios_disk_image.py $@ bin/boot/mbr.bin bin/boot/bios.bin $(IMAGE_STAGE_DIR)
+	@python3 kernel/arch/x86/build/build_bios_disk_image.py $@ \
+		bin/boot/mbr.bin bin/boot/bios.bin $(IMAGE_STAGE_DIR)
 endif
 
 bin/$(IMAGE_NAME).iso: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
 	$(call stage_image)
-	@python3 kernel/build_hybrid_iso_image.py $@ \
+	@python3 kernel/arch/x86/build/build_hybrid_iso_image.py $@ \
 		bin/boot/mbr.bin \
 		bin/boot/bios.bin \
 		"$(IMAGE_UEFI_BOOTLOADER)" \

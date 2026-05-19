@@ -237,19 +237,20 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
 }
 
 bool sched_signal_sigreturn(sched_thread_t *thread, arch_int_state_t *state) {
-    if (
-        !thread || !state ||
+    bool no_saved_signal = (
+        !thread ||
+        !state ||
         !__atomic_load_n(&thread->signal_saved_valid, __ATOMIC_ACQUIRE)
-    ) {
+    );
+
+    if (no_saved_signal) {
         return false;
     }
 
     *state = thread->signal_saved_state;
     __atomic_store_n(&thread->signal_saved_valid, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&thread->current_signal, 0, __ATOMIC_RELEASE);
-    if (!sched_save_user_context(thread, state)) {
-        thread->context = (uintptr_t)state;
-    }
+    thread->context = (uintptr_t)state;
 
     return true;
 }

@@ -4,7 +4,7 @@
 #include <base/types.h>
 
 
-NORETURN inline void halt(void) {
+NORETURN static inline void halt(void) {
     for (;;)
         asm("hlt");
 

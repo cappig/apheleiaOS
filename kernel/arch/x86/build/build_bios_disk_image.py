@@ -7,6 +7,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+KERNEL_DIR = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(KERNEL_DIR))
+
 from build_image_common import (
     BuildError,
     SECTOR_SIZE,

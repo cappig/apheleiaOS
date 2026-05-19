@@ -11,6 +11,7 @@
 #include <sys/devfs.h>
 #include <sys/ioctl.h>
 #include <sys/tty_input.h>
+#include <sys/usercopy.h>
 #include <termios.h>
 
 static ssize_t current_tty = TTY_NONE;
@@ -500,6 +501,137 @@ tty_write_handle(const tty_handle_t *handle, const void *buf, size_t len) {
     }
 }
 
+static bool _winsize_changed(const winsize_t *before, const winsize_t *after) {
+    return before->ws_row != after->ws_row || before->ws_col != after->ws_col;
+}
+
+static int _get_winsize(size_t screen, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    winsize_t ws = {0};
+    if (!tty_input_get_winsize(screen, &ws)) {
+        return -EIO;
+    }
+
+    sched_thread_t *current = sched_current();
+    if (!user_copy_to(current, args, &ws, sizeof(ws))) {
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
+static int _set_winsize(size_t screen, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *current = sched_current();
+    winsize_t new_ws = {0};
+    if (!user_copy_from(current, &new_ws, args, sizeof(new_ws))) {
+        return -EFAULT;
+    }
+
+    winsize_t old_ws = {0};
+    tty_input_get_winsize(screen, &old_ws);
+
+    if (!tty_input_set_winsize(screen, &new_ws)) {
+        return -EIO;
+    }
+
+    if (_winsize_changed(&old_ws, &new_ws) && tty_pgrp[screen] > 0) {
+        sched_signal_send_pgrp(tty_pgrp[screen], SIGWINCH);
+    }
+
+    return 0;
+}
+
+static int _get_termios(size_t screen, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    termios_t tos = {0};
+    if (!tty_input_get_termios(screen, &tos)) {
+        return -EIO;
+    }
+
+    sched_thread_t *current = sched_current();
+    if (!user_copy_to(current, args, &tos, sizeof(tos))) {
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
+static int _set_termios(size_t screen, u64 request, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *current = sched_current();
+    termios_t tos = {0};
+    if (!user_copy_from(current, &tos, args, sizeof(tos))) {
+        return -EFAULT;
+    }
+
+    u32 flags =
+        request == TCSETSF ? TTY_TERMIOS_SET_FLUSH : TTY_TERMIOS_SET_NONE;
+
+    if (!tty_input_set_termios(screen, &tos, flags)) {
+        return -EIO;
+    }
+
+    return 0;
+}
+
+static int _set_pgrp(size_t screen, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *current = sched_current();
+    pid_t requested = 0;
+    if (!user_copy_from(current, &requested, args, sizeof(requested))) {
+        return -EFAULT;
+    }
+
+    if (requested <= 0) {
+        return -EINVAL;
+    }
+
+    if (!current || !current->user_thread) {
+        return -EPERM;
+    }
+
+    if (!_is_controlling_screen(current, screen)) {
+        return -ENOTTY;
+    }
+
+    if (current->sid <= 0 || !sched_pgrp_in_session(requested, current->sid)) {
+        return -EPERM;
+    }
+
+    tty_pgrp[screen] = requested;
+    return 0;
+}
+
+static int _get_pgrp(size_t screen, void *args) {
+    if (!args) {
+        return -EINVAL;
+    }
+
+    pid_t pgrp = tty_pgrp[screen];
+    sched_thread_t *current = sched_current();
+    if (!user_copy_to(current, args, &pgrp, sizeof(pgrp))) {
+        return -EFAULT;
+    }
+
+    return 0;
+}
+
 ssize_t tty_ioctl_handle(const tty_handle_t *handle, u64 request, void *args) {
     size_t screen = 0;
     if (!_resolve_screen(handle, &screen)) {
@@ -508,85 +640,19 @@ ssize_t tty_ioctl_handle(const tty_handle_t *handle, u64 request, void *args) {
 
     switch (request) {
     case TIOCGWINSZ:
-        if (!args) {
-            return -EINVAL;
-        }
-
-        return tty_input_get_winsize(screen, args) ? 0 : -EIO;
-    case TIOCSWINSZ: {
-        if (!args) {
-            return -EINVAL;
-        }
-
-        winsize_t old_ws = {0};
-        tty_input_get_winsize(screen, &old_ws);
-
-        if (!tty_input_set_winsize(screen, args)) {
-            return -EIO;
-        }
-
-        winsize_t new_ws = *(const winsize_t *)args;
-        if (
-            (old_ws.ws_row != new_ws.ws_row || old_ws.ws_col != new_ws.ws_col) &&
-            tty_pgrp[screen] > 0
-        ) {
-            sched_signal_send_pgrp(tty_pgrp[screen], SIGWINCH);
-        }
-
-        return 0;
-    }
+        return _get_winsize(screen, args);
+    case TIOCSWINSZ:
+        return _set_winsize(screen, args);
     case TCGETS:
-        if (!args) {
-            return -EINVAL;
-        }
-        return tty_input_get_termios(screen, args) ? 0 : -EIO;
+        return _get_termios(screen, args);
     case TCSETS:
-        if (!args) {
-            return -EINVAL;
-        }
-        return tty_input_set_termios(screen, args, TTY_TERMIOS_SET_NONE) ? 0 : -EIO;
     case TCSETSW:
-        if (!args) {
-            return -EINVAL;
-        }
-        return tty_input_set_termios(screen, args, TTY_TERMIOS_SET_NONE) ? 0 : -EIO;
     case TCSETSF:
-        if (!args) {
-            return -EINVAL;
-        }
-        return tty_input_set_termios(screen, args, TTY_TERMIOS_SET_FLUSH) ? 0 : -EIO;
+        return _set_termios(screen, request, args);
     case TIOCSPGRP:
-        if (!args) {
-            return -EINVAL;
-        }
-
-        pid_t requested = *(pid_t *)args;
-        if (requested <= 0) {
-            return -EINVAL;
-        }
-
-        sched_thread_t *current = sched_current();
-        if (!current || !current->user_thread) {
-            return -EPERM;
-        }
-
-        if (!_is_controlling_screen(current, screen)) {
-            return -ENOTTY;
-        }
-
-        if (current->sid <= 0 || !sched_pgrp_in_session(requested, current->sid)) {
-            return -EPERM;
-        }
-
-        tty_pgrp[screen] = requested;
-        return 0;
+        return _set_pgrp(screen, args);
     case TIOCGPGRP:
-        if (!args) {
-            return -EINVAL;
-        }
-
-        *(pid_t *)args = tty_pgrp[screen];
-        return 0;
+        return _get_pgrp(screen, args);
     default:
         return -ENOTTY;
     }

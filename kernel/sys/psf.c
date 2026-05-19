@@ -194,9 +194,9 @@ bool psf_load(const char *path) {
     log_debug(
         "loaded font '%s' (%ux%u, %u glyphs)",
         path,
-        loaded_font.glyph_width,
-        loaded_font.glyph_height,
-        loaded_font.glyph_count
+        (unsigned int)loaded_font.glyph_width,
+        (unsigned int)loaded_font.glyph_height,
+        (unsigned int)loaded_font.glyph_count
     );
 
     return true;

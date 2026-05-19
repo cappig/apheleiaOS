@@ -117,6 +117,7 @@ static bool _xhci_wait_common(
                 out_slot,
                 out_residual
             );
+
             return true;
         }
 
@@ -138,6 +139,7 @@ static bool _xhci_wait_common(
                     out_slot,
                     out_residual
                 );
+
                 return true;
             }
 
@@ -221,6 +223,7 @@ bool _xhci_submit_command(
             ctrl->func,
             cmd_name
         );
+
         return false;
     }
 
@@ -232,6 +235,7 @@ bool _xhci_submit_command(
             ctrl->func,
             cmd_name
         );
+
         return false;
     }
 
@@ -306,10 +310,10 @@ bool _xhci_submit_command(
             ctrl->slot,
             ctrl->func,
             cmd_name,
-            usbsts,
+            (unsigned int)usbsts,
             trb_paddr,
-            ctrl->event_dequeue,
-            ctrl->event_cycle
+            (unsigned int)ctrl->event_dequeue,
+            (unsigned int)ctrl->event_cycle
         );
 
         _xhci_log_fault_snapshot(ctrl, "command timeout");
@@ -432,6 +436,7 @@ bool _xhci_submit_transfer(
             endpoint_id,
             cc
         );
+
         return false;
     }
 

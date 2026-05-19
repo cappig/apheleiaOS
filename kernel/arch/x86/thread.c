@@ -184,7 +184,7 @@ static arch_word_t arch_state_flags(const arch_int_state_t *state) {
 #endif
 }
 
-bool arch_state_is_valid(const arch_int_state_t *state) {
+static bool arch_state_is_valid(const arch_int_state_t *state) {
     if (!state) {
         return false;
     }
@@ -212,6 +212,10 @@ bool arch_state_is_valid(const arch_int_state_t *state) {
     }
 
     return !image_end || ip < image_end;
+}
+
+bool arch_state_flags_sane(const arch_int_state_t *state) {
+    return arch_state_is_valid(state);
 }
 
 arch_word_t arch_kernel_vaddr_base(void) {

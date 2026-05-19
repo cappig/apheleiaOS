@@ -1,7 +1,7 @@
 #include "internal.h"
 
 bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
-    if (!out || pid < 0 || !sched_state.all_list) {
+    if (!out || pid < 0 || !sched_state.procs.all_list) {
         return false;
     }
 
@@ -12,7 +12,7 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
     sched_thread_t *thread = pid_get(pid);
 
     if (!thread) {
-        ll_foreach(node, sched_state.all_list) {
+        ll_foreach(node, sched_state.procs.all_list) {
             sched_thread_t *candidate = node->data;
 
             if (!candidate || candidate->pid != pid) {
@@ -43,7 +43,7 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         out->tty_index = thread->tty_index;
 
         for (size_t i = 0; i < MAX_CORES; i++) {
-            if (sched_state.cpu[i].current == thread) {
+            if (sched_state.cpus.cpu[i].current == thread) {
                 out->core_id = (int)i;
                 break;
             }
@@ -139,7 +139,7 @@ int sched_getgroups_pid(
     size_t max_groups,
     size_t *group_count_out
 ) {
-    if (pid <= 0 || !group_count_out || !sched_state.all_list) {
+    if (pid <= 0 || !group_count_out || !sched_state.procs.all_list) {
         return -EINVAL;
     }
 
@@ -171,7 +171,7 @@ int sched_getgroups_pid(
 }
 
 bool sched_proc_cwd(pid_t pid, char *out, size_t out_len) {
-    if (!out || !out_len || pid <= 0 || !sched_state.all_list) {
+    if (!out || !out_len || pid <= 0 || !sched_state.procs.all_list) {
         return false;
     }
 
@@ -195,14 +195,14 @@ bool sched_proc_cwd(pid_t pid, char *out, size_t out_len) {
 }
 
 int sched_signal_send_pgrp(pid_t pgid, int signum) {
-    if (!sched_state.all_list || pgid <= 0) {
+    if (!sched_state.procs.all_list || pgid <= 0) {
         return -1;
     }
 
     int count = 0;
     unsigned long flags = sched_lock_save();
 
-    ll_foreach(node, sched_state.all_list) {
+    ll_foreach(node, sched_state.procs.all_list) {
         sched_thread_t *thread = node->data;
 
         if (!thread || thread->pgid != pgid) {
@@ -217,4 +217,50 @@ int sched_signal_send_pgrp(pid_t pgid, int signum) {
     sched_lock_restore(flags);
 
     return count ? count : -1;
+}
+
+int sched_signal_pgrp_as(
+    pid_t pgid,
+    int signum,
+    const sched_thread_t *sender
+) {
+    if (!sched_state.procs.all_list || pgid <= 0) {
+        return -ESRCH;
+    }
+
+    if (signum < 0 || signum >= NSIG) {
+        return -EINVAL;
+    }
+
+    uid_t uid = sender ? sender->uid : 0;
+    bool root = uid == 0;
+    bool denied = false;
+    int count = 0;
+
+    unsigned long flags = sched_lock_save();
+
+    ll_foreach(node, sched_state.procs.all_list) {
+        sched_thread_t *thread = node->data;
+
+        if (!thread || thread->pgid != pgid) {
+            continue;
+        }
+
+        if (!root && uid != thread->uid) {
+            denied = true;
+            continue;
+        }
+
+        if (!signum || sched_signal_send_thread(thread, signum) >= 0) {
+            count++;
+        }
+    }
+
+    sched_lock_restore(flags);
+
+    if (count) {
+        return count;
+    }
+
+    return denied ? -EPERM : -ESRCH;
 }

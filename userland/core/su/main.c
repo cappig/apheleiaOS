@@ -44,12 +44,10 @@ static ssize_t write_str(const char *str) {
 
 static void strip_newline(char *buf) {
     size_t len = strlen(buf);
-    if (!len) {
-        return;
-    }
 
-    if (buf[len - 1] == '\n') {
+    while (len && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
         buf[len - 1] = '\0';
+        len--;
     }
 }
 
@@ -427,6 +425,25 @@ static bool _wheel_allows_uid(uid_t uid) {
     return _group_allows_user("wheel", caller->pw_name, caller->pw_gid);
 }
 
+static bool secure_streq(const char *left, const char *right) {
+    if (!left || !right) {
+        return false;
+    }
+
+    size_t left_len = strlen(left);
+    size_t right_len = strlen(right);
+    size_t max_len = left_len > right_len ? left_len : right_len;
+    unsigned char diff = left_len != right_len ? 1 : 0;
+
+    for (size_t i = 0; i < max_len; i++) {
+        unsigned char a = i < left_len ? (unsigned char)left[i] : 0;
+        unsigned char b = i < right_len ? (unsigned char)right[i] : 0;
+        diff |= (unsigned char)(a ^ b);
+    }
+
+    return diff == 0;
+}
+
 static bool authenticate_user(const char *name) {
     if (!name || !name[0]) {
         return false;
@@ -438,7 +455,7 @@ static bool authenticate_user(const char *name) {
         return false;
     }
 
-    char pass[64] = {0};
+    char pass[256] = {0};
 
     write_str("Password: ");
     (void)tty_set_echo(false);
@@ -455,7 +472,7 @@ static bool authenticate_user(const char *name) {
     strip_newline(pass);
 
     const char *hashed = crypt(pass, shadow->sp_pwdp);
-    if (!hashed || strcmp(hashed, shadow->sp_pwdp)) {
+    if (!secure_streq(hashed, shadow->sp_pwdp)) {
         write_str("su: authentication failed\n");
         return false;
     }

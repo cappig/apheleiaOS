@@ -4,10 +4,10 @@
 #include <poll.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <sys/config.h>
 #include <sys/proc.h>
 #include <sys/types.h>
 
-#define TTY_COUNT        4
 #define TTY_SCREEN_COUNT (TTY_COUNT + 1)
 #define TTY_CONSOLE      0
 #define TTY_FIRST_USER   1

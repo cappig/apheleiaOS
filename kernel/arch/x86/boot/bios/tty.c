@@ -63,12 +63,10 @@ int printf(const char *fmt, ...) {
 
     va_list args;
     va_start(args, fmt);
-
     int ret = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
 
     puts(buf);
-
-    va_end(args);
 
     return ret;
 }
@@ -78,12 +76,10 @@ int serial_printf(const char *fmt, ...) {
 
     va_list args;
     va_start(args, fmt);
-
     int ret = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
 
     serial_puts(buf);
-
-    va_end(args);
 
     return ret;
 }

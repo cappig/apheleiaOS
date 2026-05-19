@@ -31,14 +31,16 @@ static inline void _align_core_tick_floor(size_t cpu_id) {
     u64 global = __atomic_load_n(&irq_tick_count, __ATOMIC_ACQUIRE);
     u64 local = __atomic_load_n(&irq_core_tick_count[cpu_id], __ATOMIC_RELAXED);
     while (local < global) {
-        if (__atomic_compare_exchange_n(
-                &irq_core_tick_count[cpu_id],
-                &local,
-                global,
-                false,
-                __ATOMIC_RELEASE,
-                __ATOMIC_RELAXED
-            )) {
+        bool raised_floor = __atomic_compare_exchange_n(
+            &irq_core_tick_count[cpu_id],
+            &local,
+            global,
+            false,
+            __ATOMIC_RELEASE,
+            __ATOMIC_RELAXED
+        );
+
+        if (raised_floor) {
             return;
         }
     }
@@ -54,14 +56,16 @@ static inline void _publish_tick(size_t cpu_id) {
     u64 observed = __atomic_load_n(&irq_tick_count, __ATOMIC_RELAXED);
 
     while (core_ticks > observed) {
-        if (__atomic_compare_exchange_n(
-                &irq_tick_count,
-                &observed,
-                core_ticks,
-                false,
-                __ATOMIC_RELEASE,
-                __ATOMIC_RELAXED
-            )) {
+        bool published = __atomic_compare_exchange_n(
+            &irq_tick_count,
+            &observed,
+            core_ticks,
+            false,
+            __ATOMIC_RELEASE,
+            __ATOMIC_RELAXED
+        );
+
+        if (published) {
             break;
         }
     }
@@ -148,18 +152,25 @@ static void _soft_resched_handler(int_state_t *state) {
 }
 
 static void _init_timer_source(bool apic_ok) {
-    const u32 timer_hz = TIMER_FREQ ? TIMER_FREQ : 1U;
+    const u32 timer_hz = TIMER_FREQ;
 
     use_apic_timer = false;
 
     if (apic_ok && apic_timer_init(timer_hz)) {
         use_apic_timer = true;
-        log_info("APIC timer initialized at %u Hz", apic_timer_hz());
+        log_info(
+            "APIC timer initialized at %u Hz",
+            (unsigned int)apic_timer_hz()
+        );
+
         return;
     }
 
     pit_set_frequency(timer_hz);
-    log_info("PIT timer initialized at %u Hz", pit_get_frequency());
+    log_info(
+        "PIT timer initialized at %u Hz",
+        (unsigned int)pit_get_frequency()
+    );
 }
 
 bool irq_init(void) {
@@ -222,7 +233,10 @@ void irq_register(size_t irq, int_handler_t handler) {
         if (irq != IRQ_SYSTEM_TIMER || !use_apic_timer) {
             u32 dest = lapic_id();
             if (!ioapic_route_irq((u8)irq, (u8)vec, dest)) {
-                log_warn("failed to route irq %u via IOAPIC", (u32)irq);
+                log_warn(
+                    "failed to route irq %u via IOAPIC",
+                    (unsigned int)irq
+                );
             }
         }
         return;

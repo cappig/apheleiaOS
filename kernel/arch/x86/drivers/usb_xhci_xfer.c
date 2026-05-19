@@ -460,7 +460,7 @@ bool _xhci_hcd_control_transfer(
 
             u8 config_value = 0;
             if (
-                usb_desc_parse_identity_from_config(
+                usb_desc_parse_config_identity(
                     transfer->buffer,
                     cfg_len,
                     &identity,

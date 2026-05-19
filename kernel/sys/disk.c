@@ -278,7 +278,7 @@ static bool _partition_ext2_uuid(disk_partition_t *part, u8 out_uuid[16]) {
     return true;
 }
 
-static bool _partition_matches_preferred_rootfs(disk_partition_t *part) {
+static bool _matches_rootfs_uuid(disk_partition_t *part) {
     if (!preferred_rootfs_uuid_set) {
         return false;
     }
@@ -783,7 +783,7 @@ static disk_partition_t *_pick_rootfs_partition(
                 continue;
             }
 
-            if (_partition_matches_preferred_rootfs(part)) {
+            if (_matches_rootfs_uuid(part)) {
                 return part;
             }
         }
@@ -1227,6 +1227,7 @@ static bool _mount_rootfs_on_disk(disk_dev_t *dev, bool honor_preferred_uuid) {
         "failed to mount rootfs from %s",
         dev->name ? dev->name : "disk"
     );
+
     return false;
 }
 

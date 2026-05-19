@@ -340,7 +340,7 @@ static bool _usb_queue_enum_locked(size_t hcd_id, size_t port, u64 generation) {
     return vec_push(usb_enum_tasks, &task);
 }
 
-static void _usb_drop_enum_tasks_for_hcd_locked(size_t hcd_id) {
+static void _drop_hcd_enum_tasks_locked(size_t hcd_id) {
     if (!usb_enum_tasks || !hcd_id) {
         return;
     }
@@ -376,7 +376,7 @@ static bool _usb_hcd_has_enum_ops(const usb_hcd_state_t *hcd) {
     );
 }
 
-static bool _usb_enum_candidate_eligible_locked(
+static bool _enum_candidate_ok_locked(
     usb_device_handle_t dev,
     bool defer_slow
 ) {
@@ -398,7 +398,7 @@ static bool _usb_enum_candidate_eligible_locked(
     return !defer_slow || dev->speed >= USB_SPEED_HIGH;
 }
 
-static usb_device_handle_t _usb_pick_boot_enum_candidate_locked(
+static usb_device_handle_t _pick_boot_enum_candidate_locked(
     bool defer_slow,
     bool *out_fast_identity_present
 ) {
@@ -425,7 +425,7 @@ static usb_device_handle_t _usb_pick_boot_enum_candidate_locked(
             fast_identity_present = true;
         }
 
-        if (!_usb_enum_candidate_eligible_locked(dev, defer_slow)) {
+        if (!_enum_candidate_ok_locked(dev, defer_slow)) {
             continue;
         }
 
@@ -441,7 +441,7 @@ static usb_device_handle_t _usb_pick_boot_enum_candidate_locked(
     return candidate;
 }
 
-static bool _usb_boot_enumeration_settled_locked(bool queued) {
+static bool _boot_enum_settled_locked(bool queued) {
     if (queued) {
         return false;
     }
@@ -1058,7 +1058,7 @@ bool usb_unregister_hcd(size_t hcd_id) {
         *slot = NULL;
     }
 
-    _usb_drop_enum_tasks_for_hcd_locked(hcd_id);
+    _drop_hcd_enum_tasks_locked(hcd_id);
     vec_remove_at(usb_hcds, hcd_index, NULL);
     spin_unlock_irqrestore(&usb_state_lock, flags);
 
@@ -1383,13 +1383,13 @@ bool usb_wait_for_boot_enumeration(u32 timeout_ms) {
         u64 elapsed = arch_timer_ticks() - start;
         bool defer_slow = elapsed < (timeout / 3U);
 
-        candidate = _usb_pick_boot_enum_candidate_locked(
+        candidate = _pick_boot_enum_candidate_locked(
             defer_slow,
             &fast_identity_present
         );
 
         if (!candidate && defer_slow) {
-            candidate = _usb_pick_boot_enum_candidate_locked(false, NULL);
+            candidate = _pick_boot_enum_candidate_locked(false, NULL);
         }
 
         if (fast_identity_present && candidate && candidate->speed < USB_SPEED_HIGH) {
@@ -1410,7 +1410,7 @@ bool usb_wait_for_boot_enumeration(u32 timeout_ms) {
             }
         }
 
-        bool settled = _usb_boot_enumeration_settled_locked(queued);
+        bool settled = _boot_enum_settled_locked(queued);
 
         spin_unlock_irqrestore(&usb_state_lock, flags);
 

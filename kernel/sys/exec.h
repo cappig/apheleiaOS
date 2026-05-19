@@ -2,6 +2,7 @@
 
 #include <arch/context.h>
 #include <sched/scheduler.h>
+#include <sys/config.h>
 
 sched_thread_t *user_spawn(const char *path);
 int user_exec(

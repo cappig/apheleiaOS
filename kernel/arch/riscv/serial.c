@@ -1,0 +1,124 @@
+#include "serial.h"
+
+#include <string.h>
+
+#ifdef _KERNEL
+#include <sys/lock.h>
+static spinlock_t tx_lock = SPINLOCK_INIT;
+#endif
+
+#define UART_THR 0x00
+#define UART_RBR 0x00
+#define UART_IER 0x01
+#define UART_LSR 0x05
+
+#define UART_LSR_RX_READY 0x01
+#define UART_LSR_TX_IDLE  0x20
+#define UART_IER_RX_READY 0x01
+
+static inline uintptr_t _uart_reg(uintptr_t base, uintptr_t reg) {
+    return base + reg * RISCV_UART_STRIDE;
+}
+
+static inline u8 _uart_read(uintptr_t base, uintptr_t reg) {
+    return *(volatile u8 *)_uart_reg(base, reg);
+}
+
+static inline void _uart_write(uintptr_t base, uintptr_t reg, u8 val) {
+    *(volatile u8 *)_uart_reg(base, reg) = val;
+}
+
+static inline bool _uart_has_data(uintptr_t base) {
+    return (_uart_read(base, UART_LSR) & UART_LSR_RX_READY) != 0;
+}
+
+static void _send_serial_unlocked(uintptr_t base, char c) {
+    if (c == '\n') {
+        while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
+        _uart_write(base, UART_THR, '\r');
+    }
+
+    while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
+    _uart_write(base, UART_THR, (u8)c);
+}
+
+void send_serial(uintptr_t base, char c) {
+    if (!base) {
+        return;
+    }
+
+#ifdef _KERNEL
+    unsigned long flags = spin_lock_irqsave(&tx_lock);
+#endif
+
+    _send_serial_unlocked(base, c);
+
+#ifdef _KERNEL
+    spin_unlock_irqrestore(&tx_lock, flags);
+#endif
+}
+
+char receive_serial(uintptr_t base) {
+    if (!base) {
+        return 0;
+    }
+
+    while (!_uart_has_data(base)) {}
+    return (char)_uart_read(base, UART_RBR);
+}
+
+bool serial_try_receive(uintptr_t base, char *out) {
+    if (!base) {
+        return false;
+    }
+
+    if (!_uart_has_data(base)) {
+        return false;
+    }
+
+    if (out) {
+        *out = (char)_uart_read(base, UART_RBR);
+    } else {
+        (void)_uart_read(base, UART_RBR);
+    }
+
+    return true;
+}
+
+void serial_set_rx_interrupt(uintptr_t base, bool enable) {
+    if (!base) {
+        return;
+    }
+
+    u8 ier = _uart_read(base, UART_IER);
+
+    if (enable) {
+        ier |= UART_IER_RX_READY;
+    } else {
+        ier &= (u8)~UART_IER_RX_READY;
+    }
+
+    _uart_write(base, UART_IER, ier);
+}
+
+void send_serial_string(uintptr_t base, const char *s) {
+    send_serial_sized_string(base, s, s ? strlen(s) : 0);
+}
+
+void send_serial_sized_string(uintptr_t base, const char *s, size_t len) {
+    if (!base || !s || !len) {
+        return;
+    }
+
+#ifdef _KERNEL
+    unsigned long flags = spin_lock_irqsave(&tx_lock);
+#endif
+
+    for (size_t i = 0; i < len; i++) {
+        _send_serial_unlocked(base, s[i]);
+    }
+
+#ifdef _KERNEL
+    spin_unlock_irqrestore(&tx_lock, flags);
+#endif
+}

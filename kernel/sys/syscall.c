@@ -12,15 +12,18 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <inttypes.h>
+#include <limits.h>
 #include <log/log.h>
 #include <poll.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/config.h>
 #include <sys/cpu.h>
 #include <sys/exec.h>
 #include <sys/lock.h>
@@ -32,236 +35,13 @@
 #include <sys/pty.h>
 #include <sys/stat.h>
 #include <sys/tty.h>
+#include <sys/usercopy.h>
 #include <sys/vfs.h>
 #include "ws.h"
 #include <time.h>
 #include <unistd.h>
 
 #define SYSCALL_INT 0x80
-#define MMAP_INIT_CHUNK_BYTES (64U * 1024U)
-#define USER_IO_CHUNK_BYTES  (64U * 1024U)
-
-static bool _mmap_init_chunked(
-    uintptr_t paddr,
-    size_t size,
-    vfs_node_t *file,
-    off_t file_offset
-) {
-    size_t offset = 0;
-
-    while (offset < size) {
-        size_t chunk = size - offset;
-        if (chunk > MMAP_INIT_CHUNK_BYTES) {
-            chunk = MMAP_INIT_CHUNK_BYTES;
-        }
-
-        void *dst = arch_phys_map((u64)paddr + offset, chunk, 0);
-        if (!dst) {
-            return false;
-        }
-
-        memset(dst, 0, chunk);
-
-        if (file) {
-            ssize_t read_len =
-                vfs_read(file, dst, (size_t)file_offset + offset, chunk, 0);
-            if (read_len < 0) {
-                arch_phys_unmap(dst, chunk);
-                return false;
-            }
-
-            arch_phys_unmap(dst, chunk);
-
-            if ((size_t)read_len < chunk) {
-                return true;
-            }
-        } else {
-            arch_phys_unmap(dst, chunk);
-        }
-
-        offset += chunk;
-    }
-
-    return true;
-}
-
-static bool _user_buf_ok(const void *buf, size_t len) {
-    if (!buf) {
-        return false;
-    }
-
-    if (!len) {
-        return true;
-    }
-
-    sched_thread_t *thread = sched_current();
-    if (!thread || !thread->user_thread) {
-        return true;
-    }
-
-    uintptr_t start = (uintptr_t)buf;
-    uintptr_t end = start + len - 1;
-
-    if (end < start) {
-        return false;
-    }
-
-    uintptr_t kernel_base = (uintptr_t)arch_kernel_vaddr_base();
-    if (kernel_base && (start >= kernel_base || end >= kernel_base)) {
-        return false;
-    }
-
-    return true;
-}
-
-static sched_user_region_t *
-_find_user_region_locked(sched_thread_t *thread, uintptr_t addr) {
-    if (!thread) {
-        return NULL;
-    }
-
-    for (sched_user_region_t *region = thread->regions; region; region = region->next) {
-        uintptr_t start = region->vaddr;
-        uintptr_t end = region->vaddr + region->pages * PAGE_4KIB;
-
-        if (addr >= start && addr < end) {
-            return region;
-        }
-    }
-
-    return NULL;
-}
-
-static bool _user_copy_from_mapping(
-    sched_thread_t *thread,
-    void *kernel_dst,
-    const void *user_src,
-    size_t len
-) {
-    if (!len) {
-        return true;
-    }
-
-    if (!_user_buf_ok(user_src, len) || !kernel_dst) {
-        return false;
-    }
-
-    if (!thread || !thread->user_thread) {
-        memcpy(kernel_dst, user_src, len);
-        return true;
-    }
-
-    u8 *dst = kernel_dst;
-    uintptr_t addr = (uintptr_t)user_src;
-    size_t remaining = len;
-
-    while (remaining) {
-        unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
-        sched_user_region_t *region = _find_user_region_locked(thread, addr);
-        if (!region) {
-            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-            return false;
-        }
-
-        uintptr_t region_end = region->vaddr + region->pages * PAGE_4KIB;
-        uintptr_t offset = addr - region->vaddr;
-        uintptr_t paddr = region->paddr + offset;
-        size_t chunk = (size_t)(region_end - addr);
-        if (chunk > remaining) {
-            chunk = remaining;
-        }
-        if (chunk > USER_IO_CHUNK_BYTES) {
-            chunk = USER_IO_CHUNK_BYTES;
-        }
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-
-        void *map = arch_phys_map((u64)paddr, chunk, 0);
-        if (!map) {
-            return false;
-        }
-
-        memcpy(dst, map, chunk);
-        arch_phys_unmap(map, chunk);
-
-        dst += chunk;
-        addr += chunk;
-        remaining -= chunk;
-    }
-
-    return true;
-}
-
-static bool _user_copy_to_mapping(
-    sched_thread_t *thread,
-    void *user_dst,
-    const void *kernel_src,
-    size_t len
-) {
-    if (!len) {
-        return true;
-    }
-
-    if (!_user_buf_ok(user_dst, len) || !kernel_src) {
-        return false;
-    }
-
-    if (!thread || !thread->user_thread) {
-        memcpy(user_dst, kernel_src, len);
-        return true;
-    }
-
-    const u8 *src = kernel_src;
-    uintptr_t addr = (uintptr_t)user_dst;
-    size_t remaining = len;
-
-    while (remaining) {
-        unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
-        sched_user_region_t *region = _find_user_region_locked(thread, addr);
-        if (!region) {
-            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-            return false;
-        }
-
-        if (region->flags & SCHED_REGION_COW) {
-            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-            if (!sched_handle_cow_fault(thread, addr, true)) {
-                return false;
-            }
-            continue;
-        }
-
-        if (!(region->flags & PT_WRITE)) {
-            spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-            return false;
-        }
-
-        uintptr_t region_end = region->vaddr + region->pages * PAGE_4KIB;
-        uintptr_t offset = addr - region->vaddr;
-        uintptr_t paddr = region->paddr + offset;
-        size_t chunk = (size_t)(region_end - addr);
-        if (chunk > remaining) {
-            chunk = remaining;
-        }
-        if (chunk > USER_IO_CHUNK_BYTES) {
-            chunk = USER_IO_CHUNK_BYTES;
-        }
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-
-        void *map = arch_phys_map((u64)paddr, chunk, 0);
-        if (!map) {
-            return false;
-        }
-
-        memcpy(map, src, chunk);
-        arch_phys_unmap(map, chunk);
-
-        src += chunk;
-        addr += chunk;
-        remaining -= chunk;
-    }
-
-    return true;
-}
 
 static mode_t _apply_umask(mode_t mode, mode_t mask) {
     mode_t special = mode & 07000;
@@ -442,6 +222,123 @@ static vfs_node_t *_resolve_link_node(vfs_node_t *node) {
     return node;
 }
 
+typedef struct {
+    char *items[EXEC_MAX_ENV + 1];
+} exec_vec_t;
+
+static void _free_exec_vec(exec_vec_t *vec) {
+    if (!vec) {
+        return;
+    }
+
+    for (size_t i = 0; i < ARRAY_LEN(vec->items); i++) {
+        free(vec->items[i]);
+        vec->items[i] = NULL;
+    }
+}
+
+static bool _user_field(
+    const void *base,
+    size_t index,
+    size_t item_size,
+    size_t member_offset,
+    void **out
+) {
+    if (!base || !item_size || !out) {
+        return false;
+    }
+
+    // argv, envp, and pollfd arrays are user memory too; do not index them raw.
+    uintptr_t addr = (uintptr_t)base;
+    if (index > ((uintptr_t)-1 - addr) / item_size) {
+        return false;
+    }
+
+    addr += index * item_size;
+    if (member_offset > (uintptr_t)-1 - addr) {
+        return false;
+    }
+
+    *out = (void *)(addr + member_offset);
+    return true;
+}
+
+static int _copy_exec_vec(
+    const sched_thread_t *thread,
+    char *const user_vec[],
+    size_t max_items,
+    size_t max_len,
+    exec_vec_t *out
+) {
+    if (!out || !max_len || max_items >= ARRAY_LEN(out->items)) {
+        return -EINVAL;
+    }
+
+    memset(out, 0, sizeof(*out));
+    if (!user_vec) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < max_items; i++) {
+        char *item = NULL;
+        void *slot = NULL;
+
+        if (!_user_field(user_vec, i, sizeof(user_vec[0]), 0, &slot)) {
+            _free_exec_vec(out);
+            return -EFAULT;
+        }
+
+        if (!user_copy_from(thread, &item, slot, sizeof(item))) {
+            _free_exec_vec(out);
+            return -EFAULT;
+        }
+
+        if (!item) {
+            return 0;
+        }
+
+        char *copy = malloc(max_len);
+        if (!copy) {
+            _free_exec_vec(out);
+            return -ENOMEM;
+        }
+
+        int err = user_copy_string(thread, item, copy, max_len);
+        if (err < 0) {
+            free(copy);
+            _free_exec_vec(out);
+
+            if (err == -ENAMETOOLONG) {
+                return -E2BIG;
+            }
+
+            return err;
+        }
+
+        out->items[i] = copy;
+    }
+
+    char *sentinel = NULL;
+    void *slot = NULL;
+
+    if (!_user_field(user_vec, max_items, sizeof(user_vec[0]), 0, &slot)) {
+        _free_exec_vec(out);
+        return -EFAULT;
+    }
+
+    if (!user_copy_from(thread, &sentinel, slot, sizeof(sentinel))) {
+        _free_exec_vec(out);
+        return -EFAULT;
+    }
+
+    if (sentinel) {
+        _free_exec_vec(out);
+        return -E2BIG;
+    }
+
+    return 0;
+}
+
 static int _resolve_user_path(
     const sched_thread_t *thread,
     const char *path,
@@ -456,30 +353,13 @@ static int _resolve_user_path(
         return -EINVAL;
     }
 
-    char kernel_path[PATH_MAX];
-    if (thread->user_thread) {
-        for (size_t i = 0; i < sizeof(kernel_path); i++) {
-            char ch = '\0';
-            if (!_user_copy_from_mapping((sched_thread_t *)thread, &ch, path + i, 1)) {
-                return -EFAULT;
-            }
-            kernel_path[i] = ch;
-            if (!ch) {
-                break;
-            }
-            if (i + 1 == sizeof(kernel_path)) {
-                return -ENAMETOOLONG;
-            }
-        }
-    } else {
-        size_t len = strnlen(path, sizeof(kernel_path));
-        if (len >= sizeof(kernel_path)) {
-            return -ENAMETOOLONG;
-        }
-        memcpy(kernel_path, path, len + 1);
+    char local[PATH_MAX];
+    int copy_err = user_copy_string(thread, path, local, sizeof(local));
+    if (copy_err < 0) {
+        return copy_err;
     }
 
-    if (!path_resolve(thread->cwd, kernel_path, out, out_len)) {
+    if (!path_resolve(thread->cwd, local, out, out_len)) {
         return -ENOENT;
     }
 
@@ -743,19 +623,64 @@ static int _resolve_writable_parent(
     return 0;
 }
 
+static bool _region_bounds(
+    const sched_user_region_t *region,
+    uintptr_t *start_out,
+    uintptr_t *end_out
+) {
+    if (!region || !region->pages) {
+        return false;
+    }
+
+    uintptr_t max_addr = (uintptr_t)-1;
+    if (region->pages > (size_t)(max_addr / PAGE_4KIB)) {
+        return false;
+    }
+
+    uintptr_t start = region->vaddr;
+    uintptr_t size = (uintptr_t)(region->pages * PAGE_4KIB);
+    uintptr_t end = start + size;
+
+    if (end <= start) {
+        return false;
+    }
+
+    if (start_out) {
+        *start_out = start;
+    }
+
+    if (end_out) {
+        *end_out = end;
+    }
+
+    return true;
+}
+
+static uintptr_t _region_end(const sched_user_region_t *region) {
+    uintptr_t end = 0;
+    if (!_region_bounds(region, NULL, &end)) {
+        return 0;
+    }
+
+    return end;
+}
+
 static bool _region_overlaps(
     const sched_user_region_t *region,
     uintptr_t start,
     uintptr_t end
 ) {
-    if (!region || start >= end) {
+    if (start >= end) {
         return false;
     }
 
-    uintptr_t region_start = region->vaddr;
-    uintptr_t _region_end = region->vaddr + region->pages * PAGE_4KIB;
+    uintptr_t region_start = 0;
+    uintptr_t region_end = 0;
+    if (!_region_bounds(region, &region_start, &region_end)) {
+        return false;
+    }
 
-    return start < _region_end && end > region_start;
+    return start < region_end && end > region_start;
 }
 
 static uintptr_t _pick_mmap_base(sched_thread_t *thread, size_t size) {
@@ -771,17 +696,36 @@ static uintptr_t _pick_mmap_base(sched_thread_t *thread, size_t size) {
     }
 
     uintptr_t stack_end = stack_base + thread->user_stack_size;
+    if (stack_end < stack_base) {
+        stack_end = (uintptr_t)-1;
+    }
 
-    for (sched_user_region_t *region = thread->regions; region; region = region->next) {
-        uintptr_t region_end = region->vaddr + region->pages * PAGE_4KIB;
+    for (
+        sched_user_region_t *region = thread->regions;
+        region;
+        region = region->next
+    ) {
+        uintptr_t region_start = 0;
+        uintptr_t region_end = 0;
+        if (!_region_bounds(region, &region_start, &region_end)) {
+            continue;
+        }
 
-        if (stack_base && region->vaddr >= stack_base && region_end <= stack_end) {
+        if (
+            stack_base &&
+            region_start >= stack_base &&
+            region_end <= stack_end
+        ) {
             continue;
         }
 
         if (region_end > base) {
             base = region_end;
         }
+    }
+
+    if (base > (uintptr_t)-1 - (PAGE_4KIB - 1)) {
+        return 0;
     }
 
     base = ALIGN(base, PAGE_4KIB);
@@ -792,21 +736,34 @@ static uintptr_t _pick_mmap_base(sched_thread_t *thread, size_t size) {
     while (advanced) {
         advanced = false;
 
-        for (sched_user_region_t *region = thread->regions; region; region = region->next) {
+        for (
+            sched_user_region_t *region = thread->regions;
+            region;
+            region = region->next
+        ) {
+            if (size > (uintptr_t)-1 - addr) {
+                return 0;
+            }
+
             uintptr_t end = addr + size;
 
             if (!_region_overlaps(region, addr, end)) {
                 continue;
             }
 
-            addr = ALIGN(region->vaddr + region->pages * PAGE_4KIB, PAGE_4KIB);
+            uintptr_t region_end = _region_end(region);
+            if (!region_end || region_end > (uintptr_t)-1 - (PAGE_4KIB - 1)) {
+                return 0;
+            }
+
+            addr = ALIGN(region_end, PAGE_4KIB);
             advanced = true;
 
             break;
         }
     }
 
-    if (addr + size > stack_base) {
+    if (size > (uintptr_t)-1 - addr || addr + size > stack_base) {
         return 0;
     }
 
@@ -825,7 +782,11 @@ static sched_user_region_t *_find_region_exact(
 
     sched_user_region_t *prev = NULL;
 
-    for (sched_user_region_t *region = thread->regions; region; region = region->next) {
+    for (
+        sched_user_region_t *region = thread->regions;
+        region;
+        region = region->next
+    ) {
         if (region->vaddr == addr && region->pages == pages) {
             if (prev_out) {
                 *prev_out = prev;
@@ -854,12 +815,56 @@ static u64 _mmap_prot_flags(int prot) {
     return flags;
 }
 
-static uintptr_t _region_end(const sched_user_region_t *region) {
+static void _drop_region_exact(
+    sched_thread_t *thread,
+    uintptr_t addr,
+    size_t pages
+) {
+    sched_user_region_t *prev = NULL;
+    sched_user_region_t *region =
+        _find_region_exact(thread, addr, pages, &prev);
+
     if (!region) {
-        return 0;
+        return;
     }
 
-    return region->vaddr + region->pages * PAGE_4KIB;
+    if (prev) {
+        prev->next = region->next;
+    } else {
+        thread->regions = region->next;
+    }
+
+    free(region);
+    sched_user_mem_sub(thread, pages);
+}
+
+static void _unmap_user_pages(void *root, uintptr_t addr, size_t pages) {
+    for (size_t i = 0; i < pages; i++) {
+        uintptr_t vaddr = addr + i * PAGE_4KIB;
+        unmap_page((page_t *)root, vaddr);
+        arch_tlb_flush(vaddr);
+    }
+}
+
+static void _mmap_undo_alloc(
+    sched_thread_t *thread,
+    void *root,
+    uintptr_t addr,
+    uintptr_t paddr,
+    size_t pages,
+    bool drop_region
+) {
+    if (drop_region) {
+        _drop_region_exact(thread, addr, pages);
+    }
+
+    if (root) {
+        _unmap_user_pages(root, addr, pages);
+    }
+
+    if (paddr) {
+        arch_free_frames((void *)paddr, pages);
+    }
 }
 
 static size_t _fd_vfs_io_flags(const sched_fd_t *entry) {
@@ -867,7 +872,71 @@ static size_t _fd_vfs_io_flags(const sched_fd_t *entry) {
         return 0;
     }
 
-    return (entry->flags & O_NONBLOCK) ? VFS_NONBLOCK : 0;
+    if (entry->flags & O_NONBLOCK) {
+        return VFS_NONBLOCK;
+    }
+
+    return 0;
+}
+
+static bool _size_to_off(size_t value, off_t *out) {
+    if (!out) {
+        return false;
+    }
+
+#if SIZE_MAX > LLONG_MAX
+    if (value > (size_t)LLONG_MAX) {
+        return false;
+    }
+#endif
+
+    *out = (off_t)value;
+    return true;
+}
+
+static bool _off_to_size(off_t value, size_t *out) {
+    if (!out || value < 0) {
+        return false;
+    }
+
+#if SIZE_MAX < LLONG_MAX
+    if ((unsigned long long)value > (unsigned long long)SIZE_MAX) {
+        return false;
+    }
+#endif
+
+    *out = (size_t)value;
+    return true;
+}
+
+static bool _off_add(off_t base, off_t delta, off_t *out) {
+    if (!out) {
+        return false;
+    }
+
+    if (delta > 0 && base > (off_t)LLONG_MAX - delta) {
+        return false;
+    }
+
+    if (delta < 0 && base < (off_t)LLONG_MIN - delta) {
+        return false;
+    }
+
+    *out = base + delta;
+    return true;
+}
+
+static bool _fd_advance_offset(
+    sched_fd_t *entry,
+    size_t offset,
+    size_t amount
+) {
+    if (!entry || amount > SIZE_MAX - offset) {
+        return false;
+    }
+
+    entry->offset = offset + amount;
+    return true;
 }
 
 static ssize_t _fd_read_dir(
@@ -939,7 +1008,10 @@ static ssize_t _fd_read_dir(
 
     size_t bytes = written * sizeof(dirent_t);
     if (bytes > 0 && advance_offset) {
-        entry->offset = offset + bytes;
+        if (!_fd_advance_offset(entry, offset, bytes)) {
+            ret = -EOVERFLOW;
+            goto out;
+        }
     }
 
     ret = (ssize_t)bytes;
@@ -972,13 +1044,23 @@ static ssize_t _fd_read_vfs(
     }
 
     ssize_t ws_result = 0;
-    if (ws_node_read(entry->node, thread ? thread->pid : 0, buf, offset, len, _fd_vfs_io_flags(entry), &ws_result)) {
+    if (ws_node_read(
+            entry->node,
+            thread ? thread->pid : 0,
+            buf,
+            offset,
+            len,
+            _fd_vfs_io_flags(entry),
+            &ws_result
+        )) {
         if (ws_result == VFS_EOF) {
             return 0;
         }
 
         if (ws_result > 0 && advance_offset) {
-            entry->offset = offset + (size_t)ws_result;
+            if (!_fd_advance_offset(entry, offset, (size_t)ws_result)) {
+                return -EOVERFLOW;
+            }
         }
 
         return ws_result;
@@ -992,7 +1074,9 @@ static ssize_t _fd_read_vfs(
     }
 
     if (ret > 0 && advance_offset) {
-        entry->offset = offset + (size_t)ret;
+        if (!_fd_advance_offset(entry, offset, (size_t)ret)) {
+            return -EOVERFLOW;
+        }
     }
 
     return ret;
@@ -1021,10 +1105,20 @@ static ssize_t _fd_write_vfs(
     }
 
     ssize_t ws_result = 0;
-    if (ws_node_write(entry->node, thread ? thread->pid : 0, buf, offset, len, _fd_vfs_io_flags(entry), &ws_result)) {
+    if (ws_node_write(
+            entry->node,
+            thread ? thread->pid : 0,
+            buf,
+            offset,
+            len,
+            _fd_vfs_io_flags(entry),
+            &ws_result
+        )) {
         if (ws_result > 0) {
             if (advance_offset) {
-                entry->offset = offset + (size_t)ws_result;
+                if (!_fd_advance_offset(entry, offset, (size_t)ws_result)) {
+                    return -EOVERFLOW;
+                }
             }
             _maybe_clear_setid(thread, entry->node);
         }
@@ -1038,7 +1132,9 @@ static ssize_t _fd_write_vfs(
 
     if (ret > 0) {
         if (advance_offset) {
-            entry->offset = offset + (size_t)ret;
+            if (!_fd_advance_offset(entry, offset, (size_t)ret)) {
+                return -EOVERFLOW;
+            }
         }
         _maybe_clear_setid(thread, entry->node);
     }
@@ -1047,65 +1143,26 @@ static ssize_t _fd_write_vfs(
 }
 
 static ssize_t sys_read(int fd, void *buf, size_t len) {
-    if (!_user_buf_ok(buf, len)) {
-        return -EFAULT;
-    }
-
     if (!len) {
         return 0;
     }
 
     sched_thread_t *thread = sched_current();
+    if (!user_write_prepare(thread, buf, len)) {
+        return -EFAULT;
+    }
+
     sched_fd_t *entry = NULL;
-    size_t bounce_len = len;
-    if (bounce_len > USER_IO_CHUNK_BYTES) {
-        bounce_len = USER_IO_CHUNK_BYTES;
-    }
-
-    u8 *bounce = malloc(bounce_len);
-    if (!bounce) {
-        return -ENOMEM;
-    }
-
-    size_t total = 0;
-    ssize_t result = 0;
 
     if (thread && _fd_lookup(thread, fd, &entry)) {
         _sync_thread_tty(thread, entry);
-        while (total < len) {
-            size_t chunk = len - total;
-            if (chunk > bounce_len) {
-                chunk = bounce_len;
-            }
 
-            ssize_t got = 0;
-            if (entry->kind == SCHED_FD_PIPE_READ) {
-                bool nonblock = (entry->flags & O_NONBLOCK) != 0;
-                got = _pipe_read(entry->pipe, bounce, chunk, nonblock);
-            } else {
-                got = _fd_read_vfs(
-                    thread, entry, bounce, chunk, entry->offset, true, -EBADF
-                );
-            }
-
-            if (got <= 0) {
-                result = total > 0 ? (ssize_t)total : got;
-                goto out;
-            }
-
-            if (!_user_copy_to_mapping(thread, (u8 *)buf + total, bounce, (size_t)got)) {
-                result = total > 0 ? (ssize_t)total : -EFAULT;
-                goto out;
-            }
-
-            total += (size_t)got;
-            if ((size_t)got < chunk) {
-                break;
-            }
+        if (entry->kind == SCHED_FD_PIPE_READ) {
+            bool nonblock = (entry->flags & O_NONBLOCK) != 0;
+            return _pipe_read(entry->pipe, buf, len, nonblock);
         }
 
-        result = (ssize_t)total;
-        goto out;
+        return _fd_read_vfs(thread, entry, buf, len, entry->offset, true, -EBADF);
     }
 
     if (fd == STDIN_FILENO) {
@@ -1114,54 +1171,32 @@ static ssize_t sys_read(int fd, void *buf, size_t len) {
         }
 
         tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
-        while (total < len) {
-            size_t chunk = len - total;
-            if (chunk > bounce_len) {
-                chunk = bounce_len;
-            }
 
-            ssize_t got = tty_read_handle(&handle, bounce, chunk);
-            if (got <= 0) {
-                result = total > 0 ? (ssize_t)total : got;
-                goto out;
-            }
-
-            if (!_user_copy_to_mapping(thread, (u8 *)buf + total, bounce, (size_t)got)) {
-                result = total > 0 ? (ssize_t)total : -EFAULT;
-                goto out;
-            }
-
-            total += (size_t)got;
-            if ((size_t)got < chunk) {
-                break;
-            }
-        }
-
-        result = (ssize_t)total;
-        goto out;
+        return tty_read_handle(&handle, buf, len);
     }
 
-    result = -EBADF;
-
-out:
-    free(bounce);
-    return result;
+    return -EBADF;
 }
 
 static ssize_t sys_pread(int fd, void *buf, size_t len, off_t offset) {
-    if (!_user_buf_ok(buf, len)) {
-        return -EFAULT;
-    }
-
     if (!len) {
         return 0;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!user_write_prepare(thread, buf, len)) {
+        return -EFAULT;
     }
 
     if (offset < 0) {
         return -EINVAL;
     }
 
-    sched_thread_t *thread = sched_current();
+    size_t read_offset = 0;
+    if (!_off_to_size(offset, &read_offset)) {
+        return -EOVERFLOW;
+    }
+
     sched_fd_t *entry = NULL;
 
     if (!_fd_lookup(thread, fd, &entry)) {
@@ -1169,113 +1204,33 @@ static ssize_t sys_pread(int fd, void *buf, size_t len, off_t offset) {
     }
 
     _sync_thread_tty(thread, entry);
-    size_t bounce_len = len;
-    if (bounce_len > USER_IO_CHUNK_BYTES) {
-        bounce_len = USER_IO_CHUNK_BYTES;
-    }
 
-    u8 *bounce = malloc(bounce_len);
-    if (!bounce) {
-        return -ENOMEM;
-    }
-
-    size_t total = 0;
-    ssize_t result = 0;
-    size_t current_offset = (size_t)offset;
-
-    while (total < len) {
-        size_t chunk = len - total;
-        if (chunk > bounce_len) {
-            chunk = bounce_len;
-        }
-
-        ssize_t got = _fd_read_vfs(
-            thread, entry, bounce, chunk, current_offset, false, -ESPIPE
-        );
-        if (got <= 0) {
-            result = total > 0 ? (ssize_t)total : got;
-            goto out_pread;
-        }
-
-        if (!_user_copy_to_mapping(thread, (u8 *)buf + total, bounce, (size_t)got)) {
-            result = total > 0 ? (ssize_t)total : -EFAULT;
-            goto out_pread;
-        }
-
-        total += (size_t)got;
-        current_offset += (size_t)got;
-        if ((size_t)got < chunk) {
-            break;
-        }
-    }
-
-    result = (ssize_t)total;
-
-out_pread:
-    free(bounce);
-    return result;
+    return _fd_read_vfs(thread, entry, buf, len, read_offset, false, -ESPIPE);
 }
 
 static ssize_t sys_write(int fd, const void *buf, size_t len) {
-    if (!_user_buf_ok(buf, len)) {
-        return -EFAULT;
-    }
-
     if (!len) {
         return 0;
     }
 
     sched_thread_t *thread = sched_current();
+    if (!user_range_ok(thread, buf, len, false)) {
+        return -EFAULT;
+    }
+
     sched_fd_t *entry = NULL;
-    size_t bounce_len = len;
-    if (bounce_len > USER_IO_CHUNK_BYTES) {
-        bounce_len = USER_IO_CHUNK_BYTES;
-    }
-
-    u8 *bounce = malloc(bounce_len);
-    if (!bounce) {
-        return -ENOMEM;
-    }
-
-    size_t total = 0;
-    ssize_t result = 0;
 
     if (thread && _fd_lookup(thread, fd, &entry)) {
         _sync_thread_tty(thread, entry);
-        while (total < len) {
-            size_t chunk = len - total;
-            if (chunk > bounce_len) {
-                chunk = bounce_len;
-            }
 
-            if (!_user_copy_from_mapping(thread, bounce, (const u8 *)buf + total, chunk)) {
-                result = total > 0 ? (ssize_t)total : -EFAULT;
-                goto out_write;
-            }
-
-            ssize_t wrote = 0;
-            if (entry->kind == SCHED_FD_PIPE_WRITE) {
-                bool nonblock = (entry->flags & O_NONBLOCK) != 0;
-                wrote = _pipe_write(entry->pipe, bounce, chunk, nonblock);
-            } else {
-                wrote = _fd_write_vfs(
-                    thread, entry, bounce, chunk, entry->offset, true, true, -EBADF
-                );
-            }
-
-            if (wrote <= 0) {
-                result = total > 0 ? (ssize_t)total : wrote;
-                goto out_write;
-            }
-
-            total += (size_t)wrote;
-            if ((size_t)wrote < chunk) {
-                break;
-            }
+        if (entry->kind == SCHED_FD_PIPE_WRITE) {
+            bool nonblock = (entry->flags & O_NONBLOCK) != 0;
+            return _pipe_write(entry->pipe, buf, len, nonblock);
         }
 
-        result = (ssize_t)total;
-        goto out_write;
+        return _fd_write_vfs(
+            thread, entry, buf, len, entry->offset, true, true, -EBADF
+        );
     }
 
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO || fd == STDIN_FILENO) {
@@ -1284,54 +1239,32 @@ static ssize_t sys_write(int fd, const void *buf, size_t len) {
         }
 
         tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
-        while (total < len) {
-            size_t chunk = len - total;
-            if (chunk > bounce_len) {
-                chunk = bounce_len;
-            }
 
-            if (!_user_copy_from_mapping(thread, bounce, (const u8 *)buf + total, chunk)) {
-                result = total > 0 ? (ssize_t)total : -EFAULT;
-                goto out_write;
-            }
-
-            ssize_t wrote = tty_write_handle(&handle, bounce, chunk);
-            if (wrote <= 0) {
-                result = total > 0 ? (ssize_t)total : wrote;
-                goto out_write;
-            }
-
-            total += (size_t)wrote;
-            if ((size_t)wrote < chunk) {
-                break;
-            }
-        }
-
-        result = (ssize_t)total;
-        goto out_write;
+        return tty_write_handle(&handle, buf, len);
     }
 
-    result = -EBADF;
-
-out_write:
-    free(bounce);
-    return result;
+    return -EBADF;
 }
 
 static ssize_t sys_pwrite(int fd, const void *buf, size_t len, off_t offset) {
-    if (!_user_buf_ok(buf, len)) {
-        return -EFAULT;
-    }
-
     if (!len) {
         return 0;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!user_range_ok(thread, buf, len, false)) {
+        return -EFAULT;
     }
 
     if (offset < 0) {
         return -EINVAL;
     }
 
-    sched_thread_t *thread = sched_current();
+    size_t write_offset = 0;
+    if (!_off_to_size(offset, &write_offset)) {
+        return -EOVERFLOW;
+    }
+
     sched_fd_t *entry = NULL;
 
     if (!_fd_lookup(thread, fd, &entry)) {
@@ -1339,62 +1272,15 @@ static ssize_t sys_pwrite(int fd, const void *buf, size_t len, off_t offset) {
     }
 
     _sync_thread_tty(thread, entry);
-    size_t bounce_len = len;
-    if (bounce_len > USER_IO_CHUNK_BYTES) {
-        bounce_len = USER_IO_CHUNK_BYTES;
-    }
 
-    u8 *bounce = malloc(bounce_len);
-    if (!bounce) {
-        return -ENOMEM;
-    }
-
-    size_t total = 0;
-    ssize_t result = 0;
-    size_t current_offset = (size_t)offset;
-
-    while (total < len) {
-        size_t chunk = len - total;
-        if (chunk > bounce_len) {
-            chunk = bounce_len;
-        }
-
-        if (!_user_copy_from_mapping(thread, bounce, (const u8 *)buf + total, chunk)) {
-            result = total > 0 ? (ssize_t)total : -EFAULT;
-            goto out_pwrite;
-        }
-
-        ssize_t wrote = _fd_write_vfs(
-            thread, entry, bounce, chunk, current_offset, false, false, -ESPIPE
-        );
-        if (wrote <= 0) {
-            result = total > 0 ? (ssize_t)total : wrote;
-            goto out_pwrite;
-        }
-
-        total += (size_t)wrote;
-        current_offset += (size_t)wrote;
-        if ((size_t)wrote < chunk) {
-            break;
-        }
-    }
-
-    result = (ssize_t)total;
-
-out_pwrite:
-    free(bounce);
-    return result;
+    return _fd_write_vfs(
+        thread, entry, buf, len, write_offset, false, false, -ESPIPE
+    );
 }
 
 static ssize_t sys_ioctl(int fd, u64 request, void *args) {
     sched_thread_t *thread = sched_current();
     sched_fd_t *entry = NULL;
-
-    if (args && thread && thread->user_thread) {
-        if (!_user_buf_ok(args, 1)) {
-            return -EFAULT;
-        }
-    }
 
     if (thread && _fd_lookup(thread, fd, &entry)) {
         if (entry->kind == SCHED_FD_VFS && entry->node) {
@@ -1484,12 +1370,9 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         fd_pty_index = _pty_index_from_dev_name(dev);
     }
 
-    unsigned long procfs_irq_flags = 0;
-    bool procfs_locked = procfs_path_lock_if_needed(resolved, &procfs_irq_flags);
     vfs_node_t *node = vfs_lookup(resolved);
     if (node) {
         if ((flags & O_EXCL) && (flags & O_CREAT)) {
-            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, -EEXIST);
         }
     } else if (flags & O_CREAT) {
@@ -1508,25 +1391,21 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         );
 
         if (parent_err < 0) {
-            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, parent_err);
         }
 
         mode_t create_mode = _apply_umask(mode & 07777, thread->umask);
         node = vfs_create(parent, base, VFS_FILE, create_mode);
         if (!node) {
-            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, -EIO);
         }
 
         if (!vfs_chown(node, thread->uid, thread->gid)) {
-            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, -EIO);
         }
     }
 
     if (!node) {
-        procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
         return _open_fail(ptmx_open, ptmx_index, -ENOENT);
     }
 
@@ -1536,7 +1415,6 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     }
 
     if (!resolved_node) {
-        procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
         return _open_fail(ptmx_open, ptmx_index, -EINVAL);
     }
 
@@ -1550,24 +1428,20 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     }
 
     if (resolved_node->type == VFS_DIR && _open_has_write(flags)) {
-        procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
         return _open_fail(ptmx_open, ptmx_index, -EISDIR);
     }
 
     if (need && !vfs_access(resolved_node, thread->uid, thread->gid, need)) {
-        procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
         return _open_fail(ptmx_open, ptmx_index, -EACCES);
     }
 
     if (flags & O_TRUNC) {
         if (resolved_node->type == VFS_DIR) {
-            procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
             return _open_fail(ptmx_open, ptmx_index, -EISDIR);
         }
 
         if (resolved_node->type == VFS_FILE) {
             if (vfs_truncate(resolved_node, 0) < 0) {
-                procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
                 return _open_fail(ptmx_open, ptmx_index, -EIO);
             }
 
@@ -1594,7 +1468,6 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         .fd_flags = fd_flags,
     };
     int ret = sched_fd_alloc(thread, &fd, 3);
-    procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
 
     if (ret < 0 && ptmx_open) {
         pty_unreserve(ptmx_index);
@@ -1629,13 +1502,14 @@ static int sys_close(int fd) {
 }
 
 static int sys_pipe(int *fds) {
-    if (!fds) {
-        return -EFAULT;
-    }
-
     sched_thread_t *thread = sched_current();
     if (!thread) {
         return -EINVAL;
+    }
+
+    int pair[2] = {-1, -1};
+    if (!user_write_prepare(thread, fds, sizeof(pair))) {
+        return -EFAULT;
     }
 
     sched_pipe_t *pipe = sched_pipe_create(SCHED_PIPE_CAPACITY);
@@ -1675,8 +1549,14 @@ static int sys_pipe(int *fds) {
         return write_fd;
     }
 
-    fds[0] = read_fd;
-    fds[1] = write_fd;
+    pair[0] = read_fd;
+    pair[1] = write_fd;
+
+    if (!user_copy_to(thread, fds, pair, sizeof(pair))) {
+        sched_fd_close(thread, write_fd);
+        sched_fd_close(thread, read_fd);
+        return -EFAULT;
+    }
 
     return 0;
 }
@@ -1899,7 +1779,7 @@ static int sys_chdir(const char *path) {
         return -ENOENT;
     }
 
-    if (!node || node->type != VFS_DIR) {
+    if (node->type != VFS_DIR) {
         return -ENOTDIR;
     }
 
@@ -1937,36 +1817,47 @@ static int sys_access(const char *path, int mode) {
 }
 
 static uintptr_t sys_mmap(const mmap_args_t *args) {
-    if (!args) {
-        return (uintptr_t)-EFAULT;
-    }
-
     sched_thread_t *thread = sched_current();
     if (!thread || !thread->vm_space) {
         return (uintptr_t)-EINVAL;
     }
 
-    if (!args->len) {
+    mmap_args_t req = {0};
+    if (!user_copy_from(thread, &req, args, sizeof(req))) {
+        return (uintptr_t)-EFAULT;
+    }
+
+    if (!req.len) {
         return (uintptr_t)-EINVAL;
     }
 
-    size_t size = args->len;
+    if (req.len > SIZE_MAX - (PAGE_4KIB - 1)) {
+        return (uintptr_t)-EINVAL;
+    }
+
+    size_t size = req.len;
     size = ALIGN(size, PAGE_4KIB);
     size_t pages = size / PAGE_4KIB;
-    if (args->offset < 0) {
+
+    if (req.offset < 0) {
         return (uintptr_t)-EINVAL;
     }
 
-    if ((args->offset % PAGE_4KIB) != 0) {
+    if ((req.offset % PAGE_4KIB) != 0) {
         return (uintptr_t)-EINVAL;
     }
 
-    int prot = args->prot;
+    size_t file_offset = 0;
+    if (!_off_to_size(req.offset, &file_offset)) {
+        return (uintptr_t)-EOVERFLOW;
+    }
+
+    int prot = req.prot;
     if (prot == PROT_NONE) {
         return (uintptr_t)-EINVAL;
     }
 
-    int map_type = args->flags & (MAP_SHARED | MAP_PRIVATE);
+    int map_type = req.flags & (MAP_SHARED | MAP_PRIVATE);
     if (map_type != MAP_SHARED && map_type != MAP_PRIVATE) {
         return (uintptr_t)-EINVAL;
     }
@@ -1975,36 +1866,33 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
         return (uintptr_t)-ENOTSUP;
     }
 
-    if ((args->flags & MAP_ANON) && args->fd != -1) {
+    if ((req.flags & MAP_ANON) && req.fd != -1) {
         return (uintptr_t)-EINVAL;
     }
 
-    uintptr_t addr = (uintptr_t)args->addr;
+    uintptr_t addr = (uintptr_t)req.addr;
     if (addr && (addr % PAGE_4KIB)) {
         return (uintptr_t)-EINVAL;
     }
 
-    bool fixed = (args->flags & MAP_FIXED) != 0;
+    bool fixed = (req.flags & MAP_FIXED) != 0;
     if (!addr && fixed) {
         return (uintptr_t)-EINVAL;
     }
-
-    unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
 
     if (!addr) {
         addr = _pick_mmap_base(thread, size);
     }
 
     if (!addr) {
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return (uintptr_t)-ENOMEM;
     }
 
-    uintptr_t end = addr + size;
-    if (end < addr) {
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+    if (size > (uintptr_t)-1 - addr) {
         return (uintptr_t)-EINVAL;
     }
+
+    uintptr_t end = addr + size;
 
     uintptr_t stack_top = thread->user_stack_base;
     if (!stack_top) {
@@ -2012,34 +1900,38 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
     }
 
     if (end > stack_top) {
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return (uintptr_t)-ENOMEM;
     }
 
     if (fixed) {
-        for (sched_user_region_t *region = thread->regions; region; region = region->next) {
+        for (
+            sched_user_region_t *region = thread->regions;
+            region;
+            region = region->next
+        ) {
             if (_region_overlaps(region, addr, end)) {
-                spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
                 return (uintptr_t)-ENOMEM;
             }
         }
     } else {
-        for (sched_user_region_t *region = thread->regions; region; region = region->next) {
+        for (
+            sched_user_region_t *region = thread->regions;
+            region;
+            region = region->next
+        ) {
             if (!_region_overlaps(region, addr, end)) {
                 continue;
             }
 
             addr = _pick_mmap_base(thread, size);
-            if (!addr) {
-                spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
+            if (!addr || size > (uintptr_t)-1 - addr) {
                 return (uintptr_t)-ENOMEM;
             }
+
             end = addr + size;
             break;
         }
     }
-
-    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
     if (!addr || end > stack_top) {
         return (uintptr_t)-ENOMEM;
@@ -2047,8 +1939,8 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
 
     vfs_node_t *file = NULL;
 
-    if (!(args->flags & MAP_ANON)) {
-        int fd = args->fd;
+    if (!(req.flags & MAP_ANON)) {
+        int fd = req.fd;
 
         if (fd < 0) {
             return (uintptr_t)-EBADF;
@@ -2094,54 +1986,39 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
 
     arch_map_region(root, pages, addr, paddr, page_flags);
 
-    vm_flags = spin_lock_irqsave(&thread->vm_lock);
     if (!sched_add_user_region(thread, addr, paddr, pages, page_flags)) {
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-        for (size_t i = 0; i < pages; i++) {
-            unmap_page((page_t *)root, addr + i * PAGE_4KIB);
-            arch_tlb_flush(addr + i * PAGE_4KIB);
-        }
-
-        arch_free_frames((void *)paddr, pages);
-
+        _mmap_undo_alloc(thread, root, addr, paddr, pages, false);
         return (uintptr_t)-ENOMEM;
     }
-    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
 
-    if (!_mmap_init_chunked(paddr, pages * PAGE_4KIB, file, args->offset)) {
-        sched_user_region_t *prev = NULL;
-        vm_flags = spin_lock_irqsave(&thread->vm_lock);
-        sched_user_region_t *region =
-            _find_region_exact(thread, addr, pages, &prev);
-
-        if (region) {
-            if (prev) {
-                prev->next = region->next;
-            } else {
-                thread->regions = region->next;
-            }
-
-            free(region);
-            sched_user_mem_sub(thread, pages);
-        }
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
-
-        for (size_t i = 0; i < pages; i++) {
-            uintptr_t vaddr = addr + i * PAGE_4KIB;
-            unmap_page((page_t *)root, vaddr);
-            arch_tlb_flush(vaddr);
-        }
-
-        arch_free_frames((void *)paddr, pages);
-
-        return (uintptr_t)(file ? -EIO : -ENOMEM);
+    void *dst = arch_phys_map(paddr, pages * PAGE_4KIB, 0);
+    if (!dst) {
+        _mmap_undo_alloc(thread, root, addr, paddr, pages, true);
+        return (uintptr_t)-ENOMEM;
     }
+
+    memset(dst, 0, pages * PAGE_4KIB);
+
+    if (file) {
+        ssize_t read_len = vfs_read(file, dst, file_offset, size, 0);
+        if (read_len < 0) {
+            arch_phys_unmap(dst, pages * PAGE_4KIB);
+            _mmap_undo_alloc(thread, root, addr, paddr, pages, true);
+            return (uintptr_t)-EIO;
+        }
+    }
+
+    arch_phys_unmap(dst, pages * PAGE_4KIB);
 
     return addr;
 }
 
 static int sys_munmap(void *addr, size_t len) {
     if (!addr || !len) {
+        return -EINVAL;
+    }
+
+    if (len > SIZE_MAX - (PAGE_4KIB - 1)) {
         return -EINVAL;
     }
 
@@ -2168,7 +2045,6 @@ static int sys_munmap(void *addr, size_t len) {
 
     bool unmapped = false;
     sched_user_region_t *prev = NULL;
-    unsigned long vm_flags = spin_lock_irqsave(&thread->vm_lock);
     sched_user_region_t *region = thread->regions;
 
     while (region) {
@@ -2194,7 +2070,6 @@ static int sys_munmap(void *addr, size_t len) {
         if (before_pages && after_pages) {
             tail = calloc(1, sizeof(*tail));
             if (!tail) {
-                spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
                 return -ENOMEM;
             }
 
@@ -2256,24 +2131,40 @@ static int sys_munmap(void *addr, size_t len) {
     }
 
     if (!unmapped) {
-        spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
         return -EINVAL;
     }
 
-    spin_unlock_irqrestore(&thread->vm_lock, vm_flags);
     return 0;
 }
 
 static pid_t sys_waitpid(pid_t pid, int *status, int options) {
-    return sched_waitpid(pid, status, options);
-}
-
-static int _sys_stat_path(const char *path, stat_t *st, bool follow_links) {
-    if (!st) {
+    sched_thread_t *thread = sched_current();
+    if (status && !user_write_prepare(thread, status, sizeof(*status))) {
         return -EFAULT;
     }
 
+    int wait_status = 0;
+    pid_t ret = sched_waitpid(pid, status ? &wait_status : NULL, options);
+    if (ret <= 0 || !status) {
+        return ret;
+    }
+
+    if (!user_copy_to(thread, status, &wait_status, sizeof(wait_status))) {
+        return -EFAULT;
+    }
+
+    return ret;
+}
+
+static pid_t sys_wait(pid_t pid, int *status) {
+    return sys_waitpid(pid, status, 0);
+}
+
+static int _sys_stat_path(const char *path, stat_t *st, bool follow_links) {
     sched_thread_t *thread = sched_current();
+    if (!user_write_prepare(thread, st, sizeof(*st))) {
+        return -EFAULT;
+    }
 
     char resolved[PATH_MAX];
     int resolve_err =
@@ -2288,15 +2179,20 @@ static int _sys_stat_path(const char *path, stat_t *st, bool follow_links) {
         return -ENOENT;
     }
 
-    if (!vfs_stat_node(node, st, follow_links)) {
+    stat_t local = {0};
+    if (!vfs_stat_node(node, &local, follow_links)) {
         return -EIO;
     }
 
     uid_t owner_uid = 0;
     gid_t owner_gid = 0;
     if (procfs_stat_owner(node, &owner_uid, &owner_gid)) {
-        st->st_uid = owner_uid;
-        st->st_gid = owner_gid;
+        local.st_uid = owner_uid;
+        local.st_gid = owner_gid;
+    }
+
+    if (!user_copy_to(thread, st, &local, sizeof(local))) {
+        return -EFAULT;
     }
 
     return 0;
@@ -2311,11 +2207,11 @@ static int sys_lstat(const char *path, stat_t *st) {
 }
 
 static int sys_fstat(int fd, stat_t *st) {
-    if (!st) {
+    sched_thread_t *thread = sched_current();
+    if (!user_write_prepare(thread, st, sizeof(*st))) {
         return -EFAULT;
     }
 
-    sched_thread_t *thread = sched_current();
     sched_fd_t *entry = NULL;
 
     if (!_fd_lookup(thread, fd, &entry)) {
@@ -2323,10 +2219,14 @@ static int sys_fstat(int fd, stat_t *st) {
     }
 
     if (entry->kind == SCHED_FD_PIPE_READ || entry->kind == SCHED_FD_PIPE_WRITE) {
-        memset(st, 0, sizeof(*st));
+        stat_t local = {0};
 
-        st->st_mode = S_IFIFO | 0666;
-        st->st_nlink = 1;
+        local.st_mode = S_IFIFO | 0666;
+        local.st_nlink = 1;
+
+        if (!user_copy_to(thread, st, &local, sizeof(local))) {
+            return -EFAULT;
+        }
 
         return 0;
     }
@@ -2335,15 +2235,20 @@ static int sys_fstat(int fd, stat_t *st) {
         return -EBADF;
     }
 
-    if (!vfs_stat_node(entry->node, st, true)) {
+    stat_t local = {0};
+    if (!vfs_stat_node(entry->node, &local, true)) {
         return -EIO;
     }
 
     uid_t owner_uid = 0;
     gid_t owner_gid = 0;
     if (procfs_stat_owner(entry->node, &owner_uid, &owner_gid)) {
-        st->st_uid = owner_uid;
-        st->st_gid = owner_gid;
+        local.st_uid = owner_uid;
+        local.st_gid = owner_gid;
+    }
+
+    if (!user_copy_to(thread, st, &local, sizeof(local))) {
+        return -EFAULT;
     }
 
     return 0;
@@ -2361,10 +2266,6 @@ static int sys_chmod(const char *path, mode_t mode) {
     }
 
     vfs_node_t *node = _resolve_link_node(vfs_lookup(resolved));
-    if (!node) {
-        return -ENOENT;
-    }
-
     if (!node) {
         return -ENOENT;
     }
@@ -2408,10 +2309,6 @@ static int sys_chown(const char *path, uid_t uid, gid_t gid) {
         return -ENOENT;
     }
 
-    if (!node) {
-        return -ENOENT;
-    }
-
     if (thread->uid != 0) {
         return -EPERM;
     }
@@ -2443,8 +2340,9 @@ static int sys_link(const char *oldpath, const char *newpath) {
     }
 
     char resolved_old[PATH_MAX];
-    if (!path_resolve(thread->cwd, oldpath, resolved_old, sizeof(resolved_old))) {
-        return -ENOENT;
+    int old_err = _resolve_user_path(thread, oldpath, resolved_old, sizeof(resolved_old));
+    if (old_err < 0) {
+        return old_err;
     }
 
     char resolved_new[PATH_MAX];
@@ -2474,21 +2372,17 @@ static int sys_link(const char *oldpath, const char *newpath) {
 }
 
 static ssize_t sys_readlink(const char *path, char *buf, size_t bufsiz) {
-    if (!path || !buf) {
-        return -EFAULT;
-    }
-
     if (!bufsiz) {
         return 0;
-    }
-
-    if (!_user_buf_ok(buf, bufsiz)) {
-        return -EFAULT;
     }
 
     sched_thread_t *thread = sched_current();
     if (!thread) {
         return -EINVAL;
+    }
+
+    if (!user_write_prepare(thread, buf, bufsiz)) {
+        return -EFAULT;
     }
 
     char resolved[PATH_MAX];
@@ -2508,8 +2402,9 @@ static ssize_t sys_readlink(const char *path, char *buf, size_t bufsiz) {
 
     size_t len = strlen(node->symlink_target);
     size_t copy_len = len < bufsiz ? len : bufsiz;
-    memcpy(buf, node->symlink_target, copy_len);
-    return (ssize_t)copy_len;
+    return user_copy_to(thread, buf, node->symlink_target, copy_len)
+        ? (ssize_t)copy_len
+        : -EFAULT;
 }
 
 static int sys_unlink(const char *path) {
@@ -2651,7 +2546,13 @@ static int sys_mount(
         return -ENOTSUP;
     }
 
-    if (strcmp(filesystemtype, "ext2")) {
+    char fs_type[16];
+    int fs_err = user_copy_string(thread, filesystemtype, fs_type, sizeof(fs_type));
+    if (fs_err < 0) {
+        return fs_err;
+    }
+
+    if (strcmp(fs_type, "ext2")) {
         return -ENOTSUP;
     }
 
@@ -2704,7 +2605,7 @@ static int sys_mount(
         return -ENOTDIR;
     }
 
-    if (!disk_mount_partition_node(source_node, target_node, filesystemtype)) {
+    if (!disk_mount_partition_node(source_node, target_node, fs_type)) {
         return -ENODEV;
     }
 
@@ -2779,30 +2680,54 @@ static off_t sys_seek(int fd, off_t offset, int whence) {
         base = 0;
         break;
     case SEEK_CUR:
-        base = (off_t)entry->offset;
+        if (!_size_to_off(entry->offset, &base)) {
+            return -EOVERFLOW;
+        }
         break;
     case SEEK_END:
-        base = (off_t)entry->node->size;
+        if (!_size_to_off(entry->node->size, &base)) {
+            return -EOVERFLOW;
+        }
         break;
     default:
         return -EINVAL;
     }
 
-    off_t next = base + offset;
+    off_t next = 0;
+    if (!_off_add(base, offset, &next)) {
+        return -EOVERFLOW;
+    }
+
     if (next < 0) {
         return -EINVAL;
     }
 
-    entry->offset = (size_t)next;
+    size_t next_offset = 0;
+    if (!_off_to_size(next, &next_offset)) {
+        return -EOVERFLOW;
+    }
+
+    entry->offset = next_offset;
     return next;
 }
 
 static int sys_sleep(const struct timespec *req, struct timespec *rem) {
-    if (!req) {
+    sched_thread_t *thread = sched_current();
+    struct timespec ts = {0};
+
+    if (!user_copy_from(thread, &ts, req, sizeof(ts))) {
         return -EFAULT;
     }
 
-    if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L) {
+    if (rem && !user_write_prepare(thread, rem, sizeof(*rem))) {
+        return -EFAULT;
+    }
+
+    if (
+        ts.tv_sec < 0 ||
+        ts.tv_nsec < 0 ||
+        ts.tv_nsec >= 1000000000L
+    ) {
         return -EINVAL;
     }
 
@@ -2811,17 +2736,31 @@ static int sys_sleep(const struct timespec *req, struct timespec *rem) {
         return -EINVAL;
     }
 
-    u64 ns = (u64)req->tv_sec * 1000000000ULL + (u64)req->tv_nsec;
-    u64 ticks = (ns * hz + 999999999ULL) / 1000000000ULL;
-    if (ns && !ticks) {
+    u64 seconds = (u64)ts.tv_sec;
+    if (seconds > UINT64_MAX / hz) {
+        return -EINVAL;
+    }
+
+    u64 ticks = seconds * hz;
+    u64 subsecond_ticks =
+        ((u64)ts.tv_nsec * hz + 999999999ULL) / 1000000000ULL;
+
+    if (ticks > UINT64_MAX - subsecond_ticks) {
+        return -EINVAL;
+    }
+
+    ticks += subsecond_ticks;
+    if ((ts.tv_sec || ts.tv_nsec) && !ticks) {
         ticks = 1;
     }
 
     sched_sleep(ticks);
 
     if (rem) {
-        rem->tv_sec = 0;
-        rem->tv_nsec = 0;
+        struct timespec zero = {0};
+        if (!user_copy_to(thread, rem, &zero, sizeof(zero))) {
+            return -EFAULT;
+        }
     }
 
     return 0;
@@ -2841,15 +2780,44 @@ static int sys_time(struct timespec *realtime, struct timespec *monotonic) {
         return -EINVAL;
     }
 
+    sched_thread_t *thread = sched_current();
+    if (
+        realtime &&
+        !user_write_prepare(thread, realtime, sizeof(*realtime))
+    ) {
+        return -EFAULT;
+    }
+
+    if (
+        monotonic &&
+        !user_write_prepare(thread, monotonic, sizeof(*monotonic))
+    ) {
+        return -EFAULT;
+    }
+
     if (realtime) {
-        _timespec_from_ns(arch_realtime_ns(), realtime);
+        struct timespec local = {0};
+        _timespec_from_ns(arch_realtime_ns(), &local);
+        if (!user_copy_to(thread, realtime, &local, sizeof(local))) {
+            return -EFAULT;
+        }
     }
 
     if (monotonic) {
         u64 hz = arch_timer_hz();
         u64 ticks = arch_timer_ticks();
-        u64 ns = hz ? (ticks / hz * 1000000000ULL + (ticks % hz) * 1000000000ULL / hz) : 0;
-        _timespec_from_ns(ns, monotonic);
+        u64 ns = 0;
+
+        if (hz) {
+            ns = ticks / hz * 1000000000ULL;
+            ns += (ticks % hz) * 1000000000ULL / hz;
+        }
+
+        struct timespec local = {0};
+        _timespec_from_ns(ns, &local);
+        if (!user_copy_to(thread, monotonic, &local, sizeof(local))) {
+            return -EFAULT;
+        }
     }
 
     return 0;
@@ -2888,9 +2856,13 @@ static u64 sys_kill(pid_t pid, int signum) {
         return (u64)-EINVAL;
     }
 
+    if (signum < 0 || signum >= NSIG) {
+        return (u64)-EINVAL;
+    }
+
     if (pid < 0) {
-        int ret = sched_signal_send_pgrp(-pid, signum);
-        return ret < 0 ? (u64)-ESRCH : (u64)ret;
+        int ret = sched_signal_pgrp_as(-pid, signum, self);
+        return !signum && ret > 0 ? 0 : (u64)ret;
     }
 
     if (!pid) {
@@ -2898,8 +2870,8 @@ static u64 sys_kill(pid_t pid, int signum) {
             return (u64)-ESRCH;
         }
 
-        int ret = sched_signal_send_pgrp(self->pgid, signum);
-        return ret < 0 ? (u64)-ESRCH : (u64)ret;
+        int ret = sched_signal_pgrp_as(self->pgid, signum, self);
+        return !signum && ret > 0 ? 0 : (u64)ret;
     }
 
     // Permission check: non-root can only signal processes with the same uid
@@ -2913,9 +2885,69 @@ static u64 sys_kill(pid_t pid, int signum) {
         return (u64)-EPERM;
     }
 
+    if (!signum) {
+        thread_put(target);
+        return 0;
+    }
+
     int ret = sched_signal_send_thread(target, signum);
     thread_put(target);
     return ret < 0 ? (u64)-ESRCH : (u64)ret;
+}
+
+static int sys_execve(
+    const char *path,
+    char *const argv[],
+    char *const envp[],
+    arch_int_state_t *state
+) {
+    sched_thread_t *thread = sched_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    char path_buf[PATH_MAX];
+    int err = user_copy_string(thread, path, path_buf, sizeof(path_buf));
+    if (err < 0) {
+        return err;
+    }
+
+    exec_vec_t argv_copy = {0};
+    err = _copy_exec_vec(
+        thread,
+        argv,
+        EXEC_MAX_ARGS,
+        EXEC_MAX_ARG_LEN,
+        &argv_copy
+    );
+    if (err < 0) {
+        return err;
+    }
+
+    exec_vec_t env_copy = {0};
+    err = _copy_exec_vec(
+        thread,
+        envp,
+        EXEC_MAX_ENV,
+        EXEC_MAX_ENV_LEN,
+        &env_copy
+    );
+    if (err < 0) {
+        _free_exec_vec(&argv_copy);
+        return err;
+    }
+
+    int ret = user_exec(
+        thread,
+        path_buf,
+        argv_copy.items,
+        env_copy.items,
+        state
+    );
+
+    _free_exec_vec(&env_copy);
+    _free_exec_vec(&argv_copy);
+    return ret;
 }
 
 static short _pipe_poll(sched_pipe_t *pipe, bool read_end, short events) {
@@ -2982,7 +3014,13 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
             }
 
             short ws_revents = 0;
-            if (ws_node_poll(entry->node, thread ? thread->pid : 0, events, (u32)vfs_flags, &ws_revents)) {
+            if (ws_node_poll(
+                    entry->node,
+                    thread ? thread->pid : 0,
+                    events,
+                    (u32)vfs_flags,
+                    &ws_revents
+                )) {
                 return ws_revents;
             }
 
@@ -3006,36 +3044,146 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
     return POLLNVAL;
 }
 
-static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
-    if (!fds && nfds) {
-        return -EFAULT;
+static int _poll_store_revents(
+    const sched_thread_t *thread,
+    struct pollfd *user_fds,
+    const struct pollfd *pfds,
+    nfds_t nfds
+) {
+    for (nfds_t i = 0; i < nfds; i++) {
+        void *slot = NULL;
+
+        if (!_user_field(
+                user_fds,
+                i,
+                sizeof(user_fds[0]),
+                offsetof(struct pollfd, revents),
+                &slot
+            )) {
+            return -EFAULT;
+        }
+
+        if (!user_copy_to(
+                thread,
+                slot,
+                &pfds[i].revents,
+                sizeof(pfds[i].revents)
+            )) {
+            return -EFAULT;
+        }
     }
 
+    return 0;
+}
+
+static int _poll_finish(
+    const sched_thread_t *thread,
+    struct pollfd *user_fds,
+    struct pollfd *pfds,
+    nfds_t nfds,
+    int result
+) {
+    int err = _poll_store_revents(thread, user_fds, pfds, nfds);
+
+    free(pfds);
+    if (err < 0) {
+        return err;
+    }
+
+    return result;
+}
+
+static int _poll_deadline(int timeout_ms, u64 *deadline_out) {
+    if (!deadline_out) {
+        return -EINVAL;
+    }
+
+    *deadline_out = 0;
+    if (timeout_ms <= 0) {
+        return 0;
+    }
+
+    u32 hz = arch_timer_hz();
+    if (!hz) {
+        return -EINVAL;
+    }
+
+    u64 ticks = ((u64)timeout_ms * (u64)hz + 999ULL) / 1000ULL;
+    if (!ticks) {
+        ticks = 1;
+    }
+
+    u64 now = arch_timer_ticks();
+    *deadline_out = ticks > UINT64_MAX - now ? UINT64_MAX : now + ticks;
+    return 0;
+}
+
+static int _poll_scan(
+    sched_thread_t *thread,
+    struct pollfd *pfds,
+    nfds_t nfds
+) {
+    int ready = 0;
+
+    for (nfds_t i = 0; i < nfds; i++) {
+        struct pollfd *pfd = &pfds[i];
+        pfd->revents = 0;
+
+        if (pfd->fd < 0) {
+            continue;
+        }
+
+        pfd->revents = _fd_poll_revents(thread, pfd->fd, pfd->events);
+        if (pfd->revents) {
+            ready++;
+        }
+    }
+
+    return ready;
+}
+
+static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
     if (timeout_ms < -1) {
         return -EINVAL;
     }
 
-    if (nfds > 1024) {
+    if (nfds > POLL_MAX_FDS) {
         return -EINVAL;
     }
 
     sched_thread_t *thread = sched_current();
+    if (nfds > (nfds_t)(SIZE_MAX / sizeof(*fds))) {
+        return -EINVAL;
+    }
+
+    struct pollfd *pfds = NULL;
+    size_t fds_size = (size_t)nfds * sizeof(*fds);
+
+    if (nfds) {
+        if (!user_write_prepare(thread, fds, fds_size)) {
+            return -EFAULT;
+        }
+
+        pfds = malloc(fds_size);
+        if (!pfds) {
+            return -ENOMEM;
+        }
+
+        if (!user_copy_from(thread, pfds, fds, fds_size)) {
+            free(pfds);
+            return -EFAULT;
+        }
+    }
 
     bool finite_timeout = timeout_ms >= 0;
     u64 deadline = 0;
 
-    if (finite_timeout && timeout_ms > 0) {
-        u32 hz = arch_timer_hz();
-        if (!hz) {
-            return -EINVAL;
+    if (finite_timeout) {
+        int deadline_err = _poll_deadline(timeout_ms, &deadline);
+        if (deadline_err < 0) {
+            free(pfds);
+            return deadline_err;
         }
-
-        u64 ticks = ((u64)timeout_ms * (u64)hz + 999ULL) / 1000ULL;
-        if (!ticks) {
-            ticks = 1;
-        }
-
-        deadline = arch_timer_ticks() + ticks;
     }
 
     for (;;) {
@@ -3044,38 +3192,23 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
             wait_seq = sched_poll_wait_seq();
         }
 
-        int ready = 0;
-
-        for (nfds_t i = 0; i < nfds; i++) {
-            struct pollfd *pfd = &fds[i];
-            pfd->revents = 0;
-
-            if (pfd->fd < 0) {
-                continue;
-            }
-
-            short revents = _fd_poll_revents(thread, pfd->fd, pfd->events);
-            pfd->revents = revents;
-
-            if (revents) {
-                ready++;
-            }
-        }
+        int ready = _poll_scan(thread, pfds, nfds);
 
         if (ready) {
-            return ready;
+            return _poll_finish(thread, fds, pfds, nfds, ready);
         }
 
         if (finite_timeout && !timeout_ms) {
-            return 0;
+            return _poll_finish(thread, fds, pfds, nfds, 0);
         }
 
         if (thread && sched_signal_has_pending(thread)) {
+            free(pfds);
             return -EINTR;
         }
 
         if (finite_timeout && timeout_ms > 0 && arch_timer_ticks() >= deadline) {
-            return 0;
+            return _poll_finish(thread, fds, pfds, nfds, 0);
         }
 
         if (!sched_is_running()) {
@@ -3098,15 +3231,16 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
         }
 
         if (!finite_timeout) {
-            sched_poll_block_if_unchanged(wait_seq);
+            sched_poll_wait_change(wait_seq);
             continue;
         }
 
         if (timeout_ms > 0) {
-            sched_poll_block_if_unchanged_until(wait_seq, deadline);
+            sched_poll_wait_until(wait_seq, deadline);
             continue;
         }
 
+        free(pfds);
         return 0;
     }
 }
@@ -3256,15 +3390,14 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
     case SYS_FORK:
         return (u64)sched_fork(state);
     case SYS_EXECVE:
-        return (u64)user_exec(
-            sched_current(),
+        return (u64)sys_execve(
             (const char *)arch_syscall_arg1(state),
             (char *const *)arch_syscall_arg2(state),
             (char *const *)arch_syscall_arg3(state),
             state
         );
     case SYS_WAIT:
-        return (u64)sched_wait(
+        return (u64)sys_wait(
             (pid_t)arch_syscall_arg1(state), (int *)arch_syscall_arg2(state)
         );
     case SYS_WAITPID:
@@ -3317,13 +3450,11 @@ static void _syscall_handler(arch_int_state_t *state) {
         return;
     }
 
-    sched_release_retired_current_cpu();
     sched_capture_context(state);
     sched_metrics_record_syscall();
 
     u64 num = (u64)arch_syscall_num(state);
     u64 ret = _syscall_dispatch(state);
-    sched_capture_context(state);
 
     if (num == SYS_SIGRETURN && !ret) {
         return;

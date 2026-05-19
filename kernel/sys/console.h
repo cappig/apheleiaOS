@@ -32,6 +32,8 @@ typedef struct console_backend_ops {
     bool (*probe)(void *arch_boot_info, console_hw_desc_t *out);
     u8 *(*fb_map)(size_t offset, size_t size);
     void (*fb_unmap)(void *ptr, size_t size);
+    void (*set_output_suppressed)(bool suppressed);
+    ssize_t (*stream_write)(const void *buf, size_t len);
     void (*text_cursor_set)(size_t col, size_t row);
     void (*text_put)(
         u8 *fb,

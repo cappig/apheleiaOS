@@ -33,21 +33,26 @@ typedef term_cell_t console_cell_t;
 
 typedef struct {
     console_mode_t mode;
+
     u8 *fb;
     size_t fb_size;
     u8 *fb_back;
+
     u32 width;
     u32 height;
     u32 pitch;
     u8 bytes_per_pixel;
+
     u8 red_shift;
     u8 green_shift;
     u8 blue_shift;
     u8 red_size;
     u8 green_size;
     u8 blue_size;
+
     size_t cols;
     size_t rows;
+
     const font_t *font;
     u32 font_width;
     u32 font_height;
@@ -56,9 +61,11 @@ typedef struct {
     u32 font_cell_src_x;
     u32 font_row_bytes;
     u32 font_glyph_bytes;
+
     font_map_t *font_map_sorted;
     u32 font_map_sorted_count;
     const font_t *font_map_sorted_src;
+
     bool ready;
     size_t screen_count;
     size_t active_screen;
@@ -96,6 +103,22 @@ static spinlock_t console_lock = SPINLOCK_INIT;
 
 void console_backend_register(const console_backend_ops_t *ops) {
     backend_ops = ops;
+}
+
+static bool _stream_passthrough_screen(size_t screen) {
+    if (!backend_ops || !backend_ops->stream_write) {
+        return false;
+    }
+
+    if (!console_state.ready || console_state.mode != CONSOLE_TEXT) {
+        return false;
+    }
+
+    if (screen == TTY_CONSOLE) {
+        return false;
+    }
+
+    return screen == console_state.active_screen;
 }
 
 static void _screen_reset_colors(console_screen_t *screen) {
@@ -154,6 +177,51 @@ static console_cell_t *_screen_cells(size_t index) {
 
     size_t count = _cell_count();
     return console_state.cells + index * count;
+}
+
+static bool _screen_is_blank(size_t index) {
+    console_screen_t *screen = _get_screen(index);
+    console_cell_t *cells = _screen_cells(index);
+
+    if (!screen) {
+        return true;
+    }
+
+    if (screen->cursor_x || screen->cursor_y || screen->saved_cursor_valid) {
+        return false;
+    }
+
+    if (!cells) {
+        return true;
+    }
+
+    size_t count = _cell_count();
+    for (size_t i = 0; i < count; i++) {
+        if (cells[i].codepoint != ' ') {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void _inherit_screen_state(size_t dst, size_t src) {
+    console_screen_t *dst_screen = _get_screen(dst);
+    console_screen_t *src_screen = _get_screen(src);
+
+    if (!dst_screen || !src_screen || dst == src) {
+        return;
+    }
+
+    *dst_screen = *src_screen;
+
+    console_cell_t *dst_cells = _screen_cells(dst);
+    console_cell_t *src_cells = _screen_cells(src);
+    size_t count = _cell_count();
+
+    if (dst_cells && src_cells && count) {
+        memcpy(dst_cells, src_cells, count * sizeof(*dst_cells));
+    }
 }
 
 static void _clear_screen_buffer(size_t index) {
@@ -1185,6 +1253,10 @@ static void _redraw_screen(size_t index) {
         return;
     }
 
+    if (console_state.mode == CONSOLE_TEXT && _screen_is_blank(index)) {
+        return;
+    }
+
     bool temp_batch = false;
 
     if (index == console_state.active_screen && _has_back_buffer() && !console_state.flush_batch) {
@@ -1247,6 +1319,7 @@ bool console_set_active(size_t index) {
         return false;
     }
 
+    size_t previous = console_state.active_screen;
     bool screen_changed = (console_state.active_screen != index);
     if (screen_changed) {
         console_state.active_screen = index;
@@ -1254,6 +1327,14 @@ bool console_set_active(size_t index) {
 
     if (console_state.fb_owned && index == console_state.fb_owner_screen) {
         notify_ws = true;
+    } else if (
+        console_state.mode == CONSOLE_TEXT &&
+        screen_changed &&
+        previous == TTY_CONSOLE &&
+        _screen_is_blank(index)
+    ) {
+        _inherit_screen_state(index, previous);
+        console_state.handoff_refresh_pending = false;
     } else if (screen_changed || console_state.handoff_refresh_pending) {
         // Ensure the first tty-facing activation cannot inherit stale pixels.
         console_state.cursor_drawn = false;
@@ -1914,6 +1995,23 @@ ssize_t console_write_screen(size_t screen, const void *buf, size_t len) {
     }
 
     unsigned long flags = spin_lock_irqsave(&console_lock);
+
+    if (_stream_passthrough_screen(screen)) {
+        if (backend_ops->set_output_suppressed) {
+            backend_ops->set_output_suppressed(true);
+        }
+
+        _write_screen_locked(screen, buf, len);
+
+        if (backend_ops->set_output_suppressed) {
+            backend_ops->set_output_suppressed(false);
+        }
+
+        ssize_t ret = backend_ops->stream_write(buf, len);
+        spin_unlock_irqrestore(&console_lock, flags);
+        return ret < 0 ? ret : (ssize_t)len;
+    }
+
     _write_screen_locked(screen, buf, len);
     spin_unlock_irqrestore(&console_lock, flags);
 

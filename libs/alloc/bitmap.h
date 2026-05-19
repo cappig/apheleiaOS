@@ -23,12 +23,17 @@ typedef struct {
 
 static inline size_t
 bitmap_alloc_to_block(bitmap_allocator_t *alloc, void *ptr) {
-    return (ptr - alloc->chuck_start) / alloc->block_size;
+    uintptr_t start = (uintptr_t)alloc->chuck_start;
+    uintptr_t addr = (uintptr_t)ptr;
+
+    return (addr - start) / alloc->block_size;
 }
 
-static inline bitmap_word_t *
+static inline void *
 bitmap_alloc_to_ptr(bitmap_allocator_t *alloc, size_t block) {
-    return alloc->chuck_start + block * alloc->block_size;
+    uintptr_t start = (uintptr_t)alloc->chuck_start;
+
+    return (void *)(start + block * alloc->block_size);
 }
 
 bool bitmap_alloc_init(

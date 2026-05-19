@@ -2,9 +2,19 @@
 
 #include <limits.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
-static const char digits[36] __attribute__((nonstring)) =
+#if defined(__has_attribute)
+#if __has_attribute(nonstring)
+#define NONSTRING_ATTR __attribute__((nonstring))
+#endif
+#endif
+#ifndef NONSTRING_ATTR
+#define NONSTRING_ATTR
+#endif
+
+static const char digits[36] NONSTRING_ATTR =
     "0123456789abcdefghijklmnopqrstuvwxyz";
 
 
@@ -18,10 +28,10 @@ size_t ulltoa(unsigned long long value, char *buf, int base) {
     char *pos = &buffer[sizeof(buffer) - 1];
     *pos = '\0';
 
+    unsigned long long ubase = (unsigned long long)(unsigned)base;
     do {
-        lldiv_t div = ulldiv(value, base);
-        *(--pos) = digits[div.rem];
-        value = div.quot;
+        *(--pos) = digits[value % ubase];
+        value = value / ubase;
     } while (value);
 
     size_t size_used = &buffer[sizeof(buffer)] - pos;
@@ -81,13 +91,29 @@ int itobcd(int num) {
 
 
 unsigned short bswaps(unsigned short num) {
-    return __builtin_bswap16(num);
+    uint16_t v = (uint16_t)num;
+    v = (uint16_t)((v << 8) | (v >> 8));
+    return (unsigned short)v;
 }
 
 unsigned long bswapl(unsigned long num) {
-    return __builtin_bswap32(num);
+    uint32_t v = (uint32_t)num;
+    v = ((v & 0x000000ffU) << 24) |
+        ((v & 0x0000ff00U) << 8) |
+        ((v & 0x00ff0000U) >> 8) |
+        ((v & 0xff000000U) >> 24);
+    return (unsigned long)v;
 }
 
 unsigned long long bswapll(unsigned long long num) {
-    return __builtin_bswap64(num);
+    uint64_t v = (uint64_t)num;
+    v = ((v & 0x00000000000000ffULL) << 56) |
+        ((v & 0x000000000000ff00ULL) << 40) |
+        ((v & 0x0000000000ff0000ULL) << 24) |
+        ((v & 0x00000000ff000000ULL) << 8) |
+        ((v & 0x000000ff00000000ULL) >> 8) |
+        ((v & 0x0000ff0000000000ULL) >> 24) |
+        ((v & 0x00ff000000000000ULL) >> 40) |
+        ((v & 0xff00000000000000ULL) >> 56);
+    return (unsigned long long)v;
 }

@@ -88,8 +88,9 @@ void arch_kernel_stack_free(sched_thread_t *thread) {
         return;
     }
 
-    (void)thread->stack_size;
-
+#if !defined(__i386__)
+    free(thread->stack);
+#endif
     thread->stack = NULL;
 }
 

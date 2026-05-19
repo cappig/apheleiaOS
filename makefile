@@ -1,5 +1,5 @@
 NAME    := apheleia
-VERSION := alpha-1.1
+VERSION := alpha-1.2
 
 BUILD_DATE       ?= $(shell date -u +%Y-%m-%d)
 GIT_COMMIT_SHORT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -32,7 +32,6 @@ CC_BASE := \
 	-DEXTEND_LIBC \
 	-D_APHELEIA_SOURCE \
 	-nostdinc \
-	-mno-red-zone \
 	-fno-pic \
 	-fno-pie
 
@@ -44,7 +43,7 @@ LD_BASE := \
 
 include utils/toolchain.mk
 include utils/docker.mk
-include utils/qemu.mk
+include utils/emu.mk
 include userland/build.mk
 
 .DEFAULT_GOAL := all

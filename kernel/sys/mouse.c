@@ -11,10 +11,10 @@
 #include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/config.h>
 #include <sys/devfs.h>
 #include <sys/framebuffer.h>
 
-#define MOUSE_DEV_BUFFER_SIZE 256
 #define MOUSE_DEV_UID         0U
 #define MOUSE_DEV_GID         45U
 #define MOUSE_DEV_MODE        0644

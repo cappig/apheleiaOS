@@ -4,17 +4,15 @@
 #include <base/types.h>
 #include <lib/boot.h>
 #include <stddef.h>
+#include <sys/config.h>
 #include <sys/types.h>
-
-#ifndef TIMER_FREQ
-#define TIMER_FREQ 1000U
-#endif
 
 typedef struct arch_vm_space arch_vm_space_t;
 typedef void (*arch_syscall_handler_t)(arch_int_state_t *state);
 
 const kernel_args_t *arch_init(void *boot_info);
 void arch_storage_init(void);
+void arch_late_init(void);
 void arch_log_replay_console(void);
 void arch_debug_write(const char *s, size_t len);
 void arch_smp_init(void);

@@ -14,6 +14,7 @@
 #include <sys/cpu.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/usercopy.h>
 
 #include "vfs.h"
 
@@ -324,7 +325,11 @@ static ssize_t _dev_clock_ioctl(vfs_node_t *node, u64 request, void *args) {
     clock.boot = _boot_seconds();
     clock.realtime_ns = arch_realtime_ns();
 
-    memcpy(args, &clock, sizeof(clock));
+    sched_thread_t *current = sched_current();
+    if (!user_copy_to(current, args, &clock, sizeof(clock))) {
+        return -EFAULT;
+    }
+
     return 0;
 }
 

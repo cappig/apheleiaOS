@@ -3,11 +3,9 @@
 #include <base/types.h>
 #include <poll.h>
 #include <stddef.h>
+#include <sys/config.h>
 #include <sys/types.h>
 #include <termios.h>
-
-#define PTY_COUNT       8
-#define PTY_BUFFER_SIZE 4096
 
 typedef struct {
     size_t index;

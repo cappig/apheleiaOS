@@ -129,7 +129,7 @@ bool _xhci_process_events(
                     ctrl->bus,
                     ctrl->slot,
                     ctrl->func,
-                    type
+                    (unsigned int)type
                 );
                 continue;
             }

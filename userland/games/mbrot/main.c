@@ -336,13 +336,19 @@ static void draw_status_overlay(
     u32 zoom_whole = zoom_x100 / 100U;
     u32 zoom_frac = zoom_x100 % 100U;
 
-    snprintf(zoom_line, sizeof(zoom_line), "zoom: %u.%02ux", zoom_whole, zoom_frac);
+    snprintf(
+        zoom_line,
+        sizeof(zoom_line),
+        "zoom: %u.%02ux",
+        (unsigned int)zoom_whole,
+        (unsigned int)zoom_frac
+    );
     snprintf(
         res_line,
         sizeof(res_line),
         "res: step %u / %u",
-        current_step,
-        target_step
+        (unsigned int)current_step,
+        (unsigned int)target_step
     );
 
     int zoom_w = text_width_px(zoom_line);
