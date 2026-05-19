@@ -82,7 +82,7 @@ $(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS))
 	@mkdir -p $(@D)
 	$(call ld, $(KERNEL_LD_FLAGS), $@, $^)
 	@if [ "$(STRIP_KERNEL)" = "true" ]; then \
-		$(ST) --strip-debug $@; \
+		$(ST) $(STRIP_KERNEL_FLAGS) $@; \
 	fi
 
 

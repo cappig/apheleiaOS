@@ -260,6 +260,7 @@ typedef struct {
 
 typedef struct {
     u32 name;
+    u8 info;
     u16 shndx;
     u64 value;
 } elf_symbol_view_t;

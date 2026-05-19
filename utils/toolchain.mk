@@ -155,6 +155,7 @@ endif
 endif
 
 STRIP_KERNEL ?= true
+STRIP_KERNEL_FLAGS ?= --strip-debug --discard-locals
 
 CC_BASE_TRACE :=
 ifeq ($(TRACEABLE_KERNEL), true)

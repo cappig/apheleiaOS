@@ -510,6 +510,7 @@ bool elf_view_read_symbol(
 
         const elf32_sym_t *raw = (const elf32_sym_t *)entry;
         out->name = raw->name;
+        out->info = raw->info;
         out->shndx = raw->shndx;
         out->value = raw->value;
         return true;
@@ -521,6 +522,7 @@ bool elf_view_read_symbol(
 
     const elf64_sym_t *raw = (const elf64_sym_t *)entry;
     out->name = raw->name;
+    out->info = raw->info;
     out->shndx = raw->shndx;
     out->value = raw->value;
 

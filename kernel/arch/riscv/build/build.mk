@@ -173,7 +173,7 @@ $(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS)) \
 	$(ARCH_DIR)/build/linker$(ARCH_VARIANT).ld
 	@mkdir -p $(@D)
 	$(call ld, $(KERNEL_LD_FLAGS), $@, $(filter-out $(ARCH_DIR)/build/linker$(ARCH_VARIANT).ld, $^))
-	@if [ "$(STRIP_KERNEL)" = "true" ]; then $(ST) --strip-debug $@; fi
+	@if [ "$(STRIP_KERNEL)" = "true" ]; then $(ST) $(STRIP_KERNEL_FLAGS) $@; fi
 
 IMAGE_SCRIPT_DEPS := \
 	kernel/build_image_common.py \

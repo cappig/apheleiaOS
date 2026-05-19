@@ -45,6 +45,32 @@ static bool _name_is_terminated(const char *name, size_t max_len) {
     return name && memchr(name, '\0', max_len);
 }
 
+static bool _symbol_name_is_traceable(const char *name) {
+    if (!name || !*name) {
+        return false;
+    }
+
+    return name[0] != '$' && strncmp(name, ".L", 2) != 0;
+}
+
+static bool _symbol_is_traceable(const elf_symbol_view_t *sym, const char *name) {
+    if (!sym) {
+        return false;
+    }
+
+    u8 type = ELF_SYMBOL_TYPE(sym->info);
+
+    if (type == STT_FUNC) {
+        return true;
+    }
+
+    if (type == STT_NOTYPE) {
+        return _symbol_name_is_traceable(name);
+    }
+
+    return false;
+}
+
 static bool _symbol_section_to_table(
     const elf_view_t *view,
     const elf_section_view_t *sym_sec
@@ -122,6 +148,10 @@ static bool _symbol_section_to_table(
             continue;
         }
 
+        if (!_symbol_is_traceable(&sym, name)) {
+            continue;
+        }
+
         text_count++;
     }
 
@@ -177,6 +207,10 @@ static bool _symbol_section_to_table(
 
         char *name = sym_blob + str_sec.offset + sym.name;
         if (!_name_is_terminated(name, strtab_size - sym.name)) {
+            continue;
+        }
+
+        if (!_symbol_is_traceable(&sym, name)) {
             continue;
         }
 
