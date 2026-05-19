@@ -136,6 +136,7 @@ static void _flatten_blocks(
         panic("failed to allocate memory for indirect blocks");
     }
 
+    memset(indirect_blocks, 0, block_size);
     _read_fs(fs, indirect_blocks, block_num * block_size, block_size);
 
     for (u32 i = 0; i < entries_per_block && *n < max; i++) {

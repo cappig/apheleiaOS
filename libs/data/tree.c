@@ -7,8 +7,16 @@
 
 tree_node_t *tree_create_node(void *data) {
     tree_node_t *new = calloc(1, sizeof(tree_node_t));
+    if (!new) {
+        return NULL;
+    }
 
     new->children = list_create();
+    if (!new->children) {
+        free(new);
+        return NULL;
+    }
+
     new->parent = NULL;
     new->data = data;
 
@@ -16,6 +24,10 @@ tree_node_t *tree_create_node(void *data) {
 }
 
 void tree_destroy_node(tree_node_t *node) {
+    if (!node) {
+        return;
+    }
+
     if (node->children) {
         list_destroy(node->children, false);
     }
@@ -25,7 +37,15 @@ void tree_destroy_node(tree_node_t *node) {
 
 
 tree_t *tree_create_rooted(tree_node_t *root) {
+    if (!root) {
+        return NULL;
+    }
+
     tree_t *new = malloc(sizeof(tree_t));
+    if (!new) {
+        return NULL;
+    }
+
     new->root = root;
     new->nodes = 1;
 
@@ -34,7 +54,12 @@ tree_t *tree_create_rooted(tree_node_t *root) {
 
 tree_t *tree_create(void *root_data) {
     tree_node_t *root = tree_create_node(root_data);
-    return tree_create_rooted(root);
+    tree_t *tree = tree_create_rooted(root);
+    if (!tree) {
+        tree_destroy_node(root);
+    }
+
+    return tree;
 }
 
 void tree_destroy(tree_t *trunk) {

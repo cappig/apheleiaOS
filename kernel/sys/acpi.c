@@ -58,12 +58,22 @@ static sdt_header_t *_copy_table(u64 phys_addr) {
     return copy;
 }
 
-static void _append_table(sdt_header_t *table) {
+static bool _append_table(sdt_header_t *table) {
     if (!table || !acpi_tables) {
-        return;
+        return false;
     }
 
-    list_append(acpi_tables, list_create_node(table));
+    list_node_t *node = list_create_node(table);
+    if (!node) {
+        return false;
+    }
+
+    if (!list_append(acpi_tables, node)) {
+        list_destroy_node(node);
+        return false;
+    }
+
+    return true;
 }
 
 static void _parse_rsdt(u64 rsdt_phys) {
@@ -72,7 +82,10 @@ static void _parse_rsdt(u64 rsdt_phys) {
         return;
     }
 
-    _append_table(table);
+    if (!_append_table(table)) {
+        free(table);
+        return;
+    }
 
     rsdt_t *rsdt = (rsdt_t *)table;
     size_t entries =
@@ -86,7 +99,9 @@ static void _parse_rsdt(u64 rsdt_phys) {
             continue;
         }
 
-        _append_table(entry);
+        if (!_append_table(entry)) {
+            free(entry);
+        }
     }
 }
 
@@ -98,7 +113,10 @@ static void _parse_xsdt(u64 xsdt_phys) {
         return;
     }
 
-    _append_table(table);
+    if (!_append_table(table)) {
+        free(table);
+        return;
+    }
 
     xsdt_t *xsdt = (xsdt_t *)table;
     size_t entries =
@@ -112,7 +130,9 @@ static void _parse_xsdt(u64 xsdt_phys) {
             continue;
         }
 
-        _append_table(entry);
+        if (!_append_table(entry)) {
+            free(entry);
+        }
     }
 }
 

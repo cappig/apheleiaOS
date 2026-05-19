@@ -473,25 +473,38 @@ strftime(char *str, size_t max, const char *format, const struct tm *tm) {
     return pos;
 }
 
+static char asctime_buf[32];
+
+static char *asctime_bad_time(void) {
+    static const char text[] = "??? ??? ?? ??:??:?? ????\n";
+    memcpy(asctime_buf, text, sizeof(text));
+    return asctime_buf;
+}
+
 char *asctime(const struct tm *time) {
-    static char buf[32];
-
     if (!time) {
-        return strcpy(buf, "??? ??? ?? ??:??:?? ????\n");
+        return asctime_bad_time();
     }
 
-    if (!strftime(buf, sizeof(buf), "%a %b %e %H:%M:%S %Y\n", time)) {
-        return strcpy(buf, "??? ??? ?? ??:??:?? ????\n");
+    size_t len = strftime(
+        asctime_buf,
+        sizeof(asctime_buf),
+        "%a %b %e %H:%M:%S %Y\n",
+        time
+    );
+
+    if (!len) {
+        return asctime_bad_time();
     }
 
-    return buf;
+    return asctime_buf;
 }
 
 char *ctime(const time_t *timer) {
     struct tm tm_buf;
 
-    if (!localtime_r(timer, &tm_buf)) {
-        return asctime(NULL);
+    if (!timer || !localtime_r(timer, &tm_buf)) {
+        return asctime_bad_time();
     }
 
     return asctime(&tm_buf);

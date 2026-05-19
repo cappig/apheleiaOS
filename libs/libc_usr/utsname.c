@@ -2,6 +2,10 @@
 #include <string.h>
 #include <sys/utsname.h>
 
+#ifndef VERSION
+#define VERSION "unknown"
+#endif
+
 int uname(struct utsname *buf) {
     if (!buf) {
         errno = EINVAL;
@@ -11,7 +15,7 @@ int uname(struct utsname *buf) {
     memset(buf, 0, sizeof(*buf));
     strncpy(buf->sysname, "apheleiaOS", sizeof(buf->sysname) - 1);
     strncpy(buf->nodename, "apheleia", sizeof(buf->nodename) - 1);
-    strncpy(buf->release, "alpha", sizeof(buf->release) - 1);
+    strncpy(buf->release, VERSION, sizeof(buf->release) - 1);
     strncpy(buf->version, "posix-base", sizeof(buf->version) - 1);
 #ifdef ARCH_NAME
     strncpy(buf->machine, ARCH_NAME, sizeof(buf->machine) - 1);

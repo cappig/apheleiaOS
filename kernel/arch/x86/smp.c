@@ -123,7 +123,14 @@ static const u8 *_trampoline_end(void) {
 }
 
 static size_t _trampoline_size(void) {
-    return (size_t)(_trampoline_end() - _trampoline_start());
+    uintptr_t start = (uintptr_t)_trampoline_start();
+    uintptr_t end = (uintptr_t)_trampoline_end();
+
+    return end > start ? (size_t)(end - start) : 0;
+}
+
+static size_t _trampoline_offset(const u8 *symbol) {
+    return (size_t)((uintptr_t)symbol - (uintptr_t)_trampoline_start());
 }
 
 static void _patch_trampoline(void *trampoline_base, const cpu_core_t *core) {
@@ -131,14 +138,11 @@ static void _patch_trampoline(void *trampoline_base, const cpu_core_t *core) {
         (u64)(uintptr_t)(smp_ap_stacks[core->id] + ARRAY_LEN(smp_ap_stacks[0]));
 
 #if defined(__x86_64__)
-    size_t off_cr3 = (size_t)(&smp_trampoline64_cr3 - &smp_trampoline64_start);
-    size_t off_efer =
-        (size_t)(&smp_trampoline64_efer - &smp_trampoline64_start);
-    size_t off_entry =
-        (size_t)(&smp_trampoline64_entry - &smp_trampoline64_start);
-    size_t off_arg = (size_t)(&smp_trampoline64_arg - &smp_trampoline64_start);
-    size_t off_stack =
-        (size_t)(&smp_trampoline64_stack - &smp_trampoline64_start);
+    size_t off_cr3 = _trampoline_offset(&smp_trampoline64_cr3);
+    size_t off_efer = _trampoline_offset(&smp_trampoline64_efer);
+    size_t off_entry = _trampoline_offset(&smp_trampoline64_entry);
+    size_t off_arg = _trampoline_offset(&smp_trampoline64_arg);
+    size_t off_stack = _trampoline_offset(&smp_trampoline64_stack);
 
     _write32(trampoline_base, off_cr3, (u32)read_cr3());
     _write32(trampoline_base, off_efer, (u32)read_msr(EFER_MSR));
@@ -150,12 +154,10 @@ static void _patch_trampoline(void *trampoline_base, const cpu_core_t *core) {
     _write64(trampoline_base, off_arg, (u64)core->id);
     _write64(trampoline_base, off_stack, stack_top);
 #else
-    size_t off_cr3 = (size_t)(&smp_trampoline32_cr3 - &smp_trampoline32_start);
-    size_t off_entry =
-        (size_t)(&smp_trampoline32_entry - &smp_trampoline32_start);
-    size_t off_arg = (size_t)(&smp_trampoline32_arg - &smp_trampoline32_start);
-    size_t off_stack =
-        (size_t)(&smp_trampoline32_stack - &smp_trampoline32_start);
+    size_t off_cr3 = _trampoline_offset(&smp_trampoline32_cr3);
+    size_t off_entry = _trampoline_offset(&smp_trampoline32_entry);
+    size_t off_arg = _trampoline_offset(&smp_trampoline32_arg);
+    size_t off_stack = _trampoline_offset(&smp_trampoline32_stack);
 
     _write32(trampoline_base, off_cr3, (u32)read_cr3());
     _write32(

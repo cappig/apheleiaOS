@@ -174,26 +174,28 @@ static bool _hashmap_rehash(hashmap_t *map, size_t new_capacity) {
         return false;
     }
 
-    hashmap_entry_t *old_entries = map->entries;
-    size_t old_capacity = map->capacity;
+    hashmap_t tmp = *map;
+    tmp.entries = new_entries;
+    tmp.capacity = new_capacity;
+    tmp.size = 0;
 
-    map->entries = new_entries;
-    map->capacity = new_capacity;
-    map->size = 0;
-
-    for (size_t i = 0; i < old_capacity; i++) {
-        const hashmap_entry_t *entry = &old_entries[i];
+    for (size_t i = 0; i < map->capacity; i++) {
+        const hashmap_entry_t *entry = &map->entries[i];
         if (entry->state != HASHMAP_SLOT_FULL) {
             continue;
         }
 
-        if (!_hashmap_insert_raw(map, entry->key, entry->value)) {
-            free(old_entries);
+        if (!_hashmap_insert_raw(&tmp, entry->key, entry->value)) {
+            free(new_entries);
             return false;
         }
     }
 
-    free(old_entries);
+    free(map->entries);
+    map->entries = tmp.entries;
+    map->capacity = tmp.capacity;
+    map->size = tmp.size;
+
     return true;
 }
 

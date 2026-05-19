@@ -428,7 +428,10 @@ vfs_t *vfs_init(void) {
     assert(vfs);
 
     vfs_node_t *root = vfs_create_node(NULL, VFS_DIR);
+    assert(root);
+
     vfs->tree = tree_create_rooted(root->tree_entry);
+    assert(vfs->tree);
 
     log_debug("VFS initialized");
     return vfs;
@@ -444,12 +447,22 @@ vfs_node_t *vfs_create_node(char *name, u32 type) {
 
     node->type = type;
     node->tree_entry = tree_create_node(node);
+    if (!node->tree_entry) {
+        free(node);
+        return NULL;
+    }
+
     node->time.created = _time_now();
     node->time.modified = node->time.created;
     node->time.accessed = node->time.created;
 
     if (name) {
         node->name = strdup(name);
+        if (!node->name) {
+            tree_destroy_node(node->tree_entry);
+            free(node);
+            return NULL;
+        }
     }
 
     return node;

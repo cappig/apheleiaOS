@@ -11,7 +11,7 @@
 
 static const char *_skip_space(const char *str) {
     const char *cursor = str;
-    while (cursor && isspace((unsigned char)*cursor)) {
+    while (isspace((unsigned char)*cursor)) {
         cursor++;
     }
     return cursor;
@@ -82,6 +82,23 @@ static unsigned long long _parse_unsigned(
     bool negative = false;
     bool has_digits = false;
     bool overflow = false;
+
+    if (!str) {
+        errno = EINVAL;
+        if (endptr) {
+            *endptr = NULL;
+        }
+        if (negative_out) {
+            *negative_out = false;
+        }
+        if (has_digits_out) {
+            *has_digits_out = false;
+        }
+        if (overflow_out) {
+            *overflow_out = false;
+        }
+        return 0;
+    }
 
     const char *cursor = _skip_space(str);
 

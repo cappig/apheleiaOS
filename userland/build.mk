@@ -71,7 +71,8 @@ USER_CC := \
 	-Ilibs/user \
 	-Ilibs/gui \
 	$(USER_ARCH_CFLAGS) \
-	-DARCH_NAME=\"$(USER_ARCH_NAME)\"
+	-DARCH_NAME=\"$(USER_ARCH_NAME)\" \
+	-DVERSION=\"$(VERSION)\"
 
 USER_AS := -felf$(ARCH_VARIANT)
 

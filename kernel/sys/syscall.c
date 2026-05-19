@@ -815,6 +815,16 @@ static u64 _mmap_prot_flags(int prot) {
     return flags;
 }
 
+static bool _mmap_prot_valid(int prot) {
+    int known = PROT_READ | PROT_WRITE | PROT_EXEC;
+    return prot != PROT_NONE && (prot & ~known) == 0;
+}
+
+static bool _mmap_flags_valid(int flags) {
+    int known = MAP_SHARED | MAP_PRIVATE | MAP_FIXED | MAP_ANON;
+    return (flags & ~known) == 0;
+}
+
 static void _drop_region_exact(
     sched_thread_t *thread,
     uintptr_t addr,
@@ -1853,7 +1863,7 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
     }
 
     int prot = req.prot;
-    if (prot == PROT_NONE) {
+    if (!_mmap_prot_valid(prot) || !_mmap_flags_valid(req.flags)) {
         return (uintptr_t)-EINVAL;
     }
 

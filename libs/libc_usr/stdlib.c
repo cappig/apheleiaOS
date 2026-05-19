@@ -249,7 +249,8 @@ static int _append_component(char *out, size_t out_cap, const char *comp) {
 static void _pop_component(char *out) {
     size_t len = strlen(out);
     if (len <= 1) {
-        strcpy(out, "/");
+        out[0] = '/';
+        out[1] = '\0';
         return;
     }
 
@@ -262,7 +263,8 @@ static void _pop_component(char *out) {
     }
 
     if (!len) {
-        strcpy(out, "/");
+        out[0] = '/';
+        out[1] = '\0';
     }
 }
 
@@ -274,18 +276,21 @@ char *realpath(const char *path, char *resolved_path) {
 
     char combined[PATH_MAX] = {0};
     if (path[0] == '/') {
-        if (strlen(path) >= sizeof(combined)) {
+        size_t path_len = strlen(path);
+        if (path_len >= sizeof(combined)) {
             errno = ENAMETOOLONG;
             return NULL;
         }
-        strcpy(combined, path);
+
+        memcpy(combined, path, path_len + 1);
     } else {
         if (!getcwd(combined, sizeof(combined))) {
             return NULL;
         }
 
         size_t len = strlen(combined);
-        if (len + 1 + strlen(path) + 1 > sizeof(combined)) {
+        size_t path_len = strlen(path);
+        if (len + 1 + path_len + 1 > sizeof(combined)) {
             errno = ENAMETOOLONG;
             return NULL;
         }
@@ -295,11 +300,11 @@ char *realpath(const char *path, char *resolved_path) {
             combined[len] = '\0';
         }
 
-        strcat(combined, path);
+        memcpy(combined + len, path, path_len + 1);
     }
 
     char work[PATH_MAX] = {0};
-    strcpy(work, combined);
+    memcpy(work, combined, strlen(combined) + 1);
 
     char normalized[PATH_MAX] = "/";
     char *save = NULL;
@@ -337,7 +342,8 @@ char *realpath(const char *path, char *resolved_path) {
         }
     }
 
-    if (strlen(normalized) >= PATH_MAX) {
+    size_t normalized_len = strlen(normalized);
+    if (normalized_len >= PATH_MAX) {
         errno = ENAMETOOLONG;
         if (!resolved_path) {
             free(out);
@@ -345,7 +351,7 @@ char *realpath(const char *path, char *resolved_path) {
         return NULL;
     }
 
-    strcpy(out, normalized);
+    memcpy(out, normalized, normalized_len + 1);
     return out;
 }
 
