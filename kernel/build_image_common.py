@@ -699,6 +699,41 @@ def _dir_entry(name: str, attr: int, first_cluster: int, size: int = 0) -> bytes
     return _dir_entry_raw(n + x, attr, first_cluster, size)
 
 
+def esp_fat16_size_sectors(
+    *,
+    efi_app: Path,
+    kernel_elf: Path,
+    rootfs_image: Path,
+    align_sectors: int = 2048,
+) -> int:
+    bps = SECTOR_SIZE
+    spc = 4
+    reserved = 1
+    num_fats = 2
+    root_entries = 512
+    root_dir_sectors = div_round_up(root_entries * 32, bps)
+    cluster_size = spc * bps
+
+    payload_sizes = [
+        efi_app.stat().st_size,
+        kernel_elf.stat().st_size,
+        rootfs_image.stat().st_size,
+    ]
+
+    file_clusters = sum(max(1, div_round_up(size, cluster_size)) for size in payload_sizes)
+    data_clusters = max(32, 3 + file_clusters + 16)
+
+    spf = 1
+    while True:
+        need = div_round_up((data_clusters + 2) * 2, bps)
+        if need == spf:
+            break
+        spf = need
+
+    sectors = reserved + num_fats * spf + root_dir_sectors + data_clusters * spc
+    return align_up(sectors, align_sectors)
+
+
 def build_esp_fat16_image(
     out_path: Path,
     *,

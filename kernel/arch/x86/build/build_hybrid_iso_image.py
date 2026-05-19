@@ -18,6 +18,7 @@ from build_image_common import (
     build_esp_fat16_image,
     build_ext2_image,
     div_round_up,
+    esp_fat16_size_sectors,
     prepare_root_tree,
     write_at,
     write_file_to_lba,
@@ -583,16 +584,21 @@ def main() -> None:
             root_tree,
             ext2_img,
             block_size=4096,
-            inode_count=2048,
-            growth_numerator=2,
+            growth_numerator=1,
             growth_denominator=1,
+            minimum_bytes=0,
         )
 
         efi_img: Path | None = None
         if uefi_enabled:
+            esp_sectors = esp_fat16_size_sectors(
+                efi_app=efi_app,
+                kernel_elf=kernel_elf,
+                rootfs_image=ext2_img,
+            )
             build_esp_fat16_image(
                 esp_img,
-                size_sectors=131072,  # 64 MiB
+                size_sectors=esp_sectors,
                 efi_app=efi_app,
                 kernel_elf=kernel_elf,
                 rootfs_image=ext2_img,

@@ -17,6 +17,7 @@ from build_image_common import (
     build_esp_fat16_image,
     build_ext2_image,
     div_round_up,
+    esp_fat16_size_sectors,
     prepare_root_tree,
     write_file_to_lba,
     write_gpt,
@@ -24,7 +25,6 @@ from build_image_common import (
 )
 
 ALIGN_SECTORS = 2048
-ESP_SECTORS = 131072  # 64 MiB
 GPT_FOOTER_SECTORS = 33
 
 GPT_BIOS_BOOT_GUID = "21686148-6449-6E6F-744E-656564454649"
@@ -55,9 +55,16 @@ def main() -> None:
 
         prepare_root_tree(args.rootfs_dir, root_tree)
         build_ext2_image(root_tree, ext2_img, block_size=4096)
+
+        esp_sectors = esp_fat16_size_sectors(
+            efi_app=args.efi_app,
+            kernel_elf=args.kernel_elf,
+            rootfs_image=ext2_img,
+            align_sectors=ALIGN_SECTORS,
+        )
         build_esp_fat16_image(
             esp_img,
-            size_sectors=ESP_SECTORS,
+            size_sectors=esp_sectors,
             efi_app=args.efi_app,
             kernel_elf=args.kernel_elf,
             rootfs_image=ext2_img,
@@ -70,7 +77,7 @@ def main() -> None:
         bios_end = bios_start + bios_sectors - 1
 
         esp_start = align_up(bios_end + 1, ALIGN_SECTORS)
-        esp_end = esp_start + ESP_SECTORS - 1
+        esp_end = esp_start + esp_sectors - 1
 
         ext2_start = align_up(esp_end + 1, ALIGN_SECTORS)
         ext2_end = ext2_start + ext2_sectors - 1
@@ -117,7 +124,7 @@ def main() -> None:
             args.output_img,
             code440=mbr_code,
             entries=[
-                (0x00, 0xEF, esp_start, ESP_SECTORS),
+                (0x00, 0xEF, esp_start, esp_sectors),
                 (0x80, 0x83, bios_start, bios_sectors),
                 (0x00, 0x83, ext2_start, ext2_sectors),
                 (0x00, 0xEE, 1, total_sectors - 1),
