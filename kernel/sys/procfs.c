@@ -931,10 +931,7 @@ static bool _upsert_dir(
         return false;
     }
 
-    if (dir->interface) {
-        free(dir->interface);
-        dir->interface = NULL;
-    }
+    vfs_clear_interface(dir);
 
     dir->type = VFS_DIR;
     dir->mode = mode;
@@ -969,18 +966,30 @@ static bool _upsert_file(
 
     if (!node->interface) {
         if (field == PROC_FIELD_STAT) {
-            node->interface = vfs_create_interface(_proc_stat_read, NULL, NULL);
+            vfs_adopt_interface(
+                node,
+                vfs_create_interface(_proc_stat_read, NULL, NULL)
+            );
         } else if (field == PROC_FIELD_CWD) {
-            node->interface = vfs_create_interface(_proc_cwd_read, NULL, NULL);
+            vfs_adopt_interface(
+                node,
+                vfs_create_interface(_proc_cwd_read, NULL, NULL)
+            );
         } else if (field == PROC_FIELD_GROUPS) {
-            node->interface =
-                vfs_create_interface(_proc_groups_read, _proc_groups_write, NULL);
+            vfs_adopt_interface(
+                node,
+                vfs_create_interface(_proc_groups_read, _proc_groups_write, NULL)
+            );
         } else if (field == PROC_FIELD_AFFINITY) {
-            node->interface =
-                vfs_create_interface(_proc_affinity_read, _proc_affinity_write, NULL);
+            vfs_adopt_interface(
+                node,
+                vfs_create_interface(_proc_affinity_read, _proc_affinity_write, NULL)
+            );
         } else {
-            node->interface =
-                vfs_create_interface(_proc_value_read, _proc_value_write, NULL);
+            vfs_adopt_interface(
+                node,
+                vfs_create_interface(_proc_value_read, _proc_value_write, NULL)
+            );
         }
 
         if (!node->interface) {
@@ -1049,10 +1058,7 @@ bool procfs_init(void) {
         return false;
     }
 
-    if (proc->interface) {
-        free(proc->interface);
-        proc->interface = NULL;
-    }
+    vfs_clear_interface(proc);
 
     proc->type = VFS_DIR;
     proc->mode = 0555;
@@ -1143,7 +1149,7 @@ void procfs_unregister_pid(pid_t pid) {
         return;
     }
 
-    if (!vfs_detach_child(proc_root, proc_dir)) {
+    if (vfs_detach_child(proc_root, proc_dir) < 0) {
         mutex_unlock(&procfs_tree_lock);
         return;
     }

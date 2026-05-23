@@ -105,6 +105,7 @@ struct fs_interface {
         uid_t uid,
         gid_t gid
     );
+    void (*destroy_node)(fs_instance_t *instance, vfs_node_t *node);
 
     // mkdir
     // touch

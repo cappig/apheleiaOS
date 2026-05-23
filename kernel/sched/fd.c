@@ -200,7 +200,7 @@ static void sched_fd_retain(const sched_fd_t *fd) {
     }
 
     if (fd->kind == SCHED_FD_VFS && fd->node) {
-        __atomic_fetch_add(&fd->node->open_refs, 1, __ATOMIC_ACQ_REL);
+        vfs_node_open(fd->node);
     }
 
     if (fd->pty_index >= 0) {
@@ -220,10 +220,7 @@ static void sched_fd_release_value(sched_fd_t *fd) {
     }
 
     if (fd->kind == SCHED_FD_VFS && fd->node) {
-        u32 prev = __atomic_fetch_sub(&fd->node->open_refs, 1, __ATOMIC_ACQ_REL);
-        if (!prev) {
-            panic("sched fd release underflow on vfs node");
-        }
+        vfs_node_close(fd->node);
     }
 
     if (fd->pty_index >= 0) {

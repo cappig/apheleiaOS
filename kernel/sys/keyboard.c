@@ -298,7 +298,7 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
     }
 
     vfs_node_t *kbd_node = vfs_lookup_from(dev_dir, "keyboard");
-    if (!kbd_node || !vfs_chown(kbd_node, KBD_DEV_UID, KBD_DEV_GID)) {
+    if (!kbd_node || vfs_chown(kbd_node, KBD_DEV_UID, KBD_DEV_GID) < 0) {
         log_warn("failed to set /dev/keyboard ownership to root:input");
         return false;
     }

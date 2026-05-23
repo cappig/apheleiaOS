@@ -754,7 +754,10 @@ static void _publish_partition_nodes(disk_dev_t *dev) {
             part->fs_instance ? part->fs_instance : _probe_partition(part);
 
         node->private = part;
-        node->interface = vfs_create_interface(_vfs_read, _vfs_write, NULL);
+        vfs_adopt_interface(
+            node,
+            vfs_create_interface(_vfs_read, _vfs_write, NULL)
+        );
     }
 }
 
@@ -942,7 +945,7 @@ bool disk_unregister(disk_dev_t *dev) {
                 continue;
             }
 
-            if (!vfs_unlink(path)) {
+            if (vfs_unlink(path) < 0) {
                 mutex_unlock(&disk_registry_lock);
                 return false;
             }
@@ -1087,7 +1090,7 @@ bool disk_mount_partition_node(
         instance->refcount = 0;
     }
 
-    bool ok = vfs_mount(instance, target);
+    bool ok = vfs_mount(instance, target) == 0;
     mutex_unlock(&disk_registry_lock);
     return ok;
 }
@@ -1097,7 +1100,7 @@ bool disk_unmount_node(vfs_node_t *target, bool destroy_tree) {
         return false;
     }
 
-    return vfs_unmount(target, destroy_tree);
+    return vfs_unmount(target, destroy_tree) == 0;
 }
 
 void disk_clear_preferred_rootfs_uuid(void) {
@@ -1148,7 +1151,7 @@ static bool _mount_partition_as_root(vfs_node_t *root, disk_partition_t *part) {
         return false;
     }
 
-    if (!vfs_mount(instance, root)) {
+    if (vfs_mount(instance, root) < 0) {
         return false;
     }
 

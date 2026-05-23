@@ -524,7 +524,7 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
     }
 
     vfs_node_t *fb_node = vfs_lookup("/dev/fb");
-    if (!fb_node || !vfs_chown(fb_node, FB_DEV_UID, FB_DEV_GID)) {
+    if (!fb_node || vfs_chown(fb_node, FB_DEV_UID, FB_DEV_GID) < 0) {
         log_warn("failed to set /dev/fb ownership to root:video");
         return false;
     }

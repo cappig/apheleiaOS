@@ -13,6 +13,7 @@
 #include "disk.h"
 
 #define VFS_EOF (-1)
+#define VFS_INTERFACE_STATIC ((u32)-1)
 
 // regular and device files should provide the read/(write) interface
 #define VFS_IS_READABLE(type) ((type) >= VFS_FILE && (type) <= VFS_CHARDEV)
@@ -48,44 +49,53 @@ typedef struct vfs_node vfs_node_t;
 typedef struct vfs_interface vfs_interface_t;
 struct sched_wait_queue;
 
+typedef ssize_t (*vfs_io_fn)(
+    vfs_node_t *node,
+    void *buf,
+    size_t offset,
+    size_t len,
+    u32 flags
+);
+typedef ssize_t (*vfs_truncate_fn)(vfs_node_t *node, size_t len);
+typedef short (*vfs_poll_fn)(vfs_node_t *node, short events, u32 flags);
+typedef struct sched_wait_queue *(*vfs_wait_queue_fn)(
+    vfs_node_t *node,
+    short events,
+    u32 flags
+);
+typedef ssize_t (*vfs_ioctl_fn)(vfs_node_t *node, u64 request, void *args);
+typedef ssize_t (*vfs_create_fn)(vfs_node_t *node, vfs_node_t *child);
+typedef ssize_t (*vfs_link_fn)(
+    vfs_node_t *node,
+    vfs_node_t *child,
+    vfs_node_t *target
+);
+typedef ssize_t (*vfs_remove_fn)(vfs_node_t *node, vfs_node_t *child);
+typedef ssize_t (*vfs_rename_fn)(
+    vfs_node_t *old_parent,
+    vfs_node_t *child,
+    vfs_node_t *new_parent,
+    vfs_node_t *target,
+    const char *new_name
+);
+
 struct vfs_interface {
     u32 refcount;
 
     // Operations on the node itself
-    ssize_t (*read)(
-        vfs_node_t *node,
-        void *buf,
-        size_t offset,
-        size_t len,
-        u32 flags
-    );
-    ssize_t (*write)(
-        vfs_node_t *node,
-        void *buf,
-        size_t offset,
-        size_t len,
-        u32 flags
-    );
-    ssize_t (*truncate)(vfs_node_t *node, size_t len);
-    short (*poll)(vfs_node_t *node, short events, u32 flags);
-    struct sched_wait_queue *(*wait_queue)(
-        vfs_node_t *node,
-        short events,
-        u32 flags
-    );
-
-    ssize_t (*mmap)(
-        vfs_node_t *node,
-        void *buf,
-        size_t offset,
-        size_t len,
-        u32 flags
-    );
-    ssize_t (*ioctl)(vfs_node_t *node, u64 request, void *args);
+    vfs_io_fn read;
+    vfs_io_fn write;
+    vfs_truncate_fn truncate;
+    vfs_poll_fn poll;
+    vfs_wait_queue_fn wait_queue;
+    vfs_io_fn mmap;
+    vfs_ioctl_fn ioctl;
 
     // Operations on children
-    ssize_t (*create)(vfs_node_t *node, vfs_node_t *child);
-    ssize_t (*remove)(vfs_node_t *node, char *name);
+    vfs_create_fn create;
+    vfs_link_fn link;
+    vfs_remove_fn remove;
+    vfs_rename_fn rename;
 };
 
 struct vfs_node {
@@ -100,8 +110,9 @@ struct vfs_node {
 
     u64 size;
     u64 inode;
+    u32 nlink;
 
-    struct vfs_node *link; // The target if this node is a symlink or a mount point
+    struct vfs_node *link; // Mount target.
     char *symlink_target;
 
     vfs_interface_t *interface;
@@ -109,7 +120,10 @@ struct vfs_node {
 
     tree_node_t *tree_entry;
     hashmap_str_t *children_index;
-    volatile u32 open_refs;
+    volatile u32 refs;      // Internal VFS holds.
+    volatile u32 open_refs; // Live file descriptors.
+    bool busy;    // Create/remove is in progress; path lookup should skip it.
+    bool removed; // Unlinked from the tree, but still held by open files.
 
     void *private;
 };
@@ -123,23 +137,18 @@ vfs_t *vfs_init(void);
 
 vfs_node_t *vfs_create_node(char *name, u32 type);
 void vfs_destroy_node(vfs_node_t *node);
+void vfs_node_retain(vfs_node_t *node);
+void vfs_node_release(vfs_node_t *node);
+void vfs_node_open(vfs_node_t *node);
+void vfs_node_close(vfs_node_t *node);
+void vfs_set_interface(vfs_node_t *node, vfs_interface_t *interface);
+void vfs_adopt_interface(vfs_node_t *node, vfs_interface_t *interface);
+void vfs_clear_interface(vfs_node_t *node);
 
 vfs_interface_t *vfs_create_interface(
-    ssize_t (*read)(
-        vfs_node_t *node,
-        void *buf,
-        size_t offset,
-        size_t len,
-        u32 flags
-    ),
-    ssize_t (*write)(
-        vfs_node_t *node,
-        void *buf,
-        size_t offset,
-        size_t len,
-        u32 flags
-    ),
-    ssize_t (*truncate)(vfs_node_t *node, size_t len)
+    vfs_io_fn read,
+    vfs_io_fn write,
+    vfs_truncate_fn truncate
 );
 void vfs_destroy_interface(vfs_interface_t *interface);
 
@@ -149,30 +158,32 @@ vfs_node_t *vfs_lookup_from(vfs_node_t *from, const char *path);
 vfs_node_t *vfs_lookup(const char *path);
 vfs_node_t *vfs_lookup_relative(const char *root, const char *path);
 vfs_node_t *vfs_open(const char *path, u32 type, bool create, mode_t mode);
+vfs_node_t *vfs_resolve_node(vfs_node_t *node);
 
-bool vfs_access(vfs_node_t *vnode, uid_t uid, gid_t gid, int mode);
+int vfs_access(vfs_node_t *vnode, uid_t uid, gid_t gid, int mode);
 int vfs_check_search(
     const char *path,
     uid_t uid,
     gid_t gid,
     bool allow_missing_leaf
 );
-bool vfs_stat_node(vfs_node_t *node, stat_t *out, bool follow_links);
-bool vfs_chmod(vfs_node_t *node, mode_t mode);
-bool vfs_chown(vfs_node_t *node, uid_t uid, gid_t gid);
-bool vfs_link(const char *target, const char *link_path);
-MUST_USE bool vfs_unlink(const char *path);
-MUST_USE bool vfs_rmdir(const char *path);
-bool vfs_detach_child(vfs_node_t *parent, vfs_node_t *child);
-bool vfs_rename(const char *old_path, const char *new_path);
+int vfs_stat_node(vfs_node_t *node, stat_t *out, bool follow_links);
+int vfs_chmod(vfs_node_t *node, mode_t mode);
+int vfs_chown(vfs_node_t *node, uid_t uid, gid_t gid);
+int vfs_hardlink(const char *target, const char *link_path);
+int vfs_symlink(const char *target, const char *link_path);
+MUST_USE int vfs_unlink(const char *path);
+MUST_USE int vfs_rmdir(const char *path);
+int vfs_detach_child(vfs_node_t *parent, vfs_node_t *child);
+int vfs_rename(const char *old_path, const char *new_path);
 
-bool vfs_insert_child(vfs_node_t *parent, vfs_node_t *child);
-bool vfs_insert_child_virtual(vfs_node_t *parent, vfs_node_t *child);
+int vfs_insert_child(vfs_node_t *parent, vfs_node_t *child);
+int vfs_insert_child_virtual(vfs_node_t *parent, vfs_node_t *child);
 vfs_node_t *vfs_create(vfs_node_t *parent, char *name, u32 type, mode_t mode);
 vfs_node_t *vfs_create_virtual(vfs_node_t *parent, char *name, u32 type, mode_t mode);
 
-bool vfs_mount(fs_instance_t *fs, vfs_node_t *mount);
-bool vfs_unmount(vfs_node_t *mount, bool destroy_tree);
+int vfs_mount(fs_instance_t *fs, vfs_node_t *mount);
+int vfs_unmount(vfs_node_t *mount, bool destroy_tree);
 
 ssize_t
 vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);

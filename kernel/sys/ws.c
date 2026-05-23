@@ -103,7 +103,7 @@ static u32 _rect_end(u32 start, u32 size) {
 }
 
 static bool _set_ws_owner(vfs_node_t *node, const char *path) {
-    if (!node || !vfs_chown(node, WS_DEV_UID, WS_DEV_GID)) {
+    if (!node || vfs_chown(node, WS_DEV_UID, WS_DEV_GID) < 0) {
         log_warn("failed to set %s ownership to root:ws", path ? path : "node");
         return false;
     }

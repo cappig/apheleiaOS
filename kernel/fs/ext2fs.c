@@ -5,6 +5,7 @@
 #include <data/bitmap.h>
 #include <errno.h>
 #include <fs/ext2.h>
+#include <limits.h>
 #include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
@@ -51,6 +52,7 @@ typedef struct {
 typedef struct {
     u32 inode_num;
     ext2_inode_t inode;
+    bool reclaimed;
 } ext2_node_info_t;
 
 
@@ -418,6 +420,7 @@ static void _sync_vnode(vfs_node_t *node, const ext2_inode_t *inode) {
     }
 
     node->size = ext2_file_size(inode);
+    node->nlink = inode->hard_link_count;
     node->time.accessed = inode->last_access_time;
     node->time.created = inode->creation_time;
     node->time.modified = inode->last_modification_time;
@@ -912,6 +915,8 @@ static u16 _vfs_to_inode_type(u32 vfs_type) {
         return EXT2_IT_CHAR_DEV;
     case VFS_BLOCKDEV:
         return EXT2_IT_BLOCK_DEV;
+    case VFS_SYMLINK:
+        return EXT2_IT_SYMLINK;
     default:
         return 0;
     }
@@ -927,6 +932,8 @@ static u8 _vfs_to_dir_type(u32 vfs_type) {
         return EXT2_DIR_CHAR_DEV;
     case VFS_BLOCKDEV:
         return EXT2_DIR_BLOCK_DEV;
+    case VFS_SYMLINK:
+        return EXT2_DIR_SYMLINK;
     default:
         return EXT2_DIR_UNKNOWN;
     }
@@ -951,6 +958,10 @@ static u32 _inode_type_to_vfs(const ext2_inode_t *inode) {
 
     if (ext2_is_type(inode, EXT2_IT_BLOCK_DEV)) {
         return VFS_BLOCKDEV;
+    }
+
+    if (ext2_is_type(inode, EXT2_IT_SYMLINK)) {
+        return VFS_SYMLINK;
     }
 
     return VFS_FILE;
@@ -1255,6 +1266,57 @@ static bool _dir_remove_entry(
     return ok;
 }
 
+static bool _dir_set_entry(
+    ext2_private_t *priv,
+    disk_partition_t *part,
+    const ext2_node_info_t *dir_info,
+    const char *name,
+    u32 inode_num,
+    u8 type
+) {
+    if (!priv || !part || !dir_info || !name || !name[0] || !inode_num) {
+        return false;
+    }
+
+    u32 block_num = 0;
+    size_t pos = 0;
+
+    bool found_entry = _dir_find_entry(
+        priv,
+        part,
+        dir_info,
+        name,
+        NULL,
+        &block_num,
+        &pos,
+        NULL,
+        NULL
+    );
+
+    if (!found_entry) {
+        return false;
+    }
+
+    u8 *block = malloc(priv->block_size);
+    if (!block) {
+        return false;
+    }
+
+    if (!_read_block(priv, part, block_num, block)) {
+        free(block);
+        return false;
+    }
+
+    ext2_directory_t *entry = (ext2_directory_t *)(block + pos);
+    entry->inode = inode_num;
+    entry->type = type;
+
+    bool ok = _write_block(priv, part, block_num, block);
+
+    free(block);
+    return ok;
+}
+
 static bool _dir_is_empty(
     ext2_private_t *priv,
     disk_partition_t *part,
@@ -1300,11 +1362,14 @@ static bool _dir_is_empty(
             }
 
             if (entry->inode && entry->name_size) {
-                if (
-                    !(entry->name_size == 1 && entry->name[0] == '.') &&
-                    !(entry->name_size == 2 && entry->name[0] == '.' && 
-                    entry->name[1] == '.')
-                ) {
+                bool dot = entry->name_size == 1 && entry->name[0] == '.';
+                bool dotdot = false;
+
+                if (entry->name_size == 2) {
+                    dotdot = entry->name[0] == '.' && entry->name[1] == '.';
+                }
+
+                if (!dot && !dotdot) {
                     empty = false;
                     break;
                 }
@@ -1357,7 +1422,7 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf || !node->private || !node->fs) {
-        return -1;
+        return -EINVAL;
     }
 
     ext2_node_info_t *info = node->private;
@@ -1365,10 +1430,17 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     disk_partition_t *part = node->fs->partition;
 
     if (!priv || !part) {
-        return -1;
+        return -EINVAL;
     }
 
     mutex_lock(&priv->lock);
+
+    if (!_read_inode(priv, part, info->inode_num, &info->inode)) {
+        mutex_unlock(&priv->lock);
+        return -EIO;
+    }
+
+    _sync_vnode(node, &info->inode);
 
     u64 size = ext2_file_size(&info->inode);
     if (offset >= size) {
@@ -1377,7 +1449,7 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     }
 
     size_t to_read = len;
-    if (offset + to_read > size) {
+    if (to_read > size - offset) {
         to_read = (size_t)(size - offset);
     }
 
@@ -1387,7 +1459,7 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
 
     if (!bounce) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -ENOMEM;
     }
 
     size_t remaining = to_read;
@@ -1398,10 +1470,12 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         size_t block_off = (size_t)(cursor % block_size);
         u32 block = _block_for_index(priv, part, &info->inode, block_index);
 
-        if (!_read_block(priv, part, block, bounce)) {
+        if (!block) {
+            memset(bounce, 0, block_size);
+        } else if (!_read_block(priv, part, block, bounce)) {
             free(bounce);
             mutex_unlock(&priv->lock);
-            return -1;
+            return -EIO;
         }
 
         size_t available = block_size - block_off;
@@ -1429,12 +1503,143 @@ _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     return (ssize_t)(to_read - remaining);
 }
 
+static bool _read_inode_bytes_locked(
+    ext2_private_t *priv,
+    disk_partition_t *part,
+    const ext2_inode_t *inode,
+    char *out,
+    size_t out_len
+) {
+    if (!priv || !part || !inode || !out || !out_len) {
+        return false;
+    }
+
+    u64 size = ext2_file_size(inode);
+    if (size >= out_len) {
+        return false;
+    }
+
+    out[0] = '\0';
+    if (!size) {
+        return true;
+    }
+
+    u32 block_size = priv->block_size;
+    u8 *bounce = malloc(block_size);
+    if (!bounce) {
+        return false;
+    }
+
+    size_t copied = 0;
+    while (copied < size) {
+        u32 block_index = (u32)(copied / block_size);
+        u32 block = _block_for_index(priv, part, inode, block_index);
+        if (!block || !_read_block(priv, part, block, bounce)) {
+            free(bounce);
+            return false;
+        }
+
+        size_t chunk = block_size;
+        if (chunk > size - copied) {
+            chunk = (size_t)(size - copied);
+        }
+
+        memcpy(out + copied, bounce, chunk);
+        copied += chunk;
+    }
+
+    out[size] = '\0';
+    free(bounce);
+    return true;
+}
+
+static bool _write_inode_bytes_locked(
+    ext2_private_t *priv,
+    disk_partition_t *part,
+    ext2_node_info_t *info,
+    const void *data,
+    size_t len
+) {
+    if (!priv || !part || !info || (len && !data)) {
+        return false;
+    }
+
+    if (!len) {
+        _set_file_size(&info->inode, 0);
+        return _write_inode(priv, part, info->inode_num, &info->inode);
+    }
+
+    u32 block_size = priv->block_size;
+    u8 *bounce = malloc(block_size);
+    if (!bounce) {
+        return false;
+    }
+
+    const u8 *in = data;
+    size_t remaining = len;
+    u64 cursor = 0;
+    bool inode_changed = false;
+
+    while (remaining) {
+        u32 block_index = (u32)(cursor / block_size);
+        size_t block_off = (size_t)(cursor % block_size);
+
+        u32 block = 0;
+        bool changed = false;
+
+        if (!_ensure_block(priv, part, info, block_index, &block, &changed)) {
+            free(bounce);
+            return false;
+        }
+
+        inode_changed |= changed;
+
+        size_t available = block_size - block_off;
+        size_t chunk = remaining < available ? remaining : available;
+
+        if (block_off || chunk < block_size) {
+            if (!_read_block(priv, part, block, bounce)) {
+                free(bounce);
+                return false;
+            }
+        } else {
+            memset(bounce, 0, block_size);
+        }
+
+        memcpy(bounce + block_off, in, chunk);
+
+        if (!_write_block(priv, part, block, bounce)) {
+            free(bounce);
+            return false;
+        }
+
+        in += chunk;
+        remaining -= chunk;
+        cursor += chunk;
+    }
+
+    free(bounce);
+
+    if (cursor > ext2_file_size(&info->inode)) {
+        _set_file_size(&info->inode, cursor);
+        inode_changed = true;
+    }
+
+    u32 now = _now(priv);
+    info->inode.last_access_time = now;
+    info->inode.last_modification_time = now;
+    inode_changed = true;
+
+    return !inode_changed ||
+           _write_inode(priv, part, info->inode_num, &info->inode);
+}
+
 static ssize_t
 _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf || !node->private || !node->fs) {
-        return -1;
+        return -EINVAL;
     }
 
     ext2_node_info_t *info = node->private;
@@ -1442,14 +1647,21 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     disk_partition_t *part = node->fs->partition;
 
     if (!priv || !part) {
-        return -1;
+        return -EINVAL;
     }
 
     mutex_lock(&priv->lock);
 
+    if (!_read_inode(priv, part, info->inode_num, &info->inode)) {
+        mutex_unlock(&priv->lock);
+        return -EIO;
+    }
+
+    _sync_vnode(node, &info->inode);
+
     if (!ext2_is_type(&info->inode, EXT2_IT_FILE)) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EINVAL;
     }
 
     if (!len) {
@@ -1462,7 +1674,7 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
 
     if (!bounce) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -ENOMEM;
     }
 
     u8 *in = buf;
@@ -1480,7 +1692,7 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         if (!_ensure_block(priv, part, info, block_index, &block, &changed)) {
             free(bounce);
             mutex_unlock(&priv->lock);
-            return -1;
+            return -ENOSPC;
         }
 
         inode_changed |= changed;
@@ -1492,7 +1704,7 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
             if (!_read_block(priv, part, block, bounce)) {
                 free(bounce);
                 mutex_unlock(&priv->lock);
-                return -1;
+                return -EIO;
             }
         } else {
             memset(bounce, 0, block_size);
@@ -1503,7 +1715,7 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         if (!_write_block(priv, part, block, bounce)) {
             free(bounce);
             mutex_unlock(&priv->lock);
-            return -1;
+            return -EIO;
         }
 
         in += chunk;
@@ -1526,13 +1738,10 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
 
     if (inode_changed && !_write_inode(priv, part, info->inode_num, &info->inode)) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EIO;
     }
 
-    if (!_update_super_write_time(priv, part, now)) {
-        mutex_unlock(&priv->lock);
-        return -1;
-    }
+    _update_super_write_time(priv, part, now);
 
     _sync_vnode(node, &info->inode);
 
@@ -1542,11 +1751,11 @@ _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
 
 static ssize_t _truncate_file(vfs_node_t *node, size_t len) {
     if (!node || !node->private || !node->fs) {
-        return -1;
+        return -EINVAL;
     }
 
     if (len != 0) {
-        return -1;
+        return -ENOTSUP;
     }
 
     ext2_node_info_t *info = node->private;
@@ -1554,14 +1763,19 @@ static ssize_t _truncate_file(vfs_node_t *node, size_t len) {
     disk_partition_t *part = node->fs->partition;
 
     if (!priv || !part) {
-        return -1;
+        return -EINVAL;
     }
 
     mutex_lock(&priv->lock);
 
+    if (!_read_inode(priv, part, info->inode_num, &info->inode)) {
+        mutex_unlock(&priv->lock);
+        return -EIO;
+    }
+
     if (!_release_inode_blocks(priv, part, &info->inode)) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EIO;
     }
 
     u32 now = _now(priv);
@@ -1571,12 +1785,12 @@ static ssize_t _truncate_file(vfs_node_t *node, size_t len) {
 
     if (!_write_inode(priv, part, info->inode_num, &info->inode)) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EIO;
     }
 
     if (!_update_super_write_time(priv, part, now)) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EIO;
     }
 
     _sync_vnode(node, &info->inode);
@@ -1585,24 +1799,80 @@ static ssize_t _truncate_file(vfs_node_t *node, size_t len) {
     return 0;
 }
 
-static ssize_t _dir_remove(vfs_node_t *node, char *name) {
-    if (!node || !name || !name[0] || !node->private || !node->fs) {
-        return -1;
+static int _drop_inode_locked(
+    ext2_private_t *priv,
+    disk_partition_t *part,
+    ext2_node_info_t *parent_info,
+    vfs_node_t *victim,
+    u32 inode_num,
+    ext2_inode_t *inode
+) {
+    if (!priv || !part || !parent_info || !victim || !inode || !inode_num) {
+        return -EINVAL;
     }
 
+    ext2_node_info_t *victim_info = victim->private;
+    bool is_dir = ext2_is_type(inode, EXT2_IT_DIR);
+    bool victim_open =
+        __atomic_load_n(&victim->open_refs, __ATOMIC_ACQUIRE) != 0;
+
+    if (!is_dir && inode->hard_link_count > 1) {
+        inode->hard_link_count--;
+        return _write_inode(priv, part, inode_num, inode) ? 0 : -EIO;
+    }
+
+    if (!is_dir && victim_open) {
+        inode->hard_link_count = 0;
+        return _write_inode(priv, part, inode_num, inode) ? 0 : -EIO;
+    }
+
+    if (!_release_inode_blocks(priv, part, inode)) {
+        return -EIO;
+    }
+
+    if (!_clear_inode(priv, part, inode_num)) {
+        return -EIO;
+    }
+
+    if (!_free_inode(priv, part, inode_num)) {
+        return -EIO;
+    }
+
+    if (victim_info && victim_info->inode_num == inode_num) {
+        victim_info->reclaimed = true;
+    }
+
+    if (is_dir && parent_info->inode.hard_link_count > 1) {
+        parent_info->inode.hard_link_count--;
+    }
+
+    return 0;
+}
+
+static ssize_t _dir_remove(vfs_node_t *node, vfs_node_t *child) {
+    if (!node || !child || !child->name || !child->name[0]) {
+        return -EINVAL;
+    }
+
+    if (!node->private || !node->fs) {
+        return -EINVAL;
+    }
+
+    const char *name = child->name;
     ext2_node_info_t *parent_info = node->private;
+    ext2_node_info_t *child_info = child->private;
     ext2_private_t *priv = node->fs->private;
     disk_partition_t *part = node->fs->partition;
 
     if (!priv || !part) {
-        return -1;
+        return -EINVAL;
     }
 
     mutex_lock(&priv->lock);
 
     if (!ext2_is_type(&parent_info->inode, EXT2_IT_DIR)) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -ENOTDIR;
     }
 
     u32 inode_num = 0;
@@ -1622,43 +1892,38 @@ static ssize_t _dir_remove(vfs_node_t *node, char *name) {
 
     if (!found_entry) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -ENOENT;
     }
 
     ext2_inode_t inode;
     if (!_read_inode(priv, part, inode_num, &inode)) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EIO;
     }
 
     bool is_dir = ext2_is_type(&inode, EXT2_IT_DIR);
     if (is_dir && !_dir_is_empty(priv, part, &inode)) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -ENOTEMPTY;
     }
 
     if (!_dir_remove_entry(priv, part, parent_info, name, NULL, NULL)) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EIO;
     }
 
-    if (!_release_inode_blocks(priv, part, &inode)) {
+    int ret = _drop_inode_locked(
+        priv,
+        part,
+        parent_info,
+        child,
+        inode_num,
+        &inode
+    );
+
+    if (ret < 0) {
         mutex_unlock(&priv->lock);
-        return -1;
-    }
-
-    if (!_clear_inode(priv, part, inode_num)) {
-        mutex_unlock(&priv->lock);
-        return -1;
-    }
-
-    if (!_free_inode(priv, part, inode_num)) {
-        mutex_unlock(&priv->lock);
-        return -1;
-    }
-
-    if (is_dir && parent_info->inode.hard_link_count > 1) {
-        parent_info->inode.hard_link_count--;
+        return ret;
     }
 
     u32 now = _now(priv);
@@ -1675,22 +1940,443 @@ static ssize_t _dir_remove(vfs_node_t *node, char *name) {
 
     if (!wrote_parent_inode) {
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EIO;
+    }
+
+    _update_super_write_time(priv, part, now);
+
+    _sync_vnode(node, &parent_info->inode);
+    if (child_info && child_info->inode_num == inode_num) {
+        child_info->inode = inode;
+        _sync_vnode(child, &child_info->inode);
+    }
+
+    mutex_unlock(&priv->lock);
+    return 0;
+}
+
+static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child);
+static ssize_t
+_dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target);
+static ssize_t _dir_rename(
+    vfs_node_t *old_parent,
+    vfs_node_t *child,
+    vfs_node_t *new_parent,
+    vfs_node_t *target,
+    const char *new_name
+);
+
+static vfs_interface_t ext2_file_interface = {
+    .refcount = VFS_INTERFACE_STATIC,
+    .read = _read_file,
+    .write = _write_file,
+    .truncate = _truncate_file,
+};
+
+static vfs_interface_t ext2_dir_interface = {
+    .refcount = VFS_INTERFACE_STATIC,
+    .create = _dir_create,
+    .link = _dir_link,
+    .remove = _dir_remove,
+    .rename = _dir_rename,
+};
+
+static bool _assign_ext2_interface(vfs_node_t *node, u32 type) {
+    if (!node) {
+        return false;
+    }
+
+    vfs_interface_t *iface = NULL;
+
+    if (type == VFS_FILE) {
+        iface = &ext2_file_interface;
+    } else if (type == VFS_DIR) {
+        iface = &ext2_dir_interface;
+    }
+
+    vfs_set_interface(node, iface);
+    return true;
+}
+
+static ssize_t
+_dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target) {
+    if (!node || !child || !target || !child->name || !child->name[0]) {
+        return -EINVAL;
+    }
+
+    if (!node->private || !node->fs || target->fs != node->fs) {
+        return -EXDEV;
+    }
+
+    ext2_node_info_t *parent_info = node->private;
+    ext2_node_info_t *target_info = target->private;
+    ext2_private_t *priv = node->fs->private;
+    disk_partition_t *part = node->fs->partition;
+
+    if (!target_info || !priv || !part) {
+        return -EINVAL;
+    }
+
+    if (target->type == VFS_DIR) {
+        return -EPERM;
+    }
+
+    mutex_lock(&priv->lock);
+
+    if (!ext2_is_type(&parent_info->inode, EXT2_IT_DIR)) {
+        mutex_unlock(&priv->lock);
+        return -ENOTDIR;
+    }
+
+    if (!_read_inode(priv, part, target_info->inode_num, &target_info->inode)) {
+        mutex_unlock(&priv->lock);
+        return -EIO;
+    }
+
+    if (
+        ext2_is_type(&target_info->inode, EXT2_IT_DIR) ||
+        target_info->inode.hard_link_count == 0
+    ) {
+        mutex_unlock(&priv->lock);
+        return -EPERM;
+    }
+
+    u8 dir_type = _vfs_to_dir_type(target->type);
+    if (dir_type == EXT2_DIR_UNKNOWN) {
+        mutex_unlock(&priv->lock);
+        return -EINVAL;
+    }
+
+    u32 now = _now(priv);
+
+    target_info->inode.hard_link_count++;
+    target_info->inode.last_modification_time = now;
+
+    if (!_write_inode(priv, part, target_info->inode_num, &target_info->inode)) {
+        mutex_unlock(&priv->lock);
+        return -EIO;
+    }
+
+    bool added_entry = _dir_add_entry(
+        priv,
+        part,
+        parent_info,
+        child->name,
+        target_info->inode_num,
+        dir_type
+    );
+
+    if (!added_entry) {
+        target_info->inode.hard_link_count--;
+        _write_inode(priv, part, target_info->inode_num, &target_info->inode);
+        mutex_unlock(&priv->lock);
+        return -EIO;
+    }
+
+    parent_info->inode.last_access_time = now;
+    parent_info->inode.last_modification_time = now;
+
+    if (!_write_inode(priv, part, parent_info->inode_num, &parent_info->inode)) {
+        _dir_remove_entry(priv, part, parent_info, child->name, NULL, NULL);
+        target_info->inode.hard_link_count--;
+        _write_inode(priv, part, target_info->inode_num, &target_info->inode);
+        mutex_unlock(&priv->lock);
+        return -EIO;
+    }
+
+    _update_super_write_time(priv, part, now);
+
+    child->type = target->type;
+    child->mode = target->mode;
+    child->uid = target->uid;
+    child->gid = target->gid;
+
+    if (!_init_vnode(child, node->fs, target_info->inode_num, &target_info->inode)) {
+        mutex_unlock(&priv->lock);
+        return -ENOMEM;
+    }
+
+    if (!_assign_ext2_interface(child, child->type)) {
+        mutex_unlock(&priv->lock);
+        return -EINVAL;
+    }
+
+    _sync_vnode(target, &target_info->inode);
+    _sync_vnode(child, &target_info->inode);
+    _sync_vnode(node, &parent_info->inode);
+
+    mutex_unlock(&priv->lock);
+    return 0;
+}
+
+static ssize_t _dir_rename(
+    vfs_node_t *old_parent,
+    vfs_node_t *child,
+    vfs_node_t *new_parent,
+    vfs_node_t *target,
+    const char *new_name
+) {
+    if (!old_parent || !child || !new_parent || !new_name || !new_name[0]) {
+        return -EINVAL;
+    }
+
+    if (!child->name || !child->private || !old_parent->private) {
+        return -EINVAL;
+    }
+
+    if (!new_parent->private || old_parent->fs != new_parent->fs) {
+        return -EXDEV;
+    }
+
+    if (child->fs != old_parent->fs || !old_parent->fs) {
+        return -EXDEV;
+    }
+
+    if (target && target->fs != old_parent->fs) {
+        return -EXDEV;
+    }
+
+    ext2_node_info_t *old_info = old_parent->private;
+    ext2_node_info_t *new_info = new_parent->private;
+    ext2_node_info_t *child_info = child->private;
+    ext2_node_info_t *target_info = target ? target->private : NULL;
+    ext2_private_t *priv = old_parent->fs->private;
+    disk_partition_t *part = old_parent->fs->partition;
+
+    if (!priv || !part) {
+        return -EINVAL;
+    }
+
+    if (target && !target_info) {
+        return -EINVAL;
+    }
+
+    size_t name_len = strlen(new_name);
+    if (!name_len || name_len > 255) {
+        return name_len ? -ENAMETOOLONG : -EINVAL;
+    }
+
+    mutex_lock(&priv->lock);
+
+    if (
+        !ext2_is_type(&old_info->inode, EXT2_IT_DIR) ||
+        !ext2_is_type(&new_info->inode, EXT2_IT_DIR)
+    ) {
+        mutex_unlock(&priv->lock);
+        return -ENOTDIR;
+    }
+
+    u32 child_ino = 0;
+    u8 dir_type = EXT2_DIR_UNKNOWN;
+
+    bool found_old = _dir_find_entry(
+        priv,
+        part,
+        old_info,
+        child->name,
+        &child_ino,
+        NULL,
+        NULL,
+        NULL,
+        &dir_type
+    );
+
+    if (!found_old || child_ino != child_info->inode_num) {
+        mutex_unlock(&priv->lock);
+        return -ENOENT;
+    }
+
+    u32 target_ino = 0;
+    u8 target_type = EXT2_DIR_UNKNOWN;
+
+    bool found_new = _dir_find_entry(
+        priv,
+        part,
+        new_info,
+        new_name,
+        &target_ino,
+        NULL,
+        NULL,
+        NULL,
+        &target_type
+    );
+
+    ext2_inode_t target_inode = {0};
+    bool replacing = target != NULL;
+
+    if (replacing) {
+        if (!found_new || target_ino != target_info->inode_num) {
+            mutex_unlock(&priv->lock);
+            return -ENOENT;
+        }
+
+        if (target_ino == child_ino) {
+            mutex_unlock(&priv->lock);
+            return 0;
+        }
+
+        if (!_read_inode(priv, part, target_ino, &target_inode)) {
+            mutex_unlock(&priv->lock);
+            return -EIO;
+        }
+
+        bool child_is_dir = child->type == VFS_DIR;
+        bool target_is_dir = ext2_is_type(&target_inode, EXT2_IT_DIR);
+
+        if (child_is_dir && !target_is_dir) {
+            mutex_unlock(&priv->lock);
+            return -ENOTDIR;
+        }
+
+        if (!child_is_dir && target_is_dir) {
+            mutex_unlock(&priv->lock);
+            return -EISDIR;
+        }
+
+        if (target_is_dir && !_dir_is_empty(priv, part, &target_inode)) {
+            mutex_unlock(&priv->lock);
+            return -ENOTEMPTY;
+        }
+    } else if (found_new) {
+        mutex_unlock(&priv->lock);
+        return -EEXIST;
+    }
+
+    bool same_parent = old_parent == new_parent;
+    bool moved_dir = child->type == VFS_DIR && !same_parent;
+    u32 now = _now(priv);
+
+    bool linked_new = replacing
+        ? _dir_set_entry(priv, part, new_info, new_name, child_ino, dir_type)
+        : _dir_add_entry(priv, part, new_info, new_name, child_ino, dir_type);
+
+    if (!linked_new) {
+        mutex_unlock(&priv->lock);
+        return replacing ? -EIO : -ENOSPC;
+    }
+
+    new_info->inode.last_access_time = now;
+    new_info->inode.last_modification_time = now;
+
+    if (moved_dir) {
+        new_info->inode.hard_link_count++;
+    }
+
+    if (moved_dir) {
+        bool fixed_dot = _dir_set_entry(
+            priv,
+            part,
+            child_info,
+            "..",
+            new_info->inode_num,
+            EXT2_DIR_DIRECTORY
+        );
+
+        if (!fixed_dot) {
+            new_info->inode.hard_link_count--;
+            if (replacing) {
+                _dir_set_entry(
+                    priv,
+                    part,
+                    new_info,
+                    new_name,
+                    target_ino,
+                    target_type
+                );
+            } else {
+                _dir_remove_entry(priv, part, new_info, new_name, NULL, NULL);
+            }
+            mutex_unlock(&priv->lock);
+            return -EIO;
+        }
+    }
+
+    if (!_dir_remove_entry(priv, part, old_info, child->name, NULL, NULL)) {
+        if (moved_dir) {
+            _dir_set_entry(
+                priv,
+                part,
+                child_info,
+                "..",
+                old_info->inode_num,
+                EXT2_DIR_DIRECTORY
+            );
+        }
+
+        if (moved_dir) {
+            new_info->inode.hard_link_count--;
+        }
+
+        if (replacing) {
+            _dir_set_entry(
+                priv,
+                part,
+                new_info,
+                new_name,
+                target_ino,
+                target_type
+            );
+        } else {
+            _dir_remove_entry(priv, part, new_info, new_name, NULL, NULL);
+        }
+        mutex_unlock(&priv->lock);
+        return -EIO;
+    }
+
+    old_info->inode.last_access_time = now;
+    old_info->inode.last_modification_time = now;
+
+    if (moved_dir) {
+        if (old_info->inode.hard_link_count > 1) {
+            old_info->inode.hard_link_count--;
+        }
+    }
+
+    if (replacing) {
+        int drop_ret = _drop_inode_locked(
+            priv,
+            part,
+            new_info,
+            target,
+            target_ino,
+            &target_inode
+        );
+
+        if (drop_ret < 0) {
+            log_warn("rename replaced '%s' but inode cleanup failed", new_name);
+        }
+    }
+
+    if (!_write_inode(priv, part, new_info->inode_num, &new_info->inode)) {
+        log_warn("rename of '%s' could not update destination directory", new_name);
+    }
+
+    if (!same_parent) {
+        if (!_write_inode(priv, part, old_info->inode_num, &old_info->inode)) {
+            log_warn("rename of '%s' could not update source directory", child->name);
+        }
     }
 
     if (!_update_super_write_time(priv, part, now)) {
-        mutex_unlock(&priv->lock);
-        return -1;
+        log_warn("rename of '%s' could not update superblock time", new_name);
     }
 
-    _sync_vnode(node, &parent_info->inode);
+    _sync_vnode(old_parent, &old_info->inode);
+    _sync_vnode(new_parent, &new_info->inode);
+    _sync_vnode(child, &child_info->inode);
+
+    if (target_info && target_info->inode_num == target_ino) {
+        target_info->inode = target_inode;
+        _sync_vnode(target, &target_info->inode);
+    }
+
     mutex_unlock(&priv->lock);
     return 0;
 }
 
 static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     if (!node || !child || !node->private || !node->fs || !child->name) {
-        return -1;
+        return -EINVAL;
     }
 
     ext2_node_info_t *parent_info = node->private;
@@ -1698,7 +2384,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     disk_partition_t *part = node->fs->partition;
 
     if (!priv || !part) {
-        return -1;
+        return -EINVAL;
     }
 
     mutex_lock(&priv->lock);
@@ -1709,7 +2395,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
             child->name
         );
         mutex_unlock(&priv->lock);
-        return -1;
+        return -ENOTDIR;
     }
 
     u16 inode_type = _vfs_to_inode_type(child->type);
@@ -1720,14 +2406,14 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
             (unsigned int)child->type
         );
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EINVAL;
     }
 
     u32 inode_num = 0;
     if (!_alloc_inode(priv, part, &inode_num)) {
         log_warn("failed to create '%s' because no free inode", child->name);
         mutex_unlock(&priv->lock);
-        return -1;
+        return -ENOSPC;
     }
 
     ext2_inode_t inode = {0};
@@ -1751,7 +2437,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
             );
             _free_inode(priv, part, inode_num);
             mutex_unlock(&priv->lock);
-            return -1;
+            return -ENOSPC;
         }
 
         inode.direct_block_ptr[0] = block;
@@ -1774,7 +2460,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
             _free_block(priv, part, block);
             _free_inode(priv, part, inode_num);
             mutex_unlock(&priv->lock);
-            return -1;
+            return -EIO;
         }
     }
 
@@ -1783,7 +2469,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         _release_inode_blocks(priv, part, &inode);
         _free_inode(priv, part, inode_num);
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EIO;
     }
 
     u8 dir_type = _vfs_to_dir_type(child->type);
@@ -1806,7 +2492,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         _clear_inode(priv, part, inode_num);
         _free_inode(priv, part, inode_num);
         mutex_unlock(&priv->lock);
-        return -1;
+        return -ENOSPC;
     }
 
     if (child->type == VFS_DIR) {
@@ -1829,7 +2515,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
             child->name
         );
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EIO;
     }
 
     if (!_update_super_write_time(priv, part, now)) {
@@ -1837,38 +2523,45 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
             "failed to create '%s' because superblock write time update failed",
             child->name
         );
-        mutex_unlock(&priv->lock);
-        return -1;
     }
 
     if (!_init_vnode(child, node->fs, inode_num, &inode)) {
         log_warn("failed to create '%s' because vnode init failed", child->name);
         mutex_unlock(&priv->lock);
-        return -1;
+        return -ENOMEM;
     }
 
-    vfs_interface_t *iface = NULL;
+    if (child->type == VFS_SYMLINK) {
+        const char *target = child->symlink_target ? child->symlink_target : "";
+        ext2_node_info_t *info = child->private;
 
-    if (child->type == VFS_FILE) {
-        iface = vfs_create_interface(_read_file, _write_file, _truncate_file);
-    } else if (child->type == VFS_DIR) {
-        iface = calloc(1, sizeof(vfs_interface_t));
-        if (iface) {
-            iface->create = _dir_create;
-            iface->remove = _dir_remove;
+        bool wrote_target = false;
+        if (info) {
+            size_t target_len = strlen(target);
+            wrote_target =
+                _write_inode_bytes_locked(priv, part, info, target, target_len);
         }
+
+        if (!wrote_target) {
+            log_warn(
+                "failed to create '%s' because symlink target write failed",
+                child->name
+            );
+            mutex_unlock(&priv->lock);
+            return -EIO;
+        }
+
+        _sync_vnode(child, &info->inode);
     }
 
-    if ((child->type == VFS_FILE || child->type == VFS_DIR) && !iface) {
+    if (!_assign_ext2_interface(child, child->type)) {
         log_warn(
             "failed to create '%s' because interface allocation failed",
             child->name
         );
         mutex_unlock(&priv->lock);
-        return -1;
+        return -EINVAL;
     }
-
-    child->interface = iface;
 
     _sync_vnode(node, &parent_info->inode);
 
@@ -1876,43 +2569,8 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     return 0;
 }
 
-
-static vfs_interface_t *_make_file_interface(void) {
-    return vfs_create_interface(_read_file, _write_file, _truncate_file);
-}
-
-static vfs_interface_t *_make_dir_interface(void) {
-    vfs_interface_t *iface = calloc(1, sizeof(vfs_interface_t));
-    if (!iface) {
-        return NULL;
-    }
-
-    iface->create = _dir_create;
-    iface->remove = _dir_remove;
-
-    return iface;
-}
-
 static bool _assign_interface(vfs_node_t *node, u32 vfs_type) {
-    if (!node) {
-        return false;
-    }
-
-    vfs_interface_t *iface = NULL;
-
-    if (vfs_type == VFS_FILE) {
-        iface = _make_file_interface();
-    } else if (vfs_type == VFS_DIR) {
-        iface = _make_dir_interface();
-    }
-
-    if ((vfs_type == VFS_FILE || vfs_type == VFS_DIR) && !iface) {
-        return false;
-    }
-
-    node->interface = iface;
-
-    return true;
+    return _assign_ext2_interface(node, vfs_type);
 }
 
 static bool _build_dir(
@@ -2022,6 +2680,27 @@ static bool _build_dir(
 
             if (!_init_vnode(child, instance, entry->inode, &child_inode)) {
                 log_warn("failed to init node %s", name);
+            }
+
+            if (vfs_type == VFS_SYMLINK) {
+                char target[PATH_MAX];
+
+                if (
+                    _read_inode_bytes_locked(
+                        priv,
+                        instance->partition,
+                        &child_inode,
+                        target,
+                        sizeof(target)
+                    )
+                ) {
+                    child->symlink_target = strdup(target);
+                    child->size = strlen(target);
+                } else {
+                    log_warn("failed to read symlink target for %s", name);
+                }
+
+                continue;
             }
 
             if (vfs_type == VFS_FILE) {
@@ -2255,22 +2934,59 @@ _node_chown(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid) {
     return true;
 }
 
+static void _node_destroy(fs_instance_t *instance, vfs_node_t *node) {
+    if (!node || !node->private) {
+        return;
+    }
+
+    ext2_node_info_t *info = node->private;
+    bool reclaim_inode =
+        node->removed && !info->reclaimed && info->inode.hard_link_count == 0;
+
+    if (reclaim_inode && instance && instance->private && instance->partition) {
+        ext2_private_t *priv = instance->private;
+        disk_partition_t *part = instance->partition;
+
+        mutex_lock(&priv->lock);
+
+        bool read_inode = _read_inode(priv, part, info->inode_num, &info->inode);
+        if (read_inode && info->inode.hard_link_count == 0) {
+            u32 now = _now(priv);
+
+            bool released_blocks = _release_inode_blocks(priv, part, &info->inode);
+            bool cleared_inode =
+                released_blocks && _clear_inode(priv, part, info->inode_num);
+            bool freed_inode =
+                cleared_inode && _free_inode(priv, part, info->inode_num);
+
+            if (freed_inode) {
+                _update_super_write_time(priv, part, now);
+                info->reclaimed = true;
+            }
+        }
+
+        mutex_unlock(&priv->lock);
+    }
+
+    free(info);
+    node->private = NULL;
+}
+
 static bool _free_vnode(tree_node_t *node) {
     vfs_node_t *vnode = node ? (vfs_node_t *)node->data : NULL;
     if (!vnode) {
         return false;
     }
 
-    if (vnode->private) {
-        free(vnode->private);
-    }
+    _node_destroy(vnode->fs, vnode);
 
-    if (vnode->interface) {
-        free(vnode->interface);
-    }
+    vfs_clear_interface(vnode);
 
     if (vnode->name) {
         free(vnode->name);
+    }
+    if (vnode->symlink_target) {
+        free(vnode->symlink_target);
     }
 
     free(vnode);
@@ -2311,6 +3027,7 @@ bool ext2fs_init(void) {
     static fs_interface_t ext2_node_interface = {
         .chmod = _node_chmod,
         .chown = _node_chown,
+        .destroy_node = _node_destroy,
     };
 
     static fs_t ext2_fs = {

@@ -1003,8 +1003,11 @@ static int _open_file(
         return -EISDIR;
     }
 
-    if (require_exec && !vfs_access(out->node, thread->uid, thread->gid, X_OK)) {
-        return -EACCES;
+    if (require_exec) {
+        int access = vfs_access(out->node, thread->uid, thread->gid, X_OK);
+        if (access < 0) {
+            return access;
+        }
     }
 
     if (!_read_file(out->node, &out->buffer, &out->size)) {

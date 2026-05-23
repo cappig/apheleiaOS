@@ -174,7 +174,7 @@ static bool _register_devfs(vfs_node_t *dev_dir) {
 
     node->type = VFS_CHARDEV;
     node->mode = 0600;
-    node->interface = iface;
+    vfs_adopt_interface(node, iface);
     node->private = &port;
 
     port.registered = true;

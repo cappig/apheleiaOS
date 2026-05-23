@@ -424,7 +424,7 @@ bool devfs_register_node(
 
     node->type = type;
     node->mode = mode;
-    node->interface = interface;
+    vfs_set_interface(node, interface);
     node->private = priv;
 
     return true;
@@ -447,7 +447,7 @@ devfs_register_dir(vfs_node_t *parent, const char *name, mode_t mode) {
 
     node->type = VFS_DIR;
     node->mode = mode;
-    node->interface = NULL;
+    vfs_clear_interface(node);
     node->private = NULL;
 
     return node;
@@ -471,10 +471,7 @@ static vfs_node_t *_ensure_dev_dir(void) {
     }
 
     // Keep /dev purely in-memory even if a backing fs is mounted
-    if (dev_dir->interface) {
-        free(dev_dir->interface);
-        dev_dir->interface = NULL;
-    }
+    vfs_clear_interface(dev_dir);
 
     dev_dir->type = VFS_DIR;
     dev_dir->mode = 0755;
@@ -570,10 +567,10 @@ bool devfs_unregister_node(const char *path) {
     }
 
     if (node->type == VFS_DIR) {
-        return vfs_rmdir(path);
+        return vfs_rmdir(path) == 0;
     }
 
-    return vfs_unlink(path);
+    return vfs_unlink(path) == 0;
 }
 
 bool devfs_is_ready(void) {

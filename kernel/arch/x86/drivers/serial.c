@@ -63,7 +63,7 @@ static bool _create_node(
 
     node->type = VFS_CHARDEV;
     node->mode = 0600;
-    node->interface = interface;
+    vfs_set_interface(node, interface);
     node->private = priv;
 
     return true;

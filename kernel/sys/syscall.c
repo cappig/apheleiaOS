@@ -184,8 +184,8 @@ static void _maybe_clear_setid(sched_thread_t *thread, vfs_node_t *node) {
         return;
     }
 
-    if (VFS_IS_LINK(node->type) && node->link) {
-        node = node->link;
+    if (VFS_IS_LINK(node->type)) {
+        node = vfs_resolve_node(node);
     }
 
     if (!node || node->type != VFS_FILE) {
@@ -198,7 +198,7 @@ static void _maybe_clear_setid(sched_thread_t *thread, vfs_node_t *node) {
         return;
     }
 
-    vfs_chmod(node, cleared);
+    (void)vfs_chmod(node, cleared);
 }
 
 static bool _fd_lookup(sched_thread_t *thread, int fd, sched_fd_t **entry_out) {
@@ -215,11 +215,7 @@ static bool _fd_lookup(sched_thread_t *thread, int fd, sched_fd_t **entry_out) {
 }
 
 static vfs_node_t *_resolve_link_node(vfs_node_t *node) {
-    if (node && VFS_IS_LINK(node->type) && node->link) {
-        node = node->link;
-    }
-
-    return node;
+    return vfs_resolve_node(node);
 }
 
 typedef struct {
@@ -615,8 +611,9 @@ static int _resolve_writable_parent(
         return -ENOTDIR;
     }
 
-    if (!vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK)) {
-        return -EACCES;
+    int access = vfs_access(parent, thread->uid, thread->gid, W_OK | X_OK);
+    if (access < 0) {
+        return access;
     }
 
     *parent_out = parent;
@@ -1410,8 +1407,9 @@ static int sys_open(const char *path, int flags, mode_t mode) {
             return _open_fail(ptmx_open, ptmx_index, -EIO);
         }
 
-        if (!vfs_chown(node, thread->uid, thread->gid)) {
-            return _open_fail(ptmx_open, ptmx_index, -EIO);
+        int chown_ret = vfs_chown(node, thread->uid, thread->gid);
+        if (chown_ret < 0) {
+            return _open_fail(ptmx_open, ptmx_index, chown_ret);
         }
     }
 
@@ -1420,8 +1418,8 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     }
 
     vfs_node_t *resolved_node = node;
-    if (VFS_IS_LINK(resolved_node->type) && resolved_node->link) {
-        resolved_node = resolved_node->link;
+    if (VFS_IS_LINK(resolved_node->type)) {
+        resolved_node = vfs_resolve_node(resolved_node);
     }
 
     if (!resolved_node) {
@@ -1441,8 +1439,11 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         return _open_fail(ptmx_open, ptmx_index, -EISDIR);
     }
 
-    if (need && !vfs_access(resolved_node, thread->uid, thread->gid, need)) {
-        return _open_fail(ptmx_open, ptmx_index, -EACCES);
+    if (need) {
+        int access = vfs_access(resolved_node, thread->uid, thread->gid, need);
+        if (access < 0) {
+            return _open_fail(ptmx_open, ptmx_index, access);
+        }
     }
 
     if (flags & O_TRUNC) {
@@ -1451,8 +1452,9 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         }
 
         if (resolved_node->type == VFS_FILE) {
-            if (vfs_truncate(resolved_node, 0) < 0) {
-                return _open_fail(ptmx_open, ptmx_index, -EIO);
+            ssize_t trunc_ret = vfs_truncate(resolved_node, 0);
+            if (trunc_ret < 0) {
+                return _open_fail(ptmx_open, ptmx_index, (int)trunc_ret);
             }
 
             _maybe_clear_setid(thread, resolved_node);
@@ -1469,7 +1471,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
 
     sched_fd_t fd = {
         .kind = SCHED_FD_VFS,
-        .node = node,
+        .node = resolved_node,
         .pipe = NULL,
         .offset = 0,
         .pty_index = fd_pty_index,
@@ -1705,8 +1707,9 @@ static int sys_mkdir(const char *path, mode_t mode) {
         return -EIO;
     }
 
-    if (!vfs_chown(node, thread->uid, thread->gid)) {
-        return -EIO;
+    int chown_ret = vfs_chown(node, thread->uid, thread->gid);
+    if (chown_ret < 0) {
+        return chown_ret;
     }
 
     return 0;
@@ -1732,7 +1735,7 @@ static int sys_rmdir(const char *path) {
         return -ENOENT;
     }
 
-    if (VFS_IS_LINK(node->type) && node->link) {
+    if (VFS_IS_LINK(node->type)) {
         return -ENOTDIR;
     }
 
@@ -1770,7 +1773,7 @@ static int sys_rmdir(const char *path) {
         return sticky;
     }
 
-    return vfs_rmdir(resolved) ? 0 : -EIO;
+    return vfs_rmdir(resolved);
 }
 
 static int sys_chdir(const char *path) {
@@ -1793,8 +1796,9 @@ static int sys_chdir(const char *path) {
         return -ENOTDIR;
     }
 
-    if (!vfs_access(node, thread->uid, thread->gid, X_OK)) {
-        return -EACCES;
+    int access = vfs_access(node, thread->uid, thread->gid, X_OK);
+    if (access < 0) {
+        return access;
     }
 
     strncpy(thread->cwd, resolved, sizeof(thread->cwd) - 1);
@@ -1823,7 +1827,7 @@ static int sys_access(const char *path, int mode) {
         return 0;
     }
 
-    return vfs_access(node, thread->uid, thread->gid, mode) ? 0 : -EACCES;
+    return vfs_access(node, thread->uid, thread->gid, mode);
 }
 
 static uintptr_t sys_mmap(const mmap_args_t *args) {
@@ -1977,8 +1981,9 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
             need |= W_OK;
         }
 
-        if (!vfs_access(file, thread->uid, thread->gid, need)) {
-            return (uintptr_t)-EACCES;
+        int access = vfs_access(file, thread->uid, thread->gid, need);
+        if (access < 0) {
+            return (uintptr_t)access;
         }
     }
 
@@ -2014,7 +2019,7 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
         if (read_len < 0) {
             arch_phys_unmap(dst, pages * PAGE_4KIB);
             _mmap_undo_alloc(thread, root, addr, paddr, pages, true);
-            return (uintptr_t)-EIO;
+            return (uintptr_t)read_len;
         }
     }
 
@@ -2190,8 +2195,9 @@ static int _sys_stat_path(const char *path, stat_t *st, bool follow_links) {
     }
 
     stat_t local = {0};
-    if (!vfs_stat_node(node, &local, follow_links)) {
-        return -EIO;
+    int stat_ret = vfs_stat_node(node, &local, follow_links);
+    if (stat_ret < 0) {
+        return stat_ret;
     }
 
     uid_t owner_uid = 0;
@@ -2246,8 +2252,9 @@ static int sys_fstat(int fd, stat_t *st) {
     }
 
     stat_t local = {0};
-    if (!vfs_stat_node(entry->node, &local, true)) {
-        return -EIO;
+    int stat_ret = vfs_stat_node(entry->node, &local, true);
+    if (stat_ret < 0) {
+        return stat_ret;
     }
 
     uid_t owner_uid = 0;
@@ -2300,7 +2307,7 @@ static int sys_chmod(const char *path, mode_t mode) {
         }
     }
 
-    return vfs_chmod(node, desired) ? 0 : -EIO;
+    return vfs_chmod(node, desired);
 }
 
 static int sys_chown(const char *path, uid_t uid, gid_t gid) {
@@ -2328,12 +2335,13 @@ static int sys_chown(const char *path, uid_t uid, gid_t gid) {
     uid_t new_uid = (uid == (uid_t)-1) ? old_uid : uid;
     gid_t new_gid = (gid == (gid_t)-1) ? old_gid : gid;
 
-    if (!vfs_chown(node, new_uid, new_gid)) {
-        return -EIO;
+    int chown_ret = vfs_chown(node, new_uid, new_gid);
+    if (chown_ret < 0) {
+        return chown_ret;
     }
 
     if (node->type == VFS_FILE && (old_uid != new_uid || old_gid != new_gid)) {
-        vfs_chmod(node, node->mode & (mode_t) ~(S_ISUID | S_ISGID));
+        (void)vfs_chmod(node, node->mode & (mode_t) ~(S_ISUID | S_ISGID));
     }
 
     return 0;
@@ -2350,7 +2358,8 @@ static int sys_link(const char *oldpath, const char *newpath) {
     }
 
     char resolved_old[PATH_MAX];
-    int old_err = _resolve_user_path(thread, oldpath, resolved_old, sizeof(resolved_old));
+    int old_err =
+        _resolve_user_path(thread, oldpath, resolved_old, sizeof(resolved_old));
     if (old_err < 0) {
         return old_err;
     }
@@ -2378,7 +2387,50 @@ static int sys_link(const char *oldpath, const char *newpath) {
         return parent_err;
     }
 
-    return vfs_link(resolved_old, resolved_new) ? 0 : -EIO;
+    return vfs_hardlink(resolved_old, resolved_new);
+}
+
+static int sys_symlink(const char *target, const char *linkpath) {
+    if (!target || !linkpath) {
+        return -EFAULT;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    char target_buf[PATH_MAX];
+    int target_err =
+        user_copy_string(thread, target, target_buf, sizeof(target_buf));
+    if (target_err < 0) {
+        return target_err;
+    }
+
+    char resolved_link[PATH_MAX];
+    int resolve_err =
+        _resolve_user_path(thread, linkpath, resolved_link, sizeof(resolved_link));
+    if (resolve_err < 0) {
+        return resolve_err;
+    }
+
+    char parent_path[PATH_MAX];
+    char base[PATH_MAX];
+    vfs_node_t *parent = NULL;
+    int parent_err = _resolve_writable_parent(
+        thread,
+        resolved_link,
+        parent_path,
+        sizeof(parent_path),
+        base,
+        sizeof(base),
+        &parent
+    );
+    if (parent_err < 0) {
+        return parent_err;
+    }
+
+    return vfs_symlink(target_buf, resolved_link);
 }
 
 static ssize_t sys_readlink(const char *path, char *buf, size_t bufsiz) {
@@ -2455,7 +2507,7 @@ static int sys_unlink(const char *path) {
         return sticky;
     }
 
-    return vfs_unlink(resolved) ? 0 : -EIO;
+    return vfs_unlink(resolved);
 }
 
 static int sys_rename(const char *oldpath, const char *newpath) {
@@ -2530,7 +2582,7 @@ static int sys_rename(const char *oldpath, const char *newpath) {
         }
     }
 
-    return vfs_rename(resolved_old, resolved_new) ? 0 : -EIO;
+    return vfs_rename(resolved_old, resolved_new);
 }
 
 static int sys_mount(
@@ -3381,6 +3433,11 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
         );
     case SYS_LINK:
         return (u64)sys_link(
+            (const char *)arch_syscall_arg1(state),
+            (const char *)arch_syscall_arg2(state)
+        );
+    case SYS_SYMLINK:
+        return (u64)sys_symlink(
             (const char *)arch_syscall_arg1(state),
             (const char *)arch_syscall_arg2(state)
         );

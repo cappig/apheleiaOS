@@ -295,7 +295,7 @@ int link(const char *oldpath, const char *newpath) {
 
 int symlink(const char *target, const char *linkpath) {
     return SYSCALL_RET(
-        int, syscall2(SYS_LINK, (uintptr_t)target, (uintptr_t)linkpath)
+        int, syscall2(SYS_SYMLINK, (uintptr_t)target, (uintptr_t)linkpath)
     );
 }
 

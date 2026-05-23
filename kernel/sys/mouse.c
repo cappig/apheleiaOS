@@ -174,7 +174,7 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
     }
 
     vfs_node_t *mouse_node = vfs_lookup_from(dev_dir, "mouse");
-    if (!mouse_node || !vfs_chown(mouse_node, MOUSE_DEV_UID, MOUSE_DEV_GID)) {
+    if (!mouse_node || vfs_chown(mouse_node, MOUSE_DEV_UID, MOUSE_DEV_GID) < 0) {
         log_warn("failed to set /dev/mouse ownership to root:input");
         return false;
     }
