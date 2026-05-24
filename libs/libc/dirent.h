@@ -29,5 +29,5 @@ void rewinddir(DIR *dirp);
 #ifdef _APHELEIA_SOURCE
 #define DIRENT_NAME_MAX NAME_MAX
 typedef struct dirent dirent_t;
-int getdents(int fd, struct dirent *out);
+ssize_t getdents(int fd, struct dirent *out, size_t len);
 #endif

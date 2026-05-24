@@ -38,6 +38,7 @@
 #include <sys/usercopy.h>
 #include <sys/vfs.h>
 #include "ws.h"
+
 #include <time.h>
 #include <unistd.h>
 
@@ -946,7 +947,25 @@ static bool _fd_advance_offset(
     return true;
 }
 
-static ssize_t _fd_read_dir(
+static unsigned char _dirent_type(u32 type) {
+    switch (type) {
+    case VFS_FILE:
+        return DT_REG;
+    case VFS_DIR:
+    case VFS_MOUNT:
+        return DT_DIR;
+    case VFS_CHARDEV:
+        return DT_CHR;
+    case VFS_BLOCKDEV:
+        return DT_BLK;
+    case VFS_SYMLINK:
+        return DT_LNK;
+    default:
+        return DT_UNKNOWN;
+    }
+}
+
+static ssize_t _fd_getdents(
     sched_fd_t *entry,
     void *buf,
     size_t len,
@@ -963,6 +982,10 @@ static ssize_t _fd_read_dir(
     }
 
     if (offset % sizeof(dirent_t)) {
+        return -EINVAL;
+    }
+
+    if (len < sizeof(dirent_t)) {
         return -EINVAL;
     }
 
@@ -1001,7 +1024,7 @@ static ssize_t _fd_read_dir(
         }
 
         out[written].d_ino = vnode->inode;
-        out[written].d_type = (unsigned char)vnode->type;
+        out[written].d_type = _dirent_type(vnode->type);
         memset(out[written].d_name, 0, sizeof(out[written].d_name));
 
         if (vnode->name) {
@@ -1047,7 +1070,7 @@ static ssize_t _fd_read_vfs(
 
     vfs_node_t *node = _resolve_link_node(entry->node);
     if (node && node->type == VFS_DIR) {
-        return _fd_read_dir(entry, buf, len, offset, advance_offset);
+        return -EISDIR;
     }
 
     ssize_t ws_result = 0;
@@ -1215,12 +1238,39 @@ static ssize_t sys_pread(int fd, void *buf, size_t len, off_t offset) {
     return _fd_read_vfs(thread, entry, buf, len, read_offset, false, -ESPIPE);
 }
 
+static ssize_t sys_getdents(int fd, dirent_t *buf, size_t len) {
+    if (!len) {
+        return 0;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!user_write_prepare(thread, buf, len)) {
+        return -EFAULT;
+    }
+
+    sched_fd_t *entry = NULL;
+    if (!_fd_lookup(thread, fd, &entry)) {
+        return -EBADF;
+    }
+
+    if (entry->kind != SCHED_FD_VFS || !entry->node) {
+        return -EBADF;
+    }
+
+    if (!_open_has_read(entry->flags)) {
+        return -EBADF;
+    }
+
+    return _fd_getdents(entry, buf, len, entry->offset, true);
+}
+
 static ssize_t sys_write(int fd, const void *buf, size_t len) {
     if (!len) {
         return 0;
     }
 
     sched_thread_t *thread = sched_current();
+
     if (!user_range_ok(thread, buf, len, false)) {
         return -EFAULT;
     }
@@ -1383,6 +1433,10 @@ static int sys_open(const char *path, int flags, mode_t mode) {
             return _open_fail(ptmx_open, ptmx_index, -EEXIST);
         }
     } else if (flags & O_CREAT) {
+        if (flags & O_DIRECTORY) {
+            return _open_fail(ptmx_open, ptmx_index, -EINVAL);
+        }
+
         char parent_path[PATH_MAX];
         char base[PATH_MAX];
         vfs_node_t *parent = NULL;
@@ -1424,6 +1478,10 @@ static int sys_open(const char *path, int flags, mode_t mode) {
 
     if (!resolved_node) {
         return _open_fail(ptmx_open, ptmx_index, -EINVAL);
+    }
+
+    if ((flags & O_DIRECTORY) && resolved_node->type != VFS_DIR) {
+        return _open_fail(ptmx_open, ptmx_index, -ENOTDIR);
     }
 
     int need = 0;
@@ -3009,6 +3067,7 @@ static int sys_execve(
 
     _free_exec_vec(&env_copy);
     _free_exec_vec(&argv_copy);
+
     return ret;
 }
 
@@ -3403,6 +3462,12 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
         );
     case SYS_RMDIR:
         return (u64)sys_rmdir((const char *)arch_syscall_arg1(state));
+    case SYS_GETDENTS:
+        return (u64)sys_getdents(
+            (int)arch_syscall_arg1(state),
+            (dirent_t *)arch_syscall_arg2(state),
+            (size_t)arch_syscall_arg3(state)
+        );
     case SYS_ACCESS:
         return (u64)sys_access(
             (const char *)arch_syscall_arg1(state),

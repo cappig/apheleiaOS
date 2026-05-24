@@ -1,5 +1,6 @@
 #include "time.h"
 
+#include <limits.h>
 #include <stdbool.h>
 
 #include "stdio.h"
@@ -29,26 +30,6 @@ static const char months_str[12][4] = {
 #define SECS_PER_HOUR (60LL * SECS_PER_MIN)
 #define SECS_PER_DAY  (24LL * SECS_PER_HOUR)
 
-
-static int is_leap(int year) {
-    return ((year % 4 == 0) && (year % 100 != 0)) || (year % 400 == 0);
-}
-
-static int days_in_year(int year) {
-    return is_leap(year) ? 366 : 365;
-}
-
-static int days_in_month(int year, int month) {
-    static const int days_norm[12] = {
-        31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
-    };
-
-    if (month == 1 && is_leap(year)) {
-        return 29;
-    }
-
-    return days_norm[month];
-}
 
 static bool append_char(char *out, size_t max, size_t *pos, char ch) {
     if (*pos + 1 >= max) {
@@ -202,22 +183,47 @@ append_ctime_layout(char *out, size_t max, size_t *pos, const struct tm *tm) {
     return append_number(out, max, pos, tm->tm_year + 1900, 4, '0');
 }
 
-static long long days_before_year(int year) {
-    long long days = 0;
+static long long days_from_civil(long long year, int month, int day) {
+    year -= month <= 2;
 
-    if (year >= EPOCH_YEAR) {
-        for (int y = EPOCH_YEAR; y < year; y++) {
-            days += days_in_year(y);
-        }
+    long long era = year >= 0 ? year / 400 : (year - 399) / 400;
+    unsigned yoe = (unsigned)(year - era * 400);
+    unsigned m = (unsigned)(month + (month > 2 ? -3 : 9));
+    unsigned doy = (153U * m + 2U) / 5U + (unsigned)day - 1U;
+    unsigned doe = yoe * 365U + yoe / 4U - yoe / 100U + doy;
 
-        return days;
+    return era * 146097LL + (long long)doe - 719468LL;
+}
+
+static bool civil_from_days(
+    long long days,
+    long long *year_out,
+    int *month_out,
+    int *day_out,
+    int *yday_out
+) {
+    if (!year_out || !month_out || !day_out || !yday_out) {
+        return false;
     }
 
-    for (int y = EPOCH_YEAR - 1; y >= year; y--) {
-        days -= days_in_year(y);
-    }
+    long long z = days + 719468LL;
+    long long era = z >= 0 ? z / 146097LL : (z - 146096LL) / 146097LL;
+    unsigned doe = (unsigned)(z - era * 146097LL);
+    unsigned yoe =
+        (doe - doe / 1460U + doe / 36524U - doe / 146096U) / 365U;
+    long long year = (long long)yoe + era * 400LL;
+    unsigned yday = doe - (365U * yoe + yoe / 4U - yoe / 100U);
+    unsigned mp = (5U * yday + 2U) / 153U;
+    unsigned day = yday - (153U * mp + 2U) / 5U + 1U;
+    int month = (int)mp + (mp < 10U ? 3 : -9);
 
-    return days;
+    year += month <= 2;
+
+    *year_out = year;
+    *month_out = month;
+    *day_out = (int)day;
+    *yday_out = (int)(days - days_from_civil(year, 1, 1));
+    return true;
 }
 
 time_t mktime(struct tm *tm) {
@@ -225,27 +231,19 @@ time_t mktime(struct tm *tm) {
         return (time_t)-1;
     }
 
-    int year = tm->tm_year + 1900;
-    int month = tm->tm_mon;
+    long long year = (long long)tm->tm_year + 1900LL;
+    long long month = tm->tm_mon;
+    long long month_years = month / 12LL;
+    int month_in_year = (int)(month % 12LL);
 
-    while (month < 0) {
-        month += 12;
-        year--;
+    if (month_in_year < 0) {
+        month_in_year += 12;
+        month_years--;
     }
 
-    while (month >= 12) {
-        month -= 12;
-        year++;
-    }
+    year += month_years;
 
-    long long days = days_before_year(year);
-
-    for (int m = 0; m < month; m++) {
-        days += days_in_month(year, m);
-    }
-
-    days += tm->tm_mday - 1;
-
+    long long days = days_from_civil(year, month_in_year + 1, tm->tm_mday);
     long long seconds = days * SECS_PER_DAY;
 
     seconds += (long long)tm->tm_hour * SECS_PER_HOUR;
@@ -285,36 +283,26 @@ struct tm *gmtime_r(const time_t *timer, struct tm *result) {
 
     result->tm_wday = wday;
 
-    int year = EPOCH_YEAR;
-
-    while (days >= days_in_year(year)) {
-        days -= days_in_year(year);
-        year++;
-    }
-
-    while (days < 0) {
-        year--;
-        days += days_in_year(year);
-    }
-
-    result->tm_year = year - 1900;
-    result->tm_yday = (int)days;
-
+    long long year = 0;
     int month = 0;
+    int mday = 0;
+    int yday = 0;
 
-    while (month < 11) {
-        int dim = days_in_month(year, month);
-
-        if (days < dim) {
-            break;
-        }
-
-        days -= dim;
-        month++;
+    if (!civil_from_days(days, &year, &month, &mday, &yday)) {
+        return NULL;
     }
 
-    result->tm_mon = month;
-    result->tm_mday = (int)days + 1;
+    bool year_too_small = year < (long long)INT_MIN + 1900LL;
+    bool year_too_large = year > (long long)INT_MAX + 1900LL;
+
+    if (year_too_small || year_too_large) {
+        return NULL;
+    }
+
+    result->tm_year = (int)(year - 1900LL);
+    result->tm_yday = yday;
+    result->tm_mon = month - 1;
+    result->tm_mday = mday;
     result->tm_isdst = 0;
 
     return result;

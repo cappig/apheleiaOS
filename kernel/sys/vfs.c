@@ -26,6 +26,9 @@ static vfs_node_t *_walk_from_locked(
     size_t *depth
 );
 static vfs_node_t *_follow_link_locked(vfs_node_t *node, size_t *depth);
+static const vfs_node_t *_follow_mounts_const(const vfs_node_t *node);
+static vfs_node_t *_follow_mounts(vfs_node_t *node);
+static bool _mount_cycle(vfs_node_t *mount, vfs_node_t *target);
 static int _insert_child(vfs_node_t *parent, vfs_node_t *child, bool persist);
 static int _link_child(
     vfs_node_t *parent,
@@ -35,6 +38,46 @@ static int _link_child(
 
 static time_t _time_now(void) {
     return (time_t)(arch_realtime_ns() / 1000000000ULL);
+}
+
+static time_t _latest_node_time(const vfs_node_t *node) {
+    if (!node) {
+        return _time_now();
+    }
+
+    node = _follow_mounts_const(node);
+    if (!node) {
+        return _time_now();
+    }
+
+    time_t latest = node->time.created;
+
+    if (node->time.modified > latest) {
+        latest = node->time.modified;
+    }
+
+    if (node->time.accessed > latest) {
+        latest = node->time.accessed;
+    }
+
+    return latest;
+}
+
+static void _stamp_virtual_node(vfs_node_t *node, const vfs_node_t *parent) {
+    if (!node) {
+        return;
+    }
+
+    time_t now = _time_now();
+    time_t parent_time = _latest_node_time(parent);
+
+    if (parent_time > now) {
+        now = parent_time;
+    }
+
+    node->time.created = now;
+    node->time.modified = now;
+    node->time.accessed = now;
 }
 
 static vfs_node_t *_link_target_locked(
@@ -64,20 +107,53 @@ static vfs_node_t *_link_target_locked(
 
 static vfs_node_t *_follow_link_locked(vfs_node_t *node, size_t *depth) {
     while (node && VFS_IS_LINK(node->type)) {
-        if (node->type == VFS_MOUNT) {
-            node = node->link;
-            continue;
-        }
-
         if (!depth || ++(*depth) > VFS_MAX_SYMLINKS) {
             errno = ELOOP;
             return NULL;
+        }
+
+        if (node->type == VFS_MOUNT) {
+            node = node->link;
+            continue;
         }
 
         node = _link_target_locked(node, depth);
     }
 
     return node;
+}
+
+static const vfs_node_t *_follow_mounts_const(const vfs_node_t *node) {
+    size_t depth = 0;
+
+    while (node && node->type == VFS_MOUNT) {
+        if (++depth > VFS_MAX_SYMLINKS || node->link == node) {
+            errno = ELOOP;
+            return NULL;
+        }
+
+        node = node->link;
+    }
+
+    return node;
+}
+
+static vfs_node_t *_follow_mounts(vfs_node_t *node) {
+    return (vfs_node_t *)_follow_mounts_const(node);
+}
+
+static bool _mount_cycle(vfs_node_t *mount, vfs_node_t *target) {
+    size_t depth = 0;
+
+    while (target && target->type == VFS_MOUNT) {
+        if (target == mount || ++depth > VFS_MAX_SYMLINKS) {
+            return true;
+        }
+
+        target = target->link;
+    }
+
+    return target == mount;
 }
 
 static vfs_node_t *_follow_link(vfs_node_t *node) {
@@ -978,6 +1054,14 @@ int vfs_check_search(
     }
 
     if (!strcmp(path, "/")) {
+        size_t depth = 0;
+        current = _follow_link_locked(current, &depth);
+
+        if (!current) {
+            mutex_unlock(&vfs_tree_lock);
+            return errno ? -errno : -ENOENT;
+        }
+
         if (current->type != VFS_DIR) {
             mutex_unlock(&vfs_tree_lock);
             return -ENOTDIR;
@@ -1034,6 +1118,9 @@ int vfs_stat_node(vfs_node_t *node, stat_t *out, bool follow_links) {
     if (!node || !out) {
         return -EINVAL;
     }
+
+    errno = 0;
+    node = _follow_mounts(node);
 
     if (follow_links) {
         errno = 0;
@@ -1842,6 +1929,7 @@ vfs_node_t *vfs_create_virtual(vfs_node_t *parent, char *name, u32 type, mode_t 
     }
 
     node->mode = mode;
+    _stamp_virtual_node(node, parent);
 
     if (vfs_insert_child_virtual(parent, node) < 0) {
         vfs_destroy_node(node);
@@ -1884,8 +1972,14 @@ int vfs_mount(fs_instance_t *instance, vfs_node_t *mount) {
     }
 
     mutex_lock(&vfs_tree_lock);
+    vfs_node_t *target = instance->subtree_root->data;
+    if (!target || _mount_cycle(mount, target)) {
+        mutex_unlock(&vfs_tree_lock);
+        return -ELOOP;
+    }
+
     mount->type = VFS_MOUNT;
-    mount->link = instance->subtree_root->data;
+    mount->link = target;
     instance->refcount++;
     mutex_unlock(&vfs_tree_lock);
 
