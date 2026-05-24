@@ -107,53 +107,24 @@ USER_GAMES_OPTION_NAMES := $(sort \
 	$(call user_makefile_dirs,userland/games) \
 )
 
-USER_TOOLS_SELECTED_NAMES := $(USERLAND_TOOLS)
-ifeq ($(USERLAND_TOOLS), all)
-USER_TOOLS_SELECTED_NAMES := $(USER_TOOLS_OPTION_NAMES)
-else ifeq ($(USERLAND_TOOLS), none)
-USER_TOOLS_SELECTED_NAMES :=
+define select_userland_group
+$(1)_SELECTED_NAMES := $$($(2))
+ifeq ($$($(2)), all)
+$(1)_SELECTED_NAMES := $$($(1)_OPTION_NAMES)
+else ifeq ($$($(2)), none)
+$(1)_SELECTED_NAMES :=
 endif
 
-USER_UI_SELECTED_NAMES := $(USERLAND_UI)
-ifeq ($(USERLAND_UI), all)
-USER_UI_SELECTED_NAMES := $(USER_UI_OPTION_NAMES)
-else ifeq ($(USERLAND_UI), none)
-USER_UI_SELECTED_NAMES :=
+$(1)_UNKNOWN := $$(filter-out $$($(1)_OPTION_NAMES),$$($(1)_SELECTED_NAMES))
+ifneq ($$(strip $$($(1)_UNKNOWN)),)
+$$(error Unknown $(3) selection(s) in $(2): $$($(1)_UNKNOWN))
 endif
+endef
 
-USER_EXTRA_SELECTED_NAMES := $(USERLAND_EXTRAS)
-ifeq ($(USERLAND_EXTRAS), all)
-USER_EXTRA_SELECTED_NAMES := $(USER_EXTRA_OPTION_NAMES)
-else ifeq ($(USERLAND_EXTRAS), none)
-USER_EXTRA_SELECTED_NAMES :=
-endif
-
-USER_GAMES_SELECTED_NAMES := $(USERLAND_GAMES)
-ifeq ($(USERLAND_GAMES), all)
-USER_GAMES_SELECTED_NAMES := $(USER_GAMES_OPTION_NAMES)
-else ifeq ($(USERLAND_GAMES), none)
-USER_GAMES_SELECTED_NAMES :=
-endif
-
-USER_TOOLS_UNKNOWN := $(filter-out $(USER_TOOLS_OPTION_NAMES),$(USER_TOOLS_SELECTED_NAMES))
-ifneq ($(strip $(USER_TOOLS_UNKNOWN)),)
-$(error Unknown tools selection(s) in USERLAND_TOOLS: $(USER_TOOLS_UNKNOWN))
-endif
-
-USER_UI_UNKNOWN := $(filter-out $(USER_UI_OPTION_NAMES),$(USER_UI_SELECTED_NAMES))
-ifneq ($(strip $(USER_UI_UNKNOWN)),)
-$(error Unknown UI selection(s) in USERLAND_UI: $(USER_UI_UNKNOWN))
-endif
-
-USER_EXTRA_UNKNOWN := $(filter-out $(USER_EXTRA_OPTION_NAMES),$(USER_EXTRA_SELECTED_NAMES))
-ifneq ($(strip $(USER_EXTRA_UNKNOWN)),)
-$(error Unknown extra selection(s) in USERLAND_EXTRAS: $(USER_EXTRA_UNKNOWN))
-endif
-
-USER_GAMES_UNKNOWN := $(filter-out $(USER_GAMES_OPTION_NAMES),$(USER_GAMES_SELECTED_NAMES))
-ifneq ($(strip $(USER_GAMES_UNKNOWN)),)
-$(error Unknown game selection(s) in USERLAND_GAMES: $(USER_GAMES_UNKNOWN))
-endif
+$(eval $(call select_userland_group,USER_TOOLS,USERLAND_TOOLS,tools))
+$(eval $(call select_userland_group,USER_UI,USERLAND_UI,UI))
+$(eval $(call select_userland_group,USER_EXTRA,USERLAND_EXTRAS,extra))
+$(eval $(call select_userland_group,USER_GAMES,USERLAND_GAMES,game))
 
 USER_TOOLS_PROG_DIRS := $(filter $(addprefix userland/tools/,$(USER_TOOLS_SELECTED_NAMES)),$(USER_TOOLS_ALL_DIRS))
 USER_UI_PROG_DIRS    := $(filter $(addprefix userland/ui/,$(USER_UI_SELECTED_NAMES)),$(USER_UI_ALL_DIRS))
@@ -272,8 +243,27 @@ USER_PROG_MAKEFILES := $(sort $(wildcard \
 ))
 -include $(USER_PROG_MAKEFILES)
 
-STRIP_USER       ?= true
-USER_STRIP_FLAGS ?= --strip-debug
+STRIP_USER         ?= true
+STRIP_USER_SYMBOLS ?= false
+USER_STRIP_FLAGS   ?= $(if $(filter true,$(STRIP_USER_SYMBOLS)),--strip-all,--strip-debug)
+
+ifeq ($(STRIP_USER), true)
+define user_strip
+	@$(ST) $(USER_STRIP_FLAGS) $(strip $(1))
+endef
+else
+define user_strip
+endef
+endif
+
+USER_COMPILE_STAMP := $(USER_OBJ_DIR)/.compile-flags
+USER_LINK_STAMP    := $(USER_OBJ_DIR)/.link-flags
+USER_COMPILE_CONFIG := $(CC) $(CC_BASE) $(USER_CC)
+USER_LINK_CONFIG    := $(LD) $(LD_BASE) $(USER_LD) $(ST) \
+	$(STRIP_USER) $(USER_STRIP_FLAGS)
+
+$(eval $(call flag_stamp,$(USER_COMPILE_STAMP),USER_COMPILE_CONFIG))
+$(eval $(call flag_stamp,$(USER_LINK_STAMP),USER_LINK_CONFIG))
 
 .SECONDARY: $(USER_SHARED_OBJ) $(USER_CRTI_OBJ) $(USER_CRTN_OBJ) \
 	$(USER_APP_OBJ) $(USER_PROGS_BIN)
@@ -283,25 +273,24 @@ define user_prog_objs
 $(foreach obj,$(USER_APP_OBJ),$(if $(findstring /$(1)/,$(obj)),$(obj)))
 endef
 
-$(USER_OBJ_DIR)/%.c.o: %.c
+$(USER_OBJ_DIR)/%.c.o: %.c $(USER_COMPILE_STAMP)
 	@mkdir -p $(@D)
 	$(call cc, $(USER_CC), $@, $<)
 
-$(USER_OBJ_DIR)/%.S.o: %.S
+$(USER_OBJ_DIR)/%.S.o: %.S $(USER_COMPILE_STAMP)
 	@mkdir -p $(@D)
 	$(call cc, $(USER_CC), $@, $<)
 
-$(USER_OBJ_DIR)/%.asm.o: %.asm
+$(USER_OBJ_DIR)/%.asm.o: %.asm $(USER_COMPILE_STAMP)
 	@mkdir -p $(@D)
 	$(call as, $(USER_AS), $@, $<)
 
 define user_link_rule
-$(USER_BIN_DIR)/$(1): $(USER_SHARED_OBJ) $(USER_LIBGCC) $(call user_prog_objs,$(1)) $(USER_LD_SCRIPT)
+$(USER_BIN_DIR)/$(1): $(USER_SHARED_OBJ) $(USER_LIBGCC) \
+	$(call user_prog_objs,$(1)) $(USER_LD_SCRIPT) $(USER_LINK_STAMP)
 	@mkdir -p $$(@D)
-	$(call ld, $(USER_LD), $$@, $$(filter-out $(USER_LD_SCRIPT),$$^))
-	@if [ "$(STRIP_USER)" = "true" ]; then \
-		$(ST) $(USER_STRIP_FLAGS) $$@; \
-	fi
+	$(call ld, $(USER_LD), $$@, $$(filter-out $(USER_LD_SCRIPT) $(USER_LINK_STAMP),$$^))
+	$(call user_strip, $$@)
 endef
 
 $(foreach prog,$(USER_PROGS),$(eval $(call user_link_rule,$(prog))))
@@ -310,12 +299,9 @@ $(USER_STAGE_DIR)/%: $(USER_BIN_DIR)/%
 	@mkdir -p $(@D)
 	@cp $< $@
 
-$(USER_STAGE_BIN_STAMP): $(USER_PROGS_BIN) userland-stage-bin-force
-	@mkdir -p "$(USER_STAGE_DIR)"
-	@find "$(USER_STAGE_DIR)" -mindepth 1 -maxdepth 1 ! -name '.apheleia_*' -exec rm -rf -- {} +
-	@for bin in $(USER_PROGS); do \
-		cp "$(USER_BIN_DIR)/$$bin" "$(USER_STAGE_DIR)/$$bin"; \
-	done
+$(USER_STAGE_BIN_STAMP): $(USER_PROGS_BIN) utils/stage_user_bins.sh \
+	userland-stage-bin-force
+	@utils/stage_user_bins.sh "$(USER_STAGE_DIR)" "$(USER_BIN_DIR)" $(USER_PROGS)
 	@touch $@
 
 bin/$(IMAGE_NAME).img: $(USER_BINARIES)

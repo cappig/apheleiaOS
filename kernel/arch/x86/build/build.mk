@@ -69,21 +69,24 @@ $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
 endif
 
 KERNEL_OBJ := $(patsubst %, $(KERNEL_OBJ_DIR)/%.o, $(KERNEL_SRC))
+KERNEL_FLAG_STAMP   := $(KERNEL_OBJ_DIR)/.compile-flags
+KERNEL_BUILD_CONFIG := $(CC) $(AS) $(CC_BASE) $(AS_BASE) \
+	$(KERNEL_CC_FLAGS) $(KERNEL_AS_FLAGS)
 
-$(KERNEL_OBJ_DIR)/%.asm.o: %.asm
+$(eval $(call flag_stamp,$(KERNEL_FLAG_STAMP),KERNEL_BUILD_CONFIG))
+
+$(KERNEL_OBJ_DIR)/%.asm.o: %.asm $(KERNEL_FLAG_STAMP)
 	@mkdir -p $(@D)
 	$(call as, $(KERNEL_AS_FLAGS), $@, $<)
 
-$(KERNEL_OBJ_DIR)/%.c.o: %.c
+$(KERNEL_OBJ_DIR)/%.c.o: %.c $(KERNEL_FLAG_STAMP)
 	@mkdir -p $(@D)
 	$(call cc, $(KERNEL_CC_FLAGS), $@, $<)
 
 $(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS))
 	@mkdir -p $(@D)
 	$(call ld, $(KERNEL_LD_FLAGS), $@, $^)
-	@if [ "$(STRIP_KERNEL)" = "true" ]; then \
-		$(ST) $(STRIP_KERNEL_FLAGS) $@; \
-	fi
+	$(call kernel_strip, $@)
 
 
 IMAGE_BOOT_DEPS := bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF)
@@ -99,6 +102,7 @@ IMAGE_UEFI_KERNEL := $(KERNEL_ELF)
 endif
 
 IMAGE_SCRIPT_DEPS := \
+	utils/stage_image.sh \
 	kernel/build_image_common.py \
 	kernel/arch/x86/build/build_bios_disk_image.py \
 	kernel/arch/x86/build/build_hybrid_disk_image.py \
@@ -106,18 +110,9 @@ IMAGE_SCRIPT_DEPS := \
 
 IMAGE_ROOT_DEPS := $(shell find root -type f -o -type l)
 
-
-define stage_image
-	@mkdir -p $(@D)
-	@rm -rf $(IMAGE_STAGE_DIR)
-	@mkdir -p $(IMAGE_BOOT_DIR)
-	@cp -f $(KERNEL_ELF) $(IMAGE_BOOT_DIR)/
-	@cp -r root/* $(IMAGE_STAGE_DIR)
-	@cp -a bin/user/$(ARCH)/root/. $(IMAGE_STAGE_DIR)/
-endef
-
 bin/$(IMAGE_NAME).img: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
-	$(call stage_image)
+	@utils/stage_image.sh "$(IMAGE_STAGE_DIR)" "$(IMAGE_BOOT_DIR)" \
+		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root"
 ifeq ($(ARCH_VARIANT), 64)
 	@python3 kernel/arch/x86/build/build_hybrid_disk_image.py $@ \
 		bin/boot/mbr.bin \
@@ -131,7 +126,8 @@ else
 endif
 
 bin/$(IMAGE_NAME).iso: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
-	$(call stage_image)
+	@utils/stage_image.sh "$(IMAGE_STAGE_DIR)" "$(IMAGE_BOOT_DIR)" \
+		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root"
 	@python3 kernel/arch/x86/build/build_hybrid_iso_image.py $@ \
 		bin/boot/mbr.bin \
 		bin/boot/bios.bin \

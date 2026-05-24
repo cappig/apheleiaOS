@@ -45,9 +45,14 @@ else
 $(error UEFI build does not support TOOLCHAIN='$(TOOLCHAIN)')
 endif
 
+UEFI_FLAG_STAMP := bin/uefi/obj/.compile-flags
+UEFI_BUILD_CONFIG := $(UEFI_CC) $(CC_BASE) $(UEFI_CFLAGS)
+
+$(eval $(call flag_stamp,$(UEFI_FLAG_STAMP),UEFI_BUILD_CONFIG))
 
 bin/uefi/obj/%.o: CC := $(UEFI_CC)
-bin/uefi/obj/%.o: $(UEFI_DIR)/%.c $(UEFI_DIR)/efi.h $(UEFI_DIR)/util.h
+bin/uefi/obj/%.o: $(UEFI_DIR)/%.c $(UEFI_DIR)/efi.h $(UEFI_DIR)/util.h \
+	$(UEFI_FLAG_STAMP)
 	@mkdir -p $(@D)
 	$(call cc, $(UEFI_CFLAGS), $@, $<)
 

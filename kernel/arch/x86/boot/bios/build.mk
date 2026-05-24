@@ -48,12 +48,16 @@ LD_BIOS := \
 
 OC_BIOS := -O binary
 
+BOOT_FLAG_STAMP := bin/boot/.compile-flags
+BOOT_BUILD_CONFIG := $(CC) $(AS) $(CC_BASE) $(AS_BASE) $(CC_BOOT) $(AS_BOOT)
 
-bin/boot/%.asm.o: %.asm
+$(eval $(call flag_stamp,$(BOOT_FLAG_STAMP),BOOT_BUILD_CONFIG))
+
+bin/boot/%.asm.o: %.asm $(BOOT_FLAG_STAMP)
 	@mkdir -p $(@D)
 	$(call as, $(AS_BOOT), $@, $<)
 
-bin/boot/%.c.o: %.c
+bin/boot/%.c.o: %.c $(BOOT_FLAG_STAMP)
 	@mkdir -p $(@D)
 	$(call cc, $(CC_BOOT), $@, $<)
 

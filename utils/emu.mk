@@ -174,7 +174,7 @@ $(SPIKE_MMIO_UART_PLUGIN): utils/spike/mmio_uart_plugin.cpp
 		echo "Install one (e.g. g++ or clang++) or override with SPIKE_MMIO_UART_CXX=<compiler>."; \
 		exit 1; \
 	fi
-	@echo "Building Spike MMIO UART plugin: $@"
+	@printf "%-3s  %s\n" "CXX" "$<"
 	@"$(SPIKE_MMIO_UART_CXX)" -std=c++17 -O2 -fPIC -shared -Wall -Wextra -Wpedantic \
 		-I/usr/include \
 		-o "$@" "$<"

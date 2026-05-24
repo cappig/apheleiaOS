@@ -143,29 +143,35 @@ endif
 
 KERNEL_OBJ := $(patsubst %, $(KERNEL_OBJ_DIR)/%.o, $(KERNEL_SRC))
 
-$(BOOT_ENTRY_OBJ_DIR)/%.S.o: %.S
-	@mkdir -p $(@D)
-	@$(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) -c -o $@ $<
-	@printf "%s  %s\n" "CC" "$<"
+KERNEL_FLAG_STAMP     := $(KERNEL_OBJ_DIR)/.compile-flags
+BOOT_ENTRY_FLAG_STAMP := $(BOOT_ENTRY_OBJ_DIR)/.compile-flags
+KERNEL_BUILD_CONFIG   := $(CC) $(CC_BASE) $(KERNEL_CC_FLAGS)
+BOOT_ENTRY_CONFIG     := $(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS)
 
-$(BOOT_ENTRY_OBJ_DIR)/%.c.o: %.c
+$(eval $(call flag_stamp,$(KERNEL_FLAG_STAMP),KERNEL_BUILD_CONFIG))
+$(eval $(call flag_stamp,$(BOOT_ENTRY_FLAG_STAMP),BOOT_ENTRY_CONFIG))
+
+$(BOOT_ENTRY_OBJ_DIR)/%.S.o: %.S $(BOOT_ENTRY_FLAG_STAMP)
 	@mkdir -p $(@D)
-	@$(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) -c -o $@ $<
-	@printf "%s  %s\n" "CC" "$<"
+	$(call cc, $(BOOT_ENTRY_CFLAGS), $@, $<)
+
+$(BOOT_ENTRY_OBJ_DIR)/%.c.o: %.c $(BOOT_ENTRY_FLAG_STAMP)
+	@mkdir -p $(@D)
+	$(call cc, $(BOOT_ENTRY_CFLAGS), $@, $<)
 
 $(BOOT_ENTRY_ELF): $(BOOT_ENTRY_OBJ) $(call LIBGCC, $(BOOT_ENTRY_CFLAGS)) | $(BOOT_ENTRY_LINKER)
 	@mkdir -p $(@D)
 	@$(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) $(BOOT_ENTRY_LDFLAGS) -o $@ $^
-	@printf "%s  %s\n" "LD" "$@"
+	@printf "%-3s  %s\n" "LD" "$@"
 
 $(BOOT_ENTRY_BIN): $(BOOT_ENTRY_ELF)
 	$(call oc, -O binary, $<, $@)
 
-$(KERNEL_OBJ_DIR)/%.S.o: %.S
+$(KERNEL_OBJ_DIR)/%.S.o: %.S $(KERNEL_FLAG_STAMP)
 	@mkdir -p $(@D)
 	$(call cc, $(KERNEL_CC_FLAGS), $@, $<)
 
-$(KERNEL_OBJ_DIR)/%.c.o: %.c
+$(KERNEL_OBJ_DIR)/%.c.o: %.c $(KERNEL_FLAG_STAMP)
 	@mkdir -p $(@D)
 	$(call cc, $(KERNEL_CC_FLAGS), $@, $<)
 
@@ -173,45 +179,31 @@ $(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS)) \
 	$(ARCH_DIR)/build/linker$(ARCH_VARIANT).ld
 	@mkdir -p $(@D)
 	$(call ld, $(KERNEL_LD_FLAGS), $@, $(filter-out $(ARCH_DIR)/build/linker$(ARCH_VARIANT).ld, $^))
-	@if [ "$(STRIP_KERNEL)" = "true" ]; then $(ST) $(STRIP_KERNEL_FLAGS) $@; fi
+	$(call kernel_strip, $@)
 
 IMAGE_SCRIPT_DEPS := \
+	utils/stage_image.sh \
 	kernel/build_image_common.py \
+	kernel/arch/riscv/build/check_boot_stub.py \
 	kernel/arch/riscv/build/build_riscv_disk_image.py \
 	kernel/arch/riscv/build/check_image_layout.py
 
 IMAGE_ROOT_DEPS := $(shell find root -type f -o -type l)
 
-define stage_image
-	@mkdir -p $(@D)
-	@rm -rf $(IMAGE_STAGE_DIR)
-	@mkdir -p $(IMAGE_BOOT_DIR)
-	@cp -f $(KERNEL_ELF) $(IMAGE_BOOT_DIR)/
-	@cp -r root/* $(IMAGE_STAGE_DIR)
-	@cp -a bin/user/$(ARCH)/root/. $(IMAGE_STAGE_DIR)/
-	@rm -rf $(IMAGE_STAGE_DIR)/usr/lib
-	@rm -rf $(IMAGE_STAGE_DIR)/etc/cursors
-	@rm -f  $(IMAGE_STAGE_DIR)/home/user/wall.ppm
-endef
-
 $(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
-	$(call stage_image)
+	@utils/stage_image.sh "$(IMAGE_STAGE_DIR)" "$(IMAGE_BOOT_DIR)" \
+		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root" riscv
 	@python3 kernel/arch/riscv/build/build_riscv_disk_image.py $@ $(IMAGE_STAGE_DIR)
-	@printf "%s  %s\n" "IM" "$@"
+	@printf "%-3s  %s\n" "IM" "$@"
 
 bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE)
 	@mkdir -p $(@D)
-	@stack_top=$$(printf '%d' 0x$$(readelf -Ws $(BOOT_ENTRY_ELF) \
-	    | awk '$$NF == "__stack_top" { print $$2; exit }')); \
-	footprint=$$((stack_top - 0x80000000)); \
-	[ "$$footprint" -le "$(RISCV_BOOT_IMAGE_ROOTFS_OFFSET)" ] || \
-	    { echo "boot image footprint exceeds embedded rootfs offset"; exit 1; }
-	@[ "$$(wc -c < $(BOOT_ENTRY_BIN))" -le "$(RISCV_BOOT_IMAGE_ROOTFS_OFFSET)" ] || \
-	    { echo "boot binary exceeds embedded rootfs offset"; exit 1; }
+	@python3 kernel/arch/riscv/build/check_boot_stub.py \
+		$(BOOT_ENTRY_ELF) $(BOOT_ENTRY_BIN) $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET)
 	@python3 kernel/arch/riscv/build/check_image_layout.py \
 	    $(KERNEL_ELF) $(ROOTFS_IMAGE) $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) \
 	    $(RISCV_BOOT_SCRATCH_OFFSET)
 	@cp $(BOOT_ENTRY_BIN) $@
 	@truncate -s $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) $@
 	@cat $(ROOTFS_IMAGE) >> $@
-	@printf "%s  %s\n" "IM" "$@"
+	@printf "%-3s  %s\n" "IM" "$@"
