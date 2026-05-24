@@ -8,12 +8,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/proc.h>
+#include <term_size.h>
 #include <termios.h>
 #include <unistd.h>
 
-#define TOP_DEFAULT_DELAY_MS 1000U
+#define TOP_DEFAULT_DELAY_MS 500U
 #define TOP_DEFAULT_ROWS     24
 #define TOP_DEFAULT_COLS     80
 #define TOP_COL_PID          5
@@ -79,6 +79,9 @@ typedef struct {
     int cpu_fd;
 } top_data_fds_t;
 
+static char top_key_push = 0;
+static bool top_key_push_valid = false;
+
 static void top_write(const char *text) {
     if (!text) {
         return;
@@ -93,11 +96,19 @@ top_write_line(const char *line, bool interactive, size_t *line_count) {
         return;
     }
 
-    if (interactive) {
-        top_write("\x1b[2K");
-    }
+    size_t len = strlen(line);
+    bool newline = len && line[len - 1] == '\n';
 
-    top_write(line);
+    if (!interactive) {
+        top_write(line);
+    } else if (newline) {
+        (void)write(STDOUT_FILENO, line, len - 1);
+        top_write("\x1b[K");
+        top_write("\n");
+    } else {
+        top_write(line);
+        top_write("\x1b[K");
+    }
 
     if (line_count) {
         (*line_count)++;
@@ -107,7 +118,7 @@ top_write_line(const char *line, bool interactive, size_t *line_count) {
 static void top_usage(void) {
     static const char usage[] =
         "usage: top [-d delay_ms] [-n samples] [-c] [-p] [-g]\n"
-        "  -d delay_ms  refresh delay in milliseconds (default: 1000)\n"
+        "  -d delay_ms  refresh delay in milliseconds (default: 500)\n"
         "  -c           show running core column\n"
         "  -p           show per-core CPU usage summary\n"
         "  -g           show CPU/MEM bar graphs\n"
@@ -775,31 +786,20 @@ static bool top_snapshot_prev(
 }
 
 static void top_update_winsize(size_t *rows, size_t *cols, int input_fd) {
-    size_t new_rows = TOP_DEFAULT_ROWS;
-    size_t new_cols = TOP_DEFAULT_COLS;
-    winsize_t ws = {0};
+    const term_size_t fallback = {
+        .rows = TOP_DEFAULT_ROWS,
+        .cols = TOP_DEFAULT_COLS,
+    };
 
-    bool ok = (!ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) && ws.ws_row && ws.ws_col) ||
-              (!ioctl(input_fd, TIOCGWINSZ, &ws) && ws.ws_row && ws.ws_col) ||
-              (!ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) && ws.ws_row && ws.ws_col);
-
-    if (ok) {
-        new_rows = ws.ws_row;
-        new_cols = ws.ws_col;
-    }
-
-    if (!new_rows) {
-        new_rows = TOP_DEFAULT_ROWS;
-    }
-    if (!new_cols) {
-        new_cols = TOP_DEFAULT_COLS;
-    }
+    term_size_t size = fallback;
+    term_get_size(input_fd, STDOUT_FILENO, &size, &fallback);
 
     if (rows) {
-        *rows = new_rows;
+        *rows = size.rows;
     }
+
     if (cols) {
-        *cols = new_cols;
+        *cols = size.cols;
     }
 }
 
@@ -838,33 +838,49 @@ static void top_restore_tty_mode(top_tty_state_t *tty) {
     tty->active = false;
 }
 
-static bool top_handle_input(int input_fd, unsigned int timeout_ms) {
-    pollfd pfd = {
-        .fd = input_fd,
-        .events = POLLIN,
-        .revents = 0,
-    };
+static bool top_read_byte(
+    int input_fd,
+    char *out,
+    int timeout_ms,
+    void *ctx
+) {
+    (void)ctx;
 
-    int pr = poll(&pfd, 1, (int)timeout_ms);
-    if (pr < 0) {
-        if (errno == EINTR) {
-            return true;
-        }
+    if (!out) {
         return false;
     }
 
-    if (pr == 0 || !(pfd.revents & POLLIN)) {
+    if (top_key_push_valid) {
+        top_key_push_valid = false;
+        *out = top_key_push;
         return true;
     }
 
-    for (;;) {
-        char ch = 0;
-        ssize_t n = read(input_fd, &ch, 1);
-        if (n == 1) {
-            if (ch == 'q' || ch == 'Q' || ch == 3) {
+    if (timeout_ms >= 0) {
+        pollfd pfd = {
+            .fd = input_fd,
+            .events = POLLIN,
+            .revents = 0,
+        };
+
+        for (;;) {
+            int pr = poll(&pfd, 1, timeout_ms);
+            if (pr < 0 && errno == EINTR) {
+                continue;
+            }
+
+            if (pr <= 0 || !(pfd.revents & POLLIN)) {
                 return false;
             }
-            continue;
+
+            break;
+        }
+    }
+
+    for (;;) {
+        ssize_t n = read(input_fd, out, 1);
+        if (n == 1) {
+            return true;
         }
 
         if (n < 0 && errno == EINTR) {
@@ -872,6 +888,45 @@ static bool top_handle_input(int input_fd, unsigned int timeout_ms) {
         }
 
         break;
+    }
+
+    return false;
+}
+
+static void top_push_byte(int input_fd, char ch, void *ctx) {
+    (void)input_fd;
+    (void)ctx;
+
+    top_key_push = ch;
+    top_key_push_valid = true;
+}
+
+static void top_probe_winsize(int input_fd) {
+    term_size_t size = {0};
+    (void)term_probe_size(
+        input_fd,
+        STDOUT_FILENO,
+        &size,
+        top_read_byte,
+        top_push_byte,
+        NULL
+    );
+}
+
+static bool top_handle_input(int input_fd, unsigned int timeout_ms) {
+    char ch = 0;
+    if (!top_read_byte(input_fd, &ch, (int)timeout_ms, NULL)) {
+        return true;
+    }
+
+    for (;;) {
+        if (ch == 'q' || ch == 'Q' || ch == 3) {
+            return false;
+        }
+
+        if (!top_read_byte(input_fd, &ch, 0, NULL)) {
+            break;
+        }
     }
 
     return true;
@@ -1237,6 +1292,7 @@ int main(int argc, char **argv) {
     if (interactive) {
         (void)top_enable_tty_mode(&tty, input_fd);
         top_write("\x1b[?25l\x1b[H\x1b[2J");
+        top_probe_winsize(input_fd);
     }
 
     top_prev_proc_t *prev = NULL;

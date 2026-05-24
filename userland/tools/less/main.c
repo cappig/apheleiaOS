@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
+#include <term_size.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -32,6 +32,9 @@ typedef struct {
     bool active;
     int fd;
 } tty_state_t;
+
+static char key_push = 0;
+static bool key_push_valid = false;
 
 static int write_all(int fd, const char *buf, size_t len) {
     size_t off = 0;
@@ -142,22 +145,20 @@ static size_t line_end(const doc_t *doc, size_t line) {
 }
 
 static void terminal_size(size_t *rows, size_t *cols, int input_fd) {
-    size_t out_rows = 24;
-    size_t out_cols = 80;
-    winsize_t ws = {0};
+    const term_size_t fallback = {
+        .rows = 24,
+        .cols = 80,
+    };
 
-    bool ok = (!ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) && ws.ws_row && ws.ws_col) ||
-              (!ioctl(input_fd, TIOCGWINSZ, &ws) && ws.ws_row && ws.ws_col);
-    if (ok) {
-        out_rows = ws.ws_row;
-        out_cols = ws.ws_col;
-    }
+    term_size_t size = fallback;
+    term_get_size(input_fd, STDOUT_FILENO, &size, &fallback);
 
     if (rows) {
-        *rows = out_rows;
+        *rows = size.rows;
     }
+
     if (cols) {
-        *cols = out_cols;
+        *cols = size.cols;
     }
 }
 
@@ -193,16 +194,29 @@ static bool read_key_byte(int fd, char *out, int timeout_ms) {
         return false;
     }
 
+    if (key_push_valid) {
+        key_push_valid = false;
+        *out = key_push;
+        return true;
+    }
+
     if (timeout_ms >= 0) {
-        pollfd pfd = {.fd = fd, .events = POLLIN, .revents = 0};
+        pollfd pfd = {
+            .fd = fd,
+            .events = POLLIN,
+            .revents = 0,
+        };
+
         for (;;) {
             int pr = poll(&pfd, 1, timeout_ms);
             if (pr < 0 && errno == EINTR) {
                 continue;
             }
+
             if (pr <= 0 || !(pfd.revents & POLLIN)) {
                 return false;
             }
+
             break;
         }
     }
@@ -212,11 +226,39 @@ static bool read_key_byte(int fd, char *out, int timeout_ms) {
         if (n == 1) {
             return true;
         }
+
         if (n < 0 && errno == EINTR) {
             continue;
         }
+
         return false;
     }
+}
+
+static bool read_term_byte(int fd, char *out, int timeout_ms, void *ctx) {
+    (void)ctx;
+
+    return read_key_byte(fd, out, timeout_ms);
+}
+
+static void push_term_byte(int fd, char ch, void *ctx) {
+    (void)fd;
+    (void)ctx;
+
+    key_push = ch;
+    key_push_valid = true;
+}
+
+static void probe_terminal_size(int input_fd) {
+    term_size_t size = {0};
+    (void)term_probe_size(
+        input_fd,
+        STDOUT_FILENO,
+        &size,
+        read_term_byte,
+        push_term_byte,
+        NULL
+    );
 }
 
 static int read_key(int input_fd) {
@@ -270,18 +312,23 @@ static int read_key(int input_fd) {
         if (c != '~') {
             return KEY_NONE;
         }
+
         if (v == 5) {
             return KEY_PAGE_UP;
         }
+
         if (v == 6) {
             return KEY_PAGE_DOWN;
         }
+
         if (v == 1 || v == 7) {
             return KEY_HOME;
         }
+
         if (v == 4 || v == 8) {
             return KEY_END;
         }
+
         return KEY_NONE;
     }
 }
@@ -424,6 +471,8 @@ int main(int argc, char **argv) {
         }
         goto out;
     }
+
+    probe_terminal_size(input_fd);
 
     size_t top_line = 0;
     for (;;) {

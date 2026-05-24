@@ -1487,12 +1487,64 @@ static void close_pipe_fds(int pipes[][2], int count) {
     for (int i = 0; i < count; i++) {
         if (pipes[i][0] >= 0) {
             close(pipes[i][0]);
+            pipes[i][0] = -1;
         }
 
         if (pipes[i][1] >= 0) {
             close(pipes[i][1]);
+            pipes[i][1] = -1;
         }
     }
+}
+
+static void close_start_gate(int gate[2]) {
+    if (gate[0] >= 0) {
+        close(gate[0]);
+        gate[0] = -1;
+    }
+
+    if (gate[1] >= 0) {
+        close(gate[1]);
+        gate[1] = -1;
+    }
+}
+
+static void wait_start_gate(int gate[2]) {
+    if (gate[0] < 0) {
+        return;
+    }
+
+    if (gate[1] >= 0) {
+        close(gate[1]);
+        gate[1] = -1;
+    }
+
+    char byte = 0;
+    while (read(gate[0], &byte, 1) < 0 && errno == EINTR) {
+        ;
+    }
+
+    close(gate[0]);
+    gate[0] = -1;
+}
+
+static void release_start_gate(int gate[2]) {
+    if (gate[1] < 0) {
+        return;
+    }
+
+    if (gate[0] >= 0) {
+        close(gate[0]);
+        gate[0] = -1;
+    }
+
+    char byte = 0;
+    while (write(gate[1], &byte, 1) < 0 && errno == EINTR) {
+        ;
+    }
+
+    close(gate[1]);
+    gate[1] = -1;
 }
 
 static int redirect_path_to_fd(
@@ -1644,9 +1696,17 @@ static int run_pipeline(
         pipes[i][1] = -1;
     }
 
+    int start_gate[2] = {-1, -1};
+    bool gate_child_start = sh_interactive && !background;
+    if (gate_child_start && pipe(start_gate) < 0) {
+        io_write_str("sh: pipe failed\n");
+        return -1;
+    }
+
     for (int i = 0; i + 1 < stage_count; i++) {
         if (pipe(pipes[i]) < 0) {
             io_write_str("sh: pipe failed\n");
+            close_start_gate(start_gate);
             close_pipe_fds(pipes, stage_count - 1);
             return -1;
         }
@@ -1687,6 +1747,10 @@ static int run_pipeline(
                 _exit(1);
             }
 
+            if (gate_child_start) {
+                wait_start_gate(start_gate);
+            }
+
             int builtin_status = 0;
             if (handle_builtin(stages[i].argc, stages[i].argv, &builtin_status)) {
                 _exit(builtin_status);
@@ -1704,6 +1768,7 @@ static int run_pipeline(
 
         if (pid < 0) {
             io_write_str("sh: fork failed\n");
+            close_start_gate(start_gate);
             close_pipe_fds(pipes, stage_count - 1);
             return -1;
         }
@@ -1719,6 +1784,7 @@ static int run_pipeline(
     close_pipe_fds(pipes, stage_count - 1);
 
     if (background) {
+        close_start_gate(start_gate);
         sh_last_bg_pid = pgid;
         if (sh_interactive) {
             job_t *job = job_add(pgid, cmdline, JOB_RUNNING);
@@ -1734,6 +1800,8 @@ static int run_pipeline(
     if (sh_interactive) {
         tty_set_pgrp(pgid);
     }
+
+    release_start_gate(start_gate);
 
     sh_wait_result_t wait_result = wait_foreground_pgrp(pgid, last_pid);
     if (sh_interactive) {

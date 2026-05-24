@@ -16,6 +16,8 @@ static spinlock_t tx_lock = SPINLOCK_INIT;
 #define UART_LSR_TX_IDLE  0x20
 #define UART_IER_RX_READY 0x01
 
+#define UART_TX_IRQ_CHUNK 16
+
 static inline uintptr_t _uart_reg(uintptr_t base, uintptr_t reg) {
     return base + reg * RISCV_UART_STRIDE;
 }
@@ -110,15 +112,25 @@ void send_serial_sized_string(uintptr_t base, const char *s, size_t len) {
         return;
     }
 
+    size_t off = 0;
+    while (off < len) {
+        size_t chunk = len - off;
+        if (chunk > UART_TX_IRQ_CHUNK) {
+            chunk = UART_TX_IRQ_CHUNK;
+        }
+
 #ifdef _KERNEL
-    unsigned long flags = spin_lock_irqsave(&tx_lock);
+        unsigned long flags = spin_lock_irqsave(&tx_lock);
 #endif
 
-    for (size_t i = 0; i < len; i++) {
-        _send_serial_unlocked(base, s[i]);
+        for (size_t i = 0; i < chunk; i++) {
+            _send_serial_unlocked(base, s[off + i]);
+        }
+
+#ifdef _KERNEL
+        spin_unlock_irqrestore(&tx_lock, flags);
+#endif
+
+        off += chunk;
     }
-
-#ifdef _KERNEL
-    spin_unlock_irqrestore(&tx_lock, flags);
-#endif
 }

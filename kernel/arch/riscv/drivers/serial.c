@@ -20,8 +20,6 @@ typedef struct {
     size_t rx_count;
 
     spinlock_t rx_lock;
-    spinlock_t tx_lock;
-
     sched_wait_queue_t rx_wait;
     serial_tty_t tty;
 
@@ -31,7 +29,6 @@ typedef struct {
 
 static serial_port_t port = {
     .rx_lock = SPINLOCK_INIT,
-    .tx_lock = SPINLOCK_INIT,
 };
 
 static bool driver_loaded = false;
@@ -105,9 +102,8 @@ _write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         return 0;
     }
 
-    unsigned long irq_flags = spin_lock_irqsave(&port.tx_lock);
     send_serial_sized_string(uart_console_base(), buf, len);
-    spin_unlock_irqrestore(&port.tx_lock, irq_flags);
+
     return (ssize_t)len;
 }
 

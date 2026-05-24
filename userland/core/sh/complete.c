@@ -7,8 +7,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <term_size.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -96,12 +96,14 @@ static bool starts_with(const char *text, const char *prefix) {
 }
 
 static size_t completion_term_cols(void) {
-    winsize_t ws = {0};
-    if (!ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) && ws.ws_col) {
-        return (size_t)ws.ws_col;
-    }
+    const term_size_t fallback = {
+        .rows = 25,
+        .cols = 80,
+    };
 
-    return 80;
+    term_size_t size = fallback;
+    term_get_size(STDIN_FILENO, STDOUT_FILENO, &size, &fallback);
+    return size.cols;
 }
 
 static int match_name_cmp(const void *lhs, const void *rhs) {
