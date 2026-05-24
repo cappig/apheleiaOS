@@ -1365,6 +1365,8 @@ int user_exec(
         return -ENOMEM;
     }
 
+    sched_preempt_disable();
+
     sched_user_region_t *old_regions = thread->regions;
     uintptr_t old_stack_base = thread->user_stack_base;
     size_t old_stack_size = thread->user_stack_size;
@@ -1398,6 +1400,7 @@ int user_exec(
         _free_env(&env);
         _close_file(&file);
 
+        sched_preempt_enable();
         return -ENOEXEC;
     }
 
@@ -1415,9 +1418,11 @@ int user_exec(
         _free_env(&env);
         _close_file(&file);
 
+        sched_preempt_enable();
         return -ENOMEM;
     }
 
+    // The current thread's VM, stack, and trap frame switch as one image.
     _apply_exec_identity(thread, file.node);
 
     arch_vm_switch(thread->vm_space);
@@ -1456,5 +1461,6 @@ int user_exec(
     _free_env(&env);
     _close_file(&file);
 
+    sched_preempt_enable();
     return 0;
 }

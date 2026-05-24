@@ -165,6 +165,51 @@ static void _append_bootloader_log(const boot_info_t *info) {
     spin_unlock_irqrestore(&boot_log_lock, flags);
 }
 
+static bool _e820_range_reserved(const e820_map_t *map, u64 start, size_t size) {
+    if (!map || !start || !size || start >= PROTECTED_MODE_TOP) {
+        return false;
+    }
+
+    u64 end = start + (u64)size;
+    if (end <= start || end > PROTECTED_MODE_TOP) {
+        return false;
+    }
+
+    size_t count = map->count < E820_MAX ? (size_t)map->count : E820_MAX;
+    u64 cursor = start;
+
+    while (cursor < end) {
+        bool covered = false;
+
+        for (size_t i = 0; i < count; i++) {
+            const e820_entry_t *entry = &map->entries[i];
+            u64 entry_end = entry->address + entry->size;
+
+            if (entry->type == E820_AVAILABLE) {
+                continue;
+            }
+
+            if (entry_end <= entry->address) {
+                continue;
+            }
+
+            if (cursor < entry->address || cursor >= entry_end) {
+                continue;
+            }
+
+            cursor = entry_end < end ? entry_end : end;
+            covered = true;
+            break;
+        }
+
+        if (!covered) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void _log_history_replay_console(void) {
     if (!log_console_ready || !boot_log_history_len) {
         return;
@@ -1098,6 +1143,21 @@ const kernel_args_t *arch_init(void *boot_info) {
         boot_rootfs_paddr = 0;
     } else {
         boot_rootfs_size = (size_t)info->boot_rootfs_size;
+    }
+
+    bool staged_rootfs = boot_rootfs_paddr && boot_rootfs_size;
+    bool rootfs_reserved = false;
+
+    if (staged_rootfs) {
+        rootfs_reserved = _e820_range_reserved(
+            &info->memory_map,
+            boot_rootfs_paddr,
+            boot_rootfs_size
+        );
+    }
+
+    if (staged_rootfs && !rootfs_reserved) {
+        panic("staged rootfs memory is allocatable");
     }
 
     _configure_log_sinks(info);

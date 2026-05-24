@@ -379,6 +379,54 @@ static bool read_rootfs_image(void *dest, size_t offset, size_t bytes, void *ctx
     return true;
 }
 
+static void keep_out_of_heap(
+    const char *name,
+    uintptr_t start,
+    size_t size,
+    uintptr_t *heap_start,
+    uintptr_t *heap_end
+) {
+    if (!start || !size || !heap_start || !heap_end) {
+        return;
+    }
+
+    if (*heap_start >= *heap_end) {
+        return;
+    }
+
+    uintptr_t end = start + size;
+    if (end <= start) {
+        panic("boot reservation overflow");
+    }
+
+    if (end <= *heap_start || start >= *heap_end) {
+        return;
+    }
+
+    uintptr_t low_end = ALIGN_DOWN(start, RISCV_BOOT_PAGE_SIZE);
+    uintptr_t high_start = ALIGN(end, RISCV_BOOT_PAGE_SIZE);
+
+    size_t low_size = low_end > *heap_start ? low_end - *heap_start : 0;
+    size_t high_size = high_start < *heap_end ? *heap_end - high_start : 0;
+
+    if (!low_size && !high_size) {
+        panic("boot heap overlaps reserved image");
+    }
+
+    if (low_size >= high_size) {
+        *heap_end = low_end;
+    } else {
+        *heap_start = high_start;
+    }
+
+    boot_logf(
+        "%s: kept out of boot heap [%#lx, %#lx)",
+        name ? name : "reservation",
+        (unsigned long)start,
+        (unsigned long)end
+    );
+}
+
 NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     if (RISCV_BOOT_FORCE_NO_DTB) {
         dtb = NULL;
@@ -442,6 +490,17 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         rootfs_image = (const u8 *)(uintptr_t)initrd_reg.addr;
         rootfs_limit = (size_t)initrd_reg.size;
         rootfs_from_initrd = true;
+
+        uintptr_t initrd_start = (uintptr_t)rootfs_image;
+        uintptr_t initrd_end = initrd_start + rootfs_limit;
+
+        bool initrd_bad = initrd_end <= initrd_start;
+        initrd_bad = initrd_bad || initrd_start < (uintptr_t)memory_reg.addr;
+        initrd_bad = initrd_bad || initrd_end > memory_end;
+
+        if (initrd_bad) {
+            panic("initrd outside RAM");
+        }
     }
 
     u64 boot_hart = 0;
@@ -497,6 +556,17 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
 
     heap_start = ALIGN(heap_start, RISCV_BOOT_PAGE_SIZE);
     memory_end = ALIGN_DOWN(memory_end, RISCV_BOOT_PAGE_SIZE);
+
+    if (rootfs_from_initrd) {
+        keep_out_of_heap(
+            "initrd",
+            (uintptr_t)rootfs_image,
+            rootfs_limit,
+            &heap_start,
+            &memory_end
+        );
+    }
+
     if (heap_start >= memory_end) {
         panic("no boot heap space available");
     }

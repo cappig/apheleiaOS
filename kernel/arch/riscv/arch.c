@@ -1062,12 +1062,17 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     uintptr_t mem_end = (uintptr_t)(boot.mem_paddr + boot.mem_size);
     uintptr_t early_limit = mem_end;
+    uintptr_t pmm_limit = mem_end;
 
     if (boot.rootfs_paddr && boot.rootfs_size) {
         uintptr_t rootfs_start = (uintptr_t)boot.rootfs_paddr;
         uintptr_t rootfs_end = (uintptr_t)(boot.rootfs_paddr + boot.rootfs_size);
 
-        if (rootfs_end <= rootfs_start || rootfs_end > mem_end) {
+        bool rootfs_bad = rootfs_end <= rootfs_start;
+        rootfs_bad = rootfs_bad || rootfs_start < (uintptr_t)boot.mem_paddr;
+        rootfs_bad = rootfs_bad || rootfs_end > mem_end;
+
+        if (rootfs_bad) {
             panic("boot rootfs range exceeds RAM");
         }
 
@@ -1075,6 +1080,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
             if (rootfs_start >= reserved_end) {
                 // keep the early allocator below high initrd-style rootfs blobs
                 early_limit = rootfs_start;
+                pmm_limit = rootfs_start;
             } else {
                 // rootfs overlaps the reserved area; advance cursor past it
                 reserved_end = rootfs_end;
@@ -1130,10 +1136,15 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     _plic_init(uart_irq);
 
-    pmm_init(boot.mem_paddr, boot.mem_size, mmio.early_cursor);
+    if (pmm_limit <= boot.mem_paddr) {
+        panic("RISC-V PMM has no allocatable RAM");
+    }
+
+    u64 pmm_size = (u64)(pmm_limit - (uintptr_t)boot.mem_paddr);
+    pmm_init(boot.mem_paddr, pmm_size, mmio.early_cursor);
     log_debug(
         "initialized physical memory manager base=%#llx size=%#llx",
-        (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size
+        (unsigned long long)boot.mem_paddr, (unsigned long long)pmm_size
     );
 
     heap_init();
