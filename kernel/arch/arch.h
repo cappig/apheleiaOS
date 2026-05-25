@@ -62,6 +62,7 @@ const char *arch_cpu_name(void);
 u64 arch_cpu_khz(void);
 
 void arch_mem_info(size_t *total, size_t *free);
+size_t arch_mem_installed(void);
 
 void arch_syscall_install(int vector, arch_syscall_handler_t handler);
 

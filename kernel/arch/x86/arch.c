@@ -1620,6 +1620,10 @@ void arch_mem_info(size_t *total, size_t *free) {
     }
 }
 
+size_t arch_mem_installed(void) {
+    return pmm_total_mem();
+}
+
 void arch_syscall_install(int vector, arch_syscall_handler_t handler) {
     set_int_handler(vector, handler);
     configure_int(vector, GDT_KERNEL_CODE, 0, IDT_TRP);

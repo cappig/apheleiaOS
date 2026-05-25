@@ -109,10 +109,12 @@ static struct {
 
 static struct {
     u64 timebase_hz;
+    u64 cpu_hz;
     char platform_name[RISCV_PLATFORM_NAME_MAX];
     bool arm_fail_logged;
 } timer = {
     .timebase_hz = RISCV_TIMEBASE_HZ,
+    .cpu_hz = RISCV_TIMEBASE_HZ,
     .platform_name = "riscv",
     .arm_fail_logged = false,
 };
@@ -1054,12 +1056,21 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     timer.timebase_hz = RISCV_TIMEBASE_HZ;
+    timer.cpu_hz = RISCV_TIMEBASE_HZ;
     timer.platform_name[0] = '\0';
     timer.arm_fail_logged = false;
     if (boot.dtb) {
         u64 parsed_hz = 0;
         if (fdt_find_timebase_frequency(boot.dtb, &parsed_hz) && parsed_hz) {
             timer.timebase_hz = parsed_hz;
+        }
+
+        u32 cpu_hz = 0;
+        bool have_cpu_hz =
+            fdt_find_compatible_u32(boot.dtb, "riscv", "clock-frequency", &cpu_hz);
+
+        if (have_cpu_hz && cpu_hz) {
+            timer.cpu_hz = cpu_hz;
         }
 
         if (!fdt_find_model(boot.dtb, timer.platform_name, sizeof(timer.platform_name))) {
@@ -1072,8 +1083,9 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     log_info(
-        "platform model=%s timebase=%llu Hz",
+        "platform model=%s cpu=%llu Hz timebase=%llu Hz",
         timer.platform_name,
+        (unsigned long long)timer.cpu_hz,
         (unsigned long long)timer.timebase_hz
     );
 
@@ -1519,7 +1531,7 @@ const char *arch_cpu_name(void) {
 }
 
 u64 arch_cpu_khz(void) {
-    return timer.timebase_hz / 1000ULL;
+    return timer.cpu_hz / 1000ULL;
 }
 
 void arch_mem_info(size_t *total, size_t *free_mem) {
@@ -1530,6 +1542,10 @@ void arch_mem_info(size_t *total, size_t *free_mem) {
     if (free_mem) {
         *free_mem = pmm_free_mem();
     }
+}
+
+size_t arch_mem_installed(void) {
+    return (size_t)boot.mem_size;
 }
 
 void arch_syscall_install(int vector, arch_syscall_handler_t handler) {

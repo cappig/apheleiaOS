@@ -343,19 +343,26 @@ static ssize_t _dev_swap_read(
     (void)node;
     (void)flags;
 
-    size_t _total = 0, _free = 0;
-    arch_mem_info(&_total, &_free);
-    u64 total_kib = (u64)_total / KIB;
-    u64 free_kib = (u64)_free / KIB;
-    u64 used_kib = total_kib >= free_kib ? total_kib - free_kib : 0;
+    size_t managed = 0;
+    size_t free_mem = 0;
+    arch_mem_info(&managed, &free_mem);
+
+    u64 managed_kib = (u64)managed / KIB;
+    u64 free_kib = (u64)free_mem / KIB;
+    u64 installed_kib = (u64)arch_mem_installed() / KIB;
+    u64 used_kib = managed_kib >= free_kib ? managed_kib - free_kib : 0;
 
     char text[SYSINFO_TEXT_MAX];
     snprintf(
         text,
         sizeof(text),
-        "total_kib=%" PRIu64 "\n"
+        "installed_kib=%" PRIu64 "\n"
+        "managed_kib=%" PRIu64 "\n"
+        "free_kib=%" PRIu64 "\n"
         "used_kib=%" PRIu64 "\n",
-        total_kib,
+        installed_kib,
+        managed_kib,
+        free_kib,
         used_kib
     );
 

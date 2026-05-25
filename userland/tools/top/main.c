@@ -35,7 +35,7 @@ typedef struct {
 } top_clock_t;
 
 typedef struct {
-    unsigned long long total_kib;
+    unsigned long long managed_kib;
     unsigned long long used_kib;
 } top_mem_t;
 
@@ -297,7 +297,7 @@ static bool top_read_mem(int fd, top_mem_t *out) {
         return false;
     }
 
-    return kv_read_u64(text, "total_kib", &out->total_kib) &&
+    return kv_read_u64(text, "managed_kib", &out->managed_kib) &&
            kv_read_u64(text, "used_kib", &out->used_kib);
 }
 
@@ -970,8 +970,8 @@ static void top_render(
     );
 
     unsigned long long mem_pct_x10 = 0;
-    if (mem && mem->total_kib) {
-        mem_pct_x10 = (mem->used_kib * 1000ULL) / mem->total_kib;
+    if (mem && mem->managed_kib) {
+        mem_pct_x10 = (mem->used_kib * 1000ULL) / mem->managed_kib;
     }
 
     char uptime_buf[32];
@@ -1006,7 +1006,7 @@ static void top_render(
         ncpu ? ncpu : 1ULL,
         cols > 70 ? "  " : " ",
         mem ? mem->used_kib : 0ULL,
-        mem ? mem->total_kib : 0ULL,
+        mem ? mem->managed_kib : 0ULL,
         mem_pct_x10 / 10ULL,
         mem_pct_x10 % 10ULL
     );
@@ -1116,8 +1116,8 @@ static void top_render(
             p->cpu_pct_x100 % 100ULL
         );
         unsigned long long mem_pct_x100 = 0;
-        if (mem && mem->total_kib) {
-            mem_pct_x100 = (p->stat.vm_kib * 10000ULL) / mem->total_kib;
+        if (mem && mem->managed_kib) {
+            mem_pct_x100 = (p->stat.vm_kib * 10000ULL) / mem->managed_kib;
         }
         snprintf(
             mem_buf,

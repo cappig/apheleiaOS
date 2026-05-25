@@ -3,13 +3,12 @@
 / {
     #address-cells = <1>;
     #size-cells = <1>;
-
-    compatible = "fer,friscv-refsoc";
     model = "FER RISC-V Reference SoC";
+    compatible = "fer,friscv-refsoc";
 
     chosen {
-        bootargs = "console=ttyS0 earlycon";
-        stdout-path = "/soc/serial@10000000";
+        bootargs = "earlycon=sbi console=ttyS0,115200";
+        stdout-path = &uart0;
     };
 
     cpus {
@@ -17,20 +16,20 @@
         #size-cells = <0>;
         timebase-frequency = <10000000>;
 
-        cpu@0 {
+        CPU0: cpu@0 {
             device_type = "cpu";
-            reg = <0>;
             compatible = "riscv";
+            reg = <0>;
+            status = "okay";
             riscv,isa = "rv32ima_zifencei_zicsr";
             mmu-type = "riscv,sv32";
-            status = "okay";
+            clock-frequency = <50000000>;
 
-            interrupt-controller {
+            cpu0_intc: interrupt-controller {
                 #address-cells = <0>;
                 #interrupt-cells = <1>;
-                interrupt-controller;
                 compatible = "riscv,cpu-intc";
-                phandle = <1>;
+                interrupt-controller;
             };
         };
     };
@@ -40,27 +39,18 @@
         reg = <0x80000000 0x10000000>;
     };
 
-    soc {
-        #address-cells = <1>;
-        #size-cells = <1>;
-        compatible = "simple-bus";
-        ranges;
+    clint@2000000 {
+        compatible = "riscv,clint0";
+        reg = <0x2000000 0x10000>;
+        interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>;
+    };
 
-        clint@2000000 {
-            compatible = "riscv,clint0";
-            reg = <0x02000000 0x00010000>;
-            interrupts-extended = <&{/cpus/cpu@0/interrupt-controller} 3
-                                   &{/cpus/cpu@0/interrupt-controller} 7>;
-        };
-
-        serial@10000000 {
-            compatible = "ns16550a";
-            reg = <0x10000000 0x100>;
-            reg-shift = <2>;
-            reg-io-width = <4>;
-            clock-frequency = <50000000>;
-            current-speed = <115200>;
-            status = "okay";
-        };
+    uart0: serial@10000000 {
+        compatible = "ns16550a";
+        reg = <0x10000000 0x100>;
+        reg-shift = <2>;
+        reg-io-width = <4>;
+        clock-frequency = <50000000>;
+        current-speed = <115200>;
     };
 };

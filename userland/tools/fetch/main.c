@@ -64,7 +64,7 @@ static void fill_separator(char *out, size_t out_len, size_t width) {
 
 static void format_ram_line(
     unsigned long long used_kib,
-    unsigned long long total_kib,
+    unsigned long long installed_kib,
     char *out,
     size_t out_len
 ) {
@@ -72,7 +72,7 @@ static void format_ram_line(
         return;
     }
 
-    if (!total_kib) {
+    if (!installed_kib) {
         snprintf(out, out_len, "ram: <unknown>");
         return;
     }
@@ -87,10 +87,10 @@ static void format_ram_line(
     };
 
     char used_buf[32];
-    char total_buf[32];
+    char installed_buf[32];
 
-    const unsigned long long values[] = {used_kib, total_kib};
-    char *outputs[] = {used_buf, total_buf};
+    const unsigned long long values[] = {used_kib, installed_kib};
+    char *outputs[] = {used_buf, installed_buf};
 
     for (size_t i = 0; i < 2; i++) {
         unsigned long long value = values[i];
@@ -122,7 +122,7 @@ static void format_ram_line(
         }
     }
 
-    snprintf(out, out_len, "ram: %s / %s", used_buf, total_buf);
+    snprintf(out, out_len, "ram: %s / %s", used_buf, installed_buf);
 }
 
 static void print_fetch_rows(
@@ -156,7 +156,7 @@ int main(void) {
     char os_name[32] = "apheleiaOS";
     char os_arch[32] = ARCH_NAME;
     char cpu_model[64] = "<unknown>";
-    unsigned long long total_kib = 0;
+    unsigned long long installed_kib = 0;
     unsigned long long used_kib = 0;
     unsigned long long freq_khz = 0;
     unsigned long long ncpu = 1;
@@ -176,7 +176,7 @@ int main(void) {
 
     int swap_fd = open("/dev/swap", O_RDONLY, 0);
     if (swap_fd >= 0 && kv_read_fd(swap_fd, swap_kv, sizeof(swap_kv)) > 0) {
-        kv_read_u64(swap_kv, "total_kib", &total_kib);
+        kv_read_u64(swap_kv, "installed_kib", &installed_kib);
         kv_read_u64(swap_kv, "used_kib", &used_kib);
     }
     if (swap_fd >= 0) {
@@ -199,7 +199,7 @@ int main(void) {
     snprintf(os_line, sizeof(os_line), "os: %s %s", os_name, os_arch);
     snprintf(shell_line, sizeof(shell_line), "shell: %s", shell);
 
-    format_ram_line(used_kib, total_kib, ram_line, sizeof(ram_line));
+    format_ram_line(used_kib, installed_kib, ram_line, sizeof(ram_line));
 
     if (freq_khz > 0) {
         char model_clean[sizeof(cpu_model)];
