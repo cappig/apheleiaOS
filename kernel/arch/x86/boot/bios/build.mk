@@ -9,6 +9,7 @@ BIOS_SRC_DIRS := \
 	$(LIBC_DIRS) \
 	libs/alloc \
 	libs/data \
+	libs/log \
 	libs/parse
 
 ARCH_BOOT_SRC := \
@@ -20,6 +21,7 @@ BIOS_SCAN_DIRS := $(filter-out $(ARCH_DIR), $(BIOS_SRC_DIRS))
 BIOS_SRC := \
 	$(foreach dir, $(BIOS_SCAN_DIRS), $(wildcard $(dir)/*.c) $(wildcard $(dir)/*.asm)) \
 	$(ARCH_BOOT_SRC)
+BIOS_SRC := $(filter-out libs/libc/math.c, $(BIOS_SRC))
 
 MBR_SRC := $(wildcard $(MBR_DIR)/*.asm)
 
@@ -27,14 +29,11 @@ MBR_OBJ  := $(patsubst %, bin/boot/%.o, $(MBR_SRC))
 BIOS_OBJ := $(patsubst %, bin/boot/%.o, $(BIOS_SRC))
 
 AS_BOOT := -felf32
-BOOT_X86_FP_FLAGS := \
-	-mno-mmx \
-	-mno-sse \
-	-mno-sse2
 
 CC_BOOT := \
 	-m32 \
-	$(BOOT_X86_FP_FLAGS) \
+	$(X86_NO_FP_FLAGS) \
+	-DBOOT_LOG_COLOR=$(BOOT_LOG_COLOR) \
 	-fdata-sections \
 	-DEXTERNAL_ALLOC \
 	-ffunction-sections

@@ -11,6 +11,13 @@ enum log_levels {
     LOG_FATAL = 5,
 };
 
+enum log_options {
+    LOG_OPT_NONE = 0,
+    LOG_OPT_COLOR = 1U << 0,
+    LOG_OPT_LOCATION = 1U << 1,
+    LOG_OPT_DEFAULT = LOG_OPT_COLOR | LOG_OPT_LOCATION,
+};
+
 typedef void (*puts_fn)(const char *);
 
 #define LOG_BUF_SIZE 256
@@ -22,19 +29,11 @@ typedef void (*puts_fn)(const char *);
 #define log_fatal(...) log(LOG_FATAL, __FILE__, __LINE__, __VA_ARGS__)
 
 
-void vslog(
-    char *restrict buf,
-    int lvl,
-    char *file,
-    int line,
-    char *fmt,
-    va_list args
-);
+void vslog(char *restrict buf, int lvl, char *file, int line, char *fmt, va_list args);
 
-void slog(char *restrict buf, int lvl, char *file, int line, char *fmt, ...)
-    __attribute__((format(printf, 5, 6)));
-void log(int lvl, char *file, int line, char *fmt, ...)
-    __attribute__((format(printf, 4, 5)));
+void slog(char *restrict buf, int lvl, char *file, int line, char *fmt, ...) __attribute__((format(printf, 5, 6)));
+void log(int lvl, char *file, int line, char *fmt, ...) __attribute__((format(printf, 4, 5)));
 
 void log_init(puts_fn sink);
 void log_set_lvl(int lvl);
+void log_set_options(unsigned int options);

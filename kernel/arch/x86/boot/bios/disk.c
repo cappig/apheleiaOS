@@ -2,12 +2,12 @@
 
 #include <base/macros.h>
 #include <base/types.h>
+#include <common/ext2.h>
+#include <log/log.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-#include <common/ext2.h>
 
 #include "bios.h"
 #include "memory.h"
@@ -26,18 +26,13 @@ static u16 disk_sector_size = MBR_SECTOR_SIZE;
 static u16 disk_flags = 0;
 static size_t rootfs_base = 0;
 static size_t rootfs_size = 0;
-static mbr_partition_t rootfs_partition = {0};
+static mbr_partition_t rootfs_partition = { 0 };
 static bool rootfs_partition_valid = false;
 static u8 rootfs_partition_index = 0;
-static bool _read_rootfs_bytes(
-    void *dest,
-    size_t offset,
-    size_t bytes,
-    void *ctx
-);
+static bool _read_rootfs_bytes(void *dest, size_t offset, size_t bytes, void *ctx);
 
-static boot_ext2_t rootfs = {0};
-static u8 bounce[BOUNCE_SIZE] = {0};
+static boot_ext2_t rootfs = { 0 };
+static u8 bounce[BOUNCE_SIZE] = { 0 };
 
 
 static bool _bios_read_lba(void *dest, size_t lba, u16 sectors) {
@@ -54,7 +49,7 @@ static bool _bios_read_lba(void *dest, size_t lba, u16 sectors) {
         .lba = lba,
     };
 
-    regs32_t r = {0};
+    regs32_t r = { 0 };
     r.ah = 0x42;
     r.dl = disk_code;
     r.esi = (uintptr_t)&dap;
@@ -69,8 +64,7 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
     size_t sector_off = offset % ss;
 
     u16 bounce_sectors = BOUNCE_SIZE / ss;
-    u16 max_sectors =
-        (u16)min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)bounce_sectors);
+    u16 max_sectors = (u16)min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)bounce_sectors);
 
     uint8_t *out = dest;
 
@@ -133,7 +127,7 @@ static void _detect_sector_size(void) {
     memset(&params, 0, sizeof(params));
     params.size = sizeof(params);
 
-    regs32_t r = {0};
+    regs32_t r = { 0 };
     r.ah = 0x48;
     r.dl = disk_code;
     r.esi = (uintptr_t)&params;
@@ -152,9 +146,9 @@ void disk_init(u16 disk) {
     disk_code = disk;
     _detect_sector_size();
 
-    printf("disk=0x%x sector_size=%u\n\r", disk_code, disk_sector_size);
+    log_debug("boot disk %#x sector_size=%u", disk_code, disk_sector_size);
 
-    mbr_partition_t part = {0};
+    mbr_partition_t part = { 0 };
     u8 rootfs_index = 0;
 
     if (!_find_rootfs(&part, &rootfs_index)) {
@@ -176,12 +170,7 @@ void disk_init(u16 disk) {
     rootfs_base = part.lba_first * MBR_SECTOR_SIZE;
     rootfs_size = part.sector_count * MBR_SECTOR_SIZE;
 
-    // printf(
-    //     "rootfs lba=%u base=0x%x size=%u\n\r",
-    //     part.lba_first,
-    //     (unsigned)rootfs_base,
-    //     (unsigned)rootfs_size
-    // );
+    log_debug("rootfs partition lba=%u base=%#zx size=%zu", (unsigned int)part.lba_first, rootfs_base, rootfs_size);
 
     if (!boot_ext2_init(&rootfs, _read_rootfs_bytes, NULL, rootfs_size)) {
         panic("not an ext2 filesystem");
@@ -216,11 +205,7 @@ bool bios_boot_root_hint(boot_root_hint_t *out) {
 
     if (rootfs.superblock.signature == EXT2_SIGNATURE) {
         out->rootfs_uuid_valid = 1;
-        memcpy(
-            out->rootfs_uuid,
-            rootfs.superblock.fs_id,
-            sizeof(out->rootfs_uuid)
-        );
+        memcpy(out->rootfs_uuid, rootfs.superblock.fs_id, sizeof(out->rootfs_uuid));
     }
 
     return true;
@@ -237,8 +222,7 @@ bool stage_rootfs_image(u64 *paddr, u64 *size) {
         return false;
     }
 
-    void *image =
-        mmap_alloc_top(alloc_size, E820_KERNEL, 0x1000, PROTECTED_MODE_TOP);
+    void *image = mmap_alloc_top(alloc_size, E820_KERNEL, 0x1000, PROTECTED_MODE_TOP);
 
     read_disk(image, rootfs_base, rootfs_size);
 
@@ -253,12 +237,7 @@ bool stage_rootfs_image(u64 *paddr, u64 *size) {
 }
 
 
-static bool _read_rootfs_bytes(
-    void *dest,
-    size_t offset,
-    size_t bytes,
-    void *ctx
-) {
+static bool _read_rootfs_bytes(void *dest, size_t offset, size_t bytes, void *ctx) {
     (void)ctx;
     read_disk(dest, rootfs_base + offset, bytes);
     return true;

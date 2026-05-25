@@ -1,19 +1,18 @@
-#include <base/units.h>
 #include <base/attributes.h>
+#include <base/units.h>
+#include <common/elf.h>
+#include <common/ext2.h>
+#include <lib/boot.h>
+#include <log/log.h>
+#include <parse/fdt.h>
 #include <riscv/arch_paging.h>
 #include <riscv/asm.h>
 #include <riscv/boot.h>
 #include <riscv/serial.h>
-#include <common/elf.h>
-#include <lib/boot.h>
-#include <parse/fdt.h>
-#include <stdarg.h>
-#include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/config.h>
-
-#include <common/ext2.h>
 
 #include "memory.h"
 #include "tty.h"
@@ -51,10 +50,29 @@ extern char __image_start;
 #ifndef RISCV_BOOT_IMAGE_BASE_OVERRIDE
 #define RISCV_BOOT_IMAGE_BASE_OVERRIDE 0ULL
 #endif
+#ifndef BOOT_LOG_COLOR
+#define BOOT_LOG_COLOR true
+#endif
 
 struct riscv_elf_load_ctx {
     const u8 *blob;
 };
+
+typedef struct {
+    const u8 *image;
+    size_t limit;
+    bool from_initrd;
+} boot_rootfs_src_t;
+
+typedef struct {
+    uintptr_t hartid;
+    const void *dtb;
+    size_t dtb_size;
+    const u8 *rootfs_image;
+    size_t rootfs_size;
+    fdt_reg_t memory;
+    uintptr_t uart;
+} boot_desc_t;
 
 uintptr_t riscv_boot_timer_cmp_addr = 0;
 uintptr_t riscv_boot_timer_time_addr = 0;
@@ -64,15 +82,30 @@ u8 riscv_boot_timer_ready = 0;
 extern void mtrap_entry(void);
 extern char riscv_boot_mtrap_scratch[];
 
-static void boot_logf(const char *fmt, ...) {
-    char buf[PRINTF_BUF_SIZE];
-    va_list args;
+static void boot_log_sink(const char *msg) {
+    puts(msg);
+}
 
-    va_start(args, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
+static unsigned int boot_log_options(void) {
+#if BOOT_LOG_COLOR
+    return LOG_OPT_LOCATION | LOG_OPT_COLOR;
+#else
+    return LOG_OPT_LOCATION;
+#endif
+}
 
-    printf("[riscv boot] %s\n\r", buf);
+static void commit_boot_log(boot_info_t *info) {
+    if (!info) {
+        return;
+    }
+
+    size_t len = 0;
+    size_t cap = 0;
+    const char *buf = boot_log_buffer(&len, &cap);
+
+    info->boot_log_paddr = (uintptr_t)buf;
+    info->boot_log_len = len;
+    info->boot_log_cap = cap;
 }
 
 static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
@@ -81,24 +114,24 @@ static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
 
     u64 dst = seg->paddr ? seg->paddr : seg->vaddr;
     if (!dst) {
-        boot_logf(
-            "segment skip: no load address off=%#llx filesz=%#llx memsz=%#llx flags=%#x",
+        log_debug(
+            "skipping segment without load address off=%#llx filesz=%#llx memsz=%#llx flags=%#lx",
             (unsigned long long)seg->offset,
             (unsigned long long)seg->file_size,
             (unsigned long long)seg->mem_size,
-            seg->flags
+            (unsigned long)seg->flags
         );
 
         return false;
     }
 
-    boot_logf(
-        "segment load: off=%#llx dst=%#llx filesz=%#llx memsz=%#llx flags=%#x",
+    log_debug(
+        "loading segment off=%#llx dst=%#llx filesz=%#llx memsz=%#llx flags=%#lx",
         (unsigned long long)seg->offset,
         (unsigned long long)dst,
         (unsigned long long)seg->file_size,
         (unsigned long long)seg->mem_size,
-        seg->flags
+        (unsigned long)seg->flags
     );
 
     memcpy((void *)(uintptr_t)dst, blob + seg->offset, seg->file_size);
@@ -107,10 +140,7 @@ static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
         void *bss = (void *)(uintptr_t)(dst + seg->file_size);
         size_t bss_len = seg->mem_size - seg->file_size;
 
-        boot_logf(
-            "segment bss:  addr=%#llx len=%#zx",
-            (unsigned long long)(dst + seg->file_size), bss_len
-        );
+        log_debug("clearing segment bss addr=%#llx len=%#zx", (unsigned long long)(dst + seg->file_size), bss_len);
 
         memset(bss, 0, bss_len);
     }
@@ -120,20 +150,17 @@ static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
 
 static bool load_kernel_elf(const u8 *blob, size_t blob_size, uintptr_t *out_entry) {
     struct riscv_elf_load_ctx ctx = { .blob = blob };
-    elf_info_t info = {0};
+    elf_info_t info = { 0 };
 
-    boot_logf("elf parse: blob=%#lx size=%zu", (unsigned long)(uintptr_t)blob, blob_size);
+    log_debug("parsing ELF blob=%#lx size=%zu", (unsigned long)(uintptr_t)blob, blob_size);
 
     if (!elf_foreach_segment(blob, blob_size, load_kernel_segment, &ctx, &info)) {
-        boot_logf("elf parse: failed");
+        log_debug("ELF parse failed");
         return false;
     }
 
     *out_entry = (uintptr_t)info.entry;
-    boot_logf(
-        "elf parse: entry=%#lx class=%s",
-        (unsigned long)*out_entry, info.is_64 ? "elf64" : "elf32"
-    );
+    log_debug("ELF entry=%#lx class=%s", (unsigned long)*out_entry, info.is_64 ? "elf64" : "elf32");
 
     return true;
 }
@@ -146,9 +173,7 @@ static const void *sanitize_dtb_ptr(const void *dtb) {
     }
 
     bool low_window = addr >= RISCV_BOOT_PAGE_SIZE && addr < RISCV_DTB_LOW_WINDOW_MAX;
-    bool ram_window =
-        addr >= RISCV_KERNEL_BASE &&
-        addr < (RISCV_KERNEL_BASE + RISCV_DTB_RAM_WINDOW_SIZE);
+    bool ram_window = addr >= RISCV_KERNEL_BASE && addr < (RISCV_KERNEL_BASE + RISCV_DTB_RAM_WINDOW_SIZE);
 
     if (!low_window && !ram_window) {
         return NULL;
@@ -189,13 +214,15 @@ static bool detect_mtimer(
         }
     }
 
-    fdt_reg_t reg = {0};
-    if (
-        dtb &&
-        fdt_find_compatible_reg(dtb, "riscv,aclint-mtimer", &reg) &&
-        reg.addr &&
-        reg.size >= ((u64)(hartid + 1U) * 8ULL + 8ULL)
-    ) {
+    fdt_reg_t reg = { 0 };
+    bool have_aclint = false;
+
+    if (dtb && fdt_find_compatible_reg(dtb, "riscv,aclint-mtimer", &reg)) {
+        u64 cmp_end = (u64)(hartid + 1U) * 8ULL + 8ULL;
+        have_aclint = reg.addr != 0 && reg.size >= cmp_end;
+    }
+
+    if (have_aclint) {
         if (mtime_addr_out) {
             *mtime_addr_out = (uintptr_t)(reg.addr + reg.size - 8ULL);
         }
@@ -206,7 +233,6 @@ static bool detect_mtimer(
 
         if (timebase_hz_out) {
             *timebase_hz_out = timebase_hz;
-
         }
 
         if (kind_out) {
@@ -216,21 +242,25 @@ static bool detect_mtimer(
         return true;
     }
 
-    if (
-        dtb &&
-        (
-            (fdt_find_compatible_reg(dtb, "sifive,clint0", &reg) && reg.addr) ||
-            (fdt_find_compatible_reg(dtb, "riscv,clint0", &reg) && reg.addr)
-        )
-    ) {
+    bool have_clint = false;
+
+    if (dtb) {
+        have_clint = fdt_find_compatible_reg(dtb, "sifive,clint0", &reg);
+
+        if (!have_clint || !reg.addr) {
+            have_clint = fdt_find_compatible_reg(dtb, "riscv,clint0", &reg);
+        }
+
+        have_clint = have_clint && reg.addr != 0;
+    }
+
+    if (have_clint) {
         if (mtime_addr_out) {
             *mtime_addr_out = (uintptr_t)(reg.addr + RISCV_CLINT_MTIME_OFF);
         }
 
         if (mtimecmp_addr_out) {
-            *mtimecmp_addr_out = (uintptr_t)(
-                reg.addr + RISCV_CLINT_MTIMECMP_OFF + (u64)hartid * 8ULL
-            );
+            *mtimecmp_addr_out = (uintptr_t)(reg.addr + RISCV_CLINT_MTIMECMP_OFF + (u64)hartid * 8ULL);
         }
 
         if (timebase_hz_out) {
@@ -244,20 +274,19 @@ static bool detect_mtimer(
         return true;
     }
 
-    if (
-        !dtb ||
-        fdt_has_compatible(dtb, "ucbbar,spike-bare-dev") ||
-        fdt_has_compatible(dtb, "ucbbar,spike-bare")
-    ) {
+    bool use_spike_timer = !dtb;
+    if (dtb) {
+        use_spike_timer = fdt_has_compatible(dtb, "ucbbar,spike-bare-dev");
+        use_spike_timer = use_spike_timer || fdt_has_compatible(dtb, "ucbbar,spike-bare");
+    }
+
+    if (use_spike_timer) {
         if (mtime_addr_out) {
             *mtime_addr_out = (uintptr_t)(RISCV_CLINT_DEFAULT_BASE + RISCV_CLINT_MTIME_OFF);
         }
 
         if (mtimecmp_addr_out) {
-            *mtimecmp_addr_out = (uintptr_t)(
-                RISCV_CLINT_DEFAULT_BASE + RISCV_CLINT_MTIMECMP_OFF +
-                (u64)hartid * 8ULL
-            );
+            *mtimecmp_addr_out = (uintptr_t)(RISCV_CLINT_DEFAULT_BASE + RISCV_CLINT_MTIMECMP_OFF + (u64)hartid * 8ULL);
         }
 
         if (timebase_hz_out) {
@@ -276,29 +305,23 @@ static bool detect_mtimer(
 
 NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
     // delegate all standard exceptions to S-mode
-    unsigned long medeleg =
-        (1UL << 0) | (1UL << 1) | (1UL << 2) | (1UL << 3) |
-        (1UL << 4) | (1UL << 5) | (1UL << 6) | (1UL << 7) |
-        (1UL << 8) | (1UL << 12) | (1UL << 13) | (1UL << 15);
+    unsigned long medeleg = (1UL << 0) | (1UL << 1) | (1UL << 2) | (1UL << 3) | (1UL << 4) | (1UL << 5) | (1UL << 6) |
+                            (1UL << 7) | (1UL << 8) | (1UL << 12) | (1UL << 13) | (1UL << 15);
     unsigned long mideleg = MIP_SSIP | MIP_STIP | (1UL << 9);
     unsigned long mstatus = riscv_read_mstatus();
 
-    boot_logf(
-        "supervisor: entry=%#lx info=%#lx hart=%llu",
+    log_debug(
+        "entering supervisor entry=%#lx info=%#lx hart=%llu",
         (unsigned long)entry,
         (unsigned long)(uintptr_t)info,
         (unsigned long long)(info ? info->hartid : 0)
     );
-    boot_logf(
-        "supervisor: medeleg=%#lx mideleg=%#lx mstatus=%#lx",
-        medeleg, mideleg, mstatus
-    );
+    log_debug("supervisor delegation medeleg=%#lx mideleg=%#lx mstatus=%#lx", medeleg, mideleg, mstatus);
+    commit_boot_log(info);
 
     riscv_write_medeleg(medeleg);
     riscv_write_mideleg(mideleg);
-    riscv_write_mcounteren(
-        RISCV_COUNTEREN_CY | RISCV_COUNTEREN_TM | RISCV_COUNTEREN_IR
-    );
+    riscv_write_mcounteren(RISCV_COUNTEREN_CY | RISCV_COUNTEREN_TM | RISCV_COUNTEREN_IR);
     riscv_write_mtvec((uintptr_t)mtrap_entry);
     riscv_write_mscratch((uintptr_t)riscv_boot_mtrap_scratch);
     riscv_clear_mip_bits(MIP_STIP);
@@ -316,28 +339,25 @@ NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
 
     riscv_write_mepc(entry);
 
-    asm volatile(
-        "mv a0, %0\n"
-        "mv a1, %1\n"
-        "mret\n"
-        :
-        : "r"(info), "r"((uintptr_t)info->hartid)
-        : "memory"
-    );
+    asm volatile("mv a0, %0\n"
+                 "mv a1, %1\n"
+                 "mret\n"
+                 :
+                 : "r"(info), "r"((uintptr_t)info->hartid)
+                 : "memory");
 
     __builtin_unreachable();
 }
 
 static uintptr_t detect_uart_base(const void *dtb) {
-    fdt_reg_t reg = {0};
+    fdt_reg_t reg = { 0 };
 
     if (dtb && fdt_valid(dtb)) {
         if (fdt_find_compatible_reg(dtb, "ns16550a", &reg) && reg.addr) {
             return (uintptr_t)reg.addr;
         }
 
-        if (fdt_has_compatible(dtb, "ucbbar,spike-bare-dev") ||
-            fdt_has_compatible(dtb, "ucbbar,spike-bare")) {
+        if (fdt_has_compatible(dtb, "ucbbar,spike-bare-dev") || fdt_has_compatible(dtb, "ucbbar,spike-bare")) {
             // run-spike wires an NS16550-compatible MMIO plugin at UART0
             return SERIAL_UART0;
         }
@@ -355,8 +375,7 @@ static uintptr_t detect_uart_stride(const void *dtb) {
     }
 
     u32 shift = 0;
-    if (fdt_find_compatible_u32(dtb, "ns16550a", "reg-shift", &shift) &&
-        shift <= 3U) {
+    if (fdt_find_compatible_u32(dtb, "ns16550a", "reg-shift", &shift) && shift <= 3U) {
         return (uintptr_t)1 << shift;
     }
 
@@ -369,7 +388,7 @@ static fdt_reg_t detect_memory(const void *dtb) {
         .size = 256ULL * MIB,
     };
 
-    fdt_reg_t probed = {0};
+    fdt_reg_t probed = { 0 };
     if (dtb && fdt_find_memory_reg(dtb, &probed) && probed.addr && probed.size) {
         reg = probed;
     }
@@ -401,13 +420,8 @@ static bool read_rootfs_image(void *dest, size_t offset, size_t bytes, void *ctx
     return true;
 }
 
-static void keep_out_of_heap(
-    const char *name,
-    uintptr_t start,
-    size_t size,
-    uintptr_t *heap_start,
-    uintptr_t *heap_end
-) {
+static void
+keep_out_of_heap(const char *name, uintptr_t start, size_t size, uintptr_t *heap_start, uintptr_t *heap_end) {
     if (!start || !size || !heap_start || !heap_end) {
         return;
     }
@@ -441,7 +455,7 @@ static void keep_out_of_heap(
         *heap_start = high_start;
     }
 
-    boot_logf(
+    log_debug(
         "%s: kept out of boot heap [%#lx, %#lx)",
         name ? name : "reservation",
         (unsigned long)start,
@@ -449,28 +463,211 @@ static void keep_out_of_heap(
     );
 }
 
+static bool dtb_initrd(const void *dtb, fdt_reg_t *reg) {
+    if (!dtb || !fdt_find_initrd(dtb, reg)) {
+        return false;
+    }
+
+    if (!reg->addr || !reg->size) {
+        return false;
+    }
+
+    return reg->size <= (u64)(size_t)-1;
+}
+
+static void check_initrd_range(const u8 *image, size_t size, fdt_reg_t memory, uintptr_t memory_end) {
+    uintptr_t start = (uintptr_t)image;
+    uintptr_t end = start + size;
+
+    bool wraps = end <= start;
+    bool below_ram = start < (uintptr_t)memory.addr;
+    bool above_ram = end > memory_end;
+
+    if (wraps || below_ram || above_ram) {
+        panic("initrd outside RAM");
+    }
+}
+
+static void log_boot_hart(uintptr_t hartid, const void *dtb) {
+    u64 boot_hart = 0;
+    bool known = dtb && fdt_boot_cpuid_phys(dtb, &boot_hart);
+
+    if (known) {
+        log_debug("boot hart dtb=%llu current=%lu", (unsigned long long)boot_hart, (unsigned long)hartid);
+    } else {
+        log_debug("boot hart missing from DTB, defaulting to hart 0 (current=%lu)", (unsigned long)hartid);
+    }
+}
+
+static bool secondary_hart(uintptr_t hartid, const void *dtb) {
+    u64 boot_hart = 0;
+    bool known = dtb && fdt_boot_cpuid_phys(dtb, &boot_hart);
+
+    if (known) {
+        return hartid != (uintptr_t)boot_hart;
+    }
+
+    return hartid != 0;
+}
+
+static void log_timer_status(const char *kind) {
+    if (!riscv_boot_timer_ready) {
+        log_warn("no machine timer backend detected");
+        return;
+    }
+
+    u64 interval = riscv_boot_timer_timebase_hz / TIMER_FREQ;
+    if (!interval) {
+        interval = 1;
+    }
+
+    log_debug(
+        "timer %s time=%#lx cmp=%#lx timebase=%lluHz interval=%llu",
+        kind,
+        (unsigned long)riscv_boot_timer_time_addr,
+        (unsigned long)riscv_boot_timer_cmp_addr,
+        (unsigned long long)riscv_boot_timer_timebase_hz,
+        (unsigned long long)interval
+    );
+}
+
+static void load_platform_dtb(boot_ext2_t *rootfs, const void **dtb, size_t *size) {
+    if (!RISCV_FRISC) {
+        return;
+    }
+
+    size_t file_size = 0;
+    void *file = boot_ext2_read_file(rootfs, RISCV_BOOT_PLATFORM_DTB, &file_size);
+
+    if (file && fdt_valid(file)) {
+        *dtb = file;
+        *size = fdt_size(file);
+
+        log_debug("loaded DTB %s size=%zu", RISCV_BOOT_PLATFORM_DTB, *size);
+        return;
+    }
+
+    if (file) {
+        free(file);
+    }
+
+    log_warn("DTB %s unavailable", RISCV_BOOT_PLATFORM_DTB);
+}
+
+static void *copy_dtb(const void *dtb, size_t size) {
+    if (!dtb || !size) {
+        log_warn("no DTB available");
+        return NULL;
+    }
+
+    void *copy = boot_alloc_aligned(size, RISCV_BOOT_PAGE_SIZE, false);
+    if (!copy) {
+        panic("failed to copy dtb");
+    }
+
+    memcpy(copy, dtb, size);
+
+    log_debug("copied DTB %zu bytes to %#lx", size, (unsigned long)(uintptr_t)copy);
+
+    return copy;
+}
+
+static boot_rootfs_src_t choose_rootfs(const void *dtb, const u8 *embedded, fdt_reg_t memory, uintptr_t memory_end) {
+    boot_rootfs_src_t rootfs = {
+        .image = embedded,
+        .limit = 0,
+        .from_initrd = false,
+    };
+    fdt_reg_t initrd = { 0 };
+
+    if (!dtb_initrd(dtb, &initrd)) {
+        return rootfs;
+    }
+
+    rootfs.image = (const u8 *)(uintptr_t)initrd.addr;
+    rootfs.limit = (size_t)initrd.size;
+    rootfs.from_initrd = true;
+
+    check_initrd_range(rootfs.image, rootfs.limit, memory, memory_end);
+    return rootfs;
+}
+
+static void init_rootfs(boot_ext2_t *rootfs, const u8 *image, size_t limit, bool from_initrd) {
+    if (from_initrd) {
+        log_debug("rootfs from DTB initrd at %#lx limit=%zu KiB", (unsigned long)(uintptr_t)image, limit / 1024);
+    } else {
+        log_debug("rootfs from embedded image at %#lx", (unsigned long)(uintptr_t)image);
+    }
+
+    if (!boot_ext2_init(rootfs, read_rootfs_image, (void *)image, limit)) {
+        panic("storage device not available");
+    }
+
+    log_debug(
+        "rootfs ready block_size=%lu blocks=%lu size=%zu KiB",
+        (unsigned long)ext2_block_size(&rootfs->superblock),
+        (unsigned long)rootfs->superblock.block_count,
+        rootfs->size / 1024
+    );
+}
+
+static const char *kernel_path(void) {
+#if __riscv_xlen == 64
+    return boot_kernel_path(true);
+#else
+    return boot_kernel_path(false);
+#endif
+}
+
+static boot_info_t *make_boot_info(const boot_desc_t *desc) {
+    boot_info_t *info = boot_alloc_aligned(sizeof(*info), 16, true);
+    if (!info) {
+        panic("failed to allocate boot info");
+    }
+
+    info->magic = BOOT_INFO_MAGIC;
+    init_boot_args(&info->args);
+    info->hartid = desc->hartid;
+    info->dtb_paddr = (uintptr_t)desc->dtb;
+    info->dtb_size = desc->dtb_size;
+    info->boot_rootfs_paddr = (uintptr_t)desc->rootfs_image;
+    info->boot_rootfs_size = desc->rootfs_size;
+    info->memory_paddr = desc->memory.addr;
+    info->memory_size = desc->memory.size;
+    info->uart_paddr = desc->uart;
+    commit_boot_log(info);
+
+    log_info(
+        "boot info hart=%llu uart=%#llx dtb=%#llx/%zu memory=%#llx+%#llx rootfs=%#llx+%zu",
+        (unsigned long long)info->hartid,
+        (unsigned long long)info->uart_paddr,
+        (unsigned long long)info->dtb_paddr,
+        desc->dtb_size,
+        (unsigned long long)info->memory_paddr,
+        (unsigned long long)info->memory_size,
+        (unsigned long long)info->boot_rootfs_paddr,
+        desc->rootfs_size
+    );
+    commit_boot_log(info);
+
+    return info;
+}
+
 NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     if (RISCV_BOOT_FORCE_NO_DTB) {
         dtb = NULL;
     }
 
-    boot_ext2_t rootfs = {0};
+    boot_ext2_t rootfs = { 0 };
     const void *entry_dtb = sanitize_dtb_ptr(dtb);
     const void *boot_dtb = RISCV_FRISC ? NULL : entry_dtb;
     bool dtb_valid = entry_dtb != NULL;
     size_t dtb_size = boot_dtb ? fdt_size(boot_dtb) : 0;
-    fdt_reg_t initrd_reg = {0};
 
-    uintptr_t image_base = RISCV_BOOT_IMAGE_BASE_OVERRIDE ?
-        (uintptr_t)RISCV_BOOT_IMAGE_BASE_OVERRIDE :
-        (uintptr_t)&__image_start;
+    uintptr_t image_base = RISCV_BOOT_IMAGE_BASE_OVERRIDE ? (uintptr_t)RISCV_BOOT_IMAGE_BASE_OVERRIDE
+                                                          : (uintptr_t)&__image_start;
 
-    const u8 *embedded_rootfs =
-        (const u8 *)(image_base + RISCV_BOOT_IMAGE_ROOTFS_OFFSET);
-
-    const u8 *rootfs_image = embedded_rootfs;
-    size_t rootfs_limit = 0;
-    bool rootfs_from_initrd = false;
+    const u8 *embedded_rootfs = (const u8 *)(image_base + RISCV_BOOT_IMAGE_ROOTFS_OFFSET);
 
     fdt_reg_t memory_reg = detect_memory(boot_dtb);
     uintptr_t uart_base = detect_uart_base(boot_dtb);
@@ -481,23 +678,26 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
 
     serial_set_reg_stride(uart_stride);
     tty_set_uart_base(uart_base);
+    log_init(boot_log_sink);
+    log_set_lvl(LOG_DEBUG);
+    log_set_options(boot_log_options());
 
-    boot_logf(
-        "entry: hart=%lu dtb=%#lx valid=%s active=%s size=%zu",
+    log_info(
+        "entered boot stub hart=%lu dtb=%#lx valid=%s active=%s size=%zu",
         (unsigned long)hartid,
         (unsigned long)(uintptr_t)dtb,
         dtb_valid ? "yes" : "no",
         boot_dtb ? "yes" : "no",
         dtb_size
     );
-    boot_logf(
-        "memory: base=%#llx size=%#llx end=%#lx",
+    log_debug(
+        "memory range base=%#llx size=%#llx end=%#lx",
         (unsigned long long)memory_reg.addr,
         (unsigned long long)memory_reg.size,
         (unsigned long)memory_end
     );
-    boot_logf(
-        "layout: image=%#lx rootfs=%#lx stack_top=%#lx scratch=%#lx uart=%#lx stride=%lu",
+    log_info(
+        "image layout image=%#lx rootfs=%#lx stack_top=%#lx scratch=%#lx uart=%#lx stride=%lu",
         (unsigned long)image_base,
         (unsigned long)(uintptr_t)embedded_rootfs,
         (unsigned long)(uintptr_t)&__stack_top,
@@ -510,44 +710,12 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         heap_start = scratch_base;
     }
 
-    if (boot_dtb && fdt_find_initrd(boot_dtb, &initrd_reg) &&
-        initrd_reg.addr &&
-        initrd_reg.size &&
-        initrd_reg.size <= (u64)(size_t)-1) {
-        rootfs_image = (const u8 *)(uintptr_t)initrd_reg.addr;
-        rootfs_limit = (size_t)initrd_reg.size;
-        rootfs_from_initrd = true;
+    boot_rootfs_src_t rootfs_src = choose_rootfs(boot_dtb, embedded_rootfs, memory_reg, memory_end);
 
-        uintptr_t initrd_start = (uintptr_t)rootfs_image;
-        uintptr_t initrd_end = initrd_start + rootfs_limit;
+    log_boot_hart(hartid, boot_dtb);
 
-        bool initrd_bad = initrd_end <= initrd_start;
-        initrd_bad = initrd_bad || initrd_start < (uintptr_t)memory_reg.addr;
-        initrd_bad = initrd_bad || initrd_end > memory_end;
-
-        if (initrd_bad) {
-            panic("initrd outside RAM");
-        }
-    }
-
-    u64 boot_hart = 0;
-    bool boot_hart_known = boot_dtb && fdt_boot_cpuid_phys(boot_dtb, &boot_hart);
-
-    if (boot_hart_known) {
-        boot_logf(
-            "boot hart: dtb says %llu, we are %lu",
-            (unsigned long long)boot_hart, (unsigned long)hartid
-        );
-    } else {
-        boot_logf(
-            "boot hart: not in DTB, defaulting to hart 0 (we are %lu)",
-            (unsigned long)hartid
-        );
-    }
-
-    if ((boot_hart_known && hartid != (uintptr_t)boot_hart) ||
-        (!boot_hart_known && hartid != 0)) {
-        boot_logf("parking secondary hart %lu", (unsigned long)hartid);
+    if (secondary_hart(hartid, boot_dtb)) {
+        log_debug("parking secondary hart %lu", (unsigned long)hartid);
         halt();
     }
 
@@ -560,45 +728,20 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         &riscv_boot_timer_timebase_hz,
         &timer_kind
     );
-
-    if (riscv_boot_timer_ready) {
-        u64 timebase_hz = riscv_boot_timer_timebase_hz;
-        u64 interval = timebase_hz / TIMER_FREQ;
-
-        if (!interval) {
-            interval = 1;
-        }
-
-        boot_logf(
-            "timer: %s time=%#lx cmp=%#lx timebase=%lluHz interval=%llu",
-            timer_kind,
-            (unsigned long)riscv_boot_timer_time_addr,
-            (unsigned long)riscv_boot_timer_cmp_addr,
-            (unsigned long long)riscv_boot_timer_timebase_hz,
-            (unsigned long long)interval
-        );
-    } else {
-        boot_logf("timer: no machine timer backend detected");
-    }
+    log_timer_status(timer_kind);
 
     heap_start = ALIGN(heap_start, RISCV_BOOT_PAGE_SIZE);
     memory_end = ALIGN_DOWN(memory_end, RISCV_BOOT_PAGE_SIZE);
 
-    if (rootfs_from_initrd) {
-        keep_out_of_heap(
-            "initrd",
-            (uintptr_t)rootfs_image,
-            rootfs_limit,
-            &heap_start,
-            &memory_end
-        );
+    if (rootfs_src.from_initrd) {
+        keep_out_of_heap("initrd", (uintptr_t)rootfs_src.image, rootfs_src.limit, &heap_start, &memory_end);
     }
 
     if (heap_start >= memory_end) {
         panic("no boot heap space available");
     }
 
-    boot_logf(
+    log_debug(
         "heap: [%#lx, %#lx) %lu KiB",
         (unsigned long)heap_start,
         (unsigned long)memory_end,
@@ -607,121 +750,38 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
 
     boot_heap_init(heap_start, memory_end);
 
-    if (rootfs_from_initrd) {
-        boot_logf(
-            "rootfs: init from DTB initrd at %#lx limit=%zu KiB",
-            (unsigned long)(uintptr_t)rootfs_image,
-            rootfs_limit / 1024
-        );
-    } else {
-        boot_logf(
-            "rootfs: init from embedded image at %#lx",
-            (unsigned long)(uintptr_t)rootfs_image
-        );
-    }
+    init_rootfs(&rootfs, rootfs_src.image, rootfs_src.limit, rootfs_src.from_initrd);
 
-    if (!boot_ext2_init(&rootfs, read_rootfs_image, (void *)rootfs_image, rootfs_limit)) {
-        panic("storage device not available");
-    }
-    boot_logf(
-        "rootfs: ready block_size=%u blocks=%u size=%zu KiB",
-        ext2_block_size(&rootfs.superblock),
-        rootfs.superblock.block_count,
-        rootfs.size / 1024
-    );
+    load_platform_dtb(&rootfs, &boot_dtb, &dtb_size);
 
-    if (RISCV_FRISC) {
-        size_t platform_dtb_size = 0;
-        void *platform_dtb = boot_ext2_read_file(
-            &rootfs,
-            RISCV_BOOT_PLATFORM_DTB,
-            &platform_dtb_size
-        );
-
-        if (platform_dtb && fdt_valid(platform_dtb)) {
-            boot_dtb = platform_dtb;
-            dtb_size = fdt_size(platform_dtb);
-
-            boot_logf(
-                "dtb: loaded %s size=%zu",
-                RISCV_BOOT_PLATFORM_DTB,
-                dtb_size
-            );
-        } else {
-            if (platform_dtb) {
-                free(platform_dtb);
-            }
-
-            boot_logf("dtb: %s unavailable", RISCV_BOOT_PLATFORM_DTB);
-        }
-    }
-
-#if __riscv_xlen == 64
-    const char *kernel_path = boot_kernel_path(true);
-#else
-    const char *kernel_path = boot_kernel_path(false);
-#endif
-
-    boot_logf("kernel: reading %s", kernel_path);
+    const char *path = kernel_path();
+    log_debug("reading kernel %s", path);
 
     size_t kernel_size = 0;
-    void *kernel_blob = boot_ext2_read_file(&rootfs, kernel_path, &kernel_size);
+    void *kernel_blob = boot_ext2_read_file(&rootfs, path, &kernel_size);
     if (!kernel_blob) {
         panic("no kernel image found");
     }
 
-    boot_logf(
-        "kernel: loaded at %#lx size=%zu KiB",
-        (unsigned long)(uintptr_t)kernel_blob, kernel_size / 1024
-    );
+    log_debug("loaded kernel at %#lx size=%zu KiB", (unsigned long)(uintptr_t)kernel_blob, kernel_size / 1024);
 
     uintptr_t elf_entry = 0;
     if (!load_kernel_elf(kernel_blob, kernel_size, &elf_entry)) {
         panic("failed to load kernel ELF");
     }
 
-    void *dtb_copy = NULL;
-    if (boot_dtb && dtb_size) {
-        dtb_copy = boot_alloc_aligned(dtb_size, RISCV_BOOT_PAGE_SIZE, false);
-        if (!dtb_copy) {
-            panic("failed to copy dtb");
-        }
-        memcpy(dtb_copy, boot_dtb, dtb_size);
-        boot_logf(
-            "dtb: copied %zu bytes to %#lx",
-            dtb_size, (unsigned long)(uintptr_t)dtb_copy
-        );
-    } else {
-        boot_logf("dtb: none available");
-    }
+    void *dtb_copy = copy_dtb(boot_dtb, dtb_size);
+    boot_desc_t desc = {
+        .hartid = hartid,
+        .dtb = dtb_copy,
+        .dtb_size = dtb_size,
+        .rootfs_image = rootfs_src.image,
+        .rootfs_size = rootfs.size,
+        .memory = memory_reg,
+        .uart = uart_base,
+    };
 
-    boot_info_t *info = boot_alloc_aligned(sizeof(*info), 16, true);
-    if (!info) {
-        panic("failed to allocate boot info");
-    }
-
-    info->magic = BOOT_INFO_MAGIC;
-    init_boot_args(&info->args);
-    info->hartid = hartid;
-    info->dtb_paddr = (uintptr_t)dtb_copy;
-    info->dtb_size = dtb_size;
-    info->boot_rootfs_paddr = (uintptr_t)rootfs_image;
-    info->boot_rootfs_size = rootfs.size;
-    info->memory_paddr = memory_reg.addr;
-    info->memory_size = memory_reg.size;
-    info->uart_paddr = uart_base;
-
-    boot_logf(
-        "boot_info: hart=%llu uart=%#llx dtb=%#llx/%zu memory=%#llx+%#llx rootfs=%#llx+%zu",
-        (unsigned long long)info->hartid,
-        (unsigned long long)info->uart_paddr,
-        (unsigned long long)info->dtb_paddr,
-        dtb_size,
-        (unsigned long long)info->memory_paddr,
-        (unsigned long long)info->memory_size,
-        (unsigned long long)info->boot_rootfs_paddr,
-        rootfs.size
-    );
+    boot_info_t *info = make_boot_info(&desc);
 
     enter_supervisor(elf_entry, info);
 }

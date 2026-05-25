@@ -12,24 +12,34 @@
 #include "mbr.h"
 #include "vfs.h"
 
-static vector_t *disks = NULL;
-static vector_t *file_systems = NULL;
-static mutex_t disk_registry_lock = MUTEX_INIT;
+typedef struct {
+    vector_t *disks;
+    vector_t *file_systems;
+    mutex_t lock;
 
-static size_t next_disk_id = 1;
-static size_t next_fs_id = 1;
-static bool preferred_rootfs_uuid_set = false;
-static u8 preferred_rootfs_uuid[16] = {0};
-static bool boot_hint_set = false;
-static disk_boot_hint_t boot_hint = {0};
+    size_t next_disk_id;
+    size_t next_fs_id;
+
+    bool preferred_uuid_set;
+    u8 preferred_uuid[16];
+
+    bool boot_hint_set;
+    disk_boot_hint_t boot_hint;
+} disk_state_t;
+
+static disk_state_t disk_state = {
+    .lock = MUTEX_INIT,
+    .next_disk_id = 1,
+    .next_fs_id = 1,
+};
 
 static bool _disk_name_exists(const char *name) {
-    if (!name || !name[0] || !disks) {
+    if (!name || !name[0] || !disk_state.disks) {
         return false;
     }
 
-    for (size_t i = 0; i < disks->size; i++) {
-        disk_dev_t *existing = vec_at_ptr(disks, i);
+    for (size_t i = 0; i < disk_state.disks->size; i++) {
+        disk_dev_t *existing = vec_at_ptr(disk_state.disks, i);
 
         if (!existing || !existing->name) {
             continue;
@@ -48,12 +58,8 @@ static void _destroy_fs_instance(fs_instance_t *instance) {
         return;
     }
 
-    if (
-        instance->has_tree &&
-        instance->filesystem &&
-        instance->filesystem->fs_interface &&
-        instance->filesystem->fs_interface->destroy_tree
-    ) {
+    if (instance->has_tree && instance->filesystem && instance->filesystem->fs_interface &&
+        instance->filesystem->fs_interface->destroy_tree) {
         (void)instance->filesystem->fs_interface->destroy_tree(instance);
     }
 
@@ -107,14 +113,8 @@ static char *_alloc_unique_disk_name(size_t type) {
     const char *prefix = _disk_name_prefix(type);
 
     for (size_t index = 0; index < 1024; index++) {
-        char candidate[32] = {0};
-        int wrote = snprintf(
-            candidate,
-            sizeof(candidate),
-            "%s%zu",
-            prefix,
-            index
-        );
+        char candidate[32] = { 0 };
+        int wrote = snprintf(candidate, sizeof(candidate), "%s%zu", prefix, index);
 
         if (wrote <= 0 || (size_t)wrote >= sizeof(candidate)) {
             continue;
@@ -175,7 +175,7 @@ static char *_partition_name(const char *disk, ssize_t number) {
     return name;
 }
 
-static bool _partition_is_whole_disk_alias(const disk_partition_t *part) {
+static bool whole_disk_alias(const disk_partition_t *part) {
     if (!part || !part->disk || !part->name || !part->disk->name) {
         return false;
     }
@@ -191,7 +191,7 @@ static bool _disk_has_real_partitions(const disk_dev_t *dev) {
     for (size_t i = 0; i < dev->partitions->size; i++) {
         disk_partition_t *part = vec_at_ptr(dev->partitions, i);
 
-        if (!part || _partition_is_whole_disk_alias(part)) {
+        if (!part || whole_disk_alias(part)) {
             continue;
         }
 
@@ -201,14 +201,7 @@ static bool _disk_has_real_partitions(const disk_dev_t *dev) {
     return false;
 }
 
-static bool _create_partition(
-    disk_dev_t *dev,
-    ssize_t number,
-    u8 status,
-    u8 type,
-    size_t lba_first,
-    size_t sectors
-) {
+static bool _create_partition(disk_dev_t *dev, ssize_t number, u8 status, u8 type, size_t lba_first, size_t sectors) {
     if (!dev) {
         return false;
     }
@@ -240,13 +233,7 @@ static bool _create_partition(
 }
 
 static bool _partition_ext2_uuid(disk_partition_t *part, u8 out_uuid[16]) {
-    if (
-        !part ||
-        !out_uuid ||
-        !part->disk ||
-        !part->disk->interface ||
-        !part->disk->interface->read
-    ) {
+    if (!part || !out_uuid || !part->disk || !part->disk->interface || !part->disk->interface->read) {
         return false;
     }
 
@@ -258,13 +245,8 @@ static bool _partition_ext2_uuid(disk_partition_t *part, u8 out_uuid[16]) {
         return false;
     }
 
-    ext2_superblock_t sb = {0};
-    ssize_t read = part->disk->interface->read(
-        part->disk,
-        &sb,
-        part->offset + 1024,
-        sizeof(sb)
-    );
+    ext2_superblock_t sb = { 0 };
+    ssize_t read = part->disk->interface->read(part->disk, &sb, part->offset + 1024, sizeof(sb));
 
     if (read < (ssize_t)sizeof(sb)) {
         return false;
@@ -279,24 +261,24 @@ static bool _partition_ext2_uuid(disk_partition_t *part, u8 out_uuid[16]) {
 }
 
 static bool _matches_rootfs_uuid(disk_partition_t *part) {
-    if (!preferred_rootfs_uuid_set) {
+    if (!disk_state.preferred_uuid_set) {
         return false;
     }
 
-    u8 uuid[16] = {0};
+    u8 uuid[16] = { 0 };
     if (!_partition_ext2_uuid(part, uuid)) {
         return false;
     }
 
-    return !memcmp(uuid, preferred_rootfs_uuid, sizeof(uuid));
+    return !memcmp(uuid, disk_state.preferred_uuid, sizeof(uuid));
 }
 
-static bool _disk_matches_boot_hint_transport(const disk_dev_t *dev) {
-    if (!dev || !boot_hint_set || !boot_hint.valid) {
+static bool boot_hint_matches_disk(const disk_dev_t *dev) {
+    if (!dev || !disk_state.boot_hint_set || !disk_state.boot_hint.valid) {
         return false;
     }
 
-    switch (boot_hint.transport) {
+    switch (disk_state.boot_hint.transport) {
     case DISK_BOOT_TRANSPORT_USB:
         return dev->type == DISK_USB;
     case DISK_BOOT_TRANSPORT_ATAPI:
@@ -309,7 +291,7 @@ static bool _disk_matches_boot_hint_transport(const disk_dev_t *dev) {
         break;
     }
 
-    switch (boot_hint.media) {
+    switch (disk_state.boot_hint.media) {
     case DISK_BOOT_MEDIA_USB:
         return dev->type == DISK_USB;
     case DISK_BOOT_MEDIA_OPTICAL:
@@ -322,15 +304,15 @@ static bool _disk_matches_boot_hint_transport(const disk_dev_t *dev) {
 }
 
 static bool _has_transport_hint(void) {
-    if (!boot_hint_set || !boot_hint.valid) {
+    if (!disk_state.boot_hint_set || !disk_state.boot_hint.valid) {
         return false;
     }
 
-    if (boot_hint.transport != DISK_BOOT_TRANSPORT_UNKNOWN) {
+    if (disk_state.boot_hint.transport != DISK_BOOT_TRANSPORT_UNKNOWN) {
         return true;
     }
 
-    return boot_hint.media != DISK_BOOT_MEDIA_UNKNOWN;
+    return disk_state.boot_hint.media != DISK_BOOT_MEDIA_UNKNOWN;
 }
 
 static bool _parse_mbr(disk_dev_t *dev) {
@@ -338,7 +320,7 @@ static bool _parse_mbr(disk_dev_t *dev) {
         return false;
     }
 
-    u8 mbr[512] = {0};
+    u8 mbr[512] = { 0 };
     ssize_t read = dev->interface->read(dev, mbr, 0, sizeof(mbr));
 
     if (read < (ssize_t)sizeof(mbr)) {
@@ -357,21 +339,17 @@ static bool _parse_mbr(disk_dev_t *dev) {
         u8 status = mbr[entry + 0];
         u8 type = mbr[entry + 4];
 
-        u32 lba_first =
-            (u32)mbr[entry + 8] | ((u32)mbr[entry + 9] << 8) |
-            ((u32)mbr[entry + 10] << 16) | ((u32)mbr[entry + 11] << 24);
+        u32 lba_first = (u32)mbr[entry + 8] | ((u32)mbr[entry + 9] << 8) | ((u32)mbr[entry + 10] << 16) |
+                        ((u32)mbr[entry + 11] << 24);
 
-        u32 sector_count =
-            (u32)mbr[entry + 12] | ((u32)mbr[entry + 13] << 8) |
-            ((u32)mbr[entry + 14] << 16) | ((u32)mbr[entry + 15] << 24);
+        u32 sector_count = (u32)mbr[entry + 12] | ((u32)mbr[entry + 13] << 8) | ((u32)mbr[entry + 14] << 16) |
+                           ((u32)mbr[entry + 15] << 24);
 
         if (!type || !sector_count) {
             continue;
         }
 
-        _create_partition(
-            dev, (ssize_t)i, status, type, lba_first, sector_count
-        );
+        _create_partition(dev, (ssize_t)i, status, type, lba_first, sector_count);
     }
 
     return true;
@@ -408,62 +386,17 @@ typedef struct PACKED {
 
 // 0FC63DAF-8483-4772-8E79-3D69D8477DE4 (mixed-endian)
 static const u8 _gpt_linux_fs_guid[16] = {
-    0xAF,
-    0x3D,
-    0xC6,
-    0x0F,
-    0x83,
-    0x84,
-    0x72,
-    0x47,
-    0x8E,
-    0x79,
-    0x3D,
-    0x69,
-    0xD8,
-    0x47,
-    0x7D,
-    0xE4,
+    0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4,
 };
 
 // C12A7328-F81F-11D2-BA4B-00A0C93EC93B
 static const u8 _gpt_efi_system_guid[16] = {
-    0x28,
-    0x73,
-    0x2A,
-    0xC1,
-    0x1F,
-    0xF8,
-    0xD2,
-    0x11,
-    0xBA,
-    0x4B,
-    0x00,
-    0xA0,
-    0xC9,
-    0x3E,
-    0xC9,
-    0x3B,
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
 };
 
 // 21686148-6449-6E6F-744E-656564454649
 static const u8 _gpt_bios_boot_guid[16] = {
-    0x48,
-    0x61,
-    0x68,
-    0x21,
-    0x49,
-    0x64,
-    0x6F,
-    0x6E,
-    0x74,
-    0x4E,
-    0x65,
-    0x65,
-    0x64,
-    0x45,
-    0x46,
-    0x49,
+    0x48, 0x61, 0x68, 0x21, 0x49, 0x64, 0x6F, 0x6E, 0x74, 0x4E, 0x65, 0x65, 0x64, 0x45, 0x46, 0x49,
 };
 
 static bool _guid_is_zero(const u8 guid[16]) {
@@ -493,10 +426,8 @@ static bool _parse_gpt(disk_dev_t *dev) {
         return false;
     }
 
-    u8 header_buf[512] = {0};
-    ssize_t read = dev->interface->read(
-        dev, header_buf, dev->sector_size, sizeof(header_buf)
-    );
+    u8 header_buf[512] = { 0 };
+    ssize_t read = dev->interface->read(dev, header_buf, dev->sector_size, sizeof(header_buf));
 
     if (read < (ssize_t)sizeof(header_buf)) {
         return false;
@@ -552,9 +483,7 @@ static bool _parse_gpt(disk_dev_t *dev) {
         size_t last_lba = (size_t)entry->last_lba;
         size_t sectors = last_lba - first_lba + 1;
 
-        _create_partition(
-            dev, part_num++, MBR_INACTIVE, mbr_type, first_lba, sectors
-        );
+        _create_partition(dev, part_num++, MBR_INACTIVE, mbr_type, first_lba, sectors);
     }
 
     free(entries);
@@ -596,12 +525,12 @@ static fs_instance_t *_probe_partition(disk_partition_t *part) {
         return part ? part->fs_instance : NULL;
     }
 
-    if (!file_systems) {
+    if (!disk_state.file_systems) {
         return NULL;
     }
 
-    for (size_t i = 0; i < file_systems->size; i++) {
-        fs_t *fs = vec_at_ptr(file_systems, i);
+    for (size_t i = 0; i < disk_state.file_systems->size; i++) {
+        fs_t *fs = vec_at_ptr(disk_state.file_systems, i);
 
         if (!fs || !fs->fs_interface || !fs->fs_interface->probe) {
             continue;
@@ -622,15 +551,15 @@ static fs_instance_t *_probe_partition(disk_partition_t *part) {
 }
 
 static bool _probe_disk(disk_dev_t *dev) {
-    if (!disks) {
-        disks = vec_create(sizeof(disk_dev_t *));
+    if (!disk_state.disks) {
+        disk_state.disks = vec_create(sizeof(disk_dev_t *));
     }
 
-    if (!disks) {
+    if (!disk_state.disks) {
         return false;
     }
 
-    dev->id = next_disk_id++;
+    dev->id = disk_state.next_disk_id++;
 
     if (!dev->partitions) {
         dev->partitions = vec_create(sizeof(disk_partition_t *));
@@ -644,12 +573,11 @@ static bool _probe_disk(disk_dev_t *dev) {
         log_warn("no partitions found on %s", dev->name ? dev->name : "disk");
     }
 
-    vec_insert(disks, dev->id - 1, &dev);
+    vec_insert(disk_state.disks, dev->id - 1, &dev);
     return true;
 }
 
-static ssize_t
-_vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !node->private) {
@@ -672,13 +600,10 @@ _vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         }
     }
 
-    return part->disk->interface->read(
-        part->disk, buf, part->offset + offset, len
-    );
+    return part->disk->interface->read(part->disk, buf, part->offset + offset, len);
 }
 
-static ssize_t
-_vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !node->private) {
@@ -701,9 +626,7 @@ _vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
         }
     }
 
-    return part->disk->interface->write(
-        part->disk, buf, part->offset + offset, len
-    );
+    return part->disk->interface->write(part->disk, buf, part->offset + offset, len);
 }
 
 static void _publish_partition_nodes(disk_dev_t *dev) {
@@ -735,54 +658,42 @@ static void _publish_partition_nodes(disk_dev_t *dev) {
             continue;
         }
 
-        char path[64] = {0};
+        char path[64] = { 0 };
         snprintf(path, sizeof(path), "/dev/%s", part->name);
 
         if (vfs_lookup(path)) {
             continue;
         }
 
-        vfs_node_t *node =
-            vfs_create_virtual(dev_dir, part->name, VFS_BLOCKDEV, KFILE_MODE);
+        vfs_node_t *node = vfs_create_virtual(dev_dir, part->name, VFS_BLOCKDEV, KFILE_MODE);
 
         if (!node) {
             log_warn("failed to create /dev/%s", part->name);
             continue;
         }
 
-        node->fs =
-            part->fs_instance ? part->fs_instance : _probe_partition(part);
+        node->fs = part->fs_instance ? part->fs_instance : _probe_partition(part);
 
         node->private = part;
-        vfs_adopt_interface(
-            node,
-            vfs_create_interface(_vfs_read, _vfs_write, NULL)
-        );
+        vfs_adopt_interface(node, vfs_create_interface(_vfs_read, _vfs_write, NULL));
     }
 }
 
-static disk_partition_t *_pick_rootfs_partition(
-    disk_dev_t *dev,
-    bool honor_preferred_uuid
-) {
+static disk_partition_t *_pick_rootfs_partition(disk_dev_t *dev, bool honor_preferred_uuid) {
     if (!dev || !dev->partitions) {
         return NULL;
     }
 
     bool has_real = _disk_has_real_partitions(dev);
 
-    if (
-        honor_preferred_uuid &&
-        dev->type != DISK_VIRTUAL &&
-        preferred_rootfs_uuid_set
-    ) {
+    if (honor_preferred_uuid && dev->type != DISK_VIRTUAL && disk_state.preferred_uuid_set) {
         for (size_t i = 0; i < dev->partitions->size; i++) {
             disk_partition_t *part = vec_at_ptr(dev->partitions, i);
             if (!part) {
                 continue;
             }
 
-            if (has_real && _partition_is_whole_disk_alias(part)) {
+            if (has_real && whole_disk_alias(part)) {
                 continue;
             }
 
@@ -807,7 +718,7 @@ static disk_partition_t *_pick_rootfs_partition(
             continue;
         }
 
-        if (has_real && _partition_is_whole_disk_alias(part)) {
+        if (has_real && whole_disk_alias(part)) {
             continue;
         }
 
@@ -853,15 +764,15 @@ bool disk_register(disk_dev_t *dev) {
         return false;
     }
 
-    mutex_lock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
 
     if (!_ensure_disk_name(dev)) {
-        mutex_unlock(&disk_registry_lock);
+        mutex_unlock(&disk_state.lock);
         return false;
     }
 
     if (!_probe_disk(dev)) {
-        mutex_unlock(&disk_registry_lock);
+        mutex_unlock(&disk_state.lock);
         return false;
     }
 
@@ -869,13 +780,9 @@ bool disk_register(disk_dev_t *dev) {
         _publish_partition_nodes(dev);
     }
 
-    log_debug(
-        "registered disk %s (id=%zu)",
-        dev->name ? dev->name : "disk",
-        dev->id
-    );
+    log_debug("registered disk %s (id=%zu)", dev->name ? dev->name : "disk", dev->id);
     dump_partitions(dev);
-    mutex_unlock(&disk_registry_lock);
+    mutex_unlock(&disk_state.lock);
     return true;
 }
 
@@ -898,7 +805,7 @@ static bool _disk_is_busy_locked(const disk_dev_t *dev) {
             continue;
         }
 
-        char path[64] = {0};
+        char path[64] = { 0 };
         snprintf(path, sizeof(path), "/dev/%s", part->name);
 
         vfs_node_t *node = vfs_lookup(path);
@@ -911,21 +818,21 @@ static bool _disk_is_busy_locked(const disk_dev_t *dev) {
 }
 
 bool disk_is_busy(const disk_dev_t *dev) {
-    mutex_lock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
     bool busy = _disk_is_busy_locked(dev);
-    mutex_unlock(&disk_registry_lock);
+    mutex_unlock(&disk_state.lock);
     return busy;
 }
 
 bool disk_unregister(disk_dev_t *dev) {
-    if (!dev || !disks) {
+    if (!dev || !disk_state.disks) {
         return false;
     }
 
-    mutex_lock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
 
     if (_disk_is_busy_locked(dev)) {
-        mutex_unlock(&disk_registry_lock);
+        mutex_unlock(&disk_state.lock);
         return false;
     }
 
@@ -937,7 +844,7 @@ bool disk_unregister(disk_dev_t *dev) {
                 continue;
             }
 
-            char path[64] = {0};
+            char path[64] = { 0 };
             snprintf(path, sizeof(path), "/dev/%s", part->name);
 
             vfs_node_t *node = vfs_lookup(path);
@@ -946,7 +853,7 @@ bool disk_unregister(disk_dev_t *dev) {
             }
 
             if (vfs_unlink(path) < 0) {
-                mutex_unlock(&disk_registry_lock);
+                mutex_unlock(&disk_state.lock);
                 return false;
             }
         }
@@ -954,8 +861,8 @@ bool disk_unregister(disk_dev_t *dev) {
 
     bool removed = false;
 
-    for (size_t i = 0; i < disks->size; i++) {
-        disk_dev_t **slot = vec_at(disks, i);
+    for (size_t i = 0; i < disk_state.disks->size; i++) {
+        disk_dev_t **slot = vec_at(disk_state.disks, i);
         if (!slot || *slot != dev) {
             continue;
         }
@@ -966,25 +873,25 @@ bool disk_unregister(disk_dev_t *dev) {
     }
 
     if (!removed) {
-        mutex_unlock(&disk_registry_lock);
+        mutex_unlock(&disk_state.lock);
         return false;
     }
 
     _destroy_partitions(dev);
     dev->id = 0;
 
-    mutex_unlock(&disk_registry_lock);
+    mutex_unlock(&disk_state.lock);
     return true;
 }
 
 disk_dev_t *disk_lookup(size_t dev_id) {
-    if (!disks || !dev_id) {
+    if (!disk_state.disks || !dev_id) {
         return NULL;
     }
 
-    mutex_lock(&disk_registry_lock);
-    disk_dev_t *dev = vec_at_ptr(disks, dev_id - 1);
-    mutex_unlock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
+    disk_dev_t *dev = vec_at_ptr(disk_state.disks, dev_id - 1);
+    mutex_unlock(&disk_state.lock);
     return dev;
 }
 
@@ -993,34 +900,32 @@ bool file_system_register(fs_t *fs) {
         return false;
     }
 
-    mutex_lock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
 
-    if (!file_systems) {
-        file_systems = vec_create(sizeof(fs_t *));
+    if (!disk_state.file_systems) {
+        disk_state.file_systems = vec_create(sizeof(fs_t *));
     }
 
-    if (!file_systems) {
-        mutex_unlock(&disk_registry_lock);
+    if (!disk_state.file_systems) {
+        mutex_unlock(&disk_state.lock);
         return false;
     }
 
-    fs->id = next_fs_id++;
+    fs->id = disk_state.next_fs_id++;
 
-    vec_push(file_systems, &fs);
-    log_debug(
-        "registered file system %s (%zu)", fs->name ? fs->name : "fs", fs->id
-    );
-    mutex_unlock(&disk_registry_lock);
+    vec_push(disk_state.file_systems, &fs);
+    log_debug("registered file system %s (%zu)", fs->name ? fs->name : "fs", fs->id);
+    mutex_unlock(&disk_state.lock);
     return true;
 }
 
 static fs_t *_file_system_lookup_locked(const char *name) {
-    if (!file_systems || !name) {
+    if (!disk_state.file_systems || !name) {
         return NULL;
     }
 
-    for (size_t i = 0; i < file_systems->size; i++) {
-        fs_t *fs = vec_at_ptr(file_systems, i);
+    for (size_t i = 0; i < disk_state.file_systems->size; i++) {
+        fs_t *fs = vec_at_ptr(disk_state.file_systems, i);
 
         if (fs && fs->name && !strcmp(name, fs->name)) {
             return fs;
@@ -1030,17 +935,13 @@ static fs_t *_file_system_lookup_locked(const char *name) {
 }
 
 fs_t *file_system_lookup(const char *name) {
-    mutex_lock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
     fs_t *fs = _file_system_lookup_locked(name);
-    mutex_unlock(&disk_registry_lock);
+    mutex_unlock(&disk_state.lock);
     return fs;
 }
 
-bool disk_mount_partition_node(
-    vfs_node_t *source,
-    vfs_node_t *target,
-    const char *fs_name
-) {
+bool disk_mount_partition_node(vfs_node_t *source, vfs_node_t *target, const char *fs_name) {
     if (!source || !target) {
         return false;
     }
@@ -1057,30 +958,25 @@ bool disk_mount_partition_node(
         fs_name = "ext2";
     }
 
-    mutex_lock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
 
     disk_partition_t *part = source->private;
     fs_instance_t *instance = part->fs_instance;
 
-    if (
-        instance &&
-        instance->filesystem &&
-        instance->filesystem->name &&
-        strcmp(instance->filesystem->name, fs_name)
-    ) {
+    if (instance && instance->filesystem && instance->filesystem->name && strcmp(instance->filesystem->name, fs_name)) {
         instance = NULL;
     }
 
     if (!instance) {
         fs_t *fs = _file_system_lookup_locked(fs_name);
         if (!fs || !fs->fs_interface || !fs->fs_interface->probe) {
-            mutex_unlock(&disk_registry_lock);
+            mutex_unlock(&disk_state.lock);
             return false;
         }
 
         instance = fs->fs_interface->probe(part);
         if (!instance) {
-            mutex_unlock(&disk_registry_lock);
+            mutex_unlock(&disk_state.lock);
             return false;
         }
 
@@ -1091,7 +987,7 @@ bool disk_mount_partition_node(
     }
 
     bool ok = vfs_mount(instance, target) == 0;
-    mutex_unlock(&disk_registry_lock);
+    mutex_unlock(&disk_state.lock);
     return ok;
 }
 
@@ -1103,30 +999,30 @@ bool disk_unmount_node(vfs_node_t *target, bool destroy_tree) {
     return vfs_unmount(target, destroy_tree) == 0;
 }
 
-void disk_clear_preferred_rootfs_uuid(void) {
-    mutex_lock(&disk_registry_lock);
-    memset(preferred_rootfs_uuid, 0, sizeof(preferred_rootfs_uuid));
-    preferred_rootfs_uuid_set = false;
-    mutex_unlock(&disk_registry_lock);
+void disk_clear_root_uuid(void) {
+    mutex_lock(&disk_state.lock);
+    memset(disk_state.preferred_uuid, 0, sizeof(disk_state.preferred_uuid));
+    disk_state.preferred_uuid_set = false;
+    mutex_unlock(&disk_state.lock);
 }
 
-void disk_set_preferred_rootfs_uuid(const u8 uuid[16]) {
+void disk_set_root_uuid(const u8 uuid[16]) {
     if (!uuid) {
-        disk_clear_preferred_rootfs_uuid();
+        disk_clear_root_uuid();
         return;
     }
 
-    mutex_lock(&disk_registry_lock);
-    memcpy(preferred_rootfs_uuid, uuid, sizeof(preferred_rootfs_uuid));
-    preferred_rootfs_uuid_set = true;
-    mutex_unlock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
+    memcpy(disk_state.preferred_uuid, uuid, sizeof(disk_state.preferred_uuid));
+    disk_state.preferred_uuid_set = true;
+    mutex_unlock(&disk_state.lock);
 }
 
 void disk_clear_boot_hint(void) {
-    mutex_lock(&disk_registry_lock);
-    boot_hint_set = false;
-    memset(&boot_hint, 0, sizeof(boot_hint));
-    mutex_unlock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
+    disk_state.boot_hint_set = false;
+    memset(&disk_state.boot_hint, 0, sizeof(disk_state.boot_hint));
+    mutex_unlock(&disk_state.lock);
 }
 
 void disk_set_boot_hint(const disk_boot_hint_t *hint) {
@@ -1135,10 +1031,10 @@ void disk_set_boot_hint(const disk_boot_hint_t *hint) {
         return;
     }
 
-    mutex_lock(&disk_registry_lock);
-    boot_hint = *hint;
-    boot_hint_set = true;
-    mutex_unlock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
+    disk_state.boot_hint = *hint;
+    disk_state.boot_hint_set = true;
+    mutex_unlock(&disk_state.lock);
 }
 
 static bool _mount_partition_as_root(vfs_node_t *root, disk_partition_t *part) {
@@ -1171,20 +1067,10 @@ static bool _mount_rootfs_on_disk(disk_dev_t *dev, bool honor_preferred_uuid) {
     disk_partition_t *preferred = _pick_rootfs_partition(dev, honor_preferred_uuid);
 
     if (!preferred) {
-        if (
-            honor_preferred_uuid &&
-            preferred_rootfs_uuid_set &&
-            dev->type != DISK_VIRTUAL
-        ) {
-            log_debug(
-                "no preferred rootfs UUID match on %s",
-                dev->name ? dev->name : "disk"
-            );
+        if (honor_preferred_uuid && disk_state.preferred_uuid_set && dev->type != DISK_VIRTUAL) {
+            log_debug("no preferred rootfs UUID match on %s", dev->name ? dev->name : "disk");
         } else {
-            log_debug(
-                "no rootfs candidate on %s",
-                dev->name ? dev->name : "disk"
-            );
+            log_debug("no rootfs candidate on %s", dev->name ? dev->name : "disk");
         }
 
         return false;
@@ -1202,10 +1088,7 @@ static bool _mount_rootfs_on_disk(disk_dev_t *dev, bool honor_preferred_uuid) {
     }
 
     if (!_probe_partition(preferred)) {
-        log_warn(
-            "no filesystem for %s",
-            preferred->name ? preferred->name : "partition"
-        );
+        log_warn("no filesystem for %s", preferred->name ? preferred->name : "partition");
     }
 
     bool has_real = _disk_has_real_partitions(dev);
@@ -1217,7 +1100,7 @@ static bool _mount_rootfs_on_disk(disk_dev_t *dev, bool honor_preferred_uuid) {
             continue;
         }
 
-        if (has_real && _partition_is_whole_disk_alias(part)) {
+        if (has_real && whole_disk_alias(part)) {
             continue;
         }
 
@@ -1226,26 +1109,23 @@ static bool _mount_rootfs_on_disk(disk_dev_t *dev, bool honor_preferred_uuid) {
         }
     }
 
-    log_debug(
-        "failed to mount rootfs from %s",
-        dev->name ? dev->name : "disk"
-    );
+    log_debug("failed to mount rootfs from %s", dev->name ? dev->name : "disk");
 
     return false;
 }
 
 bool mount_rootfs(void) {
-    mutex_lock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
 
-    if (!disks || !disks->size) {
-        mutex_unlock(&disk_registry_lock);
+    if (!disk_state.disks || !disk_state.disks->size) {
+        mutex_unlock(&disk_state.lock);
         return false;
     }
 
     bool has_virtual = false;
 
-    for (size_t i = 0; i < disks->size; i++) {
-        disk_dev_t *dev = vec_at_ptr(disks, i);
+    for (size_t i = 0; i < disk_state.disks->size; i++) {
+        disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
 
         if (dev && dev->type == DISK_VIRTUAL) {
             has_virtual = true;
@@ -1253,123 +1133,123 @@ bool mount_rootfs(void) {
         }
     }
 
-    if (preferred_rootfs_uuid_set) {
-        for (size_t i = 0; i < disks->size; i++) {
-            disk_dev_t *dev = vec_at_ptr(disks, i);
+    if (disk_state.preferred_uuid_set) {
+        for (size_t i = 0; i < disk_state.disks->size; i++) {
+            disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
 
             if (!dev || dev->type == DISK_VIRTUAL) {
                 continue;
             }
 
             if (_mount_rootfs_on_disk(dev, true)) {
-                mutex_unlock(&disk_registry_lock);
+                mutex_unlock(&disk_state.lock);
                 return true;
             }
         }
 
         if (has_virtual) {
-            for (size_t i = 0; i < disks->size; i++) {
-                disk_dev_t *dev = vec_at_ptr(disks, i);
+            for (size_t i = 0; i < disk_state.disks->size; i++) {
+                disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
                 if (!dev || dev->type != DISK_VIRTUAL) {
                     continue;
                 }
 
                 if (_mount_rootfs_on_disk(dev, true)) {
-                    mutex_unlock(&disk_registry_lock);
+                    mutex_unlock(&disk_state.lock);
                     return true;
                 }
             }
 
-            mutex_unlock(&disk_registry_lock);
+            mutex_unlock(&disk_state.lock);
             return false;
         }
 
         log_warn(
             "preferred rootfs UUID set but no staged fallback disk is present; "
-            "probing all physical disks"
+            "probing all physical disk_state.disks"
         );
     }
 
     if (_has_transport_hint()) {
-        for (size_t i = 0; i < disks->size; i++) {
-            disk_dev_t *dev = vec_at_ptr(disks, i);
+        for (size_t i = 0; i < disk_state.disks->size; i++) {
+            disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
 
             if (!dev || dev->type == DISK_VIRTUAL) {
                 continue;
             }
 
-            if (!_disk_matches_boot_hint_transport(dev)) {
+            if (!boot_hint_matches_disk(dev)) {
                 continue;
             }
 
             if (_mount_rootfs_on_disk(dev, false)) {
-                mutex_unlock(&disk_registry_lock);
+                mutex_unlock(&disk_state.lock);
                 return true;
             }
         }
 
-        for (size_t i = 0; i < disks->size; i++) {
-            disk_dev_t *dev = vec_at_ptr(disks, i);
+        for (size_t i = 0; i < disk_state.disks->size; i++) {
+            disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
 
             if (!dev || dev->type == DISK_VIRTUAL) {
                 continue;
             }
 
-            if (_disk_matches_boot_hint_transport(dev)) {
+            if (boot_hint_matches_disk(dev)) {
                 continue;
             }
 
             if (_mount_rootfs_on_disk(dev, false)) {
-                mutex_unlock(&disk_registry_lock);
+                mutex_unlock(&disk_state.lock);
                 return true;
             }
         }
     } else {
-        for (size_t i = 0; i < disks->size; i++) {
-            disk_dev_t *dev = vec_at_ptr(disks, i);
+        for (size_t i = 0; i < disk_state.disks->size; i++) {
+            disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
 
             if (!dev || dev->type == DISK_VIRTUAL) {
                 continue;
             }
 
             if (_mount_rootfs_on_disk(dev, false)) {
-                mutex_unlock(&disk_registry_lock);
+                mutex_unlock(&disk_state.lock);
                 return true;
             }
         }
     }
 
-    for (size_t i = 0; i < disks->size; i++) {
-        disk_dev_t *dev = vec_at_ptr(disks, i);
+    for (size_t i = 0; i < disk_state.disks->size; i++) {
+        disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
 
         if (!dev || dev->type != DISK_VIRTUAL) {
             continue;
         }
 
         if (_mount_rootfs_on_disk(dev, false)) {
-            mutex_unlock(&disk_registry_lock);
+            mutex_unlock(&disk_state.lock);
             return true;
         }
     }
 
-    mutex_unlock(&disk_registry_lock);
+    mutex_unlock(&disk_state.lock);
     return false;
 }
 
 bool disk_publish_devices(void) {
-    mutex_lock(&disk_registry_lock);
+    mutex_lock(&disk_state.lock);
 
-    if (!disks) {
-        mutex_unlock(&disk_registry_lock);
+    if (!disk_state.disks) {
+        mutex_unlock(&disk_state.lock);
         return false;
     }
 
-    for (size_t i = 0; i < disks->size; i++) {
-        disk_dev_t *dev = vec_at_ptr(disks, i);
+    for (size_t i = 0; i < disk_state.disks->size; i++) {
+        disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
         _publish_partition_nodes(dev);
     }
 
-    mutex_unlock(&disk_registry_lock);
+    mutex_unlock(&disk_state.lock);
     return true;
 }
 
@@ -1381,7 +1261,7 @@ void dump_partitions(disk_dev_t *dev) {
     log_debug("partitions on /dev/%s", dev->name ? dev->name : "disk");
 
     if (!dev->partitions->size) {
-        log_debug("[ empty table ]");
+        log_debug("partition table empty");
         return;
     }
 
@@ -1395,12 +1275,6 @@ void dump_partitions(disk_dev_t *dev) {
         unsigned long long start = (unsigned long long)part->offset;
         unsigned long long end = start + (unsigned long long)part->size;
         unsigned int type = (unsigned int)part->type;
-        log_debug(
-            "[ %s | %llu - %llu | type=0x%02x ]",
-            part->name ? part->name : "-",
-            start,
-            end,
-            type
-        );
+        log_debug("%s: %llu-%llu type=0x%02x", part->name ? part->name : "-", start, end, type);
     }
 }

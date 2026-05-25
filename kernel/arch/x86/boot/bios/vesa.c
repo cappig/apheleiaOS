@@ -1,6 +1,7 @@
 #include "vesa.h"
 
 #include <base/macros.h>
+#include <log/log.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,7 +22,7 @@ static bool _fetch_vbe_info(vesa_info_t *buffer) {
 
     memcpy(buffer->signature, "VBE2", 4);
 
-    regs32_t r = {0};
+    regs32_t r = { 0 };
     r.ax = 0x4f00;
     r.es = REAL_SEG(buffer);
     r.edi = REAL_OFF(buffer);
@@ -40,7 +41,7 @@ static bool _fetch_mode_info(vesa_mode_t *buffer, u16 mode) {
         return true;
     }
 
-    regs32_t r = {0};
+    regs32_t r = { 0 };
     r.ax = 0x4f01;
     r.cx = mode;
     r.es = REAL_SEG(buffer);
@@ -56,7 +57,7 @@ static bool _fetch_edid_info(edid_data_t *buffer) {
         return true;
     }
 
-    regs32_t r = {0};
+    regs32_t r = { 0 };
     r.ax = 0x4f15;
     r.bx = 0x01;
     r.es = REAL_SEG(buffer);
@@ -68,15 +69,13 @@ static bool _fetch_edid_info(edid_data_t *buffer) {
 }
 
 static void _edid_resolution(u8 *edid_data, edid_info_t *edid_info) {
-    edid_info->monitor_width =
-        edid_data[0x38] | ((int)(edid_data[0x3a] & 0xf0) << 4);
+    edid_info->monitor_width = edid_data[0x38] | ((int)(edid_data[0x3a] & 0xf0) << 4);
 
-    edid_info->monitor_height =
-        edid_data[0x3b] | ((int)(edid_data[0x3d] & 0xf0) << 4);
+    edid_info->monitor_height = edid_data[0x3b] | ((int)(edid_data[0x3d] & 0xf0) << 4);
 }
 
 static bool _set_vesa_mode(u16 mode_index) {
-    regs32_t r = {0};
+    regs32_t r = { 0 };
     r.ax = 0x4f02;
     r.bx = mode_index | (1 << 14); // use linear framebuffer
 
@@ -88,15 +87,14 @@ static bool _set_vesa_mode(u16 mode_index) {
 // Find the mode with the highest possible resolution and bpp
 // If a fitting mode was found it sets it up
 static vesa_mode_t _init_vesa(u16 max_width, u16 max_height, u16 max_bpp) {
-    vesa_info_t info_buffer = {0};
-    vesa_mode_t current_mode = {0}, best_mode = {0};
+    vesa_info_t info_buffer = { 0 };
+    vesa_mode_t current_mode = { 0 }, best_mode = { 0 };
 
     if (_fetch_vbe_info(&info_buffer)) {
         return current_mode;
     }
 
-    uintptr_t mode_list =
-        REAL_FLATTEN(info_buffer.video_mode_seg, info_buffer.video_mode_off);
+    uintptr_t mode_list = REAL_FLATTEN(info_buffer.video_mode_seg, info_buffer.video_mode_off);
 
     // Guard against buggy firmware returning a junk mode_list pointer
     if (mode_list < 0x0500 || mode_list > 0x10fff0) {
@@ -141,19 +139,13 @@ static vesa_mode_t _init_vesa(u16 max_width, u16 max_height, u16 max_bpp) {
         }
 
         // Ignore modes that are too large
-        if (
-            current_mode.width > max_width || 
-            current_mode.height > max_height ||
-            current_mode.bits_per_pixel > max_bpp
-        ) {
+        if (current_mode.width > max_width || current_mode.height > max_height ||
+            current_mode.bits_per_pixel > max_bpp) {
             continue;
         }
 
-        if (
-            current_mode.width > best_mode.width ||
-            current_mode.height > best_mode.height ||
-            current_mode.bits_per_pixel > best_mode.bits_per_pixel
-        ) {
+        if (current_mode.width > best_mode.width || current_mode.height > best_mode.height ||
+            current_mode.bits_per_pixel > best_mode.bits_per_pixel) {
             best_mode_i = mode;
             best_mode = current_mode;
         }
@@ -163,7 +155,7 @@ static vesa_mode_t _init_vesa(u16 max_width, u16 max_height, u16 max_bpp) {
         return best_mode;
     }
 
-    return (vesa_mode_t){0};
+    return (vesa_mode_t){ 0 };
 }
 
 
@@ -194,7 +186,7 @@ void init_graphics(boot_info_t *info) {
         return;
     }
 
-    edid_data_t edid_data = {0};
+    edid_data_t edid_data = { 0 };
 
     if (!_fetch_edid_info(&edid_data)) {
         _edid_resolution((u8 *)&edid_data, &info->edid);
@@ -202,12 +194,11 @@ void init_graphics(boot_info_t *info) {
         video->width = min(args->vesa_width, edid->monitor_width);
         video->height = min(args->vesa_height, edid->monitor_height);
 
-        printf("detected monitor %dx%d\n\r", video->width, video->height);
+        log_debug("detected monitor %ux%u", (unsigned int)video->width, (unsigned int)video->height);
     }
 
     if (info->args.video == VIDEO_GRAPHICS) {
-        vesa_mode_t vesa =
-            _init_vesa(video->width, video->height, info->args.vesa_bpp);
+        vesa_mode_t vesa = _init_vesa(video->width, video->height, info->args.vesa_bpp);
 
         if (vesa.bits_per_pixel) {
             video->mode = VIDEO_GRAPHICS;
@@ -223,15 +214,11 @@ void init_graphics(boot_info_t *info) {
             video->green_size = vesa.green.mask;
             video->blue_size = vesa.blue.mask;
 
-            printf(
-                "video output graphics %hdx%hd\n\r",
-                video->width,
-                video->height
-            );
+            log_info("video output graphics %ux%u", (unsigned int)video->width, (unsigned int)video->height);
 
             return;
         }
     }
 
-    printf("video output vga text\n\r");
+    log_info("video output vga text");
 }

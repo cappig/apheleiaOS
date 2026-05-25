@@ -17,4 +17,7 @@ typedef struct PACKED {
     u64 memory_paddr;
     u64 memory_size;
     u64 uart_paddr;
+    u64 boot_log_paddr;
+    u64 boot_log_len;
+    u64 boot_log_cap;
 } boot_info_t;

@@ -68,12 +68,7 @@ static u32 _efi_mem_type_to_e820(u32 type) {
     }
 }
 
-static void _build_e820_map(
-    boot_info_t *info,
-    EFI_MEMORY_DESCRIPTOR *descs,
-    UINTN map_size,
-    UINTN desc_size
-) {
+static void _build_e820_map(boot_info_t *info, EFI_MEMORY_DESCRIPTOR *descs, UINTN map_size, UINTN desc_size) {
     if (!info || !descs || !desc_size) {
         return;
     }
@@ -82,8 +77,7 @@ static void _build_e820_map(
 
     UINTN count = map_size / desc_size;
     for (UINTN i = 0; i < count; i++) {
-        EFI_MEMORY_DESCRIPTOR *desc =
-            (EFI_MEMORY_DESCRIPTOR *)((u8 *)descs + i * desc_size);
+        EFI_MEMORY_DESCRIPTOR *desc = (EFI_MEMORY_DESCRIPTOR *)((u8 *)descs + i * desc_size);
 
         u64 base = desc->PhysicalStart;
         if (desc->NumberOfPages > (UINT64_MAX / EFI_PAGE_SIZE)) {
@@ -103,8 +97,7 @@ static void _build_e820_map(
         u32 type = _efi_mem_type_to_e820(desc->Type);
 
         if (info->memory_map.count > 0) {
-            e820_entry_t *prev =
-                &info->memory_map.entries[info->memory_map.count - 1];
+            e820_entry_t *prev = &info->memory_map.entries[info->memory_map.count - 1];
             u64 prev_top = prev->address + prev->size;
 
             if (prev->type == type && prev_top == base) {
@@ -122,8 +115,7 @@ static void _build_e820_map(
             break;
         }
 
-        e820_entry_t *entry =
-            &info->memory_map.entries[info->memory_map.count++];
+        e820_entry_t *entry = &info->memory_map.entries[info->memory_map.count++];
 
         entry->address = base;
         entry->size = size;
@@ -148,9 +140,7 @@ EFI_STATUS uefi_get_memory_map_and_key(
     UINTN desc_size = 0;
     UINT32 desc_version = 0;
 
-    EFI_STATUS status = bs->GetMemoryMap(
-        &query_size, NULL, &query_key, &desc_size, &desc_version
-    );
+    EFI_STATUS status = bs->GetMemoryMap(&query_size, NULL, &query_key, &desc_size, &desc_version);
 
     if (status != EFI_BUFFER_SMALL) {
         return status;
@@ -172,26 +162,18 @@ EFI_STATUS uefi_get_memory_map_and_key(
     }
 
     UINTN map_size = *map_buf_size;
-    status = bs->GetMemoryMap(
-        &map_size,
-        (EFI_MEMORY_DESCRIPTOR *)(*map_buf),
-        map_key,
-        &desc_size,
-        &desc_version
-    );
+    status = bs->GetMemoryMap(&map_size, (EFI_MEMORY_DESCRIPTOR *)(*map_buf), map_key, &desc_size, &desc_version);
 
     if (efi_error(status)) {
         return status;
     }
 
-    _build_e820_map(
-        info, (EFI_MEMORY_DESCRIPTOR *)(*map_buf), map_size, desc_size
-    );
+    _build_e820_map(info, (EFI_MEMORY_DESCRIPTOR *)(*map_buf), map_size, desc_size);
 
     return EFI_SUCCESS;
 }
 
-EFI_STATUS uefi_load_file_from_boot_volume(
+EFI_STATUS uefi_load_boot_file(
     EFI_BOOT_SERVICES *bs,
     EFI_HANDLE image,
     const EFI_GUID *loaded_image_guid,
@@ -201,34 +183,20 @@ EFI_STATUS uefi_load_file_from_boot_volume(
     void **file_data,
     UINTN *file_size
 ) {
-    if (
-        !bs ||
-        !image ||
-        !loaded_image_guid ||
-        !simple_fs_guid ||
-        !file_info_guid ||
-        !path ||
-        !file_data ||
-        !file_size
-    ) {
+    if (!bs || !image || !loaded_image_guid || !simple_fs_guid || !file_info_guid || !path || !file_data ||
+        !file_size) {
         return EFI_INVALID_PARAM;
     }
 
     EFI_LOADED_IMAGE_PROTOCOL *loaded_image = NULL;
-    EFI_STATUS status = bs->HandleProtocol(
-        image, (EFI_GUID *)(uintptr_t)loaded_image_guid, (void **)&loaded_image
-    );
+    EFI_STATUS status = bs->HandleProtocol(image, (EFI_GUID *)(uintptr_t)loaded_image_guid, (void **)&loaded_image);
 
     if (efi_error(status)) {
         return status;
     }
 
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
-    status = bs->HandleProtocol(
-        loaded_image->DeviceHandle,
-        (EFI_GUID *)(uintptr_t)simple_fs_guid,
-        (void **)&fs
-    );
+    status = bs->HandleProtocol(loaded_image->DeviceHandle, (EFI_GUID *)(uintptr_t)simple_fs_guid, (void **)&fs);
 
     if (efi_error(status)) {
         return status;
@@ -250,9 +218,7 @@ EFI_STATUS uefi_load_file_from_boot_volume(
     }
 
     UINTN info_size = 0;
-    status = file->GetInfo(
-        file, (EFI_GUID *)(uintptr_t)file_info_guid, &info_size, NULL
-    );
+    status = file->GetInfo(file, (EFI_GUID *)(uintptr_t)file_info_guid, &info_size, NULL);
 
     if (status != EFI_BUFFER_SMALL) {
         file->Close(file);
@@ -269,9 +235,7 @@ EFI_STATUS uefi_load_file_from_boot_volume(
         return status;
     }
 
-    status = file->GetInfo(
-        file, (EFI_GUID *)(uintptr_t)file_info_guid, &info_size, info
-    );
+    status = file->GetInfo(file, (EFI_GUID *)(uintptr_t)file_info_guid, &info_size, info);
 
     if (efi_error(status)) {
         bs->FreePool(info);
@@ -306,12 +270,7 @@ EFI_STATUS uefi_load_file_from_boot_volume(
     return EFI_SUCCESS;
 }
 
-void uefi_detect_acpi(
-    boot_info_t *info,
-    EFI_SYSTEM_TABLE *st,
-    const EFI_GUID *acpi2_guid,
-    const EFI_GUID *acpi_guid
-) {
+void uefi_detect_acpi(boot_info_t *info, EFI_SYSTEM_TABLE *st, const EFI_GUID *acpi2_guid, const EFI_GUID *acpi_guid) {
     if (!info || !st || !st->ConfigurationTable || !acpi2_guid || !acpi_guid) {
         return;
     }
@@ -376,10 +335,7 @@ static bool _parse_bitmask_channel(u32 mask, u8 *shift_out, u8 *size_out) {
     return true;
 }
 
-static bool _fill_video_format_from_gop(
-    video_info_t *video,
-    const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode
-) {
+static bool _fill_video_format_from_gop(video_info_t *video, const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode) {
     if (!video || !mode) {
         return false;
     }
@@ -402,19 +358,9 @@ static bool _fill_video_format_from_gop(
         video->blue_size = 8;
         return true;
     case PixelBitMask: {
-        bool ok_r = _parse_bitmask_channel(
-            mode->PixelInformation.RedMask, &video->red_shift, &video->red_size
-        );
-        bool ok_g = _parse_bitmask_channel(
-            mode->PixelInformation.GreenMask,
-            &video->green_shift,
-            &video->green_size
-        );
-        bool ok_b = _parse_bitmask_channel(
-            mode->PixelInformation.BlueMask,
-            &video->blue_shift,
-            &video->blue_size
-        );
+        bool ok_r = _parse_bitmask_channel(mode->PixelInformation.RedMask, &video->red_shift, &video->red_size);
+        bool ok_g = _parse_bitmask_channel(mode->PixelInformation.GreenMask, &video->green_shift, &video->green_size);
+        bool ok_b = _parse_bitmask_channel(mode->PixelInformation.BlueMask, &video->blue_shift, &video->blue_size);
 
         return ok_r && ok_g && ok_b;
     }
@@ -426,11 +372,7 @@ static bool _fill_video_format_from_gop(
     }
 }
 
-void uefi_detect_video(
-    boot_info_t *info,
-    EFI_BOOT_SERVICES *bs,
-    const EFI_GUID *gop_guid
-) {
+void uefi_detect_video(boot_info_t *info, EFI_BOOT_SERVICES *bs, const EFI_GUID *gop_guid) {
     if (!info) {
         return;
     }
@@ -455,9 +397,7 @@ void uefi_detect_video(
     }
 
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = NULL;
-    EFI_STATUS status = bs->LocateProtocol(
-        (EFI_GUID *)(uintptr_t)gop_guid, NULL, (void **)&gop
-    );
+    EFI_STATUS status = bs->LocateProtocol((EFI_GUID *)(uintptr_t)gop_guid, NULL, (void **)&gop);
 
     if (efi_error(status) || !gop || !gop->Mode || !gop->Mode->Info) {
         return;

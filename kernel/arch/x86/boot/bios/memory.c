@@ -3,13 +3,12 @@
 #include <alloc/bitmap.h>
 #include <base/macros.h>
 #include <data/bitmap.h>
+#include <log/log.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "bios.h"
-// #include "stdlib.h"
-
 #include "stdlib.h"
 #include "tty.h"
 #include "x86/e820.h"
@@ -21,7 +20,7 @@ static e820_map_t *e820_mmap = NULL;
 
 // http://www.uruk.org/orig-grub/mem64mb.html
 void get_e820(e820_map_t *mmap) {
-    regs32_t out_regs = {0};
+    regs32_t out_regs = { 0 };
     regs32_t in_regs = {
         .eax = 0xe820,
         .ecx = sizeof(e820_entry_t),
@@ -29,7 +28,7 @@ void get_e820(e820_map_t *mmap) {
     };
 
     while (mmap->count < E820_MAX) {
-        e820_entry_t entry = {0};
+        e820_entry_t entry = { 0 };
 
         in_regs.edi = REAL_OFF(&entry);
         in_regs.es = REAL_SEG(&entry);
@@ -58,7 +57,7 @@ void get_e820(e820_map_t *mmap) {
 
     e820_mmap = mmap;
 
-    // printf("e820 regions=%d\n\r", mmap->count);
+    log_debug("e820 memory regions=%llu", (unsigned long long)mmap->count);
 }
 
 
@@ -76,14 +75,14 @@ void get_rsdp(u64 *rsdp) {
         }
 
         if (!strncmp((char *)(uintptr_t)addr, "RSD PTR ", 8)) {
-            // printf("RSDP at %#p\n\r", addr);
             *rsdp = addr;
+            log_debug("RSDP found at %#llx", addr);
 
             return;
         }
     }
 
-    // printf("no RSDP found\n\r");
+    log_debug("RSDP not found");
 }
 
 

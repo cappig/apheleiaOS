@@ -3,7 +3,9 @@
 #include <base/types.h>
 #include <fs/ext2.h>
 #include <lib/boot.h>
+#include <log/log.h>
 #include <parse/elf.h>
+#include <stdbool.h>
 #include <x86/asm.h>
 #include <x86/boot.h>
 #include <x86/paging64.h>
@@ -11,48 +13,31 @@
 #include "efi.h"
 #include "util.h"
 
+#ifndef BOOT_LOG_COLOR
+#define BOOT_LOG_COLOR true
+#endif
+
 static EFI_SYSTEM_TABLE *g_st = NULL;
 static EFI_BOOT_SERVICES *g_bs = NULL;
 static page_t *g_lvl4 = NULL;
 static char boot_log_buf[BOOT_LOG_CAP];
 static size_t boot_log_len = 0;
 
-static const EFI_GUID loaded_image_guid = {
-    0x5b1b31a1,
-    0x9562,
-    0x11d2,
-    {0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}
-};
-static const EFI_GUID simple_fs_guid = {
-    0x0964e5b22,
-    0x6459,
-    0x11d2,
-    {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}
-};
-static const EFI_GUID file_info_guid = {
-    0x09576e92,
-    0x6d3f,
-    0x11d2,
-    {0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b}
-};
-static const EFI_GUID gop_guid = {
-    0x9042a9de,
-    0x23dc,
-    0x4a38,
-    {0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a}
-};
-static const EFI_GUID acpi_guid = {
-    0xeb9d2d30,
-    0x2d88,
-    0x11d3,
-    {0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d}
-};
-static const EFI_GUID acpi2_guid = {
-    0x8868e871,
-    0xe4f1,
-    0x11d3,
-    {0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81}
-};
+static const EFI_GUID loaded_image_guid = { 0x5b1b31a1,
+                                            0x9562,
+                                            0x11d2,
+                                            { 0x8e, 0x3f, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+static const EFI_GUID simple_fs_guid = { 0x0964e5b22,
+                                         0x6459,
+                                         0x11d2,
+                                         { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+static const EFI_GUID file_info_guid = { 0x09576e92,
+                                         0x6d3f,
+                                         0x11d2,
+                                         { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+static const EFI_GUID gop_guid = { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } };
+static const EFI_GUID acpi_guid = { 0xeb9d2d30, 0x2d88, 0x11d3, { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } };
+static const EFI_GUID acpi2_guid = { 0x8868e871, 0xe4f1, 0x11d3, { 0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81 } };
 
 static void _boot_log_append(const CHAR16 *s) {
     if (!s) {
@@ -69,44 +54,178 @@ static void _boot_log_append(const CHAR16 *s) {
     }
 }
 
+static void _uefi_set_attr(UINTN fg, UINTN bg) {
+    if (!g_st || !g_st->ConOut || !g_st->ConOut->SetAttribute) {
+        return;
+    }
+
+    g_st->ConOut->SetAttribute(g_st->ConOut, fg | (bg << 4));
+}
+
+static void _uefi_write_text(const CHAR16 *s, size_t len) {
+    if (!g_st || !g_st->ConOut || !g_st->ConOut->OutputString || !s || !len) {
+        return;
+    }
+
+    CHAR16 chunk[LOG_BUF_SIZE];
+    while (len) {
+        size_t count = len < LOG_BUF_SIZE - 1 ? len : LOG_BUF_SIZE - 1;
+
+        for (size_t i = 0; i < count; i++) {
+            chunk[i] = s[i];
+        }
+
+        chunk[count] = 0;
+        g_st->ConOut->OutputString(g_st->ConOut, chunk);
+
+        s += count;
+        len -= count;
+    }
+}
+
+static void _uefi_apply_sgr(const unsigned int *codes, size_t count) {
+    UINTN fg = 7;
+    UINTN bg = 0;
+
+    if (!count) {
+        _uefi_set_attr(fg, bg);
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        switch (codes[i]) {
+        case 0:
+            fg = 7;
+            bg = 0;
+            break;
+        case 31:
+            fg = 4;
+            break;
+        case 32:
+            fg = 2;
+            break;
+        case 33:
+            fg = 14;
+            break;
+        case 36:
+            fg = 3;
+            break;
+        case 37:
+            fg = 7;
+            break;
+        case 41:
+            bg = 4;
+            break;
+        case 90:
+            fg = 8;
+            break;
+        case 97:
+            fg = 15;
+            break;
+        default:
+            break;
+        }
+    }
+
+    _uefi_set_attr(fg, bg);
+}
+
+static bool _uefi_parse_sgr(const CHAR16 **cursor) {
+    const CHAR16 *p = *cursor;
+    unsigned int codes[4];
+    size_t count = 0;
+
+    if (p[0] != 0x1b || p[1] != '[') {
+        return false;
+    }
+
+    p += 2;
+
+    while (*p && count < ARRAY_LEN(codes)) {
+        unsigned int value = 0;
+        bool have_digit = false;
+
+        while (*p >= '0' && *p <= '9') {
+            value = value * 10U + (unsigned int)(*p - '0');
+            have_digit = true;
+            p++;
+        }
+
+        if (have_digit) {
+            codes[count++] = value;
+        }
+
+        if (*p == ';') {
+            p++;
+            continue;
+        }
+
+        break;
+    }
+
+    if (*p != 'm') {
+        return false;
+    }
+
+    _uefi_apply_sgr(codes, count);
+    *cursor = p + 1;
+    return true;
+}
+
+static void _uefi_write_ansi(const CHAR16 *s) {
+    if (!s) {
+        return;
+    }
+
+    const CHAR16 *text = s;
+    const CHAR16 *p = s;
+
+    while (*p) {
+        if (*p != 0x1b) {
+            p++;
+            continue;
+        }
+
+        _uefi_write_text(text, (size_t)(p - text));
+
+        const CHAR16 *after = p;
+        if (_uefi_parse_sgr(&after)) {
+            p = after;
+            text = p;
+            continue;
+        }
+
+        p++;
+        text = p;
+    }
+
+    _uefi_write_text(text, (size_t)(p - text));
+    _uefi_set_attr(7, 0);
+}
+
 static void _uefi_puts(const CHAR16 *s) {
     if (!s) {
         return;
     }
 
     _boot_log_append(s);
-
-    if (!g_st || !g_st->ConOut || !g_st->ConOut->OutputString) {
-        return;
-    }
-
-    g_st->ConOut->OutputString(g_st->ConOut, s);
-}
-
-static void _uefi_put_hex64(u64 value) {
-    static const CHAR16 hex[] = L"0123456789ABCDEF";
-    CHAR16 out[19];
-
-    out[0] = L'0';
-    out[1] = L'x';
-
-    for (int i = 0; i < 16; i++) {
-        int shift = (15 - i) * 4;
-        out[2 + i] = hex[(value >> shift) & 0x0f];
-    }
-
-    out[18] = 0;
-
-    _uefi_puts(out);
+    _uefi_write_ansi(s);
 }
 
 static EFI_STATUS _uefi_fail(const CHAR16 *msg, EFI_STATUS status) {
+    char text[96];
+    size_t i = 0;
+
     if (msg) {
-        _uefi_puts(msg);
+        while (msg[i] && i < sizeof(text) - 1) {
+            CHAR16 c = msg[i];
+            text[i] = (c <= 0x7f) ? (char)c : '?';
+            i++;
+        }
     }
 
-    _uefi_put_hex64(status);
-    _uefi_puts((const CHAR16 *)L"\r\n");
+    text[i] = '\0';
+    log_error("%s%#llx", text, (unsigned long long)status);
 
     if (g_bs && g_bs->Stall) {
         typedef EFI_STATUS(EFIAPI * efi_stall_t)(UINTN);
@@ -116,7 +235,31 @@ static EFI_STATUS _uefi_fail(const CHAR16 *msg, EFI_STATUS status) {
     return status;
 }
 
-// a bit of repeated code here... TODO: can we do anything about this?
+static unsigned int _boot_log_options(void) {
+#if BOOT_LOG_COLOR
+    return LOG_OPT_LOCATION | LOG_OPT_COLOR;
+#else
+    return LOG_OPT_LOCATION;
+#endif
+}
+
+static void _boot_log_sink(const char *s) {
+    CHAR16 out[LOG_BUF_SIZE];
+    size_t i = 0;
+
+    if (!s) {
+        return;
+    }
+
+    while (s[i] && i < LOG_BUF_SIZE - 1) {
+        out[i] = (unsigned char)s[i];
+        i++;
+    }
+
+    out[i] = 0;
+    _uefi_puts(out);
+}
+
 static bool _ascii_is_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
@@ -149,8 +292,7 @@ static bool _token_ieq(const char *begin, const char *end, const char *value) {
     return (p == end) && (*q == '\0');
 }
 
-static bool
-_parse_bool_token(const char *begin, const char *end, bool *value_out) {
+static bool _parse_bool_token(const char *begin, const char *end, bool *value_out) {
     if (!begin || !end || !value_out || end < begin) {
         return false;
     }
@@ -192,7 +334,7 @@ static void _parse_loader_conf(EFI_HANDLE image, boot_info_t *info) {
     for (size_t i = 0; i < ARRAY_LEN(candidates); i++) {
         config_data = NULL;
         config_size = 0;
-        status = uefi_load_file_from_boot_volume(
+        status = uefi_load_boot_file(
             g_bs,
             image,
             &loaded_image_guid,
@@ -289,8 +431,7 @@ static void _parse_loader_conf(EFI_HANDLE image, boot_info_t *info) {
             continue;
         }
 
-        if (_token_ieq(key_begin, key_end, "stage_rootfs") ||
-            _token_ieq(key_begin, key_end, "stage_roootfs")) {
+        if (_token_ieq(key_begin, key_end, "stage_rootfs") || _token_ieq(key_begin, key_end, "stage_roootfs")) {
             bool enabled = info->args.stage_rootfs != 0;
 
             if (_parse_bool_token(value_begin, value_end, &enabled)) {
@@ -311,8 +452,7 @@ static EFI_STATUS _alloc_pages_low(UINTN pages, EFI_PHYSICAL_ADDRESS *addr) {
     return g_bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, addr);
 }
 
-static EFI_STATUS
-_alloc_pages_below(UINTN pages, EFI_PHYSICAL_ADDRESS max, EFI_PHYSICAL_ADDRESS *addr) {
+static EFI_STATUS _alloc_pages_below(UINTN pages, EFI_PHYSICAL_ADDRESS max, EFI_PHYSICAL_ADDRESS *addr) {
     if (!addr) {
         return EFI_INVALID_PARAM;
     }
@@ -401,8 +541,7 @@ static EFI_STATUS _map_page_2m(u64 vaddr, u64 paddr, u64 flags) {
 
     size_t index = GET_LVL2_INDEX(vaddr);
     u64 pat_huge = flags & PT_PAT_HUGE;
-    lvl2[index] = 
-        (paddr & ADDR_MASK) | (flags & FLAGS_MASK) | pat_huge | PT_PRESENT | PT_HUGE;
+    lvl2[index] = (paddr & ADDR_MASK) | (flags & FLAGS_MASK) | pat_huge | PT_PRESENT | PT_HUGE;
 
     return EFI_SUCCESS;
 }
@@ -411,8 +550,7 @@ static EFI_STATUS _map_region_4k(u64 vaddr, u64 paddr, u64 size, u64 flags) {
     u64 pages = DIV_ROUND_UP(size, PAGE_4KIB);
 
     for (u64 i = 0; i < pages; i++) {
-        EFI_STATUS status =
-            _map_page_4k(vaddr + i * PAGE_4KIB, paddr + i * PAGE_4KIB, flags);
+        EFI_STATUS status = _map_page_4k(vaddr + i * PAGE_4KIB, paddr + i * PAGE_4KIB, flags);
 
         if (efi_error(status)) {
             return status;
@@ -439,8 +577,7 @@ static EFI_STATUS _map_identity_and_linear(void) {
     return EFI_SUCCESS;
 }
 
-static EFI_STATUS
-_map_region_identity_and_linear(u64 paddr, u64 size, u64 flags) {
+static EFI_STATUS map_boot_region(u64 paddr, u64 size, u64 flags) {
     if (!size) {
         return EFI_SUCCESS;
     }
@@ -466,9 +603,7 @@ static EFI_STATUS _map_loader_runtime(EFI_HANDLE image) {
     }
 
     EFI_LOADED_IMAGE_PROTOCOL *loaded_image = NULL;
-    EFI_STATUS status = g_bs->HandleProtocol(
-        image, (EFI_GUID *)(uintptr_t)&loaded_image_guid, (void **)&loaded_image
-    );
+    EFI_STATUS status = g_bs->HandleProtocol(image, (EFI_GUID *)(uintptr_t)&loaded_image_guid, (void **)&loaded_image);
 
     if (efi_error(status) || !loaded_image) {
         return status;
@@ -478,8 +613,7 @@ static EFI_STATUS _map_loader_runtime(EFI_HANDLE image) {
     u64 image_size = loaded_image->ImageSize;
 
     if (image_base && image_size) {
-        status =
-            _map_region_identity_and_linear(image_base, image_size, PT_WRITE);
+        status = map_boot_region(image_base, image_size, PT_WRITE);
 
         if (efi_error(status)) {
             return status;
@@ -492,8 +626,7 @@ static EFI_STATUS _map_loader_runtime(EFI_HANDLE image) {
     const u64 stack_window = 128 * 1024;
     u64 stack_base = (rsp > stack_window / 2) ? (rsp - stack_window / 2) : 0;
 
-    status =
-        _map_region_identity_and_linear(stack_base, stack_window, PT_WRITE);
+    status = map_boot_region(stack_base, stack_window, PT_WRITE);
 
     if (efi_error(status)) {
         return status;
@@ -503,14 +636,8 @@ static EFI_STATUS _map_loader_runtime(EFI_HANDLE image) {
 }
 
 static EFI_STATUS _map_framebuffer_linear(const boot_info_t *info) {
-    if (
-        !info ||
-        info->video.mode != VIDEO_GRAPHICS ||
-        !info->video.framebuffer ||
-        !info->video.width ||
-        !info->video.height ||
-        !info->video.bytes_per_pixel
-    ) {
+    if (!info || info->video.mode != VIDEO_GRAPHICS || !info->video.framebuffer || !info->video.width ||
+        !info->video.height || !info->video.bytes_per_pixel) {
         return EFI_SUCCESS;
     }
 
@@ -538,9 +665,7 @@ static EFI_STATUS _map_framebuffer_linear(const boot_info_t *info) {
                 return s;
             }
 
-            s = _map_page_2m(
-                addr + LINEAR_MAP_OFFSET_64, addr, PT_WRITE | PT_PAT_HUGE
-            );
+            s = _map_page_2m(addr + LINEAR_MAP_OFFSET_64, addr, PT_WRITE | PT_PAT_HUGE);
 
             if (efi_error(s)) {
                 return s;
@@ -571,8 +696,7 @@ static EFI_STATUS _map_framebuffer_linear(const boot_info_t *info) {
 }
 
 
-static EFI_STATUS
-_load_kernel_elf(void *file_data, UINTN file_size, u64 *entry) {
+static EFI_STATUS _load_kernel_elf(void *file_data, UINTN file_size, u64 *entry) {
     if (!file_data || !entry || file_size < sizeof(elf_header_t)) {
         return EFI_LOAD_ERROR;
     }
@@ -595,8 +719,7 @@ _load_kernel_elf(void *file_data, UINTN file_size, u64 *entry) {
         return EFI_LOAD_ERROR;
     }
 
-    u64 phdr_end =
-        header->phoff + (u64)header->ph_num * (u64)header->phent_size;
+    u64 phdr_end = header->phoff + (u64)header->ph_num * (u64)header->phent_size;
 
     if (phdr_end > file_size) {
         return EFI_LOAD_ERROR;
@@ -604,8 +727,7 @@ _load_kernel_elf(void *file_data, UINTN file_size, u64 *entry) {
 
     for (size_t i = 0; i < header->ph_num; i++) {
         size_t offset = header->phoff + i * header->phent_size;
-        elf_prog_header_t *ph =
-            (elf_prog_header_t *)((u8 *)file_data + offset);
+        elf_prog_header_t *ph = (elf_prog_header_t *)((u8 *)file_data + offset);
 
         if (ph->type != PT_LOAD) {
             continue;
@@ -630,11 +752,7 @@ _load_kernel_elf(void *file_data, UINTN file_size, u64 *entry) {
         }
 
         uefi_mem_zero((void *)(uintptr_t)paddr, pages * EFI_PAGE_SIZE);
-        uefi_mem_copy(
-            (void *)(uintptr_t)paddr,
-            (u8 *)file_data + ph->offset,
-            ph->file_size
-        );
+        uefi_mem_copy((void *)(uintptr_t)paddr, (u8 *)file_data + ph->offset, ph->file_size);
 
         u64 flags = 0;
         if (ph->flags & PF_W) {
@@ -665,11 +783,7 @@ static void _setup_default_args(boot_info_t *info) {
     info->args.vesa_height = (u16)BOOT_DEFAULT_VESA_HEIGHT;
     info->args.vesa_bpp = BOOT_DEFAULT_VESA_BPP;
 
-    uefi_str_copy(
-        info->args.console,
-        sizeof(info->args.console),
-        "/dev/ttyS0,/dev/console"
-    );
+    uefi_str_copy(info->args.console, sizeof(info->args.console), "/dev/ttyS0,/dev/console");
 
     uefi_str_copy(info->args.font, sizeof(info->args.font), BOOT_DEFAULT_FONT);
 }
@@ -688,11 +802,7 @@ static void _set_root_hint_defaults(boot_root_hint_t *hint) {
     hint->bios_drive = 0;
 }
 
-static void _populate_root_hint_from_staged(
-    boot_info_t *info,
-    const void *rootfs_file,
-    UINTN rootfs_size
-) {
+static void stage_root_hint(boot_info_t *info, const void *rootfs_file, UINTN rootfs_size) {
     if (!info || !rootfs_file || rootfs_size < 1024 + sizeof(ext2_superblock_t)) {
         return;
     }
@@ -700,19 +810,14 @@ static void _populate_root_hint_from_staged(
     _set_root_hint_defaults(&info->boot_root_hint);
 
     const u8 *bytes = (const u8 *)rootfs_file;
-    const ext2_superblock_t *sb =
-        (const ext2_superblock_t *)(const void *)(bytes + 1024);
+    const ext2_superblock_t *sb = (const ext2_superblock_t *)(const void *)(bytes + 1024);
 
     if (sb->signature != EXT2_SIGNATURE) {
         return;
     }
 
     info->boot_root_hint.rootfs_uuid_valid = 1;
-    uefi_mem_copy(
-        info->boot_root_hint.rootfs_uuid,
-        sb->fs_id,
-        sizeof(info->boot_root_hint.rootfs_uuid)
-    );
+    uefi_mem_copy(info->boot_root_hint.rootfs_uuid, sb->fs_id, sizeof(info->boot_root_hint.rootfs_uuid));
 }
 
 static void _stage_rootfs_from_esp(EFI_HANDLE image, boot_info_t *info) {
@@ -733,7 +838,7 @@ static void _stage_rootfs_from_esp(EFI_HANDLE image, boot_info_t *info) {
     for (size_t i = 0; i < ARRAY_LEN(candidates); i++) {
         rootfs_file = NULL;
         rootfs_size = 0;
-        status = uefi_load_file_from_boot_volume(
+        status = uefi_load_boot_file(
             g_bs,
             image,
             &loaded_image_guid,
@@ -763,24 +868,21 @@ static void _stage_rootfs_from_esp(EFI_HANDLE image, boot_info_t *info) {
         uefi_mem_copy((void *)(uintptr_t)rootfs_phys, rootfs_file, rootfs_size);
         info->boot_rootfs_paddr = (u64)rootfs_phys;
         info->boot_rootfs_size = (u64)rootfs_size;
-        _populate_root_hint_from_staged(info, rootfs_file, rootfs_size);
+        stage_root_hint(info, rootfs_file, rootfs_size);
     }
 
     g_bs->FreePool(rootfs_file);
 }
 
-static NORETURN void
-_jump_to_kernel(u64 entry, u64 stack_top, boot_info_t *info) {
-    asm volatile(
-        "cli\n\t"
-        "cld\n\t"
-        "mov %0, %%rsp\n\t"
-        "xor %%rbp, %%rbp\n\t"
-        "jmp *%1"
-        :
-        : "r"(stack_top), "r"(entry), "D"(info)
-        : "memory"
-    );
+static NORETURN void _jump_to_kernel(u64 entry, u64 stack_top, boot_info_t *info) {
+    asm volatile("cli\n\t"
+                 "cld\n\t"
+                 "mov %0, %%rsp\n\t"
+                 "xor %%rbp, %%rbp\n\t"
+                 "jmp *%1"
+                 :
+                 : "r"(stack_top), "r"(entry), "D"(info)
+                 : "memory");
 
     __builtin_unreachable();
 }
@@ -793,7 +895,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
         return EFI_LOAD_ERROR;
     }
 
-    _uefi_puts((const CHAR16 *)L"UEFI boot starting\r\n");
+    log_init(_boot_log_sink);
+    log_set_lvl(LOG_DEBUG);
+    log_set_options(_boot_log_options());
+
+    log_info("UEFI boot starting");
 
     if (g_bs->SetWatchdogTimer) {
         g_bs->SetWatchdogTimer(0, 0, 0, NULL);
@@ -801,7 +907,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
     void *kernel_file = NULL;
     UINTN kernel_file_size = 0;
-    EFI_STATUS status = uefi_load_file_from_boot_volume(
+    EFI_STATUS status = uefi_load_boot_file(
         g_bs,
         image,
         &loaded_image_guid,
@@ -813,7 +919,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     );
 
     if (efi_error(status)) {
-        _uefi_puts((const CHAR16 *)L"failed to open kernel64.elf\r\n");
+        log_error("failed to open kernel64.elf");
         return status;
     }
 
@@ -821,9 +927,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     status = _alloc_pages_low(1, &info_phys);
 
     if (efi_error(status)) {
-        return _uefi_fail(
-            (const CHAR16 *)L"boot info allocation failed ", status
-        );
+        return _uefi_fail((const CHAR16 *)L"boot info allocation failed ", status);
     }
 
     boot_info_t *info = (boot_info_t *)(uintptr_t)info_phys;
@@ -845,37 +949,29 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
     status = _alloc_table(&g_lvl4);
     if (efi_error(status)) {
-        return _uefi_fail(
-            (const CHAR16 *)L"page table allocation failed ", status
-        );
+        return _uefi_fail((const CHAR16 *)L"page table allocation failed ", status);
     }
 
     status = _map_identity_and_linear();
     if (efi_error(status)) {
-        return _uefi_fail(
-            (const CHAR16 *)L"low memory map failed ", status
-        );
+        return _uefi_fail((const CHAR16 *)L"low memory map failed ", status);
     }
 
     status = _map_loader_runtime(image);
     if (efi_error(status)) {
-        return _uefi_fail(
-            (const CHAR16 *)L"loader runtime map failed ", status
-        );
+        return _uefi_fail((const CHAR16 *)L"loader runtime map failed ", status);
     }
 
     status = _map_framebuffer_linear(info);
     if (efi_error(status)) {
-        return _uefi_fail(
-            (const CHAR16 *)L"framebuffer map failed ", status
-        );
+        return _uefi_fail((const CHAR16 *)L"framebuffer map failed ", status);
     }
 
     u64 kernel_entry = 0;
     status = _load_kernel_elf(kernel_file, kernel_file_size, &kernel_entry);
 
     if (efi_error(status)) {
-        _uefi_puts((const CHAR16 *)L"failed to load kernel ELF\r\n");
+        log_error("failed to load kernel ELF");
         return status;
     }
 
@@ -883,9 +979,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     EFI_PHYSICAL_ADDRESS stack_phys = 0;
     status = _alloc_pages_low(stack_pages, &stack_phys);
     if (efi_error(status)) {
-        return _uefi_fail(
-            (const CHAR16 *)L"kernel stack allocation failed ", status
-        );
+        return _uefi_fail((const CHAR16 *)L"kernel stack allocation failed ", status);
     }
 
     if (info->args.stage_rootfs) {
@@ -893,22 +987,17 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     }
 
     u64 stack_top = stack_phys + KERNEL_STACK_SIZE + LINEAR_MAP_OFFSET_64;
-    boot_info_t *info_virt =
-        (boot_info_t *)(uintptr_t)(info_phys + LINEAR_MAP_OFFSET_64);
+    boot_info_t *info_virt = (boot_info_t *)(uintptr_t)(info_phys + LINEAR_MAP_OFFSET_64);
 
     void *map_buf = NULL;
     UINTN map_buf_size = 0;
     UINTN map_key = 0;
 
     for (int attempts = 0; attempts < 8; attempts++) {
-        status = uefi_get_memory_map_and_key(
-            g_bs, info, &map_buf, &map_buf_size, &map_key
-        );
+        status = uefi_get_memory_map_and_key(g_bs, info, &map_buf, &map_buf_size, &map_key);
 
         if (efi_error(status)) {
-            return _uefi_fail(
-                (const CHAR16 *)L"memory map fetch failed ", status
-            );
+            return _uefi_fail((const CHAR16 *)L"memory map fetch failed ", status);
         }
 
         status = g_bs->ExitBootServices(image, map_key);
@@ -918,9 +1007,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     }
 
     if (efi_error(status)) {
-        return _uefi_fail(
-            (const CHAR16 *)L"ExitBootServices failed ", status
-        );
+        return _uefi_fail((const CHAR16 *)L"ExitBootServices failed ", status);
     }
 
     info->boot_log_len = (u32)boot_log_len;

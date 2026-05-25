@@ -3,6 +3,7 @@
 #include <base/attributes.h>
 #include <base/macros.h>
 #include <base/types.h>
+#include <common/elf.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -11,8 +12,6 @@
 #include "parse/elf.h"
 #include "x86/asm.h"
 #include "x86/paging32.h"
-
-#include <common/elf.h>
 
 static page_t *pdpt;
 
@@ -23,9 +22,7 @@ static page_t *_walk_pdpt_once(size_t index, bool is_kernel) {
         pd = (page_t *)(uintptr_t)page_get_paddr(&pdpt[index]);
     } else {
         u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
-        pd = (page_t *)mmap_alloc_top(
-            PAGE_4KIB, type, PAGE_4KIB, LINEAR_MAP_OFFSET_32
-        );
+        pd = (page_t *)mmap_alloc_top(PAGE_4KIB, type, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
         memset(pd, 0, PAGE_4KIB);
 
         page_set_paddr(&pdpt[index], (page_t)(uintptr_t)pd);
@@ -42,9 +39,7 @@ static page_t *_walk_pd_once(page_t *pd, size_t index, bool is_kernel) {
         pt = (page_t *)(uintptr_t)page_get_paddr(&pd[index]);
     } else {
         u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
-        pt = (page_t *)mmap_alloc_top(
-            PAGE_4KIB, type, PAGE_4KIB, LINEAR_MAP_OFFSET_32
-        );
+        pt = (page_t *)mmap_alloc_top(PAGE_4KIB, type, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
         memset(pt, 0, PAGE_4KIB);
 
         page_set_paddr(&pd[index], (page_t)(uintptr_t)pt);
@@ -71,9 +66,7 @@ static void reserve_phys_window_32(void) {
             continue;
         }
 
-        page_t *pt = (page_t *)mmap_alloc_top(
-            PAGE_4KIB, E820_PAGE_TABLE, PAGE_4KIB, LINEAR_MAP_OFFSET_32
-        );
+        page_t *pt = (page_t *)mmap_alloc_top(PAGE_4KIB, E820_PAGE_TABLE, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
         memset(pt, 0, PAGE_4KIB);
 
         page_set_paddr(&pd[pd_index], (page_t)(uintptr_t)pt);
@@ -114,13 +107,7 @@ void map_page_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel) {
 }
 
 // Map region by breaking into 4 KiB pages
-void map_region_32(
-    size_t size,
-    u32 vaddr,
-    u64 paddr,
-    u64 flags,
-    bool is_kernel
-) {
+void map_region_32(size_t size, u32 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     for (size_t i = 0; i < DIV_ROUND_UP(size, PAGE_4KIB); i++) {
         u32 page_vaddr = vaddr + (u32)(i * PAGE_4KIB);
         u64 page_paddr = paddr + (u64)(i * PAGE_4KIB);
@@ -145,9 +132,7 @@ void identity_map_32(u32 top_address, u32 offset, bool is_kernel) {
 
 void setup_paging_32(void) {
     // Allocate the PDPT (root)
-    pdpt = (page_t *)mmap_alloc_top(
-        PAGE_4KIB, E820_KERNEL, PAGE_4KIB, LINEAR_MAP_OFFSET_32
-    );
+    pdpt = (page_t *)mmap_alloc_top(PAGE_4KIB, E820_KERNEL, PAGE_4KIB, LINEAR_MAP_OFFSET_32);
     memset(pdpt, 0, PAGE_4KIB);
 
     // write physical base into CR3
@@ -186,19 +171,14 @@ static bool load_segment_32(const elf_segment_t *seg, void *ctx_ptr) {
     u32 size = ALIGN((u32)seg->mem_size, PAGE_4KIB);
     u64 flags = _elf_to_page_flags(seg->flags);
 
-    u64 pbase =
-        (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, (size_t)seg->align);
+    u64 pbase = (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, (size_t)seg->align);
     u32 vbase = (u32)seg->vaddr;
 
     // Map the segment
     map_region_32(size, vbase, pbase, flags, true);
 
     // Copy all loadable data from the file
-    memcpy(
-        (void *)(uintptr_t)pbase,
-        (u8 *)load_ctx->elf + seg->offset,
-        (size_t)seg->file_size
-    );
+    memcpy((void *)(uintptr_t)pbase, (u8 *)load_ctx->elf + seg->offset, (size_t)seg->file_size);
 
     // Zero out any additional space
     size_t zero_len = (size_t)(seg->mem_size - seg->file_size);
@@ -212,7 +192,7 @@ u32 load_elf_sections_32(void *elf_file) {
         .elf = elf_file,
     };
 
-    elf_info_t info = {0};
+    elf_info_t info = { 0 };
     if (!elf_foreach_segment(elf_file, 0, load_segment_32, &ctx, &info)) {
         return 0;
     }

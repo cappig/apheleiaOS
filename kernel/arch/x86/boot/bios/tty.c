@@ -13,6 +13,7 @@
 
 static char boot_log_buf[BOOT_LOG_CAP];
 static size_t boot_log_len = 0;
+static bool bios_output_enabled = true;
 
 static void _boot_log_putc(char c) {
     if (boot_log_len >= BOOT_LOG_CAP) {
@@ -34,28 +35,38 @@ const char *boot_log_buffer(size_t *len, size_t *cap) {
     return boot_log_buf;
 }
 
+void tty_disable_bios_output(void) {
+    bios_output_enabled = false;
+}
+
 int puts(const char *str) {
-    regs32_t regs = {.ah = 0x0e};
+    regs32_t regs = { .ah = 0x0e };
     int count = 0;
 
     while (*str) {
-        regs.al = *str;
-        _boot_log_putc(*str);
-        send_serial(SERIAL_COM1, *str);
-        bios_call(0x10, &regs, &regs);
-        str++;
+        char c = *str++;
+
+        if (c == '\n') {
+            send_serial(SERIAL_COM1, '\r');
+
+            if (bios_output_enabled) {
+                regs.al = '\r';
+                bios_call(0x10, &regs, &regs);
+            }
+        }
+
+        _boot_log_putc(c);
+        send_serial(SERIAL_COM1, c);
+
+        if (bios_output_enabled) {
+            regs.al = c;
+            bios_call(0x10, &regs, &regs);
+        }
+
         count++;
     }
 
     return count;
-}
-
-void serial_puts(const char *str) {
-    while (*str) {
-        _boot_log_putc(*str);
-        send_serial(SERIAL_COM1, *str);
-        str++;
-    }
 }
 
 int printf(const char *fmt, ...) {
@@ -67,19 +78,6 @@ int printf(const char *fmt, ...) {
     va_end(args);
 
     puts(buf);
-
-    return ret;
-}
-
-int serial_printf(const char *fmt, ...) {
-    char buf[PRINTF_BUF_SIZE];
-
-    va_list args;
-    va_start(args, fmt);
-    int ret = vsnprintf(buf, sizeof(buf), fmt, args);
-    va_end(args);
-
-    serial_puts(buf);
 
     return ret;
 }

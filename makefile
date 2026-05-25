@@ -9,6 +9,7 @@ TOOLCHAIN        ?= gnu
 PROFILE          ?= fast
 IMAGE_FORMAT     ?= img
 TRACEABLE_KERNEL ?= true
+BOOT_LOG_COLOR   ?= true
 
 BUILD_NAME := $(NAME)_$(VERSION)
 IMAGE_NAME := $(BUILD_NAME)_$(ARCH)

@@ -51,6 +51,7 @@ BOOT_ENTRY_SRC := \
 	libs/libc/stdlib.c \
 	libs/libc/string.c \
 	libs/libc_ext/stdlib.c \
+	libs/log/log.c \
 	libs/parse/fdt.c
 
 BOOT_ENTRY_OBJ_DIR := bin/boot/$(ARCH)
@@ -112,6 +113,7 @@ BOOT_ENTRY_CFLAGS_COMMON := \
 	-DRISCV_BOOT_SCRATCH_OFFSET=$(RISCV_BOOT_SCRATCH_OFFSET) \
 	-DSERIAL_UART0=$(RISCV_UART0) \
 	-DRISCV_UART_STRIDE=$(RISCV_UART_STRIDE) \
+	-DBOOT_LOG_COLOR=$(BOOT_LOG_COLOR) \
 	-mcmodel=medany
 
 ifeq ($(RISCV_FRISC),true)
@@ -120,7 +122,7 @@ BOOT_ENTRY_CFLAGS_COMMON += \
 	-DRISCV_BOOT_PLATFORM_DTB=\"$(RISCV_PLATFORM_DTB)\"
 endif
 
-ifeq ($(RISCV_BOOT_FORCE_NO_DTB), true)
+ifeq ($(RISCV_BOOT_FORCE_NO_DTB),true)
 BOOT_ENTRY_CFLAGS_COMMON += -DRISCV_BOOT_FORCE_NO_DTB=1
 endif
 
@@ -137,15 +139,27 @@ ifeq ($(ARCH_VARIANT), 64)
 KERNEL_SRC      := $(KERNEL_SRC_64)
 KERNEL_OBJ_DIR  := bin/kernel_riscv64
 KERNEL_ELF      := $(KERNEL_OBJ_DIR)/boot/kernel64.elf
-KERNEL_CC_FLAGS := $(KERNEL_CC_COMMON) $(RISCV_64_ISA_FLAGS) -mcmodel=medany
-KERNEL_LD_FLAGS := $(KERNEL_LD_COMMON) -m elf64lriscv -T$(ARCH_DIR)/build/linker64.ld
+KERNEL_CC_FLAGS := \
+	$(KERNEL_CC_COMMON) \
+	$(RISCV_64_ISA_FLAGS) \
+	-mcmodel=medany
+KERNEL_LD_FLAGS := \
+	$(KERNEL_LD_COMMON) \
+	-m elf64lriscv \
+	-T$(ARCH_DIR)/build/linker64.ld
 BOOT_ENTRY_CFLAGS := $(BOOT_ENTRY_CFLAGS_COMMON) $(RISCV_64_ISA_FLAGS)
 else ifeq ($(ARCH_VARIANT), 32)
 KERNEL_SRC      := $(KERNEL_SRC_32)
 KERNEL_OBJ_DIR  := bin/kernel_riscv32
 KERNEL_ELF      := $(KERNEL_OBJ_DIR)/boot/kernel32.elf
-KERNEL_CC_FLAGS := $(KERNEL_CC_COMMON) $(RISCV_32_ISA_FLAGS) -mcmodel=medany
-KERNEL_LD_FLAGS := $(KERNEL_LD_COMMON) -m elf32lriscv -T$(ARCH_DIR)/build/linker32.ld
+KERNEL_CC_FLAGS := \
+	$(KERNEL_CC_COMMON) \
+	$(RISCV_32_ISA_FLAGS) \
+	-mcmodel=medany
+KERNEL_LD_FLAGS := \
+	$(KERNEL_LD_COMMON) \
+	-m elf32lriscv \
+	-T$(ARCH_DIR)/build/linker32.ld
 BOOT_ENTRY_CFLAGS := $(BOOT_ENTRY_CFLAGS_COMMON) $(RISCV_32_ISA_FLAGS)
 else
 $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')

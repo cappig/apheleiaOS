@@ -2,6 +2,11 @@
 
 #include <base/attributes.h>
 #include <base/types.h>
+#include <base/units.h>
+
+#ifndef BOOT_LOG_CAP
+#define BOOT_LOG_CAP (4 * KIB)
+#endif
 
 typedef enum {
     DEBUG_NONE = 0,
@@ -16,12 +21,12 @@ typedef enum {
 } video_mode_t;
 
 // -1 means that the bootloader will attempt to autodetect
-#define BOOT_DEFAULT_DEBUG       DEBUG_MINIMAL
-#define BOOT_DEFAULT_VIDEO       VIDEO_TEXT
-#define BOOT_DEFAULT_VESA_WIDTH  -1
-#define BOOT_DEFAULT_VESA_HEIGHT -1
-#define BOOT_DEFAULT_VESA_BPP    32
-#define BOOT_DEFAULT_FONT        "/etc/ter-116n.psf"
+#define BOOT_DEFAULT_DEBUG        DEBUG_MINIMAL
+#define BOOT_DEFAULT_VIDEO        VIDEO_TEXT
+#define BOOT_DEFAULT_VESA_WIDTH   -1
+#define BOOT_DEFAULT_VESA_HEIGHT  -1
+#define BOOT_DEFAULT_VESA_BPP     32
+#define BOOT_DEFAULT_FONT         "/etc/ter-116n.psf"
 #define BOOT_DEFAULT_STAGE_ROOTFS 0
 
 #define BOOT_KERNEL_PATH_32 "/boot/kernel32.elf"

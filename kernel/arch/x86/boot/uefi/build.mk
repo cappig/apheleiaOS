@@ -2,25 +2,31 @@ UEFI_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 
 UEFI_SRC := \
 	$(UEFI_DIR)/main.c \
-	$(UEFI_DIR)/util.c
+	$(UEFI_DIR)/util.c \
+	libs/libc/ctype.c \
+	libs/libc/errno.c \
+	libs/libc/sprintf.c \
+	libs/libc/stdlib.c \
+	libs/libc/string.c \
+	libs/libc_ext/stdlib.c \
+	libs/log/log.c
 
-UEFI_OBJ := $(patsubst $(UEFI_DIR)/%.c, bin/uefi/obj/%.o, $(UEFI_SRC))
+UEFI_OBJ := $(patsubst %, bin/uefi/obj/%.o, $(UEFI_SRC))
 
-UEFI_X86_FP_FLAGS := \
-	-mno-mmx \
-	-mno-sse \
-	-mno-sse2
-
+UEFI_CFLAGS_COMMON := \
+	$(X86_NO_FP_FLAGS) \
+	-DBOOT_LOG_COLOR=$(BOOT_LOG_COLOR) \
+	-fshort-wchar \
+	-DEXTERNAL_ALLOC \
+	-fdata-sections \
+	-ffunction-sections
 
 ifeq ($(TOOLCHAIN), llvm)
 UEFI_CC := $(CC)
 UEFI_LD := $(LD)
 UEFI_CFLAGS := \
 	-target x86_64-unknown-uefi \
-	$(UEFI_X86_FP_FLAGS) \
-	-fshort-wchar \
-	-fdata-sections \
-	-ffunction-sections
+	$(UEFI_CFLAGS_COMMON)
 UEFI_LDFLAGS := \
 	-m i386pep \
 	--subsystem efi_application \
@@ -30,10 +36,7 @@ else ifeq ($(TOOLCHAIN), gnu)
 UEFI_CC := x86_64-w64-mingw32-gcc
 UEFI_LD := x86_64-w64-mingw32-ld
 UEFI_CFLAGS := \
-	$(UEFI_X86_FP_FLAGS) \
-	-fshort-wchar \
-	-fdata-sections \
-	-ffunction-sections
+	$(UEFI_CFLAGS_COMMON)
 UEFI_LDFLAGS := \
 	-m i386pep \
 	--subsystem 10 \
@@ -50,8 +53,8 @@ UEFI_BUILD_CONFIG := $(UEFI_CC) $(CC_BASE) $(UEFI_CFLAGS)
 
 $(eval $(call flag_stamp,$(UEFI_FLAG_STAMP),UEFI_BUILD_CONFIG))
 
-bin/uefi/obj/%.o: CC := $(UEFI_CC)
-bin/uefi/obj/%.o: $(UEFI_DIR)/%.c $(UEFI_DIR)/efi.h $(UEFI_DIR)/util.h \
+bin/uefi/obj/%.c.o: CC := $(UEFI_CC)
+bin/uefi/obj/%.c.o: %.c $(UEFI_DIR)/efi.h $(UEFI_DIR)/util.h \
 	$(UEFI_FLAG_STAMP)
 	@mkdir -p $(@D)
 	$(call cc, $(UEFI_CFLAGS), $@, $<)

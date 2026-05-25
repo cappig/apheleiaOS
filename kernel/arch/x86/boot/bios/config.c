@@ -1,6 +1,7 @@
 #include "config.h"
 
 #include <lib/boot.h>
+#include <log/log.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -98,20 +99,18 @@ static void handle_stage_rootfs(char *value, void *data) {
 }
 
 
-static const cfg_entry_t cfg_table[] = {
-    {"debug", handle_debug},
-    {"video", handle_video},
-    {"graphics.width", handle_vesa_width},
-    {"graphics.height", handle_vesa_height},
-    {"graphics.bpp", handle_vesa_bpp},
-    {"console", handle_console},
-    {"font", handle_font},
-    {"console.font", handle_font},
-    {"text.font", handle_font},
-    {"stage_rootfs", handle_stage_rootfs},
-    {"stage_roootfs", handle_stage_rootfs},
-    {NULL, NULL}
-};
+static const cfg_entry_t cfg_table[] = { { "debug", handle_debug },
+                                         { "video", handle_video },
+                                         { "graphics.width", handle_vesa_width },
+                                         { "graphics.height", handle_vesa_height },
+                                         { "graphics.bpp", handle_vesa_bpp },
+                                         { "console", handle_console },
+                                         { "font", handle_font },
+                                         { "console.font", handle_font },
+                                         { "text.font", handle_font },
+                                         { "stage_rootfs", handle_stage_rootfs },
+                                         { "stage_roootfs", handle_stage_rootfs },
+                                         { NULL, NULL } };
 
 
 void parse_config(kernel_args_t *args) {
@@ -128,7 +127,7 @@ void parse_config(kernel_args_t *args) {
     void *config = read_rootfs("/boot/loader.conf");
 
     if (!config) {
-        puts("/boot/loader.conf not found, using defaults\r\n");
+        log_warn("/boot/loader.conf not found, using defaults");
         return;
     }
 

@@ -2,12 +2,35 @@
 
 #include <base/attributes.h>
 #include <base/types.h>
+#include <lib/boot.h>
 #include <riscv/asm.h>
 #include <riscv/serial.h>
 #include <stdarg.h>
 #include <stdio.h>
 
 static uintptr_t tty_uart_base = SERIAL_UART0;
+static char boot_log_buf[BOOT_LOG_CAP];
+static size_t boot_log_len = 0;
+
+static void boot_log_putc(char c) {
+    if (boot_log_len >= BOOT_LOG_CAP) {
+        return;
+    }
+
+    boot_log_buf[boot_log_len++] = c;
+}
+
+const char *boot_log_buffer(size_t *len, size_t *cap) {
+    if (len) {
+        *len = boot_log_len;
+    }
+
+    if (cap) {
+        *cap = BOOT_LOG_CAP;
+    }
+
+    return boot_log_buf;
+}
 
 void tty_set_uart_base(uintptr_t base) {
     tty_uart_base = base;
@@ -17,7 +40,14 @@ int puts(const char *str) {
     int count = 0;
 
     while (*str) {
-        send_serial(tty_uart_base, *str++);
+        char c = *str++;
+
+        if (c == '\n') {
+            send_serial(tty_uart_base, '\r');
+        }
+
+        boot_log_putc(c);
+        send_serial(tty_uart_base, c);
         count++;
     }
 

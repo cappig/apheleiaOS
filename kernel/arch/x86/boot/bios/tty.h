@@ -8,8 +8,7 @@
 int printf(const char *fmt, ...);
 int puts(const char *str);
 
-int serial_printf(const char *fmt, ...);
-void serial_puts(const char *str);
+void tty_disable_bios_output(void);
 
 NORETURN void panic(const char *msg);
 

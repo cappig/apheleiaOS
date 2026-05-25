@@ -2,6 +2,7 @@
 
 #include <base/macros.h>
 #include <base/types.h>
+#include <common/elf.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -11,13 +12,11 @@
 #include "x86/asm.h"
 #include "x86/paging64.h"
 
-#include <common/elf.h>
-
 static page_t *lvl4;
 static bool nx_supported = false;
 
 static bool _cpu_has_nx(void) {
-    cpuid_regs_t regs = {0};
+    cpuid_regs_t regs = { 0 };
     cpuid(0x80000000, &regs);
 
     if (regs.eax < CPUID_EXTENDED_INFO) {
@@ -89,23 +88,13 @@ finalize:
     *entry |= (flags & FLAGS_MASK) | pat_huge;
 }
 
-void map_region_64(
-    size_t size,
-    u64 vaddr,
-    u64 paddr,
-    u64 flags,
-    bool is_kernel
-) {
+void map_region_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     size_t remaining = ALIGN(size, PAGE_4KIB);
 
     while (remaining) {
         size_t page_size = PAGE_4KIB;
 
-        if (
-            remaining >= PAGE_2MIB &&
-            (vaddr & (PAGE_2MIB - 1)) == 0 &&
-            (paddr & (PAGE_2MIB - 1)) == 0
-        ) {
+        if (remaining >= PAGE_2MIB && (vaddr & (PAGE_2MIB - 1)) == 0 && (paddr & (PAGE_2MIB - 1)) == 0) {
             page_size = PAGE_2MIB;
         }
 
@@ -181,19 +170,14 @@ static bool load_segment_64(const elf_segment_t *seg, void *ctx_ptr) {
     u64 size = ALIGN(seg->mem_size, PAGE_4KIB);
     u64 flags = _elf_to_page_flags(seg->flags);
 
-    u64 pbase =
-        (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, (size_t)seg->align);
+    u64 pbase = (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, (size_t)seg->align);
     u64 vbase = seg->vaddr;
 
     // Map the segment
     map_region_64(size, vbase, pbase, flags, true);
 
     // Copy all loadable data from the file
-    memcpy(
-        (void *)(uintptr_t)pbase,
-        (u8 *)load_ctx->elf + seg->offset,
-        (size_t)seg->file_size
-    );
+    memcpy((void *)(uintptr_t)pbase, (u8 *)load_ctx->elf + seg->offset, (size_t)seg->file_size);
 
     // Zero out any additional space
     size_t zero_len = (size_t)(seg->mem_size - seg->file_size);
@@ -206,7 +190,7 @@ u64 load_elf_sections_64(void *elf_file) {
     struct elf_load_ctx64 ctx = {
         .elf = elf_file,
     };
-    elf_info_t info = {0};
+    elf_info_t info = { 0 };
 
     if (!elf_foreach_segment(elf_file, 0, load_segment_64, &ctx, &info)) {
         return 0;

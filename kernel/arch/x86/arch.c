@@ -25,8 +25,8 @@
 #include <sys/pci.h>
 #include <sys/tty.h>
 #include <sys/usb.h>
-#include <x86/asm.h>
 #include <x86/apic.h>
+#include <x86/asm.h>
 #include <x86/boot.h>
 #include <x86/console.h>
 #include <x86/gdt.h>
@@ -41,19 +41,19 @@
 #include <x86/tsc.h>
 
 
-#define LOG_BOOT_HISTORY_CAP    (256 * 1024)
-#define BOOT_ROOTFS_SECTOR_SIZE 512
-#define CPUID_FEATURES          0x00000001
-#define CPUID_FEAT_EDX_FXSR     (1U << 24)
-#define CPUID_FEAT_EDX_SSE      (1U << 25)
+#define LOG_BOOT_HISTORY_CAP     (256 * 1024)
+#define BOOT_ROOTFS_SECTOR_SIZE  512
+#define CPUID_FEATURES           0x00000001
+#define CPUID_FEAT_EDX_FXSR      (1U << 24)
+#define CPUID_FEAT_EDX_SSE       (1U << 25)
 #define WALLCLOCK_RTC_RESYNC_SEC 60ULL
 
 static bool log_console_ready = false;
-static kernel_args_t boot_args = {0};
+static kernel_args_t boot_args = { 0 };
 static u64 boot_rootfs_paddr = 0;
 static size_t boot_rootfs_size = 0;
 static bool boot_rootfs_registered = false;
-static boot_root_hint_t boot_root_hint = {0};
+static boot_root_hint_t boot_root_hint = { 0 };
 static bool arch_fpu_fxsr = false;
 
 static char boot_log_history[LOG_BOOT_HISTORY_CAP];
@@ -92,14 +92,14 @@ typedef struct {
 
 static void FX_HELPER_ATTR _fxsave_unaligned(void *buf) {
     u8 bounce[512] __attribute__((aligned(16)));
-    asm volatile("fxsave %0" : "=m"(*(u8 (*)[512])bounce));
+    asm volatile("fxsave %0" : "=m"(*(u8(*)[512])bounce));
     memcpy(buf, bounce, sizeof(bounce));
 }
 
 static void FX_HELPER_ATTR _fxrstor_unaligned(const void *buf) {
     u8 bounce[512] __attribute__((aligned(16)));
     memcpy(bounce, buf, sizeof(bounce));
-    asm volatile("fxrstor %0" : : "m"(*(const u8 (*)[512])bounce));
+    asm volatile("fxrstor %0" : : "m"(*(const u8(*)[512])bounce));
 }
 
 
@@ -109,11 +109,7 @@ static void _log_history_append(const char *s, size_t len) {
     }
 
     if (len >= LOG_BOOT_HISTORY_CAP) {
-        memcpy(
-            boot_log_history,
-            s + (len - LOG_BOOT_HISTORY_CAP),
-            LOG_BOOT_HISTORY_CAP
-        );
+        memcpy(boot_log_history, s + (len - LOG_BOOT_HISTORY_CAP), LOG_BOOT_HISTORY_CAP);
         boot_log_history_len = LOG_BOOT_HISTORY_CAP;
         return;
     }
@@ -121,11 +117,7 @@ static void _log_history_append(const char *s, size_t len) {
     if (boot_log_history_len + len > LOG_BOOT_HISTORY_CAP) {
         size_t drop = (boot_log_history_len + len) - LOG_BOOT_HISTORY_CAP;
 
-        memmove(
-            boot_log_history,
-            boot_log_history + drop,
-            boot_log_history_len - drop
-        );
+        memmove(boot_log_history, boot_log_history + drop, boot_log_history_len - drop);
         boot_log_history_len -= drop;
     }
 
@@ -339,7 +331,7 @@ bool arch_supports_nx(void) {
     static bool has_nx = false;
 
     if (!checked) {
-        cpuid_regs_t regs = {0};
+        cpuid_regs_t regs = { 0 };
         cpuid(0x80000000, &regs);
 
         if (regs.eax >= CPUID_EXTENDED_INFO) {
@@ -373,7 +365,7 @@ static inline void _fxsave_buf(void *buf) {
     }
 
     if (((uintptr_t)buf & 0x0f) == 0) {
-        asm volatile("fxsave %0" : "=m"(*(u8 (*)[512])buf));
+        asm volatile("fxsave %0" : "=m"(*(u8(*)[512])buf));
         return;
     }
 
@@ -386,7 +378,7 @@ static inline void _fxrstor_buf(const void *buf) {
     }
 
     if (((uintptr_t)buf & 0x0f) == 0) {
-        asm volatile("fxrstor %0" : : "m"(*(const u8 (*)[512])buf));
+        asm volatile("fxrstor %0" : : "m"(*(const u8(*)[512])buf));
         return;
     }
 
@@ -406,7 +398,7 @@ void arch_fpu_init(void *buf) {
     }
 
     asm volatile("fninit");
-    asm volatile("fnsave %0" : "=m"(*(u8 (*)[108])buf));
+    asm volatile("fnsave %0" : "=m"(*(u8(*)[108])buf));
     asm volatile("fninit");
 }
 
@@ -420,7 +412,7 @@ void arch_fpu_save(void *buf) {
         return;
     }
 
-    asm volatile("fnsave %0" : "=m"(*(u8 (*)[108])buf));
+    asm volatile("fnsave %0" : "=m"(*(u8(*)[108])buf));
 }
 
 void arch_fpu_restore(const void *buf) {
@@ -433,7 +425,7 @@ void arch_fpu_restore(const void *buf) {
         return;
     }
 
-    asm volatile("frstor %0" : : "m"(*(const u8 (*)[108])buf));
+    asm volatile("frstor %0" : : "m"(*(const u8(*)[108])buf));
 }
 
 static char cpu_name[64] = "x86";
@@ -452,12 +444,12 @@ static void _trim_cpu_name(char *name) {
 }
 
 static void _detect_cpu_name(void) {
-    cpuid_regs_t regs = {0};
+    cpuid_regs_t regs = { 0 };
     cpuid(0x80000000, &regs);
 
     if (regs.eax >= 0x80000004) {
-        u32 brand[12] = {0};
-        cpuid_regs_t leaf = {0};
+        u32 brand[12] = { 0 };
+        cpuid_regs_t leaf = { 0 };
 
         cpuid(0x80000002, &leaf);
         brand[0] = leaf.eax;
@@ -487,7 +479,7 @@ static void _detect_cpu_name(void) {
     }
 
     cpuid(0x00000000, &regs);
-    u32 vendor[3] = {regs.ebx, regs.edx, regs.ecx};
+    u32 vendor[3] = { regs.ebx, regs.edx, regs.ecx };
     memcpy(cpu_name, vendor, sizeof(vendor));
 
     cpu_name[sizeof(vendor)] = '\0';
@@ -514,7 +506,7 @@ static void _select_log_level(const boot_info_t *info) {
 }
 
 static bool _cpu_has_fxsr_sse(void) {
-    cpuid_regs_t regs = {0};
+    cpuid_regs_t regs = { 0 };
     cpuid(CPUID_FEATURES, &regs);
 
     if (!(regs.edx & CPUID_FEAT_EDX_FXSR)) {
@@ -684,8 +676,8 @@ static void _page_fault_handler(int_state_t *state) {
 
         if (user_frame) {
             log_fatal(
-                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
-                " rip=%#" PRIx64 " rsp=%#" PRIx64 " cs=%#" PRIx64,
+                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " rip=%#" PRIx64 " rsp=%#" PRIx64
+                " cs=%#" PRIx64,
                 addr,
                 code,
                 cr3,
@@ -695,8 +687,8 @@ static void _page_fault_handler(int_state_t *state) {
             );
         } else {
             log_fatal(
-                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
-                " rip=%#" PRIx64 " ksp=%#" PRIx64 " cs=%#" PRIx64,
+                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " rip=%#" PRIx64 " ksp=%#" PRIx64
+                " cs=%#" PRIx64,
                 addr,
                 code,
                 cr3,
@@ -706,12 +698,7 @@ static void _page_fault_handler(int_state_t *state) {
             );
         }
     } else {
-        log_fatal(
-            "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
-            addr,
-            code,
-            cr3
-        );
+        log_fatal("page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
     }
 #else
     if (state) {
@@ -721,8 +708,8 @@ static void _page_fault_handler(int_state_t *state) {
 
         if (user_frame) {
             log_fatal(
-                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
-                " eip=%#" PRIx64 " esp=%#" PRIx64 " cs=%#" PRIx64,
+                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " eip=%#" PRIx64 " esp=%#" PRIx64
+                " cs=%#" PRIx64,
                 addr,
                 code,
                 cr3,
@@ -732,8 +719,8 @@ static void _page_fault_handler(int_state_t *state) {
             );
         } else {
             log_fatal(
-                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64
-                " eip=%#" PRIx64 " ksp=%#" PRIx64 " cs=%#" PRIx64,
+                "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64 " eip=%#" PRIx64 " ksp=%#" PRIx64
+                " cs=%#" PRIx64,
                 addr,
                 code,
                 cr3,
@@ -743,12 +730,7 @@ static void _page_fault_handler(int_state_t *state) {
             );
         }
     } else {
-        log_fatal(
-            "page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64,
-            addr,
-            code,
-            cr3
-        );
+        log_fatal("page fault addr=%#" PRIx64 " err=%#" PRIx64 " cr3=%#" PRIx64, addr, code, cr3);
     }
 #endif
 
@@ -772,13 +754,7 @@ static void _gp_fault_handler(int_state_t *state) {
         u64 rip = state->s_regs.rip;
         u64 cs = state->s_regs.cs;
 
-        log_fatal(
-            "general protection fault err=%#" PRIx64 " rip=%#" PRIx64
-            " cs=%#" PRIx64,
-            code,
-            rip,
-            cs
-        );
+        log_fatal("general protection fault err=%#" PRIx64 " rip=%#" PRIx64 " cs=%#" PRIx64, code, rip, cs);
     } else {
         log_fatal("general protection fault err=%#" PRIx64, code);
     }
@@ -787,13 +763,7 @@ static void _gp_fault_handler(int_state_t *state) {
         u64 eip = state->s_regs.eip;
         u64 cs = state->s_regs.cs;
 
-        log_fatal(
-            "general protection fault err=%#" PRIx64 " eip=%#" PRIx64
-            " cs=%#" PRIx64,
-            code,
-            eip,
-            cs
-        );
+        log_fatal("general protection fault err=%#" PRIx64 " eip=%#" PRIx64 " cs=%#" PRIx64, code, eip, cs);
     } else {
         log_fatal("general protection fault err=%#" PRIx64, code);
     }
@@ -835,18 +805,10 @@ static void _invalid_opcode_handler(int_state_t *state) {
         uintptr_t stack_base = (uintptr_t)current->stack;
         uintptr_t stack_end = stack_base + current->stack_size;
         uintptr_t ctx_ptr = current->context;
-        size_t kernel_frame_need =
-            offsetof(arch_int_state_t, s_regs) + (3U * sizeof(arch_word_t));
-        if (
-            current->context &&
-            arch_kernel_stack_valid(current) &&
-            stack_end >= stack_base &&
-            ctx_ptr >= stack_base &&
-            ctx_ptr < stack_end &&
-            (size_t)(stack_end - ctx_ptr) >= kernel_frame_need
-        ) {
-            const arch_int_state_t *ctx =
-                (const arch_int_state_t *)(uintptr_t)current->context;
+        size_t kernel_frame_need = offsetof(arch_int_state_t, s_regs) + (3U * sizeof(arch_word_t));
+        if (current->context && arch_kernel_stack_valid(current) && stack_end >= stack_base && ctx_ptr >= stack_base &&
+            ctx_ptr < stack_end && (size_t)(stack_end - ctx_ptr) >= kernel_frame_need) {
+            const arch_int_state_t *ctx = (const arch_int_state_t *)(uintptr_t)current->context;
             ctx_ip = ctx->s_regs.rip;
             ctx_cs = ctx->s_regs.cs;
         }
@@ -856,26 +818,17 @@ static void _invalid_opcode_handler(int_state_t *state) {
         uintptr_t stack_base = (uintptr_t)current->stack;
         uintptr_t stack_end = stack_base + current->stack_size;
         uintptr_t ctx_ptr = current->context;
-        size_t kernel_frame_need =
-            offsetof(arch_int_state_t, s_regs) + (3U * sizeof(arch_word_t));
-        if (
-            current->context &&
-            arch_kernel_stack_valid(current) &&
-            stack_end >= stack_base &&
-            ctx_ptr >= stack_base &&
-            ctx_ptr < stack_end &&
-            (size_t)(stack_end - ctx_ptr) >= kernel_frame_need
-        ) {
-            const arch_int_state_t *ctx =
-                (const arch_int_state_t *)(uintptr_t)current->context;
+        size_t kernel_frame_need = offsetof(arch_int_state_t, s_regs) + (3U * sizeof(arch_word_t));
+        if (current->context && arch_kernel_stack_valid(current) && stack_end >= stack_base && ctx_ptr >= stack_base &&
+            ctx_ptr < stack_end && (size_t)(stack_end - ctx_ptr) >= kernel_frame_need) {
+            const arch_int_state_t *ctx = (const arch_int_state_t *)(uintptr_t)current->context;
             ctx_ip = ctx->s_regs.eip;
             ctx_cs = ctx->s_regs.cs;
         }
 #endif
 
         log_fatal(
-            "current thread pid=%d name=%s context=%#" PRIx64
-            " stack=%#" PRIx64 " stack_size=%zu cpu=%d state=%d"
+            "current thread pid=%d name=%s context=%#" PRIx64 " stack=%#" PRIx64 " stack_size=%zu cpu=%d state=%d"
             " ctx_ip=%#" PRIx64 " ctx_cs=%#" PRIx64,
             current->pid,
             current->name,
@@ -917,7 +870,7 @@ static void _invalid_opcode_handler(int_state_t *state) {
 }
 
 static void _publish_framebuffer(const boot_info_t *info) {
-    framebuffer_info_t fb = {0};
+    framebuffer_info_t fb = { 0 };
 
     if (!info || info->video.mode != VIDEO_GRAPHICS || !info->video.framebuffer) {
         framebuffer_set_info(NULL);
@@ -960,8 +913,7 @@ static void _publish_framebuffer(const boot_info_t *info) {
     framebuffer_set_info(&fb);
 }
 
-static ssize_t
-_boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, size_t bytes) {
+static ssize_t _boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, size_t bytes) {
     if (!dev || !dest || !dev->private) {
         return -1;
     }
@@ -991,8 +943,7 @@ _boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, size_t bytes) {
     return (ssize_t)bytes;
 }
 
-static ssize_t
-_boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, size_t bytes) {
+static ssize_t _boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, size_t bytes) {
     if (!dev || !src || !dev->private) {
         return -1;
     }
@@ -1059,36 +1010,32 @@ static bool _register_boot_rootfs(void) {
     }
 
     boot_rootfs_registered = true;
-    log_info(
-        "registered /dev/%s from boot image (%zu KiB)",
-        disk->name,
-        rootfs->size / 1024
-    );
+    log_info("registered /dev/%s from boot image (%zu KiB)", disk->name, rootfs->size / 1024);
 
     return true;
 }
 
-static void _set_boot_rootfs_uuid_preference(void) {
+static void set_boot_root_uuid(void) {
     if (boot_root_hint.valid && boot_root_hint.rootfs_uuid_valid) {
-        disk_set_preferred_rootfs_uuid(boot_root_hint.rootfs_uuid);
+        disk_set_root_uuid(boot_root_hint.rootfs_uuid);
         return;
     }
 
     if (!boot_rootfs_paddr || !boot_rootfs_size) {
-        disk_clear_preferred_rootfs_uuid();
+        disk_clear_root_uuid();
         return;
     }
 
     if (boot_rootfs_size < sizeof(ext2_superblock_t) + 1024) {
-        disk_clear_preferred_rootfs_uuid();
+        disk_clear_root_uuid();
         return;
     }
 
-    ext2_superblock_t sb = {0};
+    ext2_superblock_t sb = { 0 };
     void *map = arch_phys_map(boot_rootfs_paddr + 1024, sizeof(sb), 0);
 
     if (!map) {
-        disk_clear_preferred_rootfs_uuid();
+        disk_clear_root_uuid();
         return;
     }
 
@@ -1096,11 +1043,11 @@ static void _set_boot_rootfs_uuid_preference(void) {
     arch_phys_unmap(map, sizeof(sb));
 
     if (sb.signature != EXT2_SIGNATURE) {
-        disk_clear_preferred_rootfs_uuid();
+        disk_clear_root_uuid();
         return;
     }
 
-    disk_set_preferred_rootfs_uuid(sb.fs_id);
+    disk_set_root_uuid(sb.fs_id);
 }
 
 static void _set_boot_disk_hint(void) {
@@ -1149,11 +1096,7 @@ const kernel_args_t *arch_init(void *boot_info) {
     bool rootfs_reserved = false;
 
     if (staged_rootfs) {
-        rootfs_reserved = _e820_range_reserved(
-            &info->memory_map,
-            boot_rootfs_paddr,
-            boot_rootfs_size
-        );
+        rootfs_reserved = _e820_range_reserved(&info->memory_map, boot_rootfs_paddr, boot_rootfs_size);
     }
 
     if (staged_rootfs && !rootfs_reserved) {
@@ -1173,11 +1116,7 @@ const kernel_args_t *arch_init(void *boot_info) {
 #endif
 
     if (boot_rootfs_paddr && boot_rootfs_size) {
-        log_info(
-            "staged rootfs at %#" PRIx64 " (%zu KiB)",
-            boot_rootfs_paddr,
-            boot_rootfs_size / 1024
-        );
+        log_info("staged rootfs at %#" PRIx64 " (%zu KiB)", boot_rootfs_paddr, boot_rootfs_size / 1024);
     }
 
     _route_irqs_to_pic();
@@ -1257,7 +1196,7 @@ void arch_smp_init(void) {
 
 void arch_storage_init(void) {
     _set_boot_disk_hint();
-    _set_boot_rootfs_uuid_preference();
+    set_boot_root_uuid();
 
     if (!usb_core_init()) {
         log_warn("USB core init failed");
@@ -1320,7 +1259,7 @@ void *arch_cpu_get_local(void) {
         return core;
     }
 
-    cpuid_regs_t regs = {0};
+    cpuid_regs_t regs = { 0 };
     cpuid(1, &regs);
     u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
     u32 live_apic_id = lapic_id();
@@ -1342,7 +1281,7 @@ void *arch_cpu_get_local(void) {
         }
     }
 
-    cpuid_regs_t regs = {0};
+    cpuid_regs_t regs = { 0 };
     cpuid(1, &regs);
     u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
     u32 live_apic_id = lapic_id();
@@ -1370,10 +1309,7 @@ bool arch_current_cpu_id(size_t *out) {
 
 #if defined(__x86_64__)
     cpu_core_t *local_core = (cpu_core_t *)arch_cpu_get_local();
-    if (
-        _cpu_ptr_is_core_local(local_core) && local_core->valid &&
-        local_core->id < MAX_CORES
-    ) {
+    if (_cpu_ptr_is_core_local(local_core) && local_core->valid && local_core->id < MAX_CORES) {
         *out = local_core->id;
         return true;
     }
@@ -1388,7 +1324,7 @@ bool arch_current_cpu_id(size_t *out) {
     }
 #endif
 
-    cpuid_regs_t regs = {0};
+    cpuid_regs_t regs = { 0 };
     cpuid(1, &regs);
     u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
     u32 live_apic_id = lapic_id();
@@ -1444,14 +1380,12 @@ void arch_cpu_wait(void) {
         return;
     }
 
-    asm volatile(
-        "sti\n"
-        "hlt\n"
-        "cli"
-        :
-        :
-        : "memory", "cc"
-    );
+    asm volatile("sti\n"
+                 "hlt\n"
+                 "cli"
+                 :
+                 :
+                 : "memory", "cc");
 }
 
 void arch_cpu_relax(void) {
@@ -1486,16 +1420,12 @@ static void _wallclock_try_rtc_sync(u64 now_ticks, bool force) {
         return;
     }
 
-    u64 base_seconds =
-        __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
-    u64 base_ticks =
-        __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
-    u64 last_sync =
-        __atomic_load_n(&wallclock_last_sync_ticks, __ATOMIC_ACQUIRE);
+    u64 base_seconds = __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
+    u64 base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
+    u64 last_sync = __atomic_load_n(&wallclock_last_sync_ticks, __ATOMIC_ACQUIRE);
     u64 sync_interval = hz * WALLCLOCK_RTC_RESYNC_SEC;
 
-    if (!force && base_seconds && last_sync && now_ticks >= last_sync &&
-        (now_ticks - last_sync) < sync_interval) {
+    if (!force && base_seconds && last_sync && now_ticks >= last_sync && (now_ticks - last_sync) < sync_interval) {
         return;
     }
 
@@ -1539,10 +1469,8 @@ static u64 _wallclock_seconds_from_ticks(u64 now_ticks, u64 hz) {
         return 0;
     }
 
-    u64 base_seconds =
-        __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
-    u64 base_ticks =
-        __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
+    u64 base_seconds = __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
+    u64 base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
 
     if (!base_seconds) {
         _wallclock_try_rtc_sync(now_ticks, true);
@@ -1572,10 +1500,8 @@ u64 arch_realtime_ns(void) {
 
     u64 now_ticks = arch_timer_ticks();
     u64 seconds = _wallclock_seconds_from_ticks(now_ticks, hz);
-    u64 base_seconds =
-        __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
-    u64 base_ticks =
-        __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
+    u64 base_seconds = __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
+    u64 base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
 
     u64 delta_ns = 0;
     if (now_ticks >= base_ticks) {
@@ -1634,8 +1560,7 @@ void arch_set_kernel_stack(uintptr_t sp) {
 }
 
 #if defined(__i386__)
-NORETURN void
-arch_context_switch_bad_frame(uintptr_t ctx, u32 eip, u32 cs) {
+NORETURN void arch_context_switch_bad_frame(uintptr_t ctx, u32 eip, u32 cs) {
     sched_thread_t *current = sched_is_running() ? sched_current() : NULL;
     panic(
         "bad i386 kernel return frame ctx=%#lx eip=%#x cs=%#x"

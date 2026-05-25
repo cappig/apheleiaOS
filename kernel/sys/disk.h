@@ -4,7 +4,6 @@
 #include <base/types.h>
 #include <data/tree.h>
 #include <data/vector.h>
-
 #include <sys/types.h>
 
 
@@ -99,12 +98,7 @@ struct fs_interface {
     bool (*destroy_tree)(fs_instance_t *instance);
 
     bool (*chmod)(fs_instance_t *instance, vfs_node_t *node, mode_t mode);
-    bool (*chown)(
-        fs_instance_t *instance,
-        vfs_node_t *node,
-        uid_t uid,
-        gid_t gid
-    );
+    bool (*chown)(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid);
     void (*destroy_node)(fs_instance_t *instance, vfs_node_t *node);
 
     // mkdir
@@ -143,15 +137,11 @@ fs_t *file_system_lookup(const char *name);
 
 bool mount_rootfs(void);
 bool disk_publish_devices(void);
-bool disk_mount_partition_node(
-    vfs_node_t *source,
-    vfs_node_t *target,
-    const char *fs_name
-);
+bool disk_mount_partition_node(vfs_node_t *source, vfs_node_t *target, const char *fs_name);
 bool disk_unmount_node(vfs_node_t *target, bool destroy_tree);
 
-void disk_set_preferred_rootfs_uuid(const u8 uuid[16]);
-void disk_clear_preferred_rootfs_uuid(void);
+void disk_set_root_uuid(const u8 uuid[16]);
+void disk_clear_root_uuid(void);
 void disk_set_boot_hint(const disk_boot_hint_t *hint);
 void disk_clear_boot_hint(void);
 
