@@ -7,4 +7,5 @@ docker_image:
 .PHONY: docker_build
 docker_build: docker_image utils/docker_build.sh
 	@utils/docker_build.sh "$(DOCKER_IMAGE)" "$(CURDIR)" "make" \
-		"$(ARCH)" "$(TOOLCHAIN)" "$(IMAGE_FORMAT)" "$(PROFILE)"
+		"$(ARCH)" "$(TOOLCHAIN)" "$(IMAGE_FORMAT)" "$(PROFILE)" \
+		"$(RISCV_FRISC)" "$(RISCV_UART_STRIDE)"

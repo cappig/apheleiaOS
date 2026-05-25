@@ -219,13 +219,13 @@ int main(void) {
         snprintf(
             cpu_line,
             sizeof(cpu_line),
-            "cpu: %s (%llu cores) @ %llu MHz",
+            "cpu: %s (%llu) @ %llu MHz",
             model_clean,
             ncpu,
             freq_khz / 1000
         );
     } else {
-        snprintf(cpu_line, sizeof(cpu_line), "cpu: %s (%llu cores)", cpu_model, ncpu);
+        snprintf(cpu_line, sizeof(cpu_line), "cpu: %s (%llu)", cpu_model, ncpu);
     }
 
     fill_separator(sep, sizeof(sep), strlen(user_at));

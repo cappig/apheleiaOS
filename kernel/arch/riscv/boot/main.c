@@ -40,6 +40,14 @@ extern char __image_start;
 #define RISCV_BOOT_FORCE_NO_DTB 0
 #endif
 
+#ifndef RISCV_FRISC
+#define RISCV_FRISC 0
+#endif
+
+#ifndef RISCV_BOOT_PLATFORM_DTB
+#define RISCV_BOOT_PLATFORM_DTB "/boot/platform.dtb"
+#endif
+
 #ifndef RISCV_BOOT_IMAGE_BASE_OVERRIDE
 #define RISCV_BOOT_IMAGE_BASE_OVERRIDE 0ULL
 #endif
@@ -341,6 +349,20 @@ static uintptr_t detect_uart_base(const void *dtb) {
     return SERIAL_UART0;
 }
 
+static uintptr_t detect_uart_stride(const void *dtb) {
+    if (!dtb || !fdt_valid(dtb)) {
+        return RISCV_UART_STRIDE;
+    }
+
+    u32 shift = 0;
+    if (fdt_find_compatible_u32(dtb, "ns16550a", "reg-shift", &shift) &&
+        shift <= 3U) {
+        return (uintptr_t)1 << shift;
+    }
+
+    return RISCV_UART_STRIDE;
+}
+
 static fdt_reg_t detect_memory(const void *dtb) {
     fdt_reg_t reg = {
         .addr = RISCV_KERNEL_BASE,
@@ -433,8 +455,9 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     }
 
     boot_ext2_t rootfs = {0};
-    const void *boot_dtb = sanitize_dtb_ptr(dtb);
-    bool dtb_valid = boot_dtb != NULL;
+    const void *entry_dtb = sanitize_dtb_ptr(dtb);
+    const void *boot_dtb = RISCV_FRISC ? NULL : entry_dtb;
+    bool dtb_valid = entry_dtb != NULL;
     size_t dtb_size = boot_dtb ? fdt_size(boot_dtb) : 0;
     fdt_reg_t initrd_reg = {0};
 
@@ -451,17 +474,20 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
 
     fdt_reg_t memory_reg = detect_memory(boot_dtb);
     uintptr_t uart_base = detect_uart_base(boot_dtb);
+    uintptr_t uart_stride = detect_uart_stride(boot_dtb);
     uintptr_t heap_start = (uintptr_t)&__stack_top;
     uintptr_t memory_end = (uintptr_t)(memory_reg.addr + memory_reg.size);
     uintptr_t scratch_base = (uintptr_t)(memory_reg.addr + RISCV_BOOT_SCRATCH_OFFSET);
 
+    serial_set_reg_stride(uart_stride);
     tty_set_uart_base(uart_base);
 
     boot_logf(
-        "entry: hart=%lu dtb=%#lx valid=%s size=%zu",
+        "entry: hart=%lu dtb=%#lx valid=%s active=%s size=%zu",
         (unsigned long)hartid,
         (unsigned long)(uintptr_t)dtb,
         dtb_valid ? "yes" : "no",
+        boot_dtb ? "yes" : "no",
         dtb_size
     );
     boot_logf(
@@ -471,12 +497,13 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         (unsigned long)memory_end
     );
     boot_logf(
-        "layout: image=%#lx rootfs=%#lx stack_top=%#lx scratch=%#lx uart=%#lx",
+        "layout: image=%#lx rootfs=%#lx stack_top=%#lx scratch=%#lx uart=%#lx stride=%lu",
         (unsigned long)image_base,
         (unsigned long)(uintptr_t)embedded_rootfs,
         (unsigned long)(uintptr_t)&__stack_top,
         (unsigned long)scratch_base,
-        (unsigned long)uart_base
+        (unsigned long)uart_base,
+        (unsigned long)uart_stride
     );
 
     if (scratch_base > heap_start) {
@@ -602,6 +629,32 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         rootfs.superblock.block_count,
         rootfs.size / 1024
     );
+
+    if (RISCV_FRISC) {
+        size_t platform_dtb_size = 0;
+        void *platform_dtb = boot_ext2_read_file(
+            &rootfs,
+            RISCV_BOOT_PLATFORM_DTB,
+            &platform_dtb_size
+        );
+
+        if (platform_dtb && fdt_valid(platform_dtb)) {
+            boot_dtb = platform_dtb;
+            dtb_size = fdt_size(platform_dtb);
+
+            boot_logf(
+                "dtb: loaded %s size=%zu",
+                RISCV_BOOT_PLATFORM_DTB,
+                dtb_size
+            );
+        } else {
+            if (platform_dtb) {
+                free(platform_dtb);
+            }
+
+            boot_logf("dtb: %s unavailable", RISCV_BOOT_PLATFORM_DTB);
+        }
+    }
 
 #if __riscv_xlen == 64
     const char *kernel_path = boot_kernel_path(true);

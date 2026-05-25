@@ -10,6 +10,9 @@
 #define RISCV_UART_STRIDE 1
 #endif
 
+void serial_set_reg_stride(uintptr_t stride);
+uintptr_t serial_reg_stride(void);
+
 void send_serial(uintptr_t base, char c);
 char receive_serial(uintptr_t base);
 bool serial_try_receive(uintptr_t base, char *out);

@@ -178,7 +178,7 @@ USER_STAGE_USR_NO_HEADERS_STAMP := $(USER_STAGE_USR_DIR)/.apheleia_no_headers
 $(USER_USR_LIBC_A): $(USER_LIBC_OBJ)
 	@mkdir -p $(@D)
 	@rm -f $@
-	@ar rcs $@ $^
+	@$(AR) rcs $@ $^
 
 $(USER_USR_CRT1_OBJ): $(USER_CRT_OBJ)
 	@mkdir -p $(@D)

@@ -7,6 +7,7 @@ RUN apk add --no-cache \
     binutils-riscv-none-elf~2 \
     clang18~18 \
     curl~8 \
+    dtc~1 \
     gcc~13 \
     gcc-riscv-none-elf~14 \
     git~2 \

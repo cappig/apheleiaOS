@@ -914,6 +914,20 @@ static void _relocate_boot_dtb(boot_info_t *info, uintptr_t *reserved_end) {
     *reserved_end = next;
 }
 
+static uintptr_t _uart_stride_from_dtb(const void *dtb) {
+    if (!dtb || !fdt_valid(dtb)) {
+        return RISCV_UART_STRIDE;
+    }
+
+    u32 shift = 0;
+    if (fdt_find_compatible_u32(dtb, "ns16550a", "reg-shift", &shift) &&
+        shift <= 3U) {
+        return (uintptr_t)1 << shift;
+    }
+
+    return RISCV_UART_STRIDE;
+}
+
 const kernel_args_t *arch_init(void *boot_info_ptr) {
     boot_info_t *info = boot_info_ptr;
     if (!info) {
@@ -941,6 +955,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     boot.rootfs_size = info->boot_rootfs_size <= (u64)(size_t)-1
         ? (size_t)info->boot_rootfs_size : 0;
 
+    serial_set_reg_stride(_uart_stride_from_dtb(boot.dtb));
     uart_console_set_base(uart_phys);
     log_init(_log_puts);
     log_set_lvl(info->args.debug == DEBUG_NONE ? LOG_INFO : LOG_DEBUG);
@@ -972,8 +987,10 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     log_debug(
-        "UART phys=%#lx irq=%u stride=%d",
-        (unsigned long)uart_phys, (unsigned int)uart_irq, RISCV_UART_STRIDE
+        "UART phys=%#lx irq=%u stride=%lu",
+        (unsigned long)uart_phys,
+        (unsigned int)uart_irq,
+        (unsigned long)serial_reg_stride()
     );
 
     mmio.count = 0;

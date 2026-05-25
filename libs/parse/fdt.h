@@ -46,6 +46,13 @@ bool fdt_find_compatible_irq(
     u32 *out
 );
 
+bool fdt_find_compatible_u32(
+    const void *dtb,
+    const char *compatible,
+    const char *property,
+    u32 *out
+);
+
 bool fdt_find_initrd(const void *dtb, fdt_reg_t *out);
 bool fdt_find_timebase_frequency(const void *dtb, u64 *out);
 bool fdt_find_model(const void *dtb, char *out, size_t out_len);

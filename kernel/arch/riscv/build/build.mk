@@ -59,13 +59,24 @@ BOOT_ENTRY_ELF     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.elf
 BOOT_ENTRY_BIN     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.bin
 ROOTFS_IMAGE       := bin/$(IMAGE_NAME).rootfs.img
 
+RISCV_UART0   := 0x10000000UL
+RISCV_FRISC   ?= false
+
+ifeq ($(RISCV_FRISC),true)
+RISCV_UART_STRIDE ?= 4
+else
+RISCV_UART_STRIDE ?= 1
+endif
+
 # The embedded rootfs sits at this byte offset inside the flat image.
-# The boot stub must fit below it; the kernel loads above it.
+# FRISC keeps its DTB in /boot/platform.dtb; the boot stub uses board defaults
+# only long enough to read that file from the rootfs.
 RISCV_BOOT_IMAGE_ROOTFS_OFFSET := 1441792
 RISCV_BOOT_SCRATCH_OFFSET      := 50331648
 
-RISCV_UART0        := 0x10000000UL
-RISCV_UART_STRIDE  ?= 1
+RISCV_FRISC_DTS        := $(ARCH_DIR)/dts/friscv.dts
+RISCV_FRISC_DTB        := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
+RISCV_PLATFORM_DTB     := /boot/platform.dtb
 
 RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr -mabi=lp64
 RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr -mabi=ilp32
@@ -102,6 +113,12 @@ BOOT_ENTRY_CFLAGS_COMMON := \
 	-DSERIAL_UART0=$(RISCV_UART0) \
 	-DRISCV_UART_STRIDE=$(RISCV_UART_STRIDE) \
 	-mcmodel=medany
+
+ifeq ($(RISCV_FRISC),true)
+BOOT_ENTRY_CFLAGS_COMMON += \
+	-DRISCV_FRISC=1 \
+	-DRISCV_BOOT_PLATFORM_DTB=\"$(RISCV_PLATFORM_DTB)\"
+endif
 
 ifeq ($(RISCV_BOOT_FORCE_NO_DTB), true)
 BOOT_ENTRY_CFLAGS_COMMON += -DRISCV_BOOT_FORCE_NO_DTB=1
@@ -190,9 +207,27 @@ IMAGE_SCRIPT_DEPS := \
 
 IMAGE_ROOT_DEPS := $(shell find root -type f -o -type l)
 
-$(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
+$(RISCV_FRISC_DTB): $(RISCV_FRISC_DTS)
+	@mkdir -p $(@D)
+	@command -v dtc >/dev/null 2>&1 || { \
+		echo "dtc is required for RISCV_FRISC=true"; \
+		exit 1; \
+	}
+	@dtc -I dts -O dtb -o $@ $<
+	@printf "%-3s  %s\n" "DTB" "$@"
+
+ifeq ($(RISCV_FRISC),true)
+RISCV_ROOTFS_DTB_DEPS := $(RISCV_FRISC_DTB)
+endif
+
+$(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) \
+	$(IMAGE_ROOT_DEPS) $(RISCV_ROOTFS_DTB_DEPS)
 	@utils/stage_image.sh "$(IMAGE_STAGE_DIR)" "$(IMAGE_BOOT_DIR)" \
 		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root" riscv
+ifeq ($(RISCV_FRISC),true)
+	@cp -f "$(RISCV_FRISC_DTB)" "$(IMAGE_STAGE_DIR)$(RISCV_PLATFORM_DTB)"
+	@printf "%-3s  %s\n" "DTB" "$(IMAGE_STAGE_DIR)$(RISCV_PLATFORM_DTB)"
+endif
 	@python3 kernel/arch/riscv/build/build_riscv_disk_image.py $@ $(IMAGE_STAGE_DIR)
 	@printf "%-3s  %s\n" "IM" "$@"
 

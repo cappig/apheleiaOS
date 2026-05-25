@@ -1,4 +1,5 @@
 AS := nasm
+AR := ar
 OC := objcopy
 ST := strip
 
@@ -7,9 +8,9 @@ gcc_tool  = $(shell utils/gcc_tool.sh "$(strip $(1))" $(2) $(3))
 riscv_gcc = $(shell utils/pick_riscv_gcc.sh $(1) $(2) $(3))
 
 GNU_CC_CANDIDATES_x86_64   := x86_64-elf-gcc x86_64-linux-gnu-gcc gcc
-GNU_CC_CANDIDATES_x86_32   := i686-elf-gcc i386-elf-gcc i686-linux-gnu-gcc i386-linux-gnu-gcc
+GNU_CC_CANDIDATES_x86_32   := i686-elf-gcc i386-elf-gcc i686-linux-gnu-gcc i386-linux-gnu-gcc gcc
 GNU_CC_CANDIDATES_riscv_64 := riscv64-unknown-elf-gcc riscv-none-elf-gcc riscv64-elf-gcc
-GNU_CC_CANDIDATES_riscv_32 := $(GNU_CC_CANDIDATES_riscv_64)
+GNU_CC_CANDIDATES_riscv_32 := riscv32-unknown-elf-gcc riscv32-elf-gcc $(GNU_CC_CANDIDATES_riscv_64)
 
 # Per-arch, per-toolchain tool overrides. Defaults are resolved from common
 # bare-metal and distro names; callers can still pass GNU_CC_x86_32=/path/gcc.
@@ -36,7 +37,20 @@ ifndef GNU_LD_riscv_64
 GNU_LD_riscv_64 := $(call gcc_tool,$(GNU_CC_riscv_64),ld,riscv64-unknown-elf-ld riscv64-elf-ld riscv-none-elf-ld)
 endif
 ifndef GNU_LD_riscv_32
-GNU_LD_riscv_32 := $(call gcc_tool,$(GNU_CC_riscv_32),ld,riscv64-unknown-elf-ld riscv64-elf-ld riscv-none-elf-ld)
+GNU_LD_riscv_32 := $(call gcc_tool,$(GNU_CC_riscv_32),ld,riscv32-unknown-elf-ld riscv32-elf-ld riscv64-unknown-elf-ld riscv64-elf-ld riscv-none-elf-ld)
+endif
+
+ifndef GNU_AR_x86_64
+GNU_AR_x86_64 := $(call gcc_tool,$(GNU_CC_x86_64),ar,x86_64-elf-ar x86_64-linux-gnu-ar ar)
+endif
+ifndef GNU_AR_x86_32
+GNU_AR_x86_32 := $(call gcc_tool,$(GNU_CC_x86_32),ar,i686-elf-ar i386-elf-ar i686-linux-gnu-ar i386-linux-gnu-ar ar)
+endif
+ifndef GNU_AR_riscv_64
+GNU_AR_riscv_64 := $(call gcc_tool,$(GNU_CC_riscv_64),ar,riscv64-unknown-elf-ar riscv64-elf-ar riscv-none-elf-ar)
+endif
+ifndef GNU_AR_riscv_32
+GNU_AR_riscv_32 := $(call gcc_tool,$(GNU_CC_riscv_32),ar,riscv32-unknown-elf-ar riscv32-elf-ar riscv64-unknown-elf-ar riscv64-elf-ar riscv-none-elf-ar)
 endif
 
 ifndef GNU_OC_x86_64
@@ -49,7 +63,7 @@ ifndef GNU_OC_riscv_64
 GNU_OC_riscv_64 := $(call gcc_tool,$(GNU_CC_riscv_64),objcopy,riscv64-unknown-elf-objcopy riscv64-elf-objcopy riscv-none-elf-objcopy)
 endif
 ifndef GNU_OC_riscv_32
-GNU_OC_riscv_32 := $(call gcc_tool,$(GNU_CC_riscv_32),objcopy,riscv64-unknown-elf-objcopy riscv64-elf-objcopy riscv-none-elf-objcopy)
+GNU_OC_riscv_32 := $(call gcc_tool,$(GNU_CC_riscv_32),objcopy,riscv32-unknown-elf-objcopy riscv32-elf-objcopy riscv64-unknown-elf-objcopy riscv64-elf-objcopy riscv-none-elf-objcopy)
 endif
 
 ifndef GNU_ST_x86_64
@@ -62,24 +76,28 @@ ifndef GNU_ST_riscv_64
 GNU_ST_riscv_64 := $(call gcc_tool,$(GNU_CC_riscv_64),strip,riscv64-unknown-elf-strip riscv64-elf-strip riscv-none-elf-strip)
 endif
 ifndef GNU_ST_riscv_32
-GNU_ST_riscv_32 := $(call gcc_tool,$(GNU_CC_riscv_32),strip,riscv64-unknown-elf-strip riscv64-elf-strip riscv-none-elf-strip)
+GNU_ST_riscv_32 := $(call gcc_tool,$(GNU_CC_riscv_32),strip,riscv32-unknown-elf-strip riscv32-elf-strip riscv64-unknown-elf-strip riscv64-elf-strip riscv-none-elf-strip)
 endif
 
+LLVM_AR_x86_64   ?= $(call pick_tool,llvm-ar ar)
 LLVM_CC_x86_64   ?= clang
 LLVM_LD_x86_64   ?= ld.lld
 LLVM_OC_x86_64   ?= llvm-objcopy
 LLVM_ST_x86_64   ?= llvm-strip
 
+LLVM_AR_x86_32   ?= $(call pick_tool,llvm-ar ar)
 LLVM_CC_x86_32   ?= clang
 LLVM_LD_x86_32   ?= ld.lld
 LLVM_OC_x86_32   ?= llvm-objcopy
 LLVM_ST_x86_32   ?= llvm-strip
 
+LLVM_AR_riscv_64 ?= $(call pick_tool,llvm-ar ar)
 LLVM_CC_riscv_64 ?= clang --target=riscv64-unknown-elf
 LLVM_LD_riscv_64 ?= ld.lld
 LLVM_OC_riscv_64 ?= llvm-objcopy
 LLVM_ST_riscv_64 ?= llvm-strip
 
+LLVM_AR_riscv_32 ?= $(call pick_tool,llvm-ar ar)
 LLVM_CC_riscv_32 ?= clang --target=riscv32-unknown-elf
 LLVM_LD_riscv_32 ?= ld.lld
 LLVM_OC_riscv_32 ?= llvm-objcopy
@@ -88,11 +106,13 @@ LLVM_ST_riscv_32 ?= llvm-strip
 ifneq ($(ARCH),)
 
 ifeq ($(TOOLCHAIN), gnu)
+AR := $(GNU_AR_$(ARCH))
 CC := $(GNU_CC_$(ARCH))
 LD := $(GNU_LD_$(ARCH))
 OC := $(GNU_OC_$(ARCH))
 ST := $(GNU_ST_$(ARCH))
 else ifeq ($(TOOLCHAIN), llvm)
+AR := $(LLVM_AR_$(ARCH))
 CC := $(LLVM_CC_$(ARCH))
 LD := $(LLVM_LD_$(ARCH))
 OC := $(LLVM_OC_$(ARCH))
@@ -102,10 +122,13 @@ $(error Unsupported TOOLCHAIN '$(TOOLCHAIN)')
 endif
 
 ifeq ($(strip $(CC)),)
-$(error Unsupported ARCH '$(ARCH)' for TOOLCHAIN '$(TOOLCHAIN)')
+$(error Missing compiler for ARCH '$(ARCH)' and TOOLCHAIN '$(TOOLCHAIN)')
 endif
 ifeq ($(strip $(LD)),)
 $(error Missing linker for ARCH '$(ARCH)' and TOOLCHAIN '$(TOOLCHAIN)')
+endif
+ifeq ($(strip $(AR)),)
+$(error Missing archiver for ARCH '$(ARCH)' and TOOLCHAIN '$(TOOLCHAIN)')
 endif
 ifeq ($(strip $(OC)),)
 $(error Missing objcopy for ARCH '$(ARCH)' and TOOLCHAIN '$(TOOLCHAIN)')

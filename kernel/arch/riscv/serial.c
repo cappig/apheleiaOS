@@ -18,8 +18,10 @@ static spinlock_t tx_lock = SPINLOCK_INIT;
 
 #define UART_TX_IRQ_CHUNK 16
 
+static uintptr_t uart_reg_stride = RISCV_UART_STRIDE;
+
 static inline uintptr_t _uart_reg(uintptr_t base, uintptr_t reg) {
-    return base + reg * RISCV_UART_STRIDE;
+    return base + reg * uart_reg_stride;
 }
 
 static inline u8 _uart_read(uintptr_t base, uintptr_t reg) {
@@ -32,6 +34,18 @@ static inline void _uart_write(uintptr_t base, uintptr_t reg, u8 val) {
 
 static inline bool _uart_has_data(uintptr_t base) {
     return (_uart_read(base, UART_LSR) & UART_LSR_RX_READY) != 0;
+}
+
+void serial_set_reg_stride(uintptr_t stride) {
+    if (stride != 1 && stride != 2 && stride != 4 && stride != 8) {
+        stride = RISCV_UART_STRIDE;
+    }
+
+    uart_reg_stride = stride ? stride : 1;
+}
+
+uintptr_t serial_reg_stride(void) {
+    return uart_reg_stride;
 }
 
 static void _send_serial_unlocked(uintptr_t base, char c) {
