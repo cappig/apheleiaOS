@@ -34,11 +34,18 @@ make docker_build ARCH=x86_32
 # RISC-V
 make docker_build ARCH=riscv_32 TOOLCHAIN=llvm
 make docker_build ARCH=riscv_64 TOOLCHAIN=llvm
+
+# FRISC FPGA image
+make docker_build ARCH=riscv_32 TOOLCHAIN=llvm RISCV_FRISC=true
 ```
 
 `make docker_build` will build or refresh the Docker image automatically.
 
-For RISC-V, use `TOOLCHAIN=llvm` in Docker just like you would locally.
+Docker also carries the cross tools needed for GNU RISC-V builds:
+
+```bash
+make docker_build ARCH=riscv_32 TOOLCHAIN=gnu RISCV_FRISC=true
+```
 
 If you want to prepare the image explicitly first:
 
@@ -62,6 +69,9 @@ make ARCH=x86_32
 make ARCH=riscv_32 TOOLCHAIN=llvm
 make ARCH=riscv_64 TOOLCHAIN=llvm
 
+# FRISC FPGA image
+make ARCH=riscv_32 TOOLCHAIN=llvm RISCV_FRISC=true
+
 # Build an ISO instead of the default raw disk image
 make IMAGE_FORMAT=iso
 ```
@@ -69,8 +79,18 @@ make IMAGE_FORMAT=iso
 After a successful build, the disk image will be generated at:
 
 ```bash
-bin/apheleia_alpha-1.1_<arch>.img
+bin/apheleia_<version>_<arch>.img
 ```
+
+Common build knobs:
+
+- `ARCH=x86_64|x86_32|riscv_64|riscv_32`
+- `TOOLCHAIN=gnu|llvm`
+- `PROFILE=fast|normal|small|debug|debug_extra`
+- `IMAGE_FORMAT=img|iso` (`iso` is for x86 images)
+- `RISCV_FRISC=true` builds the FRISC FPGA image, sets the default UART stride to `4`, builds `kernel/arch/riscv/dts/friscv.dts`, and stages it as `/boot/platform.dtb`
+- `RISCV_UART_STRIDE=<n>` overrides the RISC-V UART register stride manually
+- `STRIP_USER_SYMBOLS=true` strips user binaries more aggressively
 
 Run it with QEMU using the same `ARCH` you built:
 
@@ -86,6 +106,9 @@ make ARCH=riscv_32 run
 
 # Run RISC-V 64-bit
 make ARCH=riscv_64 run
+
+# Run RISC-V in Spike
+make ARCH=riscv_32 TOOLCHAIN=llvm run-spike
 
 # Run with 4 virtual CPUs
 make run QEMU_SMP=4
