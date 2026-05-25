@@ -14,11 +14,11 @@
 #include <user/io.h>
 #include <user/kv.h>
 
-#include "wm.h"
 #include "background.h"
 #include "color.h"
 #include "cursor.h"
 #include "loop.h"
+#include "wm.h"
 
 static volatile sig_atomic_t exit_requested = 0;
 
@@ -52,8 +52,7 @@ static void _on_signal(int signum) {
     exit_requested = 1;
 }
 
-static bool
-_cfg_set_palette_color(wm_config_t *cfg, const char *key, const char *value) {
+static bool _cfg_set_palette_color(wm_config_t *cfg, const char *key, const char *value) {
     if (!cfg || !key || !value) {
         return false;
     }
@@ -295,12 +294,7 @@ static void _warn_background_failed(const char *path) {
     }
 
     char line[PATH_MAX + 96];
-    snprintf(
-        line,
-        sizeof(line),
-        "wm: failed to load background '%s', using solid fallback\\n",
-        path
-    );
+    snprintf(line, sizeof(line), "wm: failed to load background '%s', using solid fallback\\n", path);
     io_write_str(line);
 }
 
@@ -314,12 +308,7 @@ static void _warn_cursor_failed(const char *path) {
     io_write_str(line);
 }
 
-static bool _cursor_path_join(
-    char *out,
-    size_t out_len,
-    const char *dir,
-    const char *name
-) {
+static bool _cursor_path_join(char *out, size_t out_len, const char *dir, const char *name) {
     if (!out || !out_len || !dir || !dir[0] || !name || !name[0]) {
         return false;
     }
@@ -335,37 +324,20 @@ static bool _cursor_path_join(
     return n > 0 && (size_t)n < out_len;
 }
 
-static const char *_cursor_path_or_fallback(
-    char *path_buf,
-    size_t path_buf_len,
-    const char *dir,
-    const char *name,
-    const char *fallback
-) {
-    if (
-        path_buf &&
-        path_buf_len &&
-        dir &&
-        dir[0] &&
-        name &&
-        name[0] &&
-        _cursor_path_join(path_buf, path_buf_len, dir, name)
-    ) {
+static const char *
+_cursor_path_or_fallback(char *path_buf, size_t path_buf_len, const char *dir, const char *name, const char *fallback) {
+    if (path_buf && path_buf_len && dir && dir[0] && name && name[0] &&
+        _cursor_path_join(path_buf, path_buf_len, dir, name)) {
         return path_buf;
     }
 
     return fallback;
 }
 
-static void _load_cursor_variant(
-    wm_cursor_kind_t kind,
-    const char *cursors_dir,
-    const char *name,
-    const char *fallback
-) {
+static void
+_load_cursor_variant(wm_cursor_kind_t kind, const char *cursors_dir, const char *name, const char *fallback) {
     char path[PATH_MAX];
-    const char *load_path =
-        _cursor_path_or_fallback(path, sizeof(path), cursors_dir, name, fallback);
+    const char *load_path = _cursor_path_or_fallback(path, sizeof(path), cursors_dir, name, fallback);
 
     if (load_path && !wm_cursor_load_kind(kind, load_path)) {
         _warn_cursor_failed(load_path);
@@ -377,13 +349,13 @@ int main(int argc, char **argv) {
     int fb_fd = -1;
     pixel_t *frame_store = NULL;
 
-    ui_t ui = {0};
+    ui_t ui = { 0 };
 
     bool wm_inited = false;
     bool fb_acquired = false;
     bool mgr_claimed = false;
 
-    wm_startup_t startup = {0};
+    wm_startup_t startup = { 0 };
     if (!_parse_args(argc, argv, &startup)) {
         return 1;
     }
@@ -415,7 +387,7 @@ int main(int argc, char **argv) {
 
     mgr_claimed = true;
 
-    fb_info_t fb_info = {0};
+    fb_info_t fb_info = { 0 };
     if (ioctl(fb_fd, FBIOGETINFO, &fb_info) || !fb_info.available || fb_info.bpp != 32) {
         io_write_str("wm: unsupported framebuffer\n");
         goto out;
@@ -447,7 +419,7 @@ int main(int argc, char **argv) {
         io_write_str("wm: failed to allocate frame buffer\n");
         goto out;
     }
-    wm_config_t cfg = {0};
+    wm_config_t cfg = { 0 };
     _load_wm_config(&cfg);
 
     if (cfg.font[0] && !draw_set_font_path(cfg.font)) {
@@ -522,18 +494,8 @@ int main(int argc, char **argv) {
         }
     }
 
-    _load_cursor_variant(
-        WM_CURSOR_POINTER,
-        cursors_dir,
-        "pointer_interact.ppm",
-        cursor_path
-    );
-    _load_cursor_variant(
-        WM_CURSOR_MOVE,
-        cursors_dir,
-        "move.ppm",
-        cursor_path
-    );
+    _load_cursor_variant(WM_CURSOR_POINTER, cursors_dir, "pointer_interact.ppm", cursor_path);
+    _load_cursor_variant(WM_CURSOR_MOVE, cursors_dir, "move.ppm", cursor_path);
 
     char resize_fallback_path[PATH_MAX];
     const char *resize_fallback = _cursor_path_or_fallback(
@@ -550,20 +512,13 @@ int main(int argc, char **argv) {
     } resize_cursor_spec_t;
 
     const resize_cursor_spec_t resize_specs[] = {
-        {WM_CURSOR_RESIZE_EW, "resize_ew.ppm"},
-        {WM_CURSOR_RESIZE_NS, "resize_ns.ppm"},
-        {WM_CURSOR_RESIZE_NW, "resize_nw.ppm"},
-        {WM_CURSOR_RESIZE_SE, "resize_se.ppm"},
-        {WM_CURSOR_RESIZE_SW, "resize_sw.ppm"},
+        { WM_CURSOR_RESIZE_EW, "resize_ew.ppm" }, { WM_CURSOR_RESIZE_NS, "resize_ns.ppm" },
+        { WM_CURSOR_RESIZE_NW, "resize_nw.ppm" }, { WM_CURSOR_RESIZE_SE, "resize_se.ppm" },
+        { WM_CURSOR_RESIZE_SW, "resize_sw.ppm" },
     };
 
     for (size_t i = 0; i < (sizeof(resize_specs) / sizeof(resize_specs[0])); i++) {
-        _load_cursor_variant(
-            resize_specs[i].kind,
-            cursors_dir,
-            resize_specs[i].name,
-            resize_fallback
-        );
+        _load_cursor_variant(resize_specs[i].kind, cursors_dir, resize_specs[i].name, resize_fallback);
     }
 
     wm_loop(&ui, fb_fd, &fb_info, frame_store, frame_bytes, &exit_requested);

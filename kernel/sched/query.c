@@ -34,10 +34,8 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         out->uid = thread->uid;
         out->gid = thread->gid;
         out->umask = thread->umask & 0777;
-        out->signal_pending =
-            __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE);
-        out->signal_mask =
-            __atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE);
+        out->signal_pending = __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE);
+        out->signal_mask = __atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE);
         out->state = thread_get_state(thread);
         out->core_id = -1;
         out->tty_index = thread->tty_index;
@@ -67,21 +65,15 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
 
 void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out) {
     if (busy_ticks_out) {
-        *busy_ticks_out =
-            __atomic_load_n(&sched_state.usage.busy_ticks, __ATOMIC_RELAXED);
+        *busy_ticks_out = __atomic_load_n(&sched_state.usage.busy_ticks, __ATOMIC_RELAXED);
     }
 
     if (total_ticks_out) {
-        *total_ticks_out =
-            __atomic_load_n(&sched_state.usage.total_ticks, __ATOMIC_RELAXED);
+        *total_ticks_out = __atomic_load_n(&sched_state.usage.total_ticks, __ATOMIC_RELAXED);
     }
 }
 
-void sched_cpu_usage_snapshot_core(
-    size_t core_id,
-    u64 *busy_ticks_out,
-    u64 *total_ticks_out
-) {
+void sched_cpu_usage_snapshot_core(size_t core_id, u64 *busy_ticks_out, u64 *total_ticks_out) {
     if (core_id >= MAX_CORES) {
         if (busy_ticks_out) {
             *busy_ticks_out = 0;
@@ -95,13 +87,11 @@ void sched_cpu_usage_snapshot_core(
     }
 
     if (busy_ticks_out) {
-        *busy_ticks_out =
-            __atomic_load_n(&sched_state.usage.core_busy_ticks[core_id], __ATOMIC_RELAXED);
+        *busy_ticks_out = __atomic_load_n(&sched_state.usage.core_busy_ticks[core_id], __ATOMIC_RELAXED);
     }
 
     if (total_ticks_out) {
-        *total_ticks_out =
-            __atomic_load_n(&sched_state.usage.core_total_ticks[core_id], __ATOMIC_RELAXED);
+        *total_ticks_out = __atomic_load_n(&sched_state.usage.core_total_ticks[core_id], __ATOMIC_RELAXED);
     }
 }
 
@@ -110,22 +100,14 @@ void sched_metrics_snapshot(sched_metrics_snapshot_t *out) {
         return;
     }
 
-    out->sched_switch_count =
-        __atomic_load_n(&sched_state.metrics.switch_count, __ATOMIC_RELAXED);
-    out->syscall_count =
-        __atomic_load_n(&sched_state.metrics.syscall_count, __ATOMIC_RELAXED);
-    out->sched_migrations =
-        __atomic_load_n(&sched_state.metrics.migrations, __ATOMIC_RELAXED);
-    out->sched_steals =
-        __atomic_load_n(&sched_state.metrics.steals, __ATOMIC_RELAXED);
-    out->sched_wake_ipi =
-        __atomic_load_n(&sched_state.metrics.wake_ipi, __ATOMIC_RELAXED);
-    out->sched_runqueue_max =
-        __atomic_load_n(&sched_state.metrics.runqueue_max, __ATOMIC_RELAXED);
-    out->sched_balance_runs =
-        __atomic_load_n(&sched_state.metrics.balance_runs, __ATOMIC_RELAXED);
-    out->wait_timeout_count =
-        __atomic_load_n(&sched_state.metrics.wait_timeout_count, __ATOMIC_RELAXED);
+    out->sched_switch_count = __atomic_load_n(&sched_state.metrics.switch_count, __ATOMIC_RELAXED);
+    out->syscall_count = __atomic_load_n(&sched_state.metrics.syscall_count, __ATOMIC_RELAXED);
+    out->sched_migrations = __atomic_load_n(&sched_state.metrics.migrations, __ATOMIC_RELAXED);
+    out->sched_steals = __atomic_load_n(&sched_state.metrics.steals, __ATOMIC_RELAXED);
+    out->sched_wake_ipi = __atomic_load_n(&sched_state.metrics.wake_ipi, __ATOMIC_RELAXED);
+    out->sched_runqueue_max = __atomic_load_n(&sched_state.metrics.runqueue_max, __ATOMIC_RELAXED);
+    out->sched_balance_runs = __atomic_load_n(&sched_state.metrics.balance_runs, __ATOMIC_RELAXED);
+    out->wait_timeout_count = __atomic_load_n(&sched_state.metrics.wait_timeout_count, __ATOMIC_RELAXED);
 }
 
 void sched_metrics_record_syscall(void) {
@@ -219,11 +201,7 @@ int sched_signal_send_pgrp(pid_t pgid, int signum) {
     return count ? count : -1;
 }
 
-int sched_signal_pgrp_as(
-    pid_t pgid,
-    int signum,
-    const sched_thread_t *sender
-) {
+int sched_signal_pgrp_as(pid_t pgid, int signum, const sched_thread_t *sender) {
     if (!sched_state.procs.all_list || pgid <= 0) {
         return -ESRCH;
     }

@@ -1,5 +1,5 @@
-#include <ctype.h>
 #include <crypt.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <pwd.h>
 #include <shadow.h>
@@ -207,11 +207,7 @@ static bool _member_list_has_user(const char *members, const char *user_name) {
     return false;
 }
 
-static bool _group_allows_user(
-    const char *group_name,
-    const char *user_name,
-    gid_t user_gid
-) {
+static bool _group_allows_user(const char *group_name, const char *user_name, gid_t user_gid) {
     if (!group_name || !group_name[0] || !user_name || !user_name[0]) {
         return false;
     }
@@ -315,12 +311,7 @@ static void _append_gid(gid_t gid, gid_t *groups, size_t *count, size_t max_grou
     (*count)++;
 }
 
-static size_t _collect_supp_groups(
-    const char *user_name,
-    gid_t primary_gid,
-    gid_t *groups,
-    size_t max_groups
-) {
+static size_t _collect_supp_groups(const char *user_name, gid_t primary_gid, gid_t *groups, size_t max_groups) {
     if (!user_name || !user_name[0] || !groups || !max_groups) {
         return 0;
     }
@@ -455,7 +446,7 @@ static bool authenticate_user(const char *name) {
         return false;
     }
 
-    char pass[256] = {0};
+    char pass[256] = { 0 };
 
     write_str("password: ");
     (void)tty_set_echo(false);
@@ -510,19 +501,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    gid_t groups[SU_GROUP_MAX] = {0};
-    size_t group_count = _collect_supp_groups(
-        pwd->pw_name,
-        pwd->pw_gid,
-        groups,
-        sizeof(groups) / sizeof(groups[0])
-    );
+    gid_t groups[SU_GROUP_MAX] = { 0 };
+    size_t group_count = _collect_supp_groups(pwd->pw_name, pwd->pw_gid, groups, sizeof(groups) / sizeof(groups[0]));
 
-    if (
-        setgroups(group_count, groups) < 0 ||
-        setgid(pwd->pw_gid) < 0 ||
-        setuid(pwd->pw_uid) < 0
-    ) {
+    if (setgroups(group_count, groups) < 0 || setgid(pwd->pw_gid) < 0 || setuid(pwd->pw_uid) < 0) {
         write_str("su: failed to switch credentials\n");
         return 1;
     }
@@ -531,14 +513,13 @@ int main(int argc, char **argv) {
         (void)chdir(pwd->pw_dir);
     }
 
-    const char *fallback_shell =
-        (pwd->pw_shell && pwd->pw_shell[0]) ? pwd->pw_shell : "/bin/sh";
+    const char *fallback_shell = (pwd->pw_shell && pwd->pw_shell[0]) ? pwd->pw_shell : "/bin/sh";
     const char *shell = env_lookup("SHELL");
     if (!shell || !shell[0]) {
         shell = fallback_shell;
     }
 
-    char *shell_argv[] = {(char *)shell, NULL};
+    char *shell_argv[] = { (char *)shell, NULL };
     execve(shell, shell_argv, environ);
 
     if (strcmp(shell, fallback_shell)) {

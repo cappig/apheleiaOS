@@ -14,15 +14,15 @@
 
 #include "physical.h"
 
-#define HEAP_MIN        (KERNEL_HEAP_PAGES / 2)
-#define HEAP_MAX        (KERNEL_HEAP_PAGES * 16)
+#define HEAP_MIN (KERNEL_HEAP_PAGES / 2)
+#define HEAP_MAX (KERNEL_HEAP_PAGES * 16)
 typedef struct {
     bitmap_allocator_t alloc;
     size_t pages;
     bool used;
 } heap_arena_t;
 
-static heap_arena_t heap_arenas[KERNEL_HEAP_MAX_ARENAS] = {0};
+static heap_arena_t heap_arenas[KERNEL_HEAP_MAX_ARENAS] = { 0 };
 static size_t heap_arena_count = 0;
 static spinlock_t heap_lock = SPINLOCK_INIT;
 
@@ -179,8 +179,7 @@ static void *_kmalloc(size_t size) {
 
     unsigned long irq_flags = spin_lock_irqsave(&heap_lock);
 
-    size_t header_blocks =
-        DIV_ROUND_UP(sizeof(kheap_header_t), KERNEL_HEAP_BLOCK_SIZE);
+    size_t header_blocks = DIV_ROUND_UP(sizeof(kheap_header_t), KERNEL_HEAP_BLOCK_SIZE);
     size_t blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK_SIZE);
     if (blocks > SIZE_MAX - header_blocks) {
         spin_unlock_irqrestore(&heap_lock, irq_flags);
@@ -245,8 +244,7 @@ static void _kfree(void *ptr) {
         panic("invalid RISC-V heap header");
     }
 
-    size_t header_blocks =
-        DIV_ROUND_UP(sizeof(kheap_header_t), KERNEL_HEAP_BLOCK_SIZE);
+    size_t header_blocks = DIV_ROUND_UP(sizeof(kheap_header_t), KERNEL_HEAP_BLOCK_SIZE);
     if (header->size > SIZE_MAX - header_blocks) {
         spin_unlock_irqrestore(&heap_lock, irq_flags);
         panic("RISC-V heap block count overflow");

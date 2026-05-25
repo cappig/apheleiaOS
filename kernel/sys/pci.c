@@ -12,10 +12,6 @@
 
 #include "acpi.h"
 
-static bool pci_is_express = false;
-static linked_list_t *pci_devices = NULL;
-static hashmap_t *pci_bsf_index = NULL;
-
 #define PCI_ECAM_WINDOW_MAX 64
 
 typedef struct {
@@ -25,43 +21,44 @@ typedef struct {
     u16 segment;
 } pci_ecam_window_t;
 
-static pci_ecam_window_t pci_ecam_windows[PCI_ECAM_WINDOW_MAX];
-static size_t pci_ecam_window_count = 0;
+typedef struct {
+    bool express;
+    linked_list_t *devices;
+    hashmap_t *bsf_index;
 
+    pci_ecam_window_t ecam[PCI_ECAM_WINDOW_MAX];
+    size_t ecam_count;
+} pci_state_t;
+
+static pci_state_t pci_state = { 0 };
 
 static u64 _bsf_key(u8 bus, u8 slot, u8 func) {
     return ((u64)bus << 16) | ((u64)slot << 8) | (u64)func;
 }
 
 static void _index_device(pci_found_t *device) {
-    if (!pci_bsf_index || !device) {
+    if (!pci_state.bsf_index || !device) {
         return;
     }
 
-    if (
-        !hashmap_set(
-            pci_bsf_index,
-            _bsf_key(device->bus, device->slot, device->func),
-            (u64)(uintptr_t)device
-        )
-    ) {
+    if (!hashmap_set(pci_state.bsf_index, _bsf_key(device->bus, device->slot, device->func), (u64)(uintptr_t)device)) {
         panic("pci registry index insert failed");
     }
 }
 
 static bool _device_exists(u8 bus, u8 slot, u8 func) {
-    if (pci_bsf_index) {
+    if (pci_state.bsf_index) {
         u64 encoded = 0;
-        if (hashmap_get(pci_bsf_index, _bsf_key(bus, slot, func), &encoded)) {
+        if (hashmap_get(pci_state.bsf_index, _bsf_key(bus, slot, func), &encoded)) {
             return true;
         }
     }
 
-    if (!pci_devices) {
+    if (!pci_state.devices) {
         return false;
     }
 
-    ll_foreach(node, pci_devices) {
+    ll_foreach(node, pci_state.devices) {
         pci_found_t *dev = node->data;
         if (!dev) {
             continue;
@@ -76,7 +73,7 @@ static bool _device_exists(u8 bus, u8 slot, u8 func) {
 }
 
 static bool _append_device(pci_found_t *device) {
-    if (!device || !pci_devices) {
+    if (!device || !pci_state.devices) {
         return false;
     }
 
@@ -91,7 +88,7 @@ static bool _append_device(pci_found_t *device) {
         return false;
     }
 
-    list_append(pci_devices, node);
+    list_append(pci_state.devices, node);
     _index_device(device);
     return true;
 }
@@ -101,21 +98,16 @@ static u64 _ecam_addr(u64 base, u8 bus, u8 slot, u8 func) {
 }
 
 static void _clear_ecam_windows(void) {
-    pci_ecam_window_count = 0;
-    memset(pci_ecam_windows, 0, sizeof(pci_ecam_windows));
+    pci_state.ecam_count = 0;
+    memset(pci_state.ecam, 0, sizeof(pci_state.ecam));
 }
 
-static void _register_ecam_window(
-    u64 ecam_base,
-    u16 segment,
-    u8 start_bus,
-    u8 end_bus
-) {
-    if (pci_ecam_window_count >= ARRAY_LEN(pci_ecam_windows)) {
+static void _register_ecam_window(u64 ecam_base, u16 segment, u8 start_bus, u8 end_bus) {
+    if (pci_state.ecam_count >= ARRAY_LEN(pci_state.ecam)) {
         return;
     }
 
-    pci_ecam_windows[pci_ecam_window_count++] = (pci_ecam_window_t){
+    pci_state.ecam[pci_state.ecam_count++] = (pci_ecam_window_t){
         .base = ecam_base,
         .start_bus = start_bus,
         .end_bus = end_bus,
@@ -128,8 +120,8 @@ static bool _ecam_base_for_bus(u8 bus, u64 *out_base) {
         return false;
     }
 
-    for (size_t i = 0; i < pci_ecam_window_count; i++) {
-        const pci_ecam_window_t *win = &pci_ecam_windows[i];
+    for (size_t i = 0; i < pci_state.ecam_count; i++) {
+        const pci_ecam_window_t *win = &pci_state.ecam[i];
         if (bus < win->start_bus || bus > win->end_bus) {
             continue;
         }
@@ -145,8 +137,7 @@ static u32 _read_legacy(u8 bus, u8 slot, u8 func, u8 offset, size_t bytes) {
     return pci_bus_read(bus, slot, func, offset, bytes);
 }
 
-static bool
-_ecam_read_header(u64 base, u8 bus, u8 slot, u8 func, pci_header_t *out) {
+static bool _ecam_read_header(u64 base, u8 bus, u8 slot, u8 func, pci_header_t *out) {
     if (!out) {
         return false;
     }
@@ -165,15 +156,12 @@ _ecam_read_header(u64 base, u8 bus, u8 slot, u8 func, pci_header_t *out) {
 }
 
 static void _probe_slot_legacy(u8 bus, u8 slot) {
-    u8 type =
-        (u8)_read_legacy(bus, slot, 0, offsetof(pci_header_t, header_type), 1);
+    u8 type = (u8)_read_legacy(bus, slot, 0, offsetof(pci_header_t, header_type), 1);
 
     size_t funcs = (type & 0x80) ? 8 : 1;
 
     for (size_t func = 0; func < funcs; func++) {
-        u16 vendor = (u16)_read_legacy(
-            bus, slot, func, offsetof(pci_header_t, vendor_id), 2
-        );
+        u16 vendor = (u16)_read_legacy(bus, slot, func, offsetof(pci_header_t, vendor_id), 2);
 
         if (vendor == PCI_NONE) {
             continue;
@@ -187,7 +175,7 @@ static void _probe_slot_legacy(u8 bus, u8 slot) {
         bool ecam_match = false;
 
         if (_ecam_base_for_bus(bus, &ecam_base)) {
-            pci_header_t ecam_header = {0};
+            pci_header_t ecam_header = { 0 };
 
             if (_ecam_read_header(ecam_base, bus, slot, (u8)func, &ecam_header)) {
                 ecam_match = (ecam_header.vendor_id == vendor);
@@ -217,7 +205,7 @@ static void _probe_slot_legacy(u8 bus, u8 slot) {
 }
 
 static void _probe_slot_express(u64 base, u8 bus, u8 slot) {
-    pci_header_t header = {0};
+    pci_header_t header = { 0 };
 
     if (!_ecam_read_header(base, bus, slot, 0, &header)) {
         return;
@@ -230,7 +218,7 @@ static void _probe_slot_express(u64 base, u8 bus, u8 slot) {
     size_t funcs = (header.header_type & 0x80) ? 8 : 1;
 
     for (size_t func = 0; func < funcs; func++) {
-        pci_header_t current = {0};
+        pci_header_t current = { 0 };
 
         if (!_ecam_read_header(base, bus, slot, (u8)func, &current)) {
             continue;
@@ -270,7 +258,7 @@ static void _init_legacy(void) {
 }
 
 static void _init_express(mcfg_t *table) {
-    pci_is_express = true;
+    pci_state.express = true;
 
     if (!table || table->header.length < sizeof(mcfg_t)) {
         return;
@@ -321,12 +309,7 @@ static void _init_express(mcfg_t *table) {
         // ECAM base in MCFG entries is anchored to start_bus;
         // convert to a synthetic bus-0 base so _ecam_addr() can use absolute bus
         u64 ecam_base = entry->base_addr - start_bus_off;
-        _register_ecam_window(
-            ecam_base,
-            entry->pci_seg_group,
-            entry->start_bus,
-            entry->end_bus
-        );
+        _register_ecam_window(ecam_base, entry->pci_seg_group, entry->start_bus, entry->end_bus);
 
         log_debug(
             "MCFG seg=%u bus=%u..%u base=%#" PRIx64,
@@ -345,20 +328,20 @@ static void _init_express(mcfg_t *table) {
 }
 
 size_t pci_init(void) {
-    pci_devices = list_create();
-    if (!pci_devices) {
+    pci_state.devices = list_create();
+    if (!pci_state.devices) {
         return 0;
     }
-    pci_bsf_index = hashmap_create();
+    pci_state.bsf_index = hashmap_create();
     _clear_ecam_windows();
 
     mcfg_t *table = (mcfg_t *)acpi_find_table("MCFG");
 
     if (table) {
-        size_t before = pci_devices->length;
+        size_t before = pci_state.devices->length;
         _init_express(table);
 
-        size_t found = pci_devices->length - before;
+        size_t found = pci_state.devices->length - before;
         if (found <= 1) {
             log_warn(
                 "MCFG probe found only %zu device%s; falling back to legacy PCI scan",
@@ -371,18 +354,14 @@ size_t pci_init(void) {
         _init_legacy();
     }
 
-    log_info(
-        "detected %zu devices on the %s bus",
-        pci_devices->length,
-        pci_is_express ? "PCIE" : "PCI"
-    );
+    log_info("detected %zu devices on the %s bus", pci_state.devices->length, pci_state.express ? "PCIE" : "PCI");
 
-    return pci_devices->length;
+    return pci_state.devices->length;
 }
 
 // NOTE: returns the conventional 256 bytes, not the full 4096 bytes for PCIe
 pci_device_t *pci_find_device(u8 class, u8 subclass, pci_device_t *from) {
-    list_node_t *start = pci_devices ? pci_devices->head : NULL;
+    list_node_t *start = pci_state.devices ? pci_state.devices->head : NULL;
     bool matched_from = (from == NULL);
 
     ll_foreach_from(node, start) {
@@ -390,13 +369,9 @@ pci_device_t *pci_find_device(u8 class, u8 subclass, pci_device_t *from) {
         pci_header_t *header = &dev->header;
 
         if (!matched_from) {
-            if (
-                header->vendor_id == from->header.vendor_id &&
-                header->device_id == from->header.device_id &&
-                header->class == from->header.class &&
-                header->subclass == from->header.subclass &&
-                header->prog_if == from->header.prog_if
-            ) {
+            if (header->vendor_id == from->header.vendor_id && header->device_id == from->header.device_id &&
+                header->class == from->header.class && header->subclass == from->header.subclass &&
+                header->prog_if == from->header.prog_if) {
                 matched_from = true;
             }
 
@@ -410,8 +385,7 @@ pci_device_t *pci_find_device(u8 class, u8 subclass, pci_device_t *from) {
             }
 
             if (dev->base != (u64)-1) {
-                u64 phys =
-                    _ecam_addr(dev->base, dev->bus, dev->slot, dev->func);
+                u64 phys = _ecam_addr(dev->base, dev->bus, dev->slot, dev->func);
 
                 void *map = arch_phys_map(phys, 256, PHYS_MAP_MMIO);
 
@@ -424,9 +398,7 @@ pci_device_t *pci_find_device(u8 class, u8 subclass, pci_device_t *from) {
                 arch_phys_unmap(map, 256);
             } else {
                 for (size_t i = 0; i < 256; i++) {
-                    ret[i] = (u8)_read_legacy(
-                        dev->bus, dev->slot, dev->func, (u8)i, 1
-                    );
+                    ret[i] = (u8)_read_legacy(dev->bus, dev->slot, dev->func, (u8)i, 1);
                 }
             }
 
@@ -442,14 +414,14 @@ void pci_destroy_device(pci_device_t *dev) {
 }
 
 static pci_found_t *_find_by_bsf(u8 bus, u8 slot, u8 func) {
-    if (!pci_devices) {
+    if (!pci_state.devices) {
         return NULL;
     }
 
-    if (pci_bsf_index) {
+    if (pci_state.bsf_index) {
         u64 encoded = 0;
 
-        if (hashmap_get(pci_bsf_index, _bsf_key(bus, slot, func), &encoded)) {
+        if (hashmap_get(pci_state.bsf_index, _bsf_key(bus, slot, func), &encoded)) {
             pci_found_t *device = (pci_found_t *)(uintptr_t)encoded;
 
             if (device && device->bus == bus && device->slot == slot && device->func == func) {
@@ -458,7 +430,7 @@ static pci_found_t *_find_by_bsf(u8 bus, u8 slot, u8 func) {
         }
     }
 
-    ll_foreach(node, pci_devices) {
+    ll_foreach(node, pci_state.devices) {
         pci_found_t *dev = node->data;
 
         if (dev->bus == bus && dev->slot == slot && dev->func == func) {
@@ -469,8 +441,7 @@ static pci_found_t *_find_by_bsf(u8 bus, u8 slot, u8 func) {
     return NULL;
 }
 
-static void
-_write_legacy(u8 bus, u8 slot, u8 func, u8 offset, u32 value, u8 size) {
+static void _write_legacy(u8 bus, u8 slot, u8 func, u8 offset, u32 value, u8 size) {
     pci_bus_write(bus, slot, func, offset, value, size);
 }
 
@@ -504,15 +475,7 @@ static u32 _ecam_read(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u8 size) {
     return result;
 }
 
-static void _ecam_write(
-    u64 base,
-    u8 bus,
-    u8 slot,
-    u8 func,
-    u16 offset,
-    u32 value,
-    u8 size
-) {
+static void _ecam_write(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size) {
     u64 phys = _ecam_addr(base, bus, slot, func);
     void *map = arch_phys_map(phys, 4096, PHYS_MAP_MMIO);
 
@@ -538,7 +501,7 @@ static void _ecam_write(
 }
 
 pci_found_t *pci_find_node(u8 class, u8 subclass, pci_found_t *from) {
-    list_node_t *start = pci_devices ? pci_devices->head : NULL;
+    list_node_t *start = pci_state.devices ? pci_state.devices->head : NULL;
     bool matched_from = (from == NULL);
 
     ll_foreach_from(node, start) {
@@ -570,14 +533,7 @@ u32 pci_read_config(u8 bus, u8 slot, u8 func, u16 offset, u8 size) {
     return _read_legacy(bus, slot, func, (u8)offset, size);
 }
 
-void pci_write_config(
-    u8 bus,
-    u8 slot,
-    u8 func,
-    u16 offset,
-    u32 value,
-    u8 size
-) {
+void pci_write_config(u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size) {
     pci_found_t *node = _find_by_bsf(bus, slot, func);
 
     if (node && node->base != (u64)-1) {
@@ -693,17 +649,17 @@ const char *pci_stringify_class(u8 class) {
 }
 
 void dump_pci_devices(void) {
-    if (!pci_devices) {
+    if (!pci_state.devices) {
         return;
     }
 
-    log_debug("detected %s devices", pci_is_express ? "PCIE" : "PCI");
+    log_debug("detected %s devices", pci_state.express ? "PCIE" : "PCI");
 
-    ll_foreach(node, pci_devices) {
+    ll_foreach(node, pci_state.devices) {
         pci_found_t *dev = node->data;
 
         log_debug(
-            "[ %u:%u.%u ven=%#06x dev=%#06x class=%#04x subclass=%#04x prog_if=%#04x ] %s",
+            "%u:%u.%u vendor=%#06x device=%#06x class=%#04x subclass=%#04x prog_if=%#04x %s",
             dev->bus,
             dev->slot,
             dev->func,

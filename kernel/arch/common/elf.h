@@ -21,10 +21,4 @@ typedef struct {
 
 typedef bool (*elf_segment_cb)(const elf_segment_t *seg, void *ctx);
 
-bool elf_foreach_segment(
-    const void *elf,
-    size_t size,
-    elf_segment_cb cb,
-    void *ctx,
-    elf_info_t *out_info
-);
+bool elf_foreach_segment(const void *elf, size_t size, elf_segment_cb cb, void *ctx, elf_info_t *out_info);

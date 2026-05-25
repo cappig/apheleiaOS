@@ -23,8 +23,4 @@ bool usb_stdreq_get_descriptor(
     size_t *out_actual
 );
 
-bool usb_stdreq_set_configuration(
-    const usb_stdreq_target_t *target,
-    u8 config,
-    u32 timeout_ms
-);
+bool usb_stdreq_set_configuration(const usb_stdreq_target_t *target, u8 config, u32 timeout_ms);

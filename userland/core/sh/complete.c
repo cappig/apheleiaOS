@@ -23,20 +23,7 @@ typedef struct {
 static char sh_complete_path[SH_PATH_MAX] = "/bin";
 
 static const char *sh_builtins[] = {
-    "bg",
-    "cd",
-    "echo",
-    "env",
-    "exit",
-    "fg",
-    "help",
-    "history",
-    "jobs",
-    "set",
-    "umask",
-    "unset",
-    "where",
-    NULL,
+    "bg", "cd", "echo", "env", "exit", "fg", "help", "history", "jobs", "set", "umask", "unset", "where", NULL,
 };
 
 
@@ -51,14 +38,7 @@ void complete_set_path(const char *path) {
 
 static bool is_word_delim(char ch) {
     return (
-        ch == '\0' ||
-        ch == ' ' ||
-        ch == '\t' ||
-        ch == '\n' ||
-        ch == '|' ||
-        ch == '&' ||
-        ch == '<' ||
-        ch == '>' ||
+        ch == '\0' || ch == ' ' || ch == '\t' || ch == '\n' || ch == '|' || ch == '&' || ch == '<' || ch == '>' ||
         ch == ';'
     );
 }
@@ -178,13 +158,7 @@ static bool command_is_runnable(const char *dir_path, const char *name) {
     return !access(full, X_OK);
 }
 
-static bool add_match(
-    sh_match_t *matches,
-    size_t *count,
-    size_t cap,
-    const char *name,
-    bool is_dir
-) {
+static bool add_match(sh_match_t *matches, size_t *count, size_t cap, const char *name, bool is_dir) {
     if (!matches || !count || !name || !name[0]) {
         return false;
     }
@@ -212,13 +186,8 @@ static bool add_match(
     return true;
 }
 
-static size_t collect_matches(
-    const char *dir_path,
-    const char *prefix,
-    bool include_hidden,
-    sh_match_t *matches,
-    size_t cap
-) {
+static size_t
+collect_matches(const char *dir_path, const char *prefix, bool include_hidden, sh_match_t *matches, size_t cap) {
     if (!dir_path || !prefix || !matches || !cap) {
         return 0;
     }
@@ -248,25 +217,14 @@ static size_t collect_matches(
             continue;
         }
 
-        add_match(
-            matches,
-            &count,
-            cap,
-            dent->d_name,
-            match_is_dir(dir_path, dent->d_name)
-        );
+        add_match(matches, &count, cap, dent->d_name, match_is_dir(dir_path, dent->d_name));
     }
 
     closedir(dir);
     return count;
 }
 
-static size_t collect_command_matches(
-    const char *prefix,
-    bool include_hidden,
-    sh_match_t *matches,
-    size_t cap
-) {
+static size_t collect_command_matches(const char *prefix, bool include_hidden, sh_match_t *matches, size_t cap) {
     if (!prefix || !matches || !cap) {
         return 0;
     }
@@ -369,13 +327,7 @@ static void list_matches(sh_match_t *matches, size_t count) {
 
     for (size_t i = 0; i < count; i++) {
         char item[NAME_MAX + 2];
-        snprintf(
-            item,
-            sizeof(item),
-            "%s%s",
-            matches[i].name,
-            matches[i].is_dir ? "/" : ""
-        );
+        snprintf(item, sizeof(item), "%s%s", matches[i].name, matches[i].is_dir ? "/" : "");
         io_write_str(item);
 
         bool end_row = ((i + 1) % per_row) == 0 || i + 1 == count;
@@ -391,13 +343,7 @@ static void list_matches(sh_match_t *matches, size_t count) {
     }
 }
 
-static bool build_candidate(
-    char *out,
-    size_t out_len,
-    const char *typed_dir,
-    const char *name,
-    bool is_dir
-) {
+static bool build_candidate(char *out, size_t out_len, const char *typed_dir, const char *name, bool is_dir) {
     if (!out || !out_len || !typed_dir || !name) {
         return false;
     }
@@ -448,13 +394,7 @@ static void split_prefix(
     size_t typed_len = (size_t)slash + 1;
 
     snprintf(typed_dir, typed_dir_len, "%.*s", (int)typed_len, token);
-    snprintf(
-        base_prefix,
-        base_prefix_len,
-        "%.*s",
-        (int)(token_len - typed_len),
-        token + typed_len
-    );
+    snprintf(base_prefix, base_prefix_len, "%.*s", (int)(token_len - typed_len), token + typed_len);
 
     if (!slash) {
         snprintf(dir_open, dir_open_len, "/");
@@ -463,13 +403,7 @@ static void split_prefix(
     }
 }
 
-void complete_line(
-    char *buf,
-    size_t cap,
-    size_t *len,
-    size_t *cursor,
-    sh_complete_result_t *result
-) {
+void complete_line(char *buf, size_t cap, size_t *len, size_t *cursor, sh_complete_result_t *result) {
     if (!buf || !cap || !len || !cursor || *cursor > *len) {
         return;
     }
@@ -502,20 +436,17 @@ void complete_line(
         return;
     }
 
-    bool command_mode =
-        !strchr(token, '/') && is_command_position(buf, token_start);
+    bool command_mode = !strchr(token, '/') && is_command_position(buf, token_start);
 
     bool include_hidden = token[0] == '.';
     size_t match_count = 0;
 
-    char dir_open[SH_PATH_MAX] = {0};
-    char typed_dir[SH_PATH_MAX] = {0};
-    char base_prefix[SH_PATH_MAX] = {0};
+    char dir_open[SH_PATH_MAX] = { 0 };
+    char typed_dir[SH_PATH_MAX] = { 0 };
+    char base_prefix[SH_PATH_MAX] = { 0 };
 
     if (command_mode) {
-        match_count = collect_command_matches(
-            token, include_hidden, matches, SH_MATCH_MAX
-        );
+        match_count = collect_command_matches(token, include_hidden, matches, SH_MATCH_MAX);
     } else {
         split_prefix(
             token,
@@ -529,9 +460,7 @@ void complete_line(
         );
 
         include_hidden = base_prefix[0] == '.';
-        match_count = collect_matches(
-            dir_open, base_prefix, include_hidden, matches, SH_MATCH_MAX
-        );
+        match_count = collect_matches(dir_open, base_prefix, include_hidden, matches, SH_MATCH_MAX);
     }
 
     if (!match_count) {
@@ -544,8 +473,7 @@ void complete_line(
 
     if (match_count == 1) {
         if (command_mode) {
-            int rc =
-                snprintf(candidate, sizeof(candidate), "%s", matches[0].name);
+            int rc = snprintf(candidate, sizeof(candidate), "%s", matches[0].name);
 
             have_candidate = rc >= 0 && (size_t)rc < sizeof(candidate);
         } else {
@@ -563,23 +491,14 @@ void complete_line(
 
         if (common > base_len) {
             char common_name[NAME_MAX + 1];
-            snprintf(
-                common_name,
-                sizeof(common_name),
-                "%.*s",
-                (int)common,
-                matches[0].name
-            );
+            snprintf(common_name, sizeof(common_name), "%.*s", (int)common, matches[0].name);
 
             if (command_mode) {
-                int rc =
-                    snprintf(candidate, sizeof(candidate), "%s", common_name);
+                int rc = snprintf(candidate, sizeof(candidate), "%s", common_name);
 
                 have_candidate = rc >= 0 && (size_t)rc < sizeof(candidate);
             } else {
-                have_candidate = build_candidate(
-                    candidate, sizeof(candidate), typed_dir, common_name, false
-                );
+                have_candidate = build_candidate(candidate, sizeof(candidate), typed_dir, common_name, false);
             }
         } else {
             list_matches(matches, match_count);

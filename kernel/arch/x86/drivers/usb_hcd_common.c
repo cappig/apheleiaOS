@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
-
 #include <x86/asm.h>
 #include <x86/irq.h>
 #include <x86/mm/physical.h>

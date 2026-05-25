@@ -34,12 +34,7 @@ static void _read_fs(boot_ext2_t *fs, void *dest, size_t offset, size_t bytes) {
     }
 }
 
-bool boot_ext2_init(
-    boot_ext2_t *fs,
-    boot_ext2_read_fn_t read,
-    void *ctx,
-    size_t size_limit
-) {
+bool boot_ext2_init(boot_ext2_t *fs, boot_ext2_read_fn_t read, void *ctx, size_t size_limit) {
     if (!fs || !read) {
         return false;
     }
@@ -75,8 +70,7 @@ bool boot_ext2_init(
     return true;
 }
 
-static size_t
-_indirect_capacity(u32 entries_per_block, size_t indirection, size_t max) {
+static size_t _indirect_capacity(u32 entries_per_block, size_t indirection, size_t max) {
     size_t capacity = 1;
 
     for (size_t i = 0; i < indirection; i++) {
@@ -90,8 +84,7 @@ _indirect_capacity(u32 entries_per_block, size_t indirection, size_t max) {
     return capacity;
 }
 
-static void
-_push_zero_blocks(u32 *blocks, size_t *n, size_t max, size_t count) {
+static void _push_zero_blocks(u32 *blocks, size_t *n, size_t max, size_t count) {
     if (*n >= max) {
         return;
     }
@@ -103,14 +96,7 @@ _push_zero_blocks(u32 *blocks, size_t *n, size_t max, size_t count) {
     *n += to_add;
 }
 
-static void _flatten_blocks(
-    boot_ext2_t *fs,
-    u32 *blocks,
-    u32 block_num,
-    size_t indirection,
-    size_t *n,
-    size_t max
-) {
+static void _flatten_blocks(boot_ext2_t *fs, u32 *blocks, u32 block_num, size_t indirection, size_t *n, size_t max) {
     if (*n >= max) {
         return;
     }
@@ -124,8 +110,7 @@ static void _flatten_blocks(
     }
 
     if (!block_num) {
-        size_t capacity =
-            _indirect_capacity(entries_per_block, indirection, max - *n);
+        size_t capacity = _indirect_capacity(entries_per_block, indirection, max - *n);
         _push_zero_blocks(blocks, n, max, capacity);
         return;
     }
@@ -158,8 +143,7 @@ static void _get_inode(boot_ext2_t *fs, u32 num, ext2_inode_t *inode) {
     _read_fs(fs, &gd, group_offset, sizeof(ext2_group_descriptor_t));
 
     u32 inode_size = ext2_inode_size(&fs->superblock);
-    size_t inode_offset =
-        (gd.inode_table_offset * block_size) + (index * inode_size);
+    size_t inode_offset = (gd.inode_table_offset * block_size) + (index * inode_size);
 
     _read_fs(fs, inode, inode_offset, sizeof(ext2_inode_t));
 }
@@ -258,15 +242,13 @@ static u32 _find_file(boot_ext2_t *fs, const char *path) {
         u64 dir_size = ext2_file_size(&inode);
 
         while (offset < dir_size) {
-            ext2_directory_t *dir =
-                (ext2_directory_t *)((u8 *)inode_buffer + offset);
+            ext2_directory_t *dir = (ext2_directory_t *)((u8 *)inode_buffer + offset);
 
             if (!dir->inode || !dir->size) {
                 break;
             }
 
-            if (name_len == dir->name_size &&
-                !memcmp(dir->name, current, name_len)) {
+            if (name_len == dir->name_size && !memcmp(dir->name, current, name_len)) {
                 current_inode = dir->inode;
                 found = true;
                 break;
@@ -291,11 +273,7 @@ static u32 _find_file(boot_ext2_t *fs, const char *path) {
     return current_inode;
 }
 
-void *boot_ext2_read_file(
-    boot_ext2_t *fs,
-    const char *path,
-    size_t *out_size
-) {
+void *boot_ext2_read_file(boot_ext2_t *fs, const char *path, size_t *out_size) {
     if (out_size) {
         *out_size = 0;
     }

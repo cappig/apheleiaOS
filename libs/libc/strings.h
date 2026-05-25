@@ -9,4 +9,3 @@ void bzero(void *dest, size_t len);
 
 char *index(const char *str, int ch);
 char *rindex(const char *str, int ch);
-

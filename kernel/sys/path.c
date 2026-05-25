@@ -63,15 +63,8 @@ static bool _push(
     return true;
 }
 
-static bool _apply(
-    const char *input,
-    char *out,
-    size_t out_len,
-    size_t *seg_pos,
-    size_t *seg_count,
-    size_t seg_cap,
-    size_t *len
-) {
+static bool
+_apply(const char *input, char *out, size_t out_len, size_t *seg_pos, size_t *seg_count, size_t seg_cap, size_t *len) {
     if (!input || !out || !seg_pos || !seg_count || !len) {
         return false;
     }
@@ -103,16 +96,7 @@ static bool _apply(
             continue;
         }
 
-        bool pushed = _push(
-            out,
-            out_len,
-            len,
-            start,
-            seg_len,
-            seg_pos,
-            seg_count,
-            seg_cap
-        );
+        bool pushed = _push(out, out_len, len, start, seg_len, seg_pos, seg_count, seg_cap);
 
         if (!pushed) {
             return false;
@@ -122,17 +106,12 @@ static bool _apply(
     return true;
 }
 
-bool path_resolve(
-    const char *cwd,
-    const char *path,
-    char *out,
-    size_t out_len
-) {
+bool path_resolve(const char *cwd, const char *path, char *out, size_t out_len) {
     if (!out || out_len < 2 || !path || !path[0]) {
         return false;
     }
 
-    size_t seg_pos[PATH_MAX / 2] = {0};
+    size_t seg_pos[PATH_MAX / 2] = { 0 };
     size_t seg_count = 0;
     size_t len = 1;
 
@@ -142,15 +121,7 @@ bool path_resolve(
     if (path[0] != '/') {
         const char *base = (cwd && cwd[0]) ? cwd : "/";
 
-        bool applied_base = _apply(
-            base,
-            out,
-            out_len,
-            seg_pos,
-            &seg_count,
-            ARRAY_LEN(seg_pos),
-            &len
-        );
+        bool applied_base = _apply(base, out, out_len, seg_pos, &seg_count, ARRAY_LEN(seg_pos), &len);
 
         if (!applied_base) {
             return false;
@@ -162,15 +133,7 @@ bool path_resolve(
         out[1] = '\0';
     }
 
-    bool applied_path = _apply(
-        path,
-        out,
-        out_len,
-        seg_pos,
-        &seg_count,
-        ARRAY_LEN(seg_pos),
-        &len
-    );
+    bool applied_path = _apply(path, out, out_len, seg_pos, &seg_count, ARRAY_LEN(seg_pos), &len);
 
     if (!applied_path) {
         return false;

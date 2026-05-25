@@ -10,18 +10,21 @@ typedef struct {
     vfs_node_t *node;
 } logsink_target_t;
 
-static logsink_target_t logsink_targets[LOGSINK_TARGET_MAX];
-static size_t logsink_target_count = 0;
-static bool logsink_bound = false;
+typedef struct {
+    logsink_target_t targets[LOGSINK_TARGET_MAX];
+    size_t count;
+    bool bound;
+} logsink_state_t;
 
+static logsink_state_t logsink = { 0 };
 
 static bool _path_exists(const char *path) {
     if (!path || !path[0]) {
         return false;
     }
 
-    for (size_t i = 0; i < logsink_target_count; i++) {
-        if (!strcmp(logsink_targets[i].path, path)) {
+    for (size_t i = 0; i < logsink.count; i++) {
+        if (!strcmp(logsink.targets[i].path, path)) {
             return true;
         }
     }
@@ -30,55 +33,54 @@ static bool _path_exists(const char *path) {
 }
 
 void logsink_reset(void) {
-    memset(logsink_targets, 0, sizeof(logsink_targets));
-    logsink_target_count = 0;
-    logsink_bound = false;
+    memset(&logsink, 0, sizeof(logsink));
 }
 
 void logsink_add_target(const char *path) {
-    if (!path || !path[0] || logsink_target_count >= LOGSINK_TARGET_MAX || _path_exists(path)) {
+    if (!path || !path[0] || logsink.count >= LOGSINK_TARGET_MAX || _path_exists(path)) {
         return;
     }
 
-    size_t path_len = sizeof(logsink_targets[logsink_target_count].path) - 1;
-    strncpy(logsink_targets[logsink_target_count].path, path, path_len);
+    logsink_target_t *target = &logsink.targets[logsink.count];
+    size_t path_len = sizeof(target->path) - 1;
 
-    logsink_targets[logsink_target_count].path[path_len] = '\0';
-    logsink_targets[logsink_target_count].node = NULL;
-    logsink_target_count++;
+    strncpy(target->path, path, path_len);
+    target->path[path_len] = '\0';
+    target->node = NULL;
+    logsink.count++;
 }
 
 void logsink_bind_devices(void) {
-    for (size_t i = 0; i < logsink_target_count; i++) {
-        logsink_targets[i].node = vfs_lookup(logsink_targets[i].path);
+    for (size_t i = 0; i < logsink.count; i++) {
+        logsink.targets[i].node = vfs_lookup(logsink.targets[i].path);
     }
 
-    logsink_bound = true;
+    logsink.bound = true;
 }
 
 void logsink_unbind_devices(void) {
-    for (size_t i = 0; i < logsink_target_count; i++) {
-        logsink_targets[i].node = NULL;
+    for (size_t i = 0; i < logsink.count; i++) {
+        logsink.targets[i].node = NULL;
     }
 
-    logsink_bound = false;
+    logsink.bound = false;
 }
 
 bool logsink_is_bound(void) {
-    return logsink_bound;
+    return logsink.bound;
 }
 
 bool logsink_has_targets(void) {
-    return logsink_target_count > 0;
+    return logsink.count > 0;
 }
 
 void logsink_write(const char *s, size_t len) {
-    if (!logsink_bound || !s || !len) {
+    if (!logsink.bound || !s || !len) {
         return;
     }
 
-    for (size_t i = 0; i < logsink_target_count; i++) {
-        const logsink_target_t *target = &logsink_targets[i];
+    for (size_t i = 0; i < logsink.count; i++) {
+        const logsink_target_t *target = &logsink.targets[i];
 
         if (!target->node) {
             continue;

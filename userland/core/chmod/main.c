@@ -1,9 +1,9 @@
 #include <errno.h>
 #include <io.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -62,8 +62,7 @@ static mode_t who_clear_mask(unsigned who) {
 }
 
 static mode_t perm_bits_for(unsigned who, char perm, mode_t base_mode) {
-    bool x_ok = 
-        (base_mode & S_IFMT) == S_IFDIR || (base_mode & (S_IXUSR | S_IXGRP | S_IXOTH));
+    bool x_ok = (base_mode & S_IFMT) == S_IFDIR || (base_mode & (S_IXUSR | S_IXGRP | S_IXOTH));
 
     mode_t bits = 0;
 
@@ -135,12 +134,7 @@ static int apply_symbolic_mode(const char *text, mode_t start_mode, mode_t *out)
 
     while (*cursor) {
         unsigned who = 0;
-        while (
-            *cursor == 'u' ||
-            *cursor == 'g' ||
-            *cursor == 'o' ||
-            *cursor == 'a'
-        ) {
+        while (*cursor == 'u' || *cursor == 'g' || *cursor == 'o' || *cursor == 'a') {
             if (*cursor == 'u' || *cursor == 'a') {
                 who |= 0x1;
             }
@@ -167,14 +161,8 @@ static int apply_symbolic_mode(const char *text, mode_t start_mode, mode_t *out)
         mode_t bits = 0;
         bool have_perm = false;
 
-        while (
-            *cursor == 'r' ||
-            *cursor == 'w' ||
-            *cursor == 'x' ||
-            *cursor == 'X' ||
-            *cursor == 's' ||
-            *cursor == 't'
-        ) {
+        while (*cursor == 'r' || *cursor == 'w' || *cursor == 'x' || *cursor == 'X' || *cursor == 's' ||
+               *cursor == 't') {
             bits |= perm_bits_for(who, *cursor, mode);
             have_perm = true;
             cursor++;
@@ -229,17 +217,11 @@ int main(int argc, char **argv) {
     for (int i = 2; i < argc; i++) {
         mode_t target_mode = mode;
         if (symbolic) {
-            struct stat st = {0};
+            struct stat st = { 0 };
 
             if (stat(argv[i], &st) != 0) {
                 char msg[128];
-                snprintf(
-                    msg,
-                    sizeof(msg),
-                    "chmod: %s: %s\n",
-                    argv[i],
-                    strerror(errno)
-                );
+                snprintf(msg, sizeof(msg), "chmod: %s: %s\n", argv[i], strerror(errno));
                 io_write_str(msg);
                 rc = 1;
                 continue;
@@ -254,9 +236,7 @@ int main(int argc, char **argv) {
 
         if (chmod(argv[i], target_mode) != 0) {
             char msg[128];
-            snprintf(
-                msg, sizeof(msg), "chmod: %s: %s\n", argv[i], strerror(errno)
-            );
+            snprintf(msg, sizeof(msg), "chmod: %s: %s\n", argv[i], strerror(errno));
             io_write_str(msg);
             rc = 1;
         }

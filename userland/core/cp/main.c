@@ -15,14 +15,7 @@ static void usage(void) {
 
 static void print_error(const char *src, const char *dst) {
     char line[320];
-    snprintf(
-        line,
-        sizeof(line),
-        "cp: %s -> %s: %s\n",
-        src ? src : "(null)",
-        dst ? dst : "(null)",
-        strerror(errno)
-    );
+    snprintf(line, sizeof(line), "cp: %s -> %s: %s\n", src ? src : "(null)", dst ? dst : "(null)", strerror(errno));
     io_write_str(line);
 }
 
@@ -57,7 +50,7 @@ static int copy_fd_data(int in_fd, int out_fd) {
 }
 
 static int copy_file(const char *src, const char *dst) {
-    struct stat st_src = {0};
+    struct stat st_src = { 0 };
     if (lstat(src, &st_src) < 0) {
         return -1;
     }
@@ -67,7 +60,7 @@ static int copy_file(const char *src, const char *dst) {
         return -1;
     }
 
-    struct stat st_dst = {0};
+    struct stat st_dst = { 0 };
     if (!lstat(dst, &st_dst)) {
         if (st_src.st_dev == st_dst.st_dev && st_src.st_ino == st_dst.st_ino) {
             errno = EINVAL;
@@ -113,7 +106,7 @@ int main(int argc, char **argv) {
     }
 
     const char *dest = argv[argc - 1];
-    struct stat st_dest = {0};
+    struct stat st_dest = { 0 };
 
     bool dest_exists = (!lstat(dest, &st_dest));
     bool dest_is_dir = dest_exists && fs_is_dir_mode(st_dest.st_mode);

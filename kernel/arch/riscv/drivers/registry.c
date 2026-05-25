@@ -1,6 +1,5 @@
 #include <drivers/manager.h>
 #include <drivers/registry.h>
-
 #include <riscv/drivers/serial.h>
 
 static const driver_desc_t *const drivers[] = {

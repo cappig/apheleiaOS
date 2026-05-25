@@ -10,14 +10,7 @@
 
 static void print_error(const char *src, const char *dst) {
     char line[320];
-    snprintf(
-        line,
-        sizeof(line),
-        "mv: %s -> %s: %d\n",
-        src ? src : "(null)",
-        dst ? dst : "(null)",
-        errno
-    );
+    snprintf(line, sizeof(line), "mv: %s -> %s: %d\n", src ? src : "(null)", dst ? dst : "(null)", errno);
     io_write_str(line);
 }
 
@@ -28,7 +21,7 @@ int main(int argc, char **argv) {
     }
 
     const char *dest = argv[argc - 1];
-    struct stat st_dest = {0};
+    struct stat st_dest = { 0 };
 
     bool dest_exists = (!stat(dest, &st_dest));
     bool dest_is_dir = dest_exists && fs_is_dir_mode(st_dest.st_mode);

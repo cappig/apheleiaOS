@@ -1,5 +1,5 @@
-#include <ctype.h>
 #include <crypt.h>
+#include <ctype.h>
 #include <fcntl.h>
 #include <pwd.h>
 #include <shadow.h>
@@ -152,12 +152,7 @@ static bool member_list_has_user(const char *members, const char *user_name) {
     return false;
 }
 
-static void append_group(
-    gid_t gid,
-    gid_t *groups,
-    size_t max_groups,
-    size_t *group_count
-) {
+static void append_group(gid_t gid, gid_t *groups, size_t max_groups, size_t *group_count) {
     if (!groups || !group_count) {
         return;
     }
@@ -176,12 +171,7 @@ static void append_group(
     (*group_count)++;
 }
 
-static size_t collect_supp_groups(
-    const char *user_name,
-    gid_t primary_gid,
-    gid_t *groups,
-    size_t max_groups
-) {
+static size_t collect_supp_groups(const char *user_name, gid_t primary_gid, gid_t *groups, size_t max_groups) {
     if (!groups || !max_groups) {
         return 0;
     }
@@ -278,8 +268,8 @@ int main(int argc, char **argv) {
     (void)argv;
 
     for (;;) {
-        char name[32] = {0};
-        char pass[256] = {0};
+        char name[32] = { 0 };
+        char pass[256] = { 0 };
 
         pid_t pid = getpid();
         ioctl(STDIN_FILENO, TIOCSPGRP, &pid);
@@ -329,19 +319,10 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        gid_t groups[LOGIN_GROUP_MAX] = {0};
-        size_t group_count = collect_supp_groups(
-            login_name,
-            pwd->pw_gid,
-            groups,
-            sizeof(groups) / sizeof(groups[0])
-        );
+        gid_t groups[LOGIN_GROUP_MAX] = { 0 };
+        size_t group_count = collect_supp_groups(login_name, pwd->pw_gid, groups, sizeof(groups) / sizeof(groups[0]));
 
-        if (
-            setgroups(group_count, groups) < 0 ||
-            setgid(pwd->pw_gid) < 0 ||
-            setuid(pwd->pw_uid) < 0
-        ) {
+        if (setgroups(group_count, groups) < 0 || setgid(pwd->pw_gid) < 0 || setuid(pwd->pw_uid) < 0) {
             write_str("login: failed to set credentials\n");
             continue;
         }
@@ -350,10 +331,9 @@ int main(int argc, char **argv) {
             chdir(pwd->pw_dir);
         }
 
-        const char *shell =
-            (pwd->pw_shell && pwd->pw_shell[0]) ? pwd->pw_shell : "/bin/sh";
+        const char *shell = (pwd->pw_shell && pwd->pw_shell[0]) ? pwd->pw_shell : "/bin/sh";
 
-        char *args[] = {(char *)shell, NULL};
+        char *args[] = { (char *)shell, NULL };
         execve(shell, args, NULL);
 
         write_str("login: exec failed\n");

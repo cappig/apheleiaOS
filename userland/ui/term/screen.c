@@ -12,14 +12,14 @@
 #include <term/glyph.h>
 #include <term/utf8.h>
 
-#define FONT_BUF_SIZE  (256 * 1024)
-#define TERM_TAB_WIDTH 8
-#define TERM_SCROLLBACK_LINES          4096
-#define TERM_SCROLLBAR_WIDTH_PX        3
-#define TERM_SCROLLBAR_MIN_THUMB_PX    8
-#define TERM_SCROLLBAR_TRACK_COLOR     0x00262626U
-#define TERM_SCROLLBAR_THUMB_COLOR     0x00545454U
-#define TERM_SCROLLBAR_THUMB_ACTIVE    0x007a7a7aU
+#define FONT_BUF_SIZE               (256 * 1024)
+#define TERM_TAB_WIDTH              8
+#define TERM_SCROLLBACK_LINES       4096
+#define TERM_SCROLLBAR_WIDTH_PX     3
+#define TERM_SCROLLBAR_MIN_THUMB_PX 8
+#define TERM_SCROLLBAR_TRACK_COLOR  0x00262626U
+#define TERM_SCROLLBAR_THUMB_COLOR  0x00545454U
+#define TERM_SCROLLBAR_THUMB_ACTIVE 0x007a7a7aU
 
 typedef struct {
     u32 codepoint;
@@ -69,7 +69,7 @@ typedef struct {
     bool ready;
 } term_screen_state_t;
 
-static term_screen_state_t term_screen = {0};
+static term_screen_state_t term_screen = { 0 };
 
 static framebuffer_t _screen_framebuffer(void) {
     framebuffer_t fb = {
@@ -106,8 +106,7 @@ static term_cell_t *history_line_at(size_t logical_index) {
         return NULL;
     }
 
-    size_t physical =
-        (term_screen.history_head + logical_index) % TERM_SCROLLBACK_LINES;
+    size_t physical = (term_screen.history_head + logical_index) % TERM_SCROLLBACK_LINES;
     return &term_screen.history[physical * TERM_MAX_COLS];
 }
 
@@ -134,25 +133,15 @@ static void push_history_row(const term_cell_t *row) {
 
     size_t physical = 0;
     if (term_screen.history_count < TERM_SCROLLBACK_LINES) {
-        physical =
-            (term_screen.history_head + term_screen.history_count) %
-            TERM_SCROLLBACK_LINES;
+        physical = (term_screen.history_head + term_screen.history_count) % TERM_SCROLLBACK_LINES;
         term_screen.history_count++;
     } else {
         physical = term_screen.history_head;
-        term_screen.history_head =
-            (term_screen.history_head + 1) % TERM_SCROLLBACK_LINES;
+        term_screen.history_head = (term_screen.history_head + 1) % TERM_SCROLLBACK_LINES;
     }
 
     term_cell_t *dst = &term_screen.history[physical * TERM_MAX_COLS];
-    term_cells_clear_range(
-        dst,
-        TERM_MAX_COLS,
-        0,
-        TERM_MAX_COLS,
-        term_screen.color.fg_idx,
-        term_screen.color.bg_idx
-    );
+    term_cells_clear_range(dst, TERM_MAX_COLS, 0, TERM_MAX_COLS, term_screen.color.fg_idx, term_screen.color.bg_idx);
     memcpy(dst, row, term_screen.cols * sizeof(*dst));
 
     size_t max = max_scroll_offset();
@@ -235,11 +224,7 @@ static bool reserve_font_map(size_t needed) {
     }
 
     if (term_screen.font_map_count && term_screen.font_map) {
-        memcpy(
-            next,
-            term_screen.font_map,
-            term_screen.font_map_count * sizeof(*next)
-        );
+        memcpy(next, term_screen.font_map, term_screen.font_map_count * sizeof(*next));
     }
 
     if (term_screen.font_map) {
@@ -355,16 +340,11 @@ static void set_default_cell_metrics(void) {
 }
 
 static bool glyph_bounds_for_index(u32 glyph_idx, u32 *left_out, u32 *right_out) {
-    if (
-        glyph_idx >= term_screen.font.glyph_count ||
-        !left_out ||
-        !right_out
-    ) {
+    if (glyph_idx >= term_screen.font.glyph_count || !left_out || !right_out) {
         return false;
     }
 
-    const u8 *glyph =
-        term_screen.font.glyphs + (size_t)glyph_idx * term_screen.font.glyph_size;
+    const u8 *glyph = term_screen.font.glyphs + (size_t)glyph_idx * term_screen.font.glyph_size;
     u32 left = term_screen.font.width;
     u32 right = 0;
     bool any = false;
@@ -399,11 +379,7 @@ static bool glyph_bounds_for_index(u32 glyph_idx, u32 *left_out, u32 *right_out)
 static void derive_cell_metrics(void) {
     set_default_cell_metrics();
 
-    if (
-        !term_screen.font.glyphs ||
-        !term_screen.font.width ||
-        !term_screen.font.height
-    ) {
+    if (!term_screen.font.glyphs || !term_screen.font.width || !term_screen.font.height) {
         return;
     }
 
@@ -472,11 +448,7 @@ static void derive_cell_metrics(void) {
 static bool build_font_map(void) {
     clear_font_map();
 
-    if (
-        !psf_iter_unicode_mappings(
-            &term_screen.font, push_font_map_iter, NULL
-        )
-    ) {
+    if (!psf_iter_unicode_mappings(&term_screen.font, push_font_map_iter, NULL)) {
         clear_font_map();
         return false;
     }
@@ -501,15 +473,7 @@ static bool init_font(void) {
 
     const char *font_path = draw_get_font_path();
 
-    if (
-        !term_screen.font.glyphs &&
-        !psf_load_file(
-            font_path,
-            term_screen.font_buf,
-            FONT_BUF_SIZE,
-            &term_screen.font
-        )
-    ) {
+    if (!term_screen.font.glyphs && !psf_load_file(font_path, term_screen.font_buf, FONT_BUF_SIZE, &term_screen.font)) {
         return false;
     }
 
@@ -699,11 +663,7 @@ static void put_codepoint(u32 codepoint) {
 
     term_cell_t *cell = cell_at(term_screen.cursor_x, term_screen.cursor_y);
 
-    if (
-        cell->codepoint != codepoint ||
-        cell->fg != term_screen.color.fg_idx ||
-        cell->bg != term_screen.color.bg_idx
-    ) {
+    if (cell->codepoint != codepoint || cell->fg != term_screen.color.fg_idx || cell->bg != term_screen.color.bg_idx) {
         cell->codepoint = codepoint;
         cell->fg = term_screen.color.fg_idx;
         cell->bg = term_screen.color.bg_idx;
@@ -729,14 +689,7 @@ static void clear_line_mode(void *ctx, int mode) {
     size_t row_end = row_start + term_screen.cols;
 
     if (mode == 2) {
-        term_cells_clear_range(
-            cells,
-            count,
-            row_start,
-            row_end,
-            term_screen.color.fg_idx,
-            term_screen.color.bg_idx
-        );
+        term_cells_clear_range(cells, count, row_start, row_end, term_screen.color.fg_idx, term_screen.color.bg_idx);
 
         mark_dirty_rect(0, y, term_screen.cols, y + 1);
         return;
@@ -805,31 +758,15 @@ static void clear_screen_mode(void *ctx, int mode) {
     }
 
     if (mode == 1) {
-        term_cells_clear_range(
-            cells,
-            count,
-            0,
-            cursor + 1,
-            term_screen.color.fg_idx,
-            term_screen.color.bg_idx
-        );
+        term_cells_clear_range(cells, count, 0, cursor + 1, term_screen.color.fg_idx, term_screen.color.bg_idx);
 
         mark_dirty_rect(0, 0, term_screen.cols, term_screen.cursor_y + 1);
         return;
     }
 
-    term_cells_clear_range(
-        cells,
-        count,
-        cursor,
-        count,
-        term_screen.color.fg_idx,
-        term_screen.color.bg_idx
-    );
+    term_cells_clear_range(cells, count, cursor, count, term_screen.color.fg_idx, term_screen.color.bg_idx);
 
-    mark_dirty_rect(
-        0, term_screen.cursor_y, term_screen.cols, term_screen.rows
-    );
+    mark_dirty_rect(0, term_screen.cursor_y, term_screen.cols, term_screen.rows);
 }
 
 static void utf8_on_codepoint(void *ctx, u32 codepoint) {
@@ -858,13 +795,7 @@ static void ansi_on_control(void *ctx, u8 ch) {
     put_codepoint(ch);
 }
 
-static void ansi_on_csi(
-    void *ctx,
-    char op,
-    const int *params,
-    size_t count,
-    bool private_mode
-) {
+static void ansi_on_csi(void *ctx, char op, const int *params, size_t count, bool private_mode) {
     (void)ctx;
 
     size_t old_x = term_screen.cursor_x;
@@ -914,13 +845,8 @@ static size_t pixel_stride(void) {
 }
 
 static void draw_glyph(size_t px, size_t py, u32 codepoint, u32 fg, u32 bg) {
-    if (
-        !term_screen.pixels ||
-        !term_screen.width ||
-        !term_screen.height ||
-        px >= term_screen.width ||
-        py >= term_screen.height
-    ) {
+    if (!term_screen.pixels || !term_screen.width || !term_screen.height || px >= term_screen.width ||
+        py >= term_screen.height) {
         return;
     }
 
@@ -986,16 +912,7 @@ static void draw_glyph(size_t px, size_t py, u32 codepoint, u32 fg, u32 bg) {
     }
 
     if (glyph_x0 == 0 && draw_w == glyph_w && draw_h == glyph_h) {
-        term_glyph_blit_u32(
-            dst,
-            stride,
-            glyph,
-            glyph_w,
-            glyph_h,
-            term_screen.font.row_bytes,
-            fg,
-            bg
-        );
+        term_glyph_blit_u32(dst, stride, glyph, glyph_w, glyph_h, term_screen.font.row_bytes, fg, bg);
         return;
     }
 
@@ -1003,11 +920,7 @@ static void draw_glyph(size_t px, size_t py, u32 codepoint, u32 fg, u32 bg) {
         u32 *row = dst + (size_t)gy * stride;
 
         for (u32 gx = 0; gx < draw_w; gx++) {
-            row[gx] = glyph_pixel_on(
-                          glyph, term_screen.font.row_bytes, glyph_x0 + gx, gy
-                      ) ?
-                          fg :
-                          bg;
+            row[gx] = glyph_pixel_on(glyph, term_screen.font.row_bytes, glyph_x0 + gx, gy) ? fg : bg;
         }
     }
 }
@@ -1019,14 +932,7 @@ static void draw_scrollbar(void) {
 
     framebuffer_t fb = _screen_framebuffer();
     i32 track_x = (i32)(term_screen.width - term_screen.scrollbar_width);
-    draw_rect(
-        &fb,
-        track_x,
-        0,
-        term_screen.scrollbar_width,
-        term_screen.height,
-        TERM_SCROLLBAR_TRACK_COLOR
-    );
+    draw_rect(&fb, track_x, 0, term_screen.scrollbar_width, term_screen.height, TERM_SCROLLBAR_TRACK_COLOR);
 
     size_t total_lines = term_screen.history_count + term_screen.rows;
     if (total_lines <= term_screen.rows) {
@@ -1051,16 +957,8 @@ static void draw_scrollbar(void) {
         thumb_y = (u32)(((u64)pos_from_top * (u64)range) / (u64)max_offset);
     }
 
-    pixel_t thumb_color =
-        offset ? TERM_SCROLLBAR_THUMB_ACTIVE : TERM_SCROLLBAR_THUMB_COLOR;
-    draw_rect(
-        &fb,
-        track_x,
-        (i32)thumb_y,
-        term_screen.scrollbar_width,
-        thumb_h,
-        thumb_color
-    );
+    pixel_t thumb_color = offset ? TERM_SCROLLBAR_THUMB_ACTIVE : TERM_SCROLLBAR_THUMB_COLOR;
+    draw_rect(&fb, track_x, (i32)thumb_y, term_screen.scrollbar_width, thumb_h, thumb_color);
 }
 
 static bool term_screen_layout(
@@ -1071,10 +969,7 @@ static bool term_screen_layout(
     size_t *cols_out,
     size_t *rows_out
 ) {
-    if (
-        !width || !height || !pixels_count || !scrollbar_width_out || !cols_out ||
-        !rows_out
-    ) {
+    if (!width || !height || !pixels_count || !scrollbar_width_out || !cols_out || !rows_out) {
         return false;
     }
 
@@ -1131,14 +1026,7 @@ bool term_screen_init(const framebuffer_t *fb) {
     size_t cols = 0;
     size_t rows = 0;
     u32 scrollbar_width = 0;
-    bool layout_ok = term_screen_layout(
-        fb->width,
-        fb->height,
-        fb->pixel_count,
-        &scrollbar_width,
-        &cols,
-        &rows
-    );
+    bool layout_ok = term_screen_layout(fb->width, fb->height, fb->pixel_count, &scrollbar_width, &cols, &rows);
 
     if (!layout_ok) {
         return false;
@@ -1180,14 +1068,7 @@ bool term_screen_resize(const framebuffer_t *fb) {
     size_t cols = 0;
     size_t rows = 0;
     u32 scrollbar_width = 0;
-    bool layout_ok = term_screen_layout(
-        fb->width,
-        fb->height,
-        fb->pixel_count,
-        &scrollbar_width,
-        &cols,
-        &rows
-    );
+    bool layout_ok = term_screen_layout(fb->width, fb->height, fb->pixel_count, &scrollbar_width, &cols, &rows);
 
     if (!layout_ok) {
         return false;
@@ -1283,14 +1164,10 @@ void term_screen_feed(const u8 *bytes, size_t len) {
 
     for (size_t i = 0; i < len; i++) {
         if (bytes[i] == '\x1b') {
-            term_utf8_flush_invalid(
-                &term_screen.utf8, &term_utf8_callbacks, NULL
-            );
+            term_utf8_flush_invalid(&term_screen.utf8, &term_utf8_callbacks, NULL);
         }
 
-        ansi_parser_feed(
-            &term_screen.ansi, bytes[i], &term_ansi_callbacks, NULL
-        );
+        ansi_parser_feed(&term_screen.ansi, bytes[i], &term_ansi_callbacks, NULL);
     }
 }
 
@@ -1326,12 +1203,8 @@ bool term_screen_render_rect(u32 *x, u32 *y, u32 *width, u32 *height) {
         }
     }
 
-    if (
-        term_screen.scroll_offset == 0 &&
-        term_screen.cursor_visible &&
-        term_screen.cursor_x < term_screen.cols &&
-        term_screen.cursor_y < term_screen.rows
-    ) {
+    if (term_screen.scroll_offset == 0 && term_screen.cursor_visible && term_screen.cursor_x < term_screen.cols &&
+        term_screen.cursor_y < term_screen.rows) {
         size_t px = term_screen.cursor_x * term_screen.cell_width;
         size_t py = term_screen.cursor_y * term_screen.cell_height;
 
@@ -1340,14 +1213,7 @@ bool term_screen_render_rect(u32 *x, u32 *y, u32 *width, u32 *height) {
         u32 bg = ansi_color_rgb(cell->bg);
 
         framebuffer_t fb = _screen_framebuffer();
-        draw_rect(
-            &fb,
-            (i32)px,
-            (i32)py,
-            term_screen.cell_width,
-            term_screen.cell_height,
-            bg
-        );
+        draw_rect(&fb, (i32)px, (i32)py, term_screen.cell_width, term_screen.cell_height, bg);
         draw_glyph(px, py, cell->codepoint, bg, fg);
 
         term_screen.cursor_prev_x = term_screen.cursor_x;

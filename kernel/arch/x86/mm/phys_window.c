@@ -12,8 +12,8 @@
 #if defined(__x86_64__)
 #include "virtual.h"
 
-#define PHYS_WINDOW_BASE_64 0xfffffe0000000000ULL
-#define PHYS_WINDOW_SIZE_64 (16 * MIB)
+#define PHYS_WINDOW_BASE_64   0xfffffe0000000000ULL
+#define PHYS_WINDOW_SIZE_64   (16 * MIB)
 #define PHYS_WINDOW_STACK_MAX 8
 
 typedef struct {
@@ -22,15 +22,22 @@ typedef struct {
     u64 flags;
 } window_map_t;
 
-static size_t window_pages_mapped = 0;
-static u64 window_paddr_base = 0;
-static u64 window_flags = PT_WRITE;
-static spinlock_t window_lock = SPINLOCK_INIT;
-static u32 window_lock_depth[MAX_CORES] = {0};
-static unsigned long window_irq_flags[MAX_CORES] = {0};
+typedef struct {
+    size_t pages_mapped;
+    u64 paddr_base;
+    u64 flags;
+    spinlock_t lock;
+    u32 lock_depth[MAX_CORES];
+    unsigned long irq_flags[MAX_CORES];
 
-static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
-static size_t window_stack_depth = 0;
+    window_map_t stack[PHYS_WINDOW_STACK_MAX];
+    size_t stack_depth;
+} phys_window_state_t;
+
+static phys_window_state_t window = {
+    .flags = PT_WRITE,
+    .lock = SPINLOCK_INIT,
+};
 
 static size_t _window_cpu_id(void) {
     cpu_core_t *core = cpu_current();
@@ -46,29 +53,29 @@ static void _window_lock_acquire(void) {
     unsigned long irq_flags = arch_irq_save();
     size_t cpu_id = _window_cpu_id();
 
-    if (window_lock_depth[cpu_id]) {
-        window_lock_depth[cpu_id]++;
+    if (window.lock_depth[cpu_id]) {
+        window.lock_depth[cpu_id]++;
         return;
     }
 
-    spin_lock(&window_lock);
+    spin_lock(&window.lock);
 
-    window_lock_depth[cpu_id] = 1;
-    window_irq_flags[cpu_id] = irq_flags;
+    window.lock_depth[cpu_id] = 1;
+    window.irq_flags[cpu_id] = irq_flags;
 }
 
 static void _window_lock_release(void) {
     size_t cpu_id = _window_cpu_id();
 
-    if (!window_lock_depth[cpu_id]) {
+    if (!window.lock_depth[cpu_id]) {
         return;
     }
 
-    window_lock_depth[cpu_id]--;
+    window.lock_depth[cpu_id]--;
 
-    if (!window_lock_depth[cpu_id]) {
-        spin_unlock(&window_lock);
-        arch_irq_restore(window_irq_flags[cpu_id]);
+    if (!window.lock_depth[cpu_id]) {
+        spin_unlock(&window.lock);
+        arch_irq_restore(window.irq_flags[cpu_id]);
     }
 }
 
@@ -108,16 +115,12 @@ static void _clear_window_range(size_t pages) {
 }
 
 static void _restore_window(window_map_t prev) {
-    window_pages_mapped = prev.pages;
-    window_paddr_base = prev.paddr_base;
-    window_flags = prev.flags;
+    window.pages_mapped = prev.pages;
+    window.paddr_base = prev.paddr_base;
+    window.flags = prev.flags;
 
     for (size_t i = 0; i < prev.pages; i++) {
-        _map_window_page(
-            PHYS_WINDOW_BASE_64 + i * PAGE_4KIB,
-            prev.paddr_base + i * PAGE_4KIB,
-            prev.flags
-        );
+        _map_window_page(PHYS_WINDOW_BASE_64 + i * PAGE_4KIB, prev.paddr_base + i * PAGE_4KIB, prev.flags);
     }
 }
 
@@ -127,11 +130,7 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     }
 
     u64 end = paddr + size;
-    if (
-        !(flags & (PHYS_MAP_UC | PHYS_MAP_MMIO)) &&
-        end >= paddr &&
-        end <= PROTECTED_MODE_TOP
-    ) {
+    if (!(flags & (PHYS_MAP_UC | PHYS_MAP_MMIO)) && end >= paddr && end <= PROTECTED_MODE_TOP) {
         return (void *)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
     }
 
@@ -147,33 +146,29 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
 
     _window_lock_acquire();
 
-    if (window_pages_mapped) {
-        if (window_stack_depth >= PHYS_WINDOW_STACK_MAX) {
+    if (window.pages_mapped) {
+        if (window.stack_depth >= PHYS_WINDOW_STACK_MAX) {
             panic("phys window map stack overflow");
         }
 
-        window_stack[window_stack_depth++] = (window_map_t){
-            .paddr_base = window_paddr_base,
-            .pages = window_pages_mapped,
-            .flags = window_flags,
+        window.stack[window.stack_depth++] = (window_map_t){
+            .paddr_base = window.paddr_base,
+            .pages = window.pages_mapped,
+            .flags = window.flags,
         };
 
-        _clear_window_range(window_pages_mapped);
+        _clear_window_range(window.pages_mapped);
     }
 
-    window_pages_mapped = pages;
-    window_paddr_base = start;
+    window.pages_mapped = pages;
+    window.paddr_base = start;
 
     u64 pt_flags = _map_flags_to_pt_flags(flags);
 
-    window_flags = pt_flags;
+    window.flags = pt_flags;
 
     for (size_t i = 0; i < pages; i++) {
-        _map_window_page(
-            PHYS_WINDOW_BASE_64 + i * PAGE_4KIB,
-            start + i * PAGE_4KIB,
-            pt_flags
-        );
+        _map_window_page(PHYS_WINDOW_BASE_64 + i * PAGE_4KIB, start + i * PAGE_4KIB, pt_flags);
     }
 
     return (void *)(uintptr_t)(PHYS_WINDOW_BASE_64 + (paddr - start));
@@ -194,21 +189,21 @@ void arch_phys_unmap(void *vaddr, size_t size) {
         return;
     }
 
-    if (!window_pages_mapped) {
+    if (!window.pages_mapped) {
         return;
     }
 
-    _clear_window_range(window_pages_mapped);
-    window_pages_mapped = 0;
-    window_paddr_base = 0;
-    window_flags = PT_WRITE;
+    _clear_window_range(window.pages_mapped);
+    window.pages_mapped = 0;
+    window.paddr_base = 0;
+    window.flags = PT_WRITE;
 
-    if (!window_stack_depth) {
+    if (!window.stack_depth) {
         _window_lock_release();
         return;
     }
 
-    window_map_t prev = window_stack[--window_stack_depth];
+    window_map_t prev = window.stack[--window.stack_depth];
     _restore_window(prev);
     _window_lock_release();
 }
@@ -252,13 +247,6 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
 #else
 #include <x86/paging32.h>
 
-static size_t window_pages_mapped = 0;
-static u64 window_paddr_base = 0;
-static u64 window_flags = PT_WRITE;
-static spinlock_t window_lock = SPINLOCK_INIT;
-static u32 window_lock_depth[MAX_CORES] = {0};
-static unsigned long window_irq_flags[MAX_CORES] = {0};
-
 #define PHYS_WINDOW_STACK_MAX 8
 
 typedef struct {
@@ -267,8 +255,22 @@ typedef struct {
     u64 flags;
 } window_map_t;
 
-static window_map_t window_stack[PHYS_WINDOW_STACK_MAX];
-static size_t window_stack_depth = 0;
+typedef struct {
+    size_t pages_mapped;
+    u64 paddr_base;
+    u64 flags;
+    spinlock_t lock;
+    u32 lock_depth[MAX_CORES];
+    unsigned long irq_flags[MAX_CORES];
+
+    window_map_t stack[PHYS_WINDOW_STACK_MAX];
+    size_t stack_depth;
+} phys_window_state_t;
+
+static phys_window_state_t window = {
+    .flags = PT_WRITE,
+    .lock = SPINLOCK_INIT,
+};
 
 static size_t _window_cpu_id(void) {
     cpu_core_t *core = cpu_current();
@@ -284,29 +286,29 @@ static void _window_lock_acquire(void) {
     unsigned long irq_flags = arch_irq_save();
     size_t cpu_id = _window_cpu_id();
 
-    if (window_lock_depth[cpu_id]) {
-        window_lock_depth[cpu_id]++;
+    if (window.lock_depth[cpu_id]) {
+        window.lock_depth[cpu_id]++;
         return;
     }
 
-    spin_lock(&window_lock);
+    spin_lock(&window.lock);
 
-    window_lock_depth[cpu_id] = 1;
-    window_irq_flags[cpu_id] = irq_flags;
+    window.lock_depth[cpu_id] = 1;
+    window.irq_flags[cpu_id] = irq_flags;
 }
 
 static void _window_lock_release(void) {
     size_t cpu_id = _window_cpu_id();
 
-    if (!window_lock_depth[cpu_id]) {
+    if (!window.lock_depth[cpu_id]) {
         return;
     }
 
-    window_lock_depth[cpu_id]--;
+    window.lock_depth[cpu_id]--;
 
-    if (!window_lock_depth[cpu_id]) {
-        spin_unlock(&window_lock);
-        arch_irq_restore(window_irq_flags[cpu_id]);
+    if (!window.lock_depth[cpu_id]) {
+        spin_unlock(&window.lock);
+        arch_irq_restore(window.irq_flags[cpu_id]);
     }
 }
 
@@ -389,31 +391,29 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     _window_lock_acquire();
 
     // single sliding window, new mappings invalidate any previous one
-    if (window_pages_mapped) {
-        if (window_stack_depth >= PHYS_WINDOW_STACK_MAX)
+    if (window.pages_mapped) {
+        if (window.stack_depth >= PHYS_WINDOW_STACK_MAX)
             panic("phys window map stack overflow");
 
-        window_stack[window_stack_depth++] = (window_map_t){
-            .paddr_base = window_paddr_base,
-            .pages = window_pages_mapped,
-            .flags = window_flags,
+        window.stack[window.stack_depth++] = (window_map_t){
+            .paddr_base = window.paddr_base,
+            .pages = window.pages_mapped,
+            .flags = window.flags,
         };
 
-        _clear_window_range(window_pages_mapped);
+        _clear_window_range(window.pages_mapped);
     }
 
-    window_pages_mapped = pages;
-    window_paddr_base = start;
+    window.pages_mapped = pages;
+    window.paddr_base = start;
 
     u64 pt_flags = _map_flags_to_pt_flags(flags);
-    window_flags = pt_flags;
+    window.flags = pt_flags;
 
     u32 vaddr = PHYS_WINDOW_BASE_32;
 
     for (size_t i = 0; i < pages; i++)
-        _map_window_page(
-            vaddr + (u32)(i * PAGE_4KIB), start + i * PAGE_4KIB, pt_flags
-        );
+        _map_window_page(vaddr + (u32)(i * PAGE_4KIB), start + i * PAGE_4KIB, pt_flags);
 
     return (void *)(uintptr_t)(PHYS_WINDOW_BASE_32 + (u32)(paddr - start));
 }
@@ -422,32 +422,28 @@ void arch_phys_unmap(void *vaddr, size_t size) {
     (void)vaddr;
     (void)size;
 
-    if (!window_pages_mapped)
+    if (!window.pages_mapped)
         return;
 
-    _clear_window_range(window_pages_mapped);
-    window_pages_mapped = 0;
-    window_paddr_base = 0;
-    window_flags = PT_WRITE;
+    _clear_window_range(window.pages_mapped);
+    window.pages_mapped = 0;
+    window.paddr_base = 0;
+    window.flags = PT_WRITE;
 
-    if (!window_stack_depth) {
+    if (!window.stack_depth) {
         _window_lock_release();
         return;
     }
 
-    window_map_t prev = window_stack[--window_stack_depth];
-    window_pages_mapped = prev.pages;
-    window_paddr_base = prev.paddr_base;
-    window_flags = prev.flags;
+    window_map_t prev = window.stack[--window.stack_depth];
+    window.pages_mapped = prev.pages;
+    window.paddr_base = prev.paddr_base;
+    window.flags = prev.flags;
 
     u32 map_base = PHYS_WINDOW_BASE_32;
 
     for (size_t i = 0; i < prev.pages; i++) {
-        _map_window_page(
-            map_base + (u32)(i * PAGE_4KIB),
-            prev.paddr_base + i * PAGE_4KIB,
-            prev.flags
-        );
+        _map_window_page(map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, prev.flags);
     }
 
     _window_lock_release();

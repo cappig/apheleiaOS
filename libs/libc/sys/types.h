@@ -1,7 +1,6 @@
 #pragma once
 
 #include <posix.h>
-
 #include <stddef.h>
 #include <stdint.h>
 

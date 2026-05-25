@@ -10,8 +10,7 @@
 
 #define PASSWD_PATH "/etc/passwd"
 
-static int
-copy_field(char **cursor, size_t *left, char **out, const char *src) {
+static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
     size_t n = strlen(src) + 1;
     if (!cursor || !left || !out || !src || n > *left) {
         return ERANGE;
@@ -24,23 +23,18 @@ copy_field(char **cursor, size_t *left, char **out, const char *src) {
     return 0;
 }
 
-static int parse_passwd_line(
-    const char *line,
-    struct passwd *pwd,
-    char *buf,
-    size_t buflen
-) {
+static int parse_passwd_line(const char *line, struct passwd *pwd, char *buf, size_t buflen) {
     if (!line || !pwd || !buf || !buflen) {
         return EINVAL;
     }
 
-    char pw_name[64] = {0};
-    char pw_passwd[128] = {0};
-    char uid_buf[32] = {0};
-    char gid_buf[32] = {0};
-    char pw_gecos[128] = {0};
-    char pw_dir[128] = {0};
-    char pw_shell[128] = {0};
+    char pw_name[64] = { 0 };
+    char pw_passwd[128] = { 0 };
+    char uid_buf[32] = { 0 };
+    char gid_buf[32] = { 0 };
+    char pw_gecos[128] = { 0 };
+    char pw_dir[128] = { 0 };
+    char pw_shell[128] = { 0 };
 
     const char *cursor = line;
 
@@ -132,7 +126,7 @@ static int find_passwd(
             memcpy(tmp, line, line_len);
             tmp[line_len] = '\0';
 
-            struct passwd parsed = {0};
+            struct passwd parsed = { 0 };
             int rc = parse_passwd_line(tmp, &parsed, buf, buflen);
             if (rc && rc != EINVAL) {
                 return rc;
@@ -163,13 +157,7 @@ static int find_passwd(
     return 0;
 }
 
-int getpwnam_r(
-    const char *name,
-    struct passwd *pwd,
-    char *buf,
-    size_t buflen,
-    struct passwd **result
-) {
+int getpwnam_r(const char *name, struct passwd *pwd, char *buf, size_t buflen, struct passwd **result) {
     if (!name || !pwd || !buf || !buflen || !result) {
         return EINVAL;
     }
@@ -177,13 +165,7 @@ int getpwnam_r(
     return find_passwd(name, 0, true, pwd, buf, buflen, result);
 }
 
-int getpwuid_r(
-    uid_t uid,
-    struct passwd *pwd,
-    char *buf,
-    size_t buflen,
-    struct passwd **result
-) {
+int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen, struct passwd **result) {
     if (!pwd || !buf || !buflen || !result) {
         return EINVAL;
     }

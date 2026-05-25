@@ -4,12 +4,7 @@
 #include <string.h>
 #include <x86/asm.h>
 
-static bool _write_user(
-    sched_thread_t *thread,
-    uintptr_t addr,
-    const void *src,
-    size_t len
-) {
+static bool _write_user(sched_thread_t *thread, uintptr_t addr, const void *src, size_t len) {
     if (!thread || !thread->vm_space || !src || !len) {
         return false;
     }
@@ -45,12 +40,7 @@ bool arch_signal_is_user(const arch_int_state_t *state) {
     return (state->s_regs.cs & 0x3) == 3;
 }
 
-bool arch_signal_setup_user_stack(
-    sched_thread_t *thread,
-    arch_int_state_t *state,
-    sighandler_t handler,
-    int signum
-) {
+bool arch_signal_setup_user_stack(sched_thread_t *thread, arch_int_state_t *state, sighandler_t handler, int signum) {
     if (!thread || !state || !handler) {
         return false;
     }

@@ -120,13 +120,9 @@ bool list_remove(linked_list_t *list, list_node_t *node) {
 
     list_node_t *prev = node->prev;
     list_node_t *next = node->next;
-    bool linked_consistent = (
-        node->owner == list &&
-        (!prev || prev->next == node) &&
-        (!next || next->prev == node) &&
-        (node == list->head || prev) &&
-        (node == list->tail || next)
-    );
+    bool linked_consistent =
+        (node->owner == list && (!prev || prev->next == node) && (!next || next->prev == node) &&
+         (node == list->head || prev) && (node == list->tail || next));
 
     if (!linked_consistent) {
         prev = NULL;

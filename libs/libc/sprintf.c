@@ -53,11 +53,11 @@ static int _get_flags(const char *format, size_t *index) {
 static int _get_width(const char *format, size_t *index, va_list *vlist) {
     int width = 0;
 
-    if (isdigit(format[*index])) {
-        char *end;
-
-        width = (int)strtoll(&format[*index], &end, 10);
-        *index += (size_t)(end - &format[*index]);
+    if (isdigit((unsigned char)format[*index])) {
+        while (isdigit((unsigned char)format[*index])) {
+            width = width * 10 + (format[*index] - '0');
+            *index += 1;
+        }
     } else if (format[*index] == '*') {
         width = va_arg(*vlist, int);
         *index += 1;
@@ -75,11 +75,13 @@ static int _get_precision(const char *format, size_t *index, va_list *vlist) {
 
     int precision = -1;
 
-    if (isdigit(format[*index])) {
-        char *end;
+    if (isdigit((unsigned char)format[*index])) {
+        precision = 0;
 
-        precision = (int)strtoll(&format[*index], &end, 10);
-        *index += (size_t)(end - &format[*index]);
+        while (isdigit((unsigned char)format[*index])) {
+            precision = precision * 10 + (format[*index] - '0');
+            *index += 1;
+        }
     } else if (format[*index] == '*') {
         precision = va_arg(*vlist, int);
         *index += 1;
@@ -178,8 +180,7 @@ static uintmax_t _get_var_number(int size, va_list *vlist) {
     }
 }
 
-static void
-_buf_putc(char *buffer, size_t *written, size_t max_size, char value) {
+static void _buf_putc(char *buffer, size_t *written, size_t max_size, char value) {
     if (!written) {
         return;
     }
@@ -367,12 +368,7 @@ static int _get_base(char type) {
 }
 
 
-int vsnprintf(
-    char *restrict buffer,
-    size_t max_size,
-    const char *restrict format,
-    va_list vlist
-) {
+int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict format, va_list vlist) {
     if (!format) {
         return 0;
     }
@@ -432,7 +428,7 @@ int vsnprintf(
         }
 
         if (base < 0) {
-            char char_holder[2] = {0};
+            char char_holder[2] = { 0 };
             char *string;
             flags &= ~FLAGS_ZERO;
 
@@ -450,9 +446,7 @@ int vsnprintf(
             size_t len = _bounded_strlen(string, precision);
             int padding = _padding_for_width(width, len);
 
-            _string_to_buffer(
-                buffer, max_size, &written, string, flags, precision, &padding
-            );
+            _string_to_buffer(buffer, max_size, &written, string, flags, precision, &padding);
         } else {
             uintmax_t number = _get_var_number(size, &args);
             bool negative = (size < 0 && (intmax_t)number < 0);
@@ -462,43 +456,25 @@ int vsnprintf(
                 width = (precision > width) ? precision : width;
             }
 
-            char num_buffer[66] = {0};
+            char num_buffer[66] = { 0 };
             uintmax_t absval = negative ? _signed_abs(number) : number;
 
-            int len = (int)ulltoa(absval, num_buffer, base);
+            int len = (int)ulltoa((unsigned long long)absval, num_buffer, base);
             int prefix_len = _num_prefix_len(number, flags, base, size);
             size_t field_len = (size_t)len + (size_t)prefix_len;
 
             // Width includes the sign and 0x prefix, not just the digits.
             int padding = _padding_for_width(width, field_len);
 
-            _append_num_prefix(
-                buffer,
-                max_size,
-                &written,
-                number,
-                flags,
-                base,
-                size,
-                &padding,
-                uppercase
-            );
+            _append_num_prefix(buffer, max_size, &written, number, flags, base, size, &padding, uppercase);
 
             if (uppercase) {
                 for (int j = 0; j < len; j++) {
-                    num_buffer[j] = (char)toupper(num_buffer[j]);
+                    num_buffer[j] = (char)toupper((unsigned char)num_buffer[j]);
                 }
             }
 
-            _string_to_buffer(
-                buffer,
-                max_size,
-                &written,
-                num_buffer,
-                flags,
-                precision,
-                &padding
-            );
+            _string_to_buffer(buffer, max_size, &written, num_buffer, flags, precision, &padding);
         }
     }
 

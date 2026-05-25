@@ -9,7 +9,7 @@ static bool read_uptime(unsigned long long *sec_out) {
         return false;
     }
 
-    char buf[256] = {0};
+    char buf[256] = { 0 };
     int fd = open("/dev/clock", O_RDONLY, 0);
     if (fd < 0) {
         return false;
@@ -67,9 +67,7 @@ int main(void) {
             secs
         );
     } else {
-        snprintf(
-            out, sizeof(out), "up %02llu:%02llu:%02llu\n", hrs, mins, secs
-        );
+        snprintf(out, sizeof(out), "up %02llu:%02llu:%02llu\n", hrs, mins, secs);
     }
 
     write(STDOUT_FILENO, out, strlen(out));

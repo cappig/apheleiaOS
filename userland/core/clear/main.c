@@ -16,10 +16,9 @@ int main(int argc, char **argv) {
         }
 
         if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
-            const char usage[] =
-                "usage: clear [-x|--no-scrollback]\n"
-                "  -x, --no-scrollback  clear screen only\n"
-                "  -h, --help           show this help\n";
+            const char usage[] = "usage: clear [-x|--no-scrollback]\n"
+                                 "  -x, --no-scrollback  clear screen only\n"
+                                 "  -h, --help           show this help\n";
             write(STDOUT_FILENO, usage, sizeof(usage) - 1);
             return 0;
         }

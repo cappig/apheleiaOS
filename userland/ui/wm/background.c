@@ -10,25 +10,22 @@
 
 #define WM_BG_MAX_FILE_BYTES (64U * 1024U * 1024U)
 
-static pixel_t *bg_pixels = NULL;
-static u32 bg_width = 0;
-static u32 bg_height = 0;
+typedef struct {
+    pixel_t *pixels;
+    u32 width;
+    u32 height;
+} wm_background_t;
+
+static wm_background_t background = { 0 };
 static const size_t k_size_max = (size_t)-1;
 
 static void _fill_solid_color(size_t pixels, pixel_t color) {
     for (size_t i = 0; i < pixels; i++) {
-        bg_pixels[i] = color;
+        background.pixels[i] = color;
     }
 }
 
-static void _build_cover_map(
-    u32 src_w,
-    u32 src_h,
-    u32 dst_w,
-    u32 dst_h,
-    u32 *x_map,
-    u32 *y_map
-) {
+static void _build_cover_map(u32 src_w, u32 src_h, u32 dst_w, u32 dst_h, u32 *x_map, u32 *y_map) {
     u32 crop_x = 0;
     u32 crop_y = 0;
     u32 crop_w = src_w;
@@ -75,13 +72,11 @@ static void _build_cover_map(
 }
 
 void wm_background_unload(void) {
-    if (bg_pixels) {
-        free(bg_pixels);
+    if (background.pixels) {
+        free(background.pixels);
     }
 
-    bg_pixels = NULL;
-    bg_width = 0;
-    bg_height = 0;
+    memset(&background, 0, sizeof(background));
 }
 
 bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
@@ -105,13 +100,13 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
         return false;
     }
 
-    bg_pixels = dst;
+    background.pixels = dst;
 
     u32 solid_color = 0;
     if (wm_parse_hex_color(path, &solid_color)) {
         _fill_solid_color(dst_pixels, solid_color);
-        bg_width = fb_width;
-        bg_height = fb_height;
+        background.width = fb_width;
+        background.height = fb_height;
         return true;
     }
 
@@ -121,7 +116,7 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
         goto fail;
     }
 
-    ppm_p6_blob_t ppm_blob = {0};
+    ppm_p6_blob_t ppm_blob = { 0 };
     if (!ppm_parse_p6_blob(file_data, file_len, &ppm_blob)) {
         goto fail;
     }
@@ -160,8 +155,8 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
     free(y_map);
     free(file_data);
 
-    bg_width = fb_width;
-    bg_height = fb_height;
+    background.width = fb_width;
+    background.height = fb_height;
     return true;
 
 fail:
@@ -174,7 +169,7 @@ fail:
 }
 
 bool wm_background_draw(pixel_t *frame, u32 fb_width, u32 fb_height) {
-    if (!frame || !bg_pixels || bg_width != fb_width || bg_height != fb_height) {
+    if (!frame || !background.pixels || background.width != fb_width || background.height != fb_height) {
         return false;
     }
 
@@ -187,27 +182,13 @@ bool wm_background_draw(pixel_t *frame, u32 fb_width, u32 fb_height) {
         return false;
     }
 
-    memcpy(frame, bg_pixels, pixels * sizeof(pixel_t));
+    memcpy(frame, background.pixels, pixels * sizeof(pixel_t));
     return true;
 }
 
-bool wm_background_draw_rect(
-    pixel_t *frame,
-    u32 fb_width,
-    u32 fb_height,
-    i32 x,
-    i32 y,
-    u32 width,
-    u32 height
-) {
-    if (
-        !frame ||
-        !bg_pixels ||
-        bg_width != fb_width ||
-        bg_height != fb_height ||
-        !width ||
-        !height
-    ) {
+bool wm_background_draw_rect(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32 y, u32 width, u32 height) {
+    if (!frame || !background.pixels || background.width != fb_width || background.height != fb_height || !width ||
+        !height) {
         return false;
     }
 
@@ -238,7 +219,7 @@ bool wm_background_draw_rect(
 
     for (i32 row = y0; row < y1; row++) {
         size_t off = (size_t)row * fb_width + (size_t)x0;
-        memcpy(frame + off, bg_pixels + off, row_bytes);
+        memcpy(frame + off, background.pixels + off, row_bytes);
     }
 
     return true;

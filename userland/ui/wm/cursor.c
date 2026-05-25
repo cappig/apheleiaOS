@@ -48,18 +48,13 @@ static bool _cursor_load_into(wm_cursor_t *cursor, const char *path) {
     u8 *file_data = NULL;
     size_t file_len = 0;
 
-    bool read_ok = wm_file_read_all(
-        path,
-        WM_CURSOR_MAX_FILE_BYTES,
-        &file_data,
-        &file_len
-    );
+    bool read_ok = wm_file_read_all(path, WM_CURSOR_MAX_FILE_BYTES, &file_data, &file_len);
 
     if (!read_ok) {
         return false;
     }
 
-    ppm_p6_blob_t ppm_blob = {0};
+    ppm_p6_blob_t ppm_blob = { 0 };
     if (!ppm_parse_p6_blob(file_data, file_len, &ppm_blob)) {
         free(file_data);
         return false;
@@ -123,12 +118,8 @@ static const wm_cursor_t *_cursor_pick(wm_cursor_kind_t kind) {
 }
 
 static bool _cursor_uses_center_hotspot(wm_cursor_kind_t kind) {
-    return kind == WM_CURSOR_RESIZE_EW ||
-           kind == WM_CURSOR_RESIZE_NS ||
-           kind == WM_CURSOR_RESIZE_NW ||
-           kind == WM_CURSOR_RESIZE_SE ||
-           kind == WM_CURSOR_RESIZE_SW ||
-           kind == WM_CURSOR_MOVE;
+    return kind == WM_CURSOR_RESIZE_EW || kind == WM_CURSOR_RESIZE_NS || kind == WM_CURSOR_RESIZE_NW ||
+           kind == WM_CURSOR_RESIZE_SE || kind == WM_CURSOR_RESIZE_SW || kind == WM_CURSOR_MOVE;
 }
 
 void wm_cursor_unload(void) {
@@ -145,30 +136,14 @@ bool wm_cursor_load_kind(wm_cursor_kind_t kind, const char *path) {
     return _cursor_load_into(&cursors[kind], path);
 }
 
-bool wm_cursor_draw_kind(
-    pixel_t *frame,
-    u32 fb_width,
-    u32 fb_height,
-    i32 x,
-    i32 y,
-    wm_cursor_kind_t kind
-) {
+bool wm_cursor_draw_kind(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32 y, wm_cursor_kind_t kind) {
     const wm_cursor_t *cursor = _cursor_pick(kind);
 
-    if (
-        !frame ||
-        !cursor ||
-        !cursor->pixels ||
-        !cursor->width ||
-        !cursor->height ||
-        !fb_width ||
-        !fb_height
-    ) {
+    if (!frame || !cursor || !cursor->pixels || !cursor->width || !cursor->height || !fb_width || !fb_height) {
         return false;
     }
 
-    bool has_exact_cursor =
-        kind < WM_CURSOR_KIND_COUNT && cursors[kind].pixels != NULL;
+    bool has_exact_cursor = kind < WM_CURSOR_KIND_COUNT && cursors[kind].pixels != NULL;
 
     i32 hot_x = 0;
     i32 hot_y = 0;

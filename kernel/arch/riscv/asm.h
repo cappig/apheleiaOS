@@ -211,12 +211,7 @@ static inline bool riscv_machine_timer_arm_delta(u64 delta) {
     register unsigned long a6 asm("a6") = RISCV_MCALL_TIMER_ARM_DELTA;
     register unsigned long a7 asm("a7") = RISCV_MCALL_EXT_TIMER;
 
-    asm volatile(
-        "ecall"
-        : "+r"(a0), "+r"(a1)
-        : "r"(a6), "r"(a7)
-        : "memory"
-    );
+    asm volatile("ecall" : "+r"(a0), "+r"(a1) : "r"(a6), "r"(a7) : "memory");
 
     return (long)a0 == 0;
 }
@@ -238,12 +233,7 @@ static inline bool riscv_machine_timer_read(u64 *value) {
     register unsigned long a6 asm("a6") = RISCV_MCALL_TIMER_READ_TIME;
     register unsigned long a7 asm("a7") = RISCV_MCALL_EXT_TIMER;
 
-    asm volatile(
-        "ecall"
-        : "+r"(a0), "+r"(a1), "+r"(a2)
-        : "r"(a6), "r"(a7)
-        : "memory"
-    );
+    asm volatile("ecall" : "+r"(a0), "+r"(a1), "+r"(a2) : "r"(a6), "r"(a7) : "memory");
 
     if ((long)a0 != 0) {
         return false;

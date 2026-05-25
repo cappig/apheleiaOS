@@ -15,14 +15,11 @@ static int syscall_sleep(const struct timespec *req, struct timespec *rem) {
         return -1;
     }
 
-    return (int)__SYSCALL_ERRNO(
-        syscall2(SYS_SLEEP, (uintptr_t)req, (uintptr_t)rem)
-    );
+    return (int)__SYSCALL_ERRNO(syscall2(SYS_SLEEP, (uintptr_t)req, (uintptr_t)rem));
 }
 
 static int syscall_time(struct timespec *realtime, struct timespec *monotonic) {
-    long ret =
-        (long)syscall2(SYS_TIME, (uintptr_t)realtime, (uintptr_t)monotonic);
+    long ret = (long)syscall2(SYS_TIME, (uintptr_t)realtime, (uintptr_t)monotonic);
 
     if (ret < 0) {
         errno = (int)-ret;
@@ -55,7 +52,7 @@ int nanosleep(const struct timespec *req, struct timespec *rem) {
 }
 
 time_t time(time_t *timer) {
-    struct timespec ts = {0};
+    struct timespec ts = { 0 };
     if (clock_gettime(CLOCK_REALTIME, &ts) < 0) {
         return (time_t)-1;
     }
@@ -73,7 +70,7 @@ int gettimeofday(struct timeval *tv, struct timezone *tz) {
         return -1;
     }
 
-    struct timespec ts = {0};
+    struct timespec ts = { 0 };
     if (clock_gettime(CLOCK_REALTIME, &ts) < 0) {
         return -1;
     }

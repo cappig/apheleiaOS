@@ -49,11 +49,7 @@ int atexit(void (*fn)(void));
 
 long long strtoll(char const *restrict str, char **restrict endptr, int base);
 long strtol(char const *restrict str, char **restrict endptr, int base);
-unsigned long long strtoull(
-    char const *restrict str,
-    char **restrict endptr,
-    int base
-);
+unsigned long long strtoull(char const *restrict str, char **restrict endptr, int base);
 unsigned long strtoul(char const *restrict str, char **restrict endptr, int base);
 double strtod(char const *restrict str, char **restrict endptr);
 float strtof(char const *restrict str, char **restrict endptr);
@@ -76,17 +72,6 @@ int setenv(const char *name, const char *value, int overwrite);
 int unsetenv(const char *name);
 char *realpath(const char *path, char *resolved_path);
 
-void *bsearch(
-    const void *key,
-    const void *base,
-    size_t nmemb,
-    size_t size,
-    int (*compar)(const void *, const void *)
-);
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *));
 
-void qsort(
-    void *base,
-    size_t num,
-    size_t size,
-    int (*comp)(const void *, const void *)
-);
+void qsort(void *base, size_t num, size_t size, int (*comp)(const void *, const void *));

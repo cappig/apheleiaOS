@@ -74,16 +74,24 @@ typedef struct {
     size_t cap;
 } vi_out_t;
 
-static vi_t vi;
-static vi_out_t out;
-static volatile sig_atomic_t vi_got_sigwinch = 0;
-static char *frame_cache = NULL;
-static size_t frame_cache_cols = 0;
-static size_t frame_cache_rows = 0;
-static char *row_scratch = NULL;
-static size_t row_scratch_cap = 0;
-static char key_push = 0;
-static bool key_push_valid = false;
+typedef struct {
+    vi_t editor;
+    vi_out_t out;
+
+    volatile sig_atomic_t got_sigwinch;
+
+    char *frame_cache;
+    size_t frame_cache_cols;
+    size_t frame_cache_rows;
+
+    char *row_scratch;
+    size_t row_scratch_cap;
+
+    char key_push;
+    bool key_push_valid;
+} vi_app_t;
+
+static vi_app_t app = { 0 };
 
 static void raw_mode_off(void);
 
@@ -128,17 +136,17 @@ static void fatal_signal_handler(int signum) {
 
 static bool ensure_row_scratch(size_t cols) {
     size_t need = cols + 1;
-    if (row_scratch_cap >= need) {
+    if (app.row_scratch_cap >= need) {
         return true;
     }
 
-    char *p = realloc(row_scratch, need);
+    char *p = realloc(app.row_scratch, need);
     if (!p) {
         return false;
     }
 
-    row_scratch = p;
-    row_scratch_cap = need;
+    app.row_scratch = p;
+    app.row_scratch_cap = need;
     return true;
 }
 
@@ -147,16 +155,16 @@ static bool ensure_frame_cache(size_t cols, size_t rows, bool *resized_out) {
         *resized_out = false;
     }
 
-    if (frame_cache && frame_cache_cols == cols && frame_cache_rows == rows) {
+    if (app.frame_cache && app.frame_cache_cols == cols && app.frame_cache_rows == rows) {
         return true;
     }
 
     if (!cols || !rows) {
-        free(frame_cache);
+        free(app.frame_cache);
 
-        frame_cache = NULL;
-        frame_cache_cols = 0;
-        frame_cache_rows = 0;
+        app.frame_cache = NULL;
+        app.frame_cache_cols = 0;
+        app.frame_cache_rows = 0;
 
         if (resized_out) {
             *resized_out = true;
@@ -166,22 +174,22 @@ static bool ensure_frame_cache(size_t cols, size_t rows, bool *resized_out) {
     }
 
     size_t total = cols * rows;
-    char *p = realloc(frame_cache, total);
+    char *p = realloc(app.frame_cache, total);
     if (!p) {
         return false;
     }
 
-    frame_cache = p;
-    frame_cache_cols = cols;
-    frame_cache_rows = rows;
+    app.frame_cache = p;
+    app.frame_cache_cols = cols;
+    app.frame_cache_rows = rows;
 
-    memset(frame_cache, 0xff, total);
+    memset(app.frame_cache, 0xff, total);
 
     if (resized_out) {
         *resized_out = true;
     }
 
-    vi.repaint = true;
+    app.editor.repaint = true;
     return true;
 }
 
@@ -190,25 +198,25 @@ static bool out_addn(const char *text, size_t n) {
         return true;
     }
 
-    if (out.len + n > out.cap) {
-        size_t need = out.len + n;
-        size_t cap = out.cap ? out.cap : VI_OUT_INIT;
+    if (app.out.len + n > app.out.cap) {
+        size_t need = app.out.len + n;
+        size_t cap = app.out.cap ? app.out.cap : VI_OUT_INIT;
 
         while (cap < need) {
             cap *= 2;
         }
 
-        char *p = realloc(out.data, cap);
+        char *p = realloc(app.out.data, cap);
         if (!p) {
             return false;
         }
 
-        out.data = p;
-        out.cap = cap;
+        app.out.data = p;
+        app.out.cap = cap;
     }
 
-    memcpy(out.data + out.len, text, n);
-    out.len += n;
+    memcpy(app.out.data + app.out.len, text, n);
+    app.out.len += n;
     return true;
 }
 
@@ -221,19 +229,19 @@ static bool out_add(const char *text) {
 }
 
 static bool draw_row_if_changed(size_t row, const char *data) {
-    if (!data || !frame_cache || row >= frame_cache_rows || vi.cols != frame_cache_cols) {
+    if (!data || !app.frame_cache || row >= app.frame_cache_rows || app.editor.cols != app.frame_cache_cols) {
         return false;
     }
 
-    char *cached = frame_cache + (row * frame_cache_cols);
-    if (!vi.repaint && !memcmp(cached, data, vi.cols)) {
+    char *cached = app.frame_cache + (row * app.frame_cache_cols);
+    if (!app.editor.repaint && !memcmp(cached, data, app.editor.cols)) {
         return true;
     }
 
     char seq[32];
     snprintf(seq, sizeof(seq), "\x1b[%u;1H", (unsigned)(row + 1));
 
-    size_t draw_cols = vi.cols;
+    size_t draw_cols = app.editor.cols;
     if (draw_cols > 1) {
         draw_cols--;
     }
@@ -242,12 +250,12 @@ static bool draw_row_if_changed(size_t row, const char *data) {
         return false;
     }
 
-    memcpy(cached, data, vi.cols);
+    memcpy(cached, data, app.editor.cols);
     return true;
 }
 
 static bool out_flush(void) {
-    return write_all_fd(STDOUT_FILENO, out.data, out.len);
+    return write_all_fd(STDOUT_FILENO, app.out.data, app.out.len);
 }
 
 static void set_msg(const char *text) {
@@ -255,11 +263,11 @@ static void set_msg(const char *text) {
         return;
     }
 
-    snprintf(vi.msg, sizeof(vi.msg), "%s", text);
+    snprintf(app.editor.msg, sizeof(app.editor.msg), "%s", text);
 }
 
 static void clear_msg(void) {
-    vi.msg[0] = '\0';
+    app.editor.msg[0] = '\0';
 }
 
 static void set_errno_msg(const char *op) {
@@ -270,32 +278,27 @@ static void set_errno_msg(const char *op) {
 
 static bool is_nav_key(int key) {
     return (
-        key == VI_KEY_LEFT ||
-        key == VI_KEY_RIGHT ||
-        key == VI_KEY_UP ||
-        key == VI_KEY_DOWN ||
-        key == VI_KEY_HOME ||
+        key == VI_KEY_LEFT || key == VI_KEY_RIGHT || key == VI_KEY_UP || key == VI_KEY_DOWN || key == VI_KEY_HOME ||
         key == VI_KEY_END
     );
 }
 
 static void clear_cmd(void) {
-    vi.cmd_len = 0;
-    vi.cmd[0] = '\0';
+    app.editor.cmd_len = 0;
+    app.editor.cmd[0] = '\0';
 }
 
 static void quit_vi(void) {
-    vi.running = false;
+    app.editor.running = false;
 }
 
 static void screen_enter(void) {
-    const char seq[] =
-        "\r\x1b[0m\x1b[2K"
-        "\x1b[?1049h"
-        "\x1b[?25l\x1b[H\x1b[2J\x1b[3J\x1b[H";
+    const char seq[] = "\r\x1b[0m\x1b[2K"
+                       "\x1b[?1049h"
+                       "\x1b[?25l\x1b[H\x1b[2J\x1b[3J\x1b[H";
 
     (void)write_all_fd(STDOUT_FILENO, seq, sizeof(seq) - 1);
-    vi.repaint = true;
+    app.editor.repaint = true;
 }
 
 static void screen_leave(void) {
@@ -304,9 +307,9 @@ static void screen_leave(void) {
 }
 
 static void enter_mode(vi_mode_t mode) {
-    vi.pending_op = 0;
-    vi.mode = mode;
-    vi.redraw = true;
+    app.editor.pending_op = 0;
+    app.editor.mode = mode;
+    app.editor.redraw = true;
 }
 
 static size_t visual_advance(size_t col, char ch) {
@@ -326,18 +329,18 @@ static void update_screen_size(void) {
     term_size_t size = fallback;
     term_get_size(STDIN_FILENO, STDOUT_FILENO, &size, &fallback);
 
-    vi.cols = size.cols;
-    vi.edit_rows = size.rows > 1 ? size.rows - 1 : 1;
+    app.editor.cols = size.cols;
+    app.editor.edit_rows = size.rows > 1 ? size.rows - 1 : 1;
 }
 
 static bool raw_mode_on(void) {
-    termios_t tos = {0};
+    termios_t tos = { 0 };
     if (ioctl(STDIN_FILENO, TCGETS, &tos)) {
         return false;
     }
 
-    vi.saved_tty = tos;
-    vi.saved_tty_valid = true;
+    app.editor.saved_tty = tos;
+    app.editor.saved_tty_valid = true;
 
     tos.c_iflag &= (tcflag_t) ~(ICRNL | IXON | BRKINT | INPCK | ISTRIP);
     tos.c_oflag &= (tcflag_t) ~(OPOST);
@@ -350,16 +353,16 @@ static bool raw_mode_on(void) {
 }
 
 static void raw_mode_off(void) {
-    if (!vi.saved_tty_valid) {
+    if (!app.editor.saved_tty_valid) {
         return;
     }
 
-    ioctl(STDIN_FILENO, TCSETS, &vi.saved_tty);
+    ioctl(STDIN_FILENO, TCSETS, &app.editor.saved_tty);
 }
 
 static void key_push_back(char ch) {
-    key_push = ch;
-    key_push_valid = true;
+    app.key_push = ch;
+    app.key_push_valid = true;
 }
 
 static bool read_key_byte(char *out_ch, int timeout_ms) {
@@ -367,9 +370,9 @@ static bool read_key_byte(char *out_ch, int timeout_ms) {
         return false;
     }
 
-    if (key_push_valid) {
-        key_push_valid = false;
-        *out_ch = key_push;
+    if (app.key_push_valid) {
+        app.key_push_valid = false;
+        *out_ch = app.key_push;
         return true;
     }
 
@@ -383,7 +386,7 @@ static bool read_key_byte(char *out_ch, int timeout_ms) {
         for (;;) {
             int rc = poll(&pfd, 1, timeout_ms);
             if (rc < 0 && errno == EINTR) {
-                if (vi_got_sigwinch) {
+                if (app.got_sigwinch) {
                     return false;
                 }
 
@@ -405,7 +408,7 @@ static bool read_key_byte(char *out_ch, int timeout_ms) {
         }
 
         if (n < 0 && errno == EINTR) {
-            if (vi_got_sigwinch) {
+            if (app.got_sigwinch) {
                 return false;
             }
 
@@ -416,12 +419,7 @@ static bool read_key_byte(char *out_ch, int timeout_ms) {
     }
 }
 
-static bool read_term_byte(
-    int fd,
-    char *out_ch,
-    int timeout_ms,
-    void *ctx
-) {
+static bool read_term_byte(int fd, char *out_ch, int timeout_ms, void *ctx) {
     (void)fd;
     (void)ctx;
 
@@ -436,7 +434,7 @@ static void push_term_byte(int fd, char ch, void *ctx) {
 }
 
 static int parse_csi_key(void) {
-    char seq[16] = {0};
+    char seq[16] = { 0 };
     size_t len = 0;
 
     while (len + 1 < sizeof(seq)) {
@@ -505,37 +503,30 @@ static int parse_csi_key(void) {
 }
 
 static bool detect_screen_size(void) {
-    term_size_t size = {0};
+    term_size_t size = { 0 };
 
-    bool probed = term_probe_size(
-        STDIN_FILENO,
-        STDOUT_FILENO,
-        &size,
-        read_term_byte,
-        push_term_byte,
-        NULL
-    );
+    bool probed = term_probe_size(STDIN_FILENO, STDOUT_FILENO, &size, read_term_byte, push_term_byte, NULL);
     if (!probed) {
         return false;
     }
 
-    vi.cols = size.cols;
-    vi.edit_rows = size.rows - 1;
-    vi.repaint = true;
-    vi.redraw = true;
+    app.editor.cols = size.cols;
+    app.editor.edit_rows = size.rows - 1;
+    app.editor.repaint = true;
+    app.editor.redraw = true;
     return true;
 }
 
 static int read_key(void) {
-    if (vi_got_sigwinch) {
-        vi_got_sigwinch = 0;
+    if (app.got_sigwinch) {
+        app.got_sigwinch = 0;
         return VI_KEY_RESIZE;
     }
 
     char ch = 0;
     if (!read_key_byte(&ch, -1)) {
-        if (vi_got_sigwinch) {
-            vi_got_sigwinch = 0;
+        if (app.got_sigwinch) {
+            app.got_sigwinch = 0;
             return VI_KEY_RESIZE;
         }
 
@@ -577,11 +568,11 @@ static int read_key(void) {
 }
 
 static size_t line_start(size_t idx) {
-    if (idx > vi.len) {
-        idx = vi.len;
+    if (idx > app.editor.len) {
+        idx = app.editor.len;
     }
 
-    while (idx > 0 && vi.buf[idx - 1] != '\n') {
+    while (idx > 0 && app.editor.buf[idx - 1] != '\n') {
         idx--;
     }
 
@@ -589,7 +580,7 @@ static size_t line_start(size_t idx) {
 }
 
 static size_t line_end(size_t idx) {
-    while (idx < vi.len && vi.buf[idx] != '\n') {
+    while (idx < app.editor.len && app.editor.buf[idx] != '\n') {
         idx++;
     }
 
@@ -601,19 +592,19 @@ static void index_to_rowcol(size_t idx, size_t *row, size_t *col) {
         return;
     }
 
-    if (idx > vi.len) {
-        idx = vi.len;
+    if (idx > app.editor.len) {
+        idx = app.editor.len;
     }
 
     *row = 0;
     *col = 0;
 
     for (size_t i = 0; i < idx; i++) {
-        if (vi.buf[i] == '\n') {
+        if (app.editor.buf[i] == '\n') {
             (*row)++;
             *col = 0;
         } else {
-            *col = visual_advance(*col, vi.buf[i]);
+            *col = visual_advance(*col, app.editor.buf[i]);
         }
     }
 }
@@ -630,7 +621,7 @@ static size_t line_visual_col_at_index(size_t start, size_t idx) {
 
     size_t col = 0;
     for (size_t i = start; i < idx; i++) {
-        col = visual_advance(col, vi.buf[i]);
+        col = visual_advance(col, app.editor.buf[i]);
     }
 
     return col;
@@ -642,7 +633,7 @@ static size_t line_index_from_visual_col(size_t start, size_t target_col) {
     size_t col = 0;
 
     while (idx < end) {
-        size_t next_col = visual_advance(col, vi.buf[idx]);
+        size_t next_col = visual_advance(col, app.editor.buf[idx]);
         if (next_col > target_col) {
             break;
         }
@@ -657,8 +648,8 @@ static size_t line_index_from_visual_col(size_t start, size_t target_col) {
 static size_t row_to_index(size_t row) {
     size_t idx = 0;
 
-    while (idx < vi.len && row) {
-        if (vi.buf[idx] == '\n') {
+    while (idx < app.editor.len && row) {
+        if (app.editor.buf[idx] == '\n') {
             row--;
         }
         idx++;
@@ -670,83 +661,83 @@ static size_t row_to_index(size_t row) {
 static void keep_cursor_visible(void) {
     size_t row = 0;
     size_t col = 0;
-    index_to_rowcol(vi.cursor, &row, &col);
+    index_to_rowcol(app.editor.cursor, &row, &col);
 
-    if (row < vi.rowoff) {
-        vi.rowoff = row;
+    if (row < app.editor.rowoff) {
+        app.editor.rowoff = row;
     }
 
-    if (row >= vi.rowoff + vi.edit_rows) {
-        vi.rowoff = row - vi.edit_rows + 1;
+    if (row >= app.editor.rowoff + app.editor.edit_rows) {
+        app.editor.rowoff = row - app.editor.edit_rows + 1;
     }
 
-    if (col < vi.coloff) {
-        vi.coloff = col;
+    if (col < app.editor.coloff) {
+        app.editor.coloff = col;
     }
 
-    if (vi.cols && col >= vi.coloff + vi.cols) {
-        vi.coloff = col - vi.cols + 1;
+    if (app.editor.cols && col >= app.editor.coloff + app.editor.cols) {
+        app.editor.coloff = col - app.editor.cols + 1;
     }
 }
 
 static bool vi_grow(size_t needed) {
-    if (needed <= vi.cap) {
+    if (needed <= app.editor.cap) {
         return true;
     }
 
-    size_t new_cap = vi.cap;
+    size_t new_cap = app.editor.cap;
     while (new_cap < needed) {
         new_cap = new_cap < 4096 ? 4096 : new_cap * 2;
     }
 
-    char *p = realloc(vi.buf, new_cap);
+    char *p = realloc(app.editor.buf, new_cap);
     if (!p) {
         return false;
     }
 
-    vi.buf = p;
-    vi.cap = new_cap;
+    app.editor.buf = p;
+    app.editor.cap = new_cap;
     return true;
 }
 
 static bool insert_char(size_t at, char ch) {
-    if (!vi_grow(vi.len + 2)) {
+    if (!vi_grow(app.editor.len + 2)) {
         return false;
     }
 
-    if (at > vi.len) {
-        at = vi.len;
+    if (at > app.editor.len) {
+        at = app.editor.len;
     }
 
-    memmove(vi.buf + at + 1, vi.buf + at, vi.len - at);
-    vi.buf[at] = ch;
-    vi.len++;
-    vi.buf[vi.len] = '\0';
-    vi.dirty = true;
-    vi.redraw = true;
+    memmove(app.editor.buf + at + 1, app.editor.buf + at, app.editor.len - at);
+    app.editor.buf[at] = ch;
+    app.editor.len++;
+    app.editor.buf[app.editor.len] = '\0';
+    app.editor.dirty = true;
+    app.editor.redraw = true;
     return true;
 }
 
 static void wrap_insert_line_if_needed(void) {
-    if (!vi.cols || vi.mode != VI_INSERT) {
+    if (!app.editor.cols || app.editor.mode != VI_INSERT) {
         return;
     }
 
-    size_t start = line_start(vi.cursor);
-    size_t col = line_visual_col_at_index(start, vi.cursor);
+    size_t start = line_start(app.editor.cursor);
+    size_t col = line_visual_col_at_index(start, app.editor.cursor);
 
-    if (col < vi.cols) {
+    if (col < app.editor.cols) {
         return;
     }
 
-    if (insert_char(vi.cursor, '\n')) {
-        vi.cursor++;
+    if (insert_char(app.editor.cursor, '\n')) {
+        app.editor.cursor++;
     }
 }
 
 static void insert_and_advance(char ch) {
-    if (insert_char(vi.cursor, ch)) {
-        vi.cursor++;
+    if (insert_char(app.editor.cursor, ch)) {
+        app.editor.cursor++;
 
         if (ch != '\n') {
             wrap_insert_line_if_needed();
@@ -755,41 +746,41 @@ static void insert_and_advance(char ch) {
 }
 
 static bool delete_char(size_t at) {
-    if (at >= vi.len) {
+    if (at >= app.editor.len) {
         return false;
     }
 
-    memmove(vi.buf + at, vi.buf + at + 1, vi.len - at - 1);
-    vi.len--;
-    vi.buf[vi.len] = '\0';
-    vi.dirty = true;
-    vi.redraw = true;
+    memmove(app.editor.buf + at, app.editor.buf + at + 1, app.editor.len - at - 1);
+    app.editor.len--;
+    app.editor.buf[app.editor.len] = '\0';
+    app.editor.dirty = true;
+    app.editor.redraw = true;
     return true;
 }
 
 static bool delete_range(size_t at, size_t count) {
-    if (!count || at >= vi.len) {
+    if (!count || at >= app.editor.len) {
         return false;
     }
 
-    if (at + count > vi.len) {
-        count = vi.len - at;
+    if (at + count > app.editor.len) {
+        count = app.editor.len - at;
     }
 
-    memmove(vi.buf + at, vi.buf + at + count, vi.len - at - count);
-    vi.len -= count;
-    vi.buf[vi.len] = '\0';
-    vi.dirty = true;
-    vi.redraw = true;
+    memmove(app.editor.buf + at, app.editor.buf + at + count, app.editor.len - at - count);
+    app.editor.len -= count;
+    app.editor.buf[app.editor.len] = '\0';
+    app.editor.dirty = true;
+    app.editor.redraw = true;
     return true;
 }
 
 static void delete_current_line(void) {
-    size_t start = line_start(vi.cursor);
+    size_t start = line_start(app.editor.cursor);
     size_t end = line_end(start);
     size_t count = end - start;
 
-    if (end < vi.len && vi.buf[end] == '\n') {
+    if (end < app.editor.len && app.editor.buf[end] == '\n') {
         count++;
     }
 
@@ -797,42 +788,43 @@ static void delete_current_line(void) {
         return;
     }
 
-    if (!vi.len) {
-        vi.cursor = 0;
+    if (!app.editor.len) {
+        app.editor.cursor = 0;
         return;
     }
 
-    if (start >= vi.len) {
-        vi.cursor = line_start(vi.len);
-        if (vi.cursor == vi.len && vi.cursor > 0 && vi.buf[vi.cursor - 1] == '\n') {
-            vi.cursor = line_start(vi.cursor - 1);
+    if (start >= app.editor.len) {
+        app.editor.cursor = line_start(app.editor.len);
+        if (app.editor.cursor == app.editor.len && app.editor.cursor > 0 &&
+            app.editor.buf[app.editor.cursor - 1] == '\n') {
+            app.editor.cursor = line_start(app.editor.cursor - 1);
         }
     } else {
-        vi.cursor = start;
+        app.editor.cursor = start;
     }
 }
 
 static void move_cursor(int key) {
-    size_t start = line_start(vi.cursor);
+    size_t start = line_start(app.editor.cursor);
     size_t end = line_end(start);
-    size_t col = line_visual_col_at_index(start, vi.cursor);
+    size_t col = line_visual_col_at_index(start, app.editor.cursor);
 
     switch (key) {
     case VI_KEY_LEFT:
-        if (vi.cursor > start) {
-            vi.cursor--;
+        if (app.editor.cursor > start) {
+            app.editor.cursor--;
         }
         break;
     case VI_KEY_RIGHT:
-        if (vi.cursor < end) {
-            vi.cursor++;
+        if (app.editor.cursor < end) {
+            app.editor.cursor++;
         }
         break;
     case VI_KEY_HOME:
-        vi.cursor = start;
+        app.editor.cursor = start;
         break;
     case VI_KEY_END:
-        vi.cursor = end;
+        app.editor.cursor = end;
         break;
     case VI_KEY_UP: {
         if (!start) {
@@ -841,40 +833,40 @@ static void move_cursor(int key) {
 
         size_t prev_end = start - 1;
         size_t prev_start = line_start(prev_end);
-        vi.cursor = line_index_from_visual_col(prev_start, col);
+        app.editor.cursor = line_index_from_visual_col(prev_start, col);
         break;
     }
     case VI_KEY_DOWN: {
-        if (end >= vi.len) {
+        if (end >= app.editor.len) {
             break;
         }
 
         size_t next_start = end + 1;
-        vi.cursor = line_index_from_visual_col(next_start, col);
+        app.editor.cursor = line_index_from_visual_col(next_start, col);
         break;
     }
     default:
         return;
     }
 
-    vi.redraw = true;
+    app.editor.redraw = true;
 }
 
 static bool save_file(void) {
-    if (!vi.path || !vi.path[0]) {
+    if (!app.editor.path || !app.editor.path[0]) {
         set_msg("No file name");
         return false;
     }
 
-    int fd = open(vi.path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int fd = open(app.editor.path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         set_errno_msg("write");
         return false;
     }
 
     size_t off = 0;
-    while (off < vi.len) {
-        ssize_t n = write(fd, vi.buf + off, vi.len - off);
+    while (off < app.editor.len) {
+        ssize_t n = write(fd, app.editor.buf + off, app.editor.len - off);
         if (n <= 0) {
             close(fd);
             set_errno_msg("write");
@@ -884,24 +876,22 @@ static bool save_file(void) {
     }
 
     close(fd);
-    vi.dirty = false;
+    app.editor.dirty = false;
 
     char msg[VI_MSG_MAX];
-    snprintf(
-        msg, sizeof(msg), "\"%s\" %u bytes written", vi.path, (unsigned)vi.len
-    );
+    snprintf(msg, sizeof(msg), "\"%s\" %u bytes written", app.editor.path, (unsigned)app.editor.len);
     set_msg(msg);
-    vi.redraw = true;
+    app.editor.redraw = true;
     return true;
 }
 
 static bool load_file(void) {
-    if (!vi.path || !vi.path[0]) {
+    if (!app.editor.path || !app.editor.path[0]) {
         clear_msg();
         return true;
     }
 
-    int fd = open(vi.path, O_RDONLY, 0);
+    int fd = open(app.editor.path, O_RDONLY, 0);
     if (fd < 0) {
         if (errno == ENOENT) {
             clear_msg();
@@ -913,13 +903,13 @@ static bool load_file(void) {
     }
 
     for (;;) {
-        if (!vi_grow(vi.len + 4096)) {
+        if (!vi_grow(app.editor.len + 4096)) {
             close(fd);
-            set_msg("out of memory");
+            set_msg("app.out of memory");
             return false;
         }
 
-        ssize_t n = read(fd, vi.buf + vi.len, vi.cap - vi.len - 1);
+        ssize_t n = read(fd, app.editor.buf + app.editor.len, app.editor.cap - app.editor.len - 1);
         if (!n) {
             break;
         }
@@ -930,30 +920,30 @@ static bool load_file(void) {
             return false;
         }
 
-        vi.len += (size_t)n;
+        app.editor.len += (size_t)n;
     }
 
     close(fd);
-    vi.buf[vi.len] = '\0';
+    app.editor.buf[app.editor.len] = '\0';
 
     clear_msg();
     return true;
 }
 
 static const char *mode_name(void) {
-    if (vi.mode == VI_INSERT) {
+    if (app.editor.mode == VI_INSERT) {
         return "INSERT";
     }
-    if (vi.mode == VI_COMMAND) {
+    if (app.editor.mode == VI_COMMAND) {
         return "COMMAND";
     }
     return "NORMAL";
 }
 
 static void build_editor_row(size_t *idx, char *dst) {
-    memset(dst, ' ', vi.cols);
-    if (!idx || *idx >= vi.len) {
-        if (vi.cols) {
+    memset(dst, ' ', app.editor.cols);
+    if (!idx || *idx >= app.editor.len) {
+        if (app.editor.cols) {
             dst[0] = '~';
         }
         return;
@@ -963,25 +953,25 @@ static void build_editor_row(size_t *idx, char *dst) {
     size_t visual_col = 0;
     size_t dst_col = 0;
 
-    for (size_t i = *idx; i < end && dst_col < vi.cols; i++) {
-        char c = vi.buf[i];
+    for (size_t i = *idx; i < end && dst_col < app.editor.cols; i++) {
+        char c = app.editor.buf[i];
         size_t next_col = visual_advance(visual_col, c);
 
         if (c == '\t') {
-            for (size_t t = visual_col; t < next_col && dst_col < vi.cols; t++) {
-                if (t < vi.coloff) {
+            for (size_t t = visual_col; t < next_col && dst_col < app.editor.cols; t++) {
+                if (t < app.editor.coloff) {
                     continue;
                 }
                 dst[dst_col++] = ' ';
             }
         } else {
-            if (next_col > vi.coloff) {
+            if (next_col > app.editor.coloff) {
                 char outc = c;
                 if ((unsigned char)outc < 0x20) {
                     outc = '?';
                 }
 
-                if (visual_col >= vi.coloff && dst_col < vi.cols) {
+                if (visual_col >= app.editor.coloff && dst_col < app.editor.cols) {
                     dst[dst_col++] = outc;
                 }
             }
@@ -989,40 +979,33 @@ static void build_editor_row(size_t *idx, char *dst) {
 
         visual_col = next_col;
 
-        if (visual_col > vi.coloff + vi.cols) {
+        if (visual_col > app.editor.coloff + app.editor.cols) {
             break;
         }
     }
 
-    *idx = end < vi.len ? end + 1 : end;
+    *idx = end < app.editor.len ? end + 1 : end;
 }
 
 static size_t build_status_row(size_t row, size_t col, char *dst) {
-    memset(dst, ' ', vi.cols);
+    memset(dst, ' ', app.editor.cols);
 
     char right[64];
-    snprintf(
-        right,
-        sizeof(right),
-        "%s %u:%u ",
-        mode_name(),
-        (unsigned)(row + 1),
-        (unsigned)(col + 1)
-    );
+    snprintf(right, sizeof(right), "%s %u:%u ", mode_name(), (unsigned)(row + 1), (unsigned)(col + 1));
 
     size_t right_len = strlen(right);
-    if (right_len > vi.cols) {
-        right_len = vi.cols;
+    if (right_len > app.editor.cols) {
+        right_len = app.editor.cols;
     }
 
-    char left[256] = {0};
-    if (vi.mode == VI_COMMAND) {
-        snprintf(left, sizeof(left), ":%s", vi.cmd);
-    } else if (vi.msg[0]) {
-        snprintf(left, sizeof(left), "%s", vi.msg);
+    char left[256] = { 0 };
+    if (app.editor.mode == VI_COMMAND) {
+        snprintf(left, sizeof(left), ":%s", app.editor.cmd);
+    } else if (app.editor.msg[0]) {
+        snprintf(left, sizeof(left), "%s", app.editor.msg);
     }
 
-    size_t left_max = vi.cols > right_len ? vi.cols - right_len : 0;
+    size_t left_max = app.editor.cols > right_len ? app.editor.cols - right_len : 0;
     size_t left_len = strlen(left);
 
     if (left_len > left_max) {
@@ -1034,7 +1017,7 @@ static size_t build_status_row(size_t row, size_t col, char *dst) {
     }
 
     if (right_len) {
-        memcpy(dst + (vi.cols - right_len), right, right_len);
+        memcpy(dst + (app.editor.cols - right_len), right, right_len);
     }
 
     return left_max;
@@ -1045,17 +1028,18 @@ static bool redraw_screen(void) {
     keep_cursor_visible();
 
     bool resized = false;
-    if (!ensure_row_scratch(vi.cols) || !ensure_frame_cache(vi.cols, vi.edit_rows + 1, &resized)) {
+    if (!ensure_row_scratch(app.editor.cols) ||
+        !ensure_frame_cache(app.editor.cols, app.editor.edit_rows + 1, &resized)) {
         return false;
     }
 
-    out.len = 0;
+    app.out.len = 0;
     if (!out_add("\x1b[?25l")) {
         return false;
     }
 
     if (resized) {
-        memset(frame_cache, 0xff, frame_cache_cols * frame_cache_rows);
+        memset(app.frame_cache, 0xff, app.frame_cache_cols * app.frame_cache_rows);
     }
 
     if (!out_add("\x1b[H")) {
@@ -1064,28 +1048,28 @@ static bool redraw_screen(void) {
 
     size_t row = 0;
     size_t col = 0;
-    index_to_rowcol(vi.cursor, &row, &col);
+    index_to_rowcol(app.editor.cursor, &row, &col);
 
-    size_t idx = row_to_index(vi.rowoff);
-    for (size_t screen_row = 0; screen_row < vi.edit_rows; screen_row++) {
-        build_editor_row(&idx, row_scratch);
+    size_t idx = row_to_index(app.editor.rowoff);
+    for (size_t screen_row = 0; screen_row < app.editor.edit_rows; screen_row++) {
+        build_editor_row(&idx, app.row_scratch);
 
-        if (!draw_row_if_changed(screen_row, row_scratch)) {
+        if (!draw_row_if_changed(screen_row, app.row_scratch)) {
             return false;
         }
     }
 
-    size_t command_limit = build_status_row(row, col, row_scratch);
-    if (!draw_row_if_changed(vi.edit_rows, row_scratch)) {
+    size_t command_limit = build_status_row(row, col, app.row_scratch);
+    if (!draw_row_if_changed(app.editor.edit_rows, app.row_scratch)) {
         return false;
     }
 
     size_t x = 1;
     size_t y = 1;
 
-    if (vi.mode == VI_COMMAND) {
-        y = vi.edit_rows + 1;
-        x = vi.cmd_len + 2;
+    if (app.editor.mode == VI_COMMAND) {
+        y = app.editor.edit_rows + 1;
+        x = app.editor.cmd_len + 2;
 
         if (x > command_limit) {
             x = command_limit;
@@ -1095,14 +1079,14 @@ static bool redraw_screen(void) {
             x = 2;
         }
     } else {
-        if (row >= vi.rowoff) {
-            y = (row - vi.rowoff) + 1;
+        if (row >= app.editor.rowoff) {
+            y = (row - app.editor.rowoff) + 1;
         }
 
-        if (col < vi.coloff) {
+        if (col < app.editor.coloff) {
             x = 1;
         } else {
-            x = (col - vi.coloff) + 1;
+            x = (col - app.editor.coloff) + 1;
         }
     }
 
@@ -1114,12 +1098,12 @@ static bool redraw_screen(void) {
         y = 1;
     }
 
-    if (x > vi.cols) {
-        x = vi.cols;
+    if (x > app.editor.cols) {
+        x = app.editor.cols;
     }
 
-    if (y > vi.edit_rows + 1) {
-        y = vi.edit_rows + 1;
+    if (y > app.editor.edit_rows + 1) {
+        y = app.editor.edit_rows + 1;
     }
 
     char seq[32];
@@ -1132,30 +1116,30 @@ static bool redraw_screen(void) {
         return false;
     }
 
-    vi.redraw = false;
-    vi.repaint = false;
+    app.editor.redraw = false;
+    app.editor.repaint = false;
     return true;
 }
 
 static void run_command(void) {
-    vi.cmd[vi.cmd_len] = '\0';
+    app.editor.cmd[app.editor.cmd_len] = '\0';
 
-    if (!strcmp(vi.cmd, "w")) {
+    if (!strcmp(app.editor.cmd, "w")) {
         save_file();
-    } else if (!strcmp(vi.cmd, "q")) {
-        if (vi.dirty) {
+    } else if (!strcmp(app.editor.cmd, "q")) {
+        if (app.editor.dirty) {
             set_msg("No write since last change (use :q!)");
         } else {
             quit_vi();
         }
-    } else if (!strcmp(vi.cmd, "q!")) {
+    } else if (!strcmp(app.editor.cmd, "q!")) {
         quit_vi();
-    } else if (!strcmp(vi.cmd, "wq") || !strcmp(vi.cmd, "x")) {
+    } else if (!strcmp(app.editor.cmd, "wq") || !strcmp(app.editor.cmd, "x")) {
         if (save_file()) {
             quit_vi();
         }
-    } else if (!strncmp(vi.cmd, "w ", 2)) {
-        const char *name = vi.cmd + 2;
+    } else if (!strncmp(app.editor.cmd, "w ", 2)) {
+        const char *name = app.editor.cmd + 2;
         while (*name == ' ') {
             name++;
         }
@@ -1163,8 +1147,8 @@ static void run_command(void) {
         if (!name[0]) {
             set_msg("missing file name");
         } else {
-            snprintf(vi.path_buf, sizeof(vi.path_buf), "%s", name);
-            vi.path = vi.path_buf;
+            snprintf(app.editor.path_buf, sizeof(app.editor.path_buf), "%s", name);
+            app.editor.path = app.editor.path_buf;
             save_file();
         }
     } else {
@@ -1187,14 +1171,14 @@ static void handle_insert(int key) {
     }
 
     if (key == '\b' || key == 0x7f) {
-        if (vi.cursor > line_start(vi.cursor) && delete_char(vi.cursor - 1)) {
-            vi.cursor--;
+        if (app.editor.cursor > line_start(app.editor.cursor) && delete_char(app.editor.cursor - 1)) {
+            app.editor.cursor--;
         }
         return;
     }
 
     if (key == VI_KEY_DEL) {
-        delete_char(vi.cursor);
+        delete_char(app.editor.cursor);
         return;
     }
 
@@ -1214,14 +1198,14 @@ static void handle_insert(int key) {
 }
 
 static void handle_normal(int key) {
-    if (vi.pending_op) {
-        if (vi.pending_op == 'd' && key == 'd') {
-            vi.pending_op = 0;
+    if (app.editor.pending_op) {
+        if (app.editor.pending_op == 'd' && key == 'd') {
+            app.editor.pending_op = 0;
             delete_current_line();
             return;
         }
 
-        vi.pending_op = 0;
+        app.editor.pending_op = 0;
     }
 
     switch (key) {
@@ -1233,28 +1217,28 @@ static void handle_normal(int key) {
         enter_mode(VI_INSERT);
         return;
     case 'a':
-        if (vi.cursor < line_end(line_start(vi.cursor))) {
-            vi.cursor++;
+        if (app.editor.cursor < line_end(line_start(app.editor.cursor))) {
+            app.editor.cursor++;
         }
         enter_mode(VI_INSERT);
         return;
     case 'o': {
-        size_t end = line_end(line_start(vi.cursor));
-        if (end < vi.len) {
+        size_t end = line_end(line_start(app.editor.cursor));
+        if (end < app.editor.len) {
             end++;
         }
 
         if (insert_char(end, '\n')) {
-            vi.cursor = end + 1;
+            app.editor.cursor = end + 1;
             enter_mode(VI_INSERT);
         }
         return;
     }
     case 'x':
-        delete_char(vi.cursor);
+        delete_char(app.editor.cursor);
         return;
     case 'd':
-        vi.pending_op = 'd';
+        app.editor.pending_op = 'd';
         return;
     case 'h':
         move_cursor(VI_KEY_LEFT);
@@ -1269,16 +1253,16 @@ static void handle_normal(int key) {
         move_cursor(VI_KEY_RIGHT);
         return;
     case '0':
-        vi.cursor = line_start(vi.cursor);
-        vi.redraw = true;
+        app.editor.cursor = line_start(app.editor.cursor);
+        app.editor.redraw = true;
         return;
     case '$':
-        vi.cursor = line_end(line_start(vi.cursor));
-        vi.redraw = true;
+        app.editor.cursor = line_end(line_start(app.editor.cursor));
+        app.editor.redraw = true;
         return;
     case 'G':
-        vi.cursor = vi.len;
-        vi.redraw = true;
+        app.editor.cursor = app.editor.len;
+        app.editor.redraw = true;
         return;
     default:
         if (is_nav_key(key)) {
@@ -1301,24 +1285,24 @@ static void handle_command_mode(int key) {
     }
 
     if (key == '\b' || key == 0x7f) {
-        if (vi.cmd_len) {
-            vi.cmd_len--;
-            vi.cmd[vi.cmd_len] = '\0';
-            vi.redraw = true;
+        if (app.editor.cmd_len) {
+            app.editor.cmd_len--;
+            app.editor.cmd[app.editor.cmd_len] = '\0';
+            app.editor.redraw = true;
         }
         return;
     }
 
-    if (isprint((unsigned char)key) && vi.cmd_len + 1 < sizeof(vi.cmd)) {
-        vi.cmd[vi.cmd_len++] = (char)key;
-        vi.cmd[vi.cmd_len] = '\0';
-        vi.redraw = true;
+    if (isprint((unsigned char)key) && app.editor.cmd_len + 1 < sizeof(app.editor.cmd)) {
+        app.editor.cmd[app.editor.cmd_len++] = (char)key;
+        app.editor.cmd[app.editor.cmd_len] = '\0';
+        app.editor.redraw = true;
     }
 }
 
 static void sigwinch_handler(int signum) {
     (void)signum;
-    vi_got_sigwinch = 1;
+    app.got_sigwinch = 1;
 }
 
 static void install_signal_handlers(void) {
@@ -1330,40 +1314,42 @@ static void install_signal_handlers(void) {
 }
 
 int main(int argc, char *argv[]) {
-    memset(&vi, 0, sizeof(vi));
+    memset(&app.editor, 0, sizeof(app.editor));
 
-    vi.buf = malloc(VI_INIT_CAP);
-    out.data = malloc(VI_OUT_INIT);
-    if (!vi.buf || !out.data) {
-        io_write_str("vi: out of memory\n");
+    app.editor.buf = malloc(VI_INIT_CAP);
+    app.out.data = malloc(VI_OUT_INIT);
+
+    if (!app.editor.buf || !app.out.data) {
+        io_write_str("app.editor: app.out of memory\n");
         return 1;
     }
-    vi.cap = VI_INIT_CAP;
-    vi.buf[0] = '\0';
-    out.cap = VI_OUT_INIT;
 
-    vi.running = true;
-    vi.mode = VI_NORMAL;
-    vi.redraw = true;
+    app.editor.cap = VI_INIT_CAP;
+    app.editor.buf[0] = '\0';
+    app.out.cap = VI_OUT_INIT;
+
+    app.editor.running = true;
+    app.editor.mode = VI_NORMAL;
+    app.editor.redraw = true;
 
     if (argc > 1) {
-        vi.path = argv[1];
+        app.editor.path = argv[1];
     }
 
     if (!load_file()) {
-        free(vi.buf);
-        free(out.data);
-        free(row_scratch);
-        free(frame_cache);
+        free(app.editor.buf);
+        free(app.out.data);
+        free(app.row_scratch);
+        free(app.frame_cache);
         return 1;
     }
 
     if (!raw_mode_on()) {
-        io_write_str("vi: failed to enter raw mode\n");
-        free(vi.buf);
-        free(out.data);
-        free(row_scratch);
-        free(frame_cache);
+        io_write_str("app.editor: failed to enter raw mode\n");
+        free(app.editor.buf);
+        free(app.out.data);
+        free(app.row_scratch);
+        free(app.frame_cache);
         return 1;
     }
 
@@ -1372,21 +1358,21 @@ int main(int argc, char *argv[]) {
     screen_enter();
     detect_screen_size();
 
-    while (vi.running) {
-        if (vi.redraw) {
+    while (app.editor.running) {
+        if (app.editor.redraw) {
             if (!redraw_screen()) {
                 set_msg("draw failed");
-                vi.redraw = true;
+                app.editor.redraw = true;
             }
         }
 
         int key = read_key();
         if (key == VI_KEY_RESIZE) {
-            vi.redraw = true;
+            app.editor.redraw = true;
             continue;
         }
 
-        switch (vi.mode) {
+        switch (app.editor.mode) {
         case VI_INSERT:
             handle_insert(key);
             break;
@@ -1402,10 +1388,10 @@ int main(int argc, char *argv[]) {
     raw_mode_off();
     screen_leave();
 
-    free(vi.buf);
-    free(out.data);
-    free(row_scratch);
-    free(frame_cache);
+    free(app.editor.buf);
+    free(app.out.data);
+    free(app.row_scratch);
+    free(app.frame_cache);
 
     return 0;
 }

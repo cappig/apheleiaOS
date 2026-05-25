@@ -17,7 +17,7 @@ struct arch_vm_space {
     page_t *root;
 };
 
-static struct arch_vm_space kernel_space = {0};
+static struct arch_vm_space kernel_space = { 0 };
 
 #if defined(__x86_64__)
 static void *_phys_map(page_t *paddr) {
@@ -58,11 +58,7 @@ static page_t *_clone_kernel_root_64(page_t *kernel_root) {
         return NULL;
     }
 
-    memcpy(
-        (page_t *)root_map + 256,
-        (page_t *)kernel_map + 256,
-        256 * sizeof(page_t)
-    );
+    memcpy((page_t *)root_map + 256, (page_t *)kernel_map + 256, 256 * sizeof(page_t));
 
     _phys_unmap(kernel_map);
     _phys_unmap(root_map);
@@ -173,8 +169,7 @@ static void _free_tables_64(page_t *root) {
             }
 
             page_t *lvl2 = (page_t *)page_get_paddr(&lvl3_map[j]);
-            page_t *lvl2_map =
-                (page_t *)((uintptr_t)lvl2 + LINEAR_MAP_OFFSET_64);
+            page_t *lvl2_map = (page_t *)((uintptr_t)lvl2 + LINEAR_MAP_OFFSET_64);
 
             for (size_t k = 0; k < 512; k++) {
                 if (!(lvl2_map[k] & PT_PRESENT)) {

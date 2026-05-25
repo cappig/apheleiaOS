@@ -15,22 +15,26 @@
 #include <sys/devfs.h>
 #include <sys/framebuffer.h>
 
-#define MOUSE_DEV_UID         0U
-#define MOUSE_DEV_GID         45U
-#define MOUSE_DEV_MODE        0644
+#define MOUSE_DEV_UID  0U
+#define MOUSE_DEV_GID  45U
+#define MOUSE_DEV_MODE 0644
 
 typedef struct {
     const char *name;
 } mouse_dev_t;
 
-static vector_t *mice = NULL;
-static ring_buffer_t *buffer = NULL;
-static sched_wait_queue_t mouse_wait = {0};
-static spinlock_t mouse_lock = SPINLOCK_INIT;
+typedef struct {
+    vector_t *devices;
+    ring_buffer_t *buffer;
+    sched_wait_queue_t wait;
+    spinlock_t lock;
+    i32 x;
+    i32 y;
+} mouse_state_t;
 
-static i32 mouse_x = 0;
-static i32 mouse_y = 0;
-
+static mouse_state_t mouse_state = {
+    .lock = SPINLOCK_INIT,
+};
 
 static i32 _clamp_i32(i32 value, i32 min, i32 max) {
     if (value < min) {
@@ -45,27 +49,26 @@ static i32 _clamp_i32(i32 value, i32 min, i32 max) {
 }
 
 static bool _has_events(void) {
-    unsigned long irq_flags = spin_lock_irqsave(&mouse_lock);
-    bool has_events = buffer && !ring_buffer_is_empty(buffer);
-    spin_unlock_irqrestore(&mouse_lock, irq_flags);
+    unsigned long irq_flags = spin_lock_irqsave(&mouse_state.lock);
+    bool has_events = mouse_state.buffer && !ring_buffer_is_empty(mouse_state.buffer);
+    spin_unlock_irqrestore(&mouse_state.lock, irq_flags);
 
     return has_events;
 }
 
-static ssize_t
-mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
 
-    if (!buf || !buffer || !len) {
+    if (!buf || !mouse_state.buffer || !len) {
         return -EINVAL;
     }
 
     for (;;) {
-        u32 wait_seq = sched_wait_seq(&mouse_wait);
-        unsigned long irq_flags = spin_lock_irqsave(&mouse_lock);
-        size_t popped = ring_buffer_pop_array(buffer, buf, len);
-        spin_unlock_irqrestore(&mouse_lock, irq_flags);
+        u32 wait_seq = sched_wait_seq(&mouse_state.wait);
+        unsigned long irq_flags = spin_lock_irqsave(&mouse_state.lock);
+        size_t popped = ring_buffer_pop_array(mouse_state.buffer, buf, len);
+        spin_unlock_irqrestore(&mouse_state.lock, irq_flags);
 
         if (popped) {
             return (ssize_t)popped;
@@ -84,12 +87,7 @@ mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
             return -EINTR;
         }
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(
-            &mouse_wait,
-            wait_seq,
-            0,
-            SCHED_WAIT_INTERRUPTIBLE
-        );
+        sched_wait_result_t wait_result = sched_wait_on_queue(&mouse_state.wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;
         }
@@ -109,8 +107,7 @@ static short mouse_poll(vfs_node_t *node, short events, u32 flags) {
     return revents;
 }
 
-static sched_wait_queue_t *
-mouse_wait_queue(vfs_node_t *node, short events, u32 flags) {
+static sched_wait_queue_t *mouse_wait_queue(vfs_node_t *node, short events, u32 flags) {
     (void)node;
     (void)flags;
 
@@ -118,25 +115,25 @@ mouse_wait_queue(vfs_node_t *node, short events, u32 flags) {
         return NULL;
     }
 
-    return &mouse_wait;
+    return &mouse_state.wait;
 }
 
 void mouse_handle_event(mouse_event event) {
     const framebuffer_info_t *fb = framebuffer_get_info();
 
     if (fb && fb->available && fb->width && fb->height) {
-        mouse_x = _clamp_i32(mouse_x + event.delta_x, 0, (i32)fb->width - 1);
-        mouse_y = _clamp_i32(mouse_y + event.delta_y, 0, (i32)fb->height - 1);
+        mouse_state.x = _clamp_i32(mouse_state.x + event.delta_x, 0, (i32)fb->width - 1);
+        mouse_state.y = _clamp_i32(mouse_state.y + event.delta_y, 0, (i32)fb->height - 1);
     } else {
-        mouse_x += event.delta_x;
-        mouse_y += event.delta_y;
+        mouse_state.x += event.delta_x;
+        mouse_state.y += event.delta_y;
     }
 
-    if (buffer) {
-        unsigned long irq_flags = spin_lock_irqsave(&mouse_lock);
-        ring_buffer_push_array(buffer, (u8 *)&event, sizeof(event));
-        spin_unlock_irqrestore(&mouse_lock, irq_flags);
-        sched_wake_one(&mouse_wait);
+    if (mouse_state.buffer) {
+        unsigned long irq_flags = spin_lock_irqsave(&mouse_state.lock);
+        ring_buffer_push_array(mouse_state.buffer, (u8 *)&event, sizeof(event));
+        spin_unlock_irqrestore(&mouse_state.lock, irq_flags);
+        sched_wake_one(&mouse_state.wait);
     }
 }
 
@@ -145,7 +142,7 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
         return false;
     }
 
-    if (!mice || !buffer) {
+    if (!mouse_state.devices || !mouse_state.buffer) {
         log_warn("mouse state not initialized");
         return false;
     }
@@ -159,14 +156,7 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
     mouse_if->poll = mouse_poll;
     mouse_if->wait_queue = mouse_wait_queue;
 
-    bool registered = devfs_register_node(
-        dev_dir,
-        "mouse",
-        VFS_CHARDEV,
-        MOUSE_DEV_MODE,
-        mouse_if,
-        NULL
-    );
+    bool registered = devfs_register_node(dev_dir, "mouse", VFS_CHARDEV, MOUSE_DEV_MODE, mouse_if, NULL);
 
     if (!registered) {
         log_warn("failed to create /dev/mouse");
@@ -187,35 +177,35 @@ bool mouse_init(void) {
         log_warn("failed to register devfs init callback");
     }
 
-    bool first_init = (mice == NULL || buffer == NULL);
+    bool first_init = (mouse_state.devices == NULL || mouse_state.buffer == NULL);
 
-    if (!mice) {
-        mice = vec_create(sizeof(mouse_dev_t *));
+    if (!mouse_state.devices) {
+        mouse_state.devices = vec_create(sizeof(mouse_dev_t *));
     }
 
-    if (!mice) {
+    if (!mouse_state.devices) {
         return false;
     }
 
-    if (!buffer) {
-        buffer = ring_buffer_create(MOUSE_DEV_BUFFER_SIZE);
+    if (!mouse_state.buffer) {
+        mouse_state.buffer = ring_buffer_create(MOUSE_DEV_BUFFER_SIZE);
     }
 
-    if (!buffer) {
+    if (!mouse_state.buffer) {
         return false;
     }
 
-    if (!mouse_wait.list) {
-        sched_wait_queue_init(&mouse_wait);
-        sched_wait_queue_set_poll_link(&mouse_wait, true);
+    if (!mouse_state.wait.list) {
+        sched_wait_queue_init(&mouse_state.wait);
+        sched_waitq_set_poll(&mouse_state.wait, true);
     }
 
     if (first_init) {
         const framebuffer_info_t *fb = framebuffer_get_info();
 
         if (fb && fb->available) {
-            mouse_x = (i32)(fb->width / 2);
-            mouse_y = (i32)(fb->height / 2);
+            mouse_state.x = (i32)(fb->width / 2);
+            mouse_state.y = (i32)(fb->height / 2);
         }
     }
 
@@ -223,7 +213,7 @@ bool mouse_init(void) {
 }
 
 u8 mouse_register(const char *name) {
-    if (!mice || !buffer) {
+    if (!mouse_state.devices || !mouse_state.buffer) {
         if (!mouse_init()) {
             return 0;
         }
@@ -237,12 +227,12 @@ u8 mouse_register(const char *name) {
 
     mse->name = strdup(name);
 
-    if (!vec_push(mice, &mse)) {
+    if (!vec_push(mouse_state.devices, &mse)) {
         free((void *)mse->name);
         free(mse);
         return 0;
     }
 
     log_debug("registered mouse %s", mse->name ? mse->name : "device");
-    return (u8)(mice->size - 1);
+    return (u8)(mouse_state.devices->size - 1);
 }

@@ -31,11 +31,7 @@ void pid_set(sched_thread_t *thread) {
         return;
     }
 
-    bool inserted = hashmap_set(
-        sched_state.procs.pid_index,
-        _pid_index_key(thread->pid),
-        (u64)(uintptr_t)thread
-    );
+    bool inserted = hashmap_set(sched_state.procs.pid_index, _pid_index_key(thread->pid), (u64)(uintptr_t)thread);
 
     if (!inserted) {
         panic("scheduler pid index insert failed");
@@ -204,11 +200,7 @@ void thread_put(sched_thread_t *thread) {
         return;
     }
 
-    u32 prior_lifecycle = __atomic_fetch_or(
-        &thread->lifecycle_flags,
-        SCHED_DEFER_QUEUED,
-        __ATOMIC_ACQ_REL
-    );
+    u32 prior_lifecycle = __atomic_fetch_or(&thread->lifecycle_flags, SCHED_DEFER_QUEUED, __ATOMIC_ACQ_REL);
 
     if (prior_lifecycle & SCHED_DEFER_QUEUED) {
         return;
@@ -232,11 +224,7 @@ void thread_destroy(sched_thread_t *thread) {
 
     thread->magic = 0;
 
-    __atomic_fetch_or(
-        &thread->lifecycle_flags,
-        SCHED_DESTROYING,
-        __ATOMIC_ACQ_REL
-    );
+    __atomic_fetch_or(&thread->lifecycle_flags, SCHED_DESTROYING, __ATOMIC_ACQ_REL);
 
     if (thread->pid > 0) {
         procfs_unregister_pid(thread->pid);
@@ -262,10 +250,8 @@ static bool thread_destroy_ready_locked(sched_thread_t *thread) {
         return false;
     }
 
-    if (
-        thread->in_all_list || thread->in_zombie_list || thread->in_wait_queue ||
-        thread->sleep_queued || thread->blocked_on
-    ) {
+    if (thread->in_all_list || thread->in_zombie_list || thread->in_wait_queue || thread->sleep_queued ||
+        thread->blocked_on) {
         return false;
     }
 

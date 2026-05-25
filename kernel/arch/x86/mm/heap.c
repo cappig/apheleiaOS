@@ -1,9 +1,9 @@
 #include "heap.h"
 
+#include <alloc/bitmap.h>
 #include <arch/arch.h>
 #include <arch/mm.h>
 #include <arch/paging.h>
-#include <alloc/bitmap.h>
 #include <base/macros.h>
 #include <base/types.h>
 #include <inttypes.h>
@@ -18,16 +18,17 @@
 #if defined(__x86_64__)
 #include "x86/paging64.h"
 #else
-#include "x86/paging32.h"
 #include "x86/boot.h"
+#include "x86/paging32.h"
 #endif
 
 #include "physical.h"
 
-#define HEAP_MIN        (KERNEL_HEAP_PAGES / 2)
-#define HEAP_MAX        (KERNEL_HEAP_PAGES * 16)
+#define HEAP_MIN (KERNEL_HEAP_PAGES / 2)
+#define HEAP_MAX (KERNEL_HEAP_PAGES * 16)
 
-// FIXME: baaaaaad. A bitmap is far from optimal for this
+// The bitmap keeps early heap growth simple; a fuller VM allocator can
+// replace it once x86 has larger dynamic mappings.
 
 typedef struct {
     bitmap_allocator_t alloc;
@@ -35,7 +36,7 @@ typedef struct {
     bool used;
 } heap_arena_t;
 
-static heap_arena_t heap_arenas[KERNEL_HEAP_MAX_ARENAS] = {0};
+static heap_arena_t heap_arenas[KERNEL_HEAP_MAX_ARENAS] = { 0 };
 static size_t heap_arena_count = 0;
 static spinlock_t heap_lock = SPINLOCK_INIT;
 #if defined(__i386__)
@@ -132,8 +133,7 @@ static bool _add_arena(size_t pages) {
     size_t size = pages * PAGE_4KIB;
     uintptr_t vaddr = heap_vaddr_next;
 
-    if (!heap_vaddr_limit || vaddr + size < vaddr ||
-        vaddr + size > heap_vaddr_limit) {
+    if (!heap_vaddr_limit || vaddr + size < vaddr || vaddr + size > heap_vaddr_limit) {
         free_frames(paddr, pages);
         return false;
     }
@@ -148,12 +148,7 @@ static bool _add_arena(size_t pages) {
 
     heap_arena_t *arena = &heap_arenas[heap_arena_count];
 
-    bool alloc_inited = bitmap_alloc_init(
-        &arena->alloc,
-        start,
-        chunk_size,
-        KERNEL_HEAP_BLOCK_SIZE
-    );
+    bool alloc_inited = bitmap_alloc_init(&arena->alloc, start, chunk_size, KERNEL_HEAP_BLOCK_SIZE);
 
     if (!alloc_inited) {
         free_frames(paddr, pages);
@@ -253,14 +248,13 @@ void heap_init() {
 static void *_kmalloc(size_t size) {
     if (!size) {
 #ifdef KMALLOC_DEBUG
-        log_warn("[KMALLOC_DEBUG] malloc bytes=0");
+        log_warn("kmalloc requested zero bytes");
 #endif
         return NULL;
     }
 
     unsigned long irq_flags = spin_lock_irqsave(&heap_lock);
-    size_t header_blocks =
-        DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
+    size_t header_blocks = DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
 
     size_t blocks = DIV_ROUND_UP(size, KERNEL_HEAP_BLOCK_SIZE);
     if (blocks > SIZE_MAX - header_blocks) {
@@ -295,10 +289,7 @@ static void *_kmalloc(size_t size) {
     }
 
     if (!space) {
-        panic(
-            "kmalloc out of heap memory after _grow (requested=%zu bytes)",
-            size
-        );
+        panic("kmalloc out of heap memory after _grow (requested=%zu bytes)", size);
     }
 
     // Write the header
@@ -310,11 +301,7 @@ static void *_kmalloc(size_t size) {
     void *ret = (u8 *)space + sizeof(kheap_header);
 
 #ifdef KMALLOC_DEBUG
-    log_debug(
-        "[KMALLOC_DEBUG] malloc bytes=%zd ptr=%#" PRIx64,
-        size,
-        (u64)(uintptr_t)ret
-    );
+    log_debug("kmalloc alloc bytes=%zd ptr=%#" PRIx64, size, (u64)(uintptr_t)ret);
 #endif
 
     spin_unlock_irqrestore(&heap_lock, irq_flags);
@@ -324,7 +311,7 @@ static void *_kmalloc(size_t size) {
 static void _kfree(void *ptr) {
     if (!ptr) {
 #ifdef KMALLOC_DEBUG
-        log_warn("[KMALLOC_DEBUG] free ptr is NULL");
+        log_warn("kmalloc free NULL pointer");
 #endif
         return;
     }
@@ -343,8 +330,7 @@ static void _kfree(void *ptr) {
         panic("kfree invalid heap header");
     }
 
-    size_t header_blocks =
-        DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
+    size_t header_blocks = DIV_ROUND_UP(sizeof(kheap_header), KERNEL_HEAP_BLOCK_SIZE);
 
     size_t user_blocks = header->size;
     if (user_blocks > SIZE_MAX - header_blocks) {
@@ -381,11 +367,7 @@ static void _kfree(void *ptr) {
 
 #ifdef KMALLOC_DEBUG
     size_t size = user_blocks * KERNEL_HEAP_BLOCK_SIZE;
-    log_debug(
-        "[KMALLOC_DEBUG] free bytes=%zd ptr=%#" PRIx64,
-        size,
-        (u64)(uintptr_t)ptr
-    );
+    log_debug("kmalloc free bytes=%zd ptr=%#" PRIx64, size, (u64)(uintptr_t)ptr);
 #endif
 
     spin_unlock_irqrestore(&heap_lock, irq_flags);

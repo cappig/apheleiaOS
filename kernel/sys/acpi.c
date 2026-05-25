@@ -6,8 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-static linked_list_t *acpi_tables = NULL;
-static bool acpi_xsdt = false;
+typedef struct {
+    linked_list_t *tables;
+    bool xsdt;
+} acpi_state_t;
+
+static acpi_state_t acpi = { 0 };
 
 static bool _checksum(const void *table, size_t length) {
     const u8 *bytes = table;
@@ -21,7 +25,7 @@ static bool _checksum(const void *table, size_t length) {
 }
 
 static sdt_header_t *_copy_table(u64 phys_addr) {
-    sdt_header_t header = {0};
+    sdt_header_t header = { 0 };
     void *header_map = arch_phys_map(phys_addr, sizeof(sdt_header_t), 0);
 
     if (!header_map) {
@@ -59,7 +63,7 @@ static sdt_header_t *_copy_table(u64 phys_addr) {
 }
 
 static bool _append_table(sdt_header_t *table) {
-    if (!table || !acpi_tables) {
+    if (!table || !acpi.tables) {
         return false;
     }
 
@@ -68,7 +72,7 @@ static bool _append_table(sdt_header_t *table) {
         return false;
     }
 
-    if (!list_append(acpi_tables, node)) {
+    if (!list_append(acpi.tables, node)) {
         list_destroy_node(node);
         return false;
     }
@@ -88,8 +92,7 @@ static void _parse_rsdt(u64 rsdt_phys) {
     }
 
     rsdt_t *rsdt = (rsdt_t *)table;
-    size_t entries =
-        (rsdt->header.length - sizeof(sdt_header_t)) / sizeof(rsdt->table_ptrs[0]);
+    size_t entries = (rsdt->header.length - sizeof(sdt_header_t)) / sizeof(rsdt->table_ptrs[0]);
 
     for (size_t i = 0; i < entries; i++) {
         sdt_header_t *entry = _copy_table(rsdt->table_ptrs[i]);
@@ -106,7 +109,7 @@ static void _parse_rsdt(u64 rsdt_phys) {
 }
 
 static void _parse_xsdt(u64 xsdt_phys) {
-    acpi_xsdt = true;
+    acpi.xsdt = true;
 
     sdt_header_t *table = _copy_table(xsdt_phys);
     if (!table) {
@@ -119,8 +122,7 @@ static void _parse_xsdt(u64 xsdt_phys) {
     }
 
     xsdt_t *xsdt = (xsdt_t *)table;
-    size_t entries =
-        (xsdt->header.length - sizeof(sdt_header_t)) / sizeof(xsdt->table_ptrs[0]);
+    size_t entries = (xsdt->header.length - sizeof(sdt_header_t)) / sizeof(xsdt->table_ptrs[0]);
 
     for (size_t i = 0; i < entries; i++) {
         sdt_header_t *entry = _copy_table(xsdt->table_ptrs[i]);
@@ -158,12 +160,12 @@ void acpi_init(u64 rsdp_ptr) {
         return;
     }
 
-    acpi_tables = list_create();
-    if (!acpi_tables) {
+    acpi.tables = list_create();
+    if (!acpi.tables) {
         return;
     }
 
-    rsdp_t rsdp = {0};
+    rsdp_t rsdp = { 0 };
     void *rsdp_map = arch_phys_map(rsdp_ptr, sizeof(rsdp_t), 0);
 
     if (!rsdp_map) {
@@ -184,17 +186,15 @@ void acpi_init(u64 rsdp_ptr) {
         _parse_rsdt(rsdp.rsdt_addr);
     }
 
-    log_info(
-        "loaded %zu %s tables", acpi_tables->length, acpi_xsdt ? "XSDT" : "RSDT"
-    );
+    log_info("loaded %zu %s tables", acpi.tables->length, acpi.xsdt ? "XSDT" : "RSDT");
 }
 
 sdt_header_t *acpi_find_table(char id[4]) {
-    if (!acpi_tables) {
+    if (!acpi.tables) {
         return NULL;
     }
 
-    ll_foreach(node, acpi_tables) {
+    ll_foreach(node, acpi.tables) {
         sdt_header_t *header = node->data;
 
         if (header && !memcmp(header->signature, id, 4)) {
@@ -206,19 +206,19 @@ sdt_header_t *acpi_find_table(char id[4]) {
 }
 
 void dump_acpi_tables(void) {
-    if (!acpi_tables) {
+    if (!acpi.tables) {
         return;
     }
 
-    log_debug("detected %s tables", acpi_xsdt ? "XSDT" : "RSDT");
+    log_debug("detected %s tables", acpi.xsdt ? "XSDT" : "RSDT");
 
-    ll_foreach(node, acpi_tables) {
+    ll_foreach(node, acpi.tables) {
         sdt_header_t *header = node->data;
 
         if (!header) {
             continue;
         }
 
-        log_debug("[ id=%.4s oem=%.6s ]", header->signature, header->oem_id);
+        log_debug("ACPI table %.4s oem=%.6s", header->signature, header->oem_id);
     }
 }

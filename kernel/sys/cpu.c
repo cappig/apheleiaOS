@@ -6,7 +6,7 @@
 
 size_t core_count = 1;
 size_t core_online_count = 1;
-cpu_core_t cores_local[MAX_CORES] = {0};
+cpu_core_t cores_local[MAX_CORES] = { 0 };
 
 static cpu_core_t *cpu_boot_local = NULL;
 
@@ -27,8 +27,7 @@ static cpu_core_t *_cpu_canonicalize(cpu_core_t *core) {
         return NULL;
     }
 
-    size_t index =
-        ((uintptr_t)core - (uintptr_t)&cores_local[0]) / sizeof(cpu_core_t);
+    size_t index = ((uintptr_t)core - (uintptr_t)&cores_local[0]) / sizeof(cpu_core_t);
     if (index < MAX_CORES && core->id != index) {
         core->id = index;
     }

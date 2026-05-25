@@ -2,6 +2,10 @@ ARCH_DIR        := kernel/arch/x86
 IMAGE_STAGE_DIR := bin/image/$(ARCH_VARIANT)
 IMAGE_BOOT_DIR  := $(IMAGE_STAGE_DIR)/boot
 
+X86_NO_FP_FLAGS := \
+	-mno-mmx \
+	-mno-sse \
+	-mno-sse2
 
 KERNEL_SRC_DIRS := \
 	kernel \
@@ -42,11 +46,6 @@ KERNEL_CC_COMMON := \
 	-fdata-sections \
 	-ffunction-sections
 
-KERNEL_X86_FP_FLAGS := \
-	-mno-mmx \
-	-mno-sse \
-	-mno-sse2
-
 KERNEL_LD_COMMON := \
 	--gc-sections
 
@@ -55,14 +54,22 @@ KERNEL_SRC      := $(KERNEL_SRC_64)
 KERNEL_OBJ_DIR  := bin/kernel64
 KERNEL_ELF      := bin/kernel64/boot/kernel64.elf
 KERNEL_AS_FLAGS := -felf64
-KERNEL_CC_FLAGS := $(KERNEL_CC_COMMON) $(KERNEL_X86_FP_FLAGS) -march=x86-64 -mcmodel=kernel -m64
+KERNEL_CC_FLAGS := \
+	$(KERNEL_CC_COMMON) \
+	$(X86_NO_FP_FLAGS) \
+	-march=x86-64 \
+	-mcmodel=kernel \
+	-m64
 KERNEL_LD_FLAGS := $(KERNEL_LD_COMMON) -T$(ARCH_DIR)/build/linker64.ld
 else ifeq ($(ARCH_VARIANT), 32)
 KERNEL_SRC      := $(KERNEL_SRC_32)
 KERNEL_OBJ_DIR  := bin/kernel32
 KERNEL_ELF      := bin/kernel32/boot/kernel32.elf
 KERNEL_AS_FLAGS := -felf32
-KERNEL_CC_FLAGS := $(KERNEL_CC_COMMON) $(KERNEL_X86_FP_FLAGS) -m32
+KERNEL_CC_FLAGS := \
+	$(KERNEL_CC_COMMON) \
+	$(X86_NO_FP_FLAGS) \
+	-m32
 KERNEL_LD_FLAGS := $(KERNEL_LD_COMMON) -T$(ARCH_DIR)/build/linker32.ld
 else
 $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')

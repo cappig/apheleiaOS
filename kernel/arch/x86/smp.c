@@ -24,18 +24,23 @@
 #define SMP_TLB_MAX_TARGET_CORES 64
 #define SMP_TRAMPOLINE_PAGE_SIZE 0x1000U
 
-static const boot_info_t *smp_boot_info = NULL;
-static bool smp_started = false;
-static bool smp_shootdown_enabled = false;
+typedef struct {
+    const boot_info_t *boot_info;
+    bool started;
+    bool shootdown_enabled;
 
-ALIGNED(16)
-static u8 smp_ap_stacks[MAX_CORES][SMP_AP_STACK_SIZE] = {0};
-static volatile u8 smp_ap_ready[MAX_CORES] = {0};
+    u8 ap_stacks[MAX_CORES][SMP_AP_STACK_SIZE] ALIGNED(16);
+    volatile u8 ap_ready[MAX_CORES];
 
-static spinlock_t smp_tlb_lock = SPINLOCK_INIT;
-static volatile uintptr_t smp_tlb_addr = 0;
-static volatile u64 smp_tlb_targets ALIGNED(8) = 0;
-static volatile u64 smp_tlb_acks ALIGNED(8) = 0;
+    spinlock_t tlb_lock;
+    volatile uintptr_t tlb_addr;
+    volatile u64 tlb_targets ALIGNED(8);
+    volatile u64 tlb_acks ALIGNED(8);
+} smp_state_t;
+
+static smp_state_t smp = {
+    .tlb_lock = SPINLOCK_INIT,
+};
 
 #if defined(__x86_64__)
 extern const u8 smp_trampoline64_start;
@@ -134,8 +139,7 @@ static size_t _trampoline_offset(const u8 *symbol) {
 }
 
 static void _patch_trampoline(void *trampoline_base, const cpu_core_t *core) {
-    u64 stack_top =
-        (u64)(uintptr_t)(smp_ap_stacks[core->id] + ARRAY_LEN(smp_ap_stacks[0]));
+    u64 stack_top = (u64)(uintptr_t)(smp.ap_stacks[core->id] + ARRAY_LEN(smp.ap_stacks[0]));
 
 #if defined(__x86_64__)
     size_t off_cr3 = _trampoline_offset(&smp_trampoline64_cr3);
@@ -146,11 +150,7 @@ static void _patch_trampoline(void *trampoline_base, const cpu_core_t *core) {
 
     _write32(trampoline_base, off_cr3, (u32)read_cr3());
     _write32(trampoline_base, off_efer, (u32)read_msr(EFER_MSR));
-    _write64(
-        trampoline_base,
-        off_entry,
-        (u64)(uintptr_t)_smp_ap_entry
-    );
+    _write64(trampoline_base, off_entry, (u64)(uintptr_t)_smp_ap_entry);
     _write64(trampoline_base, off_arg, (u64)core->id);
     _write64(trampoline_base, off_stack, stack_top);
 #else
@@ -160,11 +160,7 @@ static void _patch_trampoline(void *trampoline_base, const cpu_core_t *core) {
     size_t off_stack = _trampoline_offset(&smp_trampoline32_stack);
 
     _write32(trampoline_base, off_cr3, (u32)read_cr3());
-    _write32(
-        trampoline_base,
-        off_entry,
-        (u32)(uintptr_t)_smp_ap_entry
-    );
+    _write32(trampoline_base, off_entry, (u32)(uintptr_t)_smp_ap_entry);
     _write32(trampoline_base, off_arg, (u32)core->id);
     _write32(trampoline_base, off_stack, (u32)stack_top);
 #endif
@@ -178,7 +174,7 @@ static bool _wait_ap_ready(size_t core_id, size_t timeout_ms) {
     u64 deadline = _tsc_timeout_deadline(timeout_ms);
     size_t fallback = 4000000 * timeout_ms;
 
-    while (__atomic_load_n(&smp_ap_ready[core_id], __ATOMIC_ACQUIRE) == 0) {
+    while (__atomic_load_n(&smp.ap_ready[core_id], __ATOMIC_ACQUIRE) == 0) {
         if (deadline && _tsc_timed_out(deadline)) {
             return false;
         }
@@ -209,7 +205,7 @@ static bool _start_ap(const cpu_core_t *core, u8 vector) {
 }
 
 static void _tlb_ipi_handler(UNUSED int_state_t *state) {
-    uintptr_t addr = __atomic_load_n(&smp_tlb_addr, __ATOMIC_ACQUIRE);
+    uintptr_t addr = __atomic_load_n(&smp.tlb_addr, __ATOMIC_ACQUIRE);
 
     if (addr) {
 #if defined(__x86_64__)
@@ -221,9 +217,7 @@ static void _tlb_ipi_handler(UNUSED int_state_t *state) {
 
     cpu_core_t *core = cpu_current();
     if (core && core->id < SMP_TLB_MAX_TARGET_CORES) {
-        __atomic_or_fetch(
-            &smp_tlb_acks, 1ULL << core->id, __ATOMIC_SEQ_CST
-        );
+        __atomic_or_fetch(&smp.tlb_acks, 1ULL << core->id, __ATOMIC_SEQ_CST);
     }
 
     lapic_end_int();
@@ -248,7 +242,7 @@ NORETURN static void _smp_ap_entry(void *arg) {
         cpu_halt();
     }
 
-    cpuid_regs_t regs = {0};
+    cpuid_regs_t regs = { 0 };
     cpuid(1, &regs);
     u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
 
@@ -262,11 +256,7 @@ NORETURN static void _smp_ap_entry(void *arg) {
     }
 
     if (expected < MAX_CORES && core->id != expected) {
-        log_warn(
-            "AP core mismatch (expected=%zu, actual=%zu)",
-            expected,
-            core->id
-        );
+        log_warn("AP core mismatch (expected=%zu, actual=%zu)", expected, core->id);
     }
 
     cpu_set_current(core);
@@ -279,14 +269,14 @@ NORETURN static void _smp_ap_entry(void *arg) {
     scheduler_init_core();
     cpu_set_online(core, true);
 
-    __atomic_store_n(&smp_ap_ready[core->id], 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&smp.ap_ready[core->id], 1, __ATOMIC_RELEASE);
 
     while (!sched_is_running()) {
         arch_cpu_relax();
     }
 
     if (smp_online_count() > 1) {
-        smp_shootdown_enabled = true;
+        smp.shootdown_enabled = true;
     }
 
     scheduler_start_secondary();
@@ -295,7 +285,7 @@ NORETURN static void _smp_ap_entry(void *arg) {
 }
 
 void smp_set_boot_info(const boot_info_t *info) {
-    smp_boot_info = info;
+    smp.boot_info = info;
 }
 
 size_t smp_online_count(void) {
@@ -303,11 +293,11 @@ size_t smp_online_count(void) {
 }
 
 void smp_init(void) {
-    if (smp_started) {
+    if (smp.started) {
         return;
     }
 
-    smp_started = true;
+    smp.started = true;
     set_int_handler(SMP_IPI_TLB_VECTOR, _tlb_ipi_handler);
     set_int_handler(SMP_IPI_RESCHED_VECTOR, _resched_ipi_handler);
 
@@ -316,24 +306,20 @@ void smp_init(void) {
         return;
     }
 
-    if (!smp_boot_info || !smp_boot_info->smp_trampoline_paddr) {
+    if (!smp.boot_info || !smp.boot_info->smp_trampoline_paddr) {
         log_warn("trampoline page unavailable, staying uniprocessor");
         return;
     }
 
-    u64 trampoline_paddr = smp_boot_info->smp_trampoline_paddr;
+    u64 trampoline_paddr = smp.boot_info->smp_trampoline_paddr;
 
-    if (
-        (trampoline_paddr & (SMP_TRAMPOLINE_PAGE_SIZE - 1)) ||
-        trampoline_paddr >= 0x100000ULL
-    ) {
+    if ((trampoline_paddr & (SMP_TRAMPOLINE_PAGE_SIZE - 1)) || trampoline_paddr >= 0x100000ULL) {
         log_warn("invalid trampoline address %#" PRIx64, trampoline_paddr);
         return;
     }
 
     u8 sipi_vector = (u8)(trampoline_paddr >> 12);
-    void *trampoline = 
-        arch_phys_map(trampoline_paddr, SMP_TRAMPOLINE_PAGE_SIZE, PHYS_MAP_DEFAULT);
+    void *trampoline = arch_phys_map(trampoline_paddr, SMP_TRAMPOLINE_PAGE_SIZE, PHYS_MAP_DEFAULT);
 
     if (!trampoline) {
         log_warn("failed to map trampoline page");
@@ -359,24 +345,16 @@ void smp_init(void) {
             continue;
         }
 
-        __atomic_store_n(&smp_ap_ready[i], 0, __ATOMIC_RELEASE);
+        __atomic_store_n(&smp.ap_ready[i], 0, __ATOMIC_RELEASE);
         _patch_trampoline(trampoline, core);
 
         if (!_start_ap(core, sipi_vector)) {
-            log_warn(
-                "AP start IPI failed for core %zu (lapic=%u)",
-                i,
-                (unsigned int)core->lapic_id
-            );
+            log_warn("AP start IPI failed for core %zu (lapic=%u)", i, (unsigned int)core->lapic_id);
             continue;
         }
 
         if (!_wait_ap_ready(i, SMP_AP_START_TIMEOUT_MS)) {
-            log_warn(
-                "AP bring-up timed out for core %zu (lapic=%u)",
-                i,
-                (unsigned int)core->lapic_id
-            );
+            log_warn("AP bring-up timed out for core %zu (lapic=%u)", i, (unsigned int)core->lapic_id);
             continue;
         }
 
@@ -387,7 +365,7 @@ void smp_init(void) {
 
     size_t online = smp_online_count();
     if (online > 1) {
-        smp_shootdown_enabled = true;
+        smp.shootdown_enabled = true;
     }
 
     size_t prepared = started + 1;
@@ -422,7 +400,7 @@ void smp_tlb_shootdown(uintptr_t addr) {
         return;
     }
 
-    if (!smp_shootdown_enabled || smp_online_count() <= 1) {
+    if (!smp.shootdown_enabled || smp_online_count() <= 1) {
         return;
     }
 
@@ -438,7 +416,7 @@ void smp_tlb_shootdown(uintptr_t addr) {
 
     unsigned long irq_flags = arch_irq_save();
 
-    spin_lock(&smp_tlb_lock);
+    spin_lock(&smp.tlb_lock);
 
     u64 targets = 0;
 
@@ -462,14 +440,14 @@ void smp_tlb_shootdown(uintptr_t addr) {
     }
 
     if (!targets) {
-        spin_unlock(&smp_tlb_lock);
+        spin_unlock(&smp.tlb_lock);
         arch_irq_restore(irq_flags);
         return;
     }
 
-    __atomic_store_n(&smp_tlb_addr, addr, __ATOMIC_RELEASE);
-    __atomic_store_n(&smp_tlb_targets, targets, __ATOMIC_RELEASE);
-    __atomic_store_n(&smp_tlb_acks, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&smp.tlb_addr, addr, __ATOMIC_RELEASE);
+    __atomic_store_n(&smp.tlb_targets, targets, __ATOMIC_RELEASE);
+    __atomic_store_n(&smp.tlb_acks, 0, __ATOMIC_RELEASE);
 
     for (size_t i = 0; i < core_count && i < SMP_TLB_MAX_TARGET_CORES; i++) {
         if (!(targets & (1ULL << i))) {
@@ -485,18 +463,14 @@ void smp_tlb_shootdown(uintptr_t addr) {
     u64 deadline = _tsc_timeout_deadline(SMP_TLB_TIMEOUT_MS);
     size_t fallback = (size_t)(4000000ULL * SMP_TLB_TIMEOUT_MS);
 
-    while (
-        (__atomic_load_n(&smp_tlb_acks, __ATOMIC_ACQUIRE) &
-         __atomic_load_n(&smp_tlb_targets, __ATOMIC_ACQUIRE)) != targets
-    ) {
+    while ((__atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE) & __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE)) !=
+           targets) {
         if (deadline && _tsc_timed_out(deadline)) {
-            u64 acks = __atomic_load_n(&smp_tlb_acks, __ATOMIC_ACQUIRE);
-            u64 pending =
-                __atomic_load_n(&smp_tlb_targets, __ATOMIC_ACQUIRE);
+            u64 acks = __atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE);
+            u64 pending = __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE);
 
             panic(
-                "TLB shootdown timeout (self=%zu targets=%#" PRIx64
-                " acks=%#" PRIx64 " online=%zu)",
+                "TLB shootdown timeout (self=%zu targets=%#" PRIx64 " acks=%#" PRIx64 " online=%zu)",
                 self->id,
                 pending,
                 acks,
@@ -505,13 +479,11 @@ void smp_tlb_shootdown(uintptr_t addr) {
         }
 
         if (!deadline && !fallback--) {
-            u64 acks = __atomic_load_n(&smp_tlb_acks, __ATOMIC_ACQUIRE);
-            u64 pending =
-                __atomic_load_n(&smp_tlb_targets, __ATOMIC_ACQUIRE);
+            u64 acks = __atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE);
+            u64 pending = __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE);
 
             panic(
-                "TLB shootdown timeout (self=%zu targets=%#" PRIx64
-                " acks=%#" PRIx64 " online=%zu)",
+                "TLB shootdown timeout (self=%zu targets=%#" PRIx64 " acks=%#" PRIx64 " online=%zu)",
                 self->id,
                 pending,
                 acks,
@@ -522,10 +494,10 @@ void smp_tlb_shootdown(uintptr_t addr) {
         arch_cpu_relax();
     }
 
-    __atomic_store_n(&smp_tlb_acks, 0, __ATOMIC_RELEASE);
-    __atomic_store_n(&smp_tlb_targets, 0, __ATOMIC_RELEASE);
-    __atomic_store_n(&smp_tlb_addr, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&smp.tlb_acks, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&smp.tlb_targets, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&smp.tlb_addr, 0, __ATOMIC_RELEASE);
 
-    spin_unlock(&smp_tlb_lock);
+    spin_unlock(&smp.tlb_lock);
     arch_irq_restore(irq_flags);
 }

@@ -21,27 +21,20 @@ typedef struct {
 } bitmap_allocator_t;
 
 
-static inline size_t
-bitmap_alloc_to_block(bitmap_allocator_t *alloc, void *ptr) {
+static inline size_t bitmap_alloc_to_block(bitmap_allocator_t *alloc, void *ptr) {
     uintptr_t start = (uintptr_t)alloc->chuck_start;
     uintptr_t addr = (uintptr_t)ptr;
 
     return (addr - start) / alloc->block_size;
 }
 
-static inline void *
-bitmap_alloc_to_ptr(bitmap_allocator_t *alloc, size_t block) {
+static inline void *bitmap_alloc_to_ptr(bitmap_allocator_t *alloc, size_t block) {
     uintptr_t start = (uintptr_t)alloc->chuck_start;
 
     return (void *)(start + block * alloc->block_size);
 }
 
-bool bitmap_alloc_init(
-    bitmap_allocator_t *alloc,
-    void *chunk_start,
-    size_t chunk_size,
-    size_t block_size
-);
+bool bitmap_alloc_init(bitmap_allocator_t *alloc, void *chunk_start, size_t chunk_size, size_t block_size);
 
 void *bitmap_alloc_reserve(bitmap_allocator_t *alloc, size_t blocks);
 void *bitmap_alloc_reserve_high(bitmap_allocator_t *alloc, size_t blocks);

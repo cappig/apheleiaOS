@@ -43,11 +43,7 @@ static int _normalize_base(const char **cursor, int base) {
 
     if (!base) {
         if (s[0] == '0') {
-            if (
-                (s[1] == 'x' || s[1] == 'X') &&
-                _digit_value(s[2]) >= 0 &&
-                _digit_value(s[2]) < 16
-            ) {
+            if ((s[1] == 'x' || s[1] == 'X') && _digit_value(s[2]) >= 0 && _digit_value(s[2]) < 16) {
                 *cursor = s + 2;
                 return 16;
             }
@@ -58,13 +54,8 @@ static int _normalize_base(const char **cursor, int base) {
         return 10;
     }
 
-    if (
-        base == 16 &&
-        s[0] == '0' &&
-        (s[1] == 'x' || s[1] == 'X') &&
-        _digit_value(s[2]) >= 0 &&
-        _digit_value(s[2]) < 16
-    ) {
+    if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && _digit_value(s[2]) >= 0 &&
+        _digit_value(s[2]) < 16) {
         *cursor = s + 2;
     }
 
@@ -138,10 +129,7 @@ static unsigned long long _parse_unsigned(
 
         has_digits = true;
 
-        if (
-            value > cutoff ||
-            (value == cutoff && (unsigned long long)digit > cutlim)
-        ) {
+        if (value > cutoff || (value == cutoff && (unsigned long long)digit > cutlim)) {
             overflow = true;
         } else {
             value = value * (unsigned long long)parsed_base + (unsigned long long)digit;
@@ -177,16 +165,13 @@ long long strtoll(char const *restrict str, char **restrict endptr, int base) {
     bool negative = false;
     bool has_digits = false;
     bool overflow = false;
-    unsigned long long magnitude = _parse_unsigned(
-        str, endptr, base, &negative, &has_digits, &overflow
-    );
+    unsigned long long magnitude = _parse_unsigned(str, endptr, base, &negative, &has_digits, &overflow);
 
     if (!has_digits) {
         return 0;
     }
 
-    unsigned long long limit =
-        negative ? (unsigned long long)LLONG_MAX + 1ULL : (unsigned long long)LLONG_MAX;
+    unsigned long long limit = negative ? (unsigned long long)LLONG_MAX + 1ULL : (unsigned long long)LLONG_MAX;
 
     if (overflow || magnitude > limit) {
         errno = ERANGE;
@@ -218,14 +203,11 @@ long strtol(char const *restrict str, char **restrict endptr, int base) {
     return (long)value;
 }
 
-unsigned long long
-strtoull(char const *restrict str, char **restrict endptr, int base) {
+unsigned long long strtoull(char const *restrict str, char **restrict endptr, int base) {
     bool negative = false;
     bool has_digits = false;
     bool overflow = false;
-    unsigned long long value = _parse_unsigned(
-        str, endptr, base, &negative, &has_digits, &overflow
-    );
+    unsigned long long value = _parse_unsigned(str, endptr, base, &negative, &has_digits, &overflow);
 
     if (!has_digits) {
         return 0;
@@ -243,8 +225,7 @@ strtoull(char const *restrict str, char **restrict endptr, int base) {
     return value;
 }
 
-unsigned long
-strtoul(char const *restrict str, char **restrict endptr, int base) {
+unsigned long strtoul(char const *restrict str, char **restrict endptr, int base) {
     unsigned long long value = strtoull(str, endptr, base);
 
     if (value > (unsigned long long)ULONG_MAX) {
@@ -282,7 +263,7 @@ int abs(int n) {
 }
 
 div_t div(int numer, int denom) {
-    div_t out = {0, 0};
+    div_t out = { 0, 0 };
     if (!denom) {
         return out;
     }
@@ -293,7 +274,7 @@ div_t div(int numer, int denom) {
 }
 
 ldiv_t ldiv(long numer, long denom) {
-    ldiv_t out = {0, 0};
+    ldiv_t out = { 0, 0 };
     if (!denom) {
         return out;
     }
@@ -304,7 +285,7 @@ ldiv_t ldiv(long numer, long denom) {
 }
 
 lldiv_t lldiv(long long numer, long long denom) {
-    lldiv_t out = {0, 0};
+    lldiv_t out = { 0, 0 };
     if (!denom) {
         return out;
     }
@@ -314,13 +295,7 @@ lldiv_t lldiv(long long numer, long long denom) {
     return out;
 }
 
-void *bsearch(
-    const void *key,
-    const void *base,
-    size_t nmemb,
-    size_t size,
-    int (*compar)(const void *, const void *)
-) {
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size, int (*compar)(const void *, const void *)) {
     if (!key || !base || !compar || !size) {
         return NULL;
     }
@@ -330,8 +305,7 @@ void *bsearch(
 
     while (left < right) {
         size_t mid = left + (right - left) / 2;
-        const unsigned char *elem =
-            (const unsigned char *)base + (mid * size);
+        const unsigned char *elem = (const unsigned char *)base + (mid * size);
         int cmp = compar(key, elem);
 
         if (!cmp) {
@@ -350,7 +324,7 @@ void *bsearch(
 
 
 #ifdef EXTERNAL_ALLOC
-static libc_alloc_ops_t alloc_ops = {0};
+static libc_alloc_ops_t alloc_ops = { 0 };
 
 void __libc_init_alloc(const libc_alloc_ops_t *ops) {
     if (!ops) {

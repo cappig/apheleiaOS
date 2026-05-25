@@ -9,7 +9,6 @@
 #include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <sys/disk.h>
 #include <sys/pci.h>
 #include <sys/time.h>
@@ -170,8 +169,7 @@ static bool ahci_wait_port_ready(ahci_hba_port_t *port, u64 timeout_ticks) {
     return true;
 }
 
-static bool
-ahci_wait_cmd_poll(ahci_device_t *dev, ahci_hba_port_t *port, u32 slot_mask) {
+static bool ahci_wait_cmd_poll(ahci_device_t *dev, ahci_hba_port_t *port, u32 slot_mask) {
     if (!dev || !port) {
         return false;
     }
@@ -381,14 +379,7 @@ static bool ahci_port_present(ahci_hba_port_t *port) {
     return sig == AHCI_SIG_ATA || sig == 0;
 }
 
-static bool ahci_exec_cmd(
-    ahci_device_t *dev,
-    u8 command,
-    u64 lba,
-    u16 sectors,
-    bool write,
-    size_t bytes
-) {
+static bool ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, bool write, size_t bytes) {
     if (!dev || !sectors || !bytes) {
         return false;
     }
@@ -425,8 +416,7 @@ static bool ahci_exec_cmd(
 
     tbl->prdt_entry[0].dba = lo32(dev->dma_paddr);
     tbl->prdt_entry[0].dbau = hi32(dev->dma_paddr);
-    tbl->prdt_entry[0].dbc_i =
-        ((u32)(bytes - 1) & AHCI_PRDT_DBC_MASK) | AHCI_PRDT_I;
+    tbl->prdt_entry[0].dbc_i = ((u32)(bytes - 1) & AHCI_PRDT_DBC_MASK) | AHCI_PRDT_I;
 
     ahci_fis_reg_h2d_t *fis = (ahci_fis_reg_h2d_t *)tbl->cfis;
     memset(fis, 0, sizeof(*fis));
@@ -453,8 +443,7 @@ static bool ahci_exec_cmd(
 
     arch_phys_unmap(ct_map, PAGE_4KIB);
 
-    void *mmio_map =
-        arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+    void *mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
 
     if (!mmio_map) {
         return false;
@@ -472,11 +461,7 @@ static bool ahci_exec_cmd(
     const u32 port_mask = (1U << dev->port_index);
 
     if (port->ci & slot_mask) {
-        log_warn(
-            "AHCI slot %u still busy before issue (ci=%#x)",
-            AHCI_CMD_SLOT,
-            (unsigned int)port->ci
-        );
+        log_warn("AHCI slot %u still busy before issue (ci=%#x)", AHCI_CMD_SLOT, (unsigned int)port->ci);
         arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
         return false;
     }
@@ -509,10 +494,7 @@ static bool ahci_exec_cmd(
 
     if (need_poll_fallback) {
         if (!ahci_warned_irq_fallback) {
-            log_warn(
-                "IRQ timeout on port %u, falling back to completion polling",
-                (unsigned int)dev->port_index
-            );
+            log_warn("IRQ timeout on port %u, falling back to completion polling", (unsigned int)dev->port_index);
             ahci_warned_irq_fallback = true;
         }
 
@@ -567,8 +549,7 @@ static bool ahci_identify(ahci_device_t *dev, u16 *identify) {
     return true;
 }
 
-static bool
-ahci_transfer(ahci_device_t *dev, u64 lba, u16 sectors, void *buf, bool write) {
+static bool ahci_transfer(ahci_device_t *dev, u64 lba, u16 sectors, void *buf, bool write) {
     if (!dev || !buf || !sectors) {
         return false;
     }
@@ -603,8 +584,7 @@ ahci_transfer(ahci_device_t *dev, u64 lba, u16 sectors, void *buf, bool write) {
     return true;
 }
 
-static ssize_t
-ahci_read(disk_dev_t *disk, void *dest, size_t offset, size_t bytes) {
+static ssize_t ahci_read(disk_dev_t *disk, void *dest, size_t offset, size_t bytes) {
     if (!disk || !dest || !disk->private) {
         return -1;
     }
@@ -686,8 +666,7 @@ done:
     return ret;
 }
 
-static ssize_t
-ahci_write(disk_dev_t *disk, void *src, size_t offset, size_t bytes) {
+static ssize_t ahci_write(disk_dev_t *disk, void *src, size_t offset, size_t bytes) {
     if (!disk || !src || !disk->private) {
         return -1;
     }
@@ -783,26 +762,16 @@ static bool ahci_setup_port(ahci_device_t *dev) {
     dev->ct_paddr = (u64)(uintptr_t)alloc_frames(1);
     dev->dma_paddr = (u64)(uintptr_t)alloc_frames(AHCI_DMA_PAGES);
 
-    if (
-        !dev->clb_paddr ||
-        !dev->fb_paddr ||
-        !dev->ct_paddr ||
-        !dev->dma_paddr
-    ) {
+    if (!dev->clb_paddr || !dev->fb_paddr || !dev->ct_paddr || !dev->dma_paddr) {
         return false;
     }
 
-    if (
-        !ahci_zero_phys(dev->clb_paddr, PAGE_4KIB) ||
-        !ahci_zero_phys(dev->fb_paddr, PAGE_4KIB) ||
-        !ahci_zero_phys(dev->ct_paddr, PAGE_4KIB) ||
-        !ahci_zero_phys(dev->dma_paddr, AHCI_DMA_SIZE_BYTES)
-    ) {
+    if (!ahci_zero_phys(dev->clb_paddr, PAGE_4KIB) || !ahci_zero_phys(dev->fb_paddr, PAGE_4KIB) ||
+        !ahci_zero_phys(dev->ct_paddr, PAGE_4KIB) || !ahci_zero_phys(dev->dma_paddr, AHCI_DMA_SIZE_BYTES)) {
         return false;
     }
 
-    void *mmio_map =
-        arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+    void *mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
 
     if (!mmio_map) {
         return false;
@@ -849,14 +818,13 @@ static bool ahci_find_controller(ahci_device_t *dev) {
         return false;
     }
 
-    static const u8 subclasses[] = {PCI_MS_SATA, PCI_MS_RAID, PCI_MS_ATA};
+    static const u8 subclasses[] = { PCI_MS_SATA, PCI_MS_RAID, PCI_MS_ATA };
 
     for (size_t s = 0; s < ARRAY_LEN(subclasses); s++) {
         pci_found_t *cursor = NULL;
 
         for (;;) {
-            pci_found_t *node =
-                pci_find_node(PCI_MASS_STORAGE, subclasses[s], cursor);
+            pci_found_t *node = pci_find_node(PCI_MASS_STORAGE, subclasses[s], cursor);
 
             if (!node) {
                 break;
@@ -864,19 +832,10 @@ static bool ahci_find_controller(ahci_device_t *dev) {
 
             cursor = node;
 
-            u32 bar5_lo = pci_read_config(
-                node->bus, node->slot, node->func, PCI_CFG_BAR5, 4
-            );
-            u8 int_line = (u8)pci_read_config(
-                node->bus, node->slot, node->func, PCI_CFG_INT_LINE, 1
-            );
+            u32 bar5_lo = pci_read_config(node->bus, node->slot, node->func, PCI_CFG_BAR5, 4);
+            u8 int_line = (u8)pci_read_config(node->bus, node->slot, node->func, PCI_CFG_INT_LINE, 1);
 
-            log_debug(
-                "PCI command=%#x status=%#x int_line=%u",
-                node->header.command,
-                node->header.status,
-                int_line
-            );
+            log_debug("PCI command=%#x status=%#x int_line=%u", node->header.command, node->header.status, int_line);
 
             if (!bar5_lo || bar5_lo == 0xffffffffU || (bar5_lo & 1U)) {
                 continue;
@@ -885,13 +844,10 @@ static bool ahci_find_controller(ahci_device_t *dev) {
             u64 abar = (u64)(bar5_lo & ~0x0fU);
 
             if ((bar5_lo & 0x6U) == 0x4U) {
-                u32 bar5_hi = pci_read_config(
-                    node->bus, node->slot, node->func, PCI_CFG_BAR5 + 4, 4
-                );
+                u32 bar5_hi = pci_read_config(node->bus, node->slot, node->func, PCI_CFG_BAR5 + 4, 4);
                 abar |= ((u64)bar5_hi << 32);
             }
 
-            // FIXME: we should not have this limit!
             // The current MMIO mapping path is limited to 32-bit ABARs.
             if (!abar || abar > 0xffffffffULL) {
                 continue;
@@ -903,8 +859,7 @@ static bool ahci_find_controller(ahci_device_t *dev) {
             dev->slot = node->slot;
             dev->func = node->func;
 
-            void *mmio_map =
-                arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+            void *mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
 
             if (!mmio_map) {
                 continue;
@@ -987,13 +942,7 @@ static bool ahci_disk_init(void) {
     pci_enable_bus_mastering(dev->bus, dev->slot, dev->func);
 
     // Try MSI first, fall back to legacy INTx
-    bool msi_enabled = pci_enable_msi(
-        dev->bus,
-        dev->slot,
-        dev->func,
-        AHCI_MSI_VECTOR,
-        lapic_id()
-    );
+    bool msi_enabled = pci_enable_msi(dev->bus, dev->slot, dev->func, AHCI_MSI_VECTOR, lapic_id());
 
     if (msi_enabled) {
         ahci_primary = dev;
@@ -1003,10 +952,7 @@ static bool ahci_disk_init(void) {
         set_int_handler(AHCI_MSI_VECTOR, ahci_primary_irq);
         log_debug("AHCI using MSI vector %#x", AHCI_MSI_VECTOR);
     } else if (!ahci_irq_line_supported(dev->irq_line)) {
-        log_warn(
-            "IRQ line %u out of range, falling back to polling",
-            (unsigned int)dev->irq_line
-        );
+        log_warn("IRQ line %u out of range, falling back to polling", (unsigned int)dev->irq_line);
         dev->irq_enabled = false;
     } else {
         ahci_primary = dev;
@@ -1021,7 +967,7 @@ static bool ahci_disk_init(void) {
         return false;
     }
 
-    u16 identify[256] = {0};
+    u16 identify[256] = { 0 };
 
     if (!ahci_identify(dev, identify)) {
         log_error("AHCI identify failed on port %u", (unsigned int)dev->port_index);
@@ -1031,9 +977,7 @@ static bool ahci_disk_init(void) {
 
     u64 sector_count = 0;
     if (identify[83] & (1U << 10)) {
-        sector_count = (u64)identify[100] |
-                       ((u64)identify[101] << 16) |
-                       ((u64)identify[102] << 32) |
+        sector_count = (u64)identify[100] | ((u64)identify[101] << 16) | ((u64)identify[102] << 32) |
                        ((u64)identify[103] << 48);
     }
 

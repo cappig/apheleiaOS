@@ -7,19 +7,19 @@
 #include <string.h>
 #include <ui.h>
 
-#define MBROT_RES_ADJUST_MIN (-1)
-#define MBROT_RES_ADJUST_MAX 4
-#define MBROT_MAX_ITER_LIMIT 288U
-#define MBROT_RENDER_STEP_MIN 1U
-#define MBROT_RENDER_STEP_MAX 16U
-#define MBROT_HUD_MARGIN     6
-#define MBROT_HUD_PAD_X      6
-#define MBROT_HUD_PAD_Y      4
-#define MBROT_HUD_LINE_GAP   2
-#define MBROT_HUD_BG_NORMAL  DRAW_BLACK
+#define MBROT_RES_ADJUST_MIN   (-1)
+#define MBROT_RES_ADJUST_MAX   4
+#define MBROT_MAX_ITER_LIMIT   288U
+#define MBROT_RENDER_STEP_MIN  1U
+#define MBROT_RENDER_STEP_MAX  16U
+#define MBROT_HUD_MARGIN       6
+#define MBROT_HUD_PAD_X        6
+#define MBROT_HUD_PAD_Y        4
+#define MBROT_HUD_LINE_GAP     2
+#define MBROT_HUD_BG_NORMAL    DRAW_BLACK
 #define MBROT_HUD_BG_RENDERING 0x00330000U
-#define MBROT_SCALE_MIN      0.000000000001
-#define MBROT_SCALE_MAX      8.0
+#define MBROT_SCALE_MIN        0.000000000001
+#define MBROT_SCALE_MAX        8.0
 
 typedef struct {
     double center_x;
@@ -74,21 +74,20 @@ typedef struct {
 } mbrot_arg_map_t;
 
 static const mbrot_fractal_profile_t fractal_profiles[] = {
-    [MBROT_FRACTAL_MANDELBROT] =
-        {.title = "mbrot | mandelbrot", .center_x = -0.5, .center_y = 0.0, .scale = 1.6},
-    [MBROT_FRACTAL_JULIA] =
-        {.title = "mbrot | julia", .center_x = 0.0, .center_y = 0.0, .scale = 1.6},
-    [MBROT_FRACTAL_BURNING_SHIP] =
-        {.title = "mbrot | burning ship", .center_x = -0.45, .center_y = 0.5, .scale = 1.7},
-    [MBROT_FRACTAL_TRICORN] =
-        {.title = "mbrot | tricorn", .center_x = -0.2, .center_y = 0.0, .scale = 1.7},
+    [MBROT_FRACTAL_MANDELBROT] = { .title = "mbrot | mandelbrot", .center_x = -0.5, .center_y = 0.0, .scale = 1.6 },
+    [MBROT_FRACTAL_JULIA] = { .title = "mbrot | julia", .center_x = 0.0, .center_y = 0.0, .scale = 1.6 },
+    [MBROT_FRACTAL_BURNING_SHIP] = { .title = "mbrot | burning ship",
+                                     .center_x = -0.45,
+                                     .center_y = 0.5,
+                                     .scale = 1.7 },
+    [MBROT_FRACTAL_TRICORN] = { .title = "mbrot | tricorn", .center_x = -0.2, .center_y = 0.0, .scale = 1.7 },
 };
 
 static const mbrot_arg_map_t fractal_arg_map[] = {
-    {.arg = "--mandelbrot", .fractal = MBROT_FRACTAL_MANDELBROT},
-    {.arg = "--julia", .fractal = MBROT_FRACTAL_JULIA},
-    {.arg = "--burning-ship", .fractal = MBROT_FRACTAL_BURNING_SHIP},
-    {.arg = "--tricorn", .fractal = MBROT_FRACTAL_TRICORN},
+    { .arg = "--mandelbrot", .fractal = MBROT_FRACTAL_MANDELBROT },
+    { .arg = "--julia", .fractal = MBROT_FRACTAL_JULIA },
+    { .arg = "--burning-ship", .fractal = MBROT_FRACTAL_BURNING_SHIP },
+    { .arg = "--tricorn", .fractal = MBROT_FRACTAL_TRICORN },
 };
 
 static const mbrot_fractal_profile_t *fractal_profile(mbrot_fractal_t fractal) {
@@ -172,7 +171,15 @@ static size_t fb_stride_pixels(const framebuffer_t *fb) {
 }
 
 static u32 clamp_u8_i32(int value) {
-    return (u32)((value < 0) ? 0 : ((value > 255) ? 255 : value));
+    if (value < 0) {
+        return 0;
+    }
+
+    if (value > 255) {
+        return 255;
+    }
+
+    return (u32)value;
 }
 
 static void view_reset(mandelbrot_view_t *view, mbrot_fractal_t fractal) {
@@ -251,11 +258,7 @@ static u32 clamp_render_step(u32 step) {
     return step;
 }
 
-static u32 compute_render_step(
-    u32 width,
-    u32 height,
-    int resolution_adjust
-) {
+static u32 compute_render_step(u32 width, u32 height, int resolution_adjust) {
     u32 step = ((u64)width * (u64)height >= 260000ULL) ? 2U : 1U;
 
     if (resolution_adjust < 0) {
@@ -319,8 +322,8 @@ static void draw_status_overlay(
         zoom = base_scale / view->scale;
     }
 
-    char zoom_line[48] = {0};
-    char res_line[48] = {0};
+    char zoom_line[48] = { 0 };
+    char res_line[48] = { 0 };
     u32 zoom_x100 = 100U;
     if (zoom > 0.0) {
         double scaled = (zoom * 100.0) + 0.5;
@@ -336,28 +339,15 @@ static void draw_status_overlay(
     u32 zoom_whole = zoom_x100 / 100U;
     u32 zoom_frac = zoom_x100 % 100U;
 
-    snprintf(
-        zoom_line,
-        sizeof(zoom_line),
-        "zoom: %u.%02ux",
-        (unsigned int)zoom_whole,
-        (unsigned int)zoom_frac
-    );
-    snprintf(
-        res_line,
-        sizeof(res_line),
-        "res: step %u / %u",
-        (unsigned int)current_step,
-        (unsigned int)target_step
-    );
+    snprintf(zoom_line, sizeof(zoom_line), "zoom: %u.%02ux", (unsigned int)zoom_whole, (unsigned int)zoom_frac);
+    snprintf(res_line, sizeof(res_line), "res: step %u / %u", (unsigned int)current_step, (unsigned int)target_step);
 
     int zoom_w = text_width_px(zoom_line);
     int res_w = text_width_px(res_line);
     int text_w = zoom_w > res_w ? zoom_w : res_w;
     int line_count = 2;
     int text_height = text_height_px();
-    int text_h =
-        (line_count * text_height) + ((line_count - 1) * MBROT_HUD_LINE_GAP);
+    int text_h = (line_count * text_height) + ((line_count - 1) * MBROT_HUD_LINE_GAP);
 
     int box_w = text_w + (2 * MBROT_HUD_PAD_X);
     int box_h = text_h + (2 * MBROT_HUD_PAD_Y);
@@ -439,8 +429,7 @@ static u32 palette_color(u32 iter, u32 max_iter) {
     g = (g * shade) / 255;
     b = (b * shade) / 255;
 
-    return (clamp_u8_i32(r) << 16) | (clamp_u8_i32(g) << 8) |
-           clamp_u8_i32(b);
+    return (clamp_u8_i32(r) << 16) | (clamp_u8_i32(g) << 8) | clamp_u8_i32(b);
 }
 
 static bool point_inside_main_body(double cx, double cy) {
@@ -661,14 +650,13 @@ static bool render_fractal_pass(
         return false;
     }
 
-    mbrot_render_ctx_t ctx = {0};
+    mbrot_render_ctx_t ctx = { 0 };
     if (!init_render_ctx(fb, view, fractal, step, &ctx)) {
         return false;
     }
     target_step = clamp_render_step(target_step);
 
-    void (*render_row)(const mbrot_render_ctx_t *, u32) =
-        (ctx.step == 1U) ? render_row_pixels : render_row_blocks;
+    void (*render_row)(const mbrot_render_ctx_t *, u32) = (ctx.step == 1U) ? render_row_pixels : render_row_blocks;
 
     draw_status_overlay(ctx.fb, view, fractal, ctx.step, target_step, true);
     if (!flush_frame(window) && errno != EAGAIN && errno != EINTR) {
@@ -703,12 +691,7 @@ static bool render_current_resolution(
 }
 
 static int
-handle_event(
-    mandelbrot_view_t *view,
-    mbrot_fractal_t fractal,
-    int *resolution_adjust,
-    const ws_input_event_t *event
-) {
+handle_event(mandelbrot_view_t *view, mbrot_fractal_t fractal, int *resolution_adjust, const ws_input_event_t *event) {
     if (!view || !resolution_adjust || !event) {
         return MBROT_ACTION_NONE;
     }
@@ -792,11 +775,7 @@ static bool flush_or_set_pending(window_t *window, bool *present_pending) {
     return false;
 }
 
-static void advance_progressive_state(
-    bool *progressive_pending,
-    u32 *progressive_step,
-    u32 progressive_target_step
-) {
+static void advance_progressive_state(bool *progressive_pending, u32 *progressive_step, u32 progressive_target_step) {
     if (!progressive_pending || !progressive_step) {
         return;
     }
@@ -806,36 +785,28 @@ static void advance_progressive_state(
         return;
     }
 
-    *progressive_step = progressive_next_step(
-        *progressive_step,
-        progressive_target_step
-    );
+    *progressive_step = progressive_next_step(*progressive_step, progressive_target_step);
 }
 
 int main(int argc, char **argv) {
-    mbrot_options_t opts = {0};
+    mbrot_options_t opts = { 0 };
     int parse_status = parse_args(argc, argv, &opts);
     if (parse_status <= 0) {
         return parse_status < 0 ? 1 : 0;
     }
 
-    window_t window = {0};
+    window_t window = { 0 };
     if (window_init(&window, 760, 500, fractal_profile(opts.fractal)->title)) {
         return 1;
     }
 
     printf("+/- zoom, arrows pan, ] decrease res [ increase res, r reset, q/esc quit\n");
 
-    mandelbrot_view_t view = {0};
+    mandelbrot_view_t view = { 0 };
     int resolution_adjust = 0;
     view_reset(&view, opts.fractal);
 
-    if (!render_current_resolution(
-            &window,
-            &view,
-            opts.fractal,
-            resolution_adjust
-        )) {
+    if (!render_current_resolution(&window, &view, opts.fractal, resolution_adjust)) {
         window_deinit(&window);
         return 1;
     }
@@ -852,7 +823,7 @@ int main(int argc, char **argv) {
     while (true) {
         int timeout_ms = (progressive_pending || present_pending) ? 0 : -1;
 
-        ws_input_event_t event = {0};
+        ws_input_event_t event = { 0 };
         int ret = window_wait_event(&window, &event, timeout_ms);
 
         if (ret < 0) {
@@ -864,13 +835,7 @@ int main(int argc, char **argv) {
 
         if (ret == 0) {
             if (progressive_pending) {
-                if (!render_fractal_pass(
-                    &window,
-                    &view,
-                    opts.fractal,
-                    progressive_step,
-                    progressive_target_step
-                )) {
+                if (!render_fractal_pass(&window, &view, opts.fractal, progressive_step, progressive_target_step)) {
                     break;
                 }
 
@@ -881,11 +846,7 @@ int main(int argc, char **argv) {
                     continue;
                 }
 
-                advance_progressive_state(
-                    &progressive_pending,
-                    &progressive_step,
-                    progressive_target_step
-                );
+                advance_progressive_state(&progressive_pending, &progressive_step, progressive_target_step);
                 continue;
             }
 
@@ -910,46 +871,26 @@ int main(int argc, char **argv) {
 
         if (action == MBROT_ACTION_REDRAW) {
             progressive_pending = false;
-            if (!render_current_resolution(
-                    &window,
-                    &view,
-                    opts.fractal,
-                    resolution_adjust
-                )) {
+            if (!render_current_resolution(&window, &view, opts.fractal, resolution_adjust)) {
                 break;
             }
         } else if (action == MBROT_ACTION_RESOLUTION) {
             framebuffer_t *fb = window_buffer(&window);
             u32 width = fb ? fb->width : 0U;
             u32 height = fb ? fb->height : 0U;
-            u32 old_step = compute_render_step(
-                width,
-                height,
-                prev_resolution_adjust
-            );
-            u32 new_step =
-                compute_render_step(width, height, resolution_adjust);
+            u32 old_step = compute_render_step(width, height, prev_resolution_adjust);
+            u32 new_step = compute_render_step(width, height, resolution_adjust);
             u32 start_step = old_step > new_step ? old_step : new_step;
 
             progressive_target_step = new_step;
             progressive_step = start_step;
             progressive_pending = true;
 
-            if (!render_fractal_pass(
-                &window,
-                &view,
-                opts.fractal,
-                progressive_step,
-                progressive_target_step
-            )) {
+            if (!render_fractal_pass(&window, &view, opts.fractal, progressive_step, progressive_target_step)) {
                 break;
             }
 
-            advance_progressive_state(
-                &progressive_pending,
-                &progressive_step,
-                progressive_target_step
-            );
+            advance_progressive_state(&progressive_pending, &progressive_step, progressive_target_step);
         }
 
         if (!flush_or_set_pending(&window, &present_pending)) {

@@ -1,3 +1,5 @@
+#include "framebuffer.h"
+
 #include <arch/arch.h>
 #include <base/units.h>
 #include <errno.h>
@@ -17,28 +19,33 @@
 #include <sys/usercopy.h>
 #include <sys/vfs.h>
 
-#include "framebuffer.h"
-
-#define FB_MAP_CHUNK (4 * MIB)
-#define FB_DEV_UID   0U
-#define FB_DEV_GID   44U
-#define FB_DEV_MODE  0660
+#define FB_MAP_CHUNK           (4 * MIB)
+#define FB_DEV_UID             0U
+#define FB_DEV_GID             44U
+#define FB_DEV_MODE            0660
 #define FB_PRESENT_CHUNK_BYTES (64U * 1024U)
 
-static void *_present_vram;
-static bool framebuffer_driver_loaded = false;
-static mutex_t fb_present_lock = MUTEX_INIT;
-static bool fb_present_force_full = true;
+typedef struct {
+    void *present_vram;
+    bool loaded;
+    mutex_t present_lock;
+    bool force_full_present;
+} framebuffer_driver_state_t;
+
+static framebuffer_driver_state_t fb_driver = {
+    .present_lock = MUTEX_INIT,
+    .force_full_present = true,
+};
 
 static void _fb_handoff_clear(const framebuffer_info_t *fb) {
     if (!fb || !fb->available || !fb->size) {
         return;
     }
 
-    mutex_lock(&fb_present_lock);
+    mutex_lock(&fb_driver.present_lock);
 
     bool transient_map = false;
-    void *vram = _present_vram;
+    void *vram = fb_driver.present_vram;
     if (!vram) {
         vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
         transient_map = true;
@@ -52,8 +59,8 @@ static void _fb_handoff_clear(const framebuffer_info_t *fb) {
     }
 
     // Ensure the first frame after acquire repaints the entire display.
-    fb_present_force_full = true;
-    mutex_unlock(&fb_present_lock);
+    fb_driver.force_full_present = true;
+    mutex_unlock(&fb_driver.present_lock);
 }
 
 const driver_desc_t framebuffer_driver_desc = {
@@ -65,13 +72,7 @@ const driver_desc_t framebuffer_driver_desc = {
     .is_busy = framebuffer_driver_busy,
 };
 
-static ssize_t _dev_fb_transfer(
-    const framebuffer_info_t *fb,
-    void *buf,
-    size_t offset,
-    size_t len,
-    bool write
-) {
+static ssize_t _dev_fb_transfer(const framebuffer_info_t *fb, void *buf, size_t offset, size_t len, bool write) {
     if (!fb || !fb->available || !buf) {
         return -1;
     }
@@ -98,9 +99,7 @@ static ssize_t _dev_fb_transfer(
             chunk = FB_MAP_CHUNK;
         }
 
-        void *map = arch_phys_map(
-            fb->paddr + off + done, chunk, write ? PHYS_MAP_WC : 0
-        );
+        void *map = arch_phys_map(fb->paddr + off + done, chunk, write ? PHYS_MAP_WC : 0);
 
         if (!map) {
             break;
@@ -124,13 +123,7 @@ static ssize_t _dev_fb_transfer(
     return (ssize_t)done;
 }
 
-static ssize_t _dev_fb_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_fb_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)flags;
 
@@ -138,13 +131,7 @@ static ssize_t _dev_fb_read(
     return _dev_fb_transfer(fb, buf, offset, len, false);
 }
 
-static ssize_t _dev_fb_write(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_fb_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)flags;
 
@@ -216,10 +203,7 @@ static bool _fb_frame_ok(const framebuffer_info_t *fb, const pixel_t *frame) {
     return user_range_ok(current, frame, pixels * sizeof(pixel_t), false);
 }
 
-static ssize_t _dev_fb_present_rect(
-    const framebuffer_info_t *fb,
-    const fb_present_rect_t *req
-) {
+static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_present_rect_t *req) {
     if (!fb || !fb->available || !req || !req->frame) {
         return -EINVAL;
     }
@@ -259,21 +243,21 @@ static ssize_t _dev_fb_present_rect(
         &green_size,
         &blue_size
     );
-    mutex_lock(&fb_present_lock);
+    mutex_lock(&fb_driver.present_lock);
 
     bool transient_map = false;
-    void *vram = _present_vram;
+    void *vram = fb_driver.present_vram;
     if (!vram) {
         vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
         transient_map = true;
     }
 
     if (!vram) {
-        mutex_unlock(&fb_present_lock);
+        mutex_unlock(&fb_driver.present_lock);
         return -EIO;
     }
 
-    if (fb_present_force_full) {
+    if (fb_driver.force_full_present) {
         x = 0;
         y = 0;
         width = fb->width;
@@ -292,9 +276,7 @@ static ssize_t _dev_fb_present_rect(
 
     if (fast_bgrx) {
         size_t src_row_bytes = (size_t)width * sizeof(u32);
-        size_t chunk_rows_budget = src_row_bytes
-                                     ? (FB_PRESENT_CHUNK_BYTES / src_row_bytes)
-                                     : 0;
+        size_t chunk_rows_budget = src_row_bytes ? (FB_PRESENT_CHUNK_BYTES / src_row_bytes) : 0;
         if (!chunk_rows_budget) {
             chunk_rows_budget = 1;
         }
@@ -307,17 +289,14 @@ static ssize_t _dev_fb_present_rect(
 
             for (u32 r = 0; r < rows; r++) {
                 const u32 *src_row = src + (size_t)(y + row + r) * fb_width + x;
-                u8 *dst_row = (u8 *)vram + (size_t)(y + row + r) * pitch +
-                              (size_t)x * bpp_bytes;
+                u8 *dst_row = (u8 *)vram + (size_t)(y + row + r) * pitch + (size_t)x * bpp_bytes;
                 memcpy(dst_row, src_row, src_row_bytes);
             }
             row += rows;
         }
     } else {
         size_t dst_row_bytes = (size_t)width * bpp_bytes;
-        size_t chunk_rows_budget = dst_row_bytes
-                                     ? (FB_PRESENT_CHUNK_BYTES / dst_row_bytes)
-                                     : 0;
+        size_t chunk_rows_budget = dst_row_bytes ? (FB_PRESENT_CHUNK_BYTES / dst_row_bytes) : 0;
         if (!chunk_rows_budget) {
             chunk_rows_budget = 1;
         }
@@ -330,8 +309,7 @@ static ssize_t _dev_fb_present_rect(
 
             for (u32 r = 0; r < rows; r++) {
                 const u32 *src_row = src + (size_t)(y + row + r) * fb_width + x;
-                u8 *dst_row = (u8 *)vram + (size_t)(y + row + r) * pitch +
-                              (size_t)x * bpp_bytes;
+                u8 *dst_row = (u8 *)vram + (size_t)(y + row + r) * pitch + (size_t)x * bpp_bytes;
 
                 for (u32 col = 0; col < width; col++) {
                     u32 packed = pixel_pack_rgb888(
@@ -343,27 +321,24 @@ static ssize_t _dev_fb_present_rect(
                         green_size,
                         blue_size
                     );
-                    pixel_store_packed(
-                        dst_row + (size_t)col * bpp_bytes, (u8)bpp_bytes, packed
-                    );
+                    pixel_store_packed(dst_row + (size_t)col * bpp_bytes, (u8)bpp_bytes, packed);
                 }
             }
             row += rows;
         }
     }
 
-    fb_present_force_full = false;
+    fb_driver.force_full_present = false;
 
     if (transient_map) {
         arch_phys_unmap(vram, fb->size);
     }
 
-    mutex_unlock(&fb_present_lock);
+    mutex_unlock(&fb_driver.present_lock);
     return 0;
 }
 
-static ssize_t
-_dev_fb_present(const framebuffer_info_t *fb, const void *frame) {
+static ssize_t _dev_fb_present(const framebuffer_info_t *fb, const void *frame) {
     if (!frame) {
         return -EINVAL;
     }
@@ -390,7 +365,7 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
             return -EINVAL;
         }
 
-        fb_info_t info = {0};
+        fb_info_t info = { 0 };
 
         if (!fb) {
             sched_thread_t *current = sched_current();
@@ -466,7 +441,7 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
         }
 
         sched_thread_t *current = sched_current();
-        fb_present_rect_t req = {0};
+        fb_present_rect_t req = { 0 };
         if (!user_copy_from(current, &req, args, sizeof(req))) {
             return -EFAULT;
         }
@@ -497,17 +472,16 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
         return true;
     }
 
-    _present_vram = NULL;
-    fb_present_force_full = true;
+    fb_driver.present_vram = NULL;
+    fb_driver.force_full_present = true;
     if (arch_phys_map_can_persist()) {
-        _present_vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
-        if (!_present_vram) {
+        fb_driver.present_vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
+        if (!fb_driver.present_vram) {
             log_warn("failed to create persistent VRAM map for present path");
         }
     }
 
-    vfs_interface_t *fb_if =
-        vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);
+    vfs_interface_t *fb_if = vfs_create_interface(_dev_fb_read, _dev_fb_write, NULL);
 
     if (!fb_if) {
         log_warn("failed to allocate /dev interface");
@@ -516,9 +490,7 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
 
     fb_if->ioctl = _dev_fb_ioctl;
 
-    if (
-        !devfs_register_node(dev_dir, "fb", VFS_CHARDEV, FB_DEV_MODE, fb_if, NULL)
-    ) {
+    if (!devfs_register_node(dev_dir, "fb", VFS_CHARDEV, FB_DEV_MODE, fb_if, NULL)) {
         log_warn("failed to create /dev/fb");
         return false;
     }
@@ -538,7 +510,7 @@ bool framebuffer_driver_busy(void) {
 }
 
 driver_err_t framebuffer_driver_load(void) {
-    if (framebuffer_driver_loaded) {
+    if (fb_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -546,12 +518,12 @@ driver_err_t framebuffer_driver_load(void) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
-    framebuffer_driver_loaded = true;
+    fb_driver.loaded = true;
     return DRIVER_OK;
 }
 
 driver_err_t framebuffer_driver_unload(void) {
-    if (!framebuffer_driver_loaded) {
+    if (!fb_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -568,15 +540,15 @@ driver_err_t framebuffer_driver_unload(void) {
         log_warn("failed to unregister framebuffer devfs callback");
     }
 
-    if (_present_vram) {
+    if (fb_driver.present_vram) {
         const framebuffer_info_t *fb = framebuffer_get_info();
         if (fb && fb->size) {
-            arch_phys_unmap(_present_vram, fb->size);
+            arch_phys_unmap(fb_driver.present_vram, fb->size);
         }
-        _present_vram = NULL;
+        fb_driver.present_vram = NULL;
     }
-    fb_present_force_full = true;
+    fb_driver.force_full_present = true;
 
-    framebuffer_driver_loaded = false;
+    fb_driver.loaded = false;
     return DRIVER_OK;
 }

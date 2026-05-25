@@ -14,11 +14,7 @@ static uintptr_t build_initial_stack(sched_thread_t *thread) {
     return arch_build_kernel_stack(thread, (uintptr_t)thread_trampoline);
 }
 
-static uintptr_t build_user_stack(
-    sched_thread_t *thread,
-    uintptr_t entry,
-    uintptr_t user_stack_top
-) {
+static uintptr_t build_user_stack(sched_thread_t *thread, uintptr_t entry, uintptr_t user_stack_top) {
     uintptr_t sp = (uintptr_t)thread->stack + thread->stack_size;
     sp = ALIGN_DOWN(sp, 16);
 
@@ -32,8 +28,7 @@ static uintptr_t build_user_stack(
     return sp;
 }
 
-static uintptr_t
-build_fork_stack(sched_thread_t *thread, arch_int_state_t *state) {
+static uintptr_t build_fork_stack(sched_thread_t *thread, arch_int_state_t *state) {
     if (!thread || !state) {
         return 0;
     }
@@ -65,11 +60,7 @@ static pid_t _fork_fail(const char *reason, int error) {
     return error > 0 ? -error : -ENOMEM;
 }
 
-void thread_prepare_user(
-    sched_thread_t *thread,
-    uintptr_t entry,
-    uintptr_t user_stack_top
-) {
+void thread_prepare_user(sched_thread_t *thread, uintptr_t entry, uintptr_t user_stack_top) {
     if (!thread) {
         return;
     }
@@ -101,10 +92,7 @@ bool wake_cpu(size_t cpu_id) {
     return true;
 }
 
-static size_t
-sched_pick_target_cpu(const sched_thread_t *thread) {
-    u64 online = sched_online_cpu_mask();
-    u64 allowed = thread ? thread->allowed_cpu_mask : 0;
+static size_t sched_wake_cpu_count(void) {
     size_t ncpu = core_count;
 
     if (ncpu > MAX_CORES) {
@@ -117,6 +105,12 @@ sched_pick_target_cpu(const sched_thread_t *thread) {
         ncpu = 1;
     }
 
+    return ncpu;
+}
+
+static u64 sched_wake_allowed_mask(const sched_thread_t *thread, u64 online) {
+    u64 allowed = thread ? thread->allowed_cpu_mask : 0;
+
     if (!allowed) {
         allowed = online;
     }
@@ -125,6 +119,72 @@ sched_pick_target_cpu(const sched_thread_t *thread) {
     if (!allowed) {
         allowed = online ? online : 1ULL;
     }
+
+    return allowed;
+}
+
+static size_t first_cpu_in_mask(u64 mask, size_t ncpu) {
+    for (size_t cpu = 0; cpu < ncpu; cpu++) {
+        if (mask & (1ULL << cpu)) {
+            return cpu;
+        }
+    }
+
+    return 0;
+}
+
+static size_t pick_idle_cpu(u64 idle_mask, size_t base_cpu, size_t ncpu) {
+    size_t best_cpu = MAX_CORES;
+    size_t best_distance = (size_t)-1;
+
+    for (size_t cpu = 0; cpu < ncpu; cpu++) {
+        if (!(idle_mask & (1ULL << cpu))) {
+            continue;
+        }
+
+        size_t distance = sched_cpu_distance(base_cpu, cpu, ncpu);
+        bool better = best_cpu >= MAX_CORES || distance < best_distance ||
+                      (distance == best_distance && cpu < best_cpu);
+
+        if (better) {
+            best_cpu = cpu;
+            best_distance = distance;
+        }
+    }
+
+    return best_cpu;
+}
+
+static size_t pick_min_cpu(u64 min_mask, size_t ncpu) {
+    u32 start = __atomic_fetch_add(&sched_state.cpus.wake_rr_cursor, 1, __ATOMIC_RELAXED);
+
+    for (size_t step = 0; step < ncpu; step++) {
+        size_t cpu = (start + step) % ncpu;
+
+        if (min_mask & (1ULL << cpu)) {
+            return cpu;
+        }
+    }
+
+    return 0;
+}
+
+static bool wake_can_prefer(const sched_thread_t *thread, size_t ncpu, u64 allowed) {
+    if (!thread) {
+        return false;
+    }
+
+    if (thread->last_cpu >= ncpu) {
+        return false;
+    }
+
+    return allowed & (1ULL << thread->last_cpu);
+}
+
+static size_t sched_pick_target_cpu(const sched_thread_t *thread) {
+    size_t ncpu = sched_wake_cpu_count();
+    u64 online = sched_online_cpu_mask();
+    u64 allowed = sched_wake_allowed_mask(thread, online);
 
     size_t min_load = (size_t)-1;
     bool found = false;
@@ -156,7 +216,7 @@ sched_pick_target_cpu(const sched_thread_t *thread) {
 
     size_t preferred_cpu = MAX_CORES;
 
-    if (thread && thread->last_cpu < ncpu && (allowed & (1ULL << thread->last_cpu))) {
+    if (wake_can_prefer(thread, ncpu, allowed)) {
         preferred_cpu = thread->last_cpu;
     }
 
@@ -164,39 +224,10 @@ sched_pick_target_cpu(const sched_thread_t *thread) {
         size_t base_cpu = preferred_cpu;
 
         if (base_cpu >= ncpu || !(allowed & (1ULL << base_cpu))) {
-            if (min_mask) {
-                for (size_t cpu = 0; cpu < ncpu; cpu++) {
-                    if (min_mask & (1ULL << cpu)) {
-                        base_cpu = cpu;
-                        break;
-                    }
-                }
-            } else {
-                base_cpu = 0;
-            }
+            base_cpu = first_cpu_in_mask(min_mask, ncpu);
         }
 
-        size_t best_idle = MAX_CORES;
-        size_t best_distance = (size_t)-1;
-
-        for (size_t cpu = 0; cpu < ncpu; cpu++) {
-            if (!(idle_mask & (1ULL << cpu))) {
-                continue;
-            }
-
-            size_t distance = sched_cpu_distance(base_cpu, cpu, ncpu);
-            bool better_idle = (
-                best_idle >= MAX_CORES ||
-                distance < best_distance ||
-                (distance == best_distance && cpu < best_idle)
-            );
-
-            if (better_idle) {
-                best_idle = cpu;
-                best_distance = distance;
-            }
-        }
-
+        size_t best_idle = pick_idle_cpu(idle_mask, base_cpu, ncpu);
         if (best_idle < MAX_CORES) {
             return best_idle;
         }
@@ -210,21 +241,7 @@ sched_pick_target_cpu(const sched_thread_t *thread) {
         }
     }
 
-    size_t min_cpu = 0;
-    if (min_mask) {
-        u32 start = __atomic_fetch_add(&sched_state.cpus.wake_rr_cursor, 1, __ATOMIC_RELAXED);
-
-        for (size_t step = 0; step < ncpu; step++) {
-            size_t cpu = (start + step) % ncpu;
-
-            if (min_mask & (1ULL << cpu)) {
-                min_cpu = cpu;
-                break;
-            }
-        }
-    }
-
-    return min_cpu;
+    return min_mask ? pick_min_cpu(min_mask, ncpu) : 0;
 }
 
 void enqueue_ipi(sched_thread_t *thread, bool allow_remote_ipi) {
@@ -425,8 +442,7 @@ sched_thread_t *sched_find_thread(pid_t pid) {
     return thread;
 }
 
-sched_thread_t *
-sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg) {
+sched_thread_t *sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg) {
     return create_thread(name, entry, arg, true, false, SCHED_PID_KERNEL);
 }
 
@@ -443,11 +459,7 @@ static void copy_fork_state(sched_thread_t *child, sched_thread_t *parent) {
     child->user_stack_size = parent->user_stack_size;
 
     memcpy(child->cwd, parent->cwd, sizeof(parent->cwd));
-    memcpy(
-        child->signal_handlers,
-        parent->signal_handlers,
-        sizeof(child->signal_handlers)
-    );
+    memcpy(child->signal_handlers, parent->signal_handlers, sizeof(child->signal_handlers));
 
     child->signal_mask = parent->signal_mask;
     child->signal_trampoline = parent->signal_trampoline;
@@ -499,10 +511,8 @@ pid_t sched_fork(arch_int_state_t *state) {
         }
 
         if (!cow_enabled) {
-            bool region_overflows = (
-                pages > (uintptr_t)-1 / PAGE_4KIB ||
-                region->vaddr > (uintptr_t)-1 - (pages * PAGE_4KIB)
-            );
+            bool region_overflows =
+                (pages > (uintptr_t)-1 / PAGE_4KIB || region->vaddr > (uintptr_t)-1 - (pages * PAGE_4KIB));
 
             if (region_overflows) {
                 spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
@@ -518,12 +528,8 @@ pid_t sched_fork(arch_int_state_t *state) {
                 return _fork_fail("failed to allocate copied user pages", ENOMEM);
             }
 
-            arch_map_region(
-                root, pages, region->vaddr, new_paddr, region->flags
-            );
-            if (!sched_add_user_region(
-                    child, region->vaddr, new_paddr, pages, region->flags
-                )) {
+            arch_map_region(root, pages, region->vaddr, new_paddr, region->flags);
+            if (!sched_add_user_region(child, region->vaddr, new_paddr, pages, region->flags)) {
                 for (size_t i = 0; i < pages; i++) {
                     uintptr_t vaddr = region->vaddr + i * PAGE_4KIB;
                     unmap_page((page_t *)root, vaddr);
@@ -565,9 +571,7 @@ pid_t sched_fork(arch_int_state_t *state) {
         }
 
         arch_map_region(root, pages, region->vaddr, region->paddr, map_flags);
-        if (!sched_add_user_region(
-                child, region->vaddr, region->paddr, pages, region_flags
-            )) {
+        if (!sched_add_user_region(child, region->vaddr, region->paddr, pages, region_flags)) {
             spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
             sched_discard_thread(child);
             return _fork_fail("failed to record COW user region", ENOMEM);

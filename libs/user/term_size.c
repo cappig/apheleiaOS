@@ -26,12 +26,7 @@ static bool write_all(int fd, const char *buf, size_t len) {
     return true;
 }
 
-static bool read_byte_default(
-    int fd,
-    char *out,
-    int timeout_ms,
-    void *ctx
-) {
+static bool read_byte_default(int fd, char *out, int timeout_ms, void *ctx) {
     (void)ctx;
 
     if (!out) {
@@ -78,7 +73,7 @@ static bool size_from_fd(int fd, term_size_t *out) {
         return false;
     }
 
-    winsize_t ws = {0};
+    winsize_t ws = { 0 };
     if (ioctl(fd, TIOCGWINSZ, &ws)) {
         return false;
     }
@@ -96,13 +91,7 @@ static bool size_from_fd(int fd, term_size_t *out) {
     return true;
 }
 
-static bool read_number(
-    int fd,
-    size_t *out,
-    char end_ch,
-    term_read_byte_fn read_byte,
-    void *ctx
-) {
+static bool read_number(int fd, size_t *out, char end_ch, term_read_byte_fn read_byte, void *ctx) {
     if (!out) {
         return false;
     }
@@ -133,20 +122,10 @@ bool term_size_ok(const term_size_t *size) {
         return false;
     }
 
-    return (
-        size->cols >= 20 &&
-        size->cols <= 512 &&
-        size->rows >= 2 &&
-        size->rows <= 256
-    );
+    return (size->cols >= 20 && size->cols <= 512 && size->rows >= 2 && size->rows <= 256);
 }
 
-void term_get_size(
-    int input_fd,
-    int output_fd,
-    term_size_t *out,
-    const term_size_t *fallback
-) {
+void term_get_size(int input_fd, int output_fd, term_size_t *out, const term_size_t *fallback) {
     if (!out) {
         return;
     }
@@ -199,7 +178,9 @@ bool term_probe_size(
         read_byte = read_byte_default;
     }
 
-    const char query[] = "\x1b" "7\x1b[999;999H\x1b[6n\x1b" "8";
+    const char query[] = "\x1b"
+                         "7\x1b[999;999H\x1b[6n\x1b"
+                         "8";
     if (!write_all(output_fd, query, sizeof(query) - 1)) {
         return false;
     }
@@ -221,7 +202,7 @@ bool term_probe_size(
         return false;
     }
 
-    term_size_t size = {0};
+    term_size_t size = { 0 };
 
     if (!read_number(input_fd, &size.rows, ';', read_byte, ctx)) {
         return false;

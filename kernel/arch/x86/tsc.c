@@ -15,7 +15,7 @@
 static u64 tsc_rate_khz = 0;
 
 static bool _has(void) {
-    cpuid_regs_t r = {0};
+    cpuid_regs_t r = { 0 };
     cpuid(1, &r);
 
     return (r.edx & (1u << 4)) != 0;
@@ -101,12 +101,7 @@ bool tsc_init(void) {
     u64 median = samples[good / 2];
     tsc_rate_khz = median / CAL_MILLIS;
 
-    log_info(
-        "calibrated at %llu MHz (%zu/%d samples)",
-        (unsigned long long)(tsc_rate_khz / 1000),
-        good,
-        CAL_SAMPLES
-    );
+    log_info("calibrated at %llu MHz (%zu/%d samples)", (unsigned long long)(tsc_rate_khz / 1000), good, CAL_SAMPLES);
 
     return true;
 }

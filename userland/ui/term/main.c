@@ -5,9 +5,9 @@
 #include <input/kbd.h>
 #include <poll.h>
 #include <signal.h>
-#include <stdio.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/proc.h>
@@ -37,13 +37,7 @@ static void term_log_errno(const char *message) {
         saved = EIO;
     }
 
-    fprintf(
-        stderr,
-        "term: %s (%d: %s)\n",
-        message ? message : "error",
-        saved,
-        strerror(saved)
-    );
+    fprintf(stderr, "term: %s (%d: %s)\n", message ? message : "error", saved, strerror(saved));
 }
 
 static bool child_alive(pid_t child) {
@@ -59,19 +53,9 @@ static bool child_alive(pid_t child) {
 
     if (done == child) {
         if (WIFEXITED(status)) {
-            fprintf(
-                stderr,
-                "term: child %ld exited with status %d\n",
-                (long)child,
-                WEXITSTATUS(status)
-            );
+            fprintf(stderr, "term: child %ld exited with status %d\n", (long)child, WEXITSTATUS(status));
         } else {
-            fprintf(
-                stderr,
-                "term: child %ld exited with raw status %#x\n",
-                (long)child,
-                status
-            );
+            fprintf(stderr, "term: child %ld exited with raw status %#x\n", (long)child, status);
         }
         return false;
     }
@@ -122,7 +106,7 @@ static bool session_alive(pid_t sid) {
         char stat_path[80];
         snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
 
-        proc_stat_t stat = {0};
+        proc_stat_t stat = { 0 };
         if (proc_stat_read_path(stat_path, &stat) < 0) {
             continue;
         }
@@ -170,7 +154,7 @@ static bool tty_alive(int tty_index) {
         char stat_path[80];
         snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
 
-        proc_stat_t stat = {0};
+        proc_stat_t stat = { 0 };
         if (proc_stat_read_path(stat_path, &stat) < 0) {
             continue;
         }
@@ -206,7 +190,7 @@ static void signal_session(pid_t sid, int signum) {
         char stat_path[80];
         snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
 
-        proc_stat_t stat = {0};
+        proc_stat_t stat = { 0 };
         if (proc_stat_read_path(stat_path, &stat) < 0) {
             continue;
         }
@@ -240,7 +224,7 @@ static void signal_tty(int tty_index, int signum) {
         char stat_path[80];
         snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
 
-        proc_stat_t stat = {0};
+        proc_stat_t stat = { 0 };
         if (proc_stat_read_path(stat_path, &stat) < 0) {
             continue;
         }
@@ -362,24 +346,16 @@ static bool sync_screen_size(window_t *window, int master_fd) {
         return false;
     }
 
-    term_set_winsize(
-        master_fd,
-        term_screen_cols(),
-        term_screen_rows(),
-        window->width,
-        window->height
-    );
+    term_set_winsize(master_fd, term_screen_cols(), term_screen_rows(), window->width, window->height);
 
     return true;
 }
 
 static bool is_modifier_key(u32 keycode) {
-    return keycode == KBD_LEFT_SHIFT || keycode == KBD_RIGHT_SHIFT ||
-           keycode == KBD_LEFT_CTRL || keycode == KBD_RIGHT_CTRL ||
-           keycode == KBD_LEFT_ALT || keycode == KBD_RIGHT_ALT ||
-           keycode == KBD_LEFT_SUPER || keycode == KBD_RIGHT_SUPER ||
-           keycode == KBD_CAPSLOCK || keycode == KBD_NUMLOCK ||
-           keycode == KBD_SCRLLOCK;
+    return keycode == KBD_LEFT_SHIFT || keycode == KBD_RIGHT_SHIFT || keycode == KBD_LEFT_CTRL ||
+           keycode == KBD_RIGHT_CTRL || keycode == KBD_LEFT_ALT || keycode == KBD_RIGHT_ALT ||
+           keycode == KBD_LEFT_SUPER || keycode == KBD_RIGHT_SUPER || keycode == KBD_CAPSLOCK ||
+           keycode == KBD_NUMLOCK || keycode == KBD_SCRLLOCK;
 }
 
 static bool read_window(window_t *window, int master_fd) {
@@ -415,11 +391,7 @@ static bool read_window(window_t *window, int master_fd) {
         for (size_t i = 0; i < count; i++) {
             ws_input_event_t *event = &events[i];
 
-            if (
-                event->type == INPUT_EVENT_WINDOW_RESIZE &&
-                event->width &&
-                event->height
-            ) {
+            if (event->type == INPUT_EVENT_WINDOW_RESIZE && event->width && event->height) {
                 pending_resize = true;
                 continue;
             }
@@ -450,10 +422,7 @@ static bool read_window(window_t *window, int master_fd) {
                         continue;
                     }
 
-                    if (
-                        term_screen_scroll_offset() > 0 &&
-                        !is_modifier_key(event->keycode)
-                    ) {
+                    if (term_screen_scroll_offset() > 0 && !is_modifier_key(event->keycode)) {
                         term_screen_scroll_bottom();
                     }
                 }
@@ -487,7 +456,7 @@ static bool read_window(window_t *window, int master_fd) {
 }
 
 int main(void) {
-    window_t window = {0};
+    window_t window = { 0 };
     if (window_init(&window, 800, 500, "term")) {
         term_log_errno("failed to create window");
         return 1;
@@ -519,13 +488,7 @@ int main(void) {
         return 1;
     }
 
-    pid_t child = term_spawn_shell(
-        master_fd,
-        term_screen_cols(),
-        term_screen_rows(),
-        window.width,
-        window.height
-    );
+    pid_t child = term_spawn_shell(master_fd, term_screen_cols(), term_screen_rows(), window.width, window.height);
     if (child < 0) {
         term_log_errno("failed to spawn shell");
         close(master_fd);

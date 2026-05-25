@@ -93,13 +93,7 @@ u64 sched_user_mem_kib(const sched_thread_t *thread) {
     return __atomic_load_n(&thread->user_mem_kib, __ATOMIC_RELAXED);
 }
 
-bool sched_add_user_region(
-    sched_thread_t *thread,
-    uintptr_t vaddr,
-    uintptr_t paddr,
-    size_t pages,
-    u64 flags
-) {
+bool sched_add_user_region(sched_thread_t *thread, uintptr_t vaddr, uintptr_t paddr, size_t pages, u64 flags) {
     if (!thread || !region_bounds_ok(vaddr, paddr, pages)) {
         return false;
     }
@@ -141,8 +135,7 @@ void sched_clear_user_regions(sched_thread_t *thread) {
     sched_user_mem_set_kib(thread, 0);
 }
 
-static sched_user_region_t *
-find_user_region(sched_thread_t *thread, uintptr_t addr) {
+static sched_user_region_t *find_user_region(sched_thread_t *thread, uintptr_t addr) {
     if (!thread) {
         return NULL;
     }
@@ -168,10 +161,7 @@ find_user_region(sched_thread_t *thread, uintptr_t addr) {
     return NULL;
 }
 
-bool sched_user_region_mark_cow(
-    sched_thread_t *thread,
-    sched_user_region_t *region
-) {
+bool sched_user_region_mark_cow(sched_thread_t *thread, sched_user_region_t *region) {
     if (!thread || !region || !region->pages) {
         return false;
     }
@@ -204,12 +194,8 @@ bool sched_user_region_mark_cow(
     return updated;
 }
 
-static bool split_region_for_page(
-    sched_user_region_t *region,
-    size_t page_index,
-    uintptr_t new_page_paddr,
-    u64 new_flags
-) {
+static bool
+split_region_for_page(sched_user_region_t *region, size_t page_index, uintptr_t new_page_paddr, u64 new_flags) {
     if (!region || !region->pages || page_index >= region->pages) {
         return false;
     }
@@ -295,11 +281,7 @@ static bool split_region_for_page(
     return false;
 }
 
-bool sched_handle_cow_fault(
-    sched_thread_t *thread,
-    uintptr_t addr,
-    bool write
-) {
+bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write) {
     if (!thread || !thread->user_thread || !write) {
         return false;
     }
@@ -360,12 +342,7 @@ bool sched_handle_cow_fault(
             return false;
         }
 
-        bool split_ok = split_region_for_page(
-            region,
-            page_index,
-            new_paddr,
-            new_flags
-        );
+        bool split_ok = split_region_for_page(region, page_index, new_paddr, new_flags);
 
         if (!split_ok) {
             arch_free_frames((void *)new_paddr, 1);
@@ -376,12 +353,7 @@ bool sched_handle_cow_fault(
         arch_map_region(root, 1, page_addr, new_paddr, new_flags);
         arch_free_frames((void *)(uintptr_t)old_paddr, 1);
     } else {
-        bool split_ok = split_region_for_page(
-            region,
-            page_index,
-            (uintptr_t)old_paddr,
-            new_flags
-        );
+        bool split_ok = split_region_for_page(region, page_index, (uintptr_t)old_paddr, new_flags);
 
         if (!split_ok) {
             spin_unlock_irqrestore(&thread->vm_lock, vm_flags);

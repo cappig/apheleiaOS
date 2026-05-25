@@ -1,3 +1,5 @@
+#include "serial.h"
+
 #include <errno.h>
 #include <poll.h>
 #include <riscv/console.h>
@@ -8,8 +10,6 @@
 #include <sys/lock.h>
 #include <sys/serial_tty.h>
 #include <sys/vfs.h>
-
-#include "serial.h"
 
 #define RX_CAP 1024
 
@@ -42,8 +42,7 @@ const driver_desc_t serial_driver_desc = {
     .is_busy = serial_driver_busy,
 };
 
-static ssize_t
-_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
 
     if (!node || !buf) {
@@ -89,8 +88,7 @@ _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     }
 }
 
-static ssize_t
-_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
     (void)flags;
@@ -184,7 +182,7 @@ driver_err_t serial_driver_load(void) {
 
     if (!port.ready) {
         sched_wait_queue_init(&port.rx_wait);
-        sched_wait_queue_set_poll_link(&port.rx_wait, true);
+        sched_waitq_set_poll(&port.rx_wait, true);
         serial_tty_init(&port.tty);
         port.ready = true;
     }

@@ -200,10 +200,9 @@ bool sleep_heap_insert(sched_thread_t *thread) {
     }
 
     if (thread->sleep_queued) {
-        bool queued_here = (
-            thread->sleep_index < sched_state.wait.sleep.count &&
-            sched_state.wait.sleep.heap[thread->sleep_index] == thread
-        );
+        bool queued_here =
+            (thread->sleep_index < sched_state.wait.sleep.count &&
+             sched_state.wait.sleep.heap[thread->sleep_index] == thread);
 
         if (queued_here) {
             sleep_heap_remove_at(thread->sleep_index);
@@ -271,11 +270,9 @@ void sleep_heap_remove(sched_thread_t *thread) {
         return;
     }
 
-    bool queued_here = (
-        thread->sleep_queued &&
-        thread->sleep_index < sched_state.wait.sleep.count &&
-        sched_state.wait.sleep.heap[thread->sleep_index] == thread
-    );
+    bool queued_here =
+        (thread->sleep_queued && thread->sleep_index < sched_state.wait.sleep.count &&
+         sched_state.wait.sleep.heap[thread->sleep_index] == thread);
 
     if (queued_here) {
         sleep_heap_remove_at(thread->sleep_index);
@@ -316,10 +313,7 @@ pid_t sched_next_pid(sched_pid_class_t pid_class) {
         pid = sched_state.procs.next_user_pid++;
         break;
     case SCHED_PID_KERNEL:
-        bool exhausted = (
-            sched_state.procs.next_kernel_pid >= 0 ||
-            sched_state.procs.next_kernel_pid == INT_MIN
-        );
+        bool exhausted = (sched_state.procs.next_kernel_pid >= 0 || sched_state.procs.next_kernel_pid == INT_MIN);
 
         if (exhausted) {
             panic("kernel PID space exhausted");

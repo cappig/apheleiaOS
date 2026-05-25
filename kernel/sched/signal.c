@@ -14,12 +14,7 @@ static bool signal_valid(int signum) {
 }
 
 static bool signal_is_stop(int signum) {
-    return (
-        signum == SIGTSTP ||
-        signum == SIGSTOP ||
-        signum == SIGTTIN ||
-        signum == SIGTTOU
-    );
+    return (signum == SIGTSTP || signum == SIGSTOP || signum == SIGTTIN || signum == SIGTTOU);
 }
 
 static bool signal_is_continue(int signum) {
@@ -68,9 +63,8 @@ static int signal_next_pending(sched_thread_t *thread) {
         return 0;
     }
 
-    u32 pending =
-        __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE) &
-        ~__atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE);
+    u32 pending = __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE) &
+                  ~__atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE);
 
     if (!pending) {
         return 0;
@@ -103,12 +97,7 @@ void sched_signal_reset_thread(sched_thread_t *thread) {
     sched_signal_init_thread(thread);
 }
 
-sighandler_t sched_signal_set_handler(
-    sched_thread_t *thread,
-    int signum,
-    sighandler_t handler,
-    uintptr_t trampoline
-) {
+sighandler_t sched_signal_set_handler(sched_thread_t *thread, int signum, sighandler_t handler, uintptr_t trampoline) {
     if (!thread || !signal_valid(signum)) {
         return SIG_ERR;
     }
@@ -237,11 +226,7 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
 }
 
 bool sched_signal_sigreturn(sched_thread_t *thread, arch_int_state_t *state) {
-    bool no_saved_signal = (
-        !thread ||
-        !state ||
-        !__atomic_load_n(&thread->signal_saved_valid, __ATOMIC_ACQUIRE)
-    );
+    bool no_saved_signal = (!thread || !state || !__atomic_load_n(&thread->signal_saved_valid, __ATOMIC_ACQUIRE));
 
     if (no_saved_signal) {
         return false;
@@ -260,8 +245,6 @@ bool sched_signal_has_pending(sched_thread_t *thread) {
         return false;
     }
 
-    return (
-        __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE) &
-        ~__atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE)
-    ) != 0;
+    return (__atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE) &
+            ~__atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE)) != 0;
 }

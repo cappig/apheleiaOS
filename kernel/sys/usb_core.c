@@ -1,5 +1,3 @@
-#include "usb.h"
-
 #include <arch/arch.h>
 #include <data/vector.h>
 #include <log/log.h>
@@ -9,6 +7,7 @@
 #include <sys/lock.h>
 #include <sys/time.h>
 
+#include "usb.h"
 #include "usb_internal.h"
 
 typedef struct {
@@ -53,20 +52,27 @@ typedef struct {
     void *ctx;
 } usb_release_task_t;
 
-static vector_t *usb_hcds = NULL;
-static vector_t *usb_devices = NULL;
-static vector_t *usb_class_drivers = NULL;
-static vector_t *usb_enum_tasks = NULL;
+typedef struct {
+    vector_t *hcds;
+    vector_t *devices;
+    vector_t *class_drivers;
+    vector_t *enum_tasks;
 
-static size_t next_hcd_id = 1;
-static size_t next_device_id = 1;
+    size_t next_hcd_id;
+    size_t next_device_id;
 
-static spinlock_t usb_state_lock = SPINLOCK_INIT;
-static sched_wait_queue_t usb_enum_wait = {0};
-static bool usb_enum_wait_ready = false;
-static sched_thread_t *usb_enum_thread = NULL;
-static bool usb_core_ready = false;
+    spinlock_t lock;
+    sched_wait_queue_t enum_wait;
+    bool enum_wait_ready;
+    sched_thread_t *enum_thread;
+    bool ready;
+} usb_core_state_t;
 
+static usb_core_state_t usb_core = {
+    .next_hcd_id = 1,
+    .next_device_id = 1,
+    .lock = SPINLOCK_INIT,
+};
 
 static const char *_usb_hcd_kind_name(usb_hcd_kind_t kind) {
     switch (kind) {
@@ -92,10 +98,7 @@ static const char *_usb_speed_name(usb_speed_t speed) {
     }
 }
 
-static bool _usb_enum_candidate_better(
-    usb_device_handle_t dev,
-    usb_device_handle_t candidate
-) {
+static bool _usb_enum_candidate_better(usb_device_handle_t dev, usb_device_handle_t candidate) {
     if (!dev) {
         return false;
     }
@@ -115,63 +118,48 @@ static bool _usb_enum_candidate_better(
     return dev->port < candidate->port;
 }
 
-static inline void _usb_log_attach_failed(
-    const char *driver_name,
-    size_t hcd_id,
-    size_t port
-) {
-    log_warn(
-        "USB class driver '%s' failed while attaching (hcd=%zu port=%zu)",
-        driver_name,
-        hcd_id,
-        port
-    );
+static inline void _usb_log_attach_failed(const char *driver_name, size_t hcd_id, size_t port) {
+    log_warn("USB class driver '%s' failed while attaching (hcd=%zu port=%zu)", driver_name, hcd_id, port);
 }
 
-static inline void _usb_identity_class_triplet(
-    const usb_device_identity_t *identity,
-    u8 *out_class,
-    u8 *out_subclass,
-    u8 *out_protocol
-) {
+static inline void
+_usb_identity_class_triplet(const usb_device_identity_t *identity, u8 *out_class, u8 *out_subclass, u8 *out_protocol) {
     if (!identity || !out_class || !out_subclass || !out_protocol) {
         return;
     }
 
     *out_class = identity->interface_class ? identity->interface_class : identity->device_class;
-    *out_subclass =
-        identity->interface_class ? identity->interface_subclass : identity->device_subclass;
-    *out_protocol =
-        identity->interface_class ? identity->interface_protocol : identity->device_protocol;
+    *out_subclass = identity->interface_class ? identity->interface_subclass : identity->device_subclass;
+    *out_protocol = identity->interface_class ? identity->interface_protocol : identity->device_protocol;
 }
 
 static bool _usb_ensure_state(void) {
-    if (!usb_hcds) {
-        usb_hcds = vec_create(sizeof(usb_hcd_state_t));
+    if (!usb_core.hcds) {
+        usb_core.hcds = vec_create(sizeof(usb_hcd_state_t));
     }
 
-    if (!usb_devices) {
-        usb_devices = vec_create(sizeof(usb_device_handle_t));
+    if (!usb_core.devices) {
+        usb_core.devices = vec_create(sizeof(usb_device_handle_t));
     }
 
-    if (!usb_class_drivers) {
-        usb_class_drivers = vec_create(sizeof(usb_class_driver_t *));
+    if (!usb_core.class_drivers) {
+        usb_core.class_drivers = vec_create(sizeof(usb_class_driver_t *));
     }
 
-    if (!usb_enum_tasks) {
-        usb_enum_tasks = vec_create(sizeof(usb_enum_task_t));
+    if (!usb_core.enum_tasks) {
+        usb_core.enum_tasks = vec_create(sizeof(usb_enum_task_t));
     }
 
-    return usb_hcds && usb_devices && usb_class_drivers && usb_enum_tasks;
+    return usb_core.hcds && usb_core.devices && usb_core.class_drivers && usb_core.enum_tasks;
 }
 
 static usb_hcd_state_t *_usb_hcd_find_locked(size_t hcd_id) {
-    if (!usb_hcds || !hcd_id) {
+    if (!usb_core.hcds || !hcd_id) {
         return NULL;
     }
 
-    for (size_t i = 0; i < usb_hcds->size; i++) {
-        usb_hcd_state_t *hcd = vec_at(usb_hcds, i);
+    for (size_t i = 0; i < usb_core.hcds->size; i++) {
+        usb_hcd_state_t *hcd = vec_at(usb_core.hcds, i);
 
         if (hcd && hcd->id == hcd_id) {
             return hcd;
@@ -182,12 +170,12 @@ static usb_hcd_state_t *_usb_hcd_find_locked(size_t hcd_id) {
 }
 
 static usb_device_handle_t _usb_device_find_locked(size_t hcd_id, size_t port) {
-    if (!usb_devices || !hcd_id || !port) {
+    if (!usb_core.devices || !hcd_id || !port) {
         return NULL;
     }
 
-    for (size_t i = 0; i < usb_devices->size; i++) {
-        usb_device_handle_t *slot = vec_at(usb_devices, i);
+    for (size_t i = 0; i < usb_core.devices->size; i++) {
+        usb_device_handle_t *slot = vec_at(usb_core.devices, i);
         if (!slot || !*slot) {
             continue;
         }
@@ -207,11 +195,11 @@ static usb_device_handle_t _usb_device_create_locked(size_t hcd_id, size_t port)
         return NULL;
     }
 
-    dev->id = next_device_id++;
+    dev->id = usb_core.next_device_id++;
     dev->hcd_id = hcd_id;
     dev->port = port;
 
-    if (!vec_push(usb_devices, &dev)) {
+    if (!vec_push(usb_core.devices, &dev)) {
         free(dev);
         return NULL;
     }
@@ -258,11 +246,8 @@ static void _usb_log_no_driver(const usb_device_handle_t dev) {
     );
 }
 
-static void _usb_plan_bind_locked(
-    usb_device_handle_t dev,
-    const usb_class_driver_t **out_driver,
-    bool *out_log_no_driver
-) {
+static void
+_usb_plan_bind_locked(usb_device_handle_t dev, const usb_class_driver_t **out_driver, bool *out_log_no_driver) {
     if (out_driver) {
         *out_driver = NULL;
     }
@@ -271,18 +256,12 @@ static void _usb_plan_bind_locked(
         *out_log_no_driver = false;
     }
 
-    if (
-        !dev ||
-        !dev->connected ||
-        !dev->identity_valid ||
-        dev->bound_driver ||
-        !usb_class_drivers
-    ) {
+    if (!dev || !dev->connected || !dev->identity_valid || dev->bound_driver || !usb_core.class_drivers) {
         return;
     }
 
-    for (size_t i = 0; i < usb_class_drivers->size; i++) {
-        usb_class_driver_t **slot = vec_at(usb_class_drivers, i);
+    for (size_t i = 0; i < usb_core.class_drivers->size; i++) {
+        usb_class_driver_t **slot = vec_at(usb_core.class_drivers, i);
         if (!slot || !*slot) {
             continue;
         }
@@ -310,12 +289,12 @@ static void _usb_plan_bind_locked(
 }
 
 static bool _usb_queue_enum_locked(size_t hcd_id, size_t port, u64 generation) {
-    if (!usb_enum_tasks || !hcd_id || !port) {
+    if (!usb_core.enum_tasks || !hcd_id || !port) {
         return false;
     }
 
-    for (size_t i = 0; i < usb_enum_tasks->size; i++) {
-        usb_enum_task_t *task = vec_at(usb_enum_tasks, i);
+    for (size_t i = 0; i < usb_core.enum_tasks->size; i++) {
+        usb_enum_task_t *task = vec_at(usb_core.enum_tasks, i);
         if (!task) {
             continue;
         }
@@ -337,56 +316,42 @@ static bool _usb_queue_enum_locked(size_t hcd_id, size_t port, u64 generation) {
         .generation = generation,
     };
 
-    return vec_push(usb_enum_tasks, &task);
+    return vec_push(usb_core.enum_tasks, &task);
 }
 
 static void _drop_hcd_enum_tasks_locked(size_t hcd_id) {
-    if (!usb_enum_tasks || !hcd_id) {
+    if (!usb_core.enum_tasks || !hcd_id) {
         return;
     }
 
-    for (size_t i = 0; i < usb_enum_tasks->size;) {
-        usb_enum_task_t *task = vec_at(usb_enum_tasks, i);
+    for (size_t i = 0; i < usb_core.enum_tasks->size;) {
+        usb_enum_task_t *task = vec_at(usb_core.enum_tasks, i);
         if (!task || task->hcd_id != hcd_id) {
             i++;
             continue;
         }
 
-        vec_remove_at(usb_enum_tasks, i, NULL);
+        vec_remove_at(usb_core.enum_tasks, i, NULL);
     }
 }
 
 static void _usb_wake_enum_worker(void) {
-    if (!usb_enum_wait_ready || !sched_is_running()) {
+    if (!usb_core.enum_wait_ready || !sched_is_running()) {
         return;
     }
 
-    sched_wake_one(&usb_enum_wait);
+    sched_wake_one(&usb_core.enum_wait);
 }
 
 static bool _usb_hcd_has_enum_ops(const usb_hcd_state_t *hcd) {
     return (
-        hcd &&
-        hcd->has_ops &&
-        hcd->ops.port_reset &&
-        hcd->ops.device_open &&
-        hcd->ops.device_close &&
-        hcd->ops.set_address &&
-        hcd->ops.control_transfer
+        hcd && hcd->has_ops && hcd->ops.port_reset && hcd->ops.device_open && hcd->ops.device_close &&
+        hcd->ops.set_address && hcd->ops.control_transfer
     );
 }
 
-static bool _enum_candidate_ok_locked(
-    usb_device_handle_t dev,
-    bool defer_slow
-) {
-    if (
-        !dev ||
-        !dev->connected ||
-        dev->identity_valid ||
-        dev->enum_attempted ||
-        dev->enum_queued
-    ) {
+static bool _enum_candidate_ok_locked(usb_device_handle_t dev, bool defer_slow) {
+    if (!dev || !dev->connected || dev->identity_valid || dev->enum_attempted || dev->enum_queued) {
         return false;
     }
 
@@ -398,14 +363,11 @@ static bool _enum_candidate_ok_locked(
     return !defer_slow || dev->speed >= USB_SPEED_HIGH;
 }
 
-static usb_device_handle_t _pick_boot_enum_candidate_locked(
-    bool defer_slow,
-    bool *out_fast_identity_present
-) {
+static usb_device_handle_t pick_boot_candidate(bool defer_slow, bool *out_fast_identity_present) {
     usb_device_handle_t candidate = NULL;
     bool fast_identity_present = false;
 
-    if (!usb_devices) {
+    if (!usb_core.devices) {
         if (out_fast_identity_present) {
             *out_fast_identity_present = false;
         }
@@ -413,8 +375,8 @@ static usb_device_handle_t _pick_boot_enum_candidate_locked(
         return NULL;
     }
 
-    for (size_t i = 0; i < usb_devices->size; i++) {
-        usb_device_handle_t *slot = vec_at(usb_devices, i);
+    for (size_t i = 0; i < usb_core.devices->size; i++) {
+        usb_device_handle_t *slot = vec_at(usb_core.devices, i);
         if (!slot || !*slot) {
             continue;
         }
@@ -446,16 +408,16 @@ static bool _boot_enum_settled_locked(bool queued) {
         return false;
     }
 
-    if (usb_enum_tasks && usb_enum_tasks->size) {
+    if (usb_core.enum_tasks && usb_core.enum_tasks->size) {
         return false;
     }
 
-    if (!usb_devices) {
+    if (!usb_core.devices) {
         return true;
     }
 
-    for (size_t i = 0; i < usb_devices->size; i++) {
-        usb_device_handle_t *slot = vec_at(usb_devices, i);
+    for (size_t i = 0; i < usb_core.devices->size; i++) {
+        usb_device_handle_t *slot = vec_at(usb_core.devices, i);
         if (!slot || !*slot) {
             continue;
         }
@@ -474,21 +436,15 @@ static void _usb_process_enum_task(const usb_enum_task_t *task) {
         return;
     }
 
-    usb_enum_request_t req = {0};
+    usb_enum_request_t req = { 0 };
     bool can_enum = false;
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
 
     usb_hcd_state_t *hcd = _usb_hcd_find_locked(task->hcd_id);
     usb_device_handle_t dev = _usb_device_find_locked(task->hcd_id, task->port);
 
-    if (
-        hcd &&
-        dev &&
-        dev->connected &&
-        dev->generation == task->generation &&
-        _usb_hcd_has_enum_ops(hcd)
-    ) {
+    if (hcd && dev && dev->connected && dev->generation == task->generation && _usb_hcd_has_enum_ops(hcd)) {
         req = (usb_enum_request_t){
             .hcd_id = task->hcd_id,
             .port = task->port,
@@ -504,13 +460,13 @@ static void _usb_process_enum_task(const usb_enum_task_t *task) {
         dev->enum_attempted = false;
     }
 
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (!can_enum) {
         return;
     }
 
-    usb_enum_result_t enum_result = {0};
+    usb_enum_result_t enum_result = { 0 };
     bool enum_ok = usb_enum_run(&req, &enum_result);
 
     const usb_class_driver_t *attach_driver = NULL;
@@ -519,16 +475,11 @@ static void _usb_process_enum_task(const usb_enum_task_t *task) {
     void *stale_release_ctx = NULL;
     void *reject_release_ctx = NULL;
 
-    flags = spin_lock_irqsave(&usb_state_lock);
+    flags = spin_lock_irqsave(&usb_core.lock);
     hcd = _usb_hcd_find_locked(task->hcd_id);
     dev = _usb_device_find_locked(task->hcd_id, task->port);
 
-    bool stale = (
-        !hcd ||
-        !dev ||
-        !dev->connected ||
-        dev->generation != task->generation
-    );
+    bool stale = (!hcd || !dev || !dev->connected || dev->generation != task->generation);
 
     if (!stale && enum_ok) {
         if (dev->hcd_device && _usb_hcd_has_enum_ops(hcd)) {
@@ -552,7 +503,7 @@ static void _usb_process_enum_task(const usb_enum_task_t *task) {
         dev->enum_queued = false;
     }
 
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (stale_release_ctx && req.ops && req.ops->device_close) {
         req.ops->device_close(task->hcd_id, task->port, stale_release_ctx);
@@ -572,14 +523,14 @@ static void _usb_process_enum_task(const usb_enum_task_t *task) {
         );
 
         if (log_no_driver) {
-            flags = spin_lock_irqsave(&usb_state_lock);
+            flags = spin_lock_irqsave(&usb_core.lock);
 
             dev = _usb_device_find_locked(task->hcd_id, task->port);
             if (dev) {
                 _usb_log_no_driver(dev);
             }
 
-            spin_unlock_irqrestore(&usb_state_lock, flags);
+            spin_unlock_irqrestore(&usb_core.lock, flags);
         }
 
         if (attach_driver && attach_driver->attach) {
@@ -592,11 +543,7 @@ static void _usb_process_enum_task(const usb_enum_task_t *task) {
     }
 
     if (!stale && !enum_ok) {
-        log_warn(
-            "USB enumeration failed while probing device (hcd=%zu port=%zu)",
-            task->hcd_id,
-            task->port
-        );
+        log_warn("USB enumeration failed while probing device (hcd=%zu port=%zu)", task->hcd_id, task->port);
     }
 }
 
@@ -604,28 +551,23 @@ static void _usb_enum_worker(void *arg) {
     (void)arg;
 
     for (;;) {
-        usb_enum_task_t task = {0};
+        usb_enum_task_t task = { 0 };
         bool have_task = false;
         bool can_block = false;
         u32 wait_seq = 0;
 
-        unsigned long flags = spin_lock_irqsave(&usb_state_lock);
-        if (usb_enum_tasks && usb_enum_tasks->size) {
-            have_task = vec_pop(usb_enum_tasks, &task);
-        } else if (usb_enum_wait_ready) {
-            wait_seq = sched_wait_seq(&usb_enum_wait);
+        unsigned long flags = spin_lock_irqsave(&usb_core.lock);
+        if (usb_core.enum_tasks && usb_core.enum_tasks->size) {
+            have_task = vec_pop(usb_core.enum_tasks, &task);
+        } else if (usb_core.enum_wait_ready) {
+            wait_seq = sched_wait_seq(&usb_core.enum_wait);
             can_block = true;
         }
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
 
         if (!have_task) {
             if (can_block) {
-                (void)sched_wait_on_queue(
-                    &usb_enum_wait,
-                    wait_seq,
-                    0,
-                    SCHED_WAIT_INTERRUPTIBLE
-                );
+                (void)sched_wait_on_queue(&usb_core.enum_wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
             } else {
                 if (sched_is_running() && sched_current()) {
                     sched_yield();
@@ -641,22 +583,22 @@ static void _usb_enum_worker(void *arg) {
 }
 
 static void _usb_start_enum_worker(void) {
-    if (!usb_enum_wait_ready) {
-        sched_wait_queue_init(&usb_enum_wait);
-        usb_enum_wait_ready = true;
+    if (!usb_core.enum_wait_ready) {
+        sched_wait_queue_init(&usb_core.enum_wait);
+        usb_core.enum_wait_ready = true;
     }
 
-    if (usb_enum_thread) {
+    if (usb_core.enum_thread) {
         return;
     }
 
-    usb_enum_thread = sched_create_kernel_thread("usb-enum", _usb_enum_worker, NULL);
-    if (!usb_enum_thread) {
+    usb_core.enum_thread = sched_create_kernel_thread("usb-enum", _usb_enum_worker, NULL);
+    if (!usb_core.enum_thread) {
         log_warn("USB core failed while creating enumeration worker");
         return;
     }
 
-    sched_make_runnable(usb_enum_thread);
+    sched_make_runnable(usb_core.enum_thread);
 }
 
 bool usb_register_class_driver(const usb_class_driver_t *driver) {
@@ -668,25 +610,25 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
         return false;
     }
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
 
-    for (size_t i = 0; i < usb_class_drivers->size; i++) {
-        usb_class_driver_t **slot = vec_at(usb_class_drivers, i);
+    for (size_t i = 0; i < usb_core.class_drivers->size; i++) {
+        usb_class_driver_t **slot = vec_at(usb_core.class_drivers, i);
         if (!slot || !*slot) {
             continue;
         }
 
         if (*slot == driver || !strcmp((*slot)->name, driver->name)) {
-            spin_unlock_irqrestore(&usb_state_lock, flags);
+            spin_unlock_irqrestore(&usb_core.lock, flags);
             return true;
         }
     }
 
     usb_class_driver_t *driver_ptr = (usb_class_driver_t *)driver;
-    bool ok = vec_push(usb_class_drivers, &driver_ptr);
+    bool ok = vec_push(usb_core.class_drivers, &driver_ptr);
 
     if (!ok) {
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
         return false;
     }
 
@@ -694,19 +636,15 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
     bool attach_queue_failed = false;
 
     if (attach_list) {
-        for (size_t i = 0; i < usb_devices->size; i++) {
-            usb_device_handle_t *slot = vec_at(usb_devices, i);
+        for (size_t i = 0; i < usb_core.devices->size; i++) {
+            usb_device_handle_t *slot = vec_at(usb_core.devices, i);
             if (!slot || !*slot) {
                 continue;
             }
 
             usb_device_handle_t dev = *slot;
 
-            if (
-                !dev->connected ||
-                !dev->identity_valid ||
-                dev->bound_driver
-            ) {
+            if (!dev->connected || !dev->identity_valid || dev->bound_driver) {
                 continue;
             }
 
@@ -724,11 +662,11 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
                 break;
             }
         }
-    } else if (usb_devices->size > 0) {
+    } else if (usb_core.devices->size > 0) {
         attach_queue_failed = true;
     }
 
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     log_debug("registered USB class driver '%s'", driver->name);
 
@@ -740,11 +678,7 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
             }
 
             if (!driver->attach(*slot)) {
-                _usb_log_attach_failed(
-                    driver->name,
-                    usb_device_hcd_id(*slot),
-                    usb_device_port(*slot)
-                );
+                _usb_log_attach_failed(driver->name, usb_device_hcd_id(*slot), usb_device_port(*slot));
             }
         }
     }
@@ -754,10 +688,7 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
     }
 
     if (attach_queue_failed) {
-        log_warn(
-            "USB class driver '%s' registered without immediate attach due low memory",
-            driver->name
-        );
+        log_warn("USB class driver '%s' registered without immediate attach due low memory", driver->name);
     }
 
     return true;
@@ -776,11 +707,11 @@ bool usb_unregister_class_driver(const char *name) {
     vector_t *detach_list = vec_create(sizeof(usb_detach_task_t));
     size_t dropped_detach_callbacks = 0;
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
 
     size_t driver_index = (size_t)-1;
-    for (size_t i = 0; i < usb_class_drivers->size; i++) {
-        usb_class_driver_t **slot = vec_at(usb_class_drivers, i);
+    for (size_t i = 0; i < usb_core.class_drivers->size; i++) {
+        usb_class_driver_t **slot = vec_at(usb_core.class_drivers, i);
         if (!slot || !*slot) {
             continue;
         }
@@ -795,15 +726,15 @@ bool usb_unregister_class_driver(const char *name) {
     }
 
     if (!driver) {
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
         if (detach_list) {
             vec_destroy(detach_list);
         }
         return false;
     }
 
-    for (size_t i = 0; i < usb_devices->size; i++) {
-        usb_device_handle_t *slot = vec_at(usb_devices, i);
+    for (size_t i = 0; i < usb_core.devices->size; i++) {
+        usb_device_handle_t *slot = vec_at(usb_core.devices, i);
         if (!slot || !*slot) {
             continue;
         }
@@ -829,8 +760,8 @@ bool usb_unregister_class_driver(const char *name) {
         dev->bind_attempted = false;
     }
 
-    vec_remove_at(usb_class_drivers, driver_index, NULL);
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    vec_remove_at(usb_core.class_drivers, driver_index, NULL);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (driver->detach && detach_list) {
         for (size_t i = 0; i < detach_list->size; i++) {
@@ -858,11 +789,7 @@ bool usb_unregister_class_driver(const char *name) {
     return true;
 }
 
-bool usb_register_hcd(
-    const usb_hcd_info_t *info,
-    const usb_hcd_ops_t *ops,
-    size_t *out_hcd_id
-) {
+bool usb_register_hcd(const usb_hcd_info_t *info, const usb_hcd_ops_t *ops, size_t *out_hcd_id) {
     if (!info || !info->max_ports || info->kind == USB_HCD_UNKNOWN) {
         return false;
     }
@@ -871,27 +798,23 @@ bool usb_register_hcd(
         return false;
     }
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
 
-    for (size_t i = 0; i < usb_hcds->size; i++) {
-        usb_hcd_state_t *hcd = vec_at(usb_hcds, i);
+    for (size_t i = 0; i < usb_core.hcds->size; i++) {
+        usb_hcd_state_t *hcd = vec_at(usb_core.hcds, i);
         if (!hcd) {
             continue;
         }
 
-        if (
-            hcd->info.kind == info->kind &&
-            hcd->info.pci_bus == info->pci_bus &&
-            hcd->info.pci_slot == info->pci_slot &&
-            hcd->info.pci_func == info->pci_func
-        ) {
+        if (hcd->info.kind == info->kind && hcd->info.pci_bus == info->pci_bus &&
+            hcd->info.pci_slot == info->pci_slot && hcd->info.pci_func == info->pci_func) {
             if (ops) {
                 hcd->ops = *ops;
                 hcd->has_ops = true;
             }
 
             size_t id = hcd->id;
-            spin_unlock_irqrestore(&usb_state_lock, flags);
+            spin_unlock_irqrestore(&usb_core.lock, flags);
 
             if (out_hcd_id) {
                 *out_hcd_id = id;
@@ -902,10 +825,10 @@ bool usb_register_hcd(
     }
 
     usb_hcd_state_t hcd = {
-        .id = next_hcd_id++,
+        .id = usb_core.next_hcd_id++,
         .info = *info,
         .has_ops = ops != NULL,
-        .ops = {0},
+        .ops = { 0 },
         .next_address = 1,
     };
 
@@ -913,8 +836,8 @@ bool usb_register_hcd(
         hcd.ops = *ops;
     }
 
-    bool ok = vec_push(usb_hcds, &hcd);
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    bool ok = vec_push(usb_core.hcds, &hcd);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (!ok) {
         return false;
@@ -952,12 +875,12 @@ bool usb_unregister_hcd(size_t hcd_id) {
     size_t inline_release_count = 0;
     size_t inline_free_count = 0;
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
     size_t hcd_index = (size_t)-1;
-    usb_hcd_state_t hcd_copy = {0};
+    usb_hcd_state_t hcd_copy = { 0 };
 
-    for (size_t i = 0; i < usb_hcds->size; i++) {
-        usb_hcd_state_t *hcd = vec_at(usb_hcds, i);
+    for (size_t i = 0; i < usb_core.hcds->size; i++) {
+        usb_hcd_state_t *hcd = vec_at(usb_core.hcds, i);
         if (!hcd || hcd->id != hcd_id) {
             continue;
         }
@@ -968,7 +891,7 @@ bool usb_unregister_hcd(size_t hcd_id) {
     }
 
     if (hcd_index == (size_t)-1) {
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
         if (detach_list) {
             vec_destroy(detach_list);
         }
@@ -981,8 +904,8 @@ bool usb_unregister_hcd(size_t hcd_id) {
         return false;
     }
 
-    for (size_t i = 0; i < usb_devices->size; i++) {
-        usb_device_handle_t *slot = vec_at(usb_devices, i);
+    for (size_t i = 0; i < usb_core.devices->size; i++) {
+        usb_device_handle_t *slot = vec_at(usb_core.devices, i);
         if (!slot || !*slot) {
             continue;
         }
@@ -992,12 +915,7 @@ bool usb_unregister_hcd(size_t hcd_id) {
             continue;
         }
 
-        if (
-            dev->connected &&
-            dev->bound_driver &&
-            dev->bound_driver->detach &&
-            dev->identity_valid
-        ) {
+        if (dev->connected && dev->bound_driver && dev->bound_driver->detach && dev->identity_valid) {
             usb_detach_task_t task = {
                 .driver = dev->bound_driver,
                 .dev = dev,
@@ -1012,11 +930,7 @@ bool usb_unregister_hcd(size_t hcd_id) {
             }
         }
 
-        if (
-            dev->hcd_device &&
-            _usb_hcd_has_enum_ops(&hcd_copy) &&
-            hcd_copy.ops.device_close
-        ) {
+        if (dev->hcd_device && _usb_hcd_has_enum_ops(&hcd_copy) && hcd_copy.ops.device_close) {
             usb_release_task_t task = {
                 .release = hcd_copy.ops.device_close,
                 .hcd_id = hcd_id,
@@ -1038,7 +952,7 @@ bool usb_unregister_hcd(size_t hcd_id) {
         dev->connected = false;
         dev->generation++;
         dev->identity_valid = false;
-        dev->identity = (usb_device_identity_t){0};
+        dev->identity = (usb_device_identity_t){ 0 };
         dev->hcd_device = NULL;
         dev->bound_driver = NULL;
         dev->bind_attempted = false;
@@ -1059,8 +973,8 @@ bool usb_unregister_hcd(size_t hcd_id) {
     }
 
     _drop_hcd_enum_tasks_locked(hcd_id);
-    vec_remove_at(usb_hcds, hcd_index, NULL);
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    vec_remove_at(usb_core.hcds, hcd_index, NULL);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (detach_list) {
         for (size_t i = 0; i < detach_list->size; i++) {
@@ -1116,30 +1030,17 @@ bool usb_unregister_hcd(size_t hcd_id) {
     }
 
     if (inline_release_count > 0) {
-        log_warn(
-            "USB HCD id=%zu released %zu device context(s) inline due low memory",
-            hcd_id,
-            inline_release_count
-        );
+        log_warn("USB HCD id=%zu released %zu device context(s) inline due low memory", hcd_id, inline_release_count);
     }
 
     if (inline_free_count > 0) {
-        log_warn(
-            "USB HCD id=%zu freed %zu device record(s) inline due low memory",
-            hcd_id,
-            inline_free_count
-        );
+        log_warn("USB HCD id=%zu freed %zu device record(s) inline due low memory", hcd_id, inline_free_count);
     }
 
     return true;
 }
 
-bool usb_report_port_state(
-    size_t hcd_id,
-    size_t port,
-    bool connected,
-    usb_speed_t speed
-) {
+bool usb_report_port_state(size_t hcd_id, size_t port, bool connected, usb_speed_t speed) {
     if (!hcd_id || !port) {
         return false;
     }
@@ -1164,11 +1065,11 @@ bool usb_report_port_state(
     bool log_disconnected = false;
     const char *hcd_name = "USB-HCD";
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
 
     usb_hcd_state_t *hcd = _usb_hcd_find_locked(hcd_id);
     if (!hcd) {
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
         return false;
     }
 
@@ -1193,7 +1094,7 @@ bool usb_report_port_state(
             dev->connected = false;
             dev->generation++;
             dev->identity_valid = false;
-            dev->identity = (usb_device_identity_t){0};
+            dev->identity = (usb_device_identity_t){ 0 };
             dev->hcd_device = NULL;
             dev->bound_driver = NULL;
             dev->bind_attempted = false;
@@ -1201,7 +1102,7 @@ bool usb_report_port_state(
             dev->enum_queued = false;
         }
 
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
 
         if (detach_driver) {
             detach_driver->detach(detached_dev);
@@ -1221,7 +1122,7 @@ bool usb_report_port_state(
     if (!dev) {
         dev = _usb_device_create_locked(hcd_id, port);
         if (!dev) {
-            spin_unlock_irqrestore(&usb_state_lock, flags);
+            spin_unlock_irqrestore(&usb_core.lock, flags);
             return false;
         }
     }
@@ -1240,7 +1141,7 @@ bool usb_report_port_state(
         }
 
         dev->identity_valid = false;
-        dev->identity = (usb_device_identity_t){0};
+        dev->identity = (usb_device_identity_t){ 0 };
         dev->hcd_device = NULL;
         dev->bound_driver = NULL;
         dev->bind_attempted = false;
@@ -1248,11 +1149,7 @@ bool usb_report_port_state(
         dev->enum_queued = false;
     }
 
-    if (
-        !dev->identity_valid &&
-        !dev->enum_attempted &&
-        _usb_hcd_has_enum_ops(hcd)
-    ) {
+    if (!dev->identity_valid && !dev->enum_attempted && _usb_hcd_has_enum_ops(hcd)) {
         if (sched_is_running()) {
             dev->enum_attempted = true;
             dev->enum_queued = _usb_queue_enum_locked(hcd_id, port, dev->generation);
@@ -1269,20 +1166,14 @@ bool usb_report_port_state(
         attach_dev = dev;
     }
 
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (release_fn && release_ctx) {
         release_fn(hcd_id, port, release_ctx);
     }
 
     if (log_connected) {
-        log_info(
-            "%s id=%zu port %zu connected (%s-speed)",
-            hcd_name,
-            hcd_id,
-            port,
-            _usb_speed_name(speed)
-        );
+        log_info("%s id=%zu port %zu connected (%s-speed)", hcd_name, hcd_id, port, _usb_speed_name(speed));
     }
 
     if (queue_enum) {
@@ -1290,12 +1181,12 @@ bool usb_report_port_state(
     }
 
     if (log_no_driver) {
-        flags = spin_lock_irqsave(&usb_state_lock);
+        flags = spin_lock_irqsave(&usb_core.lock);
         dev = _usb_device_find_locked(hcd_id, port);
         if (dev) {
             _usb_log_no_driver(dev);
         }
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
     }
 
     if (attach_driver && attach_driver->attach) {
@@ -1317,18 +1208,12 @@ bool usb_schedule_port_enumeration(size_t hcd_id, size_t port) {
     }
 
     bool queued = false;
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
 
     usb_hcd_state_t *hcd = _usb_hcd_find_locked(hcd_id);
     usb_device_handle_t dev = _usb_device_find_locked(hcd_id, port);
 
-    if (
-        hcd &&
-        dev &&
-        dev->connected &&
-        !dev->enum_attempted &&
-        _usb_hcd_has_enum_ops(hcd)
-    ) {
+    if (hcd && dev && dev->connected && !dev->enum_attempted && _usb_hcd_has_enum_ops(hcd)) {
         dev->enum_attempted = true;
         queued = _usb_queue_enum_locked(hcd_id, port, dev->generation);
         dev->enum_queued = queued;
@@ -1338,7 +1223,7 @@ bool usb_schedule_port_enumeration(size_t hcd_id, size_t port) {
         }
     }
 
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (queued) {
         _usb_wake_enum_worker();
@@ -1361,14 +1246,14 @@ bool usb_wait_for_boot_enumeration(u32 timeout_ms) {
     u64 timeout = ms_to_ticks(wait_ms);
 
     for (;;) {
-        usb_enum_task_t task = {0};
+        usb_enum_task_t task = { 0 };
         bool have_task = false;
 
-        unsigned long flags = spin_lock_irqsave(&usb_state_lock);
-        if (usb_enum_tasks && usb_enum_tasks->size) {
-            have_task = vec_pop(usb_enum_tasks, &task);
+        unsigned long flags = spin_lock_irqsave(&usb_core.lock);
+        if (usb_core.enum_tasks && usb_core.enum_tasks->size) {
+            have_task = vec_pop(usb_core.enum_tasks, &task);
         }
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
 
         if (have_task) {
             _usb_process_enum_task(&task);
@@ -1376,20 +1261,17 @@ bool usb_wait_for_boot_enumeration(u32 timeout_ms) {
         }
 
         bool queued = false;
-        flags = spin_lock_irqsave(&usb_state_lock);
+        flags = spin_lock_irqsave(&usb_core.lock);
 
         usb_device_handle_t candidate = NULL;
         bool fast_identity_present = false;
         u64 elapsed = arch_timer_ticks() - start;
         bool defer_slow = elapsed < (timeout / 3U);
 
-        candidate = _pick_boot_enum_candidate_locked(
-            defer_slow,
-            &fast_identity_present
-        );
+        candidate = pick_boot_candidate(defer_slow, &fast_identity_present);
 
         if (!candidate && defer_slow) {
-            candidate = _pick_boot_enum_candidate_locked(false, NULL);
+            candidate = pick_boot_candidate(false, NULL);
         }
 
         if (fast_identity_present && candidate && candidate->speed < USB_SPEED_HIGH) {
@@ -1398,11 +1280,7 @@ bool usb_wait_for_boot_enumeration(u32 timeout_ms) {
 
         if (candidate) {
             candidate->enum_attempted = true;
-            queued = _usb_queue_enum_locked(
-                candidate->hcd_id,
-                candidate->port,
-                candidate->generation
-            );
+            queued = _usb_queue_enum_locked(candidate->hcd_id, candidate->port, candidate->generation);
             candidate->enum_queued = queued;
 
             if (!queued) {
@@ -1412,7 +1290,7 @@ bool usb_wait_for_boot_enumeration(u32 timeout_ms) {
 
         bool settled = _boot_enum_settled_locked(queued);
 
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
 
         if (queued) {
             continue;
@@ -1448,11 +1326,7 @@ const usb_device_identity_t *usb_device_identity(usb_device_handle_t dev) {
     return &dev->identity;
 }
 
-bool usb_identify_device(
-    size_t hcd_id,
-    size_t port,
-    const usb_device_identity_t *identity
-) {
+bool usb_identify_device(size_t hcd_id, size_t port, const usb_device_identity_t *identity) {
     if (!hcd_id || !port || !identity) {
         return false;
     }
@@ -1468,11 +1342,11 @@ bool usb_identify_device(
     usb_device_handle_t attach_dev = NULL;
     bool log_no_driver = false;
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
     usb_device_handle_t dev = _usb_device_find_locked(hcd_id, port);
 
     if (!dev || !dev->connected) {
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
         return false;
     }
 
@@ -1491,19 +1365,19 @@ bool usb_identify_device(
     _usb_plan_bind_locked(dev, &attach_driver, &log_no_driver);
     attach_dev = dev;
 
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (detach_driver) {
         detach_driver->detach(detached_dev);
     }
 
     if (log_no_driver) {
-        flags = spin_lock_irqsave(&usb_state_lock);
+        flags = spin_lock_irqsave(&usb_core.lock);
         dev = _usb_device_find_locked(hcd_id, port);
         if (dev) {
             _usb_log_no_driver(dev);
         }
-        spin_unlock_irqrestore(&usb_state_lock, flags);
+        spin_unlock_irqrestore(&usb_core.lock, flags);
     }
 
     if (attach_driver && attach_driver->attach) {
@@ -1534,7 +1408,7 @@ bool usb_device_control_transfer(
     bool (*transfer_fn)(size_t, size_t, void *, const usb_transfer_t *, size_t *) = NULL;
     void *device_ctx = NULL;
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
 
     usb_hcd_state_t *hcd = _usb_hcd_find_locked(dev->hcd_id);
     if (hcd && dev->connected && hcd->has_ops && hcd->ops.control_transfer) {
@@ -1542,7 +1416,7 @@ bool usb_device_control_transfer(
         device_ctx = dev->hcd_device;
     }
 
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (!transfer_fn) {
         return false;
@@ -1583,7 +1457,7 @@ bool usb_device_bulk_transfer(
     bool (*transfer_fn)(size_t, size_t, void *, const usb_transfer_t *, size_t *) = NULL;
     void *device_ctx = NULL;
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
 
     usb_hcd_state_t *hcd = _usb_hcd_find_locked(dev->hcd_id);
     if (hcd && dev->connected && hcd->has_ops && hcd->ops.bulk_transfer) {
@@ -1591,7 +1465,7 @@ bool usb_device_bulk_transfer(
         device_ctx = dev->hcd_device;
     }
 
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
     if (!transfer_fn) {
         return false;
@@ -1626,18 +1500,11 @@ bool usb_control_transfer(
         return false;
     }
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
     usb_device_handle_t dev = _usb_device_find_locked(hcd_id, port);
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
-    return usb_device_control_transfer(
-        dev,
-        setup,
-        buffer,
-        length,
-        timeout_ms,
-        out_actual
-    );
+    return usb_device_control_transfer(dev, setup, buffer, length, timeout_ms, out_actual);
 }
 
 bool usb_bulk_transfer(
@@ -1653,18 +1520,11 @@ bool usb_bulk_transfer(
         return false;
     }
 
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
     usb_device_handle_t dev = _usb_device_find_locked(hcd_id, port);
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
 
-    return usb_device_bulk_transfer(
-        dev,
-        endpoint,
-        buffer,
-        length,
-        timeout_ms,
-        out_actual
-    );
+    return usb_device_bulk_transfer(dev, endpoint, buffer, length, timeout_ms, out_actual);
 }
 
 size_t usb_connected_device_count(void) {
@@ -1673,21 +1533,21 @@ size_t usb_connected_device_count(void) {
     }
 
     size_t connected = 0;
-    unsigned long flags = spin_lock_irqsave(&usb_state_lock);
+    unsigned long flags = spin_lock_irqsave(&usb_core.lock);
 
-    for (size_t i = 0; i < usb_devices->size; i++) {
-        usb_device_handle_t *slot = vec_at(usb_devices, i);
+    for (size_t i = 0; i < usb_core.devices->size; i++) {
+        usb_device_handle_t *slot = vec_at(usb_core.devices, i);
         if (slot && *slot && (*slot)->connected) {
             connected++;
         }
     }
 
-    spin_unlock_irqrestore(&usb_state_lock, flags);
+    spin_unlock_irqrestore(&usb_core.lock, flags);
     return connected;
 }
 
 bool usb_core_init(void) {
-    if (usb_core_ready) {
+    if (usb_core.ready) {
         return true;
     }
 
@@ -1697,12 +1557,12 @@ bool usb_core_init(void) {
     }
 
     _usb_start_enum_worker();
-    usb_core_ready = true;
+    usb_core.ready = true;
     return true;
 }
 
 bool usb_core_is_ready(void) {
-    return usb_core_ready;
+    return usb_core.ready;
 }
 
 bool usb_init(void) {

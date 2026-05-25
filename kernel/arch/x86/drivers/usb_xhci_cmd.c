@@ -1,11 +1,10 @@
-#include "usb_xhci_internal.h"
-
 #include <inttypes.h>
 #include <log/log.h>
 #include <string.h>
-
 #include <sys/time.h>
+
 #include "usb_hcd_common.h"
+#include "usb_xhci_internal.h"
 
 static const char *_xhci_cmd_type_name(u32 type) {
     switch (type) {
@@ -38,11 +37,7 @@ typedef struct {
     u32 residual;
 } xhci_wait_state_t;
 
-static void _xhci_read_wait_state(
-    xhci_controller_t *ctrl,
-    xhci_wait_kind_t kind,
-    xhci_wait_state_t *out_state
-) {
+static void _xhci_read_wait_state(xhci_controller_t *ctrl, xhci_wait_kind_t kind, xhci_wait_state_t *out_state) {
     if (!ctrl || !out_state) {
         return;
     }
@@ -102,21 +97,14 @@ static bool _xhci_wait_common(
     }
 
     u64 start = arch_timer_ticks();
-    u32 default_timeout_ms =
-        kind == XHCI_WAIT_CMD ? XHCI_CMD_TIMEOUT_MS : XHCI_XFER_TIMEOUT_MS;
+    u32 default_timeout_ms = kind == XHCI_WAIT_CMD ? XHCI_CMD_TIMEOUT_MS : XHCI_XFER_TIMEOUT_MS;
     u64 timeout = ms_to_ticks(timeout_ms ? timeout_ms : default_timeout_ms);
 
     for (;;) {
-        xhci_wait_state_t state = {0};
+        xhci_wait_state_t state = { 0 };
         _xhci_read_wait_state(ctrl, kind, &state);
         if (state.done) {
-            _xhci_copy_wait_outputs(
-                kind,
-                &state,
-                out_cc,
-                out_slot,
-                out_residual
-            );
+            _xhci_copy_wait_outputs(kind, &state, out_cc, out_slot, out_residual);
 
             return true;
         }
@@ -132,13 +120,7 @@ static bool _xhci_wait_common(
         if (timed_out) {
             _xhci_read_wait_state(ctrl, kind, &state);
             if (state.done) {
-                _xhci_copy_wait_outputs(
-                    kind,
-                    &state,
-                    out_cc,
-                    out_slot,
-                    out_residual
-                );
+                _xhci_copy_wait_outputs(kind, &state, out_cc, out_slot, out_residual);
 
                 return true;
             }
@@ -147,13 +129,9 @@ static bool _xhci_wait_common(
         }
 
         u32 st = _xhci_read_usbsts(ctrl);
-        if (
-            st != 0xffffffffU &&
-            (st & (XHCI_USBSTS_HCH | XHCI_USBSTS_HSE | XHCI_USBSTS_CNR))
-        ) {
-            const char *reason = kind == XHCI_WAIT_CMD
-                ? "fatal status while waiting for command"
-                : "fatal status while waiting for transfer";
+        if (st != 0xffffffffU && (st & (XHCI_USBSTS_HCH | XHCI_USBSTS_HSE | XHCI_USBSTS_CNR))) {
+            const char *reason = kind == XHCI_WAIT_CMD ? "fatal status while waiting for command"
+                                                       : "fatal status while waiting for transfer";
 
             _xhci_log_fault_snapshot(ctrl, reason);
             ctrl->commands_healthy = false;
@@ -170,44 +148,15 @@ static bool _xhci_wait_common(
     }
 }
 
-bool _xhci_wait_cmd(
-    xhci_controller_t *ctrl,
-    u32 timeout_ms,
-    u8 *out_cc,
-    u8 *out_slot
-) {
-    return _xhci_wait_common(
-        ctrl,
-        XHCI_WAIT_CMD,
-        timeout_ms,
-        out_cc,
-        out_slot,
-        NULL
-    );
+bool _xhci_wait_cmd(xhci_controller_t *ctrl, u32 timeout_ms, u8 *out_cc, u8 *out_slot) {
+    return _xhci_wait_common(ctrl, XHCI_WAIT_CMD, timeout_ms, out_cc, out_slot, NULL);
 }
 
-bool _xhci_wait_xfer(
-    xhci_controller_t *ctrl,
-    u32 timeout_ms,
-    u8 *out_cc,
-    u32 *out_residual
-) {
-    return _xhci_wait_common(
-        ctrl,
-        XHCI_WAIT_XFER,
-        timeout_ms,
-        out_cc,
-        NULL,
-        out_residual
-    );
+bool _xhci_wait_xfer(xhci_controller_t *ctrl, u32 timeout_ms, u8 *out_cc, u32 *out_residual) {
+    return _xhci_wait_common(ctrl, XHCI_WAIT_XFER, timeout_ms, out_cc, NULL, out_residual);
 }
 
-bool _xhci_submit_command(
-    xhci_controller_t *ctrl,
-    const xhci_trb_t *cmd,
-    u8 *out_slot,
-    u32 timeout_ms
-) {
+bool _xhci_submit_command(xhci_controller_t *ctrl, const xhci_trb_t *cmd, u8 *out_slot, u32 timeout_ms) {
     if (!ctrl || !cmd) {
         return false;
     }
@@ -216,13 +165,7 @@ bool _xhci_submit_command(
     const char *cmd_name = _xhci_cmd_type_name(cmd_type);
 
     if (!ctrl->runtime_ready) {
-        log_warn(
-            "xHCI %u:%u.%u command %s rejected; runtime not ready",
-            ctrl->bus,
-            ctrl->slot,
-            ctrl->func,
-            cmd_name
-        );
+        log_warn("xHCI %u:%u.%u command %s rejected; runtime not ready", ctrl->bus, ctrl->slot, ctrl->func, cmd_name);
 
         return false;
     }
@@ -279,13 +222,7 @@ bool _xhci_submit_command(
     _xhci_op_unlock(ctrl);
 
     if (!doorbell) {
-        log_warn(
-            "xHCI %u:%u.%u command %s doorbell failed",
-            ctrl->bus,
-            ctrl->slot,
-            ctrl->func,
-            cmd_name
-        );
+        log_warn("xHCI %u:%u.%u command %s doorbell failed", ctrl->bus, ctrl->slot, ctrl->func, cmd_name);
 
         _xhci_set_health_state(ctrl, XHCI_HEALTH_DEGRADED, "command doorbell failed");
         ctrl->commands_healthy = false;
@@ -304,8 +241,7 @@ bool _xhci_submit_command(
         }
 
         log_warn(
-            "xHCI %u:%u.%u command %s timed out (usbsts=%#x trb=%#" PRIx64
-            " evt=%u/%u)",
+            "xHCI %u:%u.%u command %s timed out (usbsts=%#x trb=%#" PRIx64 " evt=%u/%u)",
             ctrl->bus,
             ctrl->slot,
             ctrl->func,
@@ -328,14 +264,7 @@ bool _xhci_submit_command(
     }
 
     if (cc != XHCI_CC_SUCCESS) {
-        log_warn(
-            "xHCI %u:%u.%u command %s failed (cc=%#x)",
-            ctrl->bus,
-            ctrl->slot,
-            ctrl->func,
-            cmd_name,
-            cc
-        );
+        log_warn("xHCI %u:%u.%u command %s failed (cc=%#x)", ctrl->bus, ctrl->slot, ctrl->func, cmd_name, cc);
 
         _xhci_set_health_state(ctrl, XHCI_HEALTH_DEGRADED, "command completion error");
         ctrl->commands_healthy = false;
@@ -362,15 +291,7 @@ bool _xhci_submit_transfer(
     u32 timeout_ms,
     size_t *out_actual
 ) {
-    if (
-        !ctrl ||
-        !dev ||
-        !ring ||
-        !endpoint_id ||
-        !trbs ||
-        !trb_count ||
-        !ctrl->runtime_ready
-    ) {
+    if (!ctrl || !dev || !ring || !endpoint_id || !trbs || !trb_count || !ctrl->runtime_ready) {
         return false;
     }
 
@@ -453,42 +374,25 @@ bool _xhci_submit_transfer(
     return true;
 }
 
-void _xhci_set_slot_ctx(
-    xhci_controller_t *ctrl,
-    u32 *slot_ctx,
-    u8 speed_id,
-    u8 context_entries,
-    u8 root_port
-) {
+void _xhci_set_slot_ctx(xhci_controller_t *ctrl, u32 *slot_ctx, u8 speed_id, u8 context_entries, u8 root_port) {
     (void)ctrl;
 
     if (!slot_ctx) {
         return;
     }
 
-    slot_ctx[0] =
-        ((u32)speed_id << 20) |
-        ((u32)context_entries << 27);
+    slot_ctx[0] = ((u32)speed_id << 20) | ((u32)context_entries << 27);
 
     slot_ctx[1] = (u32)root_port << 16;
 }
 
-void _xhci_set_ep_ctx(
-    u32 *ep_ctx,
-    u8 ep_type,
-    u16 max_packet,
-    u64 dequeue_paddr,
-    u16 avg_trb_len
-) {
+void _xhci_set_ep_ctx(u32 *ep_ctx, u8 ep_type, u16 max_packet, u64 dequeue_paddr, u16 avg_trb_len) {
     if (!ep_ctx) {
         return;
     }
 
     ep_ctx[0] = 0;
-    ep_ctx[1] =
-        (3U << 1) |
-        ((u32)ep_type << 3) |
-        ((u32)max_packet << 16);
+    ep_ctx[1] = (3U << 1) | ((u32)ep_type << 3) | ((u32)max_packet << 16);
     ep_ctx[2] = (u32)(dequeue_paddr & ~0x0fULL) | 1U;
     ep_ctx[3] = (u32)(dequeue_paddr >> 32);
     ep_ctx[4] = (u32)avg_trb_len;
@@ -641,23 +545,11 @@ bool _xhci_prepare_config_ctx(xhci_usb_device_t *dev) {
     }
 
     if (ep_out) {
-        _xhci_set_ep_ctx(
-            ep_out,
-            XHCI_EP_TYPE_BULK_OUT,
-            dev->bulk_out_mps,
-            dev->bulk_out_ring.paddr,
-            dev->bulk_out_mps
-        );
+        _xhci_set_ep_ctx(ep_out, XHCI_EP_TYPE_BULK_OUT, dev->bulk_out_mps, dev->bulk_out_ring.paddr, dev->bulk_out_mps);
     }
 
     if (ep_in) {
-        _xhci_set_ep_ctx(
-            ep_in,
-            XHCI_EP_TYPE_BULK_IN,
-            dev->bulk_in_mps,
-            dev->bulk_in_ring.paddr,
-            dev->bulk_in_mps
-        );
+        _xhci_set_ep_ctx(ep_in, XHCI_EP_TYPE_BULK_IN, dev->bulk_in_mps, dev->bulk_in_ring.paddr, dev->bulk_in_mps);
     }
 
     arch_phys_unmap(map, XHCI_DMA_BYTES);
@@ -669,31 +561,17 @@ static xhci_trb_t _xhci_make_cmd_trb(u32 type, u8 slot_id, u64 parameter) {
         .parameter_lo = (u32)(parameter & ~0x0fULL),
         .parameter_hi = (u32)(parameter >> 32),
         .status = 0,
-        .control =
-            (type << XHCI_TRB_TYPE_SHIFT) |
-            ((u32)slot_id << XHCI_TRB_SLOT_ID_SHIFT),
+        .control = (type << XHCI_TRB_TYPE_SHIFT) | ((u32)slot_id << XHCI_TRB_SLOT_ID_SHIFT),
     };
 }
 
-static bool _xhci_submit_simple_cmd(
-    xhci_controller_t *ctrl,
-    u32 type,
-    u8 slot_id,
-    u64 parameter,
-    u8 *out_slot
-) {
+static bool _xhci_submit_simple_cmd(xhci_controller_t *ctrl, u32 type, u8 slot_id, u64 parameter, u8 *out_slot) {
     xhci_trb_t trb = _xhci_make_cmd_trb(type, slot_id, parameter);
     return _xhci_submit_command(ctrl, &trb, out_slot, XHCI_CMD_TIMEOUT_MS);
 }
 
 bool _xhci_cmd_enable_slot(xhci_controller_t *ctrl, u8 *out_slot) {
-    return _xhci_submit_simple_cmd(
-        ctrl,
-        XHCI_TRB_TYPE_ENABLE_SLOT,
-        0,
-        0,
-        out_slot
-    );
+    return _xhci_submit_simple_cmd(ctrl, XHCI_TRB_TYPE_ENABLE_SLOT, 0, 0, out_slot);
 }
 
 bool _xhci_cmd_disable_slot(xhci_controller_t *ctrl, u8 slot_id) {
@@ -701,49 +579,17 @@ bool _xhci_cmd_disable_slot(xhci_controller_t *ctrl, u8 slot_id) {
         return true;
     }
 
-    return _xhci_submit_simple_cmd(
-        ctrl,
-        XHCI_TRB_TYPE_DISABLE_SLOT,
-        slot_id,
-        0,
-        NULL
-    );
+    return _xhci_submit_simple_cmd(ctrl, XHCI_TRB_TYPE_DISABLE_SLOT, slot_id, 0, NULL);
 }
 
 bool _xhci_cmd_address_device(xhci_controller_t *ctrl, u8 slot_id, u64 input_ctx) {
-    return _xhci_submit_simple_cmd(
-        ctrl,
-        XHCI_TRB_TYPE_ADDRESS_DEVICE,
-        slot_id,
-        input_ctx,
-        NULL
-    );
+    return _xhci_submit_simple_cmd(ctrl, XHCI_TRB_TYPE_ADDRESS_DEVICE, slot_id, input_ctx, NULL);
 }
 
-bool _xhci_cmd_configure_endpoint(
-    xhci_controller_t *ctrl,
-    u8 slot_id,
-    u64 input_ctx
-) {
-    return _xhci_submit_simple_cmd(
-        ctrl,
-        XHCI_TRB_TYPE_CONFIGURE_ENDPOINT,
-        slot_id,
-        input_ctx,
-        NULL
-    );
+bool _xhci_cmd_configure_endpoint(xhci_controller_t *ctrl, u8 slot_id, u64 input_ctx) {
+    return _xhci_submit_simple_cmd(ctrl, XHCI_TRB_TYPE_CONFIGURE_ENDPOINT, slot_id, input_ctx, NULL);
 }
 
-bool _xhci_cmd_evaluate_context(
-    xhci_controller_t *ctrl,
-    u8 slot_id,
-    u64 input_ctx
-) {
-    return _xhci_submit_simple_cmd(
-        ctrl,
-        XHCI_TRB_TYPE_EVALUATE_CONTEXT,
-        slot_id,
-        input_ctx,
-        NULL
-    );
+bool _xhci_cmd_evaluate_context(xhci_controller_t *ctrl, u8 slot_id, u64 input_ctx) {
+    return _xhci_submit_simple_cmd(ctrl, XHCI_TRB_TYPE_EVALUATE_CONTEXT, slot_id, input_ctx, NULL);
 }

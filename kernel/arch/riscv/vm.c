@@ -2,8 +2,8 @@
 #include <arch/paging.h>
 #include <base/macros.h>
 #include <riscv/asm.h>
-#include <riscv/vm.h>
 #include <riscv/mm/physical.h>
+#include <riscv/vm.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/cpu.h>
@@ -12,8 +12,8 @@ struct arch_vm_space {
     page_t *root;
 };
 
-static struct arch_vm_space kernel_space = {0};
-static page_t *current_root[MAX_CORES] = {0};
+static struct arch_vm_space kernel_space = { 0 };
+static page_t *current_root[MAX_CORES] = { 0 };
 
 static size_t _current_cpu_id(void) {
     cpu_core_t *core = cpu_current();

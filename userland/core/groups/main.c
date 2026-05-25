@@ -61,12 +61,7 @@ static bool member_list_has_user(const char *members, const char *user_name) {
     return false;
 }
 
-static void append_group(
-    gid_t gid,
-    gid_t *groups,
-    size_t max_groups,
-    size_t *group_count
-) {
+static void append_group(gid_t gid, gid_t *groups, size_t max_groups, size_t *group_count) {
     if (!groups || !group_count) {
         return;
     }
@@ -85,12 +80,7 @@ static void append_group(
     (*group_count)++;
 }
 
-static size_t collect_groups(
-    const char *user_name,
-    gid_t primary_gid,
-    gid_t *groups,
-    size_t max_groups
-) {
+static size_t collect_groups(const char *user_name, gid_t primary_gid, gid_t *groups, size_t max_groups) {
     if (!groups || !max_groups) {
         return 0;
     }
@@ -191,23 +181,17 @@ int main(int argc, char **argv) {
     uid_t uid = getuid();
     gid_t gid = getgid();
     struct passwd *pwd = getpwuid(uid);
-    const char *user_name =
-        (pwd && pwd->pw_name && pwd->pw_name[0]) ? pwd->pw_name : "";
+    const char *user_name = (pwd && pwd->pw_name && pwd->pw_name[0]) ? pwd->pw_name : "";
 
-    gid_t groups[GROUPS_MAX] = {0};
-    size_t group_count = collect_groups(
-        user_name,
-        gid,
-        groups,
-        sizeof(groups) / sizeof(groups[0])
-    );
+    gid_t groups[GROUPS_MAX] = { 0 };
+    size_t group_count = collect_groups(user_name, gid, groups, sizeof(groups) / sizeof(groups[0]));
 
     for (size_t i = 0; i < group_count; i++) {
         if (i) {
             write(STDOUT_FILENO, " ", 1);
         }
 
-        char name[32] = {0};
+        char name[32] = { 0 };
         const char *value = account_gid_name(groups[i], name, sizeof(name));
         write(STDOUT_FILENO, value, strnlen(value, sizeof(name)));
     }

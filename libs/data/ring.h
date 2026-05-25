@@ -44,7 +44,7 @@ size_t ring_buffer_pop_array(ring_buffer_t *ring, u8 *ret, size_t len);
 
 // generic typed ring queue backed by a heap-allocated circular buffer
 typedef struct ring_queue {
-    u8    *buf;
+    u8 *buf;
     size_t elem_size;
     size_t cap;
     size_t head;

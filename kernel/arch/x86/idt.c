@@ -10,13 +10,13 @@
 #include <x86/irq.h>
 #include <x86/pic.h>
 
-static idt_register_t idtr = {0};
+static idt_register_t idtr = { 0 };
 
 extern void *isr_stub_table[ISR_COUNT];
-static int_handler_t int_handlers[ISR_COUNT] = {0};
+static int_handler_t int_handlers[ISR_COUNT] = { 0 };
 
 ALIGNED(0x10)
-static idt_entry_t idt_entries[ISR_COUNT] = {0};
+static idt_entry_t idt_entries[ISR_COUNT] = { 0 };
 
 #if defined(__i386__)
 static bool _pic_irq_in_service(u8 irq) {

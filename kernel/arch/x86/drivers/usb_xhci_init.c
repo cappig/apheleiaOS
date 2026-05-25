@@ -1,17 +1,16 @@
-#include "usb_xhci.h"
-
 #include <inttypes.h>
 #include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <sys/time.h>
-#include <x86/mm/physical.h>
-#include "usb_hcd_common.h"
-#include "usb_xhci_internal.h"
 #include <x86/apic.h>
 #include <x86/asm.h>
 #include <x86/irq.h>
+#include <x86/mm/physical.h>
+
+#include "usb_hcd_common.h"
+#include "usb_xhci.h"
+#include "usb_xhci_internal.h"
 
 xhci_controller_t controllers[XHCI_MAX_DEVICES];
 size_t controller_count = 0;
@@ -51,11 +50,7 @@ static u16 _xhci_decode_scratchpad_count(u32 hcsp2) {
     return (u16)(hi | lo);
 }
 
-void _xhci_set_health_state(
-    xhci_controller_t *ctrl,
-    xhci_health_t state,
-    const char *reason
-) {
+void _xhci_set_health_state(xhci_controller_t *ctrl, xhci_health_t state, const char *reason) {
     if (!ctrl || ctrl->health_state == state) {
         return;
     }
@@ -100,12 +95,7 @@ void _xhci_set_health_state(
     );
 }
 
-static inline void _xhci_write64_order(
-    volatile void *base,
-    size_t offset,
-    u64 value,
-    bool hi_first
-) {
+static inline void _xhci_write64_order(volatile void *base, size_t offset, u64 value, bool hi_first) {
     if (!base) {
         return;
     }
@@ -120,13 +110,7 @@ static inline void _xhci_write64_order(
     _write32(base, offset + 4, (u32)(value >> 32));
 }
 
-bool _xhci_write64_checked(
-    xhci_controller_t *ctrl,
-    volatile void *base,
-    size_t offset,
-    u64 value,
-    u64 verify_mask
-) {
+bool _xhci_write64_checked(xhci_controller_t *ctrl, volatile void *base, size_t offset, u64 value, u64 verify_mask) {
     if (!ctrl || !base) {
         return false;
     }
@@ -203,11 +187,7 @@ void _xhci_op_unlock(xhci_controller_t *ctrl) {
     mutex_unlock(&ctrl->op_lock);
 }
 
-bool _xhci_alloc_dma_pages(
-    xhci_controller_t *ctrl,
-    size_t pages,
-    u64 *out_paddr
-) {
+bool _xhci_alloc_dma_pages(xhci_controller_t *ctrl, size_t pages, u64 *out_paddr) {
     if (!ctrl || !pages || !out_paddr) {
         return false;
     }
@@ -265,11 +245,7 @@ void _xhci_reset_wait_state(xhci_controller_t *ctrl) {
     ctrl->xfer_wait_residual = 0;
 }
 
-bool _xhci_ring_init(
-    xhci_controller_t *ctrl,
-    xhci_ring_state_t *ring,
-    u64 ring_paddr
-) {
+bool _xhci_ring_init(xhci_controller_t *ctrl, xhci_ring_state_t *ring, u64 ring_paddr) {
     if (!ctrl || !ring || !ring_paddr) {
         return false;
     }
@@ -296,21 +272,13 @@ bool _xhci_ring_init(
     trbs[link_idx].parameter_lo = (u32)(ring->paddr & ~0x0fULL);
     trbs[link_idx].parameter_hi = (u32)(ring->paddr >> 32);
     trbs[link_idx].status = 0;
-    trbs[link_idx].control =
-        (XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) |
-        XHCI_LINK_TOGGLE_CYCLE |
-        XHCI_TRB_CYCLE;
+    trbs[link_idx].control = (XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) | XHCI_LINK_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
 
     arch_phys_unmap(map, XHCI_DMA_BYTES);
     return true;
 }
 
-bool _xhci_ring_enqueue(
-    xhci_controller_t *ctrl,
-    xhci_ring_state_t *ring,
-    const xhci_trb_t *trb,
-    u64 *out_trb_paddr
-) {
+bool _xhci_ring_enqueue(xhci_controller_t *ctrl, xhci_ring_state_t *ring, const xhci_trb_t *trb, u64 *out_trb_paddr) {
     if (!ctrl || !ring || !trb || !ring->paddr || ring->trbs < 4) {
         return false;
     }
@@ -371,13 +339,7 @@ bool _xhci_get_mmio_base(const pci_found_t *node, u64 *out_mmio_base) {
     u64 mmio = (u64)(bar0 & ~0x0fU);
 
     if ((bar0 & 0x6U) == 0x4U) {
-        u32 bar1 = pci_read_config(
-            node->bus,
-            node->slot,
-            node->func,
-            XHCI_BAR0 + 4,
-            4
-        );
+        u32 bar1 = pci_read_config(node->bus, node->slot, node->func, XHCI_BAR0 + 4, 4);
         mmio |= ((u64)bar1 << 32);
     }
 
@@ -405,8 +367,7 @@ bool _xhci_runtime_available(const xhci_controller_t *ctrl) {
         return false;
     }
 
-    size_t rt_end =
-        (size_t)ctrl->rt_offset + XHCI_RT_IR0_OFF + XHCI_IR_ERDP_OFF + sizeof(u64);
+    size_t rt_end = (size_t)ctrl->rt_offset + XHCI_RT_IR0_OFF + XHCI_IR_ERDP_OFF + sizeof(u64);
 
     return rt_end <= XHCI_MMIO_SIZE;
 }
@@ -434,13 +395,7 @@ void _xhci_log_fault_snapshot(xhci_controller_t *ctrl, const char *reason) {
 
     ctrl->first_fault_logged = true;
 
-    log_warn(
-        "xHCI %u:%u.%u fault: %s",
-        ctrl->bus,
-        ctrl->slot,
-        ctrl->func,
-        reason ? reason : "unknown"
-    );
+    log_warn("xHCI %u:%u.%u fault: %s", ctrl->bus, ctrl->slot, ctrl->func, reason ? reason : "unknown");
 }
 
 bool _xhci_ensure_running(xhci_controller_t *ctrl) {
@@ -516,23 +471,12 @@ bool _xhci_ensure_running(xhci_controller_t *ctrl) {
 
     bool resumed = true;
     if ((status & XHCI_USBSTS_HCH) || runstop_was_cleared) {
-        resumed = _wait_bits32(
-            (volatile u32 *)(op + XHCI_OP_USBSTS_OFF),
-            XHCI_USBSTS_HCH,
-            false,
-            XHCI_HALT_TIMEOUT_MS
-        );
+        resumed = _wait_bits32((volatile u32 *)(op + XHCI_OP_USBSTS_OFF), XHCI_USBSTS_HCH, false, XHCI_HALT_TIMEOUT_MS);
     }
 
     if (!resumed) {
         u32 now = _read32(op, XHCI_OP_USBSTS_OFF);
-        log_warn(
-            "xHCI %u:%u.%u controller halted (usbsts=%#x)",
-            ctrl->bus,
-            ctrl->slot,
-            ctrl->func,
-            (unsigned int)now
-        );
+        log_warn("xHCI %u:%u.%u controller halted (usbsts=%#x)", ctrl->bus, ctrl->slot, ctrl->func, (unsigned int)now);
 
         _xhci_log_fault_snapshot(ctrl, "controller halted");
         ctrl->commands_healthy = false;
@@ -560,11 +504,7 @@ bool _xhci_ensure_running(xhci_controller_t *ctrl) {
 
             _xhci_log_fault_snapshot(ctrl, "controller never became ready");
             ctrl->commands_healthy = false;
-            _xhci_set_health_state(
-                ctrl,
-                XHCI_HEALTH_DEGRADED,
-                "controller never became ready"
-            );
+            _xhci_set_health_state(ctrl, XHCI_HEALTH_DEGRADED, "controller never became ready");
         }
     }
 
@@ -578,9 +518,7 @@ bool _xhci_update_erdp(xhci_controller_t *ctrl, volatile void *mmio) {
     }
 
     volatile u8 *ir = (volatile u8 *)mmio + ctrl->rt_offset + XHCI_RT_IR0_OFF;
-    u64 erdp =
-        ctrl->event_ring_paddr +
-        (u64)ctrl->event_dequeue * (u64)sizeof(xhci_trb_t);
+    u64 erdp = ctrl->event_ring_paddr + (u64)ctrl->event_dequeue * (u64)sizeof(xhci_trb_t);
 
     if (_xhci_write64_checked(ctrl, ir, XHCI_IR_ERDP_OFF, erdp | XHCI_ERDP_EHB, ~0x0fULL)) {
         return true;
@@ -592,11 +530,7 @@ bool _xhci_update_erdp(xhci_controller_t *ctrl, volatile void *mmio) {
     return false;
 }
 
-bool _xhci_dcbaa_set_entry(
-    xhci_controller_t *ctrl,
-    size_t index,
-    u64 value
-) {
+bool _xhci_dcbaa_set_entry(xhci_controller_t *ctrl, size_t index, u64 value) {
     if (!ctrl || !ctrl->dcbaa_paddr) {
         return false;
     }
@@ -669,7 +603,7 @@ static void _xhci_release_dma(xhci_controller_t *ctrl) {
     _xhci_free_dma_pages(&ctrl->event_ring_paddr, 1);
     _xhci_free_dma_pages(&ctrl->erst_paddr, 1);
 
-    ctrl->cmd_ring = (xhci_ring_state_t){0};
+    ctrl->cmd_ring = (xhci_ring_state_t){ 0 };
     ctrl->event_ring_trbs = 0;
     ctrl->event_dequeue = 0;
     ctrl->event_cycle = 1;
@@ -689,12 +623,9 @@ static bool _xhci_setup_rings(xhci_controller_t *ctrl) {
 
     _xhci_release_dma(ctrl);
 
-    if (
-        !_xhci_alloc_dma_pages(ctrl, 1, &ctrl->dcbaa_paddr) ||
-        !_xhci_alloc_dma_pages(ctrl, 1, &ctrl->cmd_ring_paddr) ||
+    if (!_xhci_alloc_dma_pages(ctrl, 1, &ctrl->dcbaa_paddr) || !_xhci_alloc_dma_pages(ctrl, 1, &ctrl->cmd_ring_paddr) ||
         !_xhci_alloc_dma_pages(ctrl, 1, &ctrl->event_ring_paddr) ||
-        !_xhci_alloc_dma_pages(ctrl, 1, &ctrl->erst_paddr)
-    ) {
+        !_xhci_alloc_dma_pages(ctrl, 1, &ctrl->erst_paddr)) {
         _xhci_release_dma(ctrl);
         return false;
     }
@@ -763,13 +694,7 @@ static bool _xhci_setup_rings(xhci_controller_t *ctrl) {
         }
 
         ctrl->scratchpad_array_pages = (u16)arr_pages;
-        if (
-            !_xhci_alloc_dma_pages(
-                ctrl,
-                ctrl->scratchpad_array_pages,
-                &ctrl->scratchpad_array_paddr
-            )
-        ) {
+        if (!_xhci_alloc_dma_pages(ctrl, ctrl->scratchpad_array_pages, &ctrl->scratchpad_array_paddr)) {
             _xhci_release_dma(ctrl);
             return false;
         }
@@ -807,11 +732,7 @@ static bool _xhci_setup_rings(xhci_controller_t *ctrl) {
     return true;
 }
 
-static bool _xhci_validate_runtime_programming(
-    xhci_controller_t *ctrl,
-    volatile void *mmio,
-    volatile u8 *op
-) {
+static bool _xhci_runtime_ok(xhci_controller_t *ctrl, volatile void *mmio, volatile u8 *op) {
     if (!ctrl || !mmio || !op || !_xhci_runtime_available(ctrl)) {
         return false;
     }
@@ -827,14 +748,11 @@ static bool _xhci_validate_runtime_programming(
     u64 dcbaap = _read64(op, XHCI_OP_DCBAAP_OFF);
     u64 erstba = _read64(ir, XHCI_IR_ERSTBA_OFF);
     u64 erdp = _read64(ir, XHCI_IR_ERDP_OFF);
-    u64 expected_erdp =
-        ctrl->event_ring_paddr +
-        (u64)ctrl->event_dequeue * (u64)sizeof(xhci_trb_t);
+    u64 expected_erdp = ctrl->event_ring_paddr + (u64)ctrl->event_dequeue * (u64)sizeof(xhci_trb_t);
 
     u32 erstsz = _read32(ir, XHCI_IR_ERSTSZ_OFF);
 
-    u64 expected_crcr =
-        ctrl->cmd_ring.paddr | (ctrl->crcr_cycle_one ? 1ULL : 0ULL);
+    u64 expected_crcr = ctrl->cmd_ring.paddr | (ctrl->crcr_cycle_one ? 1ULL : 0ULL);
 
     bool crcr_ok = (((crcr ^ expected_crcr) & crcr_mask) == 0);
     bool dcbaap_ok = (((dcbaap ^ ctrl->dcbaa_paddr) & dcbaap_mask) == 0);
@@ -900,53 +818,26 @@ static bool _xhci_validate_runtime_programming(
     return true;
 }
 
-static bool _xhci_program_runtime(
-    xhci_controller_t *ctrl,
-    volatile void *mmio,
-    volatile u8 *op
-) {
+static bool _xhci_program_runtime(xhci_controller_t *ctrl, volatile void *mmio, volatile u8 *op) {
     if (!ctrl || !mmio || !op) {
         return false;
     }
 
-    if (
-        !ctrl->dcbaa_paddr ||
-        !ctrl->cmd_ring.paddr ||
-        !ctrl->event_ring_paddr ||
-        !ctrl->erst_paddr ||
-        !_xhci_runtime_available(ctrl)
-    ) {
+    if (!ctrl->dcbaa_paddr || !ctrl->cmd_ring.paddr || !ctrl->event_ring_paddr || !ctrl->erst_paddr ||
+        !_xhci_runtime_available(ctrl)) {
         return false;
     }
 
     volatile u8 *ir = (volatile u8 *)mmio + ctrl->rt_offset + XHCI_RT_IR0_OFF;
 
-    if (
-        !_xhci_write64_checked(
-            ctrl,
-            op,
-            XHCI_OP_DCBAAP_OFF,
-            ctrl->dcbaa_paddr,
-            ~0x3fULL
-        )
-    ) {
-        log_warn(
-            "xHCI %u:%u.%u DCBAAP readback mismatch",
-            ctrl->bus,
-            ctrl->slot,
-            ctrl->func
-        );
+    if (!_xhci_write64_checked(ctrl, op, XHCI_OP_DCBAAP_OFF, ctrl->dcbaa_paddr, ~0x3fULL)) {
+        log_warn("xHCI %u:%u.%u DCBAAP readback mismatch", ctrl->bus, ctrl->slot, ctrl->func);
 
         return false;
     }
 
     u64 crcr_value = ctrl->cmd_ring.paddr | (ctrl->crcr_cycle_one ? 1ULL : 0ULL);
-    _xhci_write64_order(
-        op,
-        XHCI_OP_CRCR_OFF,
-        crcr_value,
-        ctrl->crcr_hi_first
-    );
+    _xhci_write64_order(op, XHCI_OP_CRCR_OFF, crcr_value, ctrl->crcr_hi_first);
     __sync_synchronize();
 
     u32 config = _read32(op, XHCI_OP_CONFIG_OFF);
@@ -957,21 +848,8 @@ static bool _xhci_program_runtime(
     _write32(ir, XHCI_IR_IMOD_OFF, 0);
     _write32(ir, XHCI_IR_ERSTSZ_OFF, 1);
 
-    if (
-        !_xhci_write64_checked(
-            ctrl,
-            ir,
-            XHCI_IR_ERSTBA_OFF,
-            ctrl->erst_paddr,
-            ~0x3fULL
-        )
-    ) {
-        log_warn(
-            "xHCI %u:%u.%u ERSTBA readback mismatch",
-            ctrl->bus,
-            ctrl->slot,
-            ctrl->func
-        );
+    if (!_xhci_write64_checked(ctrl, ir, XHCI_IR_ERSTBA_OFF, ctrl->erst_paddr, ~0x3fULL)) {
+        log_warn("xHCI %u:%u.%u ERSTBA readback mismatch", ctrl->bus, ctrl->slot, ctrl->func);
 
         return false;
     }
@@ -980,12 +858,7 @@ static bool _xhci_program_runtime(
     ctrl->event_cycle = 1;
 
     if (!_xhci_update_erdp(ctrl, mmio)) {
-        log_debug(
-            "xHCI %u:%u.%u ERDP readback mismatch during setup",
-            ctrl->bus,
-            ctrl->slot,
-            ctrl->func
-        );
+        log_debug("xHCI %u:%u.%u ERDP readback mismatch during setup", ctrl->bus, ctrl->slot, ctrl->func);
     }
 
     u32 iman = _read32(ir, XHCI_IR_IMAN_OFF);
@@ -1001,15 +874,10 @@ static bool _xhci_program_runtime(
 
     __sync_synchronize();
 
-    if (!_xhci_validate_runtime_programming(ctrl, mmio, op)) {
+    if (!_xhci_runtime_ok(ctrl, mmio, op)) {
         delay_ms(2);
-        if (!_xhci_validate_runtime_programming(ctrl, mmio, op)) {
-            log_warn(
-                "xHCI %u:%u.%u runtime programming check failed",
-                ctrl->bus,
-                ctrl->slot,
-                ctrl->func
-            );
+        if (!_xhci_runtime_ok(ctrl, mmio, op)) {
+            log_warn("xHCI %u:%u.%u runtime programming check failed", ctrl->bus, ctrl->slot, ctrl->func);
             ctrl->runtime_ready = false;
             return false;
         }
@@ -1165,12 +1033,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
     );
 
     if (!halted_before_reset) {
-        log_warn(
-            "xHCI %u:%u.%u failed to halt controller before reset",
-            ctrl->bus,
-            ctrl->slot,
-            ctrl->func
-        );
+        log_warn("xHCI %u:%u.%u failed to halt controller before reset", ctrl->bus, ctrl->slot, ctrl->func);
         arch_phys_unmap(map, XHCI_MMIO_SIZE);
         return false;
     }
@@ -1178,12 +1041,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
     cmd = _read32(op, XHCI_OP_USBCMD_OFF);
     _write32(op, XHCI_OP_USBCMD_OFF, cmd | XHCI_USBCMD_HCRST);
 
-    bool reset_done = _wait_bits32(
-        (volatile u32 *)(op + XHCI_OP_USBCMD_OFF),
-        XHCI_USBCMD_HCRST,
-        false,
-        1000
-    );
+    bool reset_done = _wait_bits32((volatile u32 *)(op + XHCI_OP_USBCMD_OFF), XHCI_USBCMD_HCRST, false, 1000);
 
     if (!reset_done) {
         log_warn("xHCI %u:%u.%u reset timed out", ctrl->bus, ctrl->slot, ctrl->func);
@@ -1241,12 +1099,8 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
     cmd |= XHCI_USBCMD_RUNSTOP;
     _write32(op, XHCI_OP_USBCMD_OFF, cmd);
 
-    bool started = _wait_bits32(
-        (volatile u32 *)(op + XHCI_OP_USBSTS_OFF),
-        XHCI_USBSTS_HCH,
-        false,
-        XHCI_HALT_TIMEOUT_MS
-    );
+    bool
+        started = _wait_bits32((volatile u32 *)(op + XHCI_OP_USBSTS_OFF), XHCI_USBSTS_HCH, false, XHCI_HALT_TIMEOUT_MS);
 
     if (!started) {
         u32 now = _read32(op, XHCI_OP_USBSTS_OFF);
@@ -1290,12 +1144,7 @@ static bool _xhci_reset_and_configure(xhci_controller_t *ctrl, bool scan_ports) 
     if (!ctrl->hcd_id) {
         if (!usb_register_hcd(&hcd_info, &xhci_hcd_ops, &ctrl->hcd_id)) {
             arch_phys_unmap(map, XHCI_MMIO_SIZE);
-            log_warn(
-                "xHCI %u:%u.%u failed to register with USB core",
-                ctrl->bus,
-                ctrl->slot,
-                ctrl->func
-            );
+            log_warn("xHCI %u:%u.%u failed to register with USB core", ctrl->bus, ctrl->slot, ctrl->func);
 
             return false;
         }
@@ -1403,13 +1252,7 @@ static void _xhci_register_irq(xhci_controller_t *ctrl) {
         return;
     }
 
-    bool msi = pci_enable_msi(
-        ctrl->bus,
-        ctrl->slot,
-        ctrl->func,
-        XHCI_MSI_VECTOR,
-        lapic_id()
-    );
+    bool msi = pci_enable_msi(ctrl->bus, ctrl->slot, ctrl->func, XHCI_MSI_VECTOR, lapic_id());
 
     if (msi) {
         if (!msi_handler_registered) {
@@ -1502,8 +1345,7 @@ static void _xhci_start_watchdog(void) {
     }
 
     xhci_watchdog_stop = false;
-    xhci_watchdog_thread =
-        sched_create_kernel_thread("xhci-watchdog", _xhci_watchdog_worker, NULL);
+    xhci_watchdog_thread = sched_create_kernel_thread("xhci-watchdog", _xhci_watchdog_worker, NULL);
 
     if (!xhci_watchdog_thread) {
         log_warn("xHCI failed to create watchdog thread");
@@ -1539,13 +1381,7 @@ static void _xhci_shutdown_controller(xhci_controller_t *ctrl) {
 
     if (ctrl->hcd_id) {
         if (!usb_unregister_hcd(ctrl->hcd_id)) {
-            log_warn(
-                "xHCI %u:%u.%u failed to unregister HCD id=%zu",
-                ctrl->bus,
-                ctrl->slot,
-                ctrl->func,
-                ctrl->hcd_id
-            );
+            log_warn("xHCI %u:%u.%u failed to unregister HCD id=%zu", ctrl->bus, ctrl->slot, ctrl->func, ctrl->hcd_id);
         }
         ctrl->hcd_id = 0;
     }
@@ -1556,12 +1392,7 @@ static void _xhci_shutdown_controller(xhci_controller_t *ctrl) {
         u32 cmd = _read32(op, XHCI_OP_USBCMD_OFF);
         cmd &= ~(XHCI_USBCMD_RUNSTOP | XHCI_USBCMD_INTE);
         _write32(op, XHCI_OP_USBCMD_OFF, cmd);
-        (void)_wait_bits32(
-            (volatile u32 *)(op + XHCI_OP_USBSTS_OFF),
-            XHCI_USBSTS_HCH,
-            true,
-            XHCI_HALT_TIMEOUT_MS
-        );
+        (void)_wait_bits32((volatile u32 *)(op + XHCI_OP_USBSTS_OFF), XHCI_USBSTS_HCH, true, XHCI_HALT_TIMEOUT_MS);
         arch_phys_unmap(mmio, XHCI_MMIO_SIZE);
     }
 
@@ -1592,23 +1423,13 @@ static bool usb_xhci_init(void) {
         }
 
         if (controller_count >= ARRAY_LEN(controllers)) {
-            log_warn(
-                "xHCI controller table full, skipping %u:%u.%u",
-                node->bus,
-                node->slot,
-                node->func
-            );
+            log_warn("xHCI controller table full, skipping %u:%u.%u", node->bus, node->slot, node->func);
             continue;
         }
 
         u64 mmio_base = 0;
         if (!_xhci_get_mmio_base(node, &mmio_base)) {
-            log_warn(
-                "xHCI %u:%u.%u has no usable MMIO BAR",
-                node->bus,
-                node->slot,
-                node->func
-            );
+            log_warn("xHCI %u:%u.%u has no usable MMIO BAR", node->bus, node->slot, node->func);
             continue;
         }
 
@@ -1625,13 +1446,7 @@ static bool usb_xhci_init(void) {
         ctrl->func = node->func;
         ctrl->vendor_id = node->header.vendor_id;
         ctrl->device_id = node->header.device_id;
-        ctrl->irq_line = (u8)pci_read_config(
-            node->bus,
-            node->slot,
-            node->func,
-            PCI_CFG_INT_LINE,
-            1
-        );
+        ctrl->irq_line = (u8)pci_read_config(node->bus, node->slot, node->func, PCI_CFG_INT_LINE, 1);
         ctrl->mmio_base = mmio_base;
         ctrl->write64_hi_first = false;
         ctrl->crcr_hi_first = false;

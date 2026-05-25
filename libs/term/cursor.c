@@ -28,14 +28,7 @@ void term_cursor_set_col(size_t *cursor_x, size_t cols, int col) {
     *cursor_x = (size_t)(col - 1);
 }
 
-void term_cursor_set_pos(
-    size_t *cursor_x,
-    size_t *cursor_y,
-    size_t cols,
-    size_t rows,
-    int row,
-    int col
-) {
+void term_cursor_set_pos(size_t *cursor_x, size_t *cursor_y, size_t cols, size_t rows, int row, int col) {
     if (!cursor_x || !cursor_y || !cols || !rows) {
         return;
     }
@@ -60,14 +53,7 @@ void term_cursor_set_pos(
     *cursor_x = (size_t)(col - 1);
 }
 
-void term_cursor_move(
-    size_t *cursor_x,
-    size_t *cursor_y,
-    size_t cols,
-    size_t rows,
-    int row_delta,
-    int col_delta
-) {
+void term_cursor_move(size_t *cursor_x, size_t *cursor_y, size_t cols, size_t rows, int row_delta, int col_delta) {
     if (!cursor_x || !cursor_y || !cols || !rows) {
         return;
     }
@@ -123,15 +109,7 @@ bool term_cursor_restore(
     const size_t *saved_y,
     const bool *saved_valid
 ) {
-    if (
-        !cursor_x ||
-        !cursor_y ||
-        !cols ||
-        !rows ||
-        !saved_x ||
-        !saved_y ||
-        (saved_valid && !*saved_valid)
-    ) {
+    if (!cursor_x || !cursor_y || !cols || !rows || !saved_x || !saved_y || (saved_valid && !*saved_valid)) {
         return false;
     }
 

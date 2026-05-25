@@ -1,16 +1,14 @@
-#include <riscv/mmio_plugin.h>
-
+#include <deque>
 #include <errno.h>
 #include <fcntl.h>
+#include <riscv/mmio_plugin.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <termios.h>
-#include <sys/types.h>
-#include <unistd.h>
-
-#include <deque>
 #include <string>
+#include <sys/types.h>
+#include <termios.h>
+#include <unistd.h>
 
 namespace {
 
@@ -30,9 +28,8 @@ constexpr uint8_t UART_LSR_THRE = 0x20;
 constexpr uint8_t UART_LSR_TEMT = 0x40;
 
 class ns16550a_plugin_t {
-public:
-    explicit ns16550a_plugin_t(const std::string &args)
-        : args_(args) {
+  public:
+    explicit ns16550a_plugin_t(const std::string &args) : args_(args) {
         const bool use_tty = args_.find("tty") != std::string::npos;
         if (use_tty) {
             int tty_in = open("/dev/tty", O_RDONLY | O_CLOEXEC);
@@ -121,7 +118,7 @@ public:
         return true;
     }
 
-private:
+  private:
     bool load8(reg_t addr, uint8_t *value) {
         if (!value) {
             return false;

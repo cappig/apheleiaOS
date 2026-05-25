@@ -8,8 +8,7 @@
 
 #define SHADOW_PATH "/etc/shadow"
 
-static int
-copy_field(char **cursor, size_t *left, char **out, const char *src) {
+static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
     size_t n = strlen(src) + 1;
 
     if (!cursor || !left || !out || !src || n > *left) {
@@ -24,18 +23,13 @@ copy_field(char **cursor, size_t *left, char **out, const char *src) {
     return 0;
 }
 
-static int parse_shadow_line(
-    const char *line,
-    struct spwd *spbuf,
-    char *buf,
-    size_t buflen
-) {
+static int parse_shadow_line(const char *line, struct spwd *spbuf, char *buf, size_t buflen) {
     if (!line || !spbuf || !buf || !buflen) {
         return EINVAL;
     }
 
-    char name[64] = {0};
-    char pwd[128] = {0};
+    char name[64] = { 0 };
+    char pwd[128] = { 0 };
 
     const char *cursor = line;
 
@@ -65,13 +59,7 @@ static int parse_shadow_line(
     return rc;
 }
 
-int getspnam_r(
-    const char *name,
-    struct spwd *spbuf,
-    char *buf,
-    size_t buflen,
-    struct spwd **result
-) {
+int getspnam_r(const char *name, struct spwd *spbuf, char *buf, size_t buflen, struct spwd **result) {
     if (!name || !spbuf || !buf || !buflen || !result) {
         return EINVAL;
     }
@@ -102,7 +90,7 @@ int getspnam_r(
             memcpy(tmp, line, line_len);
             tmp[line_len] = '\0';
 
-            struct spwd parsed = {0};
+            struct spwd parsed = { 0 };
             int rc = parse_shadow_line(tmp, &parsed, buf, buflen);
 
             if (rc && rc != EINVAL) {
@@ -118,7 +106,7 @@ int getspnam_r(
 
         if (!next) {
             break;
-        }    
+        }
 
         line = next + 1;
     }

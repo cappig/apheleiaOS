@@ -1,3 +1,5 @@
+#include "serial.h"
+
 #include <arch/arch.h>
 #include <errno.h>
 #include <log/log.h>
@@ -9,8 +11,6 @@
 #include <sys/serial_tty.h>
 #include <sys/vfs.h>
 #include <x86/serial.h>
-
-#include "serial.h"
 
 #define SERIAL_RX_QUEUE_CAP 1024
 
@@ -29,7 +29,7 @@ typedef struct {
 } serial_port_t;
 
 static serial_port_t serial_devices[] = {
-    {.index = 0, .port = SERIAL_COM1},
+    { .index = 0, .port = SERIAL_COM1 },
     // we should probably add more
 };
 
@@ -46,12 +46,7 @@ const driver_desc_t serial_driver_desc = {
     .is_busy = serial_driver_busy,
 };
 
-static bool _create_node(
-    vfs_node_t *parent,
-    const char *name,
-    vfs_interface_t *interface,
-    void *priv
-) {
+static bool _create_node(vfs_node_t *parent, const char *name, vfs_interface_t *interface, void *priv) {
     vfs_node_t *node = vfs_lookup_from(parent, name);
     if (!node) {
         node = vfs_create(parent, (char *)name, VFS_CHARDEV, 0600);
@@ -69,8 +64,7 @@ static bool _create_node(
     return true;
 }
 
-static ssize_t
-_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
 
     if (!node || !node->private || !buf) {
@@ -118,8 +112,7 @@ _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     }
 }
 
-static ssize_t
-_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
     (void)flags;
 
@@ -163,8 +156,7 @@ static short _poll(vfs_node_t *node, short events, u32 flags) {
     return ready;
 }
 
-static sched_wait_queue_t *
-_wait_queue(vfs_node_t *node, short events, u32 flags) {
+static sched_wait_queue_t *_wait_queue(vfs_node_t *node, short events, u32 flags) {
     (void)flags;
 
     if ((events & POLLIN) == 0 || (events & ~POLLIN) != 0) {
@@ -212,7 +204,7 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
             spinlock_init(&serial_devices[i].rx_lock);
             spinlock_init(&serial_devices[i].tx_lock);
             sched_wait_queue_init(&serial_devices[i].rx_wait);
-            sched_wait_queue_set_poll_link(&serial_devices[i].rx_wait, true);
+            sched_waitq_set_poll(&serial_devices[i].rx_wait, true);
             serial_devices[i].rx_wait_ready = true;
         }
 
@@ -258,7 +250,7 @@ void serial_push_rx(size_t index, char ch) {
 }
 
 bool serial_driver_busy(void) {
-    char path[32] = {0};
+    char path[32] = { 0 };
     size_t count = sizeof(serial_devices) / sizeof(serial_devices[0]);
 
     for (size_t i = 0; i < count; i++) {
@@ -295,7 +287,7 @@ driver_err_t serial_driver_unload(void) {
     }
 
     size_t count = sizeof(serial_devices) / sizeof(serial_devices[0]);
-    char path[32] = {0};
+    char path[32] = { 0 };
 
     for (size_t i = 0; i < count; i++) {
         snprintf(path, sizeof(path), "/dev/ttyS%zu", serial_devices[i].index);

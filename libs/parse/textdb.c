@@ -25,13 +25,7 @@ const char *textdb_next_field(const char *cursor, char *out, size_t out_len) {
     return cursor;
 }
 
-int textdb_find_line(
-    const char *text,
-    char *line_buf,
-    size_t line_buf_len,
-    textdb_line_match_fn match,
-    void *ctx
-) {
+int textdb_find_line(const char *text, char *line_buf, size_t line_buf_len, textdb_line_match_fn match, void *ctx) {
     if (!text || !line_buf || line_buf_len < 2 || !match) {
         return -1;
     }

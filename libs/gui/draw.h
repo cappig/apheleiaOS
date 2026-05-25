@@ -25,47 +25,15 @@ enum draw_color {
     DRAW_ORANGE = 0x00ff9900U,
 };
 
-void draw_rect(
-    framebuffer_t *fb,
-    i32 x,
-    i32 y,
-    u32 width,
-    u32 height,
-    pixel_t color
-);
+void draw_rect(framebuffer_t *fb, i32 x, i32 y, u32 width, u32 height, pixel_t color);
 
-void draw_line(
-    framebuffer_t *fb,
-    i32 x0,
-    i32 y0,
-    i32 x1,
-    i32 y1,
-    pixel_t color
-);
+void draw_line(framebuffer_t *fb, i32 x0, i32 y0, i32 x1, i32 y1, pixel_t color);
 
-void draw_circle(
-    framebuffer_t *fb,
-    i32 cx,
-    i32 cy,
-    u32 radius,
-    pixel_t color
-);
+void draw_circle(framebuffer_t *fb, i32 cx, i32 cy, u32 radius, pixel_t color);
 
-void draw_disk(
-    framebuffer_t *fb,
-    i32 cx,
-    i32 cy,
-    u32 radius,
-    pixel_t color
-);
+void draw_disk(framebuffer_t *fb, i32 cx, i32 cy, u32 radius, pixel_t color);
 
-void draw_text(
-    framebuffer_t *fb,
-    i32 x,
-    i32 y,
-    const char *text,
-    pixel_t color
-);
+void draw_text(framebuffer_t *fb, i32 x, i32 y, const char *text, pixel_t color);
 
 bool draw_set_font_path(const char *path);
 const char *draw_get_font_path(void);
@@ -73,17 +41,6 @@ const char *draw_get_font_path(void);
 u32 draw_font_width(void);
 u32 draw_font_height(void);
 
-void draw_triangle(
-    framebuffer_t *fb,
-    draw_point_t p0,
-    draw_point_t p1,
-    draw_point_t p2,
-    pixel_t color
-);
+void draw_triangle(framebuffer_t *fb, draw_point_t p0, draw_point_t p1, draw_point_t p2, pixel_t color);
 
-void draw_polygon(
-    framebuffer_t *fb,
-    const draw_point_t *points,
-    size_t count,
-    pixel_t color
-);
+void draw_polygon(framebuffer_t *fb, const draw_point_t *points, size_t count, pixel_t color);

@@ -69,13 +69,7 @@ static size_t term_width(void) {
     return 80;
 }
 
-static int list_dir(
-    const char *path,
-    bool opt_all,
-    bool opt_almost,
-    bool opt_long,
-    bool opt_single
-) {
+static int list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_long, bool opt_single) {
     DIR *dir = opendir(path);
     if (!dir) {
         io_write_str("ls: failed to open\n");
@@ -104,21 +98,13 @@ static int list_dir(
         }
 
         if (opt_long) {
-            struct stat st = {0};
+            struct stat st = { 0 };
             char uid_buf[16];
             char gid_buf[16];
             const char *uname = "";
             const char *gname = "";
 
-            read_entry_meta(
-                path,
-                name,
-                &st,
-                &uname,
-                &gname,
-                uid_buf,
-                gid_buf
-            );
+            read_entry_meta(path, name, &st, &uname, &gname, uid_buf, gid_buf);
 
             size_t uname_len = strlen(uname);
             if (uname_len > width_uname) {
@@ -164,21 +150,13 @@ static int list_dir(
         }
 
         if (opt_long) {
-            struct stat st = {0};
+            struct stat st = { 0 };
             char uid_buf[16];
             char gid_buf[16];
             const char *uname = "";
             const char *gname = "";
 
-            read_entry_meta(
-                path,
-                name,
-                &st,
-                &uname,
-                &gname,
-                uid_buf,
-                gid_buf
-            );
+            read_entry_meta(path, name, &st, &uname, &gname, uid_buf, gid_buf);
 
             char mode[11];
             fs_format_mode(st.st_mode, mode);

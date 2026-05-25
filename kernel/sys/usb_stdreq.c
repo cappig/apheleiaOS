@@ -10,12 +10,7 @@ static bool _usb_stdreq_control(
     u32 timeout_ms,
     size_t *out_actual
 ) {
-    if (
-        !target ||
-        !target->ops ||
-        !target->ops->control_transfer ||
-        !setup
-    ) {
+    if (!target || !target->ops || !target->ops->control_transfer || !setup) {
         return false;
     }
 
@@ -32,13 +27,7 @@ static bool _usb_stdreq_control(
         .timeout_ms = timeout_ms,
     };
 
-    return target->ops->control_transfer(
-        target->hcd_id,
-        target->port,
-        target->device_ctx,
-        &transfer,
-        out_actual
-    );
+    return target->ops->control_transfer(target->hcd_id, target->port, target->device_ctx, &transfer, out_actual);
 }
 
 bool usb_stdreq_get_descriptor(
@@ -66,11 +55,7 @@ bool usb_stdreq_get_descriptor(
     return _usb_stdreq_control(target, &setup, buffer, length, timeout_ms, out_actual);
 }
 
-bool usb_stdreq_set_configuration(
-    const usb_stdreq_target_t *target,
-    u8 config,
-    u32 timeout_ms
-) {
+bool usb_stdreq_set_configuration(const usb_stdreq_target_t *target, u8 config, u32 timeout_ms) {
     usb_setup_packet_t setup = {
         .request_type = USB_REQ_DIR_OUT,
         .request = USB_REQ_SET_CONFIGURATION,

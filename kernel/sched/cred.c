@@ -10,10 +10,7 @@ bool sched_pid_alive(pid_t pid) {
     sched_thread_t *thread = find_thread(pid);
 
     if (thread && thread->in_all_list && thread->pid == pid) {
-        alive = (
-            thread_get_state(thread) != THREAD_ZOMBIE &&
-            (thread->lifecycle_flags & SCHED_DESTROYING) == 0
-        );
+        alive = (thread_get_state(thread) != THREAD_ZOMBIE && (thread->lifecycle_flags & SCHED_DESTROYING) == 0);
     }
 
     sched_lock_restore(flags);
@@ -270,10 +267,7 @@ int sched_set_affinity(pid_t pid, u64 mask) {
     if (request_local_resched) {
         sched_request_resched_local();
     } else {
-        bool woke_remote = (
-            request_remote_resched_cpu < MAX_CORES &&
-            wake_cpu(request_remote_resched_cpu)
-        );
+        bool woke_remote = (request_remote_resched_cpu < MAX_CORES && wake_cpu(request_remote_resched_cpu));
 
         if (woke_remote) {
             __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);

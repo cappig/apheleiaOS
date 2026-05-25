@@ -8,7 +8,7 @@
 #include <riscv/serial.h>
 #include <string.h>
 
-static boot_info_t direct_boot_info = {0};
+static boot_info_t direct_boot_info = { 0 };
 
 static const void *sanitize_dtb_ptr(const void *dtb) {
     uintptr_t addr = (uintptr_t)dtb;
@@ -18,9 +18,7 @@ static const void *sanitize_dtb_ptr(const void *dtb) {
     }
 
     bool low_window = addr >= PAGE_4KIB && addr < (16ULL * MIB);
-    bool ram_window =
-        addr >= RISCV_KERNEL_BASE &&
-        addr < (RISCV_KERNEL_BASE + 256ULL * MIB);
+    bool ram_window = addr >= RISCV_KERNEL_BASE && addr < (RISCV_KERNEL_BASE + 256ULL * MIB);
 
     if (!low_window && !ram_window) {
         return NULL;
@@ -41,7 +39,7 @@ static uintptr_t detect_uart_base(const void *dtb) {
         "uart8250",
     };
 
-    fdt_reg_t reg = {0};
+    fdt_reg_t reg = { 0 };
     for (size_t i = 0; i < sizeof(compat_list) / sizeof(compat_list[0]); i++) {
         if (fdt_find_compatible_reg(dtb, compat_list[i], &reg) && reg.addr) {
             return (uintptr_t)reg.addr;
@@ -59,7 +57,7 @@ static fdt_reg_t detect_memory(const void *dtb) {
     };
 
     dtb = sanitize_dtb_ptr(dtb);
-    fdt_reg_t probed = {0};
+    fdt_reg_t probed = { 0 };
     if (dtb && fdt_find_memory_reg(dtb, &probed) && probed.addr && probed.size) {
         reg = probed;
     }
@@ -68,7 +66,7 @@ static fdt_reg_t detect_memory(const void *dtb) {
 }
 
 static fdt_reg_t detect_initrd(const void *dtb) {
-    fdt_reg_t reg = {0};
+    fdt_reg_t reg = { 0 };
 
     dtb = sanitize_dtb_ptr(dtb);
     if (dtb) {

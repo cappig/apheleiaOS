@@ -1,12 +1,11 @@
-#include "usb_xhci_internal.h"
-
 #include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
-
 #include <sys/usb_desc.h>
+
 #include "usb_hcd_common.h"
+#include "usb_xhci_internal.h"
 
 bool _xhci_control_xfer(
     xhci_usb_device_t *dev,
@@ -49,15 +48,11 @@ bool _xhci_control_xfer(
         }
     }
 
-    xhci_trb_t trbs[3] = {0};
+    xhci_trb_t trbs[3] = { 0 };
     size_t trb_count = 0;
 
-    u64 setup_data =
-        (u64)setup->request_type |
-        ((u64)setup->request << 8) |
-        ((u64)setup->value << 16) |
-        ((u64)setup->index << 32) |
-        ((u64)setup->length << 48);
+    u64 setup_data = (u64)setup->request_type | ((u64)setup->request << 8) | ((u64)setup->value << 16) |
+                     ((u64)setup->index << 32) | ((u64)setup->length << 48);
 
     u32 trt = XHCI_SETUP_TRT_NONE;
     if (length) {
@@ -68,10 +63,7 @@ bool _xhci_control_xfer(
         .parameter_lo = (u32)(setup_data & 0xffffffffULL),
         .parameter_hi = (u32)(setup_data >> 32),
         .status = 8,
-        .control =
-            (XHCI_TRB_TYPE_SETUP_STAGE << XHCI_TRB_TYPE_SHIFT) |
-            XHCI_TRB_IDT |
-            (trt << XHCI_SETUP_TRT_SHIFT),
+        .control = (XHCI_TRB_TYPE_SETUP_STAGE << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IDT | (trt << XHCI_SETUP_TRT_SHIFT),
     };
 
     if (length) {
@@ -79,10 +71,7 @@ bool _xhci_control_xfer(
             .parameter_lo = (u32)(dma_paddr & 0xffffffffULL),
             .parameter_hi = (u32)(dma_paddr >> 32),
             .status = (u32)length,
-            .control =
-                (XHCI_TRB_TYPE_DATA_STAGE << XHCI_TRB_TYPE_SHIFT) |
-                XHCI_TRB_CHAIN |
-                (data_in ? (1U << 16) : 0),
+            .control = (XHCI_TRB_TYPE_DATA_STAGE << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_CHAIN | (data_in ? (1U << 16) : 0),
         };
     }
 
@@ -90,10 +79,7 @@ bool _xhci_control_xfer(
         .parameter_lo = 0,
         .parameter_hi = 0,
         .status = 0,
-        .control =
-            (XHCI_TRB_TYPE_STATUS_STAGE << XHCI_TRB_TYPE_SHIFT) |
-            XHCI_TRB_IOC |
-            (data_in ? 0 : (1U << 16)),
+        .control = (XHCI_TRB_TYPE_STATUS_STAGE << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC | (data_in ? 0 : (1U << 16)),
     };
 
     bool ok = _xhci_submit_transfer(
@@ -200,10 +186,7 @@ bool _xhci_ensure_bulk_endpoint(xhci_usb_device_t *dev, u8 endpoint) {
     }
     *ready = true;
 
-    if (
-        !_xhci_prepare_config_ctx(dev) ||
-        !_xhci_cmd_configure_endpoint(ctrl, dev->slot_id, dev->input_ctx_paddr)
-    ) {
+    if (!_xhci_prepare_config_ctx(dev) || !_xhci_cmd_configure_endpoint(ctrl, dev->slot_id, dev->input_ctx_paddr)) {
         *ready = false;
         *stored_ep = 0;
         *stored_dci = 0;
@@ -300,9 +283,7 @@ bool _xhci_bulk_xfer(
             .parameter_lo = (u32)(dma_paddr & 0xffffffffULL),
             .parameter_hi = (u32)(dma_paddr >> 32),
             .status = (u32)chunk,
-            .control =
-                (XHCI_TRB_TYPE_NORMAL << XHCI_TRB_TYPE_SHIFT) |
-                XHCI_TRB_IOC,
+            .control = (XHCI_TRB_TYPE_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC,
         };
 
         size_t chunk_actual = 0;
@@ -364,11 +345,7 @@ void _xhci_free_usb_device(xhci_usb_device_t *dev) {
     free(dev);
 }
 
-void _xhci_release_usb_device(
-    xhci_controller_t *ctrl,
-    size_t port,
-    xhci_usb_device_t *dev
-) {
+void _xhci_release_usb_device(xhci_controller_t *ctrl, size_t port, xhci_usb_device_t *dev) {
     if (!ctrl || !dev) {
         return;
     }
@@ -425,25 +402,14 @@ bool _xhci_hcd_control_transfer(
     xhci_usb_device_t *dev = device_ctx;
     const usb_setup_packet_t *setup = transfer->setup;
 
-    bool ok = _xhci_control_xfer(
-        dev,
-        setup,
-        transfer->buffer,
-        transfer->length,
-        transfer->timeout_ms,
-        out_actual
-    );
+    bool ok = _xhci_control_xfer(dev, setup, transfer->buffer, transfer->length, transfer->timeout_ms, out_actual);
 
     if (!ok) {
         return false;
     }
 
-    if (
-        setup->request == USB_REQ_GET_DESCRIPTOR &&
-        (setup->request_type & USB_REQ_DIR_IN) &&
-        (((setup->value >> 8) & 0xffU) == USB_DT_CONFIG) &&
-        transfer->buffer
-    ) {
+    if (setup->request == USB_REQ_GET_DESCRIPTOR && (setup->request_type & USB_REQ_DIR_IN) &&
+        (((setup->value >> 8) & 0xffU) == USB_DT_CONFIG) && transfer->buffer) {
         size_t cfg_len = transfer->length;
         if (out_actual && *out_actual < cfg_len) {
             cfg_len = *out_actual;
@@ -459,14 +425,7 @@ bool _xhci_hcd_control_transfer(
             };
 
             u8 config_value = 0;
-            if (
-                usb_desc_parse_config_identity(
-                    transfer->buffer,
-                    cfg_len,
-                    &identity,
-                    &config_value
-                )
-            ) {
+            if (usb_desc_config_id(transfer->buffer, cfg_len, &identity, &config_value)) {
                 dev->config_value = config_value;
                 dev->interface_number = identity.interface_number;
                 dev->interface_class = identity.interface_class;
@@ -483,10 +442,7 @@ bool _xhci_hcd_control_transfer(
         }
     }
 
-    if (
-        setup->request == USB_REQ_SET_CONFIGURATION &&
-        !(setup->request_type & USB_REQ_DIR_IN)
-    ) {
+    if (setup->request == USB_REQ_SET_CONFIGURATION && !(setup->request_type & USB_REQ_DIR_IN)) {
         if (setup->value) {
             dev->config_value = (u8)setup->value;
         }
@@ -547,12 +503,7 @@ bool _xhci_hcd_port_reset(size_t hcd_id, size_t port, usb_speed_t *out_speed) {
     return true;
 }
 
-bool _xhci_hcd_device_open(
-    size_t hcd_id,
-    size_t port,
-    usb_speed_t speed,
-    void **out_device_ctx
-) {
+bool _xhci_hcd_device_open(size_t hcd_id, size_t port, usb_speed_t speed, void **out_device_ctx) {
     if (!out_device_ctx) {
         return false;
     }
@@ -608,11 +559,9 @@ bool _xhci_hcd_device_open(
         dev->max_packet0 = 8;
     }
 
-    if (
-        !_xhci_alloc_dma_pages(ctrl, 1, &dev->input_ctx_paddr) ||
+    if (!_xhci_alloc_dma_pages(ctrl, 1, &dev->input_ctx_paddr) ||
         !_xhci_alloc_dma_pages(ctrl, 1, &dev->output_ctx_paddr) ||
-        !_xhci_alloc_dma_pages(ctrl, 1, &dev->ep0_ring.paddr)
-    ) {
+        !_xhci_alloc_dma_pages(ctrl, 1, &dev->ep0_ring.paddr)) {
         _xhci_free_usb_device(dev);
         return false;
     }
@@ -632,10 +581,7 @@ bool _xhci_hcd_device_open(
         return false;
     }
 
-    if (
-        !_xhci_prepare_address_ctx(dev) ||
-        !_xhci_cmd_address_device(ctrl, dev->slot_id, dev->input_ctx_paddr)
-    ) {
+    if (!_xhci_prepare_address_ctx(dev) || !_xhci_cmd_address_device(ctrl, dev->slot_id, dev->input_ctx_paddr)) {
         _xhci_release_usb_device(ctrl, port, dev);
         return false;
     }
@@ -651,13 +597,7 @@ bool _xhci_hcd_device_open(
     return true;
 }
 
-bool _xhci_hcd_set_address(
-    size_t hcd_id,
-    size_t port,
-    void *device_ctx,
-    u8 address,
-    u16 ep0_mps
-) {
+bool _xhci_hcd_set_address(size_t hcd_id, size_t port, void *device_ctx, u8 address, u16 ep0_mps) {
     (void)hcd_id;
     (void)port;
 
@@ -674,10 +614,7 @@ bool _xhci_hcd_set_address(
     if (ep0_mps && ep0_mps != dev->max_packet0) {
         dev->max_packet0 = ep0_mps;
 
-        if (
-            !_xhci_prepare_ep0_eval_ctx(dev) ||
-            !_xhci_cmd_evaluate_context(ctrl, dev->slot_id, dev->input_ctx_paddr)
-        ) {
+        if (!_xhci_prepare_ep0_eval_ctx(dev) || !_xhci_cmd_evaluate_context(ctrl, dev->slot_id, dev->input_ctx_paddr)) {
             return false;
         }
 

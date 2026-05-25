@@ -49,11 +49,7 @@ static u64 _hashmap_str_hash_default(const char *text, void *private_data) {
     return hashmap_hash_str(text);
 }
 
-static bool _hashmap_str_cmp_default(
-    const char *left,
-    const char *right,
-    void *private_data
-) {
+static bool _hashmap_str_cmp_default(const char *left, const char *right, void *private_data) {
     (void)private_data;
     return left && right && !strcmp(left, right);
 }
@@ -252,8 +248,7 @@ bool hashmap_reserve(hashmap_t *map, size_t capacity) {
 
     size_t min_capacity = capacity;
     if (map->size > 0) {
-        size_t needed =
-            (map->size * HASHMAP_LOAD_DEN + HASHMAP_LOAD_NUM - 1) / HASHMAP_LOAD_NUM;
+        size_t needed = (map->size * HASHMAP_LOAD_DEN + HASHMAP_LOAD_NUM - 1) / HASHMAP_LOAD_NUM;
 
         if (needed > min_capacity) {
             min_capacity = needed;
@@ -284,8 +279,7 @@ bool hashmap_set(hashmap_t *map, u64 key, u64 value) {
 
     size_t limit = (map->capacity * HASHMAP_LOAD_NUM) / HASHMAP_LOAD_DEN;
     if (map->size + 1 > limit) {
-        size_t next =
-            map->capacity ? map->capacity << 1 : HASHMAP_INITIAL_CAPACITY;
+        size_t next = map->capacity ? map->capacity << 1 : HASHMAP_INITIAL_CAPACITY;
 
         if (!_hashmap_rehash(map, next)) {
             return false;
@@ -367,8 +361,7 @@ bool hashmap_remove(hashmap_t *map, u64 key) {
     }
 }
 
-static hashmap_str_entry_t *
-_hashmap_str_bucket_head(const hashmap_str_t *map, u64 hash) {
+static hashmap_str_entry_t *_hashmap_str_bucket_head(const hashmap_str_t *map, u64 hash) {
     if (!map || !map->index) {
         return NULL;
     }
@@ -381,11 +374,7 @@ _hashmap_str_bucket_head(const hashmap_str_t *map, u64 hash) {
     return (hashmap_str_entry_t *)(uintptr_t)encoded;
 }
 
-static bool _hashmap_str_bucket_store(
-    hashmap_str_t *map,
-    u64 hash,
-    hashmap_str_entry_t *head
-) {
+static bool _hashmap_str_bucket_store(hashmap_str_t *map, u64 hash, hashmap_str_entry_t *head) {
     if (!map || !map->index) {
         return false;
     }
@@ -402,11 +391,7 @@ hashmap_str_t *hashmap_str_create(void) {
     return hashmap_str_create_with(NULL, NULL, NULL);
 }
 
-hashmap_str_t *hashmap_str_create_with(
-    hashmap_str_hash_fn hash_fn,
-    hashmap_str_cmp_fn cmp_fn,
-    void *private_data
-) {
+hashmap_str_t *hashmap_str_create_with(hashmap_str_hash_fn hash_fn, hashmap_str_cmp_fn cmp_fn, void *private_data) {
     hashmap_str_t *map = calloc(1, sizeof(*map));
     if (!map) {
         return NULL;
@@ -435,8 +420,7 @@ void hashmap_str_clear(hashmap_str_t *map) {
             continue;
         }
 
-        hashmap_str_entry_t *node =
-            (hashmap_str_entry_t *)(uintptr_t)entry->value;
+        hashmap_str_entry_t *node = (hashmap_str_entry_t *)(uintptr_t)entry->value;
 
         while (node) {
             hashmap_str_entry_t *next = node->next;
@@ -496,11 +480,7 @@ bool hashmap_str_set(hashmap_str_t *map, const char *key, u64 value) {
     return true;
 }
 
-bool hashmap_str_get(
-    const hashmap_str_t *map,
-    const char *key,
-    u64 *value_out
-) {
+bool hashmap_str_get(const hashmap_str_t *map, const char *key, u64 *value_out) {
     if (!map || !map->index || !map->cmp_fn || !map->hash_fn || !key) {
         return false;
     }

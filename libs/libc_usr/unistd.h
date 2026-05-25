@@ -1,7 +1,7 @@
 #pragma once
 
-#include <sys/stat.h>
 #include <stddef.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 
 extern char **environ;
@@ -35,31 +35,15 @@ int fstatat(int dirfd, const char *path, struct stat *st, int flags);
 int faccessat(int dirfd, const char *path, int mode, int flags);
 int mkdirat(int dirfd, const char *path, mode_t mode);
 int unlinkat(int dirfd, const char *path, int flags);
-int renameat(
-    int olddirfd,
-    const char *oldpath,
-    int newdirfd,
-    const char *newpath
-);
-int linkat(
-    int olddirfd,
-    const char *oldpath,
-    int newdirfd,
-    const char *newpath,
-    int flags
-);
+int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath);
+int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags);
 int fchmod(int fd, mode_t mode);
 int fchown(int fd, uid_t uid, gid_t gid);
 int truncate(const char *path, off_t length);
 int ftruncate(int fd, off_t length);
 int fsync(int fd);
 int fdatasync(int fd);
-int mount(
-    const char *source,
-    const char *target,
-    const char *filesystemtype,
-    unsigned long flags
-);
+int mount(const char *source, const char *target, const char *filesystemtype, unsigned long flags);
 int umount(const char *target, unsigned long flags);
 
 pid_t fork(void);

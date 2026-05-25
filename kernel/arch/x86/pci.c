@@ -27,14 +27,12 @@ u32 pci_bus_read(u8 bus, u8 slot, u8 func, u8 offset, u8 size) {
     case 4:
         return inl(PCI_CONFIG_DATA_PORT);
     case 2: {
-        u16 data_port =
-            PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_WORD_OFFSET_MASK);
+        u16 data_port = PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_WORD_OFFSET_MASK);
 
         return inw(data_port);
     }
     case 1: {
-        u16 data_port = 
-            PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_BYTE_OFFSET_MASK);
+        u16 data_port = PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_BYTE_OFFSET_MASK);
 
         return inb(data_port);
     }
@@ -58,15 +56,13 @@ void pci_bus_write(u8 bus, u8 slot, u8 func, u8 offset, u32 value, u8 size) {
         outl(PCI_CONFIG_DATA_PORT, value);
         break;
     case 2: {
-        u16 data_port =
-            PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_WORD_OFFSET_MASK);
+        u16 data_port = PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_WORD_OFFSET_MASK);
 
         outw(data_port, (u16)value);
         break;
     }
     case 1: {
-        u16 data_port =
-            PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_BYTE_OFFSET_MASK);
+        u16 data_port = PCI_CONFIG_DATA_PORT + (offset & PCI_DATA_BYTE_OFFSET_MASK);
 
         outb(data_port, (u8)value);
         break;

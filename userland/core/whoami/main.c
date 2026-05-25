@@ -8,7 +8,7 @@ int main(int argc, char **argv) {
     (void)argv;
 
     uid_t uid = getuid();
-    char name[32] = {0};
+    char name[32] = { 0 };
 
     const char *value = account_uid_name(uid, name, sizeof(name));
     write(STDOUT_FILENO, value, strnlen(value, sizeof(name)));

@@ -1,5 +1,5 @@
-#include <arch/thread.h>
 #include <arch/signal.h>
+#include <arch/thread.h>
 #include <base/macros.h>
 #include <sched/scheduler.h>
 #include <x86/gdt.h>
@@ -35,11 +35,7 @@ void arch_state_set_return(arch_int_state_t *state, arch_word_t value) {
 #endif
 }
 
-void arch_state_set_user_entry(
-    arch_int_state_t *state,
-    arch_word_t entry,
-    arch_word_t stack_top
-) {
+void arch_state_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top) {
     if (!state) {
         return;
     }
@@ -78,8 +74,7 @@ arch_int_state_t *arch_thread_user_context(struct sched_thread *thread) {
     return (arch_int_state_t *)base;
 }
 
-uintptr_t
-arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
+uintptr_t arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     if (!thread) {
         return 0;
     }
@@ -111,7 +106,7 @@ arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     *(u64 *)sp = 0;
 
     // General registers in push order
-    u64 regs[15] = {0};
+    u64 regs[15] = { 0 };
 
     for (size_t i = 0; i < ARRAY_LEN(regs); i++) {
         sp -= sizeof(u64);
@@ -149,7 +144,7 @@ arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     *(u32 *)sp = (u32)GDT_KERNEL_DATA;
 
     // General registers in push order
-    u32 regs[7] = {0};
+    u32 regs[7] = { 0 };
 
     for (size_t i = 0; i < ARRAY_LEN(regs); i++) {
         sp -= sizeof(u32);

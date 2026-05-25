@@ -18,7 +18,7 @@
 
 #include "vfs.h"
 
-#define SYSINFO_TEXT_MAX  384
+#define SYSINFO_TEXT_MAX 384
 
 #ifndef BUILD_DATE
 #define BUILD_DATE "unknown"
@@ -31,8 +31,6 @@
 #ifndef VERSION
 #define VERSION "unknown"
 #endif
-
-static u64 boot_seconds = 0;
 
 typedef struct {
     u64 now;
@@ -47,12 +45,17 @@ typedef struct {
     devfs_device_init_fn init_fn;
 } devfs_device_entry_t;
 
-static vector_t *devfs_devices = NULL;
-static bool devfs_ready = false;
+typedef struct {
+    u64 boot_seconds;
+    vector_t *devices;
+    bool ready;
+} devfs_state_t;
+
+static devfs_state_t devfs = { 0 };
 
 static u64 _boot_seconds(void) {
-    if (boot_seconds) {
-        return boot_seconds;
+    if (devfs.boot_seconds) {
+        return devfs.boot_seconds;
     }
 
     u64 now = arch_realtime_ns() / 1000000000ULL;
@@ -60,23 +63,22 @@ static u64 _boot_seconds(void) {
     u64 hz = arch_timer_hz();
 
     if (!hz) {
-        boot_seconds = now;
-        return boot_seconds;
+        devfs.boot_seconds = now;
+        return devfs.boot_seconds;
     }
 
     u64 uptime = ticks / hz;
 
     if (now > uptime) {
-        boot_seconds = now - uptime;
+        devfs.boot_seconds = now - uptime;
     } else {
-        boot_seconds = 0;
+        devfs.boot_seconds = 0;
     }
 
-    return boot_seconds;
+    return devfs.boot_seconds;
 }
 
-static ssize_t
-_dev_text_read(const char *text, void *buf, size_t offset, size_t len) {
+static ssize_t _dev_text_read(const char *text, void *buf, size_t offset, size_t len) {
     if (!text || !buf) {
         return -1;
     }
@@ -96,13 +98,7 @@ _dev_text_read(const char *text, void *buf, size_t offset, size_t len) {
     return (ssize_t)copy_len;
 }
 
-static ssize_t _dev_null_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_null_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)buf;
     (void)offset;
@@ -112,13 +108,7 @@ static ssize_t _dev_null_read(
     return VFS_EOF;
 }
 
-static ssize_t _dev_null_write(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_null_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)buf;
     (void)offset;
@@ -127,13 +117,7 @@ static ssize_t _dev_null_write(
     return (ssize_t)len;
 }
 
-static ssize_t _dev_zero_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_zero_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
     (void)flags;
@@ -146,13 +130,7 @@ static ssize_t _dev_zero_read(
     return (ssize_t)len;
 }
 
-static ssize_t _dev_zero_write(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_zero_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)buf;
     (void)offset;
@@ -161,13 +139,7 @@ static ssize_t _dev_zero_write(
     return (ssize_t)len;
 }
 
-static ssize_t _dev_os_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_os_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)flags;
 
@@ -187,13 +159,7 @@ static ssize_t _dev_os_read(
     return _dev_text_read(text, buf, offset, len);
 }
 
-static ssize_t _dev_cpu_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_cpu_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)flags;
 
@@ -271,17 +237,11 @@ static ssize_t _dev_cpu_read(
     return _dev_text_read(text, buf, offset, len);
 }
 
-static ssize_t _dev_clock_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_clock_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)flags;
 
-    dev_clock_snapshot_t clock = {0};
+    dev_clock_snapshot_t clock = { 0 };
     clock.now = arch_realtime_ns() / 1000000000ULL;
     clock.ticks = arch_timer_ticks();
     clock.hz = arch_timer_hz();
@@ -318,7 +278,7 @@ static ssize_t _dev_clock_ioctl(vfs_node_t *node, u64 request, void *args) {
         return -EINVAL;
     }
 
-    dev_clock_snapshot_t clock = {0};
+    dev_clock_snapshot_t clock = { 0 };
     clock.now = arch_realtime_ns() / 1000000000ULL;
     clock.ticks = arch_timer_ticks();
     clock.hz = arch_timer_hz();
@@ -333,13 +293,7 @@ static ssize_t _dev_clock_ioctl(vfs_node_t *node, u64 request, void *args) {
     return 0;
 }
 
-static ssize_t _dev_swap_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_swap_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)flags;
 
@@ -369,17 +323,11 @@ static ssize_t _dev_swap_read(
     return _dev_text_read(text, buf, offset, len);
 }
 
-static ssize_t _dev_sched_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_sched_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)flags;
 
-    sched_metrics_snapshot_t sched_snapshot = {0};
+    sched_metrics_snapshot_t sched_snapshot = { 0 };
     sched_metrics_snapshot(&sched_snapshot);
 
     char text[SYSINFO_TEXT_MAX * 4];
@@ -437,8 +385,7 @@ bool devfs_register_node(
     return true;
 }
 
-vfs_node_t *
-devfs_register_dir(vfs_node_t *parent, const char *name, mode_t mode) {
+vfs_node_t *devfs_register_dir(vfs_node_t *parent, const char *name, mode_t mode) {
     if (!parent || !name) {
         return NULL;
     }
@@ -487,12 +434,12 @@ static vfs_node_t *_ensure_dev_dir(void) {
 }
 
 static bool _ensure_device_registry(void) {
-    if (devfs_devices) {
+    if (devfs.devices) {
         return true;
     }
 
-    devfs_devices = vec_create(sizeof(devfs_device_entry_t));
-    if (!devfs_devices) {
+    devfs.devices = vec_create(sizeof(devfs_device_entry_t));
+    if (!devfs.devices) {
         log_warn("failed to allocate devfs device registry");
         return false;
     }
@@ -509,8 +456,8 @@ bool devfs_register_device(const char *name, devfs_device_init_fn init_fn) {
         return false;
     }
 
-    for (size_t i = 0; i < devfs_devices->size; i++) {
-        devfs_device_entry_t *entry = vec_at(devfs_devices, i);
+    for (size_t i = 0; i < devfs.devices->size; i++) {
+        devfs_device_entry_t *entry = vec_at(devfs.devices, i);
         if (entry && entry->init_fn == init_fn) {
             return true;
         }
@@ -521,12 +468,12 @@ bool devfs_register_device(const char *name, devfs_device_init_fn init_fn) {
         .init_fn = init_fn,
     };
 
-    if (!vec_push(devfs_devices, &entry)) {
+    if (!vec_push(devfs.devices, &entry)) {
         log_warn("failed to grow devfs device registry");
         return false;
     }
 
-    if (devfs_ready) {
+    if (devfs.ready) {
         vfs_node_t *dev_dir = _ensure_dev_dir();
         if (!dev_dir || !init_fn(dev_dir)) {
             log_warn("%s registration failed", name);
@@ -538,12 +485,12 @@ bool devfs_register_device(const char *name, devfs_device_init_fn init_fn) {
 }
 
 bool devfs_unregister_device(const char *name) {
-    if (!name || !name[0] || !devfs_devices) {
+    if (!name || !name[0] || !devfs.devices) {
         return false;
     }
 
-    for (size_t i = 0; i < devfs_devices->size; i++) {
-        devfs_device_entry_t *entry = vec_at(devfs_devices, i);
+    for (size_t i = 0; i < devfs.devices->size; i++) {
+        devfs_device_entry_t *entry = vec_at(devfs.devices, i);
         if (!entry) {
             continue;
         }
@@ -553,7 +500,7 @@ bool devfs_unregister_device(const char *name) {
             continue;
         }
 
-        return vec_remove_at(devfs_devices, i, NULL);
+        return vec_remove_at(devfs.devices, i, NULL);
     }
 
     return false;
@@ -581,16 +528,16 @@ bool devfs_unregister_node(const char *path) {
 }
 
 bool devfs_is_ready(void) {
-    return devfs_ready;
+    return devfs.ready;
 }
 
 static void _init_registered_devices(vfs_node_t *dev_dir) {
-    if (!dev_dir || !devfs_devices) {
+    if (!dev_dir || !devfs.devices) {
         return;
     }
 
-    for (size_t i = 0; i < devfs_devices->size; i++) {
-        devfs_device_entry_t *entry = vec_at(devfs_devices, i);
+    for (size_t i = 0; i < devfs.devices->size; i++) {
+        devfs_device_entry_t *entry = vec_at(devfs.devices, i);
         if (!entry) {
             continue;
         }
@@ -607,24 +554,16 @@ static void _init_registered_devices(vfs_node_t *dev_dir) {
 static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
     bool ok = true;
 
-    vfs_interface_t *null_if =
-        vfs_create_interface(_dev_null_read, _dev_null_write, NULL);
+    vfs_interface_t *null_if = vfs_create_interface(_dev_null_read, _dev_null_write, NULL);
 
-    if (
-        !null_if ||
-        !devfs_register_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)
-    ) {
+    if (!null_if || !devfs_register_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {
         log_warn("failed to create /dev/null");
         ok = false;
     }
 
-    vfs_interface_t *zero_if =
-        vfs_create_interface(_dev_zero_read, _dev_zero_write, NULL);
+    vfs_interface_t *zero_if = vfs_create_interface(_dev_zero_read, _dev_zero_write, NULL);
 
-    if (
-        !zero_if ||
-        !devfs_register_node(dev_dir, "zero", VFS_CHARDEV, 0666, zero_if, NULL)
-    ) {
+    if (!zero_if || !devfs_register_node(dev_dir, "zero", VFS_CHARDEV, 0666, zero_if, NULL)) {
         log_warn("failed to create /dev/zero");
         ok = false;
     }
@@ -635,25 +574,18 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
         ok = false;
     }
 
-    vfs_interface_t *clock_if =
-        vfs_create_interface(_dev_clock_read, NULL, NULL);
+    vfs_interface_t *clock_if = vfs_create_interface(_dev_clock_read, NULL, NULL);
     if (clock_if) {
         clock_if->ioctl = _dev_clock_ioctl;
     }
 
-    if (
-        !clock_if ||
-        !devfs_register_node(dev_dir, "clock", VFS_CHARDEV, 0444, clock_if, NULL)
-    ) {
+    if (!clock_if || !devfs_register_node(dev_dir, "clock", VFS_CHARDEV, 0444, clock_if, NULL)) {
         log_warn("failed to create /dev/clock");
         ok = false;
     }
 
     vfs_interface_t *swap_if = vfs_create_interface(_dev_swap_read, NULL, NULL);
-    if (
-        !swap_if ||
-        !devfs_register_node(dev_dir, "swap", VFS_CHARDEV, 0444, swap_if, NULL)
-    ) {
+    if (!swap_if || !devfs_register_node(dev_dir, "swap", VFS_CHARDEV, 0444, swap_if, NULL)) {
         log_warn("failed to create /dev/swap");
         ok = false;
     }
@@ -665,10 +597,7 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
     }
 
     vfs_interface_t *sched_if = vfs_create_interface(_dev_sched_read, NULL, NULL);
-    if (
-        !sched_if ||
-        !devfs_register_node(dev_dir, "sched", VFS_CHARDEV, 0444, sched_if, NULL)
-    ) {
+    if (!sched_if || !devfs_register_node(dev_dir, "sched", VFS_CHARDEV, 0444, sched_if, NULL)) {
         log_warn("failed to create /dev/sched");
         ok = false;
     }
@@ -677,7 +606,7 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
 }
 
 void devfs_init(void) {
-    if (devfs_ready) {
+    if (devfs.ready) {
         return;
     }
 
@@ -691,7 +620,7 @@ void devfs_init(void) {
     _init_registered_devices(dev_dir);
 
     _register_builtin_nodes(dev_dir);
-    devfs_ready = true;
+    devfs.ready = true;
 
     log_debug("devfs devices ready");
 }

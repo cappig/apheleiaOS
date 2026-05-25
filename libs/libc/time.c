@@ -6,22 +6,10 @@
 #include "stdio.h"
 #include "string.h"
 
-static const char days_str[7][4] =
-    {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+static const char days_str[7][4] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 
 static const char months_str[12][4] = {
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 };
 
 #define EPOCH_YEAR    1970
@@ -58,14 +46,7 @@ static bool append_str(char *out, size_t max, size_t *pos, const char *str) {
     return true;
 }
 
-static bool append_number(
-    char *out,
-    size_t max,
-    size_t *pos,
-    long long value,
-    int width,
-    char pad
-) {
+static bool append_number(char *out, size_t max, size_t *pos, long long value, int width, char pad) {
     char buf[16];
     int len = snprintf(buf, sizeof(buf), "%lld", value);
 
@@ -112,8 +93,7 @@ static bool append_hm(char *out, size_t max, size_t *pos, const struct tm *tm) {
     return append_number(out, max, pos, tm->tm_min, 2, '0');
 }
 
-static bool
-append_hms(char *out, size_t max, size_t *pos, const struct tm *tm) {
+static bool append_hms(char *out, size_t max, size_t *pos, const struct tm *tm) {
     if (!append_hm(out, max, pos, tm)) {
         return false;
     }
@@ -125,8 +105,7 @@ append_hms(char *out, size_t max, size_t *pos, const struct tm *tm) {
     return append_number(out, max, pos, tm->tm_sec, 2, '0');
 }
 
-static bool
-append_ymd(char *out, size_t max, size_t *pos, const struct tm *tm) {
+static bool append_ymd(char *out, size_t max, size_t *pos, const struct tm *tm) {
     if (!append_number(out, max, pos, tm->tm_year + 1900, 4, '0')) {
         return false;
     }
@@ -146,8 +125,7 @@ append_ymd(char *out, size_t max, size_t *pos, const struct tm *tm) {
     return append_number(out, max, pos, tm->tm_mday, 2, '0');
 }
 
-static bool
-append_ctime_layout(char *out, size_t max, size_t *pos, const struct tm *tm) {
+static bool append_ctime_layout(char *out, size_t max, size_t *pos, const struct tm *tm) {
     if (!append_str(out, max, pos, weekday_name(tm->tm_wday))) {
         return false;
     }
@@ -195,13 +173,7 @@ static long long days_from_civil(long long year, int month, int day) {
     return era * 146097LL + (long long)doe - 719468LL;
 }
 
-static bool civil_from_days(
-    long long days,
-    long long *year_out,
-    int *month_out,
-    int *day_out,
-    int *yday_out
-) {
+static bool civil_from_days(long long days, long long *year_out, int *month_out, int *day_out, int *yday_out) {
     if (!year_out || !month_out || !day_out || !yday_out) {
         return false;
     }
@@ -209,8 +181,7 @@ static bool civil_from_days(
     long long z = days + 719468LL;
     long long era = z >= 0 ? z / 146097LL : (z - 146096LL) / 146097LL;
     unsigned doe = (unsigned)(z - era * 146097LL);
-    unsigned yoe =
-        (doe - doe / 1460U + doe / 36524U - doe / 146096U) / 365U;
+    unsigned yoe = (doe - doe / 1460U + doe / 36524U - doe / 146096U) / 365U;
     long long year = (long long)yoe + era * 400LL;
     unsigned yday = doe - (365U * yoe + yoe / 4U - yoe / 100U);
     unsigned mp = (5U * yday + 2U) / 153U;
@@ -321,8 +292,7 @@ struct tm *localtime(const time_t *timer) {
     return gmtime(timer);
 }
 
-size_t
-strftime(char *str, size_t max, const char *format, const struct tm *tm) {
+size_t strftime(char *str, size_t max, const char *format, const struct tm *tm) {
     if (!str || !max || !format || !tm) {
         return 0;
     }
@@ -474,12 +444,7 @@ char *asctime(const struct tm *time) {
         return asctime_bad_time();
     }
 
-    size_t len = strftime(
-        asctime_buf,
-        sizeof(asctime_buf),
-        "%a %b %e %H:%M:%S %Y\n",
-        time
-    );
+    size_t len = strftime(asctime_buf, sizeof(asctime_buf), "%a %b %e %H:%M:%S %Y\n", time);
 
     if (!len) {
         return asctime_bad_time();

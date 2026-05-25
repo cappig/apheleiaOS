@@ -17,11 +17,4 @@ typedef enum {
 
 bool wm_cursor_load_kind(wm_cursor_kind_t kind, const char *path);
 void wm_cursor_unload(void);
-bool wm_cursor_draw_kind(
-    pixel_t *frame,
-    u32 fb_width,
-    u32 fb_height,
-    i32 x,
-    i32 y,
-    wm_cursor_kind_t kind
-);
+bool wm_cursor_draw_kind(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32 y, wm_cursor_kind_t kind);

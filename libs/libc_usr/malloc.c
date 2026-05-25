@@ -32,9 +32,7 @@ static size_t _page_align(size_t n) {
 }
 
 static void *_mmap_pages(size_t bytes) {
-    void *p = mmap(
-        NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0
-    );
+    void *p = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
 
     if (p == MAP_FAILED) {
         return NULL;

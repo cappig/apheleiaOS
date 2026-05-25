@@ -16,10 +16,10 @@
 #include <ui.h>
 #include <unistd.h>
 
-#include "wm.h"
 #include "background.h"
 #include "cursor.h"
 #include "rect.h"
+#include "wm.h"
 
 extern char **environ;
 
@@ -126,13 +126,12 @@ static wm_rect_t _cursor_rect(i32 x, i32 y) {
     return rect;
 }
 
-static void
-_window_damage_union_bounds(const wm_window_t *window, wm_rect_t *damage) {
+static void _window_damage_union_bounds(const wm_window_t *window, wm_rect_t *damage) {
     if (!window || !damage) {
         return;
     }
 
-    wm_rect_t rect = {0};
+    wm_rect_t rect = { 0 };
     if (wm_window_bounds_rect(window, &rect)) {
         wm_rect_union(damage, &rect);
     }
@@ -162,14 +161,7 @@ static void _window_clear_dirty(wm_window_t *window) {
     window->dirty_height = 0;
 }
 
-static bool _apply_window_geometry(
-    wm_window_t *window,
-    wm_rect_t *damage,
-    i32 x,
-    i32 y,
-    u32 width,
-    u32 height
-) {
+static bool _apply_window_geometry(wm_window_t *window, wm_rect_t *damage, i32 x, i32 y, u32 width, u32 height) {
     if (!window || !damage) {
         return false;
     }
@@ -189,8 +181,7 @@ static bool _apply_window_geometry(
 }
 
 static bool _is_mouse_event(u32 type) {
-    return type == INPUT_EVENT_MOUSE_MOVE || type == INPUT_EVENT_MOUSE_BUTTON ||
-           type == INPUT_EVENT_MOUSE_WHEEL;
+    return type == INPUT_EVENT_MOUSE_MOVE || type == INPUT_EVENT_MOUSE_BUTTON || type == INPUT_EVENT_MOUSE_WHEEL;
 }
 
 static void _mark_consumed(bool *consumed) {
@@ -216,21 +207,12 @@ static void _flush_forward_batch(ui_t *ui, wm_forward_batch_t *batch) {
     memset(&batch->event, 0, sizeof(batch->event));
 }
 
-static void _queue_forward_move(
-    ui_t *ui,
-    wm_forward_batch_t *batch,
-    u32 target_id,
-    const input_event_t *event
-) {
+static void _queue_forward_move(ui_t *ui, wm_forward_batch_t *batch, u32 target_id, const input_event_t *event) {
     if (!ui || !batch || !event || event->type != INPUT_EVENT_MOUSE_MOVE) {
         return;
     }
 
-    if (
-        !batch->valid ||
-        batch->target_id != target_id ||
-        batch->event.type != INPUT_EVENT_MOUSE_MOVE
-    ) {
+    if (!batch->valid || batch->target_id != target_id || batch->event.type != INPUT_EVENT_MOUSE_MOVE) {
         _flush_forward_batch(ui, batch);
         batch->valid = true;
         batch->target_id = target_id;
@@ -246,13 +228,7 @@ static void _queue_forward_move(
     batch->event.dy += event->dy;
 }
 
-static int _sync_drag_resize(
-    ui_t *ui,
-    wm_runtime_t *rt,
-    wm_window_t *window,
-    wm_rect_t *damage,
-    bool refresh_surface
-) {
+static int _sync_drag_resize(ui_t *ui, wm_runtime_t *rt, wm_window_t *window, wm_rect_t *damage, bool refresh_surface) {
     if (!ui || !rt || !window) {
         return -EINVAL;
     }
@@ -261,11 +237,7 @@ static int _sync_drag_resize(
         return errno ? -errno : -EIO;
     }
 
-    if (
-        !rt->drag_synced_valid ||
-        rt->drag_synced_x != window->x ||
-        rt->drag_synced_y != window->y
-    ) {
+    if (!rt->drag_synced_valid || rt->drag_synced_x != window->x || rt->drag_synced_y != window->y) {
         ui_mgr_move(ui, window->id, window->x, window->y);
     }
 
@@ -298,12 +270,7 @@ static bool _title_rect(const wm_window_t *window, wm_rect_t *rect) {
     return wm_rect_valid(rect);
 }
 
-static bool _center_window_on_screen(
-    ui_t *ui,
-    const fb_info_t *fb_info,
-    wm_window_t *window,
-    wm_rect_t *damage
-) {
+static bool _center_window_on_screen(ui_t *ui, const fb_info_t *fb_info, wm_window_t *window, wm_rect_t *damage) {
     if (!ui || !fb_info || !window || !damage) {
         return false;
     }
@@ -323,8 +290,7 @@ static bool _center_window_on_screen(
         y = (frame_h - win_h) / 2;
     }
 
-    bool applied =
-        _apply_window_geometry(window, damage, x, y, window->width, window->height);
+    bool applied = _apply_window_geometry(window, damage, x, y, window->width, window->height);
 
     if (!applied) {
         return false;
@@ -334,12 +300,7 @@ static bool _center_window_on_screen(
     return true;
 }
 
-static void _focus_window(
-    ui_t *ui,
-    wm_runtime_t *rt,
-    wm_window_t *window,
-    wm_rect_t *damage
-) {
+static void _focus_window(ui_t *ui, wm_runtime_t *rt, wm_window_t *window, wm_rect_t *damage) {
     if (!ui || !rt || !window || !damage) {
         return;
     }
@@ -353,7 +314,7 @@ static void _focus_window(
     wm_set_focus(ui, window, &rt->z_counter);
     rt->focused_id = (int)window->id;
 
-    wm_rect_t title = {0};
+    wm_rect_t title = { 0 };
     if (prev && prev != window && _title_rect(prev, &title)) {
         wm_rect_union(damage, &title);
     }
@@ -367,12 +328,7 @@ static void _focus_window(
     }
 }
 
-static int _present_damage(
-    int fb_fd,
-    const fb_info_t *fb_info,
-    const pixel_t *frame,
-    wm_rect_t *damage
-) {
+static int _present_damage(int fb_fd, const fb_info_t *fb_info, const pixel_t *frame, wm_rect_t *damage) {
     if (!fb_info || !frame || !damage || !wm_rect_valid(damage)) {
         return 0;
     }
@@ -414,8 +370,8 @@ static void _spawn_term(void) {
             close(fd);
         }
 
-        char *argv[] = {"/bin/term", NULL};
-        char *empty_env[] = {NULL};
+        char *argv[] = { "/bin/term", NULL };
+        char *empty_env[] = { NULL };
         char *const *envp = environ ? environ : empty_env;
         execve("/bin/term", argv, envp);
         _exit(127);
@@ -519,7 +475,7 @@ static u32 _resize_hit_edges(const wm_window_t *window, i32 px, i32 py) {
         return 0;
     }
 
-    wm_rect_t bounds = {0};
+    wm_rect_t bounds = { 0 };
     if (!wm_window_bounds_rect(window, &bounds)) {
         return 0;
     }
@@ -649,12 +605,7 @@ typedef struct {
     i32 size;
 } wm_resize_axis_t;
 
-static void _resize_axis_apply_delta(
-    wm_resize_axis_t *axis,
-    i32 delta,
-    bool has_min_edge,
-    bool has_max_edge
-) {
+static void _resize_axis_apply_delta(wm_resize_axis_t *axis, i32 delta, bool has_min_edge, bool has_max_edge) {
     if (!axis) {
         return;
     }
@@ -669,13 +620,8 @@ static void _resize_axis_apply_delta(
     }
 }
 
-static void _resize_axis_clamp(
-    wm_resize_axis_t *axis,
-    i32 min_size,
-    i32 frame_size,
-    bool has_min_edge,
-    bool has_max_edge
-) {
+static void
+_resize_axis_clamp(wm_resize_axis_t *axis, i32 min_size, i32 frame_size, bool has_min_edge, bool has_max_edge) {
     if (!axis || frame_size <= 0) {
         return;
     }
@@ -774,12 +720,7 @@ static bool _compute_resize_geometry(
     return true;
 }
 
-static bool _apply_drag(
-    ui_t *ui,
-    wm_runtime_t *rt,
-    const fb_info_t *fb_info,
-    wm_rect_t *damage
-) {
+static bool _apply_drag(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm_rect_t *damage) {
     if (!ui || !rt || !fb_info || !damage) {
         return false;
     }
@@ -805,14 +746,7 @@ static bool _apply_drag(
     if (rt->drag_mode == WM_DRAG_MOVE) {
         next_x = rt->drag_window_start_x + delta_x;
         next_y = rt->drag_window_start_y + delta_y;
-        bool moved = _apply_window_geometry(
-            window,
-            damage,
-            next_x,
-            next_y,
-            next_width,
-            next_height
-        );
+        bool moved = _apply_window_geometry(window, damage, next_x, next_y, next_width, next_height);
 
         if (!moved) {
             return false;
@@ -825,7 +759,7 @@ static bool _apply_drag(
         return false;
     }
 
-    wm_resize_geometry_t geometry = {0};
+    wm_resize_geometry_t geometry = { 0 };
     if (!_compute_resize_geometry(rt, fb_info, delta_x, delta_y, &geometry)) {
         return false;
     }
@@ -835,17 +769,10 @@ static bool _apply_drag(
     next_width = geometry.width;
     next_height = geometry.height;
 
-    return _apply_window_geometry(
-        window, damage, next_x, next_y, next_width, next_height
-    );
+    return _apply_window_geometry(window, damage, next_x, next_y, next_width, next_height);
 }
 
-static int _handle_ws_events(
-    ui_t *ui,
-    wm_runtime_t *rt,
-    const fb_info_t *fb_info,
-    wm_rect_t *damage
-) {
+static int _handle_ws_events(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm_rect_t *damage) {
     ws_event_t events[WM_WS_EVENT_BATCH];
     size_t processed = 0;
 
@@ -884,13 +811,10 @@ static int _handle_ws_events(
                 continue;
             }
 
-            bool focus_closed = (
-                rt->focused_id >= 0 &&
-                events[i].type == WS_EVT_WINDOW_CLOSED &&
-                (u32)rt->focused_id == events[i].id
-            );
+            bool focus_closed =
+                (rt->focused_id >= 0 && events[i].type == WS_EVT_WINDOW_CLOSED && (u32)rt->focused_id == events[i].id);
 
-            wm_rect_t event_damage = {0};
+            wm_rect_t event_damage = { 0 };
             if (wm_handle_ws_event(&events[i], &event_damage)) {
                 wm_rect_union(damage, &event_damage);
             }
@@ -948,13 +872,8 @@ static bool _handle_mouse_move(
     return changed;
 }
 
-static bool _handle_mouse_button(
-    ui_t *ui,
-    wm_runtime_t *rt,
-    const input_event_t *event,
-    wm_rect_t *damage,
-    bool *consumed
-) {
+static bool
+_handle_mouse_button(ui_t *ui, wm_runtime_t *rt, const input_event_t *event, wm_rect_t *damage, bool *consumed) {
     if (consumed) {
         *consumed = false;
     }
@@ -973,7 +892,7 @@ static bool _handle_mouse_button(
             if (wm_point_in_close(window, rt->mouse_x, rt->mouse_y)) {
                 _mark_consumed(consumed);
 
-                wm_rect_t close_damage = {0};
+                wm_rect_t close_damage = { 0 };
                 wm_window_bounds_rect(window, &close_damage);
                 wm_rect_union(damage, &close_damage);
 
@@ -996,14 +915,14 @@ static bool _handle_mouse_button(
 
                     changed = true;
                 } else if (wm_point_in_title(window, rt->mouse_x, rt->mouse_y)) {
-                        rt->drag_mode = WM_DRAG_MOVE;
-                        rt->drag_edges = 0;
+                    rt->drag_mode = WM_DRAG_MOVE;
+                    rt->drag_edges = 0;
 
-                        _mark_consumed(consumed);
-                        changed = true;
-                    } else {
-                        _clear_drag(rt);
-                        changed = true;
+                    _mark_consumed(consumed);
+                    changed = true;
+                } else {
+                    _clear_drag(rt);
+                    changed = true;
                 }
             }
         }
@@ -1054,21 +973,11 @@ static bool _handle_mouse_button(
     return changed;
 }
 
-static bool _handle_key(
-    ui_t *ui,
-    wm_runtime_t *rt,
-    input_event_t *event,
-    volatile sig_atomic_t *exit_requested
-) {
+static bool _handle_key(ui_t *ui, wm_runtime_t *rt, input_event_t *event, volatile sig_atomic_t *exit_requested) {
     bool ctrl = (event->modifiers & INPUT_MOD_CTRL) != 0;
     bool alt = (event->modifiers & INPUT_MOD_ALT) != 0;
 
-    if (
-        event->action &&
-        ctrl &&
-        alt &&
-        (event->keycode == KBD_BACKSPACE || event->keycode == KBD_Q)
-    ) {
+    if (event->action && ctrl && alt && (event->keycode == KBD_BACKSPACE || event->keycode == KBD_Q)) {
         *exit_requested = 1;
         return true;
     }
@@ -1101,7 +1010,7 @@ static int _handle_input_events(
     wm_rect_t *damage
 ) {
     input_event_t events[WM_INPUT_EVENT_BATCH];
-    wm_forward_batch_t forward_batch = {0};
+    wm_forward_batch_t forward_batch = { 0 };
     size_t processed = 0;
 
     for (;;) {
@@ -1140,8 +1049,7 @@ static int _handle_input_events(
                     consumed_mouse = true;
                 }
             } else if (event->type == INPUT_EVENT_MOUSE_BUTTON) {
-                bool handled_button =
-                    _handle_mouse_button(ui, rt, event, damage, &consumed_mouse);
+                bool handled_button = _handle_mouse_button(ui, rt, event, damage, &consumed_mouse);
 
                 if (handled_button) {
                     wm_rect_t cursor = _cursor_rect(rt->mouse_x, rt->mouse_y);
@@ -1194,9 +1102,7 @@ static int _handle_input_events(
             }
 
             if (event->type == INPUT_EVENT_MOUSE_MOVE) {
-                _queue_forward_move(
-                    ui, &forward_batch, (u32)rt->focused_id, event
-                );
+                _queue_forward_move(ui, &forward_batch, (u32)rt->focused_id, event);
                 continue;
             }
 
@@ -1249,9 +1155,9 @@ void wm_loop(
     };
 
     struct pollfd pfds[3] = {
-        {.fd = ui->keyboard_fd, .events = POLLIN, .revents = 0},
-        {.fd = ui->mouse_fd, .events = POLLIN, .revents = 0},
-        {.fd = ui->mgr_fd, .events = POLLIN, .revents = 0},
+        { .fd = ui->keyboard_fd, .events = POLLIN, .revents = 0 },
+        { .fd = ui->mouse_fd, .events = POLLIN, .revents = 0 },
+        { .fd = ui->mgr_fd, .events = POLLIN, .revents = 0 },
     };
 
     wm_rect_t damage = {
@@ -1262,14 +1168,7 @@ void wm_loop(
     };
 
     wm_render_frame(frame_store, fb_info->width, fb_info->height);
-    wm_cursor_draw_kind(
-        frame_store,
-        fb_info->width,
-        fb_info->height,
-        rt.mouse_x,
-        rt.mouse_y,
-        rt.cursor_kind
-    );
+    wm_cursor_draw_kind(frame_store, fb_info->width, fb_info->height, rt.mouse_x, rt.mouse_y, rt.cursor_kind);
     if (_present_damage(fb_fd, fb_info, frame_store, &damage) == 0) {
         memset(&damage, 0, sizeof(damage));
     }
@@ -1299,10 +1198,7 @@ void wm_loop(
             continue;
         }
 
-        if (
-            (pfds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) ||
-            (pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL))
-        ) {
+        if ((pfds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) || (pfds[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
             _reopen_input_fds(ui, pfds);
             continue;
         }
@@ -1315,14 +1211,7 @@ void wm_loop(
 
         if ((pfds[0].revents & POLLIN) || (pfds[1].revents & POLLIN)) {
             bool changed = false;
-            int input_rc = _handle_input_events(
-                ui,
-                &rt,
-                fb_info,
-                exit_requested,
-                &changed,
-                &damage
-            );
+            int input_rc = _handle_input_events(ui, &rt, fb_info, exit_requested, &changed, &damage);
 
             if (input_rc < 0) {
                 continue;
@@ -1355,14 +1244,7 @@ void wm_loop(
         }
 
         wm_render_damage(frame_store, fb_info->width, fb_info->height, &damage);
-        wm_cursor_draw_kind(
-            frame_store,
-            fb_info->width,
-            fb_info->height,
-            rt.mouse_x,
-            rt.mouse_y,
-            cursor_kind
-        );
+        wm_cursor_draw_kind(frame_store, fb_info->width, fb_info->height, rt.mouse_x, rt.mouse_y, cursor_kind);
 
         int present = _present_damage(fb_fd, fb_info, frame_store, &damage);
 

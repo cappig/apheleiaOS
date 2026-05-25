@@ -177,26 +177,29 @@ static const u8 ps2_codes[128] = {
 };
 
 static const u8 ps2_codes_extended[128] = {
-    [0x1c] = KBD_KP_ENTER,
-    [0x1d] = KBD_RIGHT_CTRL,
-    [0x35] = KBD_KP_DIVIDE,
-    [0x38] = KBD_RIGHT_ALT,
-    [0x48] = KBD_UP,
-    [0x49] = KBD_PAGEUP,
-    [0x4b] = KBD_LEFT,
-    [0x4d] = KBD_RIGHT,
-    [0x4f] = KBD_END,
-    [0x50] = KBD_DOWN,
-    [0x51] = KBD_PAGEDOWN,
-    [0x52] = KBD_INSERT,
-    [0x53] = KBD_DELETE,
-    [0x5b] = KBD_LEFT_SUPER,
-    [0x5c] = KBD_RIGHT_SUPER,
+    [0x1c] = KBD_KP_ENTER, [0x1d] = KBD_RIGHT_CTRL, [0x35] = KBD_KP_DIVIDE,   [0x38] = KBD_RIGHT_ALT,
+    [0x48] = KBD_UP,       [0x49] = KBD_PAGEUP,     [0x4b] = KBD_LEFT,        [0x4d] = KBD_RIGHT,
+    [0x4f] = KBD_END,      [0x50] = KBD_DOWN,       [0x51] = KBD_PAGEDOWN,    [0x52] = KBD_INSERT,
+    [0x53] = KBD_DELETE,   [0x5b] = KBD_LEFT_SUPER, [0x5c] = KBD_RIGHT_SUPER,
 };
 
-static bool has_port1 = false;
-static bool has_port2 = false;
-static bool ps2_driver_loaded = false;
+typedef struct {
+    bool has_port1;
+    bool has_port2;
+    bool loaded;
+
+    u8 kbd_index;
+    bool kbd_extended;
+
+    u8 mouse_index;
+    u8 mouse_byte;
+    u8 mouse_packet[4];
+    u8 mouse_packet_size;
+} ps2_state_t;
+
+static ps2_state_t ps2 = {
+    .mouse_packet_size = 3,
+};
 
 const driver_desc_t ps2_driver_desc = {
     .name = "ps2",
@@ -338,11 +341,7 @@ static bool _mouse_set_sample_rate(u8 rate) {
 }
 
 static bool _mouse_enable_wheel(void) {
-    if (
-        !_mouse_set_sample_rate(200) ||
-        !_mouse_set_sample_rate(100) ||
-        !_mouse_set_sample_rate(80)
-    ) {
+    if (!_mouse_set_sample_rate(200) || !_mouse_set_sample_rate(100) || !_mouse_set_sample_rate(80)) {
         return false;
     }
 
@@ -397,7 +396,7 @@ static bool _controller_init(void) {
         u8 resp = 0;
 
         if (_read_data(&resp)) {
-            has_port1 = (resp == PS2_TEST_OK);
+            ps2.has_port1 = (resp == PS2_TEST_OK);
         }
     }
 
@@ -405,26 +404,26 @@ static bool _controller_init(void) {
         u8 resp = 0;
 
         if (_read_data(&resp)) {
-            has_port2 = (resp == PS2_TEST_OK);
+            ps2.has_port2 = (resp == PS2_TEST_OK);
         }
     }
 
-    if (has_port1) {
+    if (ps2.has_port1) {
         _write_cmd(PS2_COM_ENABLE_PORT1);
     }
 
-    if (has_port2) {
+    if (ps2.has_port2) {
         _write_cmd(PS2_COM_ENABLE_PORT2);
     }
 
-    if (has_port1) {
+    if (ps2.has_port1) {
         config |= PS2_CON_PORT1_IRQ;
         config &= ~PS2_CON_PORT1_CLOCK;
     } else {
         config |= PS2_CON_PORT1_CLOCK;
     }
 
-    if (has_port2) {
+    if (ps2.has_port2) {
         config |= PS2_CON_PORT2_IRQ;
         config &= ~PS2_CON_PORT2_CLOCK;
     } else {
@@ -442,14 +441,11 @@ static bool _controller_init(void) {
     return true;
 }
 
-static u8 kbd_index = 0;
-static bool kbd_extended = false;
-
 static void _kbd_irq(UNUSED int_state_t *s) {
     u8 scancode = inb(PS2_REG_DATA);
 
     if (scancode == PS2_EXTENDED) {
-        kbd_extended = true;
+        ps2.kbd_extended = true;
         goto done;
     }
 
@@ -461,26 +457,20 @@ static void _kbd_irq(UNUSED int_state_t *s) {
     }
 
     key_event event = {
-        .source = kbd_index,
+        .source = ps2.kbd_index,
         .type = !released ? KEY_ACTION : 0,
-        .code =
-            kbd_extended ? ps2_codes_extended[scancode] : ps2_codes[scancode],
+        .code = ps2.kbd_extended ? ps2_codes_extended[scancode] : ps2_codes[scancode],
     };
 
     keyboard_handle_key(event);
 
-    if (kbd_extended) {
-        kbd_extended = false;
+    if (ps2.kbd_extended) {
+        ps2.kbd_extended = false;
     }
 
 done:
     irq_ack(IRQ_PS2_KEYBOARD);
 }
-
-static u8 mouse_index = 0;
-static u8 mouse_byte = 0;
-static u8 mouse_packet[4];
-static u8 mouse_packet_size = 3;
 
 static void _mouse_irq(UNUSED int_state_t *s) {
     u8 status = inb(PS2_REG_STATUS);
@@ -490,23 +480,23 @@ static void _mouse_irq(UNUSED int_state_t *s) {
         goto done;
     }
 
-    if (!mouse_byte && !(packet & 0x08)) {
+    if (!ps2.mouse_byte && !(packet & 0x08)) {
         goto done;
     }
 
-    mouse_packet[mouse_byte++] = packet;
+    ps2.mouse_packet[ps2.mouse_byte++] = packet;
 
-    if (mouse_byte == mouse_packet_size) {
-        mouse_byte = 0;
+    if (ps2.mouse_byte == ps2.mouse_packet_size) {
+        ps2.mouse_byte = 0;
 
-        u8 flags = mouse_packet[0];
+        u8 flags = ps2.mouse_packet[0];
 
         if (flags & (PS2_MOUSE_XOVERFLOW | PS2_MOUSE_YOVERFLOW)) {
             goto done;
         }
 
-        i16 x = mouse_packet[1];
-        i16 y = mouse_packet[2];
+        i16 x = ps2.mouse_packet[1];
+        i16 y = ps2.mouse_packet[2];
 
         if (flags & PS2_MOUSE_XSIGN) {
             x -= 0x100;
@@ -517,8 +507,8 @@ static void _mouse_irq(UNUSED int_state_t *s) {
         }
 
         i16 wheel = 0;
-        if (mouse_packet_size >= 4) {
-            u8 wheel_raw = mouse_packet[3] & 0x0f;
+        if (ps2.mouse_packet_size >= 4) {
+            u8 wheel_raw = ps2.mouse_packet[3] & 0x0f;
             if (wheel_raw & 0x08) {
                 wheel_raw |= 0xf0;
             }
@@ -545,7 +535,7 @@ static void _mouse_irq(UNUSED int_state_t *s) {
             .delta_y = (i16)-y,
             .wheel = wheel,
             .buttons = buttons,
-            .source = mouse_index,
+            .source = ps2.mouse_index,
         };
 
         mouse_handle_event(event);
@@ -561,29 +551,29 @@ static bool ps2_init(void) {
         return false;
     }
 
-    if (!has_port1 && !has_port2) {
+    if (!ps2.has_port1 && !ps2.has_port2) {
         log_debug("no devices detected");
         return true;
     }
 
-    if (has_port1) {
+    if (ps2.has_port1) {
         _kbd_command(PS2_KBD_COM_SET_CODESET);
         _kbd_command(2);
         _kbd_command(PS2_KBD_COM_ENABLE_SCAN);
 
         irq_register(IRQ_PS2_KEYBOARD, _kbd_irq);
 
-        kbd_index = keyboard_register("PS/2 keyboard", NULL);
+        ps2.kbd_index = keyboard_register("PS/2 keyboard", NULL);
     }
 
-    if (has_port2) {
+    if (ps2.has_port2) {
         _mouse_command(PS2_MOUSE_COM_DEFAULT);
-        mouse_packet_size = _mouse_enable_wheel() ? 4 : 3;
+        ps2.mouse_packet_size = _mouse_enable_wheel() ? 4 : 3;
         _mouse_command(PS2_MOUSE_COM_ENABLE_DATA);
 
         irq_register(IRQ_PS2_MOUSE, _mouse_irq);
 
-        mouse_index = mouse_register("PS/2 mouse");
+        ps2.mouse_index = mouse_register("PS/2 mouse");
     }
 
     log_debug("controller ready");
@@ -609,7 +599,7 @@ bool ps2_driver_busy(void) {
 }
 
 driver_err_t ps2_driver_load(void) {
-    if (ps2_driver_loaded) {
+    if (ps2.loaded) {
         return DRIVER_OK;
     }
 
@@ -617,12 +607,12 @@ driver_err_t ps2_driver_load(void) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
-    ps2_driver_loaded = true;
+    ps2.loaded = true;
     return DRIVER_OK;
 }
 
 driver_err_t ps2_driver_unload(void) {
-    if (!ps2_driver_loaded) {
+    if (!ps2.loaded) {
         return DRIVER_OK;
     }
 
@@ -630,12 +620,12 @@ driver_err_t ps2_driver_unload(void) {
     irq_unregister(IRQ_PS2_MOUSE);
     _controller_shutdown();
 
-    has_port1 = false;
-    has_port2 = false;
-    kbd_extended = false;
-    mouse_byte = 0;
-    memset(mouse_packet, 0, sizeof(mouse_packet));
+    ps2.has_port1 = false;
+    ps2.has_port2 = false;
+    ps2.kbd_extended = false;
+    ps2.mouse_byte = 0;
+    memset(ps2.mouse_packet, 0, sizeof(ps2.mouse_packet));
 
-    ps2_driver_loaded = false;
+    ps2.loaded = false;
     return DRIVER_OK;
 }

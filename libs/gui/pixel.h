@@ -71,25 +71,13 @@ static inline bool pixel_is_fast_bgrx8888(
     u8 blue_size
 ) {
     return (
-        bytes_per_pixel == 4 &&
-        red_shift == 16 &&
-        green_shift == 8 &&
-        blue_shift == 0 &&
-        red_size == 8 &&
-        green_size == 8 &&
-        blue_size == 8
+        bytes_per_pixel == 4 && red_shift == 16 && green_shift == 8 && blue_shift == 0 && red_size == 8 &&
+        green_size == 8 && blue_size == 8
     );
 }
 
-static inline u32 pixel_pack_rgb888(
-    u32 color,
-    u8 red_shift,
-    u8 green_shift,
-    u8 blue_shift,
-    u8 red_size,
-    u8 green_size,
-    u8 blue_size
-) {
+static inline u32
+pixel_pack_rgb888(u32 color, u8 red_shift, u8 green_shift, u8 blue_shift, u8 red_size, u8 green_size, u8 blue_size) {
     u8 r8 = (u8)((color >> 16) & 0xffU);
     u8 g8 = (u8)((color >> 8) & 0xffU);
     u8 b8 = (u8)(color & 0xffU);
@@ -114,8 +102,7 @@ static inline u32 pixel_pack_rgb888(
     return out;
 }
 
-static inline void
-pixel_store_packed(void *dst, u8 bytes_per_pixel, u32 packed) {
+static inline void pixel_store_packed(void *dst, u8 bytes_per_pixel, u32 packed) {
     if (!dst)
         return;
 

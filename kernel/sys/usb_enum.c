@@ -1,11 +1,10 @@
-#include "usb_internal.h"
-
 #include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 
 #include "usb_desc.h"
+#include "usb_internal.h"
 #include "usb_stdreq.h"
 
 #define USB_ENUM_CTRL_TIMEOUT_MS 1000
@@ -24,20 +23,9 @@ static u16 _usb_enum_default_ep0_mps(usb_speed_t speed) {
     }
 }
 
-static bool _usb_enum_attempt(
-    const usb_enum_request_t *req,
-    usb_enum_result_t *out
-) {
-    if (
-        !req ||
-        !out ||
-        !req->ops ||
-        !req->ops->port_reset ||
-        !req->ops->device_open ||
-        !req->ops->device_close ||
-        !req->ops->set_address ||
-        !req->ops->control_transfer
-    ) {
+static bool _usb_enum_attempt(const usb_enum_request_t *req, usb_enum_result_t *out) {
+    if (!req || !out || !req->ops || !req->ops->port_reset || !req->ops->device_open || !req->ops->device_close ||
+        !req->ops->set_address || !req->ops->control_transfer) {
         return false;
     }
 
@@ -45,22 +33,14 @@ static bool _usb_enum_attempt(
     const char *fail_while = NULL;
 
     if (!req->ops->port_reset(req->hcd_id, req->port, &speed)) {
-        log_debug(
-            "USB enum hcd=%zu port=%zu failed while resetting port",
-            req->hcd_id,
-            req->port
-        );
+        log_debug("USB enum hcd=%zu port=%zu failed while resetting port", req->hcd_id, req->port);
 
         return false;
     }
 
     void *device_ctx = NULL;
     if (!req->ops->device_open(req->hcd_id, req->port, speed, &device_ctx) || !device_ctx) {
-        log_debug(
-            "USB enum hcd=%zu port=%zu failed while opening device context",
-            req->hcd_id,
-            req->port
-        );
+        log_debug("USB enum hcd=%zu port=%zu failed while opening device context", req->hcd_id, req->port);
 
         return false;
     }
@@ -72,7 +52,7 @@ static bool _usb_enum_attempt(
         .ops = req->ops,
     };
 
-    u8 dev_desc[18] = {0};
+    u8 dev_desc[18] = { 0 };
     size_t actual = 0;
 
     bool got_dev_desc8 = usb_stdreq_get_descriptor(
@@ -116,14 +96,14 @@ static bool _usb_enum_attempt(
         goto fail;
     }
 
-    usb_device_identity_t identity = {0};
+    usb_device_identity_t identity = { 0 };
     identity.device_class = dev_desc[4];
     identity.device_subclass = dev_desc[5];
     identity.device_protocol = dev_desc[6];
     identity.vendor_id = (u16)dev_desc[8] | ((u16)dev_desc[9] << 8);
     identity.product_id = (u16)dev_desc[10] | ((u16)dev_desc[11] << 8);
 
-    u8 cfg_hdr[9] = {0};
+    u8 cfg_hdr[9] = { 0 };
 
     bool got_cfg_head = usb_stdreq_get_descriptor(
         &target,
@@ -153,16 +133,8 @@ static bool _usb_enum_attempt(
         goto fail;
     }
 
-    bool ok = usb_stdreq_get_descriptor(
-        &target,
-        USB_DT_CONFIG,
-        0,
-        0,
-        cfg,
-        cfg_total,
-        USB_ENUM_CTRL_TIMEOUT_MS,
-        &actual
-    );
+    bool
+        ok = usb_stdreq_get_descriptor(&target, USB_DT_CONFIG, 0, 0, cfg, cfg_total, USB_ENUM_CTRL_TIMEOUT_MS, &actual);
 
     if (!ok || actual < cfg_total) {
         fail_while = "reading full configuration descriptor";
@@ -171,7 +143,7 @@ static bool _usb_enum_attempt(
     }
 
     u8 config_value = 0;
-    ok = usb_desc_parse_config_identity(cfg, cfg_total, &identity, &config_value);
+    ok = usb_desc_config_id(cfg, cfg_total, &identity, &config_value);
     free(cfg);
 
     if (!ok || !config_value) {
@@ -194,12 +166,7 @@ fail:
         fail_while = "probing device";
     }
 
-    log_debug(
-        "USB enum hcd=%zu port=%zu failed while %s",
-        req->hcd_id,
-        req->port,
-        fail_while
-    );
+    log_debug("USB enum hcd=%zu port=%zu failed while %s", req->hcd_id, req->port, fail_while);
 
     req->ops->device_close(req->hcd_id, req->port, device_ctx);
 

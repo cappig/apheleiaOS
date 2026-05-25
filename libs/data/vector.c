@@ -105,17 +105,9 @@ bool vec_resize(vector_t *vec, size_t size) {
 
     u8 *base = vec->data;
     if (size > vec->size) {
-        memset(
-            base + (vec->size * vec->elem_size),
-            0,
-            (size - vec->size) * vec->elem_size
-        );
+        memset(base + (vec->size * vec->elem_size), 0, (size - vec->size) * vec->elem_size);
     } else if (size < vec->size) {
-        memset(
-            base + (size * vec->elem_size),
-            0,
-            (vec->size - size) * vec->elem_size
-        );
+        memset(base + (size * vec->elem_size), 0, (vec->size - size) * vec->elem_size);
     }
 
     vec->size = size;

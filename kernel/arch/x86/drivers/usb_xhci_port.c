@@ -1,7 +1,7 @@
-#include "usb_xhci_internal.h"
-
 #include <log/log.h>
 #include <sys/time.h>
+
+#include "usb_xhci_internal.h"
 
 static usb_speed_t _xhci_speed_from_psiv(u32 psiv) {
     switch (psiv) {
@@ -32,13 +32,7 @@ void _xhci_ack_port_change_bits(volatile u8 *op, size_t off, u32 portsc) {
     _write32(op, off, write);
 }
 
-void _xhci_report_port(
-    xhci_controller_t *ctrl,
-    volatile u8 *op,
-    size_t port,
-    bool clear_changes,
-    bool log_connected
-) {
+void _xhci_report_port(xhci_controller_t *ctrl, volatile u8 *op, size_t port, bool clear_changes, bool log_connected) {
     if (!ctrl || !op || !port) {
         return;
     }
@@ -75,12 +69,7 @@ void _xhci_report_port(
     }
 }
 
-size_t _xhci_scan_ports(
-    xhci_controller_t *ctrl,
-    volatile u8 *op,
-    bool clear_changes,
-    bool log_connected
-) {
+size_t _xhci_scan_ports(xhci_controller_t *ctrl, volatile u8 *op, bool clear_changes, bool log_connected) {
     if (!ctrl || !op) {
         return 0;
     }
@@ -135,19 +124,12 @@ bool _xhci_port_reset(xhci_controller_t *ctrl, size_t port, usb_speed_t *out_spe
 
     u32 psiv = (portsc >> XHCI_PORTSC_SPEED_SHIFT) & XHCI_PORTSC_SPEED_MASK;
     bool superspeed = psiv >= 4;
-    u32 write =
-        (portsc & XHCI_PORTSC_PRESERVE_BITS) |
-        (portsc & XHCI_PORTSC_CHANGE_BITS);
+    u32 write = (portsc & XHCI_PORTSC_PRESERVE_BITS) | (portsc & XHCI_PORTSC_CHANGE_BITS);
 
     if (superspeed) {
         if (!(portsc & XHCI_PORTSC_PED)) {
             _write32(op, off, write | XHCI_PORTSC_WPR);
-            (void)_wait_bits32(
-                (volatile u32 *)(op + off),
-                XHCI_PORTSC_WPR,
-                false,
-                250
-            );
+            (void)_wait_bits32((volatile u32 *)(op + off), XHCI_PORTSC_WPR, false, 250);
             delay_ms(20);
         }
     } else {
@@ -155,12 +137,7 @@ bool _xhci_port_reset(xhci_controller_t *ctrl, size_t port, usb_speed_t *out_spe
         delay_ms(60);
 
         _write32(op, off, write);
-        (void)_wait_bits32(
-            (volatile u32 *)(op + off),
-            XHCI_PORTSC_PR,
-            false,
-            250
-        );
+        (void)_wait_bits32((volatile u32 *)(op + off), XHCI_PORTSC_PR, false, 250);
     }
 
     u64 enable_start = arch_timer_ticks();
@@ -231,10 +208,7 @@ void _xhci_enable_port_power(xhci_controller_t *ctrl, volatile u8 *op) {
             continue;
         }
 
-        u32 write =
-            (portsc & XHCI_PORTSC_PRESERVE_BITS) |
-            XHCI_PORTSC_PP |
-            (portsc & XHCI_PORTSC_CHANGE_BITS);
+        u32 write = (portsc & XHCI_PORTSC_PRESERVE_BITS) | XHCI_PORTSC_PP | (portsc & XHCI_PORTSC_CHANGE_BITS);
         _write32(op, off, write);
     }
 }
@@ -269,11 +243,7 @@ void _xhci_log_port_snapshot(xhci_controller_t *ctrl, volatile u8 *op) {
     }
 }
 
-size_t _xhci_wait_for_ports(
-    xhci_controller_t *ctrl,
-    volatile u8 *op,
-    u32 timeout_ms
-) {
+size_t _xhci_wait_for_ports(xhci_controller_t *ctrl, volatile u8 *op, u32 timeout_ms) {
     if (!ctrl || !op) {
         return 0;
     }

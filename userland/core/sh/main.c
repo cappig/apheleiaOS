@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <io.h>
 #include <limits.h>
+#include <poll.h>
 #include <pwd.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -11,7 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <poll.h>
 #include <sys/proc.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -19,10 +19,6 @@
 
 #include "complete.h"
 #include "input.h"
-
-static volatile sig_atomic_t got_sigint = 0;
-static volatile sig_atomic_t got_sigwinch = 0;
-static volatile sig_atomic_t got_sigchld = 0;
 
 #define SH_ENV_MAX       32
 #define SH_ENV_KEY_MAX   32
@@ -67,16 +63,27 @@ typedef struct {
     int exit_status;
 } sh_wait_result_t;
 
-static sh_env_t sh_env[SH_ENV_MAX];
-static size_t sh_env_count = 0;
-static job_t sh_jobs[SH_MAX_JOBS];
-static size_t sh_job_count = 0;
-static int sh_next_job_id = 1;
-static pid_t sh_pgid = 0;
-static int sh_last_status = 0;
-static pid_t sh_last_bg_pid = 0;
-static bool sh_interactive = false;
+typedef struct {
+    volatile sig_atomic_t got_sigint;
+    volatile sig_atomic_t got_sigwinch;
+    volatile sig_atomic_t got_sigchld;
 
+    sh_env_t env[SH_ENV_MAX];
+    size_t env_count;
+
+    job_t jobs[SH_MAX_JOBS];
+    size_t job_count;
+    int next_job_id;
+
+    pid_t pgid;
+    int last_status;
+    pid_t last_bg_pid;
+    bool interactive;
+} sh_state_t;
+
+static sh_state_t sh = {
+    .next_job_id = 1,
+};
 
 static void sh_printf(const char *format, ...) {
     if (!format) {
@@ -95,17 +102,17 @@ static void sh_printf(const char *format, ...) {
 
 static void sigint_handler(int signum) {
     (void)signum;
-    got_sigint = 1;
+    sh.got_sigint = 1;
 }
 
 static void sigwinch_handler(int signum) {
     (void)signum;
-    got_sigwinch = 1;
+    sh.got_sigwinch = 1;
 }
 
 static void sigchld_handler(int signum) {
     (void)signum;
-    got_sigchld = 1;
+    sh.got_sigchld = 1;
 }
 
 static void tty_set_pgrp(pid_t pid) {
@@ -117,9 +124,9 @@ static void tty_set_pgrp(pid_t pid) {
 }
 
 static job_t *job_find_by_id(int id) {
-    for (size_t i = 0; i < sh_job_count; i++) {
-        if (sh_jobs[i].id == id) {
-            return &sh_jobs[i];
+    for (size_t i = 0; i < sh.job_count; i++) {
+        if (sh.jobs[i].id == id) {
+            return &sh.jobs[i];
         }
     }
 
@@ -127,27 +134,27 @@ static job_t *job_find_by_id(int id) {
 }
 
 static void job_remove_index(size_t index) {
-    if (index >= sh_job_count) {
+    if (index >= sh.job_count) {
         return;
     }
 
-    for (size_t i = index; i + 1 < sh_job_count; i++) {
-        sh_jobs[i] = sh_jobs[i + 1];
+    for (size_t i = index; i + 1 < sh.job_count; i++) {
+        sh.jobs[i] = sh.jobs[i + 1];
     }
 
-    memset(&sh_jobs[sh_job_count - 1], 0, sizeof(sh_jobs[sh_job_count - 1]));
-    sh_job_count--;
+    memset(&sh.jobs[sh.job_count - 1], 0, sizeof(sh.jobs[sh.job_count - 1]));
+    sh.job_count--;
 }
 
 static job_t *job_add(pid_t pid, const char *cmd, job_state_t state) {
-    if (sh_job_count >= SH_MAX_JOBS) {
+    if (sh.job_count >= SH_MAX_JOBS) {
         return NULL;
     }
 
-    job_t *job = &sh_jobs[sh_job_count++];
+    job_t *job = &sh.jobs[sh.job_count++];
 
     memset(job, 0, sizeof(*job));
-    job->id = sh_next_job_id++;
+    job->id = sh.next_job_id++;
     job->pid = pid;
     job->state = state;
     snprintf(job->cmd, sizeof(job->cmd), "%s", cmd ? cmd : "");
@@ -196,7 +203,7 @@ static bool pgrp_state(pid_t pgid, bool *stopped_out) {
         char stat_path[80];
         snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
 
-        proc_stat_t stat = {0};
+        proc_stat_t stat = { 0 };
         if (proc_stat_read_path(stat_path, &stat) < 0) {
             continue;
         }
@@ -228,8 +235,8 @@ static bool pgrp_state(pid_t pgid, bool *stopped_out) {
 }
 
 static void reap_jobs(bool report) {
-    for (size_t i = 0; i < sh_job_count;) {
-        job_t *job = &sh_jobs[i];
+    for (size_t i = 0; i < sh.job_count;) {
+        job_t *job = &sh.jobs[i];
         bool stopped = false;
         bool alive = pgrp_state(job->pid, &stopped);
 
@@ -261,8 +268,8 @@ static void reap_jobs_signal(void) {
 static void print_jobs(void) {
     reap_jobs(false);
 
-    for (size_t i = 0; i < sh_job_count; i++) {
-        job_t *job = &sh_jobs[i];
+    for (size_t i = 0; i < sh.job_count; i++) {
+        job_t *job = &sh.jobs[i];
         const char *state = job->state == JOB_STOPPED ? "Stopped" : "Running";
         sh_printf("[%d] %s  %s\n", job->id, state, job->cmd);
     }
@@ -355,16 +362,15 @@ static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
     }
 }
 
-static job_t *
-select_job(int argc, char *const argv[], const char *cmd, size_t *index_out) {
-    if (!sh_job_count) {
+static job_t *select_job(int argc, char *const argv[], const char *cmd, size_t *index_out) {
+    if (!sh.job_count) {
         sh_printf("%s: no jobs\n", cmd);
         return NULL;
     }
 
     job_t *job = NULL;
     if (argc < 2) {
-        job = &sh_jobs[sh_job_count - 1];
+        job = &sh.jobs[sh.job_count - 1];
     } else {
         job = job_find_by_id(parse_job_id(argv[1]));
     }
@@ -375,7 +381,7 @@ select_job(int argc, char *const argv[], const char *cmd, size_t *index_out) {
     }
 
     if (index_out) {
-        *index_out = (size_t)(job - sh_jobs);
+        *index_out = (size_t)(job - sh.jobs);
     }
 
     return job;
@@ -389,7 +395,7 @@ static bool continue_job(job_t *job, size_t index, const char *cmd) {
     if (kill(-job->pid, SIGCONT) < 0) {
         sh_printf("%s: failed to continue job\n", cmd);
 
-        if (index < sh_job_count) {
+        if (index < sh.job_count) {
             job_remove_index(index);
         }
 
@@ -413,11 +419,11 @@ static int fg(int argc, char *const argv[]) {
 
     tty_set_pgrp(job->pid);
     sh_wait_result_t wait_result = wait_foreground_pgrp(job->pid, 0);
-    tty_set_pgrp(sh_pgid);
+    tty_set_pgrp(sh.pgid);
 
     if (wait_result.stopped) {
         job->state = JOB_STOPPED;
-    } else if (index < sh_job_count) {
+    } else if (index < sh.job_count) {
         job_remove_index(index);
     }
 
@@ -443,8 +449,8 @@ static int env_find(const char *key) {
         return -1;
     }
 
-    for (size_t i = 0; i < sh_env_count; i++) {
-        if (!strcmp(sh_env[i].key, key)) {
+    for (size_t i = 0; i < sh.env_count; i++) {
+        if (!strcmp(sh.env[i].key, key)) {
             return (int)i;
         }
     }
@@ -458,7 +464,7 @@ static const char *env_get(const char *key) {
         return "";
     }
 
-    return sh_env[index].value;
+    return sh.env[index].value;
 }
 
 static bool env_set(const char *key, const char *value) {
@@ -470,13 +476,13 @@ static bool env_set(const char *key, const char *value) {
     sh_env_t *entry = NULL;
 
     if (index >= 0) {
-        entry = &sh_env[index];
+        entry = &sh.env[index];
     } else {
-        if (sh_env_count >= SH_ENV_MAX) {
+        if (sh.env_count >= SH_ENV_MAX) {
             return false;
         }
 
-        entry = &sh_env[sh_env_count++];
+        entry = &sh.env[sh.env_count++];
         snprintf(entry->key, sizeof(entry->key), "%s", key);
     }
 
@@ -494,12 +500,12 @@ static void env_unset(const char *key) {
         return;
     }
 
-    for (size_t i = (size_t)index; i + 1 < sh_env_count; i++) {
-        sh_env[i] = sh_env[i + 1];
+    for (size_t i = (size_t)index; i + 1 < sh.env_count; i++) {
+        sh.env[i] = sh.env[i + 1];
     }
 
-    memset(&sh_env[sh_env_count - 1], 0, sizeof(sh_env[sh_env_count - 1]));
-    sh_env_count--;
+    memset(&sh.env[sh.env_count - 1], 0, sizeof(sh.env[sh.env_count - 1]));
+    sh.env_count--;
 
     if (!strcmp(key, "PATH")) {
         complete_set_path(NULL);
@@ -507,8 +513,8 @@ static void env_unset(const char *key) {
 }
 
 static void env_print(void) {
-    for (size_t i = 0; i < sh_env_count; i++) {
-        sh_printf("%s=%s\n", sh_env[i].key, sh_env[i].value);
+    for (size_t i = 0; i < sh.env_count; i++) {
+        sh_printf("%s=%s\n", sh.env[i].key, sh.env[i].value);
     }
 }
 
@@ -598,7 +604,7 @@ static void expand_arg(const char *in, char *out, size_t out_len) {
 
         size_t start = i + 1;
         size_t end = start;
-        char key[SH_ENV_KEY_MAX] = {0};
+        char key[SH_ENV_KEY_MAX] = { 0 };
 
         if (in[start] == '{') {
             start++;
@@ -607,11 +613,7 @@ static void expand_arg(const char *in, char *out, size_t out_len) {
             while (in[end] && in[end] != '}') {
                 end++;
             }
-        } else if (
-            in[start] == '?' ||
-            in[start] == '!' ||
-            in[start] == '$'
-        ) {
+        } else if (in[start] == '?' || in[start] == '!' || in[start] == '$') {
             end = start + 1;
         } else {
             while (isalnum((unsigned char)in[end]) || in[end] == '_') {
@@ -632,21 +634,21 @@ static void expand_arg(const char *in, char *out, size_t out_len) {
         memcpy(key, in + start, key_len);
         key[key_len] = '\0';
 
-        char special[32] = {0};
+        char special[32] = { 0 };
         const char *value = NULL;
 
         if (!strcmp(key, "?")) {
-            snprintf(special, sizeof(special), "%d", sh_last_status);
+            snprintf(special, sizeof(special), "%d", sh.last_status);
             value = special;
         } else if (!strcmp(key, "!")) {
-            if (sh_last_bg_pid > 0) {
-                snprintf(special, sizeof(special), "%ld", (long)sh_last_bg_pid);
+            if (sh.last_bg_pid > 0) {
+                snprintf(special, sizeof(special), "%ld", (long)sh.last_bg_pid);
                 value = special;
             } else {
                 value = "";
             }
         } else if (!strcmp(key, "$")) {
-            snprintf(special, sizeof(special), "%ld", (long)sh_pgid);
+            snprintf(special, sizeof(special), "%ld", (long)sh.pgid);
             value = special;
         } else {
             value = env_get(key);
@@ -677,7 +679,7 @@ typedef struct {
 } sh_cont_state_t;
 
 static sh_cont_state_t continuation_state(const char *line) {
-    sh_cont_state_t state = {0};
+    sh_cont_state_t state = { 0 };
 
     if (!line) {
         return state;
@@ -730,8 +732,8 @@ static int read_line_fd(int fd, char *buf, size_t len, bool interactive) {
     bool cr_seen = false;
 
     while (pos + 1 < len) {
-        if (interactive && got_sigint) {
-            got_sigint = 0;
+        if (interactive && sh.got_sigint) {
+            sh.got_sigint = 0;
             return -1;
         }
 
@@ -780,16 +782,18 @@ static bool is_operator(const char *token) {
         return false;
     }
 
-    return !strcmp(token, "|") || !strcmp(token, "<") || !strcmp(token, ">") ||
-           !strcmp(token, ">>") || !strcmp(token, "&");
+    if (!strcmp(token, "|") || !strcmp(token, "&")) {
+        return true;
+    }
+
+    if (!strcmp(token, "<") || !strcmp(token, ">") || !strcmp(token, ">>")) {
+        return true;
+    }
+
+    return false;
 }
 
-static char *redir_target_or_error(
-    char **tokens,
-    int token_count,
-    int *index_io,
-    const char *error_text
-) {
+static char *redir_target_or_error(char **tokens, int token_count, int *index_io, const char *error_text) {
     if (!tokens || !index_io || !error_text) {
         return NULL;
     }
@@ -804,13 +808,7 @@ static char *redir_target_or_error(
     return tokens[*index_io];
 }
 
-static int tokenize(
-    const char *line,
-    char *storage,
-    size_t storage_len,
-    char **tokens,
-    int max_tokens
-) {
+static int tokenize(const char *line, char *storage, size_t storage_len, char **tokens, int max_tokens) {
     if (!line || !storage || !storage_len || !tokens || max_tokens <= 1) {
         return 0;
     }
@@ -930,21 +928,12 @@ static int parse_pipeline(
     char **tokens,
     int token_cap
 ) {
-    if (
-        !line ||
-        !stages ||
-        !stage_count_out ||
-        !background_out ||
-        !token_store ||
-        !token_store_len ||
-        !tokens ||
-        token_cap <= 1
-    ) {
+    if (!line || !stages || !stage_count_out || !background_out || !token_store || !token_store_len || !tokens ||
+        token_cap <= 1) {
         return -1;
     }
 
-    int token_count =
-        tokenize(line, token_store, token_store_len, tokens, token_cap);
+    int token_count = tokenize(line, token_store, token_store_len, tokens, token_cap);
 
     if (token_count <= 0) {
         return 0;
@@ -978,9 +967,7 @@ static int parse_pipeline(
         }
 
         if (!strcmp(token, "<")) {
-            stages[stage].in_path = redir_target_or_error(
-                tokens, token_count, &i, "sh: invalid input redirection\n"
-            );
+            stages[stage].in_path = redir_target_or_error(tokens, token_count, &i, "sh: invalid input redirection\n");
             if (!stages[stage].in_path) {
                 return -1;
             }
@@ -988,9 +975,7 @@ static int parse_pipeline(
         }
 
         if (!strcmp(token, ">") || !strcmp(token, ">>")) {
-            stages[stage].out_path = redir_target_or_error(
-                tokens, token_count, &i, "sh: invalid output redirection\n"
-            );
+            stages[stage].out_path = redir_target_or_error(tokens, token_count, &i, "sh: invalid output redirection\n");
             if (!stages[stage].out_path) {
                 return -1;
             }
@@ -1021,31 +1006,21 @@ static int parse_pipeline(
     return 1;
 }
 
-static void env_build_exec(
-    char env_data[SH_ENV_MAX][SH_ENV_ENTRY_MAX],
-    char *envp[SH_ENV_MAX + 1]
-) {
-    size_t count = sh_env_count;
+static void env_build_exec(char env_data[SH_ENV_MAX][SH_ENV_ENTRY_MAX], char *envp[SH_ENV_MAX + 1]) {
+    size_t count = sh.env_count;
     if (count > SH_ENV_MAX) {
         count = SH_ENV_MAX;
     }
 
     for (size_t i = 0; i < count; i++) {
-        snprintf(
-            env_data[i],
-            SH_ENV_ENTRY_MAX,
-            "%s=%s",
-            sh_env[i].key,
-            sh_env[i].value
-        );
+        snprintf(env_data[i], SH_ENV_ENTRY_MAX, "%s=%s", sh.env[i].key, sh.env[i].value);
         envp[i] = env_data[i];
     }
 
     envp[count] = NULL;
 }
 
-static void
-exec_script(const char *script, char *const argv[], char *const envp[]) {
+static void exec_script(const char *script, char *const argv[], char *const envp[]) {
     char *sh_args[SH_MAX_ARGS];
     int argc = 0;
 
@@ -1072,21 +1047,18 @@ static bool file_has_elf_magic(const char *path) {
         return false;
     }
 
-    unsigned char magic[4] = {0};
+    unsigned char magic[4] = { 0 };
     ssize_t n = read(fd, magic, sizeof(magic));
     close(fd);
 
-    return n == (ssize_t)sizeof(magic) && magic[0] == 0x7f &&
-           magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+    if (n != (ssize_t)sizeof(magic)) {
+        return false;
+    }
+
+    return magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
 }
 
-static bool build_exec_path(
-    char *out,
-    size_t out_len,
-    const char *dir,
-    size_t dir_len,
-    const char *cmd
-) {
+static bool build_exec_path(char *out, size_t out_len, const char *dir, size_t dir_len, const char *cmd) {
     if (!out || !dir || !cmd || !out_len) {
         errno = EINVAL;
         return false;
@@ -1107,8 +1079,7 @@ static bool build_exec_path(
     return true;
 }
 
-static bool
-exec_in_path(const char *cmd, char *const argv[], char *const envp[]) {
+static bool exec_in_path(const char *cmd, char *const argv[], char *const envp[]) {
     if (!cmd || !cmd[0]) {
         return false;
     }
@@ -1216,20 +1187,7 @@ static bool parse_umask(const char *text, mode_t *out) {
 }
 
 static const char *sh_builtin_names[] = {
-    "help",
-    "echo",
-    "exit",
-    "set",
-    "unset",
-    "env",
-    "cd",
-    "umask",
-    "history",
-    "jobs",
-    "fg",
-    "bg",
-    "where",
-    NULL,
+    "help", "echo", "exit", "set", "unset", "env", "cd", "umask", "history", "jobs", "fg", "bg", "where", NULL,
 };
 
 static bool is_builtin_name(const char *name) {
@@ -1285,10 +1243,7 @@ static int builtin_where(int argc, char *const argv[]) {
                 const char *next = strchr(cursor, ':');
                 size_t len = next ? (size_t)(next - cursor) : strlen(cursor);
 
-                if (
-                    build_exec_path(full, sizeof(full), cursor, len, name) &&
-                    access(full, X_OK) == 0
-                ) {
+                if (build_exec_path(full, sizeof(full), cursor, len, name) && access(full, X_OK) == 0) {
                     sh_printf("%s\n", full);
                     found = true;
                 }
@@ -1310,10 +1265,115 @@ static int builtin_where(int argc, char *const argv[]) {
     return status;
 }
 
-static bool handle_builtin(int argc, char *const argv[], int *status_out) {
-    if (status_out) {
-        *status_out = 0;
+static void set_status(int *status, int value) {
+    if (status) {
+        *status = value;
     }
+}
+
+static void builtin_help(void) {
+    io_write_str(
+        "builtins: help, echo, exit, set, unset, env, cd, umask, "
+        "history, jobs, fg, bg, where\n"
+    );
+}
+
+static void builtin_set(int argc, char *const argv[], int *status) {
+    if (argc == 1) {
+        env_print();
+        return;
+    }
+
+    char *eq = strchr(argv[1], '=');
+    if (eq) {
+        *eq = '\0';
+        if (!env_set(argv[1], eq + 1)) {
+            set_status(status, 1);
+        }
+
+        return;
+    }
+
+    if (argc >= 3) {
+        if (!env_set(argv[1], argv[2])) {
+            set_status(status, 1);
+        }
+
+        return;
+    }
+
+    io_write_str("set: usage: set NAME=VALUE\n");
+    set_status(status, 1);
+}
+
+static void builtin_unset(int argc, char *const argv[], int *status) {
+    if (argc < 2) {
+        io_write_str("unset: usage: unset NAME\n");
+        set_status(status, 1);
+        return;
+    }
+
+    env_unset(argv[1]);
+}
+
+static void builtin_echo(int argc, char *const argv[]) {
+    for (int i = 1; i < argc; i++) {
+        char expanded[SH_EXPAND_MAX] = { 0 };
+
+        expand_arg(argv[i], expanded, sizeof(expanded));
+        io_write_str(expanded);
+
+        if (i + 1 < argc) {
+            io_write_str(" ");
+        }
+    }
+
+    io_write_str("\n");
+}
+
+static void builtin_cd(int argc, char *const argv[], int *status) {
+    const char *target = "/";
+
+    if (argc >= 2 && argv[1] && argv[1][0]) {
+        target = argv[1];
+    }
+
+    if (chdir(target) < 0) {
+        io_write_str("cd: failed\n");
+        set_status(status, 1);
+        return;
+    }
+
+    update_pwd();
+}
+
+static void builtin_umask(int argc, char *const argv[], int *status) {
+    if (argc == 1) {
+        mode_t old = umask(0);
+        umask(old);
+        sh_printf("%03o\n", (unsigned int)(old & 0777));
+        return;
+    }
+
+    if (argc == 2) {
+        mode_t mask = 0;
+
+        if (!parse_umask(argv[1], &mask)) {
+            io_write_str("umask: usage: umask [ooo]\n");
+            set_status(status, 1);
+            return;
+        }
+
+        umask(mask);
+        return;
+    }
+
+    io_write_str("umask: usage: umask [ooo]\n");
+    set_status(status, 1);
+}
+
+static bool handle_builtin(int argc, char *const argv[], int *status) {
+    set_status(status, 0);
 
     if (argc <= 0) {
         return false;
@@ -1324,10 +1384,7 @@ static bool handle_builtin(int argc, char *const argv[], int *status_out) {
     }
 
     if (!strcmp(argv[0], "help")) {
-        io_write_str(
-            "builtins: help, echo, exit, set, unset, env, cd, umask, "
-            "history, jobs, fg, bg, where\n"
-        );
+        builtin_help();
         return true;
     }
 
@@ -1337,109 +1394,27 @@ static bool handle_builtin(int argc, char *const argv[], int *status_out) {
     }
 
     if (!strcmp(argv[0], "set")) {
-        if (argc == 1) {
-            env_print();
-            return true;
-        }
-
-        char *eq = strchr(argv[1], '=');
-        if (eq) {
-            *eq = '\0';
-            if (!env_set(argv[1], eq + 1) && status_out) {
-                *status_out = 1;
-            }
-            return true;
-        }
-
-        if (argc >= 3) {
-            if (!env_set(argv[1], argv[2]) && status_out) {
-                *status_out = 1;
-            }
-            return true;
-        }
-
-        io_write_str("set: usage: set NAME=VALUE\n");
-        if (status_out) {
-            *status_out = 1;
-        }
+        builtin_set(argc, argv, status);
         return true;
     }
 
     if (!strcmp(argv[0], "unset")) {
-        if (argc < 2) {
-            io_write_str("unset: usage: unset NAME\n");
-            if (status_out) {
-                *status_out = 1;
-            }
-            return true;
-        }
-
-        env_unset(argv[1]);
+        builtin_unset(argc, argv, status);
         return true;
     }
 
     if (!strcmp(argv[0], "echo")) {
-        for (int i = 1; i < argc; i++) {
-            char expanded[SH_EXPAND_MAX] = {0};
-
-            expand_arg(argv[i], expanded, sizeof(expanded));
-            io_write_str(expanded);
-
-            if (i + 1 < argc) {
-                io_write_str(" ");
-            }
-        }
-
-        io_write_str("\n");
+        builtin_echo(argc, argv);
         return true;
     }
 
     if (!strcmp(argv[0], "cd")) {
-        const char *target = "/";
-
-        if (argc >= 2 && argv[1] && argv[1][0]) {
-            target = argv[1];
-        }
-
-        if (chdir(target) < 0) {
-            io_write_str("cd: failed\n");
-            if (status_out) {
-                *status_out = 1;
-            }
-            return true;
-        }
-
-        update_pwd();
+        builtin_cd(argc, argv, status);
         return true;
     }
 
     if (!strcmp(argv[0], "umask")) {
-        if (argc == 1) {
-            mode_t old = umask(0);
-            umask(old);
-            sh_printf("%03o\n", (unsigned int)(old & 0777));
-            return true;
-        }
-
-        if (argc == 2) {
-            mode_t mask = 0;
-
-            if (!parse_umask(argv[1], &mask)) {
-                io_write_str("umask: usage: umask [ooo]\n");
-                if (status_out) {
-                    *status_out = 1;
-                }
-                return true;
-            }
-
-            umask(mask);
-            return true;
-        }
-
-        io_write_str("umask: usage: umask [ooo]\n");
-        if (status_out) {
-            *status_out = 1;
-        }
+        builtin_umask(argc, argv, status);
         return true;
     }
 
@@ -1454,29 +1429,17 @@ static bool handle_builtin(int argc, char *const argv[], int *status_out) {
     }
 
     if (!strcmp(argv[0], "fg")) {
-        if (status_out) {
-            *status_out = fg(argc, argv);
-        } else {
-            fg(argc, argv);
-        }
+        set_status(status, fg(argc, argv));
         return true;
     }
 
     if (!strcmp(argv[0], "bg")) {
-        if (status_out) {
-            *status_out = bg(argc, argv);
-        } else {
-            bg(argc, argv);
-        }
+        set_status(status, bg(argc, argv));
         return true;
     }
 
     if (!strcmp(argv[0], "where")) {
-        if (status_out) {
-            *status_out = builtin_where(argc, argv);
-        } else {
-            builtin_where(argc, argv);
-        }
+        set_status(status, builtin_where(argc, argv));
         return true;
     }
 
@@ -1547,13 +1510,7 @@ static void release_start_gate(int gate[2]) {
     gate[1] = -1;
 }
 
-static int redirect_path_to_fd(
-    const char *path,
-    int open_flags,
-    mode_t mode,
-    int target_fd,
-    const char *open_err
-) {
+static int redirect_path_to_fd(const char *path, int open_flags, mode_t mode, int target_fd, const char *open_err) {
     int fd = open(path, open_flags, mode);
     if (fd < 0) {
         io_write_str(open_err);
@@ -1576,13 +1533,7 @@ static int open_redirection(const sh_stage_t *stage) {
     }
 
     if (stage->in_path && stage->in_path[0]) {
-        int input_rc = redirect_path_to_fd(
-            stage->in_path,
-            O_RDONLY,
-            0,
-            STDIN_FILENO,
-            "sh: failed to open input\n"
-        );
+        int input_rc = redirect_path_to_fd(stage->in_path, O_RDONLY, 0, STDIN_FILENO, "sh: failed to open input\n");
         if (input_rc < 0) {
             return -1;
         }
@@ -1597,13 +1548,7 @@ static int open_redirection(const sh_stage_t *stage) {
             flags |= O_TRUNC;
         }
 
-        int redir_rc = redirect_path_to_fd(
-            stage->out_path,
-            flags,
-            0644,
-            STDOUT_FILENO,
-            "sh: failed to open output\n"
-        );
+        int redir_rc = redirect_path_to_fd(stage->out_path, flags, 0644, STDOUT_FILENO, "sh: failed to open output\n");
 
         if (redir_rc < 0) {
             return -1;
@@ -1683,12 +1628,7 @@ static int run_builtin_in_shell(const sh_stage_t *stage, int *status_out) {
     return 0;
 }
 
-static int run_pipeline(
-    sh_stage_t *stages,
-    int stage_count,
-    bool background,
-    const char *cmdline
-) {
+static int run_pipeline(sh_stage_t *stages, int stage_count, bool background, const char *cmdline) {
     int pipes[SH_MAX_STAGES - 1][2];
 
     for (int i = 0; i < SH_MAX_STAGES - 1; i++) {
@@ -1696,8 +1636,8 @@ static int run_pipeline(
         pipes[i][1] = -1;
     }
 
-    int start_gate[2] = {-1, -1};
-    bool gate_child_start = sh_interactive && !background;
+    int start_gate[2] = { -1, -1 };
+    bool gate_child_start = sh.interactive && !background;
     if (gate_child_start && pipe(start_gate) < 0) {
         io_write_str("sh: pipe failed\n");
         return -1;
@@ -1785,8 +1725,8 @@ static int run_pipeline(
 
     if (background) {
         close_start_gate(start_gate);
-        sh_last_bg_pid = pgid;
-        if (sh_interactive) {
+        sh.last_bg_pid = pgid;
+        if (sh.interactive) {
             job_t *job = job_add(pgid, cmdline, JOB_RUNNING);
 
             if (job) {
@@ -1797,15 +1737,15 @@ static int run_pipeline(
         return 0;
     }
 
-    if (sh_interactive) {
+    if (sh.interactive) {
         tty_set_pgrp(pgid);
     }
 
     release_start_gate(start_gate);
 
     sh_wait_result_t wait_result = wait_foreground_pgrp(pgid, last_pid);
-    if (sh_interactive) {
-        tty_set_pgrp(sh_pgid);
+    if (sh.interactive) {
+        tty_set_pgrp(sh.pgid);
     }
 
     if (wait_result.stopped) {
@@ -1831,9 +1771,7 @@ static void expand_stages(
 ) {
     for (int i = 0; i < stage_count; i++) {
         for (int a = 0; a < stages[i].argc; a++) {
-            expand_arg(
-                stages[i].argv[a], expanded[i][a], sizeof(expanded[i][a])
-            );
+            expand_arg(stages[i].argv[a], expanded[i][a], sizeof(expanded[i][a]));
             stages[i].argv[a] = expanded[i][a];
         }
 
@@ -1987,9 +1925,7 @@ static int run_single_command(char *line) {
         return -1;
     }
 
-    expand_stages(
-        stages, stage_count, exp->expanded, exp->in_paths, exp->out_paths
-    );
+    expand_stages(stages, stage_count, exp->expanded, exp->in_paths, exp->out_paths);
 
     bool simple_builtin = stage_count == 1 && !background;
 
@@ -2036,7 +1972,7 @@ static int run_command(char *line) {
     char *clauses[SH_MAX_CLAUSES];
     int clause_count = split_and_clauses(trimmed, clauses, SH_MAX_CLAUSES);
     if (clause_count < 0) {
-        sh_last_status = 1;
+        sh.last_status = 1;
         return 1;
     }
 
@@ -2047,7 +1983,7 @@ static int run_command(char *line) {
         }
 
         status = run_single_command(clauses[i]);
-        sh_last_status = status;
+        sh.last_status = status;
     }
 
     return status;
@@ -2087,12 +2023,12 @@ static int run_script(const char *path) {
 
 int main(int argc, char **argv) {
     char line[SH_LINE_MAX];
-    sh_interactive = argc <= 1;
+    sh.interactive = argc <= 1;
 
-    sh_pgid = getpid();
-    if (sh_interactive) {
+    sh.pgid = getpid();
+    if (sh.interactive) {
         setpgid(0, 0);
-        tty_set_pgrp(sh_pgid);
+        tty_set_pgrp(sh.pgid);
     }
 
     signal(SIGINT, sigint_handler);
@@ -2102,9 +2038,9 @@ int main(int argc, char **argv) {
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
 
-    input_set_sigint_flag(&got_sigint);
-    input_set_sigwinch_flag(&got_sigwinch);
-    input_set_sigchld_flag(&got_sigchld);
+    input_set_sigint_flag(&sh.got_sigint);
+    input_set_sigwinch_flag(&sh.got_sigwinch);
+    input_set_sigchld_flag(&sh.got_sigchld);
     input_set_sigchld_callback(reap_jobs_signal);
 
     env_set("PATH", "/bin");
@@ -2130,7 +2066,7 @@ int main(int argc, char **argv) {
     }
 
     io_write_str("apheleiaOS sh\n");
-    tty_set_pgrp(sh_pgid);
+    tty_set_pgrp(sh.pgid);
 
     for (;;) {
         reap_jobs(true);
@@ -2163,12 +2099,7 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            int read_rc = read_line_interactive(
-                "> ",
-                line + len,
-                sizeof(line) - len,
-                false
-            );
+            int read_rc = read_line_interactive("> ", line + len, sizeof(line) - len, false);
 
             if (read_rc < 0) {
                 io_write_str("\n");

@@ -1,8 +1,8 @@
-#include "internal.h"
 #include <arch/signal.h>
 
-static bool
-ctx_stack_valid(const sched_thread_t *thread, size_t need_bytes) {
+#include "internal.h"
+
+static bool ctx_stack_valid(const sched_thread_t *thread, size_t need_bytes) {
     if (!thread || !thread->context || !thread->stack || !thread->stack_size) {
         return false;
     }
@@ -19,10 +19,7 @@ ctx_stack_valid(const sched_thread_t *thread, size_t need_bytes) {
     return need_bytes <= available;
 }
 
-bool ctx_candidate_valid(
-    const sched_thread_t *thread,
-    const arch_int_state_t *state
-) {
+bool ctx_candidate_valid(const sched_thread_t *thread, const arch_int_state_t *state) {
     if (!thread || !state || !thread->stack || !thread->stack_size) {
         return false;
     }
@@ -37,7 +34,7 @@ bool ctx_candidate_valid(
 
     size_t sregs_off = offsetof(arch_int_state_t, s_regs);
     size_t kernel_frame_need = sregs_off + (3U * sizeof(arch_word_t));
-    
+
     if ((size_t)(stack_end - ctx) < kernel_frame_need) {
         return false;
     }

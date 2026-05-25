@@ -250,15 +250,8 @@ static void push_term_byte(int fd, char ch, void *ctx) {
 }
 
 static void probe_terminal_size(int input_fd) {
-    term_size_t size = {0};
-    (void)term_probe_size(
-        input_fd,
-        STDOUT_FILENO,
-        &size,
-        read_term_byte,
-        push_term_byte,
-        NULL
-    );
+    term_size_t size = { 0 };
+    (void)term_probe_size(input_fd, STDOUT_FILENO, &size, read_term_byte, push_term_byte, NULL);
 }
 
 static int read_key(int input_fd) {
@@ -388,6 +381,124 @@ static int render_page(const doc_t *doc, size_t rows, size_t cols, size_t top_li
     return 0;
 }
 
+static bool open_source(int argc, char **argv, doc_t *doc, int *fd, bool *close_fd) {
+    if (argc > 2) {
+        (void)write_all(STDERR_FILENO, "usage: less [file]\n", 19);
+        return false;
+    }
+
+    *fd = STDIN_FILENO;
+    *close_fd = false;
+
+    if (argc == 2) {
+        doc->name = argv[1];
+        *fd = open(doc->name, O_RDONLY, 0);
+
+        if (*fd < 0) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "less: failed to open %s\n", doc->name);
+            (void)write_all(STDERR_FILENO, msg, strlen(msg));
+            return false;
+        }
+
+        *close_fd = true;
+    }
+
+    return true;
+}
+
+static int pick_input_fd(int src_fd, bool *close_input) {
+    bool stdin_is_tty = isatty(STDIN_FILENO);
+    bool needs_separate_input = src_fd == STDIN_FILENO;
+
+    *close_input = false;
+
+    if (stdin_is_tty && !needs_separate_input) {
+        return STDIN_FILENO;
+    }
+
+    if (isatty(STDERR_FILENO)) {
+        return STDERR_FILENO;
+    }
+
+    if (isatty(STDOUT_FILENO)) {
+        return STDOUT_FILENO;
+    }
+
+    int fd = open("/dev/tty", O_RDONLY, 0);
+    if (fd >= 0) {
+        *close_input = true;
+    }
+
+    return fd;
+}
+
+static int run_pager(const doc_t *doc, int input_fd) {
+    size_t top_line = 0;
+
+    for (;;) {
+        size_t rows = 24;
+        size_t cols = 80;
+        terminal_size(&rows, &cols, input_fd);
+
+        size_t page = rows > 1 ? rows - 1 : 1;
+        size_t max_top = doc->line_count > page ? doc->line_count - page : 0;
+
+        if (top_line > max_top) {
+            top_line = max_top;
+        }
+
+        if (render_page(doc, rows, cols, top_line) < 0) {
+            return 1;
+        }
+
+        int key = read_key(input_fd);
+        if (key == KEY_NONE) {
+            continue;
+        }
+
+        if (key == 'q' || key == 'Q' || key == 3 || key == 27) {
+            return 0;
+        }
+
+        if (key == 'g' || key == KEY_HOME) {
+            top_line = 0;
+            continue;
+        }
+
+        if (key == 'G' || key == KEY_END) {
+            top_line = max_top;
+            continue;
+        }
+
+        if (key == 'j' || key == 'J' || key == '\n' || key == KEY_DOWN) {
+            if (top_line < max_top) {
+                top_line++;
+            }
+
+            continue;
+        }
+
+        if (key == 'k' || key == 'K' || key == KEY_UP) {
+            if (top_line > 0) {
+                top_line--;
+            }
+
+            continue;
+        }
+
+        if (key == ' ' || key == KEY_PAGE_DOWN) {
+            size_t next = top_line + page;
+            top_line = next > max_top ? max_top : next;
+            continue;
+        }
+
+        if (key == 'b' || key == KEY_PAGE_UP) {
+            top_line = top_line > page ? top_line - page : 0;
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     doc_t doc = {
         .data = NULL,
@@ -396,7 +507,7 @@ int main(int argc, char **argv) {
         .line_count = 0,
         .name = "stdin",
     };
-    tty_state_t tty = {.active = false, .fd = -1};
+    tty_state_t tty = { .active = false, .fd = -1 };
 
     int src_fd = STDIN_FILENO;
     int input_fd = STDIN_FILENO;
@@ -404,21 +515,8 @@ int main(int argc, char **argv) {
     bool close_input = false;
     int rc = 0;
 
-    if (argc > 2) {
-        (void)write_all(STDERR_FILENO, "usage: less [file]\n", 19);
+    if (!open_source(argc, argv, &doc, &src_fd, &close_src)) {
         return 1;
-    }
-
-    if (argc == 2) {
-        doc.name = argv[1];
-        src_fd = open(doc.name, O_RDONLY, 0);
-        if (src_fd < 0) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "less: failed to open %s\n", doc.name);
-            (void)write_all(STDERR_FILENO, msg, strlen(msg));
-            return 1;
-        }
-        close_src = true;
     }
 
     if (!read_all_fd(src_fd, &doc.data, &doc.len)) {
@@ -445,24 +543,13 @@ int main(int argc, char **argv) {
         goto out;
     }
 
-    bool stdin_is_tty = isatty(STDIN_FILENO);
-    bool needs_separate_input = src_fd == STDIN_FILENO;
-
-    if (!stdin_is_tty || needs_separate_input) {
-        if (isatty(STDERR_FILENO)) {
-            input_fd = STDERR_FILENO;
-        } else if (isatty(STDOUT_FILENO)) {
-            input_fd = STDOUT_FILENO;
-        } else {
-            input_fd = open("/dev/tty", O_RDONLY, 0);
-            if (input_fd < 0) {
-                if (doc.len) {
-                    (void)write_all(STDOUT_FILENO, doc.data, doc.len);
-                }
-                goto out;
-            }
-            close_input = true;
+    input_fd = pick_input_fd(src_fd, &close_input);
+    if (input_fd < 0) {
+        if (doc.len) {
+            (void)write_all(STDOUT_FILENO, doc.data, doc.len);
         }
+
+        goto out;
     }
 
     if (!tty_enter_raw(&tty, input_fd)) {
@@ -473,64 +560,7 @@ int main(int argc, char **argv) {
     }
 
     probe_terminal_size(input_fd);
-
-    size_t top_line = 0;
-    for (;;) {
-        size_t rows = 24;
-        size_t cols = 80;
-        terminal_size(&rows, &cols, input_fd);
-
-        size_t page = rows > 1 ? rows - 1 : 1;
-        size_t max_top = doc.line_count > page ? doc.line_count - page : 0;
-        if (top_line > max_top) {
-            top_line = max_top;
-        }
-
-        if (render_page(&doc, rows, cols, top_line) < 0) {
-            rc = 1;
-            break;
-        }
-
-        int key = read_key(input_fd);
-        if (key == KEY_NONE) {
-            continue;
-        }
-        if (key == 'q' || key == 'Q' || key == 3 || key == 27) {
-            break;
-        }
-
-        if (key == 'g' || key == KEY_HOME) {
-            top_line = 0;
-            continue;
-        }
-        if (key == 'G' || key == KEY_END) {
-            top_line = max_top;
-            continue;
-        }
-
-        if (key == 'j' || key == 'J' || key == '\n' || key == KEY_DOWN) {
-            if (top_line < max_top) {
-                top_line++;
-            }
-            continue;
-        }
-        if (key == 'k' || key == 'K' || key == KEY_UP) {
-            if (top_line > 0) {
-                top_line--;
-            }
-            continue;
-        }
-
-        if (key == ' ' || key == KEY_PAGE_DOWN) {
-            size_t next = top_line + page;
-            top_line = next > max_top ? max_top : next;
-            continue;
-        }
-        if (key == 'b' || key == KEY_PAGE_UP) {
-            top_line = top_line > page ? top_line - page : 0;
-            continue;
-        }
-    }
+    rc = run_pager(&doc, input_fd);
 
 out:
     tty_leave_raw(&tty);

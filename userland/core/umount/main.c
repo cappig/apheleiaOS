@@ -17,12 +17,7 @@ int main(int argc, char **argv) {
     const char *target = argv[1];
 
     if (umount(target, 0) < 0) {
-        fprintf(
-            stderr,
-            "umount: failed to unmount '%s': %s\n",
-            target,
-            strerror(errno)
-        );
+        fprintf(stderr, "umount: failed to unmount '%s': %s\n", target, strerror(errno));
         return 1;
     }
 

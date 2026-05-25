@@ -30,12 +30,7 @@ ssize_t kv_read_fd(int fd, char *out, size_t out_len) {
     return (ssize_t)off;
 }
 
-bool kv_read_string(
-    const char *text,
-    const char *key,
-    char *out,
-    size_t out_len
-) {
+bool kv_read_string(const char *text, const char *key, char *out, size_t out_len) {
     if (!text || !key || !out || out_len < 2) {
         return false;
     }
@@ -75,7 +70,7 @@ bool kv_read_u64(const char *text, const char *key, unsigned long long *out) {
         return false;
     }
 
-    char value[64] = {0};
+    char value[64] = { 0 };
 
     if (!kv_read_string(text, key, value, sizeof(value))) {
         return false;

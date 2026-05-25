@@ -275,32 +275,11 @@ u64 elf_to_mmap_prot(u32 elf_flags);
 bool elf_parse_header(elf_attributes_t *attribs, elf_header_t *header);
 
 elf_sect_header_t *elf_locate_section(elf_header_t *header, const char *name);
-elf_symbol_t *elf_locate_symbol(
-    elf_symbol_t *symtab,
-    size_t symtab_size,
-    char *strtab,
-    const char *name
-);
+elf_symbol_t *elf_locate_symbol(elf_symbol_t *symtab, size_t symtab_size, char *strtab, const char *name);
 
 bool elf_view_init(elf_view_t *view, const void *blob, size_t blob_size);
-bool elf_view_read_section(
-    const elf_view_t *view,
-    size_t idx,
-    elf_section_view_t *out
-);
-bool elf_view_section_data_ok(
-    const elf_view_t *view,
-    const elf_section_view_t *section
-);
-bool elf_view_find_section(
-    const elf_view_t *view,
-    const char *name,
-    elf_section_view_t *out_section
-);
-bool elf_view_read_symbol(
-    const elf_view_t *view,
-    const u8 *entry,
-    size_t ent_size,
-    elf_symbol_view_t *out
-);
+bool elf_view_read_section(const elf_view_t *view, size_t idx, elf_section_view_t *out);
+bool elf_view_section_data_ok(const elf_view_t *view, const elf_section_view_t *section);
+bool elf_view_find_section(const elf_view_t *view, const char *name, elf_section_view_t *out_section);
+bool elf_view_read_symbol(const elf_view_t *view, const u8 *entry, size_t ent_size, elf_symbol_view_t *out);
 size_t elf_view_min_symbol_size(const elf_view_t *view);

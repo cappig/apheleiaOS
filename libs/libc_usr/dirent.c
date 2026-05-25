@@ -1,5 +1,5 @@
-#include <arch/sys.h>
 #include <apheleia/syscall.h>
+#include <arch/sys.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -26,9 +26,7 @@ static ssize_t _getdents_raw(int fd, struct dirent *out, size_t len) {
         return -1;
     }
 
-    return (ssize_t)__SYSCALL_ERRNO(
-        syscall3(SYS_GETDENTS, (uintptr_t)fd, (uintptr_t)out, (uintptr_t)len)
-    );
+    return (ssize_t)__SYSCALL_ERRNO(syscall3(SYS_GETDENTS, (uintptr_t)fd, (uintptr_t)out, (uintptr_t)len));
 }
 
 #ifdef _APHELEIA_SOURCE
@@ -68,11 +66,7 @@ struct dirent *readdir(DIR *dirp) {
     }
 
     if (dirp->pos >= dirp->count) {
-        ssize_t ret = _getdents_raw(
-            dirp->fd,
-            dirp->entries,
-            sizeof(dirp->entries)
-        );
+        ssize_t ret = _getdents_raw(dirp->fd, dirp->entries, sizeof(dirp->entries));
 
         if (ret <= 0) {
             return NULL;

@@ -19,13 +19,7 @@ typedef struct {
 
 #if LOCK_DEBUG
 struct sched_thread;
-void lock_debug_trap(
-    const char *site,
-    const void *lock_ptr,
-    const void *caller,
-    size_t owner_cpu,
-    int lock_state
-);
+void lock_debug_trap(const char *site, const void *lock_ptr, const void *caller, size_t owner_cpu, int lock_state);
 #endif
 
 typedef struct {
@@ -41,24 +35,12 @@ void lock_preempt_disable(void);
 void lock_preempt_enable(void);
 
 #if LOCK_DEBUG
-#define SPINLOCK_INIT \
-    { \
-        .state = 0, \
-        .owner_cpu = (size_t)-1 \
-    }
+#define SPINLOCK_INIT { .state = 0, .owner_cpu = (size_t)-1 }
 #else
-#define SPINLOCK_INIT \
-    { \
-        .state = 0 \
-    }
+#define SPINLOCK_INIT { .state = 0 }
 #endif
 
-#define MUTEX_INIT \
-    { \
-        .lock = SPINLOCK_INIT, \
-        .held = 0, \
-        .wait_queue = NULL \
-    }
+#define MUTEX_INIT { .lock = SPINLOCK_INIT, .held = 0, .wait_queue = NULL }
 
 static inline size_t lock_cpu_id(void) {
     cpu_core_t *core = cpu_current();
@@ -99,9 +81,7 @@ static inline bool spin_try_lock(spinlock_t *lock) {
     lock->owner_cpu = cpu_id;
 #endif
 
-    __atomic_fetch_add(
-        &lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED
-    );
+    __atomic_fetch_add(&lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED);
 
     return true;
 }
@@ -117,13 +97,7 @@ static inline void spin_lock(spinlock_t *lock) {
 
 #if LOCK_DEBUG
     if (!panic_in_progress() && lock->state && lock->owner_cpu == cpu_id) {
-        lock_debug_trap(
-            "spin_lock:recursive",
-            lock,
-            __builtin_return_address(0),
-            lock->owner_cpu,
-            lock->state
-        );
+        lock_debug_trap("spin_lock:recursive", lock, __builtin_return_address(0), lock->owner_cpu, lock->state);
     }
 #endif
 
@@ -136,9 +110,7 @@ static inline void spin_lock(spinlock_t *lock) {
 #if LOCK_DEBUG
     lock->owner_cpu = cpu_id;
 #endif
-    __atomic_fetch_add(
-        &lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED
-    );
+    __atomic_fetch_add(&lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED);
 }
 
 static inline void spin_unlock(spinlock_t *lock) {
@@ -150,25 +122,16 @@ static inline void spin_unlock(spinlock_t *lock) {
 
 #if LOCK_DEBUG
     if (!panic_in_progress() && lock->owner_cpu != cpu_id) {
-        lock_debug_trap(
-            "spin_unlock:foreign",
-            lock,
-            __builtin_return_address(0),
-            lock->owner_cpu,
-            lock->state
-        );
+        lock_debug_trap("spin_unlock:foreign", lock, __builtin_return_address(0), lock->owner_cpu, lock->state);
     }
 
     lock->owner_cpu = (size_t)-1;
 #endif
 
-    uint32_t depth_prev =
-        __atomic_fetch_sub(&lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED);
+    uint32_t depth_prev = __atomic_fetch_sub(&lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED);
 
     if (!depth_prev) {
-        __atomic_fetch_add(
-            &lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED
-        );
+        __atomic_fetch_add(&lock_spin_held_depth[cpu_id], 1U, __ATOMIC_RELAXED);
 
 #if LOCK_DEBUG
         if (!panic_in_progress()) {

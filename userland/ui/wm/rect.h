@@ -1,7 +1,8 @@
 #pragma once
 
-#include "wm.h"
 #include <stdlib.h>
+
+#include "wm.h"
 
 static inline bool wm_rect_valid(const wm_rect_t *rect) {
     return rect && rect->width > 0 && rect->height > 0;

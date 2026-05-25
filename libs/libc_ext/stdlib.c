@@ -14,8 +14,7 @@
 #define NONSTRING_ATTR
 #endif
 
-static const char digits[36] NONSTRING_ATTR =
-    "0123456789abcdefghijklmnopqrstuvwxyz";
+static const char digits[36] NONSTRING_ATTR = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 
 size_t ulltoa(unsigned long long value, char *buf, int base) {
@@ -73,7 +72,7 @@ size_t itoa(int value, char *buf, int base) {
 
 
 lldiv_t ulldiv(unsigned long long num, unsigned long den) {
-    lldiv_t ret = {0};
+    lldiv_t ret = { 0 };
 
     ret.rem = num % den;
     ret.quot = num / den;
@@ -98,22 +97,14 @@ unsigned short bswaps(unsigned short num) {
 
 unsigned long bswapl(unsigned long num) {
     uint32_t v = (uint32_t)num;
-    v = ((v & 0x000000ffU) << 24) |
-        ((v & 0x0000ff00U) << 8) |
-        ((v & 0x00ff0000U) >> 8) |
-        ((v & 0xff000000U) >> 24);
+    v = ((v & 0x000000ffU) << 24) | ((v & 0x0000ff00U) << 8) | ((v & 0x00ff0000U) >> 8) | ((v & 0xff000000U) >> 24);
     return (unsigned long)v;
 }
 
 unsigned long long bswapll(unsigned long long num) {
     uint64_t v = (uint64_t)num;
-    v = ((v & 0x00000000000000ffULL) << 56) |
-        ((v & 0x000000000000ff00ULL) << 40) |
-        ((v & 0x0000000000ff0000ULL) << 24) |
-        ((v & 0x00000000ff000000ULL) << 8) |
-        ((v & 0x000000ff00000000ULL) >> 8) |
-        ((v & 0x0000ff0000000000ULL) >> 24) |
-        ((v & 0x00ff000000000000ULL) >> 40) |
-        ((v & 0xff00000000000000ULL) >> 56);
+    v = ((v & 0x00000000000000ffULL) << 56) | ((v & 0x000000000000ff00ULL) << 40) |
+        ((v & 0x0000000000ff0000ULL) << 24) | ((v & 0x00000000ff000000ULL) << 8) | ((v & 0x000000ff00000000ULL) >> 8) |
+        ((v & 0x0000ff0000000000ULL) >> 24) | ((v & 0x00ff000000000000ULL) >> 40) | ((v & 0xff00000000000000ULL) >> 56);
     return (unsigned long long)v;
 }

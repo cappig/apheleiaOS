@@ -8,12 +8,7 @@ bool arch_signal_is_user(const arch_int_state_t *state) {
     return state && !(state->s_regs.sstatus & SSTATUS_SPP);
 }
 
-bool arch_signal_setup_user_stack(
-    sched_thread_t *thread,
-    arch_int_state_t *state,
-    sighandler_t handler,
-    int signum
-) {
+bool arch_signal_setup_user_stack(sched_thread_t *thread, arch_int_state_t *state, sighandler_t handler, int signum) {
     if (!thread || !state || !handler) {
         return false;
     }

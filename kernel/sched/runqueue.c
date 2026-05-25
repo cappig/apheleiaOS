@@ -106,10 +106,7 @@ static bool rq_insert(sched_rq_t *rq, sched_thread_t *thread) {
     return true;
 }
 
-static int rq_find_index(
-    const sched_rq_t *rq,
-    const sched_thread_t *thread
-) {
+static int rq_find_index(const sched_rq_t *rq, const sched_thread_t *thread) {
     if (!rq || !thread || !rq->heap) {
         return -1;
     }
@@ -182,11 +179,8 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
 
     if (!sched_cpu_allowed(thread, cpu_id) || !cores_local[cpu_id].online) {
         size_t allowed_cpu = pick_cpu(thread, cpu_id);
-        bool bad_cpu = (
-            allowed_cpu >= MAX_CORES ||
-            !cores_local[allowed_cpu].online ||
-            !sched_cpu_allowed(thread, allowed_cpu)
-        );
+        bool bad_cpu =
+            (allowed_cpu >= MAX_CORES || !cores_local[allowed_cpu].online || !sched_cpu_allowed(thread, allowed_cpu));
 
         if (bad_cpu) {
             return;
@@ -204,10 +198,7 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
     }
 
     if (thread_cpu(thread) >= 0) {
-        bool running_elsewhere = (
-            thread_is_owned(thread) ||
-            thread_get_state(thread) == THREAD_RUNNING
-        );
+        bool running_elsewhere = (thread_is_owned(thread) || thread_get_state(thread) == THREAD_RUNNING);
 
         if (running_elsewhere) {
             return;
@@ -221,10 +212,8 @@ void rq_enqueue_cpu(sched_thread_t *thread, size_t cpu_id) {
     unsigned long flags = spin_lock_irqsave(&rq->lock);
 
     if (thread->on_rq || thread->rq_index != UINT32_MAX) {
-        bool already_here = (
-            thread->last_cpu == cpu_id && thread->rq_index < rq->nr_running &&
-            rq->heap[thread->rq_index] == thread
-        );
+        bool already_here =
+            (thread->last_cpu == cpu_id && thread->rq_index < rq->nr_running && rq->heap[thread->rq_index] == thread);
 
         if (already_here) {
             spin_unlock_irqrestore(&rq->lock, flags);
@@ -283,11 +272,8 @@ static bool rq_remove_cpu(sched_rq_t *rq, sched_thread_t *thread) {
         return false;
     }
 
-    bool stale_index = (
-        thread->rq_index == UINT32_MAX ||
-        thread->rq_index >= rq->nr_running ||
-        rq->heap[thread->rq_index] != thread
-    );
+    bool stale_index =
+        (thread->rq_index == UINT32_MAX || thread->rq_index >= rq->nr_running || rq->heap[thread->rq_index] != thread);
 
     if (stale_index) {
         int found = rq_find_index(rq, thread);
@@ -401,8 +387,7 @@ sched_thread_t *rq_peek_best(size_t cpu_id) {
     return thread;
 }
 
-sched_thread_t *
-rq_pop_worst_allowed_from_cpu(size_t source_cpu, size_t target_cpu) {
+sched_thread_t *rq_pop_worst_allowed_from_cpu(size_t source_cpu, size_t target_cpu) {
     if (source_cpu >= MAX_CORES || target_cpu >= MAX_CORES) {
         return NULL;
     }
@@ -416,10 +401,7 @@ rq_pop_worst_allowed_from_cpu(size_t source_cpu, size_t target_cpu) {
     for (u32 i = 0; (size_t)i < rq->nr_running; i++) {
         sched_thread_t *thread = rq->heap[i];
 
-        bool wrong_cpu = (
-            !rq_runnable(thread) ||
-            !sched_cpu_allowed(thread, target_cpu)
-        );
+        bool wrong_cpu = (!rq_runnable(thread) || !sched_cpu_allowed(thread, target_cpu));
 
         if (wrong_cpu) {
             continue;
@@ -442,8 +424,7 @@ rq_pop_worst_allowed_from_cpu(size_t source_cpu, size_t target_cpu) {
     return candidate;
 }
 
-sched_thread_t *
-rq_pop_disallowed_from_cpu(size_t source_cpu, size_t disallowed_cpu) {
+sched_thread_t *rq_pop_disallowed_from_cpu(size_t source_cpu, size_t disallowed_cpu) {
     if (source_cpu >= MAX_CORES || disallowed_cpu >= MAX_CORES) {
         return NULL;
     }
@@ -457,10 +438,7 @@ rq_pop_disallowed_from_cpu(size_t source_cpu, size_t disallowed_cpu) {
     for (u32 i = 0; (size_t)i < rq->nr_running; i++) {
         sched_thread_t *thread = rq->heap[i];
 
-        bool still_allowed = (
-            !rq_runnable(thread) ||
-            sched_cpu_allowed(thread, disallowed_cpu)
-        );
+        bool still_allowed = (!rq_runnable(thread) || sched_cpu_allowed(thread, disallowed_cpu));
 
         if (still_allowed) {
             continue;

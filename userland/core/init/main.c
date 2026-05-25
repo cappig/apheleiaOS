@@ -1,8 +1,8 @@
-#include <stdlib.h>
-#include <stdbool.h>
-#include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -80,7 +80,7 @@ static int run_script_sync(const char *path) {
 
     pid_t pid = fork();
     if (!pid) {
-        char *args[] = {"sh", (char *)path, NULL};
+        char *args[] = { "sh", (char *)path, NULL };
         execve("/bin/sh", args, NULL);
         write_str("init: failed to exec startup script\n");
         _exit(127);
@@ -141,7 +141,7 @@ static pid_t spawn_getty(const char *tty_path) {
     pid_t pid = fork();
 
     if (!pid) {
-        char *args[] = {"getty", (char *)tty_path, "/bin/login", NULL};
+        char *args[] = { "getty", (char *)tty_path, "/bin/login", NULL };
 
         if (execve("/bin/getty", args, NULL) < 0) {
             write_str("init: exec failed\n");
@@ -161,11 +161,11 @@ int main(int argc, char **argv) {
     }
 
     getty_slot_t slots[INIT_TTY_COUNT] = {
-        {.tty_path = "/dev/ttyS0", .pid = -1, .optional = true},
-        {.tty_path = "/dev/tty0", .pid = -1, .optional = false},
-        {.tty_path = "/dev/tty1", .pid = -1, .optional = false},
-        {.tty_path = "/dev/tty2", .pid = -1, .optional = false},
-        {.tty_path = "/dev/tty3", .pid = -1, .optional = false},
+        { .tty_path = "/dev/ttyS0", .pid = -1, .optional = true },
+        { .tty_path = "/dev/tty0", .pid = -1, .optional = false },
+        { .tty_path = "/dev/tty1", .pid = -1, .optional = false },
+        { .tty_path = "/dev/tty2", .pid = -1, .optional = false },
+        { .tty_path = "/dev/tty3", .pid = -1, .optional = false },
     };
 
     for (size_t i = 0; i < INIT_TTY_COUNT; i++) {

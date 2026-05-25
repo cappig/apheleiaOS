@@ -3,20 +3,13 @@
 #include <base/utf8.h>
 #include <string.h>
 
-static void term_utf8_emit_codepoint(
-    const term_utf8_callbacks_t *callbacks,
-    void *ctx,
-    u32 codepoint
-) {
+static void term_utf8_emit_codepoint(const term_utf8_callbacks_t *callbacks, void *ctx, u32 codepoint) {
     if (callbacks && callbacks->on_codepoint) {
         callbacks->on_codepoint(ctx, codepoint);
     }
 }
 
-static void term_utf8_emit_invalid(
-    const term_utf8_callbacks_t *callbacks,
-    void *ctx
-) {
+static void term_utf8_emit_invalid(const term_utf8_callbacks_t *callbacks, void *ctx) {
     if (callbacks && callbacks->on_invalid) {
         callbacks->on_invalid(ctx);
     }
@@ -30,11 +23,7 @@ void term_utf8_reset(term_utf8_state_t *state) {
     memset(state, 0, sizeof(*state));
 }
 
-void term_utf8_flush_invalid(
-    term_utf8_state_t *state,
-    const term_utf8_callbacks_t *callbacks,
-    void *ctx
-) {
+void term_utf8_flush_invalid(term_utf8_state_t *state, const term_utf8_callbacks_t *callbacks, void *ctx) {
     if (!state || !state->pending_len) {
         return;
     }
@@ -43,12 +32,7 @@ void term_utf8_flush_invalid(
     term_utf8_emit_invalid(callbacks, ctx);
 }
 
-void term_utf8_feed(
-    term_utf8_state_t *state,
-    u8 byte,
-    const term_utf8_callbacks_t *callbacks,
-    void *ctx
-) {
+void term_utf8_feed(term_utf8_state_t *state, u8 byte, const term_utf8_callbacks_t *callbacks, void *ctx) {
     if (!state) {
         return;
     }

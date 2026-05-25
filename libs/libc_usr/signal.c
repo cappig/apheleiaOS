@@ -1,7 +1,7 @@
-#include <arch/sys.h>
 #include <apheleia/syscall.h>
-#include <fcntl.h>
+#include <arch/sys.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libc_usr/signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,12 +83,7 @@ sighandler_t signal(int signum, sighandler_t handler) {
         return SIG_ERR;
     }
 
-    long ret = syscall3(
-        SYS_SIGNAL,
-        (uintptr_t)signum,
-        (uintptr_t)handler,
-        (uintptr_t)signal_trampoline
-    );
+    long ret = syscall3(SYS_SIGNAL, (uintptr_t)signum, (uintptr_t)handler, (uintptr_t)signal_trampoline);
 
     if (ret < 0) {
         errno = (int)-ret;
@@ -222,10 +217,8 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
         return 0;
     }
 
-    const sigset_t blockable_mask =
-        ((sigset_t)0x7fffffffU) &
-        (sigset_t) ~(1u << (SIGKILL - 1)) &
-        (sigset_t) ~(1u << (SIGSTOP - 1));
+    const sigset_t blockable_mask = ((sigset_t)0x7fffffffU) & (sigset_t) ~(1u << (SIGKILL - 1)) &
+                                    (sigset_t) ~(1u << (SIGSTOP - 1));
 
     sigset_t incoming = *set & blockable_mask;
     sigset_t next = current;
@@ -255,7 +248,7 @@ int sigpending(sigset_t *set) {
         return -1;
     }
 
-    proc_stat_t stat = {0};
+    proc_stat_t stat = { 0 };
     if (proc_stat_read_path("/proc/self/stat", &stat) < 0) {
         return -1;
     }

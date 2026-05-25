@@ -37,11 +37,7 @@ bool sched_has_better_runnable(sched_thread_t *current, size_t cpu_id) {
 }
 
 static size_t sched_push_load(size_t source_cpu, size_t target_cpu, size_t max_moves) {
-    bool bad_target = (
-        source_cpu >= MAX_CORES ||
-        target_cpu >= MAX_CORES ||
-        source_cpu == target_cpu
-    );
+    bool bad_target = (source_cpu >= MAX_CORES || target_cpu >= MAX_CORES || source_cpu == target_cpu);
 
     if (bad_target || !max_moves) {
         return 0;
@@ -49,8 +45,7 @@ static size_t sched_push_load(size_t source_cpu, size_t target_cpu, size_t max_m
 
     size_t moved = 0;
     for (size_t i = 0; i < max_moves; i++) {
-        sched_thread_t *candidate =
-            rq_pop_worst_allowed_from_cpu(source_cpu, target_cpu);
+        sched_thread_t *candidate = rq_pop_worst_allowed_from_cpu(source_cpu, target_cpu);
 
         if (!candidate) {
             break;
@@ -97,11 +92,7 @@ void sched_rebalance_once(size_t cpu_id) {
 
         size_t target_cpu = pick_cpu(stranded, cpu_id);
 
-        bool bad_target = (
-            target_cpu >= MAX_CORES ||
-            target_cpu == cpu_id ||
-            !sched_cpu_allowed(stranded, target_cpu)
-        );
+        bool bad_target = (target_cpu >= MAX_CORES || target_cpu == cpu_id || !sched_cpu_allowed(stranded, target_cpu));
 
         if (bad_target) {
             rq_enqueue_cpu(stranded, cpu_id);

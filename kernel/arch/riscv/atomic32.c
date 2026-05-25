@@ -79,8 +79,7 @@ bool __atomic_compare_exchange_8(
     return false;
 }
 
-long long rv32_sync_fetch_and_add_8(volatile long long *ptr, long long value, ...)
-    __asm__("__sync_fetch_and_add_8");
+long long rv32_sync_fetch_and_add_8(volatile long long *ptr, long long value, ...) __asm__("__sync_fetch_and_add_8");
 
 long long rv32_sync_fetch_and_add_8(volatile long long *ptr, long long value, ...) {
     volatile u64 *p = (volatile u64 *)ptr;
@@ -94,19 +93,12 @@ long long rv32_sync_fetch_and_add_8(volatile long long *ptr, long long value, ..
     return (long long)old;
 }
 
-long long rv32_sync_val_compare_and_swap_8(
-    volatile long long *ptr,
-    long long old_value,
-    long long new_value,
-    ...
-) __asm__("__sync_val_compare_and_swap_8");
+long long
+rv32_sync_val_compare_and_swap_8(volatile long long *ptr, long long old_value, long long new_value, ...) __asm__(
+    "__sync_val_compare_and_swap_8"
+);
 
-long long rv32_sync_val_compare_and_swap_8(
-    volatile long long *ptr,
-    long long old_value,
-    long long new_value,
-    ...
-) {
+long long rv32_sync_val_compare_and_swap_8(volatile long long *ptr, long long old_value, long long new_value, ...) {
     volatile u64 *p = (volatile u64 *)ptr;
 
     unsigned long flags = arch_irq_save();
@@ -120,19 +112,11 @@ long long rv32_sync_val_compare_and_swap_8(
     return (long long)old;
 }
 
-bool rv32_sync_bool_compare_and_swap_8(
-    volatile long long *ptr,
-    long long old_value,
-    long long new_value,
-    ...
-) __asm__("__sync_bool_compare_and_swap_8");
+bool rv32_sync_bool_compare_and_swap_8(volatile long long *ptr, long long old_value, long long new_value, ...) __asm__(
+    "__sync_bool_compare_and_swap_8"
+);
 
-bool rv32_sync_bool_compare_and_swap_8(
-    volatile long long *ptr,
-    long long old_value,
-    long long new_value,
-    ...
-) {
+bool rv32_sync_bool_compare_and_swap_8(volatile long long *ptr, long long old_value, long long new_value, ...) {
     volatile u64 *p = (volatile u64 *)ptr;
 
     unsigned long flags = arch_irq_save();

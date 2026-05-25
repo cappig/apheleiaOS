@@ -1,7 +1,7 @@
 #pragma once
 
-#include <sys/types.h>
 #include <sys/time.h>
+#include <sys/types.h>
 
 #define RUSAGE_SELF     0
 #define RUSAGE_CHILDREN -1

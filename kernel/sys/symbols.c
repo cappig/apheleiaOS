@@ -8,24 +8,25 @@
 #include <sys/types.h>
 #include <sys/vfs.h>
 
-static symbol_table_t sym_table = {0};
-static char *sym_blob = NULL;
+typedef struct {
+    symbol_table_t table;
+    char *blob;
+} symbols_state_t;
 
-static const char *const kernel_elf_paths[] = {
-    "/boot/kernel64.elf",
-    "/boot/kernel32.elf"
-};
+static symbols_state_t symbols = { 0 };
+
+static const char *const kernel_elf_paths[] = { "/boot/kernel64.elf", "/boot/kernel32.elf" };
 
 static void _clear_symbols(void) {
-    if (sym_table.map) {
-        free(sym_table.map);
-        sym_table.map = NULL;
-        sym_table.len = 0;
+    if (symbols.table.map) {
+        free(symbols.table.map);
+        symbols.table.map = NULL;
+        symbols.table.len = 0;
     }
 
-    if (sym_blob) {
-        free(sym_blob);
-        sym_blob = NULL;
+    if (symbols.blob) {
+        free(symbols.blob);
+        symbols.blob = NULL;
     }
 }
 
@@ -71,10 +72,7 @@ static bool _symbol_is_traceable(const elf_symbol_view_t *sym, const char *name)
     return false;
 }
 
-static bool _symbol_section_to_table(
-    const elf_view_t *view,
-    const elf_section_view_t *sym_sec
-) {
+static bool _symbol_section_to_table(const elf_view_t *view, const elf_section_view_t *sym_sec) {
     if (!view || !sym_sec) {
         return false;
     }
@@ -97,12 +95,9 @@ static bool _symbol_section_to_table(
         return false;
     }
 
-    elf_section_view_t str_sec = {0};
-    if (
-        !elf_view_read_section(view, sym_sec->link, &str_sec) ||
-        str_sec.type != SHT_STRTAB ||
-        !elf_view_section_data_ok(view, &str_sec)
-    ) {
+    elf_section_view_t str_sec = { 0 };
+    if (!elf_view_read_section(view, sym_sec->link, &str_sec) || str_sec.type != SHT_STRTAB ||
+        !elf_view_section_data_ok(view, &str_sec)) {
         return false;
     }
 
@@ -117,7 +112,7 @@ static bool _symbol_section_to_table(
             return false;
         }
 
-        elf_symbol_view_t sym = {0};
+        elf_symbol_view_t sym = { 0 };
         if (!elf_view_read_symbol(view, view->blob + off, ent_size, &sym)) {
             return false;
         }
@@ -130,7 +125,7 @@ static bool _symbol_section_to_table(
             continue;
         }
 
-        elf_section_view_t sec = {0};
+        elf_section_view_t sec = { 0 };
         if (!elf_view_read_section(view, sym.shndx, &sec)) {
             return false;
         }
@@ -159,26 +154,26 @@ static bool _symbol_section_to_table(
         return false;
     }
 
-    sym_table.map = malloc(text_count * sizeof(symbol_entry_t));
-    if (!sym_table.map) {
+    symbols.table.map = malloc(text_count * sizeof(symbol_entry_t));
+    if (!symbols.table.map) {
         return false;
     }
 
-    sym_table.len = 0;
+    symbols.table.len = 0;
 
-    for (size_t i = 0; i < sym_count && sym_table.len < text_count; i++) {
+    for (size_t i = 0; i < sym_count && symbols.table.len < text_count; i++) {
         size_t off = sym_sec->offset + i * ent_size;
 
         if (!_range_ok(off, ent_size, view->blob_size)) {
-            free(sym_table.map);
-            sym_table.map = NULL;
+            free(symbols.table.map);
+            symbols.table.map = NULL;
             return false;
         }
 
-        elf_symbol_view_t sym = {0};
+        elf_symbol_view_t sym = { 0 };
         if (!elf_view_read_symbol(view, view->blob + off, ent_size, &sym)) {
-            free(sym_table.map);
-            sym_table.map = NULL;
+            free(symbols.table.map);
+            symbols.table.map = NULL;
             return false;
         }
 
@@ -190,10 +185,10 @@ static bool _symbol_section_to_table(
             continue;
         }
 
-        elf_section_view_t sec = {0};
+        elf_section_view_t sec = { 0 };
         if (!elf_view_read_section(view, sym.shndx, &sec)) {
-            free(sym_table.map);
-            sym_table.map = NULL;
+            free(symbols.table.map);
+            symbols.table.map = NULL;
             return false;
         }
 
@@ -205,7 +200,7 @@ static bool _symbol_section_to_table(
             continue;
         }
 
-        char *name = sym_blob + str_sec.offset + sym.name;
+        char *name = symbols.blob + str_sec.offset + sym.name;
         if (!_name_is_terminated(name, strtab_size - sym.name)) {
             continue;
         }
@@ -214,14 +209,14 @@ static bool _symbol_section_to_table(
             continue;
         }
 
-        sym_table.map[sym_table.len].addr = sym.value;
-        sym_table.map[sym_table.len].name = name;
-        sym_table.len++;
+        symbols.table.map[symbols.table.len].addr = sym.value;
+        symbols.table.map[symbols.table.len].name = name;
+        symbols.table.len++;
     }
 
-    if (!sym_table.len) {
-        free(sym_table.map);
-        sym_table.map = NULL;
+    if (!symbols.table.len) {
+        free(symbols.table.map);
+        symbols.table.map = NULL;
         return false;
     }
 
@@ -266,9 +261,7 @@ void load_symbols(void) {
 
     size_t total_read = 0;
     while (total_read < blob_size) {
-        ssize_t read = vfs_read(
-            file, buffer + total_read, total_read, blob_size - total_read, 0
-        );
+        ssize_t read = vfs_read(file, buffer + total_read, total_read, blob_size - total_read, 0);
 
         if (read <= 0) {
             break;
@@ -283,16 +276,16 @@ void load_symbols(void) {
     }
 
     blob_size = total_read;
-    sym_blob = buffer;
+    symbols.blob = buffer;
 
-    elf_view_t view = {0};
-    if (!elf_view_init(&view, sym_blob, blob_size)) {
+    elf_view_t view = { 0 };
+    if (!elf_view_init(&view, symbols.blob, blob_size)) {
         log_warn("%s is not a valid ELF with section headers", path);
         _clear_symbols();
         return;
     }
 
-    elf_section_view_t sym_sec = {0};
+    elf_section_view_t sym_sec = { 0 };
     bool has_symtab = elf_view_find_section(&view, ".symtab", &sym_sec);
     if (!has_symtab) {
         has_symtab = elf_view_find_section(&view, ".dynsym", &sym_sec);
@@ -310,19 +303,19 @@ void load_symbols(void) {
         return;
     }
 
-    log_debug("loaded %zu symbols from %s", sym_table.len, path);
+    log_debug("loaded %zu symbols from %s", symbols.table.len, path);
 }
 
 symbol_entry_t *resolve_symbol(u64 addr) {
-    if (!sym_table.len || !sym_table.map) {
+    if (!symbols.table.len || !symbols.table.map) {
         return NULL;
     }
 
     ssize_t index = -1;
     u64 best_addr = 0;
 
-    for (size_t i = 0; i < sym_table.len; i++) {
-        symbol_entry_t *sym = &sym_table.map[i];
+    for (size_t i = 0; i < symbols.table.len; i++) {
+        symbol_entry_t *sym = &symbols.table.map[i];
         u64 cur_addr = sym->addr;
 
         if (cur_addr <= addr && cur_addr >= best_addr) {
@@ -335,7 +328,7 @@ symbol_entry_t *resolve_symbol(u64 addr) {
         return NULL;
     }
 
-    return &sym_table.map[index];
+    return &symbols.table.map[index];
 }
 
 const char *resolve_symbol_name(u64 addr) {

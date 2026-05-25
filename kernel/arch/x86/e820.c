@@ -27,7 +27,7 @@ void mmap_remove_entry(e820_map_t *map, size_t index) {
         map->entries[i] = map->entries[i + 1];
     }
 
-    map->entries[map->count] = (e820_entry_t){0};
+    map->entries[map->count] = (e820_entry_t){ 0 };
 }
 
 bool mmap_add_entry(e820_map_t *map, u64 address, u64 size, u32 type) {
@@ -35,7 +35,7 @@ bool mmap_add_entry(e820_map_t *map, u64 address, u64 size, u32 type) {
         return false;
     }
 
-    map->entries[map->count] = (e820_entry_t){address, size, type, 0};
+    map->entries[map->count] = (e820_entry_t){ address, size, type, 0 };
     map->count++;
 
     return true;
@@ -108,13 +108,7 @@ void clean_mmap(e820_map_t *map) {
     }
 }
 
-void *mmap_alloc_inner(
-    e820_map_t *mmap,
-    size_t bytes,
-    u32 type,
-    u32 alignment,
-    u64 top
-) {
+void *mmap_alloc_inner(e820_map_t *mmap, size_t bytes, u32 type, u32 alignment, u64 top) {
     if (!bytes) {
         return NULL;
     }
@@ -226,11 +220,7 @@ char *mem_map_type_string(e820_type_t type) {
 }
 
 
-bool bitmap_alloc_init_mmap(
-    bitmap_allocator_t *alloc,
-    e820_map_t *mmap,
-    size_t block_size
-) {
+bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t block_size) {
     if (mmap->count > E820_MAX) {
         mmap->count = E820_MAX;
     }
@@ -345,8 +335,7 @@ bool bitmap_alloc_init_mmap(
     // The allocator tracks physical addresses, but the bitmap itself must be
     // accessed via a valid virtual mapping
 #if defined(__x86_64__)
-    alloc->bitmap =
-        (bitmap_word_t *)((uintptr_t)bitmap_addr + LINEAR_MAP_OFFSET_64);
+    alloc->bitmap = (bitmap_word_t *)((uintptr_t)bitmap_addr + LINEAR_MAP_OFFSET_64);
 #else
     alloc->bitmap = (bitmap_word_t *)(bitmap_addr);
 #endif
@@ -387,8 +376,7 @@ bool bitmap_alloc_init_mmap(
             continue;
         }
 
-        size_t start_block =
-            bitmap_alloc_to_block(alloc, (void *)(uintptr_t)base);
+        size_t start_block = bitmap_alloc_to_block(alloc, (void *)(uintptr_t)base);
 
         if (current->type == E820_AVAILABLE) {
             alloc->free_blocks += blocks;

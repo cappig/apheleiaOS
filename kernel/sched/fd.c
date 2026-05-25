@@ -1,5 +1,3 @@
-#include "scheduler.h"
-
 #include <errno.h>
 #include <stdlib.h>
 #include <sys/panic.h>
@@ -7,6 +5,8 @@
 #include <sys/pty.h>
 #include <sys/tty.h>
 #include <sys/vfs.h>
+
+#include "scheduler.h"
 
 static void sched_fd_reset(sched_fd_t *fd) {
     if (!fd) {
@@ -85,8 +85,8 @@ sched_pipe_t *sched_pipe_create(size_t capacity) {
     pipe->write_wait_owned = true;
     sched_wait_queue_init(pipe->read_wait_queue);
     sched_wait_queue_init(pipe->write_wait_queue);
-    sched_wait_queue_set_poll_link(pipe->read_wait_queue, true);
-    sched_wait_queue_set_poll_link(pipe->write_wait_queue, true);
+    sched_waitq_set_poll(pipe->read_wait_queue, true);
+    sched_waitq_set_poll(pipe->write_wait_queue, true);
 
     return pipe;
 }
@@ -255,7 +255,7 @@ int sched_fd_alloc(sched_thread_t *thread, const sched_fd_t *fd, int min_fd) {
         thread->fd_used[slot] = true;
         thread->fds[slot] = *fd;
         sched_fd_retain(&thread->fds[slot]);
-        
+
         return slot;
     }
 
@@ -280,11 +280,7 @@ int sched_fd_close(sched_thread_t *thread, int fd) {
     return 0;
 }
 
-int sched_fd_install(
-    sched_thread_t *thread,
-    int target_fd,
-    const sched_fd_t *fd
-) {
+int sched_fd_install(sched_thread_t *thread, int target_fd, const sched_fd_t *fd) {
     if (!thread || !fd || fd->kind == SCHED_FD_NONE) {
         return -EINVAL;
     }

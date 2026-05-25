@@ -58,8 +58,7 @@ static inline void page_set_paddr(page_t *page, page_t addr) {
     *page = addr;
 }
 
-static inline page_t
-construct_vaddr(size_t lvl4, size_t lvl3, size_t lvl2, size_t lvl1) {
+static inline page_t construct_vaddr(size_t lvl4, size_t lvl3, size_t lvl2, size_t lvl1) {
     page_t addr = 0;
     addr |= ((page_t)(lvl1 & 0x1ff) << 12);
     addr |= ((page_t)(lvl2 & 0x1ff) << 21);

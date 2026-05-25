@@ -22,7 +22,7 @@ static void load_info(uname_info_t *info) {
     snprintf(info->version, sizeof(info->version), "unknown");
     snprintf(info->arch, sizeof(info->arch), "unknown");
 
-    char os_text[256] = {0};
+    char os_text[256] = { 0 };
     int fd = open("/dev/os", O_RDONLY, 0);
     if (fd < 0) {
         return;
@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
         opt_s = true;
     }
 
-    uname_info_t info = {0};
+    uname_info_t info = { 0 };
     load_info(&info);
 
     bool first = true;

@@ -16,8 +16,7 @@ static void copy_fd(int fd) {
 
         size_t off = 0;
         while (off < (size_t)read_len) {
-            ssize_t wrote =
-                write(STDOUT_FILENO, buf + off, (size_t)read_len - off);
+            ssize_t wrote = write(STDOUT_FILENO, buf + off, (size_t)read_len - off);
 
             if (wrote <= 0) {
                 return;
@@ -29,7 +28,7 @@ static void copy_fd(int fd) {
 }
 
 static bool is_dir_fd(int fd) {
-    struct stat st = {0};
+    struct stat st = { 0 };
 
     if (fstat(fd, &st) < 0) {
         return false;

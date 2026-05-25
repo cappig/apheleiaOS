@@ -20,14 +20,11 @@ static const char *owl[] = {
 
 static void print_row(const char *left, const char *right) {
     char line[256];
-    snprintf(
-        line, sizeof(line), "%-12s %s\n", left ? left : "", right ? right : ""
-    );
+    snprintf(line, sizeof(line), "%-12s %s\n", left ? left : "", right ? right : "");
     write(STDOUT_FILENO, line, strlen(line));
 }
 
-static void
-resolve_user(char *user, size_t user_len, char *shell, size_t shell_len) {
+static void resolve_user(char *user, size_t user_len, char *shell, size_t shell_len) {
     if (!user || !user_len || !shell || !shell_len) {
         return;
     }
@@ -62,12 +59,7 @@ static void fill_separator(char *out, size_t out_len, size_t width) {
     out[width] = '\0';
 }
 
-static void format_ram_line(
-    unsigned long long used_kib,
-    unsigned long long installed_kib,
-    char *out,
-    size_t out_len
-) {
+static void format_ram_line(unsigned long long used_kib, unsigned long long installed_kib, char *out, size_t out_len) {
     if (!out || !out_len) {
         return;
     }
@@ -81,16 +73,16 @@ static void format_ram_line(
         unsigned long long kib;
         const char *name;
     } units[] = {
-        {1024ULL * 1024ULL, "GiB"},
-        {1024ULL, "MiB"},
-        {1ULL, "KiB"},
+        { 1024ULL * 1024ULL, "GiB" },
+        { 1024ULL, "MiB" },
+        { 1ULL, "KiB" },
     };
 
     char used_buf[32];
     char installed_buf[32];
 
-    const unsigned long long values[] = {used_kib, installed_kib};
-    char *outputs[] = {used_buf, installed_buf};
+    const unsigned long long values[] = { used_kib, installed_kib };
+    char *outputs[] = { used_buf, installed_buf };
 
     for (size_t i = 0; i < 2; i++) {
         unsigned long long value = values[i];
@@ -107,8 +99,7 @@ static void format_ram_line(
 
         unsigned long long whole = value / unit_kib;
         unsigned long long rem = value % unit_kib;
-        unsigned long long tenths =
-            (rem * 10ULL + (unit_kib / 2ULL)) / unit_kib;
+        unsigned long long tenths = (rem * 10ULL + (unit_kib / 2ULL)) / unit_kib;
 
         if (tenths >= 10ULL) {
             whole++;
@@ -142,8 +133,8 @@ static void print_fetch_rows(
 }
 
 int main(void) {
-    char user[64] = {0};
-    char shell[128] = {0};
+    char user[64] = { 0 };
+    char shell[128] = { 0 };
     resolve_user(user, sizeof(user), shell, sizeof(shell));
 
     char user_at[96];
@@ -161,9 +152,9 @@ int main(void) {
     unsigned long long freq_khz = 0;
     unsigned long long ncpu = 1;
 
-    char os_kv[256] = {0};
-    char swap_kv[256] = {0};
-    char cpu_kv[256] = {0};
+    char os_kv[256] = { 0 };
+    char swap_kv[256] = { 0 };
+    char cpu_kv[256] = { 0 };
 
     int os_fd = open("/dev/os", O_RDONLY, 0);
     if (os_fd >= 0 && kv_read_fd(os_fd, os_kv, sizeof(os_kv)) > 0) {
@@ -216,14 +207,7 @@ int main(void) {
             *at = '\0';
         }
 
-        snprintf(
-            cpu_line,
-            sizeof(cpu_line),
-            "cpu: %s (%llu) @ %llu MHz",
-            model_clean,
-            ncpu,
-            freq_khz / 1000
-        );
+        snprintf(cpu_line, sizeof(cpu_line), "cpu: %s (%llu) @ %llu MHz", model_clean, ncpu, freq_khz / 1000);
     } else {
         snprintf(cpu_line, sizeof(cpu_line), "cpu: %s (%llu)", cpu_model, ncpu);
     }

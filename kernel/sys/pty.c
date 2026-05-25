@@ -32,12 +32,18 @@ typedef struct {
     size_t refs;
 } pty_t;
 
-static pty_t ptys[PTY_COUNT] = {0};
-static pty_handle_t pty_master_handles[PTY_COUNT];
-static pty_handle_t pty_slave_handles[PTY_COUNT];
-static pty_handle_t pty_master_default = {.index = 0, .is_master = true};
-static spinlock_t pty_state_lock = SPINLOCK_INIT;
+typedef struct {
+    pty_t ptys[PTY_COUNT];
+    pty_handle_t master_handles[PTY_COUNT];
+    pty_handle_t slave_handles[PTY_COUNT];
+    pty_handle_t default_master;
+    spinlock_t lock;
+} pty_state_t;
 
+static pty_state_t pty_state = {
+    .default_master = { .index = 0, .is_master = true },
+    .lock = SPINLOCK_INIT,
+};
 
 static void _queue_reset(pty_queue_t *queue) {
     if (!queue) {
@@ -77,7 +83,7 @@ static pty_t *_handle_pty(const pty_handle_t *handle) {
         return NULL;
     }
 
-    return &ptys[handle->index];
+    return &pty_state.ptys[handle->index];
 }
 
 static pty_queue_t *_handle_rx_queue(pty_t *pty, const pty_handle_t *handle) {
@@ -114,8 +120,8 @@ static void _queue_init(pty_queue_t *queue) {
 
     sched_wait_queue_init(&queue->read_wait);
     sched_wait_queue_init(&queue->write_wait);
-    sched_wait_queue_set_poll_link(&queue->read_wait, true);
-    sched_wait_queue_set_poll_link(&queue->write_wait, true);
+    sched_waitq_set_poll(&queue->read_wait, true);
+    sched_waitq_set_poll(&queue->write_wait, true);
 
     queue->ready = true;
 }
@@ -146,31 +152,19 @@ static size_t _queue_free_space(pty_queue_t *queue) {
 
 static void _seed_handles(void) {
     for (size_t i = 0; i < PTY_COUNT; i++) {
-        pty_master_handles[i].index = i;
-        pty_master_handles[i].is_master = true;
-        pty_slave_handles[i].index = i;
-        pty_slave_handles[i].is_master = false;
+        pty_state.master_handles[i].index = i;
+        pty_state.master_handles[i].is_master = true;
+        pty_state.slave_handles[i].index = i;
+        pty_state.slave_handles[i].is_master = false;
     }
 }
 
-static ssize_t _dev_pty_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_pty_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
     return pty_read_handle(node ? node->private : NULL, buf, len, flags);
 }
 
-static ssize_t _dev_pty_write(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _dev_pty_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)offset;
     return pty_write_handle(node ? node->private : NULL, buf, len, flags);
 }
@@ -183,8 +177,7 @@ static short _dev_pty_poll(vfs_node_t *node, short events, u32 flags) {
     return pty_poll_handle(node ? node->private : NULL, events, flags);
 }
 
-static sched_wait_queue_t *
-_pty_wait_queue_handle(const pty_handle_t *handle, short events, u32 flags) {
+static sched_wait_queue_t *_pty_wait_queue_handle(const pty_handle_t *handle, short events, u32 flags) {
     (void)flags;
 
     pty_t *pty = _handle_pty(handle);
@@ -206,8 +199,7 @@ _pty_wait_queue_handle(const pty_handle_t *handle, short events, u32 flags) {
     return NULL;
 }
 
-static sched_wait_queue_t *
-_dev_pty_wait_queue(vfs_node_t *node, short events, u32 flags) {
+static sched_wait_queue_t *_dev_pty_wait_queue(vfs_node_t *node, short events, u32 flags) {
     return _pty_wait_queue_handle(node ? node->private : NULL, events, flags);
 }
 
@@ -239,8 +231,7 @@ static u64 _vtime_to_ticks(cc_t vtime) {
     return ticks;
 }
 
-static ssize_t
-_queue_read(pty_queue_t *queue, void *buf, size_t len, bool nonblock) {
+static ssize_t _queue_read(pty_queue_t *queue, void *buf, size_t len, bool nonblock) {
     if (!queue || !buf) {
         return -EINVAL;
     }
@@ -286,25 +277,14 @@ _queue_read(pty_queue_t *queue, void *buf, size_t len, bool nonblock) {
             return -EINTR;
         }
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(
-            &queue->read_wait,
-            wait_seq,
-            0,
-            SCHED_WAIT_INTERRUPTIBLE
-        );
+        sched_wait_result_t wait_result = sched_wait_on_queue(&queue->read_wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;
         }
     }
 }
 
-static ssize_t _queue_read_termios(
-    pty_queue_t *queue,
-    void *buf,
-    size_t len,
-    bool nonblock,
-    const termios_t *tos
-) {
+static ssize_t _queue_read_termios(pty_queue_t *queue, void *buf, size_t len, bool nonblock, const termios_t *tos) {
     if (!queue || !buf || !tos) {
         return -EINVAL;
     }
@@ -403,12 +383,8 @@ static ssize_t _queue_read_termios(
         }
 
         if (use_timeout) {
-            sched_wait_result_t wait_result = sched_wait_on_queue(
-                &queue->read_wait,
-                wait_seq,
-                deadline,
-                SCHED_WAIT_INTERRUPTIBLE
-            );
+            sched_wait_result_t
+                wait_result = sched_wait_on_queue(&queue->read_wait, wait_seq, deadline, SCHED_WAIT_INTERRUPTIBLE);
             if (wait_result == SCHED_WAIT_TIMEOUT) {
                 return (ssize_t)total;
             }
@@ -418,20 +394,14 @@ static ssize_t _queue_read_termios(
             continue;
         }
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(
-            &queue->read_wait,
-            wait_seq,
-            0,
-            SCHED_WAIT_INTERRUPTIBLE
-        );
+        sched_wait_result_t wait_result = sched_wait_on_queue(&queue->read_wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
         if (wait_result == SCHED_WAIT_INTR) {
             return total ? (ssize_t)total : -EINTR;
         }
     }
 }
 
-static ssize_t
-_queue_write(pty_queue_t *queue, const void *buf, size_t len, bool nonblock) {
+static ssize_t _queue_write(pty_queue_t *queue, const void *buf, size_t len, bool nonblock) {
     if (!queue || !buf) {
         return -EINVAL;
     }
@@ -446,11 +416,7 @@ _queue_write(pty_queue_t *queue, const void *buf, size_t len, bool nonblock) {
         u32 wait_seq = sched_wait_seq(&queue->write_wait);
         unsigned long irq_flags = spin_lock_irqsave(&queue->lock);
 
-        size_t wrote_now = ring_io_write(
-            &queue->ring,
-            (const u8 *)buf + total,
-            len - total
-        );
+        size_t wrote_now = ring_io_write(&queue->ring, (const u8 *)buf + total, len - total);
 
         spin_unlock_irqrestore(&queue->lock, irq_flags);
 
@@ -480,12 +446,8 @@ _queue_write(pty_queue_t *queue, const void *buf, size_t len, bool nonblock) {
             return total ? (ssize_t)total : -EINTR;
         }
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(
-            &queue->write_wait,
-            wait_seq,
-            0,
-            SCHED_WAIT_INTERRUPTIBLE
-        );
+        sched_wait_result_t
+            wait_result = sched_wait_on_queue(&queue->write_wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
         if (wait_result == SCHED_WAIT_INTR) {
             return total ? (ssize_t)total : -EINTR;
         }
@@ -497,15 +459,14 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
         return false;
     }
 
-    if (PTY_COUNT && !ptys[0].master_rx.ready) {
+    if (PTY_COUNT && !pty_state.ptys[0].master_rx.ready) {
         log_warn("PTY state not initialized");
         return false;
     }
 
     _seed_handles();
 
-    vfs_interface_t *pty_if =
-        vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
+    vfs_interface_t *pty_if = vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
 
     if (!pty_if) {
         log_warn("PTY failed to allocate /dev interface");
@@ -518,14 +479,7 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
 
     bool ok = true;
 
-    bool ptmx_registered = devfs_register_node(
-        dev_dir,
-        "ptmx",
-        VFS_CHARDEV,
-        0666,
-        pty_if,
-        &pty_master_default
-    );
+    bool ptmx_registered = devfs_register_node(dev_dir, "ptmx", VFS_CHARDEV, 0666, pty_if, &pty_state.default_master);
 
     if (!ptmx_registered) {
         log_warn("failed to create /dev/ptmx");
@@ -538,22 +492,18 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
     for (size_t i = 0; i < PTY_COUNT; i++) {
         pty_name[3] = (char)('0' + i);
         pts_name[3] = (char)('0' + i);
-        pty_handle_t *master_handle = &pty_master_handles[i];
-        pty_handle_t *slave_handle = &pty_slave_handles[i];
+        pty_handle_t *master_handle = &pty_state.master_handles[i];
+        pty_handle_t *slave_handle = &pty_state.slave_handles[i];
 
-        bool master_registered = devfs_register_node(
-            dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, master_handle
-        );
+        bool master_registered = devfs_register_node(dev_dir, pty_name, VFS_CHARDEV, 0666, pty_if, master_handle);
 
         if (!master_registered) {
             log_warn("failed to create /dev/%s", pty_name);
             ok = false;
         }
 
-        bool slave_registered = devfs_register_node(
-            dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, slave_handle
-        );
-        
+        bool slave_registered = devfs_register_node(dev_dir, pts_name, VFS_CHARDEV, 0666, pty_if, slave_handle);
+
         if (!slave_registered) {
             log_warn("failed to create /dev/%s", pts_name);
             ok = false;
@@ -568,12 +518,12 @@ void pty_init(void) {
         log_warn("failed to register devfs init callback");
     }
 
-    if (PTY_COUNT && ptys[0].master_rx.ready) {
+    if (PTY_COUNT && pty_state.ptys[0].master_rx.ready) {
         return;
     }
 
     for (size_t i = 0; i < PTY_COUNT; i++) {
-        pty_t *pty = &ptys[i];
+        pty_t *pty = &pty_state.ptys[i];
 
         _queue_init(&pty->master_rx);
         _queue_init(&pty->slave_rx);
@@ -587,10 +537,10 @@ bool pty_reserve(size_t *index_out) {
         return false;
     }
 
-    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state.lock);
 
     for (size_t i = 0; i < PTY_COUNT; i++) {
-        pty_t *pty = &ptys[i];
+        pty_t *pty = &pty_state.ptys[i];
 
         if (pty->allocated) {
             continue;
@@ -600,11 +550,11 @@ bool pty_reserve(size_t *index_out) {
         pty->allocated = true;
         *index_out = i;
 
-        spin_unlock_irqrestore(&pty_state_lock, irq_flags);
+        spin_unlock_irqrestore(&pty_state.lock, irq_flags);
         return true;
     }
 
-    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
+    spin_unlock_irqrestore(&pty_state.lock, irq_flags);
     return false;
 }
 
@@ -613,15 +563,15 @@ void pty_unreserve(size_t index) {
         return;
     }
 
-    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
-    pty_t *pty = &ptys[index];
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state.lock);
+    pty_t *pty = &pty_state.ptys[index];
 
     if (pty->allocated && !pty->refs) {
         _reset_state(pty);
         pty->allocated = false;
     }
 
-    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
+    spin_unlock_irqrestore(&pty_state.lock, irq_flags);
 }
 
 void pty_hold(size_t index) {
@@ -629,15 +579,15 @@ void pty_hold(size_t index) {
         return;
     }
 
-    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state.lock);
 
-    pty_t *pty = &ptys[index];
+    pty_t *pty = &pty_state.ptys[index];
 
     if (pty->allocated) {
         pty->refs++;
     }
 
-    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
+    spin_unlock_irqrestore(&pty_state.lock, irq_flags);
 }
 
 void pty_put(size_t index) {
@@ -646,8 +596,8 @@ void pty_put(size_t index) {
     }
 
     pid_t hup_pgrp = 0;
-    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
-    pty_t *pty = &ptys[index];
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state.lock);
+    pty_t *pty = &pty_state.ptys[index];
 
     if (pty->allocated && pty->refs) {
         pty->refs--;
@@ -659,7 +609,7 @@ void pty_put(size_t index) {
         }
     }
 
-    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
+    spin_unlock_irqrestore(&pty_state.lock, irq_flags);
 
     if (hup_pgrp > 0) {
         sched_signal_send_pgrp(hup_pgrp, SIGHUP);
@@ -667,8 +617,7 @@ void pty_put(size_t index) {
     }
 }
 
-ssize_t
-pty_read_handle(const pty_handle_t *handle, void *buf, size_t len, u32 flags) {
+ssize_t pty_read_handle(const pty_handle_t *handle, void *buf, size_t len, u32 flags) {
     pty_t *pty = _handle_pty(handle);
     pty_queue_t *rx = _handle_rx_queue(pty, handle);
 
@@ -685,12 +634,7 @@ pty_read_handle(const pty_handle_t *handle, void *buf, size_t len, u32 flags) {
     return _queue_read_termios(rx, buf, len, nonblock, &pty->termios);
 }
 
-ssize_t pty_write_handle(
-    const pty_handle_t *handle,
-    const void *buf,
-    size_t len,
-    u32 flags
-) {
+ssize_t pty_write_handle(const pty_handle_t *handle, const void *buf, size_t len, u32 flags) {
     pty_t *pty = _handle_pty(handle);
     pty_queue_t *tx = _handle_tx_queue(pty, handle);
 
@@ -720,7 +664,7 @@ static int _pty_set_termios(pty_t *pty, u64 request, void *args) {
     }
 
     sched_thread_t *current = sched_current();
-    termios_t tos = {0};
+    termios_t tos = { 0 };
     if (!user_copy_from(current, &tos, args, sizeof(tos))) {
         return -EFAULT;
     }
@@ -750,10 +694,7 @@ static int _pty_get_winsize(pty_t *pty, void *args) {
     return 0;
 }
 
-static bool _pty_winsize_changed(
-    const winsize_t *before,
-    const winsize_t *after
-) {
+static bool _pty_winsize_changed(const winsize_t *before, const winsize_t *after) {
     return before->ws_row != after->ws_row || before->ws_col != after->ws_col;
 }
 
@@ -763,13 +704,13 @@ static int _pty_set_winsize(pty_t *pty, void *args) {
     }
 
     sched_thread_t *current = sched_current();
-    winsize_t winsize = {0};
+    winsize_t winsize = { 0 };
     if (!user_copy_from(current, &winsize, args, sizeof(winsize))) {
         return -EFAULT;
     }
 
     pid_t winch_pgrp = 0;
-    unsigned long irq_flags = spin_lock_irqsave(&pty_state_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&pty_state.lock);
     winsize_t old_ws = pty->winsize;
     pty->winsize = winsize;
 
@@ -777,7 +718,7 @@ static int _pty_set_winsize(pty_t *pty, void *args) {
         winch_pgrp = pty->pgrp;
     }
 
-    spin_unlock_irqrestore(&pty_state_lock, irq_flags);
+    spin_unlock_irqrestore(&pty_state.lock, irq_flags);
 
     if (winch_pgrp > 0) {
         sched_signal_send_pgrp(winch_pgrp, SIGWINCH);
@@ -809,14 +750,14 @@ static int _pty_set_pgrp(pty_t *pty, void *args) {
         return -EPERM;
     }
 
-    unsigned long pty_flags = spin_lock_irqsave(&pty_state_lock);
+    unsigned long pty_flags = spin_lock_irqsave(&pty_state.lock);
     if (!pty->allocated) {
-        spin_unlock_irqrestore(&pty_state_lock, pty_flags);
+        spin_unlock_irqrestore(&pty_state.lock, pty_flags);
         return -EIO;
     }
 
     pty->pgrp = requested;
-    spin_unlock_irqrestore(&pty_state_lock, pty_flags);
+    spin_unlock_irqrestore(&pty_state.lock, pty_flags);
 
     return 0;
 }
@@ -826,9 +767,9 @@ static int _pty_get_pgrp(pty_t *pty, void *args) {
         return -EINVAL;
     }
 
-    unsigned long pty_flags = spin_lock_irqsave(&pty_state_lock);
+    unsigned long pty_flags = spin_lock_irqsave(&pty_state.lock);
     pid_t pgrp = pty->pgrp;
-    spin_unlock_irqrestore(&pty_state_lock, pty_flags);
+    spin_unlock_irqrestore(&pty_state.lock, pty_flags);
 
     sched_thread_t *current = sched_current();
     if (!user_copy_to(current, args, &pgrp, sizeof(pgrp))) {

@@ -4,11 +4,7 @@ pid_t sched_wait(pid_t pid, int *status) {
     return sched_waitpid(pid, status, 0);
 }
 
-static bool waitpid_target_matches(
-    const sched_thread_t *parent,
-    const sched_thread_t *child,
-    pid_t pid
-) {
+static bool waitpid_target_matches(const sched_thread_t *parent, const sched_thread_t *child, pid_t pid) {
     if (!parent || !child || !child->user_thread) {
         return false;
     }
@@ -32,10 +28,7 @@ static bool waitpid_target_matches(
     return child->pgid == -pid;
 }
 
-static sched_thread_t *waitpid_find_zombie(
-    const sched_thread_t *self,
-    pid_t pid
-) {
+static sched_thread_t *waitpid_find_zombie(const sched_thread_t *self, pid_t pid) {
     ll_foreach(node, sched_state.procs.zombie_list) {
         sched_thread_t *thread = node->data;
 
@@ -47,11 +40,7 @@ static sched_thread_t *waitpid_find_zombie(
     return NULL;
 }
 
-static sched_thread_t *waitpid_find_stopped(
-    const sched_thread_t *self,
-    pid_t pid,
-    bool *has_child
-) {
+static sched_thread_t *waitpid_find_stopped(const sched_thread_t *self, pid_t pid, bool *has_child) {
     ll_foreach(node, sched_state.procs.all_list) {
         sched_thread_t *thread = node->data;
 
@@ -63,10 +52,7 @@ static sched_thread_t *waitpid_find_stopped(
             *has_child = true;
         }
 
-        bool stopped_child = (
-            thread_get_state(thread) == THREAD_STOPPED &&
-            !thread->stop_reported
-        );
+        bool stopped_child = (thread_get_state(thread) == THREAD_STOPPED && !thread->stop_reported);
 
         if (stopped_child) {
             return thread;
@@ -189,12 +175,7 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
             continue;
         }
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(
-            &self->wait_queue,
-            wait_seq,
-            0,
-            SCHED_WAIT_INTERRUPTIBLE
-        );
+        sched_wait_result_t wait_result = sched_wait_on_queue(&self->wait_queue, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
 
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;

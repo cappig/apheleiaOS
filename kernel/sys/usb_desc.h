@@ -18,9 +18,4 @@
 #define USB_ENDPOINT_XFER_BULK 0x02
 
 
-bool usb_desc_parse_config_identity(
-    const u8 *cfg,
-    size_t cfg_len,
-    usb_device_identity_t *identity,
-    u8 *out_config_value
-);
+bool usb_desc_config_id(const u8 *cfg, size_t cfg_len, usb_device_identity_t *identity, u8 *out_config_value);

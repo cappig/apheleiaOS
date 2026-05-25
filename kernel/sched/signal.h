@@ -9,12 +9,7 @@ typedef struct sched_thread sched_thread_t;
 void sched_signal_init_thread(sched_thread_t *thread);
 void sched_signal_reset_thread(sched_thread_t *thread);
 
-sighandler_t sched_signal_set_handler(
-    sched_thread_t *thread,
-    int signum,
-    sighandler_t handler,
-    uintptr_t trampoline
-);
+sighandler_t sched_signal_set_handler(sched_thread_t *thread, int signum, sighandler_t handler, uintptr_t trampoline);
 
 int sched_signal_send_thread(sched_thread_t *thread, int signum);
 int sched_signal_send_pid(pid_t pid, int signum);

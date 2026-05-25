@@ -42,13 +42,7 @@ static int _timeval_to_ms(const struct timeval *tv, int *out_ms) {
     return 0;
 }
 
-int select(
-    int nfds,
-    fd_set *readfds,
-    fd_set *writefds,
-    fd_set *exceptfds,
-    struct timeval *timeout
-) {
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout) {
     if (nfds < 0 || nfds > FD_SETSIZE) {
         errno = EINVAL;
         return -1;

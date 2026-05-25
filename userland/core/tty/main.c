@@ -5,9 +5,8 @@
 #include <unistd.h>
 
 static int usage(int status) {
-    const char *text =
-        "usage: tty [-s|--silent]\n"
-        "  -s, --silent  print nothing, only set exit status\n";
+    const char *text = "usage: tty [-s|--silent]\n"
+                       "  -s, --silent  print nothing, only set exit status\n";
     int fd = (status == 0) ? STDOUT_FILENO : STDERR_FILENO;
     write(fd, text, strlen(text));
     return status;
@@ -18,7 +17,7 @@ static const char *tty_path(char *buf, size_t buf_len) {
         return "/dev/tty";
     }
 
-    proc_stat_t stat = {0};
+    proc_stat_t stat = { 0 };
     if (proc_stat_read_path("/proc/self/stat", &stat) < 0) {
         snprintf(buf, buf_len, "/dev/tty");
         return buf;

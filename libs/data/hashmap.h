@@ -22,11 +22,7 @@ u64 hashmap_hash_bytes(const void *data, size_t len);
 u64 hashmap_hash_str(const char *text);
 
 typedef u64 (*hashmap_str_hash_fn)(const char *text, void *private_data);
-typedef bool (*hashmap_str_cmp_fn)(
-    const char *left,
-    const char *right,
-    void *private_data
-);
+typedef bool (*hashmap_str_cmp_fn)(const char *left, const char *right, void *private_data);
 
 typedef struct hashmap_str_entry {
     const char *key;
@@ -55,11 +51,7 @@ bool hashmap_get(const hashmap_t *map, u64 key, u64 *value_out);
 bool hashmap_remove(hashmap_t *map, u64 key);
 
 hashmap_str_t *hashmap_str_create(void);
-hashmap_str_t *hashmap_str_create_with(
-    hashmap_str_hash_fn hash_fn,
-    hashmap_str_cmp_fn cmp_fn,
-    void *private_data
-);
+hashmap_str_t *hashmap_str_create_with(hashmap_str_hash_fn hash_fn, hashmap_str_cmp_fn cmp_fn, void *private_data);
 
 void hashmap_str_destroy(hashmap_str_t *map);
 void hashmap_str_clear(hashmap_str_t *map);

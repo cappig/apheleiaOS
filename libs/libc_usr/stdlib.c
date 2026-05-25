@@ -76,10 +76,7 @@ static int _ensure_owned_env(void) {
 }
 
 static int _env_match(const char *entry, const char *name, size_t name_len) {
-    return
-        entry &&
-        !strncmp(entry, name, name_len) &&
-        entry[name_len] == '=';
+    return entry && !strncmp(entry, name, name_len) && entry[name_len] == '=';
 }
 
 static int _find_env_index(const char *name) {
@@ -231,9 +228,7 @@ static int _append_component(char *out, size_t out_cap, const char *comp) {
     size_t out_len = strlen(out);
     size_t comp_len = strlen(comp);
 
-    if (
-        out_len + (out_len > 1 ? 1 : 0) + comp_len + 1 > out_cap
-    ) {
+    if (out_len + (out_len > 1 ? 1 : 0) + comp_len + 1 > out_cap) {
         errno = ENAMETOOLONG;
         return -1;
     }
@@ -274,7 +269,7 @@ char *realpath(const char *path, char *resolved_path) {
         return NULL;
     }
 
-    char combined[PATH_MAX] = {0};
+    char combined[PATH_MAX] = { 0 };
     if (path[0] == '/') {
         size_t path_len = strlen(path);
         if (path_len >= sizeof(combined)) {
@@ -303,7 +298,7 @@ char *realpath(const char *path, char *resolved_path) {
         memcpy(combined + len, path, path_len + 1);
     }
 
-    char work[PATH_MAX] = {0};
+    char work[PATH_MAX] = { 0 };
     memcpy(work, combined, strlen(combined) + 1);
 
     char normalized[PATH_MAX] = "/";
@@ -328,7 +323,7 @@ char *realpath(const char *path, char *resolved_path) {
         tok = strtok_r(NULL, "/", &save);
     }
 
-    struct stat st = {0};
+    struct stat st = { 0 };
     if (stat(normalized, &st) < 0) {
         return NULL;
     }
@@ -366,7 +361,7 @@ int system(const char *command) {
     }
 
     if (!pid) {
-        char *argv[] = {"/bin/sh", "-c", (char *)command, NULL};
+        char *argv[] = { "/bin/sh", "-c", (char *)command, NULL };
         execve("/bin/sh", argv, environ);
         _Exit(127);
     }

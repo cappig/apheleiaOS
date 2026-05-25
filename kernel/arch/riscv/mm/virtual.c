@@ -1,11 +1,11 @@
 #include "virtual.h"
 
 #include <base/macros.h>
+#include <riscv/asm.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "physical.h"
-#include <riscv/asm.h>
 
 static bool _leaf_pte(page_t entry) {
     return (entry & (PT_READ | PT_WRITE | PT_EXECUTE)) != 0;

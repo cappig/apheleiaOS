@@ -4,20 +4,11 @@
 #include "stddef.h"
 
 
-int vsprintf(
-    char *restrict buffer,
-    const char *restrict format,
-    va_list vlist
-) {
+int vsprintf(char *restrict buffer, const char *restrict format, va_list vlist) {
     return vsnprintf(buffer, (size_t)-1, format, vlist);
 }
 
-int snprintf(
-    char *restrict buffer,
-    size_t max_size,
-    const char *restrict format,
-    ...
-) {
+int snprintf(char *restrict buffer, size_t max_size, const char *restrict format, ...) {
     va_list arguments;
     va_start(arguments, format);
 
@@ -38,20 +29,11 @@ int sprintf(char *restrict buffer, const char *restrict format, ...) {
 }
 
 
-int vsscanf(
-    const char *restrict str,
-    const char *restrict format,
-    va_list vlist
-) {
+int vsscanf(const char *restrict str, const char *restrict format, va_list vlist) {
     return vsnscanf(str, (size_t)-1, format, vlist);
 }
 
-int snscanf(
-    const char *restrict str,
-    size_t max,
-    const char *restrict format,
-    ...
-) {
+int snscanf(const char *restrict str, size_t max, const char *restrict format, ...) {
     va_list arguments;
     va_start(arguments, format);
 

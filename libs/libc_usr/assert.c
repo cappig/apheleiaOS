@@ -10,12 +10,7 @@ void abort(void) {
     _exit(134);
 }
 
-void __assert_fail(
-    const char *expr,
-    const char *file,
-    int line,
-    const char *func
-) {
+void __assert_fail(const char *expr, const char *file, int line, const char *func) {
     fprintf(
         stderr,
         "assertion failed: %s (%s:%d: %s)\n",

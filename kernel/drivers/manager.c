@@ -15,17 +15,21 @@ typedef struct {
     bool loading;
 } driver_entry_t;
 
-static driver_entry_t driver_registry[DRIVER_REGISTRY_MAX];
-static size_t driver_registry_count = 0;
-static bool driver_registry_ready = false;
+typedef struct {
+    driver_entry_t entries[DRIVER_REGISTRY_MAX];
+    size_t count;
+    bool ready;
+} driver_registry_t;
+
+static driver_registry_t drivers = { 0 };
 
 static ssize_t _driver_find(const char *name) {
     if (!name || !name[0]) {
         return -1;
     }
 
-    for (size_t i = 0; i < driver_registry_count; i++) {
-        const driver_desc_t *desc = driver_registry[i].desc;
+    for (size_t i = 0; i < drivers.count; i++) {
+        const driver_desc_t *desc = drivers.entries[i].desc;
         if (!desc || !desc->name) {
             continue;
         }
@@ -53,11 +57,11 @@ static bool _driver_depends_on(const driver_desc_t *desc, const char *name) {
 }
 
 static driver_err_t _driver_load_entry(size_t index) {
-    if (index >= driver_registry_count) {
+    if (index >= drivers.count) {
         return DRIVER_ERR_NOT_FOUND;
     }
 
-    driver_entry_t *entry = &driver_registry[index];
+    driver_entry_t *entry = &drivers.entries[index];
     const driver_desc_t *desc = entry->desc;
 
     if (!desc || !desc->name) {
@@ -104,18 +108,17 @@ static driver_err_t _driver_load_entry(size_t index) {
 }
 
 bool driver_registry_init(void) {
-    if (driver_registry_ready) {
+    if (drivers.ready) {
         return true;
     }
 
-    memset(driver_registry, 0, sizeof(driver_registry));
-    driver_registry_count = 0;
+    memset(&drivers, 0, sizeof(drivers));
 
     if (!register_drivers()) {
         return false;
     }
 
-    driver_registry_ready = true;
+    drivers.ready = true;
     return true;
 }
 
@@ -128,11 +131,11 @@ driver_err_t driver_register(const driver_desc_t *desc) {
         return DRIVER_OK;
     }
 
-    if (driver_registry_count >= DRIVER_REGISTRY_MAX) {
+    if (drivers.count >= DRIVER_REGISTRY_MAX) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
-    driver_registry[driver_registry_count++] = (driver_entry_t){
+    drivers.entries[drivers.count++] = (driver_entry_t){
         .desc = desc,
         .loaded = false,
         .loading = false,
@@ -147,16 +150,16 @@ driver_err_t driver_unregister(const char *name) {
         return DRIVER_ERR_NOT_FOUND;
     }
 
-    if (driver_registry[(size_t)index].loaded) {
+    if (drivers.entries[(size_t)index].loaded) {
         return DRIVER_ERR_BUSY;
     }
 
-    for (size_t i = (size_t)index; i + 1 < driver_registry_count; i++) {
-        driver_registry[i] = driver_registry[i + 1];
+    for (size_t i = (size_t)index; i + 1 < drivers.count; i++) {
+        drivers.entries[i] = drivers.entries[i + 1];
     }
 
-    driver_registry_count--;
-    memset(&driver_registry[driver_registry_count], 0, sizeof(driver_registry[0]));
+    drivers.count--;
+    memset(&drivers.entries[drivers.count], 0, sizeof(drivers.entries[0]));
 
     return DRIVER_OK;
 }
@@ -167,7 +170,7 @@ driver_err_t driver_load(const char *name) {
         return DRIVER_ERR_NOT_FOUND;
     }
 
-    driver_entry_t *entry = &driver_registry[(size_t)index];
+    driver_entry_t *entry = &drivers.entries[(size_t)index];
 
     if (entry->loaded) {
         return DRIVER_ERR_ALREADY_LOADED;
@@ -182,19 +185,19 @@ driver_err_t driver_unload(const char *name) {
         return DRIVER_ERR_NOT_FOUND;
     }
 
-    driver_entry_t *entry = &driver_registry[(size_t)index];
+    driver_entry_t *entry = &drivers.entries[(size_t)index];
     const driver_desc_t *desc = entry->desc;
 
     if (!entry->loaded) {
         return DRIVER_ERR_NOT_LOADED;
     }
 
-    for (size_t i = 0; i < driver_registry_count; i++) {
-        if (i == (size_t)index || !driver_registry[i].loaded) {
+    for (size_t i = 0; i < drivers.count; i++) {
+        if (i == (size_t)index || !drivers.entries[i].loaded) {
             continue;
         }
 
-        if (_driver_depends_on(driver_registry[i].desc, desc->name)) {
+        if (_driver_depends_on(drivers.entries[i].desc, desc->name)) {
             return DRIVER_ERR_DEPENDENCY;
         }
     }
@@ -232,8 +235,8 @@ static const char *_driver_stage_name(driver_stage_t stage) {
 }
 
 void driver_load_stage(driver_stage_t stage) {
-    for (size_t i = 0; i < driver_registry_count; i++) {
-        const driver_desc_t *desc = driver_registry[i].desc;
+    for (size_t i = 0; i < drivers.count; i++) {
+        const driver_desc_t *desc = drivers.entries[i].desc;
         if (!desc || desc->stage != stage) {
             continue;
         }

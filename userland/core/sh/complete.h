@@ -13,10 +13,4 @@ typedef struct {
 
 void complete_set_path(const char *path);
 
-void complete_line(
-    char *buf,
-    size_t cap,
-    size_t *len,
-    size_t *cursor,
-    sh_complete_result_t *result
-);
+void complete_line(char *buf, size_t cap, size_t *len, size_t *cursor, sh_complete_result_t *result);

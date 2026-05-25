@@ -16,9 +16,9 @@
 #include <sys/tty.h>
 #include <sys/tty_input.h>
 
-#define KBD_DEV_UID         0U
-#define KBD_DEV_GID         45U
-#define KBD_DEV_MODE        0644
+#define KBD_DEV_UID  0U
+#define KBD_DEV_GID  45U
+#define KBD_DEV_MODE 0644
 
 typedef struct {
     const char *name;
@@ -31,13 +31,19 @@ typedef struct {
     ascii_keymap *keymap;
 } keyboard_dev_t;
 
-static vector_t *kbds = NULL;
-static ring_buffer_t *buffer = NULL;
-static sched_wait_queue_t kbd_wait = {0};
-static spinlock_t kbd_lock = SPINLOCK_INIT;
+typedef struct {
+    vector_t *devices;
+    ring_buffer_t *buffer;
+    sched_wait_queue_t wait;
+    spinlock_t lock;
+} keyboard_state_t;
+
+static keyboard_state_t keyboard = {
+    .lock = SPINLOCK_INIT,
+};
 
 static keyboard_dev_t *_get(size_t index) {
-    return vec_at_ptr(kbds, index);
+    return vec_at_ptr(keyboard.devices, index);
 }
 
 static bool _screen_captured(void) {
@@ -51,9 +57,9 @@ static bool _screen_captured(void) {
 }
 
 static bool _has_events(void) {
-    unsigned long irq_flags = spin_lock_irqsave(&kbd_lock);
-    bool has_events = buffer && !ring_buffer_is_empty(buffer);
-    spin_unlock_irqrestore(&kbd_lock, irq_flags);
+    unsigned long irq_flags = spin_lock_irqsave(&keyboard.lock);
+    bool has_events = keyboard.buffer && !ring_buffer_is_empty(keyboard.buffer);
+    spin_unlock_irqrestore(&keyboard.lock, irq_flags);
 
     return has_events;
 }
@@ -122,25 +128,19 @@ static bool _push_ansi_key(u8 code) {
     return true;
 }
 
-static ssize_t keyboard_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t keyboard_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)offset;
 
-    if (!buf || !buffer || !len) {
+    if (!buf || !keyboard.buffer || !len) {
         return -EINVAL;
     }
 
     for (;;) {
-        u32 wait_seq = sched_wait_seq(&kbd_wait);
-        unsigned long irq_flags = spin_lock_irqsave(&kbd_lock);
-        size_t popped = ring_buffer_pop_array(buffer, buf, len);
-        spin_unlock_irqrestore(&kbd_lock, irq_flags);
+        u32 wait_seq = sched_wait_seq(&keyboard.wait);
+        unsigned long irq_flags = spin_lock_irqsave(&keyboard.lock);
+        size_t popped = ring_buffer_pop_array(keyboard.buffer, buf, len);
+        spin_unlock_irqrestore(&keyboard.lock, irq_flags);
 
         if (popped) {
             return (ssize_t)popped;
@@ -159,12 +159,7 @@ static ssize_t keyboard_read(
             return -EINTR;
         }
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(
-            &kbd_wait,
-            wait_seq,
-            0,
-            SCHED_WAIT_INTERRUPTIBLE
-        );
+        sched_wait_result_t wait_result = sched_wait_on_queue(&keyboard.wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;
         }
@@ -184,8 +179,7 @@ static short keyboard_poll(vfs_node_t *node, short events, u32 flags) {
     return revents;
 }
 
-static sched_wait_queue_t *
-keyboard_wait_queue(vfs_node_t *node, short events, u32 flags) {
+static sched_wait_queue_t *keyboard_wait_queue(vfs_node_t *node, short events, u32 flags) {
     (void)node;
     (void)flags;
 
@@ -193,11 +187,11 @@ keyboard_wait_queue(vfs_node_t *node, short events, u32 flags) {
         return NULL;
     }
 
-    return &kbd_wait;
+    return &keyboard.wait;
 }
 
 void keyboard_handle_key(key_event event) {
-    if (!kbds || !buffer) {
+    if (!keyboard.devices || !keyboard.buffer) {
         return;
     }
 
@@ -209,10 +203,10 @@ void keyboard_handle_key(key_event event) {
     }
 
     bool action = (event.type & KEY_ACTION) != 0;
-    unsigned long irq_flags = spin_lock_irqsave(&kbd_lock);
-    ring_buffer_push_array(buffer, (u8 *)&event, sizeof(event));
-    spin_unlock_irqrestore(&kbd_lock, irq_flags);
-    sched_wake_one(&kbd_wait);
+    unsigned long irq_flags = spin_lock_irqsave(&keyboard.lock);
+    ring_buffer_push_array(keyboard.buffer, (u8 *)&event, sizeof(event));
+    spin_unlock_irqrestore(&keyboard.lock, irq_flags);
+    sched_wake_one(&keyboard.wait);
 
     _update_modifiers(kbd, action, event.code);
 
@@ -269,7 +263,7 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
         return false;
     }
 
-    if (!kbds || !buffer) {
+    if (!keyboard.devices || !keyboard.buffer) {
         log_warn("keyboard state not initialized");
         return false;
     }
@@ -283,14 +277,7 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
     kbd_if->poll = keyboard_poll;
     kbd_if->wait_queue = keyboard_wait_queue;
 
-    bool registered = devfs_register_node(
-        dev_dir,
-        "keyboard",
-        VFS_CHARDEV,
-        KBD_DEV_MODE,
-        kbd_if,
-        NULL
-    );
+    bool registered = devfs_register_node(dev_dir, "keyboard", VFS_CHARDEV, KBD_DEV_MODE, kbd_if, NULL);
 
     if (!registered) {
         log_warn("failed to create /dev/keyboard");
@@ -311,32 +298,32 @@ bool keyboard_init(void) {
         log_warn("failed to register devfs init callback");
     }
 
-    if (!kbds) {
-        kbds = vec_create(sizeof(keyboard_dev_t *));
+    if (!keyboard.devices) {
+        keyboard.devices = vec_create(sizeof(keyboard_dev_t *));
     }
 
-    if (!kbds) {
+    if (!keyboard.devices) {
         return false;
     }
 
-    if (!buffer) {
-        buffer = ring_buffer_create(KBD_DEV_BUFFER_SIZE);
+    if (!keyboard.buffer) {
+        keyboard.buffer = ring_buffer_create(KBD_DEV_BUFFER_SIZE);
     }
 
-    if (!buffer) {
+    if (!keyboard.buffer) {
         return false;
     }
 
-    if (!kbd_wait.list) {
-        sched_wait_queue_init(&kbd_wait);
-        sched_wait_queue_set_poll_link(&kbd_wait, true);
+    if (!keyboard.wait.list) {
+        sched_wait_queue_init(&keyboard.wait);
+        sched_waitq_set_poll(&keyboard.wait, true);
     }
 
     return true;
 }
 
 u8 keyboard_register(const char *name, ascii_keymap *keymap) {
-    if (!kbds || !buffer) {
+    if (!keyboard.devices || !keyboard.buffer) {
         if (!keyboard_init()) {
             return 0;
         }
@@ -351,12 +338,12 @@ u8 keyboard_register(const char *name, ascii_keymap *keymap) {
     kbd->name = strdup(name);
     kbd->keymap = keymap ? keymap : &us_keymap;
 
-    if (!vec_push(kbds, &kbd)) {
+    if (!vec_push(keyboard.devices, &kbd)) {
         free((void *)kbd->name);
         free(kbd);
         return 0;
     }
 
     log_debug("registered keyboard %s", kbd->name ? kbd->name : "device");
-    return (u8)(kbds->size - 1);
+    return (u8)(keyboard.devices->size - 1);
 }

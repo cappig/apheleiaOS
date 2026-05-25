@@ -1,12 +1,8 @@
-#include "usb_xhci_internal.h"
-
 #include <log/log.h>
 
-bool _xhci_poll_events(
-    xhci_controller_t *ctrl,
-    bool process_port_events,
-    bool force_event_scan
-) {
+#include "usb_xhci_internal.h"
+
+bool _xhci_poll_events(xhci_controller_t *ctrl, bool process_port_events, bool force_event_scan) {
     if (!ctrl || !ctrl->used) {
         return false;
     }
@@ -72,12 +68,7 @@ bool _xhci_poll_events(
     return progressed;
 }
 
-bool _xhci_process_events(
-    xhci_controller_t *ctrl,
-    volatile void *mmio,
-    volatile u8 *op,
-    bool process_port_events
-) {
+bool _xhci_process_events(xhci_controller_t *ctrl, volatile void *mmio, volatile u8 *op, bool process_port_events) {
     if (!ctrl || !mmio || !op || !ctrl->runtime_ready || !ctrl->event_ring_trbs) {
         return false;
     }
@@ -105,12 +96,7 @@ bool _xhci_process_events(
                     cycle ^= 1U;
                     ctrl->event_cycle_sync_pending = false;
 
-                    log_debug(
-                        "xHCI %u:%u.%u event cycle bootstrap resync",
-                        ctrl->bus,
-                        ctrl->slot,
-                        ctrl->func
-                    );
+                    log_debug("xHCI %u:%u.%u event cycle bootstrap resync", ctrl->bus, ctrl->slot, ctrl->func);
                     continue;
                 }
             }
@@ -155,14 +141,8 @@ bool _xhci_process_events(
             bool matched = false;
             unsigned long flags = arch_irq_save();
 
-            if (
-                ctrl->cmd_wait_active &&
-                (
-                    ptr == ctrl->cmd_wait_trb ||
-                    (ptr & ~0x0fULL) == (ctrl->cmd_wait_trb & ~0x0fULL) ||
-                    ptr == 0
-                )
-            ) {
+            if (ctrl->cmd_wait_active &&
+                (ptr == ctrl->cmd_wait_trb || (ptr & ~0x0fULL) == (ctrl->cmd_wait_trb & ~0x0fULL) || ptr == 0)) {
                 ctrl->cmd_wait_cc = cc;
                 ctrl->cmd_wait_slot = slot;
                 ctrl->cmd_wait_done = true;
@@ -205,14 +185,8 @@ bool _xhci_process_events(
             u64 wait_ptr_aligned = wait_ptr & ~0x0fULL;
             u64 ptr_aligned = ptr & ~0x0fULL;
 
-            bool ep_slot_match =
-                ctrl->xfer_wait_active &&
-                slot == ctrl->xfer_wait_slot &&
-                ep == ctrl->xfer_wait_ep;
-            bool ptr_match =
-                ptr == wait_ptr ||
-                ptr_aligned == wait_ptr_aligned ||
-                ptr == 0;
+            bool ep_slot_match = ctrl->xfer_wait_active && slot == ctrl->xfer_wait_slot && ep == ctrl->xfer_wait_ep;
+            bool ptr_match = ptr == wait_ptr || ptr_aligned == wait_ptr_aligned || ptr == 0;
 
             if (ep_slot_match && ptr_match) {
                 ctrl->xfer_wait_cc = cc;
@@ -230,11 +204,7 @@ bool _xhci_process_events(
 
             arch_irq_restore(flags);
 
-            if (
-                !matched &&
-                cc != XHCI_CC_SUCCESS &&
-                cc != XHCI_CC_SHORT_PACKET
-            ) {
+            if (!matched && cc != XHCI_CC_SUCCESS && cc != XHCI_CC_SHORT_PACKET) {
                 log_warn(
                     "xHCI %u:%u.%u transfer completion cc=%#x slot=%u ep=%u",
                     ctrl->bus,
@@ -266,12 +236,7 @@ bool _xhci_process_events(
 
     arch_phys_unmap(ring_map, XHCI_DMA_BYTES);
     if (!_xhci_update_erdp(ctrl, mmio)) {
-        log_debug(
-            "xHCI %u:%u.%u ERDP readback mismatch (continuing)",
-            ctrl->bus,
-            ctrl->slot,
-            ctrl->func
-        );
+        log_debug("xHCI %u:%u.%u ERDP readback mismatch (continuing)", ctrl->bus, ctrl->slot, ctrl->func);
     }
 
     return progressed;

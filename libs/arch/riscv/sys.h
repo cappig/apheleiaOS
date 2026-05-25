@@ -24,8 +24,7 @@ static inline riscv_word_t syscall1(riscv_word_t num, riscv_word_t arg1) {
     return a0;
 }
 
-static inline riscv_word_t
-syscall2(riscv_word_t num, riscv_word_t arg1, riscv_word_t arg2) {
+static inline riscv_word_t syscall2(riscv_word_t num, riscv_word_t arg1, riscv_word_t arg2) {
     register riscv_word_t a0 asm("a0") = arg1;
     register riscv_word_t a1 asm("a1") = arg2;
     register riscv_word_t a7 asm("a7") = num;
@@ -33,12 +32,7 @@ syscall2(riscv_word_t num, riscv_word_t arg1, riscv_word_t arg2) {
     return a0;
 }
 
-static inline riscv_word_t syscall3(
-    riscv_word_t num,
-    riscv_word_t arg1,
-    riscv_word_t arg2,
-    riscv_word_t arg3
-) {
+static inline riscv_word_t syscall3(riscv_word_t num, riscv_word_t arg1, riscv_word_t arg2, riscv_word_t arg3) {
     register riscv_word_t a0 asm("a0") = arg1;
     register riscv_word_t a1 asm("a1") = arg2;
     register riscv_word_t a2 asm("a2") = arg3;
@@ -47,23 +41,13 @@ static inline riscv_word_t syscall3(
     return a0;
 }
 
-static inline riscv_word_t syscall4(
-    riscv_word_t num,
-    riscv_word_t arg1,
-    riscv_word_t arg2,
-    riscv_word_t arg3,
-    riscv_word_t arg4
-) {
+static inline riscv_word_t
+syscall4(riscv_word_t num, riscv_word_t arg1, riscv_word_t arg2, riscv_word_t arg3, riscv_word_t arg4) {
     register riscv_word_t a0 asm("a0") = arg1;
     register riscv_word_t a1 asm("a1") = arg2;
     register riscv_word_t a2 asm("a2") = arg3;
     register riscv_word_t a3 asm("a3") = arg4;
     register riscv_word_t a7 asm("a7") = num;
-    asm volatile(
-        "ecall"
-        : "+r"(a0)
-        : "r"(a1), "r"(a2), "r"(a3), "r"(a7)
-        : "memory"
-    );
+    asm volatile("ecall" : "+r"(a0) : "r"(a1), "r"(a2), "r"(a3), "r"(a7) : "memory");
     return a0;
 }

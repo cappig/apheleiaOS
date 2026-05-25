@@ -79,6 +79,14 @@ typedef struct {
     int cpu_fd;
 } top_data_fds_t;
 
+typedef struct {
+    unsigned int delay_ms;
+    unsigned long long max_samples;
+    bool show_core;
+    bool show_per_core;
+    bool show_bars;
+} top_opts_t;
+
 static char top_key_push = 0;
 static bool top_key_push_valid = false;
 
@@ -90,8 +98,7 @@ static void top_write(const char *text) {
     (void)write(STDOUT_FILENO, text, strlen(text));
 }
 
-static void
-top_write_line(const char *line, bool interactive, size_t *line_count) {
+static void top_write_line(const char *line, bool interactive, size_t *line_count) {
     if (!line) {
         return;
     }
@@ -116,14 +123,13 @@ top_write_line(const char *line, bool interactive, size_t *line_count) {
 }
 
 static void top_usage(void) {
-    static const char usage[] =
-        "usage: top [-d delay_ms] [-n samples] [-c] [-p] [-g]\n"
-        "  -d delay_ms  refresh delay in milliseconds (default: 500)\n"
-        "  -c           show running core column\n"
-        "  -p           show per-core CPU usage summary\n"
-        "  -g           show CPU/MEM bar graphs\n"
-        "  -n samples   number of updates before exit (default: forever in tty,\n"
-        "               one snapshot when not interactive)\n";
+    static const char usage[] = "usage: top [-d delay_ms] [-n samples] [-c] [-p] [-g]\n"
+                                "  -d delay_ms  refresh delay in milliseconds (default: 500)\n"
+                                "  -c           show running core column\n"
+                                "  -p           show per-core CPU usage summary\n"
+                                "  -g           show CPU/MEM bar graphs\n"
+                                "  -n samples   number of updates before exit (default: forever in tty,\n"
+                                "               one snapshot when not interactive)\n";
     (void)write(STDOUT_FILENO, usage, sizeof(usage) - 1);
 }
 
@@ -140,6 +146,97 @@ static bool top_parse_u64(const char *text, unsigned long long *out) {
 
     *out = (unsigned long long)parsed;
     return true;
+}
+
+static void top_opts_init(top_opts_t *opts) {
+    opts->delay_ms = TOP_DEFAULT_DELAY_MS;
+    opts->max_samples = 0;
+    opts->show_core = false;
+    opts->show_per_core = false;
+    opts->show_bars = false;
+}
+
+static bool top_parse_delay(int argc, char **argv, int *index, top_opts_t *opts) {
+    if (*index + 1 >= argc) {
+        return false;
+    }
+
+    unsigned long long parsed = 0;
+    if (!top_parse_u64(argv[*index + 1], &parsed) || !parsed) {
+        return false;
+    }
+
+    if (parsed > 60000ULL) {
+        parsed = 60000ULL;
+    }
+
+    opts->delay_ms = (unsigned int)parsed;
+    (*index)++;
+    return true;
+}
+
+static bool top_parse_samples(int argc, char **argv, int *index, top_opts_t *opts) {
+    if (*index + 1 >= argc) {
+        return false;
+    }
+
+    unsigned long long parsed = 0;
+    if (!top_parse_u64(argv[*index + 1], &parsed) || !parsed) {
+        return false;
+    }
+
+    opts->max_samples = parsed;
+    (*index)++;
+    return true;
+}
+
+static int top_parse_args(int argc, char **argv, top_opts_t *opts) {
+    top_opts_init(opts);
+
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
+            top_usage();
+            return 1;
+        }
+
+        if (!strcmp(argv[i], "-d")) {
+            if (!top_parse_delay(argc, argv, &i, opts)) {
+                top_usage();
+                return -1;
+            }
+
+            continue;
+        }
+
+        if (!strcmp(argv[i], "-n")) {
+            if (!top_parse_samples(argc, argv, &i, opts)) {
+                top_usage();
+                return -1;
+            }
+
+            continue;
+        }
+
+        if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--core")) {
+            opts->show_core = true;
+            continue;
+        }
+
+        if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "--per-core")) {
+            opts->show_per_core = true;
+            continue;
+        }
+
+        if (!strcmp(argv[i], "-g") || !strcmp(argv[i], "--bars")) {
+            opts->show_bars = true;
+            continue;
+        }
+
+        top_usage();
+        return -1;
+    }
+
+    return 0;
 }
 
 static bool top_is_pid_name(const char *name) {
@@ -186,8 +283,7 @@ static int top_state_rank(char state) {
     }
 }
 
-static const char *
-top_tty_name(const proc_stat_t *info, char *buf, size_t buf_len) {
+static const char *top_tty_name(const proc_stat_t *info, char *buf, size_t buf_len) {
     if (!info) {
         return "??";
     }
@@ -209,8 +305,7 @@ top_tty_name(const proc_stat_t *info, char *buf, size_t buf_len) {
     return buf;
 }
 
-static void
-top_format_uptime(unsigned long long sec, char *out, size_t out_len) {
+static void top_format_uptime(unsigned long long sec, char *out, size_t out_len) {
     if (!out || !out_len) {
         return;
     }
@@ -223,25 +318,13 @@ top_format_uptime(unsigned long long sec, char *out, size_t out_len) {
     unsigned long long secs = rem % 60ULL;
 
     if (days) {
-        snprintf(
-            out,
-            out_len,
-            "%llud %02llu:%02llu:%02llu",
-            days,
-            hours,
-            mins,
-            secs
-        );
+        snprintf(out, out_len, "%llud %02llu:%02llu:%02llu", days, hours, mins, secs);
     } else {
         snprintf(out, out_len, "%02llu:%02llu:%02llu", hours, mins, secs);
     }
 }
 
-static void top_format_cpu_time(
-    unsigned long long total_ms,
-    char *out,
-    size_t out_len
-) {
+static void top_format_cpu_time(unsigned long long total_ms, char *out, size_t out_len) {
     if (!out || !out_len) {
         return;
     }
@@ -276,15 +359,13 @@ static bool top_read_clock(int fd, top_clock_t *out) {
         return false;
     }
 
-    char text[256] = {0};
+    char text[256] = { 0 };
     if (!top_read_text_fd(fd, text, sizeof(text))) {
         return false;
     }
 
-    return kv_read_u64(text, "now", &out->now) &&
-           kv_read_u64(text, "boot", &out->boot) &&
-           kv_read_u64(text, "hz", &out->hz) &&
-           kv_read_u64(text, "ticks", &out->ticks);
+    return kv_read_u64(text, "now", &out->now) && kv_read_u64(text, "boot", &out->boot) &&
+           kv_read_u64(text, "hz", &out->hz) && kv_read_u64(text, "ticks", &out->ticks);
 }
 
 static bool top_read_mem(int fd, top_mem_t *out) {
@@ -292,13 +373,12 @@ static bool top_read_mem(int fd, top_mem_t *out) {
         return false;
     }
 
-    char text[256] = {0};
+    char text[256] = { 0 };
     if (!top_read_text_fd(fd, text, sizeof(text))) {
         return false;
     }
 
-    return kv_read_u64(text, "managed_kib", &out->managed_kib) &&
-           kv_read_u64(text, "used_kib", &out->used_kib);
+    return kv_read_u64(text, "managed_kib", &out->managed_kib) && kv_read_u64(text, "used_kib", &out->used_kib);
 }
 
 static bool top_read_cpu(int fd, top_cpu_t *out) {
@@ -309,13 +389,12 @@ static bool top_read_cpu(int fd, top_cpu_t *out) {
     memset(out, 0, sizeof(*out));
     out->ncpu = 1;
 
-    char text[TOP_CPU_TEXT_MAX] = {0};
+    char text[TOP_CPU_TEXT_MAX] = { 0 };
     if (!top_read_text_fd(fd, text, sizeof(text))) {
         return false;
     }
 
-    bool ok = kv_read_u64(text, "busy_ticks", &out->busy_ticks) &&
-              kv_read_u64(text, "total_ticks", &out->total_ticks);
+    bool ok = kv_read_u64(text, "busy_ticks", &out->busy_ticks) && kv_read_u64(text, "total_ticks", &out->total_ticks);
     if (!ok) {
         return false;
     }
@@ -325,8 +404,7 @@ static bool top_read_cpu(int fd, top_cpu_t *out) {
         out->ncpu = parsed_ncpu;
     }
 
-    size_t limit = out->ncpu < TOP_CPU_MAX_CORES ? (size_t)out->ncpu
-                                                  : TOP_CPU_MAX_CORES;
+    size_t limit = out->ncpu < TOP_CPU_MAX_CORES ? (size_t)out->ncpu : TOP_CPU_MAX_CORES;
     for (size_t i = 0; i < limit; i++) {
         char key_busy[32];
         char key_total[32];
@@ -366,12 +444,7 @@ static unsigned long long top_cpu_pct_x10(
     return 0;
 }
 
-static void top_fill_bar(
-    char *out,
-    size_t out_len,
-    size_t width,
-    unsigned long long pct_x10
-) {
+static void top_fill_bar(char *out, size_t out_len, size_t width, unsigned long long pct_x10) {
     if (!out || out_len < 2) {
         return;
     }
@@ -396,12 +469,8 @@ static void top_fill_bar(
     out[width] = '\0';
 }
 
-static size_t top_render_usage_bars(
-    unsigned long long cpu_pct_x10,
-    unsigned long long mem_pct_x10,
-    size_t cols,
-    bool interactive
-) {
+static size_t
+top_render_usage_bars(unsigned long long cpu_pct_x10, unsigned long long mem_pct_x10, size_t cols, bool interactive) {
     char cpu_bar[64];
     char mem_bar[64];
     size_t bar_width = 10;
@@ -443,8 +512,7 @@ static size_t top_render_per_core_bars(
         return 0;
     }
 
-    size_t limit = cpu_now->ncpu < TOP_CPU_MAX_CORES ? (size_t)cpu_now->ncpu
-                                                      : TOP_CPU_MAX_CORES;
+    size_t limit = cpu_now->ncpu < TOP_CPU_MAX_CORES ? (size_t)cpu_now->ncpu : TOP_CPU_MAX_CORES;
     size_t bar_width = cols > 28 ? (cols - 20) : 8;
     if (bar_width > 44) {
         bar_width = 44;
@@ -469,15 +537,7 @@ static size_t top_render_per_core_bars(
         top_fill_bar(bar, sizeof(bar), bar_width, pct_x10);
 
         char line[TOP_BAR_TEXT_MAX];
-        snprintf(
-            line,
-            sizeof(line),
-            "cpu%02zu [%s] %llu.%1llu%%\n",
-            i,
-            bar,
-            pct_x10 / 10ULL,
-            pct_x10 % 10ULL
-        );
+        snprintf(line, sizeof(line), "cpu%02zu [%s] %llu.%1llu%%\n", i, bar, pct_x10 / 10ULL, pct_x10 % 10ULL);
         top_write_line(line, interactive, NULL);
         printed++;
     }
@@ -492,19 +552,14 @@ static size_t top_render_per_core_bars(
     return printed;
 }
 
-static size_t top_render_per_core_summary(
-    const top_cpu_t *cpu_now,
-    const top_cpu_t *cpu_prev,
-    size_t cols,
-    bool interactive
-) {
+static size_t
+top_render_per_core_summary(const top_cpu_t *cpu_now, const top_cpu_t *cpu_prev, size_t cols, bool interactive) {
     if (!cpu_now || !cpu_now->ncpu) {
         return 0;
     }
 
     char line[512];
-    size_t limit = cpu_now->ncpu < TOP_CPU_MAX_CORES ? (size_t)cpu_now->ncpu
-                                                      : TOP_CPU_MAX_CORES;
+    size_t limit = cpu_now->ncpu < TOP_CPU_MAX_CORES ? (size_t)cpu_now->ncpu : TOP_CPU_MAX_CORES;
 
     if (cols > sizeof(line) - 2) {
         cols = sizeof(line) - 2;
@@ -529,9 +584,7 @@ static size_t top_render_per_core_summary(
         );
 
         char item[32];
-        int wrote = snprintf(
-            item, sizeof(item), " c%zu=%llu.%1llu%%", i, pct_x10 / 10ULL, pct_x10 % 10ULL
-        );
+        int wrote = snprintf(item, sizeof(item), " c%zu=%llu.%1llu%%", i, pct_x10 / 10ULL, pct_x10 % 10ULL);
         if (wrote <= 0) {
             continue;
         }
@@ -555,8 +608,7 @@ static size_t top_render_per_core_summary(
     return 1;
 }
 
-static bool
-top_proc_reserve(top_proc_t **items, size_t *cap, size_t needed) {
+static bool top_proc_reserve(top_proc_t **items, size_t *cap, size_t needed) {
     if (!items || !cap) {
         return false;
     }
@@ -580,8 +632,7 @@ top_proc_reserve(top_proc_t **items, size_t *cap, size_t needed) {
     return true;
 }
 
-static bool
-top_prev_reserve(top_prev_proc_t **items, size_t *cap, size_t needed) {
+static bool top_prev_reserve(top_prev_proc_t **items, size_t *cap, size_t needed) {
     if (!items || !cap) {
         return false;
     }
@@ -628,7 +679,7 @@ static bool top_read_procs(top_proc_t **out_items, size_t *out_count) {
         char stat_path[80];
         snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
 
-        proc_stat_t stat = {0};
+        proc_stat_t stat = { 0 };
         if (proc_stat_read_path(stat_path, &stat) < 0) {
             continue;
         }
@@ -651,11 +702,7 @@ static bool top_read_procs(top_proc_t **out_items, size_t *out_count) {
     return true;
 }
 
-static unsigned long long top_prev_cpu_time(
-    const top_prev_proc_t *prev,
-    size_t prev_count,
-    pid_t pid
-) {
+static unsigned long long top_prev_cpu_time(const top_prev_proc_t *prev, size_t prev_count, pid_t pid) {
     if (!prev || !prev_count) {
         return 0;
     }
@@ -669,11 +716,7 @@ static unsigned long long top_prev_cpu_time(
     return 0;
 }
 
-static void top_build_task_counts(
-    const top_proc_t *items,
-    size_t count,
-    top_task_count_t *out
-) {
+static void top_build_task_counts(const top_proc_t *items, size_t count, top_task_count_t *out) {
     if (!out) {
         return;
     }
@@ -705,8 +748,7 @@ static void top_compute_proc_usage(
     unsigned long long elapsed_ms
 ) {
     for (size_t i = 0; i < count; i++) {
-        unsigned long long old_cpu =
-            top_prev_cpu_time(prev, prev_count, items[i].stat.pid);
+        unsigned long long old_cpu = top_prev_cpu_time(prev, prev_count, items[i].stat.pid);
         unsigned long long now_cpu = items[i].stat.cpu_time_ms;
         unsigned long long delta = (now_cpu >= old_cpu) ? (now_cpu - old_cpu) : 0;
 
@@ -758,12 +800,7 @@ static int top_proc_cmp(const void *lhs, const void *rhs) {
     return 0;
 }
 
-static bool top_snapshot_prev(
-    top_prev_proc_t **prev_items,
-    size_t *prev_count,
-    const top_proc_t *items,
-    size_t count
-) {
+static bool top_snapshot_prev(top_prev_proc_t **prev_items, size_t *prev_count, const top_proc_t *items, size_t count) {
     if (!prev_items || !prev_count) {
         return false;
     }
@@ -808,7 +845,7 @@ static bool top_enable_tty_mode(top_tty_state_t *tty, int fd) {
         return false;
     }
 
-    termios_t tos = {0};
+    termios_t tos = { 0 };
     if (tcgetattr(fd, &tos) < 0) {
         return false;
     }
@@ -838,12 +875,51 @@ static void top_restore_tty_mode(top_tty_state_t *tty) {
     tty->active = false;
 }
 
-static bool top_read_byte(
-    int input_fd,
-    char *out,
-    int timeout_ms,
-    void *ctx
-) {
+static int top_open_input(bool *interactive, bool *close_input) {
+    int input_fd = STDIN_FILENO;
+
+    *interactive = isatty(STDOUT_FILENO) != 0;
+    *close_input = false;
+
+    if (!*interactive || isatty(input_fd)) {
+        return input_fd;
+    }
+
+    input_fd = open("/dev/tty", O_RDONLY, 0);
+    if (input_fd >= 0) {
+        *close_input = true;
+        return input_fd;
+    }
+
+    *interactive = false;
+    return STDIN_FILENO;
+}
+
+static top_data_fds_t top_open_data_fds(void) {
+    top_data_fds_t fds = {
+        .clock_fd = open("/dev/clock", O_RDONLY, 0),
+        .swap_fd = open("/dev/swap", O_RDONLY, 0),
+        .cpu_fd = open("/dev/cpu", O_RDONLY, 0),
+    };
+
+    return fds;
+}
+
+static void top_close_data_fds(top_data_fds_t *fds) {
+    if (fds->clock_fd >= 0) {
+        close(fds->clock_fd);
+    }
+
+    if (fds->swap_fd >= 0) {
+        close(fds->swap_fd);
+    }
+
+    if (fds->cpu_fd >= 0) {
+        close(fds->cpu_fd);
+    }
+}
+
+static bool top_read_byte(int input_fd, char *out, int timeout_ms, void *ctx) {
     (void)ctx;
 
     if (!out) {
@@ -902,15 +978,8 @@ static void top_push_byte(int input_fd, char ch, void *ctx) {
 }
 
 static void top_probe_winsize(int input_fd) {
-    term_size_t size = {0};
-    (void)term_probe_size(
-        input_fd,
-        STDOUT_FILENO,
-        &size,
-        top_read_byte,
-        top_push_byte,
-        NULL
-    );
+    term_size_t size = { 0 };
+    (void)term_probe_size(input_fd, STDOUT_FILENO, &size, top_read_byte, top_push_byte, NULL);
 }
 
 static bool top_handle_input(int input_fd, unsigned int timeout_ms) {
@@ -1015,29 +1084,20 @@ static void top_render(
     size_t header_lines = 2;
 
     if (show_per_core && !show_bars) {
-        size_t extra =
-            top_render_per_core_summary(cpu_now, cpu_prev, cols, interactive);
+        size_t extra = top_render_per_core_summary(cpu_now, cpu_prev, cols, interactive);
         header_lines += extra;
         rendered_lines += extra;
     }
 
     if (show_bars) {
-        size_t usage_lines =
-            top_render_usage_bars(cpu_pct_x10, mem_pct_x10, cols, interactive);
+        size_t usage_lines = top_render_usage_bars(cpu_pct_x10, mem_pct_x10, cols, interactive);
         header_lines += usage_lines;
         rendered_lines += usage_lines;
 
         if (show_per_core) {
             size_t reserve = header_lines + 3;
             size_t max_core_lines = rows > reserve ? (rows - reserve) : 0;
-            header_lines +=
-                top_render_per_core_bars(
-                    cpu_now,
-                    cpu_prev,
-                    cols,
-                    max_core_lines,
-                    interactive
-                );
+            header_lines += top_render_per_core_bars(cpu_now, cpu_prev, cols, max_core_lines, interactive);
             rendered_lines = header_lines;
         }
     }
@@ -1088,8 +1148,7 @@ static void top_render(
     top_write_line(line, interactive, &rendered_lines);
     header_lines++;
 
-    size_t fixed_width = TOP_COL_PID + TOP_COL_TTY + TOP_COL_STAT + TOP_COL_CPU +
-                         TOP_COL_MEM + TOP_COL_TIME + 12;
+    size_t fixed_width = TOP_COL_PID + TOP_COL_TTY + TOP_COL_STAT + TOP_COL_CPU + TOP_COL_MEM + TOP_COL_TIME + 12;
     if (show_core) {
         fixed_width += TOP_COL_CORE + 2;
     }
@@ -1102,30 +1161,17 @@ static void top_render(
         char time_buf[24];
         const top_proc_t *p = &items[i];
 
-        const char *tty =
-            top_tty_name(&p->stat, tty_buf, sizeof(tty_buf));
+        const char *tty = top_tty_name(&p->stat, tty_buf, sizeof(tty_buf));
         top_format_cpu_time(p->stat.cpu_time_ms, time_buf, sizeof(time_buf));
         char cpu_buf[16];
         char mem_buf[16];
         char core_buf[8];
-        snprintf(
-            cpu_buf,
-            sizeof(cpu_buf),
-            "%llu.%02llu",
-            p->cpu_pct_x100 / 100ULL,
-            p->cpu_pct_x100 % 100ULL
-        );
+        snprintf(cpu_buf, sizeof(cpu_buf), "%llu.%02llu", p->cpu_pct_x100 / 100ULL, p->cpu_pct_x100 % 100ULL);
         unsigned long long mem_pct_x100 = 0;
         if (mem && mem->managed_kib) {
             mem_pct_x100 = (p->stat.vm_kib * 10000ULL) / mem->managed_kib;
         }
-        snprintf(
-            mem_buf,
-            sizeof(mem_buf),
-            "%llu.%02llu",
-            mem_pct_x100 / 100ULL,
-            mem_pct_x100 % 100ULL
-        );
+        snprintf(mem_buf, sizeof(mem_buf), "%llu.%02llu", mem_pct_x100 / 100ULL, mem_pct_x100 % 100ULL);
         if (p->stat.core_id >= 0) {
             snprintf(core_buf, sizeof(core_buf), "%d", p->stat.core_id);
         } else {
@@ -1202,93 +1248,22 @@ static void top_render(
 }
 
 int main(int argc, char **argv) {
-    unsigned int delay_ms = TOP_DEFAULT_DELAY_MS;
-    unsigned long long max_samples = 0;
-    bool show_core = false;
-    bool show_per_core = false;
-    bool show_bars = false;
+    top_opts_t opts;
+    int arg_status = top_parse_args(argc, argv, &opts);
 
-    for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) {
-            top_usage();
-            return 0;
-        }
-
-        if (!strcmp(argv[i], "-d")) {
-            if (i + 1 >= argc) {
-                top_usage();
-                return 1;
-            }
-
-            unsigned long long parsed = 0;
-            if (!top_parse_u64(argv[i + 1], &parsed) || !parsed) {
-                top_usage();
-                return 1;
-            }
-
-            if (parsed > 60000ULL) {
-                parsed = 60000ULL;
-            }
-
-            delay_ms = (unsigned int)parsed;
-            i++;
-            continue;
-        }
-
-        if (!strcmp(argv[i], "-n")) {
-            if (i + 1 >= argc) {
-                top_usage();
-                return 1;
-            }
-
-            unsigned long long parsed = 0;
-            if (!top_parse_u64(argv[i + 1], &parsed) || !parsed) {
-                top_usage();
-                return 1;
-            }
-
-            max_samples = parsed;
-            i++;
-            continue;
-        }
-
-        if (!strcmp(argv[i], "-c") || !strcmp(argv[i], "--core")) {
-            show_core = true;
-            continue;
-        }
-
-        if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "--per-core")) {
-            show_per_core = true;
-            continue;
-        }
-
-        if (!strcmp(argv[i], "-g") || !strcmp(argv[i], "--bars")) {
-            show_bars = true;
-            continue;
-        }
-
-        top_usage();
-        return 1;
+    if (arg_status != 0) {
+        return arg_status > 0 ? 0 : 1;
     }
 
-    int input_fd = STDIN_FILENO;
+    bool interactive = false;
     bool close_input = false;
-    bool interactive = isatty(STDOUT_FILENO) != 0;
+    int input_fd = top_open_input(&interactive, &close_input);
 
-    if (interactive && !isatty(input_fd)) {
-        input_fd = open("/dev/tty", O_RDONLY, 0);
-        if (input_fd >= 0) {
-            close_input = true;
-        } else {
-            interactive = false;
-        }
+    if (!interactive && !opts.max_samples) {
+        opts.max_samples = 1;
     }
 
-    if (!interactive && !max_samples) {
-        max_samples = 1;
-    }
-
-    top_tty_state_t tty = {0};
+    top_tty_state_t tty = { 0 };
     if (interactive) {
         (void)top_enable_tty_mode(&tty, input_fd);
         top_write("\x1b[?25l\x1b[H\x1b[2J");
@@ -1298,18 +1273,14 @@ int main(int argc, char **argv) {
     top_prev_proc_t *prev = NULL;
     size_t prev_count = 0;
 
-    top_cpu_t prev_cpu = {0};
+    top_cpu_t prev_cpu = { 0 };
     bool have_prev_cpu = false;
 
-    top_clock_t prev_clock = {0};
+    top_clock_t prev_clock = { 0 };
     bool have_prev_clock = false;
     size_t prev_render_lines = 0;
 
-    top_data_fds_t data_fds = {
-        .clock_fd = open("/dev/clock", O_RDONLY, 0),
-        .swap_fd = open("/dev/swap", O_RDONLY, 0),
-        .cpu_fd = open("/dev/cpu", O_RDONLY, 0),
-    };
+    top_data_fds_t data_fds = top_open_data_fds();
 
     unsigned long long ncpu = 1;
 
@@ -1317,13 +1288,13 @@ int main(int argc, char **argv) {
     int rc = 0;
 
     for (;;) {
-        top_clock_t clock = {0};
+        top_clock_t clock = { 0 };
         bool have_clock = top_read_clock(data_fds.clock_fd, &clock);
 
-        top_mem_t mem = {0};
+        top_mem_t mem = { 0 };
         bool have_mem = top_read_mem(data_fds.swap_fd, &mem);
 
-        top_cpu_t cpu = {0};
+        top_cpu_t cpu = { 0 };
         bool have_cpu = top_read_cpu(data_fds.cpu_fd, &cpu);
         if (have_cpu && cpu.ncpu > 0) {
             ncpu = cpu.ncpu;
@@ -1336,13 +1307,8 @@ int main(int argc, char **argv) {
             proc_count = 0;
         }
 
-        unsigned long long elapsed_ms = delay_ms;
-        if (
-            have_clock &&
-            have_prev_clock &&
-            clock.hz &&
-            clock.ticks >= prev_clock.ticks
-        ) {
+        unsigned long long elapsed_ms = opts.delay_ms;
+        if (have_clock && have_prev_clock && clock.hz && clock.ticks >= prev_clock.ticks) {
             unsigned long long delta_ticks = clock.ticks - prev_clock.ticks;
             elapsed_ms = (delta_ticks * 1000ULL) / clock.hz;
             if (!elapsed_ms) {
@@ -1350,16 +1316,10 @@ int main(int argc, char **argv) {
             }
         }
 
-        top_compute_proc_usage(
-            procs,
-            proc_count,
-            prev,
-            prev_count,
-            elapsed_ms
-        );
+        top_compute_proc_usage(procs, proc_count, prev, prev_count, elapsed_ms);
         qsort(procs, proc_count, sizeof(*procs), top_proc_cmp);
 
-        top_task_count_t tasks = {0};
+        top_task_count_t tasks = { 0 };
         top_build_task_counts(procs, proc_count, &tasks);
 
         size_t rows = TOP_DEFAULT_ROWS;
@@ -1375,9 +1335,9 @@ int main(int argc, char **argv) {
             have_cpu ? &cpu : NULL,
             have_prev_cpu ? &prev_cpu : NULL,
             ncpu,
-            show_core,
-            show_per_core,
-            show_bars,
+            opts.show_core,
+            opts.show_per_core,
+            opts.show_bars,
             interactive,
             rows,
             cols,
@@ -1402,7 +1362,7 @@ int main(int argc, char **argv) {
         }
 
         sample_index++;
-        if (max_samples && sample_index >= max_samples) {
+        if (opts.max_samples && sample_index >= opts.max_samples) {
             break;
         }
 
@@ -1410,7 +1370,7 @@ int main(int argc, char **argv) {
             break;
         }
 
-        if (!top_handle_input(input_fd, delay_ms)) {
+        if (!top_handle_input(input_fd, opts.delay_ms)) {
             break;
         }
     }
@@ -1424,15 +1384,7 @@ int main(int argc, char **argv) {
         close(input_fd);
     }
 
-    if (data_fds.clock_fd >= 0) {
-        close(data_fds.clock_fd);
-    }
-    if (data_fds.swap_fd >= 0) {
-        close(data_fds.swap_fd);
-    }
-    if (data_fds.cpu_fd >= 0) {
-        close(data_fds.cpu_fd);
-    }
+    top_close_data_fds(&data_fds);
 
     free(prev);
     return rc;

@@ -11,8 +11,7 @@ static bool elf_range_valid(size_t size, u64 offset, u64 length) {
     return offset <= limit && length <= limit - offset;
 }
 
-static bool
-elf_table_range_valid(size_t size, u64 offset, u64 count, u64 entry_size) {
+static bool elf_table_range_valid(size_t size, u64 offset, u64 count, u64 entry_size) {
     if (!size) {
         return true;
     }
@@ -24,13 +23,7 @@ elf_table_range_valid(size_t size, u64 offset, u64 count, u64 entry_size) {
     return elf_range_valid(size, offset, count * entry_size);
 }
 
-static bool elf_walk_32(
-    const u8 *blob,
-    size_t size,
-    elf_segment_cb cb,
-    void *ctx,
-    elf_info_t *out_info
-) {
+static bool elf_walk_32(const u8 *blob, size_t size, elf_segment_cb cb, void *ctx, elf_info_t *out_info) {
     const elf32_header_t *eh = (const elf32_header_t *)blob;
 
     if (size && size < sizeof(*eh)) {
@@ -52,8 +45,7 @@ static bool elf_walk_32(
 
     for (u16 i = 0; i < eh->ph_num; i++) {
         u32 ph_off = eh->phoff + (u32)i * eh->phent_size;
-        const elf32_prog_header_t *ph =
-            (const elf32_prog_header_t *)(blob + ph_off);
+        const elf32_prog_header_t *ph = (const elf32_prog_header_t *)(blob + ph_off);
 
         if (ph->type != PT_LOAD) {
             continue;
@@ -85,13 +77,7 @@ static bool elf_walk_32(
     return true;
 }
 
-static bool elf_walk_64(
-    const u8 *blob,
-    size_t size,
-    elf_segment_cb cb,
-    void *ctx,
-    elf_info_t *out_info
-) {
+static bool elf_walk_64(const u8 *blob, size_t size, elf_segment_cb cb, void *ctx, elf_info_t *out_info) {
     const elf_header_t *eh = (const elf_header_t *)blob;
 
     if (size && size < sizeof(*eh)) {
@@ -113,8 +99,7 @@ static bool elf_walk_64(
 
     for (u16 i = 0; i < eh->ph_num; i++) {
         u64 ph_off = eh->phoff + (u64)i * eh->phent_size;
-        const elf_prog_header_t *ph =
-            (const elf_prog_header_t *)(blob + ph_off);
+        const elf_prog_header_t *ph = (const elf_prog_header_t *)(blob + ph_off);
 
         if (ph->type != PT_LOAD) {
             continue;
@@ -146,13 +131,7 @@ static bool elf_walk_64(
     return true;
 }
 
-bool elf_foreach_segment(
-    const void *elf,
-    size_t size,
-    elf_segment_cb cb,
-    void *ctx,
-    elf_info_t *out_info
-) {
+bool elf_foreach_segment(const void *elf, size_t size, elf_segment_cb cb, void *ctx, elf_info_t *out_info) {
     if (!elf || !cb) {
         return false;
     }

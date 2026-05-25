@@ -53,8 +53,7 @@ bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out) {
             return false;
         }
 
-        size_t glyphs_size =
-            (size_t)psf2->glyph_count * (size_t)psf2->glyph_bytes;
+        size_t glyphs_size = (size_t)psf2->glyph_count * (size_t)psf2->glyph_bytes;
 
         size_t need = (size_t)psf2->header_size + glyphs_size;
 
@@ -110,20 +109,12 @@ bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out) {
     return true;
 }
 
-bool psf_iter_unicode_mappings(
-    const psf_blob_t *blob,
-    psf_unicode_map_iter_t iter,
-    void *ctx
-) {
+bool psf_iter_unicode_mappings(const psf_blob_t *blob, psf_unicode_map_iter_t iter, void *ctx) {
     if (!blob || !iter) {
         return false;
     }
 
-    if (
-        !(blob->flags & PSF_BLOB_UNICODE) ||
-        !blob->unicode_table ||
-        !blob->unicode_size
-    ) {
+    if (!(blob->flags & PSF_BLOB_UNICODE) || !blob->unicode_table || !blob->unicode_size) {
         return true;
     }
 
@@ -142,20 +133,14 @@ bool psf_iter_unicode_mappings(
                 }
 
                 u32 codepoint = 0;
-                size_t consumed =
-                    utf8_decode(table, (size_t)(end - table), &codepoint);
+                size_t consumed = utf8_decode(table, (size_t)(end - table), &codepoint);
 
                 if (!consumed) {
                     table++;
                     continue;
                 }
 
-                if (
-                    !sequence &&
-                    codepoint != 0xfffeU &&
-                    codepoint != 0xffffU &&
-                    !iter(ctx, codepoint, glyph)
-                ) {
+                if (!sequence && codepoint != 0xfffeU && codepoint != 0xffffU && !iter(ctx, codepoint, glyph)) {
                     return false;
                 }
 

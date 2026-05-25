@@ -22,12 +22,7 @@ static void _dump_stack_from(stack_frame_t *frame) {
             log_info("<%#llx> (unknown symbol)", (unsigned long long)ret);
         } else {
             u64 offset = (u64)ret - sym->addr;
-            log_info(
-                "<%#llx> %s+%#llx",
-                (unsigned long long)ret,
-                sym->name,
-                (unsigned long long)offset
-            );
+            log_info("<%#llx> %s+%#llx", (unsigned long long)ret, sym->name, (unsigned long long)offset);
         }
 
         if (frame->next <= frame) {

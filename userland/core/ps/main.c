@@ -33,8 +33,7 @@ static const char *state_name(char state) {
     }
 }
 
-static const char *
-tty_name(const proc_stat_t *info, char *buf, size_t buf_len) {
+static const char *tty_name(const proc_stat_t *info, char *buf, size_t buf_len) {
     if (!info) {
         return "??";
     }
@@ -93,13 +92,7 @@ static void format_cpu_time_ms(uint64_t total_ms, char *buf, size_t buf_len) {
         return;
     }
 
-    snprintf(
-        buf,
-        buf_len,
-        "%llu:%02llu",
-        (unsigned long long)(total_secs / 60ULL),
-        (unsigned long long)seconds
-    );
+    snprintf(buf, buf_len, "%llu:%02llu", (unsigned long long)(total_secs / 60ULL), (unsigned long long)seconds);
 }
 
 int main(void) {
@@ -135,7 +128,7 @@ int main(void) {
         char stat_path[80];
         snprintf(stat_path, sizeof(stat_path), "/proc/%s/stat", ent->d_name);
 
-        proc_stat_t info = {0};
+        proc_stat_t info = { 0 };
         if (proc_stat_read_path(stat_path, &info) < 0) {
             continue;
         }

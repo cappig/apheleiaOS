@@ -68,10 +68,7 @@ void sched_wake_sleepers(u64 now) {
     sched_lock_restore(sched_flags);
 }
 
-static bool wq_unlink(
-    sched_wait_queue_t *queue,
-    sched_thread_t *thread
-) {
+static bool wq_unlink(sched_wait_queue_t *queue, sched_thread_t *thread) {
     if (!queue || !queue->list || !thread) {
         return false;
     }
@@ -284,12 +281,9 @@ void sched_unblock_thread(sched_thread_t *thread) {
         thread->wake_tick = 0;
         thread->wait_deadline_tick = 0;
 
-        thread->wait_result = (u8)(
-            (
-                (thread->wait_flags & SCHED_WAIT_INTERRUPTIBLE) &&
-                sched_signal_has_pending(thread)
-            ) ? SCHED_WAIT_INTR : SCHED_WAIT_WOKEN
-        );
+        thread->wait_result = (u8)(((thread->wait_flags & SCHED_WAIT_INTERRUPTIBLE) && sched_signal_has_pending(thread))
+                                       ? SCHED_WAIT_INTR
+                                       : SCHED_WAIT_WOKEN);
 
         if (sched_reclaim_handoff(thread)) {
             thread_set_state(thread, THREAD_READY);
@@ -330,12 +324,8 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
     bool request_local_resched = false;
     size_t request_remote_resched_cpu = MAX_CORES;
     bool stopping_current = (thread == sched_local_current());
-    bool owned_running_thread = (
-        !stopping_current &&
-        state == THREAD_RUNNING &&
-        thread_cpu(thread) >= 0 &&
-        thread_is_owned(thread)
-    );
+    bool owned_running_thread =
+        (!stopping_current && state == THREAD_RUNNING && thread_cpu(thread) >= 0 && thread_is_owned(thread));
 
     if (owned_running_thread) {
         if (signum > 0 && signum < NSIG) {
@@ -357,10 +347,7 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
         if (request_local_resched) {
             sched_request_resched_local();
         } else {
-            bool woke_remote = (
-                request_remote_resched_cpu < MAX_CORES &&
-                wake_cpu(request_remote_resched_cpu)
-            );
+            bool woke_remote = (request_remote_resched_cpu < MAX_CORES && wake_cpu(request_remote_resched_cpu));
 
             if (woke_remote) {
                 __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);

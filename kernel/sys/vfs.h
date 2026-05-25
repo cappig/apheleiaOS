@@ -12,8 +12,8 @@
 
 #include "disk.h"
 
-#define VFS_EOF (-1)
-#define VFS_INTERFACE_STATIC ((u32)-1)
+#define VFS_EOF              (-1)
+#define VFS_INTERFACE_STATIC ((u32) - 1)
 
 // regular and device files should provide the read/(write) interface
 #define VFS_IS_READABLE(type) ((type) >= VFS_FILE && (type) <= VFS_CHARDEV)
@@ -49,27 +49,13 @@ typedef struct vfs_node vfs_node_t;
 typedef struct vfs_interface vfs_interface_t;
 struct sched_wait_queue;
 
-typedef ssize_t (*vfs_io_fn)(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-);
+typedef ssize_t (*vfs_io_fn)(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags);
 typedef ssize_t (*vfs_truncate_fn)(vfs_node_t *node, size_t len);
 typedef short (*vfs_poll_fn)(vfs_node_t *node, short events, u32 flags);
-typedef struct sched_wait_queue *(*vfs_wait_queue_fn)(
-    vfs_node_t *node,
-    short events,
-    u32 flags
-);
+typedef struct sched_wait_queue *(*vfs_wait_queue_fn)(vfs_node_t *node, short events, u32 flags);
 typedef ssize_t (*vfs_ioctl_fn)(vfs_node_t *node, u64 request, void *args);
 typedef ssize_t (*vfs_create_fn)(vfs_node_t *node, vfs_node_t *child);
-typedef ssize_t (*vfs_link_fn)(
-    vfs_node_t *node,
-    vfs_node_t *child,
-    vfs_node_t *target
-);
+typedef ssize_t (*vfs_link_fn)(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target);
 typedef ssize_t (*vfs_remove_fn)(vfs_node_t *node, vfs_node_t *child);
 typedef ssize_t (*vfs_rename_fn)(
     vfs_node_t *old_parent,
@@ -120,9 +106,9 @@ struct vfs_node {
 
     tree_node_t *tree_entry;
     hashmap_str_t *children_index;
-    volatile u32 refs;      // Internal VFS holds.
+    volatile u32 refs; // Internal VFS holds.
     volatile u32 open_refs; // Live file descriptors.
-    bool busy;    // Create/remove is in progress; path lookup should skip it.
+    bool busy; // Create/remove is in progress; path lookup should skip it.
     bool removed; // Unlinked from the tree, but still held by open files.
 
     void *private;
@@ -145,11 +131,7 @@ void vfs_set_interface(vfs_node_t *node, vfs_interface_t *interface);
 void vfs_adopt_interface(vfs_node_t *node, vfs_interface_t *interface);
 void vfs_clear_interface(vfs_node_t *node);
 
-vfs_interface_t *vfs_create_interface(
-    vfs_io_fn read,
-    vfs_io_fn write,
-    vfs_truncate_fn truncate
-);
+vfs_interface_t *vfs_create_interface(vfs_io_fn read, vfs_io_fn write, vfs_truncate_fn truncate);
 void vfs_destroy_interface(vfs_interface_t *interface);
 
 bool vfs_validate_name(const char *name);
@@ -161,12 +143,7 @@ vfs_node_t *vfs_open(const char *path, u32 type, bool create, mode_t mode);
 vfs_node_t *vfs_resolve_node(vfs_node_t *node);
 
 int vfs_access(vfs_node_t *vnode, uid_t uid, gid_t gid, int mode);
-int vfs_check_search(
-    const char *path,
-    uid_t uid,
-    gid_t gid,
-    bool allow_missing_leaf
-);
+int vfs_check_search(const char *path, uid_t uid, gid_t gid, bool allow_missing_leaf);
 int vfs_stat_node(vfs_node_t *node, stat_t *out, bool follow_links);
 int vfs_chmod(vfs_node_t *node, mode_t mode);
 int vfs_chown(vfs_node_t *node, uid_t uid, gid_t gid);
@@ -185,16 +162,12 @@ vfs_node_t *vfs_create_virtual(vfs_node_t *parent, char *name, u32 type, mode_t 
 int vfs_mount(fs_instance_t *fs, vfs_node_t *mount);
 int vfs_unmount(vfs_node_t *mount, bool destroy_tree);
 
-ssize_t
-vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
-ssize_t
-vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
+ssize_t vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
+ssize_t vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_truncate(vfs_node_t *node, size_t len);
-ssize_t
-vfs_mmap(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
+ssize_t vfs_mmap(vfs_node_t *node, void *buf, size_t offset, size_t len, size_t flags);
 ssize_t vfs_ioctl(vfs_node_t *node, u64 request, void *args);
 short vfs_poll(vfs_node_t *node, short events, size_t flags);
-struct sched_wait_queue *
-vfs_wait_queue(vfs_node_t *node, short events, size_t flags);
+struct sched_wait_queue *vfs_wait_queue(vfs_node_t *node, short events, size_t flags);
 
 void dump_vfs(void);

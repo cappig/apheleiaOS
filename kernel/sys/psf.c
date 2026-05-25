@@ -13,49 +13,38 @@
 
 #include "vfs.h"
 
-static void *loaded_blob = NULL;
-static size_t loaded_blob_size = 0;
-static font_t loaded_font = {0};
-static font_map_t *loaded_map = NULL;
-static size_t loaded_map_count = 0;
-static size_t loaded_map_capacity = 0;
+typedef struct {
+    void *blob;
+    font_t font;
+    font_map_t *map;
+} psf_loaded_font_t;
 
 typedef struct {
-    font_map_t **map;
-    size_t *map_count;
-    size_t *map_capacity;
+    font_map_t *items;
+    size_t count;
+    size_t cap;
 } font_map_builder_t;
 
+static psf_loaded_font_t current_font = { 0 };
 
-static void _discard(void) {
-    if (loaded_blob) {
-        free(loaded_blob);
-        loaded_blob = NULL;
+static void _discard_loaded_font(void) {
+    if (current_font.blob) {
+        free(current_font.blob);
     }
 
-    if (loaded_map) {
-        free(loaded_map);
-        loaded_map = NULL;
+    if (current_font.map) {
+        free(current_font.map);
     }
 
-    loaded_blob_size = 0;
-    loaded_map_count = 0;
-    loaded_map_capacity = 0;
-
-    memset(&loaded_font, 0, sizeof(loaded_font));
+    memset(&current_font, 0, sizeof(current_font));
 }
 
-static bool _font_map_reserve(
-    font_map_t **map,
-    size_t *count,
-    size_t *capacity,
-    size_t needed
-) {
-    if (*capacity >= needed) {
+static bool _font_map_reserve(font_map_builder_t *builder, size_t needed) {
+    if (builder->cap >= needed) {
         return true;
     }
 
-    size_t new_cap = *capacity ? *capacity * 2 : 128;
+    size_t new_cap = builder->cap ? builder->cap * 2 : 128;
 
     while (new_cap < needed) {
         new_cap *= 2;
@@ -66,33 +55,27 @@ static bool _font_map_reserve(
         return false;
     }
 
-    if (*map) {
-        memcpy(next, *map, *count * sizeof(*next));
-        free(*map);
+    if (builder->items) {
+        memcpy(next, builder->items, builder->count * sizeof(*next));
+        free(builder->items);
     }
 
-    *map = next;
-    *capacity = new_cap;
+    builder->items = next;
+    builder->cap = new_cap;
 
     return true;
 }
 
-static bool _font_map_push(
-    font_map_t **map,
-    size_t *count,
-    size_t *capacity,
-    u32 codepoint,
-    u32 glyph
-) {
+static bool _font_map_push(font_map_builder_t *builder, u32 codepoint, u32 glyph) {
     if (codepoint == 0xffff || codepoint == 0xfffe) {
         return true;
     }
 
-    if (!_font_map_reserve(map, count, capacity, *count + 1)) {
+    if (!_font_map_reserve(builder, builder->count + 1)) {
         return false;
     }
 
-    (*map)[(*count)++] = (font_map_t){
+    builder->items[builder->count++] = (font_map_t){
         .codepoint = codepoint,
         .glyph = glyph,
     };
@@ -100,20 +83,13 @@ static bool _font_map_push(
     return true;
 }
 
-static bool
-_collect_font_map(void *ctx, u32 codepoint, u32 glyph) {
+static bool _collect_font_map(void *ctx, u32 codepoint, u32 glyph) {
     font_map_builder_t *builder = ctx;
     if (!builder) {
         return false;
     }
 
-    return _font_map_push(
-        builder->map,
-        builder->map_count,
-        builder->map_capacity,
-        codepoint,
-        glyph
-    );
+    return _font_map_push(builder, codepoint, glyph);
 }
 
 bool psf_load(const char *path) {
@@ -145,10 +121,8 @@ bool psf_load(const char *path) {
         return false;
     }
 
-    psf_blob_t blob_info = {0};
-    font_map_t *map = NULL;
-    size_t map_count = 0;
-    size_t map_capacity = 0;
+    psf_blob_t blob_info = { 0 };
+    font_map_builder_t map = { 0 };
 
     if (!psf_parse_blob(blob, (size_t)node->size, &blob_info)) {
         free(blob);
@@ -156,16 +130,10 @@ bool psf_load(const char *path) {
         return false;
     }
 
-    font_map_builder_t builder = {
-        .map = &map,
-        .map_count = &map_count,
-        .map_capacity = &map_capacity,
-    };
-
-    if (!psf_iter_unicode_mappings(&blob_info, _collect_font_map, &builder)) {
+    if (!psf_iter_unicode_mappings(&blob_info, _collect_font_map, &map)) {
         free(blob);
-        if (map) {
-            free(map);
+        if (map.items) {
+            free(map.items);
         }
         return false;
     }
@@ -178,25 +146,22 @@ bool psf_load(const char *path) {
         .first_char = 0,
     };
 
-    _discard();
+    _discard_loaded_font();
 
-    loaded_blob = blob;
-    loaded_blob_size = (size_t)node->size;
-    loaded_font = parsed;
-    loaded_map = map;
-    loaded_map_count = map_count;
-    loaded_map_capacity = map_capacity;
-    loaded_font.map = loaded_map;
-    loaded_font.map_count = (u32)loaded_map_count;
+    current_font.blob = blob;
+    current_font.font = parsed;
+    current_font.map = map.items;
+    current_font.font.map = current_font.map;
+    current_font.font.map_count = (u32)map.count;
 
-    console_set_font(&loaded_font);
+    console_set_font(&current_font.font);
 
     log_debug(
         "loaded font '%s' (%ux%u, %u glyphs)",
         path,
-        (unsigned int)loaded_font.glyph_width,
-        (unsigned int)loaded_font.glyph_height,
-        (unsigned int)loaded_font.glyph_count
+        (unsigned int)current_font.font.glyph_width,
+        (unsigned int)current_font.font.glyph_height,
+        (unsigned int)current_font.font.glyph_count
     );
 
     return true;
@@ -205,8 +170,7 @@ bool psf_load(const char *path) {
 void psf_load_boot_font(const char *path) {
     size_t text_cols = 0;
     size_t text_rows = 0;
-    bool had_text_grid =
-        console_get_size(&text_cols, &text_rows) && text_cols && text_rows;
+    bool had_text_grid = console_get_size(&text_cols, &text_rows) && text_cols && text_rows;
 
     if (!path || !path[0]) {
         return;

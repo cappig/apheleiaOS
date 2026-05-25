@@ -21,7 +21,7 @@ static volatile sig_atomic_t *sh_sigchld = NULL;
 static void (*sh_sigchld_cb)(void) = NULL;
 static char *sh_history[SH_HISTORY_MAX];
 static size_t sh_history_count = 0;
-static termios_t sh_tty_saved = {0};
+static termios_t sh_tty_saved = { 0 };
 static bool sh_tty_saved_valid = false;
 
 typedef struct {
@@ -244,11 +244,7 @@ static void layout_line(
     *cursor_row_out = total_cursor_cells / cols;
 }
 
-static bool cursor_on_wrap_boundary(
-    const sh_layout_ctx_t *ctx,
-    const char *buf,
-    size_t cursor
-) {
+static bool cursor_on_wrap_boundary(const sh_layout_ctx_t *ctx, const char *buf, size_t cursor) {
     if (!ctx || !buf || !cursor) {
         return false;
     }
@@ -259,8 +255,7 @@ static bool cursor_on_wrap_boundary(
     return !((total % cols));
 }
 
-static size_t
-total_cells(const sh_layout_ctx_t *ctx, const char *buf, size_t cursor) {
+static size_t total_cells(const sh_layout_ctx_t *ctx, const char *buf, size_t cursor) {
     if (!ctx || !buf) {
         return 0;
     }
@@ -375,9 +370,7 @@ void history_add(const char *line) {
     }
 
     free(sh_history[0]);
-    memmove(
-        &sh_history[0], &sh_history[1], (SH_HISTORY_MAX - 1) * sizeof(char *)
-    );
+    memmove(&sh_history[0], &sh_history[1], (SH_HISTORY_MAX - 1) * sizeof(char *));
     sh_history[SH_HISTORY_MAX - 1] = strdup(line);
 }
 
@@ -448,12 +441,7 @@ static bool read_escape_byte(char *out) {
     }
 }
 
-int read_line_interactive(
-    const char *prompt,
-    char *buf,
-    size_t len,
-    bool use_history
-) {
+int read_line_interactive(const char *prompt, char *buf, size_t len, bool use_history) {
     if (!prompt || !buf || len < 2) {
         return -1;
     }
@@ -464,7 +452,7 @@ int read_line_interactive(
 
     size_t pos = 0;
     size_t cursor = 0;
-    sh_render_state_t render = {1, 0};
+    sh_render_state_t render = { 1, 0 };
     sh_layout_ctx_t layout = {
         .cols = normalize_cols(term_cols()),
         .prompt_cells = display_cells(prompt, strlen(prompt)),
@@ -473,7 +461,7 @@ int read_line_interactive(
     bool tab_erase_valid = false;
     size_t tab_erase_start = 0;
     size_t tab_erase_end = 0;
-    char scratch[SH_INPUT_LINE_MAX] = {0};
+    char scratch[SH_INPUT_LINE_MAX] = { 0 };
     buf[0] = '\0';
 
     io_write_str(prompt);
@@ -513,7 +501,7 @@ int read_line_interactive(
         }
 
         if (ch == '\t') {
-            sh_complete_result_t complete = {0};
+            sh_complete_result_t complete = { 0 };
             complete_line(buf, len, &pos, &cursor, &complete);
 
             if (complete.changed) {
@@ -531,17 +519,8 @@ int read_line_interactive(
         }
 
         if (ch == '\b' || (unsigned char)ch == 0x7f) {
-            if (
-                tab_erase_valid &&
-                cursor == pos &&
-                cursor == tab_erase_end &&
-                tab_erase_end > tab_erase_start
-            ) {
-                memmove(
-                    buf + tab_erase_start,
-                    buf + tab_erase_end,
-                    pos - tab_erase_end + 1
-                );
+            if (tab_erase_valid && cursor == pos && cursor == tab_erase_end && tab_erase_end > tab_erase_start) {
+                memmove(buf + tab_erase_start, buf + tab_erase_end, pos - tab_erase_end + 1);
 
                 pos -= tab_erase_end - tab_erase_start;
                 cursor = tab_erase_start;
@@ -559,8 +538,7 @@ int read_line_interactive(
                 size_t old_cursor = cursor;
                 size_t start = prev_char(buf, old_cursor);
 
-                size_t removed_cells =
-                    display_cells(buf + start, old_cursor - start);
+                size_t removed_cells = display_cells(buf + start, old_cursor - start);
 
                 if (!removed_cells) {
                     removed_cells = 1;
@@ -577,14 +555,7 @@ int read_line_interactive(
                         io_write_str("\b \b");
                     }
 
-                    layout_line(
-                        &layout,
-                        buf,
-                        pos,
-                        cursor,
-                        &render.rows,
-                        &render.cursor_row
-                    );
+                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
                 } else {
                     size_t old_total = total_cells(&layout, buf, old_cursor);
                     move_left_from_total(old_total, removed_cells, cols);
@@ -602,14 +573,7 @@ int read_line_interactive(
 
                     move_left_from_total(end_total, tail_cells + 1, cols);
 
-                    layout_line(
-                        &layout,
-                        buf,
-                        pos,
-                        cursor,
-                        &render.rows,
-                        &render.cursor_row
-                    );
+                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
                 }
             }
             continue;
@@ -644,16 +608,7 @@ int read_line_interactive(
                     history_cursor--;
                 }
 
-                load_history_line(
-                    prompt,
-                    &layout,
-                    &render,
-                    sh_history[history_cursor],
-                    buf,
-                    len,
-                    &pos,
-                    &cursor
-                );
+                load_history_line(prompt, &layout, &render, sh_history[history_cursor], buf, len, &pos, &cursor);
             } else if (seq2 == 'B' && use_history) {
                 if (history_cursor < 0) {
                     continue;
@@ -661,28 +616,10 @@ int read_line_interactive(
 
                 if ((size_t)(history_cursor + 1) < sh_history_count) {
                     history_cursor++;
-                    load_history_line(
-                        prompt,
-                        &layout,
-                        &render,
-                        sh_history[history_cursor],
-                        buf,
-                        len,
-                        &pos,
-                        &cursor
-                    );
+                    load_history_line(prompt, &layout, &render, sh_history[history_cursor], buf, len, &pos, &cursor);
                 } else {
                     history_cursor = -1;
-                    load_history_line(
-                        prompt,
-                        &layout,
-                        &render,
-                        scratch,
-                        buf,
-                        len,
-                        &pos,
-                        &cursor
-                    );
+                    load_history_line(prompt, &layout, &render, scratch, buf, len, &pos, &cursor);
                 }
             } else if (seq2 == 'C') {
                 if (cursor < pos) {
@@ -693,18 +630,9 @@ int read_line_interactive(
                     cursor = next;
                     size_t new_total = total_cells(&layout, buf, cursor);
 
-                    move_right_from_total(
-                        old_total, new_total - old_total, cols
-                    );
+                    move_right_from_total(old_total, new_total - old_total, cols);
 
-                    layout_line(
-                        &layout,
-                        buf,
-                        pos,
-                        cursor,
-                        &render.rows,
-                        &render.cursor_row
-                    );
+                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
                 }
             } else if (seq2 == 'D') {
                 if (cursor > 0) {
@@ -716,22 +644,14 @@ int read_line_interactive(
 
                     cursor = prev;
 
-                    size_t move_cells =
-                        display_cells(buf + prev, old_cursor - prev);
+                    size_t move_cells = display_cells(buf + prev, old_cursor - prev);
 
                     if (!move_cells) {
                         move_cells = 1;
                     }
 
                     move_left_from_total(old_total, move_cells, cols);
-                    layout_line(
-                        &layout,
-                        buf,
-                        pos,
-                        cursor,
-                        &render.rows,
-                        &render.cursor_row
-                    );
+                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
                 }
             }
 
@@ -756,15 +676,11 @@ int read_line_interactive(
 
             write(STDOUT_FILENO, &ch, 1);
 
-            layout_line(
-                &layout, buf, pos, cursor, &render.rows, &render.cursor_row
-            );
+            layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
         } else {
             size_t old_cursor = cursor;
 
-            memmove(
-                buf + old_cursor + 1, buf + old_cursor, pos - old_cursor + 1
-            );
+            memmove(buf + old_cursor + 1, buf + old_cursor, pos - old_cursor + 1);
 
             buf[old_cursor] = ch;
             pos++;
@@ -781,9 +697,7 @@ int read_line_interactive(
                 move_left_from_total(end_total, tail_cells, cols);
             }
 
-            layout_line(
-                &layout, buf, pos, cursor, &render.rows, &render.cursor_row
-            );
+            layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
         }
     }
 }

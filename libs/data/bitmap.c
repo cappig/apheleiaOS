@@ -35,11 +35,7 @@ bool bitmap_get(bitmap_word_t *bitmap, size_t index) {
     return ((bitmap[word] >> bit) & 1U) != 0;
 }
 
-bool bitmap_find_first_clear(
-    const bitmap_word_t *bitmap,
-    size_t bit_count,
-    size_t *index_out
-) {
+bool bitmap_find_first_clear(const bitmap_word_t *bitmap, size_t bit_count, size_t *index_out) {
     if (!bitmap || !index_out) {
         return false;
     }

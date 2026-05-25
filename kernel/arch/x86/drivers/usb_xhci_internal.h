@@ -7,98 +7,97 @@
 #include <sched/scheduler.h>
 #include <stdbool.h>
 #include <stddef.h>
-
 #include <sys/lock.h>
 #include <sys/pci.h>
 #include <sys/usb.h>
 #include <x86/asm.h>
 
-#define USB_SUBCLASS       0x03
-#define USB_PROGIF_XHCI    0x30
+#define USB_SUBCLASS    0x03
+#define USB_PROGIF_XHCI 0x30
 
-#define XHCI_BAR0          0x10
-#define XHCI_MMIO_SIZE     0x10000
-#define XHCI_MSI_VECTOR    0x41
+#define XHCI_BAR0       0x10
+#define XHCI_MMIO_SIZE  0x10000
+#define XHCI_MSI_VECTOR 0x41
 
-#define XHCI_MAX_DEVICES       8
-#define XHCI_MAX_SCAN_PORTS    32U
-#define XHCI_MAX_SCRATCHPADS   512U
-#define XHCI_DMA_BYTES         4096U
+#define XHCI_MAX_DEVICES     8
+#define XHCI_MAX_SCAN_PORTS  32U
+#define XHCI_MAX_SCRATCHPADS 512U
+#define XHCI_DMA_BYTES       4096U
 
-#define XHCI_CAPLENGTH_OFF     0x00
-#define XHCI_HCSPARAMS1_OFF    0x04
-#define XHCI_HCSPARAMS2_OFF    0x08
-#define XHCI_HCCPARAMS1_OFF    0x10
-#define XHCI_DBOFF_OFF         0x14
-#define XHCI_RTSOFF_OFF        0x18
+#define XHCI_CAPLENGTH_OFF  0x00
+#define XHCI_HCSPARAMS1_OFF 0x04
+#define XHCI_HCSPARAMS2_OFF 0x08
+#define XHCI_HCCPARAMS1_OFF 0x10
+#define XHCI_DBOFF_OFF      0x14
+#define XHCI_RTSOFF_OFF     0x18
 
-#define XHCI_OP_USBCMD_OFF     0x00
-#define XHCI_OP_USBSTS_OFF     0x04
-#define XHCI_OP_PAGESIZE_OFF   0x08
-#define XHCI_OP_CRCR_OFF       0x18
-#define XHCI_OP_DCBAAP_OFF     0x30
-#define XHCI_OP_CONFIG_OFF     0x38
-#define XHCI_OP_PORTSC_BASE    0x400
-#define XHCI_OP_PORTSC_STRIDE  0x10
+#define XHCI_OP_USBCMD_OFF    0x00
+#define XHCI_OP_USBSTS_OFF    0x04
+#define XHCI_OP_PAGESIZE_OFF  0x08
+#define XHCI_OP_CRCR_OFF      0x18
+#define XHCI_OP_DCBAAP_OFF    0x30
+#define XHCI_OP_CONFIG_OFF    0x38
+#define XHCI_OP_PORTSC_BASE   0x400
+#define XHCI_OP_PORTSC_STRIDE 0x10
 
-#define XHCI_USBCMD_RUNSTOP    (1U << 0)
-#define XHCI_USBCMD_HCRST      (1U << 1)
-#define XHCI_USBCMD_INTE       (1U << 2)
+#define XHCI_USBCMD_RUNSTOP (1U << 0)
+#define XHCI_USBCMD_HCRST   (1U << 1)
+#define XHCI_USBCMD_INTE    (1U << 2)
 
-#define XHCI_USBSTS_HCH        (1U << 0)
-#define XHCI_USBSTS_HSE        (1U << 2)
-#define XHCI_USBSTS_EINT       (1U << 3)
-#define XHCI_USBSTS_PCD        (1U << 4)
-#define XHCI_USBSTS_CNR        (1U << 11)
+#define XHCI_USBSTS_HCH  (1U << 0)
+#define XHCI_USBSTS_HSE  (1U << 2)
+#define XHCI_USBSTS_EINT (1U << 3)
+#define XHCI_USBSTS_PCD  (1U << 4)
+#define XHCI_USBSTS_CNR  (1U << 11)
 
 #define XHCI_CONFIG_MAX_SLOTS_MASK 0xffU
 
-#define XHCI_RT_IR0_OFF        0x20
-#define XHCI_IR_IMAN_OFF       0x00
-#define XHCI_IR_IMOD_OFF       0x04
-#define XHCI_IR_ERSTSZ_OFF     0x08
-#define XHCI_IR_ERSTBA_OFF     0x10
-#define XHCI_IR_ERDP_OFF       0x18
+#define XHCI_RT_IR0_OFF    0x20
+#define XHCI_IR_IMAN_OFF   0x00
+#define XHCI_IR_IMOD_OFF   0x04
+#define XHCI_IR_ERSTSZ_OFF 0x08
+#define XHCI_IR_ERSTBA_OFF 0x10
+#define XHCI_IR_ERDP_OFF   0x18
 
-#define XHCI_IMAN_IP           (1U << 0)
-#define XHCI_IMAN_IE           (1U << 1)
-#define XHCI_ERDP_EHB          (1ULL << 3)
+#define XHCI_IMAN_IP  (1U << 0)
+#define XHCI_IMAN_IE  (1U << 1)
+#define XHCI_ERDP_EHB (1ULL << 3)
 
-#define XHCI_PORTSC_CCS        (1U << 0)
-#define XHCI_PORTSC_PED        (1U << 1)
-#define XHCI_PORTSC_PR         (1U << 4)
-#define XHCI_PORTSC_PP         (1U << 9)
-#define XHCI_PORTSC_WPR        (1U << 31)
-#define XHCI_PORTSC_WCE        (1U << 24)
-#define XHCI_PORTSC_WDE        (1U << 25)
-#define XHCI_PORTSC_WOE        (1U << 26)
-#define XHCI_PORTSC_CHANGE_BITS 0x00fe0000U
-#define XHCI_PORTSC_SPEED_SHIFT 10
-#define XHCI_PORTSC_SPEED_MASK  0xf
+#define XHCI_PORTSC_CCS           (1U << 0)
+#define XHCI_PORTSC_PED           (1U << 1)
+#define XHCI_PORTSC_PR            (1U << 4)
+#define XHCI_PORTSC_PP            (1U << 9)
+#define XHCI_PORTSC_WPR           (1U << 31)
+#define XHCI_PORTSC_WCE           (1U << 24)
+#define XHCI_PORTSC_WDE           (1U << 25)
+#define XHCI_PORTSC_WOE           (1U << 26)
+#define XHCI_PORTSC_CHANGE_BITS   0x00fe0000U
+#define XHCI_PORTSC_SPEED_SHIFT   10
+#define XHCI_PORTSC_SPEED_MASK    0xf
 #define XHCI_PORTSC_PRESERVE_BITS (XHCI_PORTSC_PP)
 
-#define XHCI_TRB_TYPE_SHIFT    10
-#define XHCI_TRB_TYPE_MASK     0x3fU
-#define XHCI_TRB_CYCLE         (1U << 0)
-#define XHCI_TRB_ENT           (1U << 1)
-#define XHCI_TRB_ISP           (1U << 2)
-#define XHCI_TRB_CHAIN         (1U << 4)
-#define XHCI_TRB_IOC           (1U << 5)
-#define XHCI_TRB_IDT           (1U << 6)
+#define XHCI_TRB_TYPE_SHIFT 10
+#define XHCI_TRB_TYPE_MASK  0x3fU
+#define XHCI_TRB_CYCLE      (1U << 0)
+#define XHCI_TRB_ENT        (1U << 1)
+#define XHCI_TRB_ISP        (1U << 2)
+#define XHCI_TRB_CHAIN      (1U << 4)
+#define XHCI_TRB_IOC        (1U << 5)
+#define XHCI_TRB_IDT        (1U << 6)
 
-#define XHCI_TRB_TYPE_NORMAL            1U
-#define XHCI_TRB_TYPE_SETUP_STAGE       2U
-#define XHCI_TRB_TYPE_DATA_STAGE        3U
-#define XHCI_TRB_TYPE_STATUS_STAGE      4U
-#define XHCI_TRB_TYPE_LINK              6U
-#define XHCI_TRB_TYPE_ENABLE_SLOT       9U
-#define XHCI_TRB_TYPE_DISABLE_SLOT      10U
-#define XHCI_TRB_TYPE_ADDRESS_DEVICE    11U
+#define XHCI_TRB_TYPE_NORMAL             1U
+#define XHCI_TRB_TYPE_SETUP_STAGE        2U
+#define XHCI_TRB_TYPE_DATA_STAGE         3U
+#define XHCI_TRB_TYPE_STATUS_STAGE       4U
+#define XHCI_TRB_TYPE_LINK               6U
+#define XHCI_TRB_TYPE_ENABLE_SLOT        9U
+#define XHCI_TRB_TYPE_DISABLE_SLOT       10U
+#define XHCI_TRB_TYPE_ADDRESS_DEVICE     11U
 #define XHCI_TRB_TYPE_CONFIGURE_ENDPOINT 12U
-#define XHCI_TRB_TYPE_EVALUATE_CONTEXT  13U
-#define XHCI_TRB_TYPE_NOOP_CMD          23U
-#define XHCI_TRB_TYPE_TRANSFER_EVENT    32U
-#define XHCI_TRB_TYPE_CMD_COMPLETION    33U
+#define XHCI_TRB_TYPE_EVALUATE_CONTEXT   13U
+#define XHCI_TRB_TYPE_NOOP_CMD           23U
+#define XHCI_TRB_TYPE_TRANSFER_EVENT     32U
+#define XHCI_TRB_TYPE_CMD_COMPLETION     33U
 #define XHCI_TRB_TYPE_PORT_STATUS_CHANGE 34U
 
 #define XHCI_TRB_SLOT_ID_SHIFT 24
@@ -106,27 +105,27 @@
 #define XHCI_LINK_TOGGLE_CYCLE (1U << 1)
 #define XHCI_CMD_BSR           (1U << 9)
 
-#define XHCI_CC_SUCCESS        1U
+#define XHCI_CC_SUCCESS              1U
 #define XHCI_CC_ENDPOINT_NOT_ENABLED 12U
-#define XHCI_CC_SHORT_PACKET   13U
+#define XHCI_CC_SHORT_PACKET         13U
 
-#define XHCI_SETUP_TRT_SHIFT   16
-#define XHCI_SETUP_TRT_NONE    0U
-#define XHCI_SETUP_TRT_OUT     2U
-#define XHCI_SETUP_TRT_IN      3U
+#define XHCI_SETUP_TRT_SHIFT 16
+#define XHCI_SETUP_TRT_NONE  0U
+#define XHCI_SETUP_TRT_OUT   2U
+#define XHCI_SETUP_TRT_IN    3U
 
-#define XHCI_EP_TYPE_ISO_OUT   1U
-#define XHCI_EP_TYPE_BULK_OUT  2U
-#define XHCI_EP_TYPE_INT_OUT   3U
-#define XHCI_EP_TYPE_CTRL      4U
-#define XHCI_EP_TYPE_ISO_IN    5U
-#define XHCI_EP_TYPE_BULK_IN   6U
-#define XHCI_EP_TYPE_INT_IN    7U
+#define XHCI_EP_TYPE_ISO_OUT  1U
+#define XHCI_EP_TYPE_BULK_OUT 2U
+#define XHCI_EP_TYPE_INT_OUT  3U
+#define XHCI_EP_TYPE_CTRL     4U
+#define XHCI_EP_TYPE_ISO_IN   5U
+#define XHCI_EP_TYPE_BULK_IN  6U
+#define XHCI_EP_TYPE_INT_IN   7U
 
-#define XHCI_CMD_TIMEOUT_MS   2000
-#define XHCI_XFER_TIMEOUT_MS  8000
-#define XHCI_HALT_TIMEOUT_MS  500
-#define XHCI_CNR_TIMEOUT_MS   8000
+#define XHCI_CMD_TIMEOUT_MS  2000
+#define XHCI_XFER_TIMEOUT_MS 8000
+#define XHCI_HALT_TIMEOUT_MS 500
+#define XHCI_CNR_TIMEOUT_MS  8000
 
 typedef struct PACKED {
     u32 parameter_lo;
@@ -306,12 +305,7 @@ static inline u64 _read64(volatile void *base, size_t offset) {
     return (u64)_read32(base, offset) | ((u64)_read32(base, offset + 4) << 32);
 }
 
-static inline void _xhci_write64_mmio(
-    const xhci_controller_t *ctrl,
-    volatile void *base,
-    size_t offset,
-    u64 value
-) {
+static inline void _xhci_write64_mmio(const xhci_controller_t *ctrl, volatile void *base, size_t offset, u64 value) {
     if (!base) {
         return;
     }
@@ -352,13 +346,7 @@ static inline u8 _ep_to_dci(u8 endpoint) {
 }
 
 
-bool _xhci_write64_checked(
-    xhci_controller_t *ctrl,
-    volatile void *base,
-    size_t offset,
-    u64 value,
-    u64 verify_mask
-);
+bool _xhci_write64_checked(xhci_controller_t *ctrl, volatile void *base, size_t offset, u64 value, u64 verify_mask);
 bool _wait_bits32(const volatile u32 *reg, u32 mask, bool set, u32 timeout_ms);
 void _xhci_op_lock(xhci_controller_t *ctrl);
 void _xhci_op_unlock(xhci_controller_t *ctrl);
@@ -366,21 +354,12 @@ bool _xhci_alloc_dma_pages(xhci_controller_t *ctrl, size_t pages, u64 *out_paddr
 void _xhci_free_dma_pages(u64 *paddr, size_t pages);
 void _xhci_reset_wait_state(xhci_controller_t *ctrl);
 bool _xhci_ring_init(xhci_controller_t *ctrl, xhci_ring_state_t *ring, u64 ring_paddr);
-bool _xhci_ring_enqueue(
-    xhci_controller_t *ctrl,
-    xhci_ring_state_t *ring,
-    const xhci_trb_t *trb,
-    u64 *out_trb_paddr
-);
+bool _xhci_ring_enqueue(xhci_controller_t *ctrl, xhci_ring_state_t *ring, const xhci_trb_t *trb, u64 *out_trb_paddr);
 xhci_controller_t *_xhci_find_by_hcd(size_t hcd_id);
 bool _xhci_runtime_available(const xhci_controller_t *ctrl);
 u32 _xhci_read_usbsts(xhci_controller_t *ctrl);
 bool _xhci_ensure_running(xhci_controller_t *ctrl);
-void _xhci_set_health_state(
-    xhci_controller_t *ctrl,
-    xhci_health_t state,
-    const char *reason
-);
+void _xhci_set_health_state(xhci_controller_t *ctrl, xhci_health_t state, const char *reason);
 void _xhci_log_fault_snapshot(xhci_controller_t *ctrl, const char *reason);
 bool _xhci_update_erdp(xhci_controller_t *ctrl, volatile void *mmio);
 bool _xhci_dcbaa_set_entry(xhci_controller_t *ctrl, size_t index, u64 value);
@@ -388,18 +367,8 @@ bool _xhci_ring_doorbell(xhci_controller_t *ctrl, u8 db_index, u8 target);
 bool _xhci_get_mmio_base(const pci_found_t *node, u64 *out_mmio_base);
 
 bool _xhci_wait_cmd(xhci_controller_t *ctrl, u32 timeout_ms, u8 *out_cc, u8 *out_slot);
-bool _xhci_wait_xfer(
-    xhci_controller_t *ctrl,
-    u32 timeout_ms,
-    u8 *out_cc,
-    u32 *out_residual
-);
-bool _xhci_submit_command(
-    xhci_controller_t *ctrl,
-    const xhci_trb_t *cmd,
-    u8 *out_slot,
-    u32 timeout_ms
-);
+bool _xhci_wait_xfer(xhci_controller_t *ctrl, u32 timeout_ms, u8 *out_cc, u32 *out_residual);
+bool _xhci_submit_command(xhci_controller_t *ctrl, const xhci_trb_t *cmd, u8 *out_slot, u32 timeout_ms);
 bool _xhci_submit_transfer(
     xhci_controller_t *ctrl,
     xhci_usb_device_t *dev,
@@ -420,55 +389,19 @@ bool _xhci_cmd_configure_endpoint(xhci_controller_t *ctrl, u8 slot_id, u64 input
 bool _xhci_cmd_evaluate_context(xhci_controller_t *ctrl, u8 slot_id, u64 input_ctx);
 
 void _xhci_ack_port_change_bits(volatile u8 *op, size_t off, u32 portsc);
-void _xhci_report_port(
-    xhci_controller_t *ctrl,
-    volatile u8 *op,
-    size_t port,
-    bool clear_changes,
-    bool log_connected
-);
-size_t _xhci_scan_ports(
-    xhci_controller_t *ctrl,
-    volatile u8 *op,
-    bool clear_changes,
-    bool log_connected
-);
-bool _xhci_process_events(
-    xhci_controller_t *ctrl,
-    volatile void *mmio,
-    volatile u8 *op,
-    bool process_port_events
-);
-bool _xhci_poll_events(
-    xhci_controller_t *ctrl,
-    bool process_port_events,
-    bool force_event_scan
-);
+void _xhci_report_port(xhci_controller_t *ctrl, volatile u8 *op, size_t port, bool clear_changes, bool log_connected);
+size_t _xhci_scan_ports(xhci_controller_t *ctrl, volatile u8 *op, bool clear_changes, bool log_connected);
+bool _xhci_process_events(xhci_controller_t *ctrl, volatile void *mmio, volatile u8 *op, bool process_port_events);
+bool _xhci_poll_events(xhci_controller_t *ctrl, bool process_port_events, bool force_event_scan);
 void _xhci_service_interrupts(void);
 void _xhci_enable_port_power(xhci_controller_t *ctrl, volatile u8 *op);
 void _xhci_log_port_snapshot(xhci_controller_t *ctrl, volatile u8 *op);
-size_t _xhci_wait_for_ports(
-    xhci_controller_t *ctrl,
-    volatile u8 *op,
-    u32 timeout_ms
-);
+size_t _xhci_wait_for_ports(xhci_controller_t *ctrl, volatile u8 *op, u32 timeout_ms);
 bool _xhci_port_reset(xhci_controller_t *ctrl, size_t port, usb_speed_t *out_speed);
 u8 _xhci_speed_to_psiv(usb_speed_t speed);
 
-void _xhci_set_slot_ctx(
-    xhci_controller_t *ctrl,
-    u32 *slot_ctx,
-    u8 speed_id,
-    u8 context_entries,
-    u8 root_port
-);
-void _xhci_set_ep_ctx(
-    u32 *ep_ctx,
-    u8 ep_type,
-    u16 max_packet,
-    u64 dequeue_paddr,
-    u16 avg_trb_len
-);
+void _xhci_set_slot_ctx(xhci_controller_t *ctrl, u32 *slot_ctx, u8 speed_id, u8 context_entries, u8 root_port);
+void _xhci_set_ep_ctx(u32 *ep_ctx, u8 ep_type, u16 max_packet, u64 dequeue_paddr, u16 avg_trb_len);
 bool _xhci_prepare_address_ctx(xhci_usb_device_t *dev);
 bool _xhci_prepare_ep0_eval_ctx(xhci_usb_device_t *dev);
 bool _xhci_prepare_config_ctx(xhci_usb_device_t *dev);
@@ -491,11 +424,7 @@ bool _xhci_bulk_xfer(
     size_t *out_actual
 );
 void _xhci_free_usb_device(xhci_usb_device_t *dev);
-void _xhci_release_usb_device(
-    xhci_controller_t *ctrl,
-    size_t port,
-    xhci_usb_device_t *dev
-);
+void _xhci_release_usb_device(xhci_controller_t *ctrl, size_t port, xhci_usb_device_t *dev);
 void _xhci_release_device(size_t hcd_id, size_t port, void *device_ctx);
 
 bool _xhci_hcd_control_transfer(
@@ -513,16 +442,5 @@ bool _xhci_hcd_bulk_transfer(
     size_t *out_actual
 );
 bool _xhci_hcd_port_reset(size_t hcd_id, size_t port, usb_speed_t *out_speed);
-bool _xhci_hcd_device_open(
-    size_t hcd_id,
-    size_t port,
-    usb_speed_t speed,
-    void **out_device_ctx
-);
-bool _xhci_hcd_set_address(
-    size_t hcd_id,
-    size_t port,
-    void *device_ctx,
-    u8 address,
-    u16 ep0_mps
-);
+bool _xhci_hcd_device_open(size_t hcd_id, size_t port, usb_speed_t speed, void **out_device_ctx);
+bool _xhci_hcd_set_address(size_t hcd_id, size_t port, void *device_ctx, u8 address, u16 ep0_mps);

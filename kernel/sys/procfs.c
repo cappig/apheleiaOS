@@ -131,8 +131,7 @@ static char _state_char(thread_state_t state) {
     }
 }
 
-static ssize_t
-_text_read(const char *text, void *buf, size_t offset, size_t len) {
+static ssize_t _text_read(const char *text, void *buf, size_t offset, size_t len) {
     if (!text || !buf) {
         return -EINVAL;
     }
@@ -171,15 +170,8 @@ static bool _parse_i64(const void *buf, size_t len, long long *out) {
     }
 
     char *end_trim = start + strlen(start);
-    while (
-        end_trim > start &&
-        (
-            end_trim[-1] == ' ' || 
-            end_trim[-1] == '\t' ||
-            end_trim[-1] == '\r' ||
-            end_trim[-1] == '\n'
-        )
-    ) {
+    while (end_trim > start &&
+           (end_trim[-1] == ' ' || end_trim[-1] == '\t' || end_trim[-1] == '\r' || end_trim[-1] == '\n')) {
         end_trim--;
     }
 
@@ -218,15 +210,8 @@ static bool _parse_u64(const void *buf, size_t len, u64 *out) {
     }
 
     char *end_trim = start + strlen(start);
-    while (
-        end_trim > start &&
-        (
-            end_trim[-1] == ' ' ||
-            end_trim[-1] == '\t' ||
-            end_trim[-1] == '\r' ||
-            end_trim[-1] == '\n'
-        )
-    ) {
+    while (end_trim > start &&
+           (end_trim[-1] == ' ' || end_trim[-1] == '\t' || end_trim[-1] == '\r' || end_trim[-1] == '\n')) {
         end_trim--;
     }
 
@@ -245,13 +230,7 @@ static bool _parse_u64(const void *buf, size_t len, u64 *out) {
     return true;
 }
 
-static bool _parse_gid_list(
-    const void *buf,
-    size_t len,
-    gid_t *groups,
-    size_t max_groups,
-    size_t *group_count_out
-) {
+static bool _parse_gid_list(const void *buf, size_t len, gid_t *groups, size_t max_groups, size_t *group_count_out) {
     if (!buf || !groups || !group_count_out) {
         return false;
     }
@@ -318,11 +297,7 @@ static bool _resolve_pid(pid_t encoded_pid, pid_t *out_pid) {
     return true;
 }
 
-static bool _proc_snapshot_from_key(
-    uintptr_t key,
-    sched_proc_snapshot_t *snapshot,
-    pid_t *pid_out
-) {
+static bool _proc_snapshot_from_key(uintptr_t key, sched_proc_snapshot_t *snapshot, pid_t *pid_out) {
     if (!snapshot) {
         return false;
     }
@@ -437,7 +412,7 @@ static bool _owner_for_pid(pid_t pid, uid_t *uid_out, gid_t *gid_out) {
         }
     }
 
-    sched_proc_snapshot_t snapshot = {0};
+    sched_proc_snapshot_t snapshot = { 0 };
 
     if (!sched_proc_snapshot(pid, &snapshot)) {
         return false;
@@ -496,20 +471,14 @@ bool procfs_stat_owner(vfs_node_t *node, uid_t *uid_out, gid_t *gid_out) {
     return false;
 }
 
-static ssize_t _proc_stat_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf) {
         return -EINVAL;
     }
 
-    sched_proc_snapshot_t snapshot = {0};
+    sched_proc_snapshot_t snapshot = { 0 };
     if (!_proc_snapshot_from_key((uintptr_t)node->private, &snapshot, NULL)) {
         return -ENOENT;
     }
@@ -553,13 +522,7 @@ static ssize_t _proc_stat_read(
     return _text_read(text, buf, offset, len);
 }
 
-static ssize_t _proc_cwd_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _proc_cwd_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf) {
@@ -579,13 +542,7 @@ static ssize_t _proc_cwd_read(
     return _text_read(text, buf, offset, len);
 }
 
-static ssize_t _proc_value_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _proc_value_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf) {
@@ -595,7 +552,7 @@ static ssize_t _proc_value_read(
     uintptr_t key = (uintptr_t)node->private;
     proc_field_t field = _proc_key_field(key);
 
-    sched_proc_snapshot_t snapshot = {0};
+    sched_proc_snapshot_t snapshot = { 0 };
     if (!_proc_snapshot_from_key(key, &snapshot, NULL)) {
         return -ENOENT;
     }
@@ -636,13 +593,7 @@ static ssize_t _proc_value_read(
     return _text_read(text, buf, offset, len);
 }
 
-static ssize_t _proc_groups_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _proc_groups_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf) {
@@ -655,28 +606,17 @@ static ssize_t _proc_groups_read(
     }
 
     gid_t primary_gid = 0;
-    gid_t groups[SCHED_GROUP_MAX] = {0};
+    gid_t groups[SCHED_GROUP_MAX] = { 0 };
     size_t group_count = 0;
 
-    int rc = sched_getgroups_pid(
-        pid,
-        &primary_gid,
-        groups,
-        sizeof(groups) / sizeof(groups[0]),
-        &group_count
-    );
+    int rc = sched_getgroups_pid(pid, &primary_gid, groups, sizeof(groups) / sizeof(groups[0]), &group_count);
     if (rc < 0) {
         return rc;
     }
 
     char text[PROCFS_TEXT_MAX];
     size_t used = 0;
-    int written = snprintf(
-        text + used,
-        sizeof(text) - used,
-        "%llu",
-        (unsigned long long)primary_gid
-    );
+    int written = snprintf(text + used, sizeof(text) - used, "%llu", (unsigned long long)primary_gid);
 
     if (written <= 0 || (size_t)written >= sizeof(text) - used) {
         return -EIO;
@@ -688,12 +628,7 @@ static ssize_t _proc_groups_read(
             continue;
         }
 
-        written = snprintf(
-            text + used,
-            sizeof(text) - used,
-            " %llu",
-            (unsigned long long)groups[i]
-        );
+        written = snprintf(text + used, sizeof(text) - used, " %llu", (unsigned long long)groups[i]);
 
         if (written <= 0 || (size_t)written >= sizeof(text) - used) {
             break;
@@ -712,13 +647,7 @@ static ssize_t _proc_groups_read(
     return _text_read(text, buf, offset, len);
 }
 
-static ssize_t _proc_groups_write(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _proc_groups_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf || offset != 0) {
@@ -731,7 +660,7 @@ static ssize_t _proc_groups_write(
         return -EPERM;
     }
 
-    gid_t groups[SCHED_GROUP_MAX] = {0};
+    gid_t groups[SCHED_GROUP_MAX] = { 0 };
     size_t group_count = 0;
     if (!_parse_gid_list(buf, len, groups, SCHED_GROUP_MAX, &group_count)) {
         return -EINVAL;
@@ -745,13 +674,7 @@ static ssize_t _proc_groups_write(
     return (ssize_t)len;
 }
 
-static ssize_t _proc_affinity_read(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _proc_affinity_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf) {
@@ -774,13 +697,7 @@ static ssize_t _proc_affinity_read(
     return _text_read(text, buf, offset, len);
 }
 
-static ssize_t _proc_affinity_write(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _proc_affinity_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf || !len || offset != 0) {
@@ -805,13 +722,7 @@ static ssize_t _proc_affinity_write(
     return (ssize_t)len;
 }
 
-static ssize_t _proc_value_write(
-    vfs_node_t *node,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags
-) {
+static ssize_t _proc_value_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf || !len) {
@@ -888,16 +799,9 @@ static ssize_t _proc_value_write(
             return -EINVAL;
         }
 
-        const u32 blockable_mask =
-            ((u32)0x7fffffffU) &
-            (u32) ~(1u << (SIGKILL - 1)) &
-            (u32) ~(1u << (SIGSTOP - 1));
+        const u32 blockable_mask = ((u32)0x7fffffffU) & (u32) ~(1u << (SIGKILL - 1)) & (u32) ~(1u << (SIGSTOP - 1));
 
-        __atomic_store_n(
-            &thread->signal_mask,
-            ((u32)value) & blockable_mask,
-            __ATOMIC_RELEASE
-        );
+        __atomic_store_n(&thread->signal_mask, ((u32)value) & blockable_mask, __ATOMIC_RELEASE);
         ret = 0;
         break;
     }
@@ -912,12 +816,7 @@ static ssize_t _proc_value_write(
     return (ssize_t)len;
 }
 
-static bool _upsert_dir(
-    vfs_node_t *parent,
-    const char *name,
-    mode_t mode,
-    vfs_node_t **out
-) {
+static bool _upsert_dir(vfs_node_t *parent, const char *name, mode_t mode, vfs_node_t **out) {
     if (!parent || !name) {
         return false;
     }
@@ -944,13 +843,7 @@ static bool _upsert_dir(
     return true;
 }
 
-static bool _upsert_file(
-    vfs_node_t *parent,
-    const char *name,
-    mode_t mode,
-    proc_field_t field,
-    pid_t pid
-) {
+static bool _upsert_file(vfs_node_t *parent, const char *name, mode_t mode, proc_field_t field, pid_t pid) {
     if (!parent || !name) {
         return false;
     }
@@ -966,30 +859,15 @@ static bool _upsert_file(
 
     if (!node->interface) {
         if (field == PROC_FIELD_STAT) {
-            vfs_adopt_interface(
-                node,
-                vfs_create_interface(_proc_stat_read, NULL, NULL)
-            );
+            vfs_adopt_interface(node, vfs_create_interface(_proc_stat_read, NULL, NULL));
         } else if (field == PROC_FIELD_CWD) {
-            vfs_adopt_interface(
-                node,
-                vfs_create_interface(_proc_cwd_read, NULL, NULL)
-            );
+            vfs_adopt_interface(node, vfs_create_interface(_proc_cwd_read, NULL, NULL));
         } else if (field == PROC_FIELD_GROUPS) {
-            vfs_adopt_interface(
-                node,
-                vfs_create_interface(_proc_groups_read, _proc_groups_write, NULL)
-            );
+            vfs_adopt_interface(node, vfs_create_interface(_proc_groups_read, _proc_groups_write, NULL));
         } else if (field == PROC_FIELD_AFFINITY) {
-            vfs_adopt_interface(
-                node,
-                vfs_create_interface(_proc_affinity_read, _proc_affinity_write, NULL)
-            );
+            vfs_adopt_interface(node, vfs_create_interface(_proc_affinity_read, _proc_affinity_write, NULL));
         } else {
-            vfs_adopt_interface(
-                node,
-                vfs_create_interface(_proc_value_read, _proc_value_write, NULL)
-            );
+            vfs_adopt_interface(node, vfs_create_interface(_proc_value_read, _proc_value_write, NULL));
         }
 
         if (!node->interface) {

@@ -18,9 +18,9 @@
 #include <sched/scheduler.h>
 #include <sched/signal.h>
 #include <signal.h>
-#include <stdio.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/config.h>
@@ -37,10 +37,10 @@
 #include <sys/tty.h>
 #include <sys/usercopy.h>
 #include <sys/vfs.h>
-#include "ws.h"
-
 #include <time.h>
 #include <unistd.h>
+
+#include "ws.h"
 
 #define SYSCALL_INT 0x80
 
@@ -137,13 +137,11 @@ static int _pty_index_from_dev_name(const char *dev_name) {
 
     int idx = 0;
 
-    if (!strncmp(dev_name, "pts", 3) &&
-        _parse_index(dev_name + 3, (int)PTY_COUNT, &idx)) {
+    if (!strncmp(dev_name, "pts", 3) && _parse_index(dev_name + 3, (int)PTY_COUNT, &idx)) {
         return idx;
     }
 
-    if (!strncmp(dev_name, "pty", 3) &&
-        _parse_index(dev_name + 3, (int)PTY_COUNT, &idx)) {
+    if (!strncmp(dev_name, "pty", 3) && _parse_index(dev_name + 3, (int)PTY_COUNT, &idx)) {
         return idx;
     }
 
@@ -160,11 +158,7 @@ static void _sync_thread_tty(sched_thread_t *thread, const sched_fd_t *entry) {
     }
 }
 
-static int _enforce_sticky(
-    const sched_thread_t *thread,
-    vfs_node_t *parent,
-    vfs_node_t *target
-) {
+static int _enforce_sticky(const sched_thread_t *thread, vfs_node_t *parent, vfs_node_t *target) {
     if (!thread || !parent || !target) {
         return -EINVAL;
     }
@@ -234,13 +228,7 @@ static void _free_exec_vec(exec_vec_t *vec) {
     }
 }
 
-static bool _user_field(
-    const void *base,
-    size_t index,
-    size_t item_size,
-    size_t member_offset,
-    void **out
-) {
+static bool _user_field(const void *base, size_t index, size_t item_size, size_t member_offset, void **out) {
     if (!base || !item_size || !out) {
         return false;
     }
@@ -336,12 +324,7 @@ static int _copy_exec_vec(
     return 0;
 }
 
-static int _resolve_user_path(
-    const sched_thread_t *thread,
-    const char *path,
-    char *out,
-    size_t out_len
-) {
+static int _resolve_user_path(const sched_thread_t *thread, const char *path, char *out, size_t out_len) {
     if (!path) {
         return -EFAULT;
     }
@@ -368,8 +351,7 @@ static int _resolve_user_path(
     return 0;
 }
 
-static ssize_t
-_pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblock) {
+static ssize_t _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblock) {
     if (!pipe || !buf) {
         return -EINVAL;
     }
@@ -387,9 +369,7 @@ _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblock) {
 
     for (;;) {
         bool eof = false;
-        u32 wait_seq = pipe->read_wait_queue
-                           ? sched_wait_seq(pipe->read_wait_queue)
-                           : 0;
+        u32 wait_seq = pipe->read_wait_queue ? sched_wait_seq(pipe->read_wait_queue) : 0;
 
         unsigned long irq_flags = spin_lock_irqsave(&pipe->lock);
         if (ring_io_size(&pipe->ring)) {
@@ -430,12 +410,8 @@ _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblock) {
         }
 
         if (pipe->read_wait_queue) {
-            sched_wait_result_t wait_result = sched_wait_on_queue(
-                pipe->read_wait_queue,
-                wait_seq,
-                0,
-                SCHED_WAIT_INTERRUPTIBLE
-            );
+            sched_wait_result_t
+                wait_result = sched_wait_on_queue(pipe->read_wait_queue, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
             if (wait_result == SCHED_WAIT_INTR) {
                 result = -EINTR;
                 break;
@@ -447,8 +423,7 @@ _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblock) {
     return result;
 }
 
-static ssize_t
-_pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
+static ssize_t _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
     if (!pipe || !buf) {
         return -EINVAL;
     }
@@ -467,9 +442,7 @@ _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
 
     for (;;) {
         bool no_readers = false;
-        u32 wait_seq = pipe->write_wait_queue
-                           ? sched_wait_seq(pipe->write_wait_queue)
-                           : 0;
+        u32 wait_seq = pipe->write_wait_queue ? sched_wait_seq(pipe->write_wait_queue) : 0;
 
         unsigned long irq_flags = spin_lock_irqsave(&pipe->lock);
 
@@ -520,12 +493,8 @@ _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
         }
 
         if (pipe->write_wait_queue) {
-            sched_wait_result_t wait_result = sched_wait_on_queue(
-                pipe->write_wait_queue,
-                wait_seq,
-                0,
-                SCHED_WAIT_INTERRUPTIBLE
-            );
+            sched_wait_result_t
+                wait_result = sched_wait_on_queue(pipe->write_wait_queue, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
             if (wait_result == SCHED_WAIT_INTR) {
                 result = total > 0 ? (ssize_t)total : -EINTR;
                 break;
@@ -537,13 +506,7 @@ _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool nonblock) {
     return result;
 }
 
-static bool _split_parent(
-    const char *path,
-    char *parent,
-    size_t parent_len,
-    char *base,
-    size_t base_len
-) {
+static bool _split_parent(const char *path, char *parent, size_t parent_len, char *base, size_t base_len) {
     if (!path || !parent || !base || parent_len < 2 || !base_len) {
         return false;
     }
@@ -599,8 +562,7 @@ static int _resolve_writable_parent(
         return -EINVAL;
     }
 
-    int search_err =
-        vfs_check_search(parent_path, thread->uid, thread->gid, false);
+    int search_err = vfs_check_search(parent_path, thread->uid, thread->gid, false);
 
     if (search_err < 0) {
         return search_err;
@@ -621,11 +583,7 @@ static int _resolve_writable_parent(
     return 0;
 }
 
-static bool _region_bounds(
-    const sched_user_region_t *region,
-    uintptr_t *start_out,
-    uintptr_t *end_out
-) {
+static bool _region_bounds(const sched_user_region_t *region, uintptr_t *start_out, uintptr_t *end_out) {
     if (!region || !region->pages) {
         return false;
     }
@@ -663,11 +621,7 @@ static uintptr_t _region_end(const sched_user_region_t *region) {
     return end;
 }
 
-static bool _region_overlaps(
-    const sched_user_region_t *region,
-    uintptr_t start,
-    uintptr_t end
-) {
+static bool _region_overlaps(const sched_user_region_t *region, uintptr_t start, uintptr_t end) {
     if (start >= end) {
         return false;
     }
@@ -698,22 +652,14 @@ static uintptr_t _pick_mmap_base(sched_thread_t *thread, size_t size) {
         stack_end = (uintptr_t)-1;
     }
 
-    for (
-        sched_user_region_t *region = thread->regions;
-        region;
-        region = region->next
-    ) {
+    for (sched_user_region_t *region = thread->regions; region; region = region->next) {
         uintptr_t region_start = 0;
         uintptr_t region_end = 0;
         if (!_region_bounds(region, &region_start, &region_end)) {
             continue;
         }
 
-        if (
-            stack_base &&
-            region_start >= stack_base &&
-            region_end <= stack_end
-        ) {
+        if (stack_base && region_start >= stack_base && region_end <= stack_end) {
             continue;
         }
 
@@ -734,11 +680,7 @@ static uintptr_t _pick_mmap_base(sched_thread_t *thread, size_t size) {
     while (advanced) {
         advanced = false;
 
-        for (
-            sched_user_region_t *region = thread->regions;
-            region;
-            region = region->next
-        ) {
+        for (sched_user_region_t *region = thread->regions; region; region = region->next) {
             if (size > (uintptr_t)-1 - addr) {
                 return 0;
             }
@@ -768,23 +710,15 @@ static uintptr_t _pick_mmap_base(sched_thread_t *thread, size_t size) {
     return addr;
 }
 
-static sched_user_region_t *_find_region_exact(
-    sched_thread_t *thread,
-    uintptr_t addr,
-    size_t pages,
-    sched_user_region_t **prev_out
-) {
+static sched_user_region_t *
+_find_region_exact(sched_thread_t *thread, uintptr_t addr, size_t pages, sched_user_region_t **prev_out) {
     if (!thread) {
         return NULL;
     }
 
     sched_user_region_t *prev = NULL;
 
-    for (
-        sched_user_region_t *region = thread->regions;
-        region;
-        region = region->next
-    ) {
+    for (sched_user_region_t *region = thread->regions; region; region = region->next) {
         if (region->vaddr == addr && region->pages == pages) {
             if (prev_out) {
                 *prev_out = prev;
@@ -823,14 +757,9 @@ static bool _mmap_flags_valid(int flags) {
     return (flags & ~known) == 0;
 }
 
-static void _drop_region_exact(
-    sched_thread_t *thread,
-    uintptr_t addr,
-    size_t pages
-) {
+static void _drop_region_exact(sched_thread_t *thread, uintptr_t addr, size_t pages) {
     sched_user_region_t *prev = NULL;
-    sched_user_region_t *region =
-        _find_region_exact(thread, addr, pages, &prev);
+    sched_user_region_t *region = _find_region_exact(thread, addr, pages, &prev);
 
     if (!region) {
         return;
@@ -854,14 +783,8 @@ static void _unmap_user_pages(void *root, uintptr_t addr, size_t pages) {
     }
 }
 
-static void _mmap_undo_alloc(
-    sched_thread_t *thread,
-    void *root,
-    uintptr_t addr,
-    uintptr_t paddr,
-    size_t pages,
-    bool drop_region
-) {
+static void
+_mmap_undo_alloc(sched_thread_t *thread, void *root, uintptr_t addr, uintptr_t paddr, size_t pages, bool drop_region) {
     if (drop_region) {
         _drop_region_exact(thread, addr, pages);
     }
@@ -934,11 +857,7 @@ static bool _off_add(off_t base, off_t delta, off_t *out) {
     return true;
 }
 
-static bool _fd_advance_offset(
-    sched_fd_t *entry,
-    size_t offset,
-    size_t amount
-) {
+static bool _fd_advance_offset(sched_fd_t *entry, size_t offset, size_t amount) {
     if (!entry || amount > SIZE_MAX - offset) {
         return false;
     }
@@ -965,13 +884,7 @@ static unsigned char _dirent_type(u32 type) {
     }
 }
 
-static ssize_t _fd_getdents(
-    sched_fd_t *entry,
-    void *buf,
-    size_t len,
-    size_t offset,
-    bool advance_offset
-) {
+static ssize_t _fd_getdents(sched_fd_t *entry, void *buf, size_t len, size_t offset, bool advance_offset) {
     if (!entry || !buf) {
         return -EINVAL;
     }
@@ -1028,9 +941,7 @@ static ssize_t _fd_getdents(
         memset(out[written].d_name, 0, sizeof(out[written].d_name));
 
         if (vnode->name) {
-            strncpy(
-                out[written].d_name, vnode->name, sizeof(out[written].d_name) - 1
-            );
+            strncpy(out[written].d_name, vnode->name, sizeof(out[written].d_name) - 1);
         }
 
         written++;
@@ -1074,15 +985,7 @@ static ssize_t _fd_read_vfs(
     }
 
     ssize_t ws_result = 0;
-    if (ws_node_read(
-            entry->node,
-            thread ? thread->pid : 0,
-            buf,
-            offset,
-            len,
-            _fd_vfs_io_flags(entry),
-            &ws_result
-        )) {
+    if (ws_node_read(entry->node, thread ? thread->pid : 0, buf, offset, len, _fd_vfs_io_flags(entry), &ws_result)) {
         if (ws_result == VFS_EOF) {
             return 0;
         }
@@ -1096,8 +999,7 @@ static ssize_t _fd_read_vfs(
         return ws_result;
     }
 
-    ssize_t ret =
-        vfs_read(entry->node, buf, offset, len, _fd_vfs_io_flags(entry));
+    ssize_t ret = vfs_read(entry->node, buf, offset, len, _fd_vfs_io_flags(entry));
 
     if (ret == VFS_EOF) {
         return 0;
@@ -1135,15 +1037,7 @@ static ssize_t _fd_write_vfs(
     }
 
     ssize_t ws_result = 0;
-    if (ws_node_write(
-            entry->node,
-            thread ? thread->pid : 0,
-            buf,
-            offset,
-            len,
-            _fd_vfs_io_flags(entry),
-            &ws_result
-        )) {
+    if (ws_node_write(entry->node, thread ? thread->pid : 0, buf, offset, len, _fd_vfs_io_flags(entry), &ws_result)) {
         if (ws_result > 0) {
             if (advance_offset) {
                 if (!_fd_advance_offset(entry, offset, (size_t)ws_result)) {
@@ -1156,9 +1050,7 @@ static ssize_t _fd_write_vfs(
         return ws_result;
     }
 
-    ssize_t ret = vfs_write(
-        entry->node, (void *)buf, offset, len, _fd_vfs_io_flags(entry)
-    );
+    ssize_t ret = vfs_write(entry->node, (void *)buf, offset, len, _fd_vfs_io_flags(entry));
 
     if (ret > 0) {
         if (advance_offset) {
@@ -1200,7 +1092,7 @@ static ssize_t sys_read(int fd, void *buf, size_t len) {
             thread->tty_index = (int)tty_current_screen();
         }
 
-        tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+        tty_handle_t handle = { .kind = TTY_HANDLE_CURRENT, .index = 0 };
 
         return tty_read_handle(&handle, buf, len);
     }
@@ -1285,9 +1177,7 @@ static ssize_t sys_write(int fd, const void *buf, size_t len) {
             return _pipe_write(entry->pipe, buf, len, nonblock);
         }
 
-        return _fd_write_vfs(
-            thread, entry, buf, len, entry->offset, true, true, -EBADF
-        );
+        return _fd_write_vfs(thread, entry, buf, len, entry->offset, true, true, -EBADF);
     }
 
     if (fd == STDOUT_FILENO || fd == STDERR_FILENO || fd == STDIN_FILENO) {
@@ -1295,7 +1185,7 @@ static ssize_t sys_write(int fd, const void *buf, size_t len) {
             thread->tty_index = (int)tty_current_screen();
         }
 
-        tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+        tty_handle_t handle = { .kind = TTY_HANDLE_CURRENT, .index = 0 };
 
         return tty_write_handle(&handle, buf, len);
     }
@@ -1330,9 +1220,7 @@ static ssize_t sys_pwrite(int fd, const void *buf, size_t len, off_t offset) {
 
     _sync_thread_tty(thread, entry);
 
-    return _fd_write_vfs(
-        thread, entry, buf, len, write_offset, false, false, -ESPIPE
-    );
+    return _fd_write_vfs(thread, entry, buf, len, write_offset, false, false, -ESPIPE);
 }
 
 static ssize_t sys_ioctl(int fd, u64 request, void *args) {
@@ -1362,7 +1250,7 @@ static ssize_t sys_ioctl(int fd, u64 request, void *args) {
         thread->tty_index = (int)tty_current_screen();
     }
 
-    tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+    tty_handle_t handle = { .kind = TTY_HANDLE_CURRENT, .index = 0 };
 
     return tty_ioctl_handle(&handle, request, args);
 }
@@ -1387,8 +1275,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     }
 
     char resolved[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -1408,15 +1295,12 @@ static int sys_open(const char *path, int flags, mode_t mode) {
             }
 
             char master_path[PATH_MAX];
-            snprintf(
-                master_path, sizeof(master_path), "/dev/pty%zu", ptmx_index
-            );
+            snprintf(master_path, sizeof(master_path), "/dev/pty%zu", ptmx_index);
             snprintf(resolved, sizeof(resolved), "%s", master_path);
             ptmx_open = true;
             dev = resolved + 5;
 
-            int search_err =
-                vfs_check_search(resolved, thread->uid, thread->gid, true);
+            int search_err = vfs_check_search(resolved, thread->uid, thread->gid, true);
 
             if (search_err < 0) {
                 return _open_fail(ptmx_open, ptmx_index, search_err);
@@ -1524,8 +1408,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         fd_flags |= SCHED_FD_FLAG_CLOEXEC;
     }
 
-    u32 runtime_flags =
-        (u32)flags & (u32)(O_ACCMODE | O_APPEND | O_NONBLOCK | O_SYNC);
+    u32 runtime_flags = (u32)flags & (u32)(O_ACCMODE | O_APPEND | O_NONBLOCK | O_SYNC);
 
     sched_fd_t fd = {
         .kind = SCHED_FD_VFS,
@@ -1577,7 +1460,7 @@ static int sys_pipe(int *fds) {
         return -EINVAL;
     }
 
-    int pair[2] = {-1, -1};
+    int pair[2] = { -1, -1 };
     if (!user_write_prepare(thread, fds, sizeof(pair))) {
         return -EFAULT;
     }
@@ -1716,9 +1599,8 @@ static int sys_fcntl(int fd, int cmd, uintptr_t arg) {
         if (!_fd_lookup(thread, fd, &entry)) {
             return -EBADF;
         }
-        entry->flags =
-            (entry->flags & ~(O_APPEND | O_NONBLOCK | O_SYNC)) |
-            ((u32)arg & (O_APPEND | O_NONBLOCK | O_SYNC));
+        entry->flags = (entry->flags & ~(O_APPEND | O_NONBLOCK | O_SYNC)) |
+                       ((u32)arg & (O_APPEND | O_NONBLOCK | O_SYNC));
         return 0;
 
     default:
@@ -1730,8 +1612,7 @@ static int sys_mkdir(const char *path, mode_t mode) {
     sched_thread_t *thread = sched_current();
 
     char resolved[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -1758,8 +1639,7 @@ static int sys_mkdir(const char *path, mode_t mode) {
         return parent_err;
     }
 
-    vfs_node_t *node =
-        vfs_create(parent, base, VFS_DIR, _apply_umask(mode, thread->umask));
+    vfs_node_t *node = vfs_create(parent, base, VFS_DIR, _apply_umask(mode, thread->umask));
 
     if (!node) {
         return -EIO;
@@ -1777,8 +1657,7 @@ static int sys_rmdir(const char *path) {
     sched_thread_t *thread = sched_current();
 
     char resolved[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -1838,8 +1717,7 @@ static int sys_chdir(const char *path) {
     sched_thread_t *thread = sched_current();
 
     char resolved[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -1869,8 +1747,7 @@ static int sys_access(const char *path, int mode) {
     sched_thread_t *thread = sched_current();
 
     char resolved[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -1894,7 +1771,7 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
         return (uintptr_t)-EINVAL;
     }
 
-    mmap_args_t req = {0};
+    mmap_args_t req = { 0 };
     if (!user_copy_from(thread, &req, args, sizeof(req))) {
         return (uintptr_t)-EFAULT;
     }
@@ -1976,21 +1853,13 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
     }
 
     if (fixed) {
-        for (
-            sched_user_region_t *region = thread->regions;
-            region;
-            region = region->next
-        ) {
+        for (sched_user_region_t *region = thread->regions; region; region = region->next) {
             if (_region_overlaps(region, addr, end)) {
                 return (uintptr_t)-ENOMEM;
             }
         }
     } else {
-        for (
-            sched_user_region_t *region = thread->regions;
-            region;
-            region = region->next
-        ) {
+        for (sched_user_region_t *region = thread->regions; region; region = region->next) {
             if (!_region_overlaps(region, addr, end)) {
                 continue;
             }
@@ -2147,8 +2016,7 @@ static int sys_munmap(void *addr, size_t len) {
             }
 
             tail->vaddr = overlap_end;
-            tail->paddr =
-                region->paddr + (overlap_page_index + overlap_pages) * PAGE_4KIB;
+            tail->paddr = region->paddr + (overlap_page_index + overlap_pages) * PAGE_4KIB;
             tail->pages = after_pages;
             tail->flags = region->flags;
             tail->next = next;
@@ -2161,8 +2029,7 @@ static int sys_munmap(void *addr, size_t len) {
             arch_tlb_flush(vaddr);
         }
 
-        uintptr_t overlap_paddr =
-            region->paddr + overlap_page_index * (uintptr_t)PAGE_4KIB;
+        uintptr_t overlap_paddr = region->paddr + overlap_page_index * (uintptr_t)PAGE_4KIB;
 
         arch_free_frames((void *)overlap_paddr, overlap_pages);
         sched_user_mem_sub(thread, overlap_pages);
@@ -2240,8 +2107,7 @@ static int _sys_stat_path(const char *path, stat_t *st, bool follow_links) {
     }
 
     char resolved[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -2252,7 +2118,7 @@ static int _sys_stat_path(const char *path, stat_t *st, bool follow_links) {
         return -ENOENT;
     }
 
-    stat_t local = {0};
+    stat_t local = { 0 };
     int stat_ret = vfs_stat_node(node, &local, follow_links);
     if (stat_ret < 0) {
         return stat_ret;
@@ -2293,7 +2159,7 @@ static int sys_fstat(int fd, stat_t *st) {
     }
 
     if (entry->kind == SCHED_FD_PIPE_READ || entry->kind == SCHED_FD_PIPE_WRITE) {
-        stat_t local = {0};
+        stat_t local = { 0 };
 
         local.st_mode = S_IFIFO | 0666;
         local.st_nlink = 1;
@@ -2309,7 +2175,7 @@ static int sys_fstat(int fd, stat_t *st) {
         return -EBADF;
     }
 
-    stat_t local = {0};
+    stat_t local = { 0 };
     int stat_ret = vfs_stat_node(entry->node, &local, true);
     if (stat_ret < 0) {
         return stat_ret;
@@ -2333,8 +2199,7 @@ static int sys_chmod(const char *path, mode_t mode) {
     sched_thread_t *thread = sched_current();
 
     char resolved[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -2372,8 +2237,7 @@ static int sys_chown(const char *path, uid_t uid, gid_t gid) {
     sched_thread_t *thread = sched_current();
 
     char resolved[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -2416,15 +2280,13 @@ static int sys_link(const char *oldpath, const char *newpath) {
     }
 
     char resolved_old[PATH_MAX];
-    int old_err =
-        _resolve_user_path(thread, oldpath, resolved_old, sizeof(resolved_old));
+    int old_err = _resolve_user_path(thread, oldpath, resolved_old, sizeof(resolved_old));
     if (old_err < 0) {
         return old_err;
     }
 
     char resolved_new[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, newpath, resolved_new, sizeof(resolved_new));
+    int resolve_err = _resolve_user_path(thread, newpath, resolved_new, sizeof(resolved_new));
     if (resolve_err < 0) {
         return resolve_err;
     }
@@ -2459,15 +2321,13 @@ static int sys_symlink(const char *target, const char *linkpath) {
     }
 
     char target_buf[PATH_MAX];
-    int target_err =
-        user_copy_string(thread, target, target_buf, sizeof(target_buf));
+    int target_err = user_copy_string(thread, target, target_buf, sizeof(target_buf));
     if (target_err < 0) {
         return target_err;
     }
 
     char resolved_link[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, linkpath, resolved_link, sizeof(resolved_link));
+    int resolve_err = _resolve_user_path(thread, linkpath, resolved_link, sizeof(resolved_link));
     if (resolve_err < 0) {
         return resolve_err;
     }
@@ -2522,17 +2382,14 @@ static ssize_t sys_readlink(const char *path, char *buf, size_t bufsiz) {
 
     size_t len = strlen(node->symlink_target);
     size_t copy_len = len < bufsiz ? len : bufsiz;
-    return user_copy_to(thread, buf, node->symlink_target, copy_len)
-        ? (ssize_t)copy_len
-        : -EFAULT;
+    return user_copy_to(thread, buf, node->symlink_target, copy_len) ? (ssize_t)copy_len : -EFAULT;
 }
 
 static int sys_unlink(const char *path) {
     sched_thread_t *thread = sched_current();
 
     char resolved[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -2573,15 +2430,13 @@ static int sys_rename(const char *oldpath, const char *newpath) {
 
     char resolved_old[PATH_MAX];
     char resolved_new[PATH_MAX];
-    int resolve_err =
-        _resolve_user_path(thread, oldpath, resolved_old, sizeof(resolved_old));
+    int resolve_err = _resolve_user_path(thread, oldpath, resolved_old, sizeof(resolved_old));
 
     if (resolve_err < 0) {
         return resolve_err;
     }
 
-    resolve_err =
-        _resolve_user_path(thread, newpath, resolved_new, sizeof(resolved_new));
+    resolve_err = _resolve_user_path(thread, newpath, resolved_new, sizeof(resolved_new));
 
     if (resolve_err < 0) {
         return resolve_err;
@@ -2643,12 +2498,7 @@ static int sys_rename(const char *oldpath, const char *newpath) {
     return vfs_rename(resolved_old, resolved_new);
 }
 
-static int sys_mount(
-    const char *source,
-    const char *target,
-    const char *filesystemtype,
-    u64 flags
-) {
+static int sys_mount(const char *source, const char *target, const char *filesystemtype, u64 flags) {
     if (!source || !target || !filesystemtype) {
         return -EFAULT;
     }
@@ -2679,22 +2529,12 @@ static int sys_mount(
     char resolved_source[PATH_MAX];
     char resolved_target[PATH_MAX];
 
-    int resolve_err = _resolve_user_path(
-        thread,
-        source,
-        resolved_source,
-        sizeof(resolved_source)
-    );
+    int resolve_err = _resolve_user_path(thread, source, resolved_source, sizeof(resolved_source));
     if (resolve_err < 0) {
         return resolve_err;
     }
 
-    resolve_err = _resolve_user_path(
-        thread,
-        target,
-        resolved_target,
-        sizeof(resolved_target)
-    );
+    resolve_err = _resolve_user_path(thread, target, resolved_target, sizeof(resolved_target));
     if (resolve_err < 0) {
         return resolve_err;
     }
@@ -2751,12 +2591,7 @@ static int sys_umount(const char *target, u64 flags) {
     }
 
     char resolved_target[PATH_MAX];
-    int resolve_err = _resolve_user_path(
-        thread,
-        target,
-        resolved_target,
-        sizeof(resolved_target)
-    );
+    int resolve_err = _resolve_user_path(thread, target, resolved_target, sizeof(resolved_target));
     if (resolve_err < 0) {
         return resolve_err;
     }
@@ -2833,7 +2668,7 @@ static off_t sys_seek(int fd, off_t offset, int whence) {
 
 static int sys_sleep(const struct timespec *req, struct timespec *rem) {
     sched_thread_t *thread = sched_current();
-    struct timespec ts = {0};
+    struct timespec ts = { 0 };
 
     if (!user_copy_from(thread, &ts, req, sizeof(ts))) {
         return -EFAULT;
@@ -2843,11 +2678,7 @@ static int sys_sleep(const struct timespec *req, struct timespec *rem) {
         return -EFAULT;
     }
 
-    if (
-        ts.tv_sec < 0 ||
-        ts.tv_nsec < 0 ||
-        ts.tv_nsec >= 1000000000L
-    ) {
+    if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000L) {
         return -EINVAL;
     }
 
@@ -2862,8 +2693,7 @@ static int sys_sleep(const struct timespec *req, struct timespec *rem) {
     }
 
     u64 ticks = seconds * hz;
-    u64 subsecond_ticks =
-        ((u64)ts.tv_nsec * hz + 999999999ULL) / 1000000000ULL;
+    u64 subsecond_ticks = ((u64)ts.tv_nsec * hz + 999999999ULL) / 1000000000ULL;
 
     if (ticks > UINT64_MAX - subsecond_ticks) {
         return -EINVAL;
@@ -2877,7 +2707,7 @@ static int sys_sleep(const struct timespec *req, struct timespec *rem) {
     sched_sleep(ticks);
 
     if (rem) {
-        struct timespec zero = {0};
+        struct timespec zero = { 0 };
         if (!user_copy_to(thread, rem, &zero, sizeof(zero))) {
             return -EFAULT;
         }
@@ -2901,22 +2731,16 @@ static int sys_time(struct timespec *realtime, struct timespec *monotonic) {
     }
 
     sched_thread_t *thread = sched_current();
-    if (
-        realtime &&
-        !user_write_prepare(thread, realtime, sizeof(*realtime))
-    ) {
+    if (realtime && !user_write_prepare(thread, realtime, sizeof(*realtime))) {
         return -EFAULT;
     }
 
-    if (
-        monotonic &&
-        !user_write_prepare(thread, monotonic, sizeof(*monotonic))
-    ) {
+    if (monotonic && !user_write_prepare(thread, monotonic, sizeof(*monotonic))) {
         return -EFAULT;
     }
 
     if (realtime) {
-        struct timespec local = {0};
+        struct timespec local = { 0 };
         _timespec_from_ns(arch_realtime_ns(), &local);
         if (!user_copy_to(thread, realtime, &local, sizeof(local))) {
             return -EFAULT;
@@ -2933,7 +2757,7 @@ static int sys_time(struct timespec *realtime, struct timespec *monotonic) {
             ns += (ticks % hz) * 1000000000ULL / hz;
         }
 
-        struct timespec local = {0};
+        struct timespec local = { 0 };
         _timespec_from_ns(ns, &local);
         if (!user_copy_to(thread, monotonic, &local, sizeof(local))) {
             return -EFAULT;
@@ -2943,16 +2767,14 @@ static int sys_time(struct timespec *realtime, struct timespec *monotonic) {
     return 0;
 }
 
-static uintptr_t
-sys_signal(int signum, sighandler_t handler, uintptr_t trampoline) {
+static uintptr_t sys_signal(int signum, sighandler_t handler, uintptr_t trampoline) {
     sched_thread_t *thread = sched_current();
 
     if (!thread) {
         return (uintptr_t)-EINVAL;
     }
 
-    sighandler_t prev =
-        sched_signal_set_handler(thread, signum, handler, trampoline);
+    sighandler_t prev = sched_signal_set_handler(thread, signum, handler, trampoline);
 
     if (prev == SIG_ERR) {
         return (uintptr_t)-EINVAL;
@@ -3015,12 +2837,7 @@ static u64 sys_kill(pid_t pid, int signum) {
     return ret < 0 ? (u64)-ESRCH : (u64)ret;
 }
 
-static int sys_execve(
-    const char *path,
-    char *const argv[],
-    char *const envp[],
-    arch_int_state_t *state
-) {
+static int sys_execve(const char *path, char *const argv[], char *const envp[], arch_int_state_t *state) {
     sched_thread_t *thread = sched_current();
     if (!thread) {
         return -EINVAL;
@@ -3032,38 +2849,20 @@ static int sys_execve(
         return err;
     }
 
-    exec_vec_t argv_copy = {0};
-    err = _copy_exec_vec(
-        thread,
-        argv,
-        EXEC_MAX_ARGS,
-        EXEC_MAX_ARG_LEN,
-        &argv_copy
-    );
+    exec_vec_t argv_copy = { 0 };
+    err = _copy_exec_vec(thread, argv, EXEC_MAX_ARGS, EXEC_MAX_ARG_LEN, &argv_copy);
     if (err < 0) {
         return err;
     }
 
-    exec_vec_t env_copy = {0};
-    err = _copy_exec_vec(
-        thread,
-        envp,
-        EXEC_MAX_ENV,
-        EXEC_MAX_ENV_LEN,
-        &env_copy
-    );
+    exec_vec_t env_copy = { 0 };
+    err = _copy_exec_vec(thread, envp, EXEC_MAX_ENV, EXEC_MAX_ENV_LEN, &env_copy);
     if (err < 0) {
         _free_exec_vec(&argv_copy);
         return err;
     }
 
-    int ret = user_exec(
-        thread,
-        path_buf,
-        argv_copy.items,
-        env_copy.items,
-        state
-    );
+    int ret = user_exec(thread, path_buf, argv_copy.items, env_copy.items, state);
 
     _free_exec_vec(&env_copy);
     _free_exec_vec(&argv_copy);
@@ -3135,13 +2934,7 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
             }
 
             short ws_revents = 0;
-            if (ws_node_poll(
-                    entry->node,
-                    thread ? thread->pid : 0,
-                    events,
-                    (u32)vfs_flags,
-                    &ws_revents
-                )) {
+            if (ws_node_poll(entry->node, thread ? thread->pid : 0, events, (u32)vfs_flags, &ws_revents)) {
                 return ws_revents;
             }
 
@@ -3158,38 +2951,23 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
     }
 
     if (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO) {
-        tty_handle_t handle = {.kind = TTY_HANDLE_CURRENT, .index = 0};
+        tty_handle_t handle = { .kind = TTY_HANDLE_CURRENT, .index = 0 };
         return tty_poll_handle(&handle, events, 0);
     }
 
     return POLLNVAL;
 }
 
-static int _poll_store_revents(
-    const sched_thread_t *thread,
-    struct pollfd *user_fds,
-    const struct pollfd *pfds,
-    nfds_t nfds
-) {
+static int
+_poll_store_revents(const sched_thread_t *thread, struct pollfd *user_fds, const struct pollfd *pfds, nfds_t nfds) {
     for (nfds_t i = 0; i < nfds; i++) {
         void *slot = NULL;
 
-        if (!_user_field(
-                user_fds,
-                i,
-                sizeof(user_fds[0]),
-                offsetof(struct pollfd, revents),
-                &slot
-            )) {
+        if (!_user_field(user_fds, i, sizeof(user_fds[0]), offsetof(struct pollfd, revents), &slot)) {
             return -EFAULT;
         }
 
-        if (!user_copy_to(
-                thread,
-                slot,
-                &pfds[i].revents,
-                sizeof(pfds[i].revents)
-            )) {
+        if (!user_copy_to(thread, slot, &pfds[i].revents, sizeof(pfds[i].revents))) {
             return -EFAULT;
         }
     }
@@ -3197,13 +2975,8 @@ static int _poll_store_revents(
     return 0;
 }
 
-static int _poll_finish(
-    const sched_thread_t *thread,
-    struct pollfd *user_fds,
-    struct pollfd *pfds,
-    nfds_t nfds,
-    int result
-) {
+static int
+_poll_finish(const sched_thread_t *thread, struct pollfd *user_fds, struct pollfd *pfds, nfds_t nfds, int result) {
     int err = _poll_store_revents(thread, user_fds, pfds, nfds);
 
     free(pfds);
@@ -3239,11 +3012,7 @@ static int _poll_deadline(int timeout_ms, u64 *deadline_out) {
     return 0;
 }
 
-static int _poll_scan(
-    sched_thread_t *thread,
-    struct pollfd *pfds,
-    nfds_t nfds
-) {
+static int _poll_scan(sched_thread_t *thread, struct pollfd *pfds, nfds_t nfds) {
     int ready = 0;
 
     for (nfds_t i = 0; i < nfds; i++) {
@@ -3384,17 +3153,13 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
     }
 
     case SYS_READ:
-        return (u64)sys_read(
-            (int)arch_syscall_arg1(state),
-            (void *)arch_syscall_arg2(state),
-            (size_t)arch_syscall_arg3(state)
-        );
+        return (
+            u64
+        )sys_read((int)arch_syscall_arg1(state), (void *)arch_syscall_arg2(state), (size_t)arch_syscall_arg3(state));
     case SYS_WRITE:
-        return (u64)sys_write(
-            (int)arch_syscall_arg1(state),
-            (void *)arch_syscall_arg2(state),
-            (size_t)arch_syscall_arg3(state)
-        );
+        return (
+            u64
+        )sys_write((int)arch_syscall_arg1(state), (void *)arch_syscall_arg2(state), (size_t)arch_syscall_arg3(state));
     case SYS_OPEN:
         return (u64)sys_open(
             (const char *)arch_syscall_arg1(state),
@@ -3406,15 +3171,11 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
     case SYS_PIPE:
         return (u64)sys_pipe((int *)arch_syscall_arg1(state));
     case SYS_DUP:
-        return (u64)sys_dup(
-            (int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state)
-        );
+        return (u64)sys_dup((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_FCNTL:
-        return (u64)sys_fcntl(
-            (int)arch_syscall_arg1(state),
-            (int)arch_syscall_arg2(state),
-            (uintptr_t)arch_syscall_arg3(state)
-        );
+        return (
+            u64
+        )sys_fcntl((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state), (uintptr_t)arch_syscall_arg3(state));
     case SYS_PREAD:
         return (u64)sys_pread(
             (int)arch_syscall_arg1(state),
@@ -3430,30 +3191,21 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (off_t)arch_syscall_arg4(state)
         );
     case SYS_SEEK:
-        return (u64)sys_seek(
-            (int)arch_syscall_arg1(state),
-            (off_t)arch_syscall_arg2(state),
-            (int)arch_syscall_arg3(state)
-        );
+        return (
+            u64
+        )sys_seek((int)arch_syscall_arg1(state), (off_t)arch_syscall_arg2(state), (int)arch_syscall_arg3(state));
     case SYS_MMAP:
         return (u64)sys_mmap((const mmap_args_t *)arch_syscall_arg1(state));
     case SYS_MUNMAP:
-        return (u64)sys_munmap(
-            (void *)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state)
-        );
+        return (u64)sys_munmap((void *)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_IOCTL:
-        return (u64)sys_ioctl(
-            (int)arch_syscall_arg1(state),
-            (u64)arch_syscall_arg2(state),
-            (void *)arch_syscall_arg3(state)
-        );
+        return (
+            u64
+        )sys_ioctl((int)arch_syscall_arg1(state), (u64)arch_syscall_arg2(state), (void *)arch_syscall_arg3(state));
     case SYS_CHDIR:
         return (u64)sys_chdir((const char *)arch_syscall_arg1(state));
     case SYS_MKDIR:
-        return (u64)sys_mkdir(
-            (const char *)arch_syscall_arg1(state),
-            (mode_t)arch_syscall_arg2(state)
-        );
+        return (u64)sys_mkdir((const char *)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state));
     case SYS_POLL:
         return (u64)sys_poll(
             (struct pollfd *)arch_syscall_arg1(state),
@@ -3469,27 +3221,15 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (size_t)arch_syscall_arg3(state)
         );
     case SYS_ACCESS:
-        return (u64)sys_access(
-            (const char *)arch_syscall_arg1(state),
-            (int)arch_syscall_arg2(state)
-        );
+        return (u64)sys_access((const char *)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_STAT:
-        return (u64)sys_stat(
-            (const char *)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state)
-        );
+        return (u64)sys_stat((const char *)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state));
     case SYS_LSTAT:
-        return (u64)sys_lstat(
-            (const char *)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state)
-        );
+        return (u64)sys_lstat((const char *)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state));
     case SYS_FSTAT:
-        return (u64)sys_fstat(
-            (int)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state)
-        );
+        return (u64)sys_fstat((int)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state));
     case SYS_CHMOD:
-        return (u64)sys_chmod(
-            (const char *)arch_syscall_arg1(state),
-            (mode_t)arch_syscall_arg2(state)
-        );
+        return (u64)sys_chmod((const char *)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state));
     case SYS_CHOWN:
         return (u64)sys_chown(
             (const char *)arch_syscall_arg1(state),
@@ -3497,15 +3237,9 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (gid_t)arch_syscall_arg3(state)
         );
     case SYS_LINK:
-        return (u64)sys_link(
-            (const char *)arch_syscall_arg1(state),
-            (const char *)arch_syscall_arg2(state)
-        );
+        return (u64)sys_link((const char *)arch_syscall_arg1(state), (const char *)arch_syscall_arg2(state));
     case SYS_SYMLINK:
-        return (u64)sys_symlink(
-            (const char *)arch_syscall_arg1(state),
-            (const char *)arch_syscall_arg2(state)
-        );
+        return (u64)sys_symlink((const char *)arch_syscall_arg1(state), (const char *)arch_syscall_arg2(state));
     case SYS_READLINK:
         return (u64)sys_readlink(
             (const char *)arch_syscall_arg1(state),
@@ -3515,10 +3249,7 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
     case SYS_UNLINK:
         return (u64)sys_unlink((const char *)arch_syscall_arg1(state));
     case SYS_RENAME:
-        return (u64)sys_rename(
-            (const char *)arch_syscall_arg1(state),
-            (const char *)arch_syscall_arg2(state)
-        );
+        return (u64)sys_rename((const char *)arch_syscall_arg1(state), (const char *)arch_syscall_arg2(state));
     case SYS_FORK:
         return (u64)sched_fork(state);
     case SYS_EXECVE:
@@ -3529,25 +3260,17 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             state
         );
     case SYS_WAIT:
-        return (u64)sys_wait(
-            (pid_t)arch_syscall_arg1(state), (int *)arch_syscall_arg2(state)
-        );
+        return (u64)sys_wait((pid_t)arch_syscall_arg1(state), (int *)arch_syscall_arg2(state));
     case SYS_WAITPID:
-        return (u64)sys_waitpid(
-            (pid_t)arch_syscall_arg1(state),
-            (int *)arch_syscall_arg2(state),
-            (int)arch_syscall_arg3(state)
-        );
+        return (
+            u64
+        )sys_waitpid((pid_t)arch_syscall_arg1(state), (int *)arch_syscall_arg2(state), (int)arch_syscall_arg3(state));
     case SYS_SLEEP:
-        return (u64)sys_sleep(
-            (const struct timespec *)arch_syscall_arg1(state),
-            (struct timespec *)arch_syscall_arg2(state)
-        );
+        return (
+            u64
+        )sys_sleep((const struct timespec *)arch_syscall_arg1(state), (struct timespec *)arch_syscall_arg2(state));
     case SYS_TIME:
-        return (u64)sys_time(
-            (struct timespec *)arch_syscall_arg1(state),
-            (struct timespec *)arch_syscall_arg2(state)
-        );
+        return (u64)sys_time((struct timespec *)arch_syscall_arg1(state), (struct timespec *)arch_syscall_arg2(state));
     case SYS_MOUNT:
         return (u64)sys_mount(
             (const char *)arch_syscall_arg1(state),
@@ -3556,10 +3279,7 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (u64)arch_syscall_arg4(state)
         );
     case SYS_UMOUNT:
-        return (u64)sys_umount(
-            (const char *)arch_syscall_arg1(state),
-            (u64)arch_syscall_arg2(state)
-        );
+        return (u64)sys_umount((const char *)arch_syscall_arg1(state), (u64)arch_syscall_arg2(state));
     case SYS_SIGNAL:
         return (u64)sys_signal(
             (int)arch_syscall_arg1(state),
@@ -3569,9 +3289,7 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
     case SYS_SIGRETURN:
         return sys_sigreturn(state);
     case SYS_KILL:
-        return sys_kill(
-            (pid_t)arch_syscall_arg1(state), (int)arch_syscall_arg2(state)
-        );
+        return sys_kill((pid_t)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     default:
         return (u64)-ENOSYS;
     }

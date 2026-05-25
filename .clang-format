@@ -1,4 +1,6 @@
-ColumnLimit: 80
+BasedOnStyle: LLVM
+Language: Cpp
+ColumnLimit: 120
 
 AlignAfterOpenBracket: BlockIndent
 AlignConsecutiveAssignments: None
@@ -10,11 +12,15 @@ AlignOperands: Align
 AlignTrailingComments: false
 
 AllowAllParametersOfDeclarationOnNextLine: false
+AllowAllArgumentsOnNextLine: false
 AllowShortBlocksOnASingleLine: Empty
 AllowShortCaseLabelsOnASingleLine: false
+AllowShortCaseExpressionOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: None
 AllowShortIfStatementsOnASingleLine: Never
 AllowShortLoopsOnASingleLine: false
+AllowShortNamespacesOnASingleLine: false
 
 AlwaysBreakAfterDefinitionReturnType: None
 AlwaysBreakAfterReturnType: None
@@ -28,6 +34,7 @@ BreakBeforeBraces: Attach
 BreakBeforeTernaryOperators: true
 BreakBeforeInlineASMColon: OnlyMultiline
 BreakStringLiterals: false
+Cpp11BracedListStyle: false
 
 UseTab: Never
 TabWidth: 4
@@ -49,10 +56,13 @@ SpacesInSquareBrackets: false
 
 PenaltyBreakComment: 100
 PenaltyBreakString: 100
+PenaltyBreakAssignment: 1000
 PenaltyExcessCharacter: 1000000
 PenaltyReturnTypeOnItsOwnLine: 50
 
 ReflowComments: true
+RemoveEmptyLinesInUnwrappedLines: false
+SeparateDefinitionBlocks: Leave
 
 PointerAlignment: Right
 

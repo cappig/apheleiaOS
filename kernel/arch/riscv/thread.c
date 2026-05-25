@@ -27,11 +27,7 @@ void arch_state_set_return(arch_int_state_t *state, arch_word_t value) {
     state->g_regs.a0 = value;
 }
 
-void arch_state_set_user_entry(
-    arch_int_state_t *state,
-    arch_word_t entry,
-    arch_word_t stack_top
-) {
+void arch_state_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top) {
     if (!state) {
         return;
     }
@@ -41,8 +37,7 @@ void arch_state_set_user_entry(
     state->s_regs.sstatus = SSTATUS_SPIE;
 }
 
-uintptr_t
-arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
+uintptr_t arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     if (!thread || !thread->stack || !thread->stack_size) {
         return 0;
     }
@@ -58,10 +53,7 @@ arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point) {
     state->s_regs.sepc = entry_point;
     state->s_regs.sstatus = SSTATUS_SPP | SSTATUS_SPIE | SSTATUS_SUM;
 
-    state->s_regs.sp = (arch_word_t)ALIGN_DOWN(
-        (uintptr_t)thread->stack + thread->stack_size,
-        16
-    );
+    state->s_regs.sp = (arch_word_t)ALIGN_DOWN((uintptr_t)thread->stack + thread->stack_size, 16);
 
     return sp;
 }

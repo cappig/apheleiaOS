@@ -19,7 +19,7 @@ void arch_wallclock_maintain(void); // x86-internal, defined in arch.c
 #endif
 
 static volatile u64 irq_tick_count ALIGNED(8) = 0;
-static volatile u64 irq_core_tick_count[MAX_CORES] ALIGNED(8) = {0};
+static volatile u64 irq_core_tick_count[MAX_CORES] ALIGNED(8) = { 0 };
 static bool use_apic_timer = false;
 static bool use_ioapic = false;
 
@@ -51,8 +51,7 @@ static inline void _publish_tick(size_t cpu_id) {
         cpu_id = 0;
     }
 
-    u64 core_ticks =
-        __atomic_add_fetch(&irq_core_tick_count[cpu_id], 1, __ATOMIC_RELAXED);
+    u64 core_ticks = __atomic_add_fetch(&irq_core_tick_count[cpu_id], 1, __ATOMIC_RELAXED);
     u64 observed = __atomic_load_n(&irq_tick_count, __ATOMIC_RELAXED);
 
     while (core_ticks > observed) {
@@ -158,19 +157,13 @@ static void _init_timer_source(bool apic_ok) {
 
     if (apic_ok && apic_timer_init(timer_hz)) {
         use_apic_timer = true;
-        log_info(
-            "APIC timer initialized at %u Hz",
-            (unsigned int)apic_timer_hz()
-        );
+        log_info("APIC timer initialized at %u Hz", (unsigned int)apic_timer_hz());
 
         return;
     }
 
     pit_set_frequency(timer_hz);
-    log_info(
-        "PIT timer initialized at %u Hz",
-        (unsigned int)pit_get_frequency()
-    );
+    log_info("PIT timer initialized at %u Hz", (unsigned int)pit_get_frequency());
 }
 
 bool irq_init(void) {
@@ -233,10 +226,7 @@ void irq_register(size_t irq, int_handler_t handler) {
         if (irq != IRQ_SYSTEM_TIMER || !use_apic_timer) {
             u32 dest = lapic_id();
             if (!ioapic_route_irq((u8)irq, (u8)vec, dest)) {
-                log_warn(
-                    "failed to route irq %u via IOAPIC",
-                    (unsigned int)irq
-                );
+                log_warn("failed to route irq %u via IOAPIC", (unsigned int)irq);
             }
         }
         return;

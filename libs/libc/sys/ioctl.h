@@ -21,19 +21,19 @@
 #define FBIOPRESENT      13
 #define FBIOPRESENT_RECT 14
 
-#define WSIOCCLAIMMGR     64
-#define WSIOCRELEASEMGR   65
-#define WSIOCSFOCUS       66
-#define WSIOCSPOS         67
-#define WSIOCSZ           68
-#define WSIOCSINPUT       69
-#define WSIOCCLOSE        70
-#define WSIOCALLOC        71
-#define WSIOCFREE         72
-#define WSIOCGINFO        73
-#define WSIOCSSIZE        74
-#define WSIOCTRANSFERMGR  75
-#define WSIOCSTITLE       76
+#define WSIOCCLAIMMGR    64
+#define WSIOCRELEASEMGR  65
+#define WSIOCSFOCUS      66
+#define WSIOCSPOS        67
+#define WSIOCSZ          68
+#define WSIOCSINPUT      69
+#define WSIOCCLOSE       70
+#define WSIOCALLOC       71
+#define WSIOCFREE        72
+#define WSIOCGINFO       73
+#define WSIOCSSIZE       74
+#define WSIOCTRANSFERMGR 75
+#define WSIOCSTITLE      76
 
 #define CLOCKIOCGSNAPSHOT 80
 #endif

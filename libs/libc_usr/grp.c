@@ -9,8 +9,7 @@
 
 #define GROUP_PATH "/etc/group"
 
-static int
-copy_field(char **cursor, size_t *left, char **out, const char *src) {
+static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
     size_t n = strlen(src) + 1;
 
     if (!cursor || !left || !out || !src || n > *left) {
@@ -25,19 +24,14 @@ copy_field(char **cursor, size_t *left, char **out, const char *src) {
     return 0;
 }
 
-static int parse_group_line(
-    const char *line,
-    struct group *grp,
-    char *buf,
-    size_t buflen
-) {
+static int parse_group_line(const char *line, struct group *grp, char *buf, size_t buflen) {
     if (!line || !grp || !buf || !buflen) {
         return EINVAL;
     }
 
-    char gr_name[64] = {0};
-    char gr_passwd[64] = {0};
-    char gid_buf[32] = {0};
+    char gr_name[64] = { 0 };
+    char gr_passwd[64] = { 0 };
+    char gid_buf[32] = { 0 };
 
     const char *cursor = line;
     cursor = textdb_next_field(cursor, gr_name, sizeof(gr_name));
@@ -67,13 +61,7 @@ static int parse_group_line(
     return rc;
 }
 
-int getgrgid_r(
-    gid_t gid,
-    struct group *grp,
-    char *buf,
-    size_t buflen,
-    struct group **result
-) {
+int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen, struct group **result) {
     if (!grp || !buf || !buflen || !result) {
         return EINVAL;
     }
@@ -104,7 +92,7 @@ int getgrgid_r(
             memcpy(tmp, line, line_len);
             tmp[line_len] = '\0';
 
-            struct group parsed = {0};
+            struct group parsed = { 0 };
             int rc = parse_group_line(tmp, &parsed, buf, buflen);
             if (rc && rc != EINVAL) {
                 return rc;

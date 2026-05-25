@@ -22,7 +22,7 @@ int getrusage(int who, struct rusage *usage) {
         return 0;
     }
 
-    proc_stat_t stat = {0};
+    proc_stat_t stat = { 0 };
     if (proc_stat_read_path("/proc/self/stat", &stat) < 0) {
         return -1;
     }

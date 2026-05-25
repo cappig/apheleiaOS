@@ -109,16 +109,14 @@ WEAK_ATTR __int128 __multi3(__int128 lhs, __int128 rhs) {
             u64 lo;
             u64 hi;
         } parts;
-    } a = {.value = (unsigned __int128)lhs}, b = {.value = (unsigned __int128)rhs},
-      result = {.value = 0};
+    } a = { .value = (unsigned __int128)lhs }, b = { .value = (unsigned __int128)rhs }, result = { .value = 0 };
 
     u64 lo_hi = 0;
     u64 lo_lo = 0;
     _umul128_64(a.parts.lo, b.parts.lo, &lo_hi, &lo_lo);
 
     result.parts.lo = lo_lo;
-    result.parts.hi =
-        lo_hi + _umul64(a.parts.lo, b.parts.hi) + _umul64(a.parts.hi, b.parts.lo);
+    result.parts.hi = lo_hi + _umul64(a.parts.lo, b.parts.hi) + _umul64(a.parts.hi, b.parts.lo);
 
     return (__int128)result.value;
 }

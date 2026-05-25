@@ -1,10 +1,11 @@
+#include "console.h"
+
 #include <arch/arch.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/console.h>
 
-#include "console.h"
 #include "serial.h"
 
 #define COLS 80
@@ -114,10 +115,8 @@ static void _sync_cursor(size_t col, size_t row) {
     }
 
     bool same = cur_col == col && cur_row == row;
-    bool wrapped_next =
-        wrap_pending && col == 0 &&
-        ((cur_row + 1 < ROWS && row == cur_row + 1) ||
-         (cur_row + 1 >= ROWS && row == ROWS - 1));
+    bool wrapped_next = wrap_pending && col == 0 &&
+                        ((cur_row + 1 < ROWS && row == cur_row + 1) || (cur_row + 1 >= ROWS && row == ROWS - 1));
 
     if (same || wrapped_next) {
         return;
@@ -216,15 +215,7 @@ static u16 _cell(u32 codepoint, u8 fg, u8 bg) {
     return ((u16)attr << 8) | ch;
 }
 
-static void _text_put(
-    u8 *fb,
-    size_t cols,
-    size_t col,
-    size_t row,
-    u32 codepoint,
-    u8 fg,
-    u8 bg
-) {
+static void _text_put(u8 *fb, size_t cols, size_t col, size_t row, u32 codepoint, u8 fg, u8 bg) {
     if (!fb || !cols || col >= cols || row >= ROWS) {
         return;
     }

@@ -78,20 +78,9 @@ typedef struct usb_device *usb_device_handle_t;
 
 typedef struct usb_hcd_ops {
     bool (*port_reset)(size_t hcd_id, size_t port, usb_speed_t *out_speed);
-    bool (*device_open)(
-        size_t hcd_id,
-        size_t port,
-        usb_speed_t speed,
-        void **out_device_ctx
-    );
+    bool (*device_open)(size_t hcd_id, size_t port, usb_speed_t speed, void **out_device_ctx);
     void (*device_close)(size_t hcd_id, size_t port, void *device_ctx);
-    bool (*set_address)(
-        size_t hcd_id,
-        size_t port,
-        void *device_ctx,
-        u8 address,
-        u16 ep0_mps
-    );
+    bool (*set_address)(size_t hcd_id, size_t port, void *device_ctx, u8 address, u16 ep0_mps);
     bool (*control_transfer)(
         size_t hcd_id,
         size_t port,
@@ -133,26 +122,17 @@ typedef struct usb_class_driver {
 #define USB_MSC_SUBCLASS_UFI      0x04
 #define USB_MSC_SUBCLASS_SFF8070I 0x05
 
-#define USB_MSC_PROTO_CBI         0x00
-#define USB_MSC_PROTO_CBI_NOINTR  0x01
-#define USB_MSC_PROTO_BOT     0x50
-#define USB_MSC_PROTO_UAS         0x62
+#define USB_MSC_PROTO_CBI        0x00
+#define USB_MSC_PROTO_CBI_NOINTR 0x01
+#define USB_MSC_PROTO_BOT        0x50
+#define USB_MSC_PROTO_UAS        0x62
 
 
 bool usb_register_class_driver(const usb_class_driver_t *driver);
 MUST_USE bool usb_unregister_class_driver(const char *name);
-bool usb_register_hcd(
-    const usb_hcd_info_t *info,
-    const usb_hcd_ops_t *ops,
-    size_t *out_hcd_id
-);
+bool usb_register_hcd(const usb_hcd_info_t *info, const usb_hcd_ops_t *ops, size_t *out_hcd_id);
 MUST_USE bool usb_unregister_hcd(size_t hcd_id);
-bool usb_report_port_state(
-    size_t hcd_id,
-    size_t port,
-    bool connected,
-    usb_speed_t speed
-);
+bool usb_report_port_state(size_t hcd_id, size_t port, bool connected, usb_speed_t speed);
 bool usb_schedule_port_enumeration(size_t hcd_id, size_t port);
 bool usb_wait_for_boot_enumeration(u32 timeout_ms);
 size_t usb_device_hcd_id(usb_device_handle_t dev);
@@ -174,11 +154,7 @@ bool usb_device_bulk_transfer(
     u32 timeout_ms,
     size_t *out_actual
 );
-bool usb_identify_device(
-    size_t hcd_id,
-    size_t port,
-    const usb_device_identity_t *identity
-);
+bool usb_identify_device(size_t hcd_id, size_t port, const usb_device_identity_t *identity);
 bool usb_control_transfer(
     size_t hcd_id,
     size_t port,

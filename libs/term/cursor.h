@@ -5,23 +5,9 @@
 
 void term_cursor_set_col(size_t *cursor_x, size_t cols, int col);
 
-void term_cursor_set_pos(
-    size_t *cursor_x,
-    size_t *cursor_y,
-    size_t cols,
-    size_t rows,
-    int row,
-    int col
-);
+void term_cursor_set_pos(size_t *cursor_x, size_t *cursor_y, size_t cols, size_t rows, int row, int col);
 
-void term_cursor_move(
-    size_t *cursor_x,
-    size_t *cursor_y,
-    size_t cols,
-    size_t rows,
-    int row_delta,
-    int col_delta
-);
+void term_cursor_move(size_t *cursor_x, size_t *cursor_y, size_t cols, size_t rows, int row_delta, int col_delta);
 
 void term_cursor_save(
     const size_t *cursor_x,

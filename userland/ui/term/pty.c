@@ -16,7 +16,7 @@
 
 extern char **environ;
 
-static const u8 ctrl_ascii[6] = {'\n', '\n', '\b', '\t', '\e', 0x7f};
+static const u8 ctrl_ascii[6] = { '\n', '\n', '\b', '\t', '\e', 0x7f };
 static const int write_wait_ms = 25;
 
 static bool write_retry(int fd, const void *data, size_t len) {
@@ -177,13 +177,7 @@ void term_handle_key_event(int master_fd, const ws_input_event_t *event) {
     write_retry(master_fd, &ch, 1);
 }
 
-bool term_set_winsize(
-    int master_fd,
-    size_t cols,
-    size_t rows,
-    u32 width,
-    u32 height
-) {
+bool term_set_winsize(int master_fd, size_t cols, size_t rows, u32 width, u32 height) {
     if (master_fd < 0 || !cols || !rows || !width || !height) {
         return false;
     }
@@ -198,13 +192,7 @@ bool term_set_winsize(
     return ioctl(master_fd, TIOCSWINSZ, &ws) == 0;
 }
 
-pid_t term_spawn_shell(
-    int master_fd,
-    size_t cols,
-    size_t rows,
-    u32 width,
-    u32 height
-) {
+pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 height) {
     if (master_fd < 0 || !cols || !rows || !width || !height) {
         return -1;
     }
@@ -232,13 +220,7 @@ pid_t term_spawn_shell(
 
         int slave_fd = open(path, O_RDWR | O_CLOEXEC, 0);
         if (slave_fd < 0) {
-            fprintf(
-                stderr,
-                "term: failed to open %s (%d: %s)\n",
-                path,
-                errno,
-                strerror(errno)
-            );
+            fprintf(stderr, "term: failed to open %s (%d: %s)\n", path, errno, strerror(errno));
             _exit(127);
         }
 
@@ -252,14 +234,9 @@ pid_t term_spawn_shell(
         close(slave_fd);
         close(master_fd);
 
-        char *argv[] = {"/bin/sh", NULL};
+        char *argv[] = { "/bin/sh", NULL };
         execve("/bin/sh", argv, environ);
-        fprintf(
-            stderr,
-            "term: failed to exec /bin/sh (%d: %s)\n",
-            errno,
-            strerror(errno)
-        );
+        fprintf(stderr, "term: failed to exec /bin/sh (%d: %s)\n", errno, strerror(errno));
         _exit(127);
     }
 

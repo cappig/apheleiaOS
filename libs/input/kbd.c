@@ -4,7 +4,7 @@
 
 #include "keymap.h"
 
-static const u8 ctrl_ascii[6] = {'\n', '\n', '\b', '\t', '\e', 0x7f};
+static const u8 ctrl_ascii[6] = { '\n', '\n', '\b', '\t', '\e', 0x7f };
 
 char kbd_to_ascii(key_event event, ascii_keymap *map, bool shift) {
     u8 code = event.code;

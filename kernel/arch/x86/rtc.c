@@ -143,8 +143,8 @@ static bool _sample_valid(const rtc_sample_t *sample) {
 u64 x86_rtc_unix_seconds(void) {
     unsigned long flags = spin_lock_irqsave(&rtc_lock);
 
-    rtc_sample_t first = {0};
-    rtc_sample_t second = {0};
+    rtc_sample_t first = { 0 };
+    rtc_sample_t second = { 0 };
 
     while (_update_in_progress()) {
         cpu_pause();
@@ -175,7 +175,7 @@ u64 x86_rtc_unix_seconds(void) {
         return 0;
     }
 
-    struct tm tm_val = {0};
+    struct tm tm_val = { 0 };
     tm_val.tm_sec = second.sec;
     tm_val.tm_min = second.min;
     tm_val.tm_hour = second.hour;

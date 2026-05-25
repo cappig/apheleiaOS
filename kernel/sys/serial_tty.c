@@ -44,7 +44,7 @@ static int set_termios(serial_tty_t *tty, void *args) {
         return -EINVAL;
     }
 
-    termios_t tos = {0};
+    termios_t tos = { 0 };
     sched_thread_t *current = sched_current();
     if (!user_copy_from(current, &tos, args, sizeof(tos))) {
         return -EFAULT;
@@ -83,7 +83,7 @@ static int set_winsize(serial_tty_t *tty, void *args) {
         return -EINVAL;
     }
 
-    winsize_t winsize = {0};
+    winsize_t winsize = { 0 };
     sched_thread_t *current = sched_current();
     if (!user_copy_from(current, &winsize, args, sizeof(winsize))) {
         return -EFAULT;

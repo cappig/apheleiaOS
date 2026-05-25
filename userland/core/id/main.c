@@ -14,13 +14,7 @@
 #define GROUP_FILE_MAX  4096
 #define ID_GROUP_MAX    32
 
-static void format_identity(
-    char *out,
-    size_t out_len,
-    const char *label,
-    unsigned long long value,
-    const char *name
-) {
+static void format_identity(char *out, size_t out_len, const char *label, unsigned long long value, const char *name) {
     if (!out || !out_len || !label) {
         return;
     }
@@ -81,12 +75,7 @@ static bool member_list_has_user(const char *members, const char *user_name) {
     return false;
 }
 
-static void append_group(
-    gid_t gid,
-    gid_t *groups,
-    size_t max_groups,
-    size_t *group_count
-) {
+static void append_group(gid_t gid, gid_t *groups, size_t max_groups, size_t *group_count) {
     if (!groups || !group_count) {
         return;
     }
@@ -105,12 +94,7 @@ static void append_group(
     (*group_count)++;
 }
 
-static size_t collect_groups(
-    const char *user_name,
-    gid_t primary_gid,
-    gid_t *groups,
-    size_t max_groups
-) {
+static size_t collect_groups(const char *user_name, gid_t primary_gid, gid_t *groups, size_t max_groups) {
     if (!groups || !max_groups) {
         return 0;
     }
@@ -211,25 +195,19 @@ int main(int argc, char **argv) {
     uid_t uid = getuid();
     gid_t gid = getgid();
 
-    char uname[32] = {0};
-    char gname[32] = {0};
+    char uname[32] = { 0 };
+    char gname[32] = { 0 };
 
-    char uid_part[64] = {0};
-    char gid_part[64] = {0};
-    char groups_part[320] = {0};
-    char line[512] = {0};
+    char uid_part[64] = { 0 };
+    char gid_part[64] = { 0 };
+    char groups_part[320] = { 0 };
+    char line[512] = { 0 };
 
     struct passwd *pwd = getpwuid(uid);
-    const char *user_name =
-        (pwd && pwd->pw_name && pwd->pw_name[0]) ? pwd->pw_name : "";
+    const char *user_name = (pwd && pwd->pw_name && pwd->pw_name[0]) ? pwd->pw_name : "";
 
-    gid_t groups[ID_GROUP_MAX] = {0};
-    size_t group_count = collect_groups(
-        user_name,
-        gid,
-        groups,
-        sizeof(groups) / sizeof(groups[0])
-    );
+    gid_t groups[ID_GROUP_MAX] = { 0 };
+    size_t group_count = collect_groups(user_name, gid, groups, sizeof(groups) / sizeof(groups[0]));
 
     format_identity(
         uid_part,
@@ -248,12 +226,8 @@ int main(int argc, char **argv) {
 
     size_t groups_used = 0;
     for (size_t i = 0; i < group_count; i++) {
-        char group_name[32] = {0};
-        const char *resolved = account_gid_name(
-            groups[i],
-            group_name,
-            sizeof(group_name)
-        );
+        char group_name[32] = { 0 };
+        const char *resolved = account_gid_name(groups[i], group_name, sizeof(group_name));
 
         int n = snprintf(
             groups_part + groups_used,
@@ -273,14 +247,7 @@ int main(int argc, char **argv) {
 
     int written = 0;
     if (groups_used) {
-        written = snprintf(
-            line,
-            sizeof(line),
-            "%s %s groups=%s\n",
-            uid_part,
-            gid_part,
-            groups_part
-        );
+        written = snprintf(line, sizeof(line), "%s %s groups=%s\n", uid_part, gid_part, groups_part);
     } else {
         written = snprintf(line, sizeof(line), "%s %s\n", uid_part, gid_part);
     }

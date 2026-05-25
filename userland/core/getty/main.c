@@ -65,7 +65,7 @@ int main(int argc, char **argv) {
         (void)ioctl(STDIN_FILENO, TIOCSPGRP, &self);
     }
 
-    char *login_argv[] = {"login", NULL};
+    char *login_argv[] = { "login", NULL };
     execve(login_path, login_argv, NULL);
 
     write_str("getty: failed to exec login\n");

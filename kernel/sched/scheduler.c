@@ -9,10 +9,7 @@ void scheduler_init(void) {
         spinlock_init(&sched_state.cpus.runqueues[i].lock);
 
         sched_state.cpus.runqueues[i].capacity = SCHED_RQ_CAPACITY;
-        sched_state.cpus.runqueues[i].heap = calloc(
-            sched_state.cpus.runqueues[i].capacity,
-            sizeof(sched_thread_t *)
-        );
+        sched_state.cpus.runqueues[i].heap = calloc(sched_state.cpus.runqueues[i].capacity, sizeof(sched_thread_t *));
 
         assert(sched_state.cpus.runqueues[i].heap);
 
@@ -36,8 +33,7 @@ void scheduler_init(void) {
     sched_wait_queue_init(&sched_state.wait.sleep_wait_queue);
 
     spinlock_init(&sched_state.wait.exit_events.lock);
-    sched_state.wait.exit_events.ring =
-        ring_queue_create(sizeof(pid_t), SCHED_EXIT_EVENT_CAP);
+    sched_state.wait.exit_events.ring = ring_queue_create(sizeof(pid_t), SCHED_EXIT_EVENT_CAP);
 
     sched_state.core.kernel_vm = arch_vm_kernel();
     assert(sched_state.core.kernel_vm);
@@ -69,8 +65,7 @@ void scheduler_init_core(void) {
     local->resched_irq_pending = false;
     local->local_ticks = 0;
 
-    sched_thread_t *idle =
-        create_thread("idle", idle_entry, NULL, false, false, SCHED_PID_IDLE);
+    sched_thread_t *idle = create_thread("idle", idle_entry, NULL, false, false, SCHED_PID_IDLE);
 
     assert(idle);
 
@@ -128,9 +123,7 @@ void scheduler_start(void) {
     sched_local_set_slice_ns(0);
     sched_local_set_need_resched(false);
     __atomic_store_n(&sched_local()->force_resched, false, __ATOMIC_RELEASE);
-    __atomic_store_n(
-        &sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE
-    );
+    __atomic_store_n(&sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE);
 
     unsigned long flags = sched_lock_save();
 
@@ -204,9 +197,7 @@ void scheduler_start_secondary(void) {
     sched_local_set_slice_ns(0);
     sched_local_set_need_resched(false);
     __atomic_store_n(&sched_local()->force_resched, false, __ATOMIC_RELEASE);
-    __atomic_store_n(
-        &sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE
-    );
+    __atomic_store_n(&sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE);
     widen_default_affinity();
 
     unsigned long flags = sched_lock_save();

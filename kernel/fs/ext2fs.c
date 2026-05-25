@@ -9,7 +9,6 @@
 #include <log/log.h>
 #include <stdlib.h>
 #include <string.h>
-
 #include <sys/disk.h>
 #include <sys/lock.h>
 #include <sys/vfs.h>
@@ -56,32 +55,22 @@ typedef struct {
 } ext2_node_info_t;
 
 
-static bool
-_ext2_read(disk_partition_t *part, void *dest, size_t offset, size_t bytes) {
+static bool _ext2_read(disk_partition_t *part, void *dest, size_t offset, size_t bytes) {
     if (!part || !part->disk || !part->disk->interface || !part->disk->interface->read) {
         return false;
     }
 
-    ssize_t read = part->disk->interface->read(
-        part->disk, dest, part->offset + offset, bytes
-    );
+    ssize_t read = part->disk->interface->read(part->disk, dest, part->offset + offset, bytes);
 
     return read == (ssize_t)bytes;
 }
 
-static bool _ext2_write(
-    disk_partition_t *part,
-    const void *src,
-    size_t offset,
-    size_t bytes
-) {
+static bool _ext2_write(disk_partition_t *part, const void *src, size_t offset, size_t bytes) {
     if (!part || !part->disk || !part->disk->interface || !part->disk->interface->write) {
         return false;
     }
 
-    ssize_t written = part->disk->interface->write(
-        part->disk, (void *)src, part->offset + offset, bytes
-    );
+    ssize_t written = part->disk->interface->write(part->disk, (void *)src, part->offset + offset, bytes);
 
     return written == (ssize_t)bytes;
 }
@@ -148,12 +137,7 @@ static void _cache_store(ext2_private_t *priv, u32 block, const void *data) {
     entry->stamp = ++priv->cache_clock;
 }
 
-static bool _read_block(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 block,
-    void *dest
-) {
+static bool _read_block(ext2_private_t *priv, disk_partition_t *part, u32 block, void *dest) {
     if (!priv || !part || !dest) {
         return false;
     }
@@ -179,12 +163,7 @@ static bool _read_block(
     return true;
 }
 
-static bool _write_block(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 block,
-    const void *src
-) {
+static bool _write_block(ext2_private_t *priv, disk_partition_t *part, u32 block, const void *src) {
     if (!priv || !part || !src || !block) {
         return false;
     }
@@ -198,12 +177,7 @@ static bool _write_block(
     return true;
 }
 
-static bool _read_inode(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 inode_num,
-    ext2_inode_t *inode
-) {
+static bool _read_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num, ext2_inode_t *inode) {
     if (!priv || !part || !inode || !inode_num) {
         return false;
     }
@@ -231,12 +205,7 @@ static bool _read_inode(
     return _ext2_read(part, inode, inode_offset, read_size);
 }
 
-static bool _write_inode(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 inode_num,
-    const ext2_inode_t *inode
-) {
+static bool _write_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num, const ext2_inode_t *inode) {
     if (!priv || !part || !inode || !inode_num) {
         return false;
     }
@@ -262,9 +231,8 @@ static bool _write_inode(
     return _ext2_write(part, inode, inode_offset, write_size);
 }
 
-static bool
-_clear_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num) {
-    ext2_inode_t zero = {0};
+static bool _clear_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num) {
+    ext2_inode_t zero = { 0 };
     return _write_inode(priv, part, inode_num, &zero);
 }
 
@@ -273,9 +241,7 @@ static bool _write_super(ext2_private_t *priv, disk_partition_t *part) {
         return false;
     }
 
-    return _ext2_write(
-        part, &priv->superblock, 1024, sizeof(ext2_superblock_t)
-    );
+    return _ext2_write(part, &priv->superblock, 1024, sizeof(ext2_superblock_t));
 }
 
 static bool _write_groups(ext2_private_t *priv, disk_partition_t *part) {
@@ -286,17 +252,11 @@ static bool _write_groups(ext2_private_t *priv, disk_partition_t *part) {
     return _ext2_write(part, priv->groups, priv->gdt_offset, priv->gdt_size);
 }
 
-static bool
-_flush_alloc_metadata(ext2_private_t *priv, disk_partition_t *part) {
+static bool _flush_alloc_metadata(ext2_private_t *priv, disk_partition_t *part) {
     return _write_super(priv, part) && _write_groups(priv, part);
 }
 
-static bool _group_block_bitmap(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 group,
-    u8 *bitmap
-) {
+static bool _group_block_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, u8 *bitmap) {
     if (!priv || !part || !bitmap || group >= priv->group_count) {
         return false;
     }
@@ -306,12 +266,7 @@ static bool _group_block_bitmap(
     return _read_block(priv, part, bitmap_block, bitmap);
 }
 
-static bool _write_group_block_bitmap(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 group,
-    const u8 *bitmap
-) {
+static bool _write_group_block_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, const u8 *bitmap) {
     if (!priv || !part || !bitmap || group >= priv->group_count) {
         return false;
     }
@@ -321,12 +276,7 @@ static bool _write_group_block_bitmap(
     return _write_block(priv, part, bitmap_block, bitmap);
 }
 
-static bool _group_inode_bitmap(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 group,
-    u8 *bitmap
-) {
+static bool _group_inode_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, u8 *bitmap) {
     if (!priv || !part || !bitmap || group >= priv->group_count) {
         return false;
     }
@@ -336,12 +286,7 @@ static bool _group_inode_bitmap(
     return _read_block(priv, part, bitmap_block, bitmap);
 }
 
-static bool _write_group_inode_bitmap(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 group,
-    const u8 *bitmap
-) {
+static bool _write_group_inode_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, const u8 *bitmap) {
     if (!priv || !part || !bitmap || group >= priv->group_count) {
         return false;
     }
@@ -401,11 +346,7 @@ static bool _should_update_atime(const ext2_inode_t *inode, u32 now) {
 #endif
 }
 
-static bool _update_super_write_time(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 now
-) {
+static bool _update_super_write_time(ext2_private_t *priv, disk_partition_t *part, u32 now) {
     if (!priv || !part) {
         return false;
     }
@@ -426,8 +367,7 @@ static void _sync_vnode(vfs_node_t *node, const ext2_inode_t *inode) {
     node->time.modified = inode->last_modification_time;
 }
 
-static bool
-_alloc_block(ext2_private_t *priv, disk_partition_t *part, u32 *out_block) {
+static bool _alloc_block(ext2_private_t *priv, disk_partition_t *part, u32 *out_block) {
     if (!priv || !part || !out_block) {
         return false;
     }
@@ -493,8 +433,7 @@ _alloc_block(ext2_private_t *priv, disk_partition_t *part, u32 *out_block) {
     return ok;
 }
 
-static bool
-_free_block(ext2_private_t *priv, disk_partition_t *part, u32 block) {
+static bool _free_block(ext2_private_t *priv, disk_partition_t *part, u32 block) {
     if (!priv || !part || !block) {
         return false;
     }
@@ -546,8 +485,7 @@ out:
     return ok;
 }
 
-static bool
-_alloc_inode(ext2_private_t *priv, disk_partition_t *part, u32 *out_inode) {
+static bool _alloc_inode(ext2_private_t *priv, disk_partition_t *part, u32 *out_inode) {
     if (!priv || !part || !out_inode) {
         return false;
     }
@@ -610,8 +548,7 @@ _alloc_inode(ext2_private_t *priv, disk_partition_t *part, u32 *out_inode) {
     return ok;
 }
 
-static bool
-_free_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num) {
+static bool _free_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num) {
     if (!priv || !part || !inode_num) {
         return false;
     }
@@ -664,8 +601,7 @@ out:
     return ok;
 }
 
-static bool
-_zero_block(ext2_private_t *priv, disk_partition_t *part, u32 block) {
+static bool _zero_block(ext2_private_t *priv, disk_partition_t *part, u32 block) {
     if (!priv || !part || !block) {
         return false;
     }
@@ -682,12 +618,7 @@ _zero_block(ext2_private_t *priv, disk_partition_t *part, u32 block) {
     return ok;
 }
 
-static u32 _block_for_index(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    const ext2_inode_t *inode,
-    u32 block_index
-) {
+static u32 _block_for_index(ext2_private_t *priv, disk_partition_t *part, const ext2_inode_t *inode, u32 block_index) {
     if (!priv || !inode) {
         return 0;
     }
@@ -814,12 +745,7 @@ static bool _ensure_block(
         }
 
         table[index] = block;
-        bool wrote_indirect = _write_block(
-            priv,
-            part,
-            info->inode.indirect_block_ptr[0],
-            table
-        );
+        bool wrote_indirect = _write_block(priv, part, info->inode.indirect_block_ptr[0], table);
 
         if (!wrote_indirect) {
             _free_block(priv, part, block);
@@ -844,11 +770,7 @@ out:
     return ok;
 }
 
-static bool _release_inode_blocks(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    ext2_inode_t *inode
-) {
+static bool _release_inode_blocks(ext2_private_t *priv, disk_partition_t *part, ext2_inode_t *inode) {
     if (!priv || !part || !inode) {
         return false;
     }
@@ -971,13 +893,7 @@ static size_t _dir_entry_size(size_t name_len) {
     return ALIGN(8 + name_len, 4);
 }
 
-static bool _dir_write_dots(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    u32 block,
-    u32 self_inode,
-    u32 parent_inode
-) {
+static bool _dir_write_dots(ext2_private_t *priv, disk_partition_t *part, u32 block, u32 self_inode, u32 parent_inode) {
     if (!priv || !part || !block) {
         return false;
     }
@@ -1058,11 +974,7 @@ static bool _dir_find_entry(
                 break;
             }
 
-            if (
-                entry->inode &&
-                entry->name_size == wanted_len &&
-                !memcmp(entry->name, name, wanted_len)
-            ) {
+            if (entry->inode && entry->name_size == wanted_len && !memcmp(entry->name, name, wanted_len)) {
 
                 if (inode_out) {
                     *inode_out = entry->inode;
@@ -1161,8 +1073,7 @@ static bool _dir_add_entry(
             size_t used = _dir_entry_size(entry->name_size);
 
             if (entry->inode != 0 && entry->size >= used + need) {
-                ext2_directory_t *new_entry =
-                    (ext2_directory_t *)((u8 *)entry + used);
+                ext2_directory_t *new_entry = (ext2_directory_t *)((u8 *)entry + used);
 
                 new_entry->inode = inode_num;
                 new_entry->size = (u16)(entry->size - used);
@@ -1229,17 +1140,7 @@ static bool _dir_remove_entry(
     u32 block_num = 0;
     size_t pos = 0;
 
-    bool found_entry = _dir_find_entry(
-        priv,
-        part,
-        dir_info,
-        name,
-        inode_out,
-        &block_num,
-        &pos,
-        NULL,
-        type_out
-    );
+    bool found_entry = _dir_find_entry(priv, part, dir_info, name, inode_out, &block_num, &pos, NULL, type_out);
 
     if (!found_entry) {
         return false;
@@ -1281,17 +1182,7 @@ static bool _dir_set_entry(
     u32 block_num = 0;
     size_t pos = 0;
 
-    bool found_entry = _dir_find_entry(
-        priv,
-        part,
-        dir_info,
-        name,
-        NULL,
-        &block_num,
-        &pos,
-        NULL,
-        NULL
-    );
+    bool found_entry = _dir_find_entry(priv, part, dir_info, name, NULL, &block_num, &pos, NULL, NULL);
 
     if (!found_entry) {
         return false;
@@ -1317,11 +1208,7 @@ static bool _dir_set_entry(
     return ok;
 }
 
-static bool _dir_is_empty(
-    ext2_private_t *priv,
-    disk_partition_t *part,
-    const ext2_inode_t *inode
-) {
+static bool _dir_is_empty(ext2_private_t *priv, disk_partition_t *part, const ext2_inode_t *inode) {
     if (!priv || !part || !inode) {
         return false;
     }
@@ -1387,12 +1274,7 @@ static bool _dir_is_empty(
     return empty;
 }
 
-static bool _init_vnode(
-    vfs_node_t *node,
-    fs_instance_t *instance,
-    u32 inode_num,
-    const ext2_inode_t *inode
-) {
+static bool _init_vnode(vfs_node_t *node, fs_instance_t *instance, u32 inode_num, const ext2_inode_t *inode) {
     if (!node || !instance || !inode) {
         return false;
     }
@@ -1417,8 +1299,7 @@ static bool _init_vnode(
     return true;
 }
 
-static ssize_t
-_read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf || !node->private || !node->fs) {
@@ -1630,12 +1511,10 @@ static bool _write_inode_bytes_locked(
     info->inode.last_modification_time = now;
     inode_changed = true;
 
-    return !inode_changed ||
-           _write_inode(priv, part, info->inode_num, &info->inode);
+    return !inode_changed || _write_inode(priv, part, info->inode_num, &info->inode);
 }
 
-static ssize_t
-_write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf || !node->private || !node->fs) {
@@ -1813,8 +1692,7 @@ static int _drop_inode_locked(
 
     ext2_node_info_t *victim_info = victim->private;
     bool is_dir = ext2_is_type(inode, EXT2_IT_DIR);
-    bool victim_open =
-        __atomic_load_n(&victim->open_refs, __ATOMIC_ACQUIRE) != 0;
+    bool victim_open = __atomic_load_n(&victim->open_refs, __ATOMIC_ACQUIRE) != 0;
 
     if (!is_dir && inode->hard_link_count > 1) {
         inode->hard_link_count--;
@@ -1878,17 +1756,7 @@ static ssize_t _dir_remove(vfs_node_t *node, vfs_node_t *child) {
     u32 inode_num = 0;
     u8 type = EXT2_DIR_UNKNOWN;
 
-    bool found_entry = _dir_find_entry(
-        priv,
-        part,
-        parent_info,
-        name,
-        &inode_num,
-        NULL,
-        NULL,
-        NULL,
-        &type
-    );
+    bool found_entry = _dir_find_entry(priv, part, parent_info, name, &inode_num, NULL, NULL, NULL, &type);
 
     if (!found_entry) {
         mutex_unlock(&priv->lock);
@@ -1912,14 +1780,7 @@ static ssize_t _dir_remove(vfs_node_t *node, vfs_node_t *child) {
         return -EIO;
     }
 
-    int ret = _drop_inode_locked(
-        priv,
-        part,
-        parent_info,
-        child,
-        inode_num,
-        &inode
-    );
+    int ret = _drop_inode_locked(priv, part, parent_info, child, inode_num, &inode);
 
     if (ret < 0) {
         mutex_unlock(&priv->lock);
@@ -1931,12 +1792,7 @@ static ssize_t _dir_remove(vfs_node_t *node, vfs_node_t *child) {
     parent_info->inode.last_access_time = now;
     parent_info->inode.last_modification_time = now;
 
-    bool wrote_parent_inode = _write_inode(
-        priv,
-        part,
-        parent_info->inode_num,
-        &parent_info->inode
-    );
+    bool wrote_parent_inode = _write_inode(priv, part, parent_info->inode_num, &parent_info->inode);
 
     if (!wrote_parent_inode) {
         mutex_unlock(&priv->lock);
@@ -1956,8 +1812,7 @@ static ssize_t _dir_remove(vfs_node_t *node, vfs_node_t *child) {
 }
 
 static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child);
-static ssize_t
-_dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target);
+static ssize_t _dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target);
 static ssize_t _dir_rename(
     vfs_node_t *old_parent,
     vfs_node_t *child,
@@ -1998,8 +1853,7 @@ static bool _assign_ext2_interface(vfs_node_t *node, u32 type) {
     return true;
 }
 
-static ssize_t
-_dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target) {
+static ssize_t _dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target) {
     if (!node || !child || !target || !child->name || !child->name[0]) {
         return -EINVAL;
     }
@@ -2033,10 +1887,7 @@ _dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target) {
         return -EIO;
     }
 
-    if (
-        ext2_is_type(&target_info->inode, EXT2_IT_DIR) ||
-        target_info->inode.hard_link_count == 0
-    ) {
+    if (ext2_is_type(&target_info->inode, EXT2_IT_DIR) || target_info->inode.hard_link_count == 0) {
         mutex_unlock(&priv->lock);
         return -EPERM;
     }
@@ -2057,14 +1908,7 @@ _dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target) {
         return -EIO;
     }
 
-    bool added_entry = _dir_add_entry(
-        priv,
-        part,
-        parent_info,
-        child->name,
-        target_info->inode_num,
-        dir_type
-    );
+    bool added_entry = _dir_add_entry(priv, part, parent_info, child->name, target_info->inode_num, dir_type);
 
     if (!added_entry) {
         target_info->inode.hard_link_count--;
@@ -2158,10 +2002,7 @@ static ssize_t _dir_rename(
 
     mutex_lock(&priv->lock);
 
-    if (
-        !ext2_is_type(&old_info->inode, EXT2_IT_DIR) ||
-        !ext2_is_type(&new_info->inode, EXT2_IT_DIR)
-    ) {
+    if (!ext2_is_type(&old_info->inode, EXT2_IT_DIR) || !ext2_is_type(&new_info->inode, EXT2_IT_DIR)) {
         mutex_unlock(&priv->lock);
         return -ENOTDIR;
     }
@@ -2169,17 +2010,7 @@ static ssize_t _dir_rename(
     u32 child_ino = 0;
     u8 dir_type = EXT2_DIR_UNKNOWN;
 
-    bool found_old = _dir_find_entry(
-        priv,
-        part,
-        old_info,
-        child->name,
-        &child_ino,
-        NULL,
-        NULL,
-        NULL,
-        &dir_type
-    );
+    bool found_old = _dir_find_entry(priv, part, old_info, child->name, &child_ino, NULL, NULL, NULL, &dir_type);
 
     if (!found_old || child_ino != child_info->inode_num) {
         mutex_unlock(&priv->lock);
@@ -2189,19 +2020,9 @@ static ssize_t _dir_rename(
     u32 target_ino = 0;
     u8 target_type = EXT2_DIR_UNKNOWN;
 
-    bool found_new = _dir_find_entry(
-        priv,
-        part,
-        new_info,
-        new_name,
-        &target_ino,
-        NULL,
-        NULL,
-        NULL,
-        &target_type
-    );
+    bool found_new = _dir_find_entry(priv, part, new_info, new_name, &target_ino, NULL, NULL, NULL, &target_type);
 
-    ext2_inode_t target_inode = {0};
+    ext2_inode_t target_inode = { 0 };
     bool replacing = target != NULL;
 
     if (replacing) {
@@ -2246,9 +2067,8 @@ static ssize_t _dir_rename(
     bool moved_dir = child->type == VFS_DIR && !same_parent;
     u32 now = _now(priv);
 
-    bool linked_new = replacing
-        ? _dir_set_entry(priv, part, new_info, new_name, child_ino, dir_type)
-        : _dir_add_entry(priv, part, new_info, new_name, child_ino, dir_type);
+    bool linked_new = replacing ? _dir_set_entry(priv, part, new_info, new_name, child_ino, dir_type)
+                                : _dir_add_entry(priv, part, new_info, new_name, child_ino, dir_type);
 
     if (!linked_new) {
         mutex_unlock(&priv->lock);
@@ -2263,26 +2083,12 @@ static ssize_t _dir_rename(
     }
 
     if (moved_dir) {
-        bool fixed_dot = _dir_set_entry(
-            priv,
-            part,
-            child_info,
-            "..",
-            new_info->inode_num,
-            EXT2_DIR_DIRECTORY
-        );
+        bool fixed_dot = _dir_set_entry(priv, part, child_info, "..", new_info->inode_num, EXT2_DIR_DIRECTORY);
 
         if (!fixed_dot) {
             new_info->inode.hard_link_count--;
             if (replacing) {
-                _dir_set_entry(
-                    priv,
-                    part,
-                    new_info,
-                    new_name,
-                    target_ino,
-                    target_type
-                );
+                _dir_set_entry(priv, part, new_info, new_name, target_ino, target_type);
             } else {
                 _dir_remove_entry(priv, part, new_info, new_name, NULL, NULL);
             }
@@ -2293,14 +2099,7 @@ static ssize_t _dir_rename(
 
     if (!_dir_remove_entry(priv, part, old_info, child->name, NULL, NULL)) {
         if (moved_dir) {
-            _dir_set_entry(
-                priv,
-                part,
-                child_info,
-                "..",
-                old_info->inode_num,
-                EXT2_DIR_DIRECTORY
-            );
+            _dir_set_entry(priv, part, child_info, "..", old_info->inode_num, EXT2_DIR_DIRECTORY);
         }
 
         if (moved_dir) {
@@ -2308,14 +2107,7 @@ static ssize_t _dir_rename(
         }
 
         if (replacing) {
-            _dir_set_entry(
-                priv,
-                part,
-                new_info,
-                new_name,
-                target_ino,
-                target_type
-            );
+            _dir_set_entry(priv, part, new_info, new_name, target_ino, target_type);
         } else {
             _dir_remove_entry(priv, part, new_info, new_name, NULL, NULL);
         }
@@ -2333,14 +2125,7 @@ static ssize_t _dir_rename(
     }
 
     if (replacing) {
-        int drop_ret = _drop_inode_locked(
-            priv,
-            part,
-            new_info,
-            target,
-            target_ino,
-            &target_inode
-        );
+        int drop_ret = _drop_inode_locked(priv, part, new_info, target, target_ino, &target_inode);
 
         if (drop_ret < 0) {
             log_warn("rename replaced '%s' but inode cleanup failed", new_name);
@@ -2390,21 +2175,14 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     mutex_lock(&priv->lock);
 
     if (!ext2_is_type(&parent_info->inode, EXT2_IT_DIR)) {
-        log_warn(
-            "failed to create '%s' because parent is not a directory",
-            child->name
-        );
+        log_warn("failed to create '%s' because parent is not a directory", child->name);
         mutex_unlock(&priv->lock);
         return -ENOTDIR;
     }
 
     u16 inode_type = _vfs_to_inode_type(child->type);
     if (!inode_type) {
-        log_warn(
-            "failed to create '%s' because vnode type %u is unsupported",
-            child->name,
-            (unsigned int)child->type
-        );
+        log_warn("failed to create '%s' because vnode type %u is unsupported", child->name, (unsigned int)child->type);
         mutex_unlock(&priv->lock);
         return -EINVAL;
     }
@@ -2416,7 +2194,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         return -ENOSPC;
     }
 
-    ext2_inode_t inode = {0};
+    ext2_inode_t inode = { 0 };
     u32 now = _now(priv);
 
     inode.type = inode_type | (child->mode & EXT2_IP_MASK);
@@ -2431,10 +2209,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         u32 block = 0;
 
         if (!_alloc_block(priv, part, &block)) {
-            log_warn(
-                "failed to create '%s' because no free data block",
-                child->name
-            );
+            log_warn("failed to create '%s' because no free data block", child->name);
             _free_inode(priv, part, inode_num);
             mutex_unlock(&priv->lock);
             return -ENOSPC;
@@ -2444,19 +2219,10 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         inode.disk_sector_count = priv->block_size / 512;
         _set_file_size(&inode, priv->block_size);
 
-        bool wrote_dots = _dir_write_dots(
-            priv,
-            part,
-            block,
-            inode_num,
-            parent_info->inode_num
-        );
+        bool wrote_dots = _dir_write_dots(priv, part, block, inode_num, parent_info->inode_num);
 
         if (!wrote_dots) {
-            log_warn(
-                "failed to create '%s' because dot entries write failed",
-                child->name
-            );
+            log_warn("failed to create '%s' because dot entries write failed", child->name);
             _free_block(priv, part, block);
             _free_inode(priv, part, inode_num);
             mutex_unlock(&priv->lock);
@@ -2474,20 +2240,10 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
 
     u8 dir_type = _vfs_to_dir_type(child->type);
 
-    bool added_parent_entry = _dir_add_entry(
-        priv,
-        part,
-        parent_info,
-        child->name,
-        inode_num,
-        dir_type
-    );
+    bool added_parent_entry = _dir_add_entry(priv, part, parent_info, child->name, inode_num, dir_type);
 
     if (!added_parent_entry) {
-        log_warn(
-            "failed to create '%s' because parent entry insert failed",
-            child->name
-        );
+        log_warn("failed to create '%s' because parent entry insert failed", child->name);
         _release_inode_blocks(priv, part, &inode);
         _clear_inode(priv, part, inode_num);
         _free_inode(priv, part, inode_num);
@@ -2502,27 +2258,16 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     parent_info->inode.last_access_time = now;
     parent_info->inode.last_modification_time = now;
 
-    bool wrote_parent_inode = _write_inode(
-        priv,
-        part,
-        parent_info->inode_num,
-        &parent_info->inode
-    );
+    bool wrote_parent_inode = _write_inode(priv, part, parent_info->inode_num, &parent_info->inode);
 
     if (!wrote_parent_inode) {
-        log_warn(
-            "failed to create '%s' because parent inode write failed",
-            child->name
-        );
+        log_warn("failed to create '%s' because parent inode write failed", child->name);
         mutex_unlock(&priv->lock);
         return -EIO;
     }
 
     if (!_update_super_write_time(priv, part, now)) {
-        log_warn(
-            "failed to create '%s' because superblock write time update failed",
-            child->name
-        );
+        log_warn("failed to create '%s' because superblock write time update failed", child->name);
     }
 
     if (!_init_vnode(child, node->fs, inode_num, &inode)) {
@@ -2538,15 +2283,11 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         bool wrote_target = false;
         if (info) {
             size_t target_len = strlen(target);
-            wrote_target =
-                _write_inode_bytes_locked(priv, part, info, target, target_len);
+            wrote_target = _write_inode_bytes_locked(priv, part, info, target, target_len);
         }
 
         if (!wrote_target) {
-            log_warn(
-                "failed to create '%s' because symlink target write failed",
-                child->name
-            );
+            log_warn("failed to create '%s' because symlink target write failed", child->name);
             mutex_unlock(&priv->lock);
             return -EIO;
         }
@@ -2555,10 +2296,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
     }
 
     if (!_assign_ext2_interface(child, child->type)) {
-        log_warn(
-            "failed to create '%s' because interface allocation failed",
-            child->name
-        );
+        log_warn("failed to create '%s' because interface allocation failed", child->name);
         mutex_unlock(&priv->lock);
         return -EINVAL;
     }
@@ -2573,11 +2311,7 @@ static bool _assign_interface(vfs_node_t *node, u32 vfs_type) {
     return _assign_ext2_interface(node, vfs_type);
 }
 
-static bool _build_dir(
-    fs_instance_t *instance,
-    vfs_node_t *parent,
-    const ext2_inode_t *inode
-) {
+static bool _build_dir(fs_instance_t *instance, vfs_node_t *parent, const ext2_inode_t *inode) {
     if (!instance || !parent || !inode) {
         return false;
     }
@@ -2655,24 +2389,12 @@ static bool _build_dir(
             }
 
             ext2_inode_t child_inode;
-            if (
-                !_read_inode(
-                    priv,
-                    instance->partition,
-                    entry->inode,
-                    &child_inode
-                )
-            ) {
+            if (!_read_inode(priv, instance->partition, entry->inode, &child_inode)) {
                 continue;
             }
 
             u32 vfs_type = _inode_type_to_vfs(&child_inode);
-            vfs_node_t *child = vfs_create_virtual(
-                parent,
-                name,
-                vfs_type,
-                child_inode.type & EXT2_IP_MASK
-            );
+            vfs_node_t *child = vfs_create_virtual(parent, name, vfs_type, child_inode.type & EXT2_IP_MASK);
 
             if (!child) {
                 continue;
@@ -2685,15 +2407,7 @@ static bool _build_dir(
             if (vfs_type == VFS_SYMLINK) {
                 char target[PATH_MAX];
 
-                if (
-                    _read_inode_bytes_locked(
-                        priv,
-                        instance->partition,
-                        &child_inode,
-                        target,
-                        sizeof(target)
-                    )
-                ) {
+                if (_read_inode_bytes_locked(priv, instance->partition, &child_inode, target, sizeof(target))) {
                     child->symlink_target = strdup(target);
                     child->size = strlen(target);
                 } else {
@@ -2767,8 +2481,7 @@ static fs_instance_t *_probe(disk_partition_t *part) {
     priv->inode_size = ext2_inode_size(&priv->superblock);
     priv->group_count = ext2_group_count(&priv->superblock);
 
-    priv->gdt_size =
-        (size_t)priv->group_count * sizeof(ext2_group_descriptor_t);
+    priv->gdt_size = (size_t)priv->group_count * sizeof(ext2_group_descriptor_t);
 
     priv->groups = malloc(priv->gdt_size);
 
@@ -2789,8 +2502,7 @@ static fs_instance_t *_probe(disk_partition_t *part) {
         }
     }
 
-    priv->gdt_offset =
-        (size_t)(priv->superblock.superblock_offset + 1) * priv->block_size;
+    priv->gdt_offset = (size_t)(priv->superblock.superblock_offset + 1) * priv->block_size;
 
     if (!_ext2_read(part, priv->groups, priv->gdt_offset, priv->gdt_size)) {
         free(priv->cache_data);
@@ -2862,8 +2574,7 @@ static bool _build_tree(fs_instance_t *instance) {
     return true;
 }
 
-static bool
-_node_chmod(fs_instance_t *instance, vfs_node_t *node, mode_t mode) {
+static bool _node_chmod(fs_instance_t *instance, vfs_node_t *node, mode_t mode) {
     if (!instance || !instance->private || !instance->partition || !node || !node->private) {
         return false;
     }
@@ -2873,15 +2584,9 @@ _node_chmod(fs_instance_t *instance, vfs_node_t *node, mode_t mode) {
     mutex_lock(&priv->lock);
     u32 now = _now(priv);
 
-    info->inode.type =
-        (info->inode.type & EXT2_IT_MASK) | (mode & EXT2_IP_MASK);
+    info->inode.type = (info->inode.type & EXT2_IT_MASK) | (mode & EXT2_IP_MASK);
 
-    bool wrote_inode = _write_inode(
-        priv,
-        instance->partition,
-        info->inode_num,
-        &info->inode
-    );
+    bool wrote_inode = _write_inode(priv, instance->partition, info->inode_num, &info->inode);
 
     if (!wrote_inode) {
         mutex_unlock(&priv->lock);
@@ -2898,8 +2603,7 @@ _node_chmod(fs_instance_t *instance, vfs_node_t *node, mode_t mode) {
     return true;
 }
 
-static bool
-_node_chown(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid) {
+static bool _node_chown(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid) {
     if (!instance || !instance->private || !instance->partition || !node || !node->private) {
         return false;
     }
@@ -2912,12 +2616,7 @@ _node_chown(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid) {
     info->inode.uid = (u16)uid;
     info->inode.gid = (u16)gid;
 
-    bool wrote_inode = _write_inode(
-        priv,
-        instance->partition,
-        info->inode_num,
-        &info->inode
-    );
+    bool wrote_inode = _write_inode(priv, instance->partition, info->inode_num, &info->inode);
 
     if (!wrote_inode) {
         mutex_unlock(&priv->lock);
@@ -2940,8 +2639,7 @@ static void _node_destroy(fs_instance_t *instance, vfs_node_t *node) {
     }
 
     ext2_node_info_t *info = node->private;
-    bool reclaim_inode =
-        node->removed && !info->reclaimed && info->inode.hard_link_count == 0;
+    bool reclaim_inode = node->removed && !info->reclaimed && info->inode.hard_link_count == 0;
 
     if (reclaim_inode && instance && instance->private && instance->partition) {
         ext2_private_t *priv = instance->private;
@@ -2954,10 +2652,8 @@ static void _node_destroy(fs_instance_t *instance, vfs_node_t *node) {
             u32 now = _now(priv);
 
             bool released_blocks = _release_inode_blocks(priv, part, &info->inode);
-            bool cleared_inode =
-                released_blocks && _clear_inode(priv, part, info->inode_num);
-            bool freed_inode =
-                cleared_inode && _free_inode(priv, part, info->inode_num);
+            bool cleared_inode = released_blocks && _clear_inode(priv, part, info->inode_num);
+            bool freed_inode = cleared_inode && _free_inode(priv, part, info->inode_num);
 
             if (freed_inode) {
                 _update_super_write_time(priv, part, now);

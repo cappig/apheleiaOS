@@ -1,23 +1,22 @@
-#include "doomgeneric.h"
-#include "doomkeys.h"
-
 #include <ctype.h>
 #include <errno.h>
+#include <gui/input.h>
+#include <input/kbd.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <ui.h>
 #include <unistd.h>
 
-#include <gui/input.h>
-#include <input/kbd.h>
-#include <ui.h>
+#include "doomgeneric.h"
+#include "doomkeys.h"
 
 #define DG_KEYQUEUE_SIZE 64
 
-static window_t s_window = {0};
+static window_t s_window = { 0 };
 static bool s_window_ready = false;
 static bool s_window_closed = false;
 static bool s_close_key_sent = false;
@@ -26,7 +25,7 @@ static unsigned short s_key_queue[DG_KEYQUEUE_SIZE];
 static size_t s_key_read = 0;
 static size_t s_key_write = 0;
 
-static struct timespec s_ticks_start = {0};
+static struct timespec s_ticks_start = { 0 };
 static uint32_t s_last_ticks_ms = 0;
 
 static bool dg_has_iwad_arg(int argc, char **argv) {
@@ -316,10 +315,8 @@ static void dg_blit_frame(void) {
 
     const uint32_t *src = (const uint32_t *)DG_ScreenBuffer;
     for (uint32_t y = 0; y < copy_h; y++) {
-        const uint32_t *src_row =
-            src + (size_t)(src_y + y) * DOOMGENERIC_RESX + src_x;
-        uint32_t *dst_row =
-            fb->pixels + (size_t)(dst_y + y) * fb->width + dst_x;
+        const uint32_t *src_row = src + (size_t)(src_y + y) * DOOMGENERIC_RESX + src_x;
+        uint32_t *dst_row = fb->pixels + (size_t)(dst_y + y) * fb->width + dst_x;
 
         memcpy(dst_row, src_row, (size_t)copy_w * sizeof(uint32_t));
     }
@@ -339,12 +336,7 @@ void DG_Init(void) {
     s_close_key_sent = false;
 
     if (window_init(&s_window, DOOMGENERIC_RESX, DOOMGENERIC_RESY, "doom")) {
-        fprintf(
-            stderr,
-            "doom: failed to create window (%d: %s)\n",
-            errno,
-            strerror(errno)
-        );
+        fprintf(stderr, "doom: failed to create window (%d: %s)\n", errno, strerror(errno));
         exit(1);
     }
 
@@ -388,7 +380,7 @@ void DG_SleepMs(uint32_t ms) {
 }
 
 uint32_t DG_GetTicksMs(void) {
-    struct timespec now = {0};
+    struct timespec now = { 0 };
     if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
         return s_last_ticks_ms;
     }

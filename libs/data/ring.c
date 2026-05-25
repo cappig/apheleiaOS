@@ -355,11 +355,7 @@ bool ring_queue_reserve(ring_queue_t *q, size_t needed) {
 
     if (q->count && q->buf && q->cap) {
         for (size_t i = 0; i < q->count; i++) {
-            memcpy(
-                new_buf + i * q->elem_size,
-                q->buf + ((q->head + i) % q->cap) * q->elem_size,
-                q->elem_size
-            );
+            memcpy(new_buf + i * q->elem_size, q->buf + ((q->head + i) % q->cap) * q->elem_size, q->elem_size);
         }
     }
 

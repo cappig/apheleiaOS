@@ -57,14 +57,7 @@ int main(int argc, char **argv) {
     }
 
     if (mount(source, target, fstype, 0) < 0) {
-        fprintf(
-            stderr,
-            "mount: failed to mount '%s' on '%s' (%s): %s\n",
-            source,
-            target,
-            fstype,
-            strerror(errno)
-        );
+        fprintf(stderr, "mount: failed to mount '%s' on '%s' (%s): %s\n", source, target, fstype, strerror(errno));
         return 1;
     }
 

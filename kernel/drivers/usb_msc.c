@@ -5,27 +5,27 @@
 #include <sched/scheduler.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/lock.h>
 #include <sys/disk.h>
+#include <sys/lock.h>
 #include <sys/usb.h>
 
-#define USB_MSC_MAX_LUNS        32
-#define USB_MSC_CMD_TIMEOUT_MS  1000
-#define USB_MSC_IO_TIMEOUT_MS   3000
+#define USB_MSC_MAX_LUNS       32
+#define USB_MSC_CMD_TIMEOUT_MS 1000
+#define USB_MSC_IO_TIMEOUT_MS  3000
 
 #define USB_REQ_TYPE_CLASS      0x20
 #define USB_REQ_RECIP_INTERFACE 0x01
 
-#define USB_MSC_GET_MAX_LUN     0xfe
-#define USB_MSC_CBI_ADSC        0x00
+#define USB_MSC_GET_MAX_LUN 0xfe
+#define USB_MSC_CBI_ADSC    0x00
 
-#define SCSI_TEST_UNIT_READY    0x00
-#define SCSI_INQUIRY            0x12
-#define SCSI_READ_CAPACITY_10   0x25
-#define SCSI_READ_CAPACITY_16   0x9e
+#define SCSI_TEST_UNIT_READY     0x00
+#define SCSI_INQUIRY             0x12
+#define SCSI_READ_CAPACITY_10    0x25
+#define SCSI_READ_CAPACITY_16    0x9e
 #define SCSI_SERVICE_ACTION_RC16 0x10
-#define SCSI_READ_10            0x28
-#define SCSI_WRITE_10           0x2a
+#define SCSI_READ_10             0x28
+#define SCSI_WRITE_10            0x2a
 
 #define MSC_CBW_SIGNATURE 0x43425355U
 #define MSC_CSW_SIGNATURE 0x53425355U
@@ -66,10 +66,17 @@ typedef struct {
     disk_dev_t *disk;
 } usb_msc_lun_t;
 
-static bool msc_registered = false;
-static usb_msc_lun_t msc_luns[USB_MSC_MAX_LUNS] = {0};
-static spinlock_t msc_state_lock = SPINLOCK_INIT;
-static u32 next_tag = 1;
+typedef struct {
+    bool registered;
+    usb_msc_lun_t luns[USB_MSC_MAX_LUNS];
+    spinlock_t lock;
+    u32 next_tag;
+} usb_msc_state_t;
+
+static usb_msc_state_t msc = {
+    .lock = SPINLOCK_INIT,
+    .next_tag = 1,
+};
 
 const driver_desc_t usb_msc_driver_desc = {
     .name = "usb-msc",
@@ -102,9 +109,9 @@ static u64 _be64(const u8 *p) {
 
 static u32 _next_tag(void) {
     unsigned long flags = arch_irq_save();
-    u32 tag = next_tag++;
-    if (!next_tag) {
-        next_tag = 1;
+    u32 tag = msc.next_tag++;
+    if (!msc.next_tag) {
+        msc.next_tag = 1;
     }
     arch_irq_restore(flags);
     return tag;
@@ -177,7 +184,7 @@ static msc_bot_xfer_result_t _msc_bot_transfer_once(
         return MSC_BOT_XFER_TRANSPORT_FAIL;
     }
 
-    msc_cbw_t cbw = {0};
+    msc_cbw_t cbw = { 0 };
     cbw.signature = MSC_CBW_SIGNATURE;
     cbw.tag = _next_tag();
     cbw.transfer_length = (u32)data_len;
@@ -188,17 +195,8 @@ static msc_bot_xfer_result_t _msc_bot_transfer_once(
 
     size_t actual = 0;
 
-    if (
-        !usb_device_bulk_transfer(
-            lun->device,
-            lun->bulk_out_ep,
-            &cbw,
-            sizeof(cbw),
-            timeout_ms,
-            &actual
-        ) ||
-        actual != sizeof(cbw)
-    ) {
+    if (!usb_device_bulk_transfer(lun->device, lun->bulk_out_ep, &cbw, sizeof(cbw), timeout_ms, &actual) ||
+        actual != sizeof(cbw)) {
         return MSC_BOT_XFER_TRANSPORT_FAIL;
     }
 
@@ -207,35 +205,17 @@ static msc_bot_xfer_result_t _msc_bot_transfer_once(
     if (data_len) {
         u8 ep = data_in ? lun->bulk_in_ep : lun->bulk_out_ep;
 
-        if (
-            !usb_device_bulk_transfer(
-                lun->device,
-                ep,
-                data,
-                data_len,
-                timeout_ms,
-                &actual
-            )
-        ) {
+        if (!usb_device_bulk_transfer(lun->device, ep, data, data_len, timeout_ms, &actual)) {
             data_ok = false;
         }
 
         data_actual = actual;
     }
 
-    msc_csw_t csw = {0};
+    msc_csw_t csw = { 0 };
 
-    if (
-        !usb_device_bulk_transfer(
-            lun->device,
-            lun->bulk_in_ep,
-            &csw,
-            sizeof(csw),
-            timeout_ms,
-            &actual
-        ) ||
-        actual != sizeof(csw)
-    ) {
+    if (!usb_device_bulk_transfer(lun->device, lun->bulk_in_ep, &csw, sizeof(csw), timeout_ms, &actual) ||
+        actual != sizeof(csw)) {
         return MSC_BOT_XFER_TRANSPORT_FAIL;
     }
 
@@ -247,10 +227,7 @@ static msc_bot_xfer_result_t _msc_bot_transfer_once(
         return MSC_BOT_XFER_COMMAND_FAIL;
     }
 
-    if (
-        data_len &&
-        (!data_ok || data_actual != data_len || csw.residue != 0)
-    ) {
+    if (data_len && (!data_ok || data_actual != data_len || csw.residue != 0)) {
         return MSC_BOT_XFER_TRANSPORT_FAIL;
     }
 
@@ -266,15 +243,7 @@ static bool _msc_bot_transfer(
     bool data_in,
     u32 timeout_ms
 ) {
-    msc_bot_xfer_result_t result = _msc_bot_transfer_once(
-        lun,
-        cdb,
-        cdb_len,
-        data,
-        data_len,
-        data_in,
-        timeout_ms
-    );
+    msc_bot_xfer_result_t result = _msc_bot_transfer_once(lun, cdb, cdb_len, data, data_len, data_in, timeout_ms);
 
     if (result == MSC_BOT_XFER_OK) {
         return true;
@@ -304,7 +273,7 @@ static bool _msc_cbi_transfer_once(
         return false;
     }
 
-    u8 cmd_block[12] = {0};
+    u8 cmd_block[12] = { 0 };
     memcpy(cmd_block, cdb, cdb_len);
 
     usb_setup_packet_t setup = {
@@ -316,17 +285,8 @@ static bool _msc_cbi_transfer_once(
     };
 
     size_t actual = 0;
-    if (
-        !usb_device_control_transfer(
-            lun->device,
-            &setup,
-            cmd_block,
-            sizeof(cmd_block),
-            timeout_ms,
-            &actual
-        ) ||
-        actual != sizeof(cmd_block)
-    ) {
+    if (!usb_device_control_transfer(lun->device, &setup, cmd_block, sizeof(cmd_block), timeout_ms, &actual) ||
+        actual != sizeof(cmd_block)) {
         return false;
     }
 
@@ -335,14 +295,7 @@ static bool _msc_cbi_transfer_once(
     }
 
     u8 ep = data_in ? lun->bulk_in_ep : lun->bulk_out_ep;
-    return usb_device_bulk_transfer(
-        lun->device,
-        ep,
-        data,
-        data_len,
-        timeout_ms,
-        &actual
-    ) && actual == data_len;
+    return usb_device_bulk_transfer(lun->device, ep, data, data_len, timeout_ms, &actual) && actual == data_len;
 }
 
 static bool _msc_cbi_transfer(
@@ -354,15 +307,7 @@ static bool _msc_cbi_transfer(
     bool data_in,
     u32 timeout_ms
 ) {
-    return _msc_cbi_transfer_once(
-        lun,
-        cdb,
-        cdb_len,
-        data,
-        data_len,
-        data_in,
-        timeout_ms
-    );
+    return _msc_cbi_transfer_once(lun, cdb, cdb_len, data, data_len, data_in, timeout_ms);
 }
 
 static bool _msc_transfer(
@@ -380,80 +325,42 @@ static bool _msc_transfer(
 
     switch ((msc_transport_t)lun->transport) {
     case MSC_TRANSPORT_CBI:
-        return _msc_cbi_transfer(
-            lun,
-            cdb,
-            cdb_len,
-            data,
-            data_len,
-            data_in,
-            timeout_ms
-        );
+        return _msc_cbi_transfer(lun, cdb, cdb_len, data, data_len, data_in, timeout_ms);
     case MSC_TRANSPORT_BOT:
     default:
-        return _msc_bot_transfer(
-            lun,
-            cdb,
-            cdb_len,
-            data,
-            data_len,
-            data_in,
-            timeout_ms
-        );
+        return _msc_bot_transfer(lun, cdb, cdb_len, data, data_len, data_in, timeout_ms);
     }
 }
 
 static bool _msc_test_unit_ready(usb_msc_lun_t *lun) {
-    u8 cdb[6] = {0};
+    u8 cdb[6] = { 0 };
     cdb[0] = SCSI_TEST_UNIT_READY;
     return _msc_transfer(lun, cdb, sizeof(cdb), NULL, 0, true, USB_MSC_CMD_TIMEOUT_MS);
 }
 
 static bool _msc_inquiry(usb_msc_lun_t *lun) {
-    u8 cdb[6] = {0};
-    u8 resp[36] = {0};
+    u8 cdb[6] = { 0 };
+    u8 resp[36] = { 0 };
 
     cdb[0] = SCSI_INQUIRY;
     cdb[4] = sizeof(resp);
 
-    return _msc_transfer(
-        lun,
-        cdb,
-        sizeof(cdb),
-        resp,
-        sizeof(resp),
-        true,
-        USB_MSC_CMD_TIMEOUT_MS
-    );
+    return _msc_transfer(lun, cdb, sizeof(cdb), resp, sizeof(resp), true, USB_MSC_CMD_TIMEOUT_MS);
 }
 
-static bool _msc_read_capacity16(
-    usb_msc_lun_t *lun,
-    size_t *out_blocks,
-    size_t *out_block_size
-) {
+static bool _msc_read_capacity16(usb_msc_lun_t *lun, size_t *out_blocks, size_t *out_block_size) {
     if (!lun || !out_blocks || !out_block_size) {
         return false;
     }
 
-    u8 cdb[16] = {0};
-    u8 resp[32] = {0};
+    u8 cdb[16] = { 0 };
+    u8 resp[32] = { 0 };
 
     cdb[0] = SCSI_READ_CAPACITY_16;
     cdb[1] = SCSI_SERVICE_ACTION_RC16;
     cdb[13] = sizeof(resp);
 
-    if (
-        !_msc_transfer(
-            lun,
-            cdb,
-            sizeof(cdb),
-            resp,
-            sizeof(resp),
-            true,
-            USB_MSC_CMD_TIMEOUT_MS
-        )
-    ) {
+    if (!_msc_transfer(lun, cdb, sizeof(cdb), resp, sizeof(resp), true, USB_MSC_CMD_TIMEOUT_MS)) {
         return false;
     }
 
@@ -473,31 +380,17 @@ static bool _msc_read_capacity16(
     return true;
 }
 
-static bool _msc_read_capacity10(
-    usb_msc_lun_t *lun,
-    size_t *out_blocks,
-    size_t *out_block_size
-) {
+static bool _msc_read_capacity10(usb_msc_lun_t *lun, size_t *out_blocks, size_t *out_block_size) {
     if (!lun || !out_blocks || !out_block_size) {
         return false;
     }
 
-    u8 cdb[10] = {0};
-    u8 resp[8] = {0};
+    u8 cdb[10] = { 0 };
+    u8 resp[8] = { 0 };
 
     cdb[0] = SCSI_READ_CAPACITY_10;
 
-    if (
-        !_msc_transfer(
-            lun,
-            cdb,
-            sizeof(cdb),
-            resp,
-            sizeof(resp),
-            true,
-            USB_MSC_CMD_TIMEOUT_MS
-        )
-    ) {
+    if (!_msc_transfer(lun, cdb, sizeof(cdb), resp, sizeof(resp), true, USB_MSC_CMD_TIMEOUT_MS)) {
         return false;
     }
 
@@ -521,13 +414,7 @@ static bool _msc_read_capacity10(
     return true;
 }
 
-static bool _msc_rw10(
-    usb_msc_lun_t *lun,
-    u32 lba,
-    u16 blocks,
-    void *buffer,
-    bool write
-) {
+static bool _msc_rw10(usb_msc_lun_t *lun, u32 lba, u16 blocks, void *buffer, bool write) {
     if (!lun || !blocks || !buffer || !lun->block_size) {
         return false;
     }
@@ -536,7 +423,7 @@ static bool _msc_rw10(
         return false;
     }
 
-    u8 cdb[10] = {0};
+    u8 cdb[10] = { 0 };
     cdb[0] = write ? SCSI_WRITE_10 : SCSI_READ_10;
     cdb[2] = (u8)((lba >> 24) & 0xffU);
     cdb[3] = (u8)((lba >> 16) & 0xffU);
@@ -546,15 +433,7 @@ static bool _msc_rw10(
     cdb[8] = (u8)(blocks & 0xffU);
 
     size_t xfer_len = (size_t)blocks * lun->block_size;
-    return _msc_transfer(
-        lun,
-        cdb,
-        sizeof(cdb),
-        buffer,
-        xfer_len,
-        !write,
-        USB_MSC_IO_TIMEOUT_MS
-    );
+    return _msc_transfer(lun, cdb, sizeof(cdb), buffer, xfer_len, !write, USB_MSC_IO_TIMEOUT_MS);
 }
 
 static ssize_t _usb_msc_read(disk_dev_t *disk, void *dest, size_t offset, size_t bytes) {
@@ -768,8 +647,8 @@ done:
 }
 
 static usb_msc_lun_t *_msc_find_slot_locked(size_t hcd_id, size_t port, u8 lun) {
-    for (size_t i = 0; i < ARRAY_LEN(msc_luns); i++) {
-        usb_msc_lun_t *slot = &msc_luns[i];
+    for (size_t i = 0; i < ARRAY_LEN(msc.luns); i++) {
+        usb_msc_lun_t *slot = &msc.luns[i];
         if (!slot->used) {
             continue;
         }
@@ -788,8 +667,8 @@ static usb_msc_lun_t *_msc_alloc_slot_locked(size_t hcd_id, size_t port, u8 lun)
         return slot;
     }
 
-    for (size_t i = 0; i < ARRAY_LEN(msc_luns); i++) {
-        slot = &msc_luns[i];
+    for (size_t i = 0; i < ARRAY_LEN(msc.luns); i++) {
+        slot = &msc.luns[i];
         if (slot->used) {
             continue;
         }
@@ -878,17 +757,7 @@ static u8 _msc_get_max_lun(usb_device_handle_t dev, u8 interface_number) {
     u8 max_lun = 0;
     size_t actual = 0;
 
-    if (
-        !usb_device_control_transfer(
-            dev,
-            &setup,
-            &max_lun,
-            1,
-            USB_MSC_CMD_TIMEOUT_MS,
-            &actual
-        ) ||
-        actual != 1
-    ) {
+    if (!usb_device_control_transfer(dev, &setup, &max_lun, 1, USB_MSC_CMD_TIMEOUT_MS, &actual) || actual != 1) {
         return 0;
     }
 
@@ -904,10 +773,8 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
         return false;
     }
 
-    u8 subclass =
-        identity->interface_class ? identity->interface_subclass : identity->device_subclass;
-    u8 protocol =
-        identity->interface_class ? identity->interface_protocol : identity->device_protocol;
+    u8 subclass = identity->interface_class ? identity->interface_subclass : identity->device_subclass;
+    u8 protocol = identity->interface_class ? identity->interface_protocol : identity->device_protocol;
 
     if (!_msc_subclass_supported(subclass)) {
         log_warn("USB MSC hcd=%zu port=%zu unsupported subclass=%#x", hcd_id, port, subclass);
@@ -924,21 +791,14 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
         return false;
     }
 
-    if (
-        protocol == USB_MSC_PROTO_UAS &&
-        identity->bulk_in_ep &&
-        identity->bulk_out_ep
-    ) {
+    if (protocol == USB_MSC_PROTO_UAS && identity->bulk_in_ep && identity->bulk_out_ep) {
         log_info("USB MSC hcd=%zu port=%zu protocol=UAS using BOT transport", hcd_id, port);
     } else if (protocol == USB_MSC_PROTO_CBI || protocol == USB_MSC_PROTO_CBI_NOINTR) {
         log_info("USB MSC hcd=%zu port=%zu protocol=CBI using control/bulk", hcd_id, port);
     }
 
     u8 max_lun = 0;
-    if (
-        protocol == USB_MSC_PROTO_BOT ||
-        protocol == USB_MSC_PROTO_UAS
-    ) {
+    if (protocol == USB_MSC_PROTO_BOT || protocol == USB_MSC_PROTO_UAS) {
         max_lun = _msc_get_max_lun(dev, identity->interface_number);
     }
 
@@ -949,11 +809,11 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
     size_t attached = 0;
 
     for (u8 lun_id = 0; lun_id <= max_lun; lun_id++) {
-        unsigned long state_flags = spin_lock_irqsave(&msc_state_lock);
+        unsigned long state_flags = spin_lock_irqsave(&msc.lock);
 
         usb_msc_lun_t *lun = _msc_alloc_slot_locked(hcd_id, port, lun_id);
         if (!lun) {
-            spin_unlock_irqrestore(&msc_state_lock, state_flags);
+            spin_unlock_irqrestore(&msc.lock, state_flags);
             log_warn("USB MSC table full, dropping hcd=%zu port=%zu lun=%u", hcd_id, port, lun_id);
             continue;
         }
@@ -967,19 +827,14 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
         lun->transport = (u8)_msc_transport_for_protocol(protocol);
         lun->online = true;
 
-        spin_unlock_irqrestore(&msc_state_lock, state_flags);
+        spin_unlock_irqrestore(&msc.lock, state_flags);
 
         if (!_msc_inquiry(lun)) {
-            log_debug(
-                "USB MSC hcd=%zu port=%zu lun=%u failed while reading inquiry data",
-                hcd_id,
-                port,
-                lun_id
-            );
+            log_debug("USB MSC hcd=%zu port=%zu lun=%u failed while reading inquiry data", hcd_id, port, lun_id);
 
-            state_flags = spin_lock_irqsave(&msc_state_lock);
+            state_flags = spin_lock_irqsave(&msc.lock);
             lun->online = false;
-            spin_unlock_irqrestore(&msc_state_lock, state_flags);
+            spin_unlock_irqrestore(&msc.lock, state_flags);
 
             continue;
         }
@@ -990,16 +845,11 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
         size_t block_size = 0;
 
         if (!_msc_read_capacity10(lun, &blocks, &block_size)) {
-            log_debug(
-                "USB MSC hcd=%zu port=%zu lun=%u failed while reading capacity",
-                hcd_id,
-                port,
-                lun_id
-            );
+            log_debug("USB MSC hcd=%zu port=%zu lun=%u failed while reading capacity", hcd_id, port, lun_id);
 
-            state_flags = spin_lock_irqsave(&msc_state_lock);
+            state_flags = spin_lock_irqsave(&msc.lock);
             lun->online = false;
-            spin_unlock_irqrestore(&msc_state_lock, state_flags);
+            spin_unlock_irqrestore(&msc.lock, state_flags);
 
             continue;
         }
@@ -1014,41 +864,32 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
                 block_size
             );
 
-            state_flags = spin_lock_irqsave(&msc_state_lock);
+            state_flags = spin_lock_irqsave(&msc.lock);
             lun->online = false;
-            spin_unlock_irqrestore(&msc_state_lock, state_flags);
+            spin_unlock_irqrestore(&msc.lock, state_flags);
 
             continue;
         }
 
-        state_flags = spin_lock_irqsave(&msc_state_lock);
-        bool still_online =
-            lun->used &&
-            lun->hcd_id == hcd_id &&
-            lun->port == port &&
-            lun->lun == lun_id &&
-            lun->online;
+        state_flags = spin_lock_irqsave(&msc.lock);
+        bool still_online = lun->used && lun->hcd_id == hcd_id && lun->port == port && lun->lun == lun_id &&
+                            lun->online;
         if (still_online) {
             lun->block_size = block_size;
             lun->block_count = blocks;
         }
-        spin_unlock_irqrestore(&msc_state_lock, state_flags);
+        spin_unlock_irqrestore(&msc.lock, state_flags);
 
         if (!still_online) {
             continue;
         }
 
         if (!_msc_register_disk(lun)) {
-            log_warn(
-                "USB MSC hcd=%zu port=%zu lun=%u failed while registering disk",
-                hcd_id,
-                port,
-                lun_id
-            );
+            log_warn("USB MSC hcd=%zu port=%zu lun=%u failed while registering disk", hcd_id, port, lun_id);
 
-            state_flags = spin_lock_irqsave(&msc_state_lock);
+            state_flags = spin_lock_irqsave(&msc.lock);
             lun->online = false;
-            spin_unlock_irqrestore(&msc_state_lock, state_flags);
+            spin_unlock_irqrestore(&msc.lock, state_flags);
 
             continue;
         }
@@ -1076,13 +917,13 @@ static void _usb_msc_detach(usb_device_handle_t dev) {
     size_t hcd_id = usb_device_hcd_id(dev);
     size_t port = usb_device_port(dev);
 
-    size_t detached_indexes[USB_MSC_MAX_LUNS] = {0};
+    size_t detached_indexes[USB_MSC_MAX_LUNS] = { 0 };
     size_t detached = 0;
 
-    unsigned long state_flags = spin_lock_irqsave(&msc_state_lock);
+    unsigned long state_flags = spin_lock_irqsave(&msc.lock);
 
-    for (size_t i = 0; i < ARRAY_LEN(msc_luns); i++) {
-        usb_msc_lun_t *lun = &msc_luns[i];
+    for (size_t i = 0; i < ARRAY_LEN(msc.luns); i++) {
+        usb_msc_lun_t *lun = &msc.luns[i];
 
         if (!lun->used) {
             continue;
@@ -1098,13 +939,13 @@ static void _usb_msc_detach(usb_device_handle_t dev) {
         detached++;
     }
 
-    spin_unlock_irqrestore(&msc_state_lock, state_flags);
+    spin_unlock_irqrestore(&msc.lock, state_flags);
 
     size_t released = 0;
     size_t busy = 0;
 
     for (size_t i = 0; i < detached; i++) {
-        usb_msc_lun_t *lun = &msc_luns[detached_indexes[i]];
+        usb_msc_lun_t *lun = &msc.luns[detached_indexes[i]];
         if (_msc_unpublish_lun(lun)) {
             released++;
             continue;
@@ -1113,14 +954,14 @@ static void _usb_msc_detach(usb_device_handle_t dev) {
         busy++;
     }
 
-    state_flags = spin_lock_irqsave(&msc_state_lock);
+    state_flags = spin_lock_irqsave(&msc.lock);
     for (size_t i = 0; i < detached; i++) {
-        usb_msc_lun_t *lun = &msc_luns[detached_indexes[i]];
+        usb_msc_lun_t *lun = &msc.luns[detached_indexes[i]];
         if (!lun->disk) {
             memset(lun, 0, sizeof(*lun));
         }
     }
-    spin_unlock_irqrestore(&msc_state_lock, state_flags);
+    spin_unlock_irqrestore(&msc.lock, state_flags);
 
     if (detached) {
         log_info(
@@ -1135,7 +976,7 @@ static void _usb_msc_detach(usb_device_handle_t dev) {
 }
 
 static bool usb_msc_init(void) {
-    if (msc_registered) {
+    if (msc.registered) {
         return true;
     }
 
@@ -1150,13 +991,13 @@ static bool usb_msc_init(void) {
         return false;
     }
 
-    msc_registered = true;
+    msc.registered = true;
     return true;
 }
 
 bool usb_msc_driver_busy(void) {
-    for (size_t i = 0; i < ARRAY_LEN(msc_luns); i++) {
-        usb_msc_lun_t *lun = &msc_luns[i];
+    for (size_t i = 0; i < ARRAY_LEN(msc.luns); i++) {
+        usb_msc_lun_t *lun = &msc.luns[i];
         if (lun->used && lun->disk && disk_is_busy(lun->disk)) {
             return true;
         }
@@ -1166,7 +1007,7 @@ bool usb_msc_driver_busy(void) {
 }
 
 driver_err_t usb_msc_driver_load(void) {
-    if (msc_registered) {
+    if (msc.registered) {
         return DRIVER_OK;
     }
 
@@ -1182,7 +1023,7 @@ driver_err_t usb_msc_driver_load(void) {
 }
 
 driver_err_t usb_msc_driver_unload(void) {
-    if (!msc_registered) {
+    if (!msc.registered) {
         return DRIVER_OK;
     }
 
@@ -1194,8 +1035,8 @@ driver_err_t usb_msc_driver_unload(void) {
         log_warn("USB MSC class driver unregister failed");
     }
 
-    for (size_t i = 0; i < ARRAY_LEN(msc_luns); i++) {
-        usb_msc_lun_t *lun = &msc_luns[i];
+    for (size_t i = 0; i < ARRAY_LEN(msc.luns); i++) {
+        usb_msc_lun_t *lun = &msc.luns[i];
         if (!lun->used) {
             continue;
         }
@@ -1210,6 +1051,6 @@ driver_err_t usb_msc_driver_unload(void) {
         memset(lun, 0, sizeof(*lun));
     }
 
-    msc_registered = false;
+    msc.registered = false;
     return DRIVER_OK;
 }

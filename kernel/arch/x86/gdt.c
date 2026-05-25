@@ -8,8 +8,8 @@
 #include <sys/cpu.h>
 #include <x86/apic.h>
 
-static tss_entry_t tss_entries[MAX_CORES] = {0};
-static gdt_desc_t gdt_descs[MAX_CORES] = {0};
+static tss_entry_t tss_entries[MAX_CORES] = { 0 };
+static gdt_desc_t gdt_descs[MAX_CORES] = { 0 };
 
 #if defined(__x86_64__)
 #define IST_STACK_SIZE 4096
@@ -18,7 +18,7 @@ static u8 ist_double_fault_stack[MAX_CORES][IST_STACK_SIZE];
 #endif
 
 ALIGNED(0x10)
-static gdt_entry_t gdt_entries[MAX_CORES][GDT_ENTRY_COUNT] = {0};
+static gdt_entry_t gdt_entries[MAX_CORES][GDT_ENTRY_COUNT] = { 0 };
 
 
 bool gdt_current_core_id(size_t *out) {
@@ -26,7 +26,7 @@ bool gdt_current_core_id(size_t *out) {
         return false;
     }
 
-    gdt_desc_t current = {0};
+    gdt_desc_t current = { 0 };
     asm volatile("sgdt %0" : "=m"(current));
 
     uintptr_t active_gdt = (uintptr_t)current.gdt_ptr;
@@ -91,15 +91,7 @@ static tss_entry_t *_tss_for(size_t core_id) {
 }
 
 
-static void
-_set_gdt_entry(
-    gdt_entry_t *entries,
-    size_t index,
-    u64 base,
-    u32 limit,
-    u8 access,
-    u8 flags
-) {
+static void _set_gdt_entry(gdt_entry_t *entries, size_t index, u64 base, u32 limit, u8 access, u8 flags) {
     entries[index].limit_low = (limit & 0xffff);
     entries[index].flags = (limit >> 16) & 0xf;
     entries[index].base_low = (base & 0xffff);
@@ -159,35 +151,31 @@ void gdt_init(void) {
     asm volatile("lgdt %0" : : "m"(*gdtd) : "memory");
 
 #if defined(__i386__)
-    asm volatile(
-        "ljmp %0, $1f\n"
-        "1:\n"
-        "mov %1, %%ds\n"
-        "mov %1, %%es\n"
-        "mov %1, %%fs\n"
-        "mov %1, %%gs\n"
-        "mov %1, %%ss\n"
-        :
-        : "i"(GDT_KERNEL_CODE), "r"(GDT_KERNEL_DATA)
-        : "memory"
-    );
+    asm volatile("ljmp %0, $1f\n"
+                 "1:\n"
+                 "mov %1, %%ds\n"
+                 "mov %1, %%es\n"
+                 "mov %1, %%fs\n"
+                 "mov %1, %%gs\n"
+                 "mov %1, %%ss\n"
+                 :
+                 : "i"(GDT_KERNEL_CODE), "r"(GDT_KERNEL_DATA)
+                 : "memory");
 #else
-    asm volatile(
-        "pushq %0\n"
-        "lea 1f(%%rip), %%rax\n"
-        "pushq %%rax\n"
-        "lretq\n"
-        "1:\n"
-        "movw %1, %%ax\n"
-        "movw %%ax, %%ds\n"
-        "movw %%ax, %%es\n"
-        "movw %%ax, %%fs\n"
-        "movw %%ax, %%gs\n"
-        "movw %%ax, %%ss\n"
-        :
-        : "i"((u64)GDT_KERNEL_CODE), "i"(GDT_KERNEL_DATA)
-        : "rax", "memory"
-    );
+    asm volatile("pushq %0\n"
+                 "lea 1f(%%rip), %%rax\n"
+                 "pushq %%rax\n"
+                 "lretq\n"
+                 "1:\n"
+                 "movw %1, %%ax\n"
+                 "movw %%ax, %%ds\n"
+                 "movw %%ax, %%es\n"
+                 "movw %%ax, %%fs\n"
+                 "movw %%ax, %%gs\n"
+                 "movw %%ax, %%ss\n"
+                 :
+                 : "i"((u64)GDT_KERNEL_CODE), "i"(GDT_KERNEL_DATA)
+                 : "rax", "memory");
 #endif
 }
 

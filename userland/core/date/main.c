@@ -30,14 +30,14 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    struct tm tm_val = {0};
+    struct tm tm_val = { 0 };
 
     if (!gmtime_r(&now, &tm_val)) {
         io_write_str("date: failed to convert time\n");
         return 1;
     }
 
-    char out[256] = {0};
+    char out[256] = { 0 };
 
     if (format[0] && !strftime(out, sizeof(out), format, &tm_val)) {
         io_write_str("date: format too long\n");

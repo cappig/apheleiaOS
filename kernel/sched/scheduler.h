@@ -17,9 +17,9 @@ typedef void (*thread_entry_t)(void *arg);
 
 typedef struct vfs_node vfs_node_t;
 
-#define SCHED_REGION_COW (1ULL << 62)
+#define SCHED_REGION_COW      (1ULL << 62)
 #define SCHED_FD_FLAG_CLOEXEC (1u << 0)
-#define SCHED_THREAD_MAGIC 0x54485244u
+#define SCHED_THREAD_MAGIC    0x54485244u
 
 typedef enum {
     SCHED_FD_NONE = 0,
@@ -257,21 +257,13 @@ bool sched_process_is_child(pid_t child_pid, pid_t parent_pid);
 bool sched_pid_is_group_leader(pid_t pid);
 bool sched_pgrp_exists(pid_t pgid);
 bool sched_pgrp_in_session(pid_t pgid, pid_t sid);
-sched_thread_t *
-sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg);
+sched_thread_t *sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg);
 sched_thread_t *sched_create_user_thread(const char *name);
 pid_t sched_fork(arch_int_state_t *state);
 pid_t sched_wait(pid_t pid, int *status);
 pid_t sched_waitpid(pid_t pid, int *status, int options);
-void thread_prepare_user(
-    sched_thread_t *thread,
-    uintptr_t entry,
-    uintptr_t user_stack_top
-);
-bool sched_save_user_context(
-    sched_thread_t *thread,
-    const arch_int_state_t *state
-);
+void thread_prepare_user(sched_thread_t *thread, uintptr_t entry, uintptr_t user_stack_top);
+bool sched_save_user_context(sched_thread_t *thread, const arch_int_state_t *state);
 void sched_discard_thread(sched_thread_t *thread);
 void sched_make_runnable(sched_thread_t *thread);
 void sched_unblock_thread(sched_thread_t *thread);
@@ -279,13 +271,7 @@ void sched_stop_thread(sched_thread_t *thread, int signum);
 void sched_continue_thread(sched_thread_t *thread);
 void thread_set_name(sched_thread_t *thread, const char *name);
 
-bool sched_add_user_region(
-    sched_thread_t *thread,
-    uintptr_t vaddr,
-    uintptr_t paddr,
-    size_t pages,
-    u64 flags
-);
+bool sched_add_user_region(sched_thread_t *thread, uintptr_t vaddr, uintptr_t paddr, size_t pages, u64 flags);
 void sched_clear_user_regions(sched_thread_t *thread);
 void sched_user_mem_add(sched_thread_t *thread, size_t pages);
 void sched_user_mem_sub(sched_thread_t *thread, size_t pages);
@@ -294,15 +280,11 @@ u64 sched_user_mem_kib(const sched_thread_t *thread);
 
 void sched_wait_queue_init(sched_wait_queue_t *queue);
 void sched_wait_queue_destroy(sched_wait_queue_t *queue);
-void sched_wait_queue_set_poll_link(sched_wait_queue_t *queue, bool enabled);
+void sched_waitq_set_poll(sched_wait_queue_t *queue, bool enabled);
 
 u32 sched_wait_seq(sched_wait_queue_t *queue);
-sched_wait_result_t sched_wait_on_queue(
-    sched_wait_queue_t *queue,
-    u32 observed_seq,
-    u64 deadline_tick,
-    sched_wait_flags_t flags
-);
+sched_wait_result_t
+sched_wait_on_queue(sched_wait_queue_t *queue, u32 observed_seq, u64 deadline_tick, sched_wait_flags_t flags);
 bool sched_block_if_unchanged(sched_wait_queue_t *queue, u32 observed_seq);
 void sched_block(sched_wait_queue_t *queue);
 void sched_wake_one(sched_wait_queue_t *queue);
@@ -311,8 +293,7 @@ u32 sched_poll_wait_seq(void);
 bool sched_poll_wait_change(u32 observed_seq);
 bool sched_poll_wait_until(u32 observed_seq, u64 deadline_tick);
 void sched_poll_wait(void);
-sched_wait_result_t
-sched_wait_deadline(u64 deadline_tick, sched_wait_flags_t flags);
+sched_wait_result_t sched_wait_deadline(u64 deadline_tick, sched_wait_flags_t flags);
 u32 sched_exit_event_seq(void);
 bool sched_exit_wait_change(u32 observed_seq);
 bool sched_exit_event_pop(pid_t *pid_out);
@@ -333,29 +314,17 @@ bool wait_running(sched_thread_t *self);
 void sched_exit(void) NORETURN;
 bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out);
 void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out);
-void sched_cpu_usage_snapshot_core(
-    size_t core_id,
-    u64 *busy_ticks_out,
-    u64 *total_ticks_out
-);
+void sched_cpu_usage_snapshot_core(size_t core_id, u64 *busy_ticks_out, u64 *total_ticks_out);
 void sched_metrics_snapshot(sched_metrics_snapshot_t *out);
 void sched_metrics_record_syscall(void);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
-int sched_signal_pgrp_as(
-    pid_t pgid,
-    int signum,
-    const sched_thread_t *sender
-);
+int sched_signal_pgrp_as(pid_t pgid, int signum, const sched_thread_t *sender);
 
 bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write);
 bool sched_proc_cwd(pid_t pid, char *out, size_t out_len);
 
 int sched_fd_alloc(sched_thread_t *thread, const sched_fd_t *fd, int min_fd);
-int sched_fd_install(
-    sched_thread_t *thread,
-    int target_fd,
-    const sched_fd_t *fd
-);
+int sched_fd_install(sched_thread_t *thread, int target_fd, const sched_fd_t *fd);
 int sched_fd_close(sched_thread_t *thread, int fd);
 int sched_fd_dup(sched_thread_t *thread, int oldfd, int newfd);
 bool sched_fd_clone_table(sched_thread_t *dst, const sched_thread_t *src);

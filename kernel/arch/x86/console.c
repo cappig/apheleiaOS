@@ -152,15 +152,7 @@ static u16 _x86_text_cell(u32 codepoint, u8 fg, u8 bg) {
     return ((u16)attr << 8) | ch;
 }
 
-static void _x86_text_put(
-    u8 *fb,
-    size_t cols,
-    size_t col,
-    size_t row,
-    u32 codepoint,
-    u8 fg,
-    u8 bg
-) {
+static void _x86_text_put(u8 *fb, size_t cols, size_t col, size_t row, u32 codepoint, u8 fg, u8 bg) {
     if (!fb) {
         return;
     }
@@ -183,8 +175,7 @@ static void _x86_text_clear(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
     }
 }
 
-static void
-_x86_text_scroll_up(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
+static void _x86_text_scroll_up(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
     if (!fb || !cols || !rows) {
         return;
     }

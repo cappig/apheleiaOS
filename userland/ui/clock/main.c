@@ -103,20 +103,13 @@ static int text_height_px(void) {
     return height;
 }
 
-static void draw_face_labels(
-    framebuffer_t *fb,
-    int width,
-    int cx,
-    int cy,
-    int radius,
-    const struct tm *tm_now
-) {
+static void draw_face_labels(framebuffer_t *fb, int width, int cx, int cy, int radius, const struct tm *tm_now) {
     if (!fb || !tm_now || width <= 0 || radius <= 0) {
         return;
     }
 
-    char year_text[16] = {0};
-    char date_text[16] = {0};
+    char year_text[16] = { 0 };
+    char date_text[16] = { 0 };
 
     if (!strftime(year_text, sizeof(year_text), "%Y", tm_now)) {
         snprintf(year_text, sizeof(year_text), "?");
@@ -131,8 +124,7 @@ static void draw_face_labels(
     int face_left = cx - radius;
     int face_right = cx + radius;
     int text_height = text_height_px();
-    int label_y =
-        cy - radius - k_clock_face_label_gap - text_height - k_clock_label_raise;
+    int label_y = cy - radius - k_clock_face_label_gap - text_height - k_clock_label_raise;
     if (label_y < 2) {
         label_y = 2;
     }
@@ -206,7 +198,7 @@ static double angle_from_tick_milli(int tick_milli) {
 }
 
 static point_t polar_point_tick(int cx, int cy, int radius, int tick_milli) {
-    point_t out = {0};
+    point_t out = { 0 };
 
     double angle = angle_from_tick_milli(tick_milli);
 
@@ -267,14 +259,7 @@ static void draw_hour_numbers(framebuffer_t *fb, int cx, int cy, int radius) {
     }
 }
 
-static void draw_hand(
-    framebuffer_t *fb,
-    int cx,
-    int cy,
-    int radius,
-    int tick_milli,
-    pixel_t color
-) {
+static void draw_hand(framebuffer_t *fb, int cx, int cy, int radius, int tick_milli, pixel_t color) {
     point_t p = polar_point_tick(cx, cy, radius, tick_milli);
     draw_line(fb, cx, cy, p.x, p.y, color);
 }
@@ -287,13 +272,7 @@ static bool clock_tm_from_time(time_t now, struct tm *tm_out) {
     return localtime_r(&now, tm_out) != NULL;
 }
 
-static bool
-draw_clock(
-    window_t *window,
-    const struct tm *tm_now,
-    const clock_options_t *opts,
-    double second_fraction
-) {
+static bool draw_clock(window_t *window, const struct tm *tm_now, const clock_options_t *opts, double second_fraction) {
     if (!window || !tm_now) {
         return false;
     }
@@ -361,23 +340,9 @@ draw_clock(
     int second_tail = (radius * 10) / 100;
 
     draw_hand(fb, cx, cy, hour_len, hour_tick_milli, DRAW_WHITE);
-    draw_hand(
-        fb,
-        cx,
-        cy,
-        minute_len,
-        minute_tick_milli,
-        DRAW_GRAY_LIGHT
-    );
+    draw_hand(fb, cx, cy, minute_len, minute_tick_milli, DRAW_GRAY_LIGHT);
     draw_hand(fb, cx, cy, second_len, second_tick_milli, DRAW_RED);
-    draw_hand(
-        fb,
-        cx,
-        cy,
-        second_tail,
-        second_tick_milli + 30000,
-        DRAW_RED
-    );
+    draw_hand(fb, cx, cy, second_tail, second_tick_milli + 30000, DRAW_RED);
 
     draw_rect(fb, cx - 1, cy - 1, 3, 3, DRAW_RED);
 
@@ -414,7 +379,7 @@ static bool smooth_clock_sample(
         return false;
     }
 
-    struct timespec mono_now = {0};
+    struct timespec mono_now = { 0 };
     if (clock_gettime(CLOCK_MONOTONIC, &mono_now) < 0) {
         return false;
     }
@@ -465,13 +430,13 @@ static bool smooth_clock_sample(
 }
 
 int main(int argc, char **argv) {
-    clock_options_t opts = {0};
+    clock_options_t opts = { 0 };
     int parse_status = parse_args(argc, argv, &opts);
     if (parse_status <= 0) {
         return parse_status < 0 ? 1 : 0;
     }
 
-    window_t window = {0};
+    window_t window = { 0 };
     if (window_init(&window, 320, 360, "clock")) {
         return 1;
     }
@@ -479,7 +444,7 @@ int main(int argc, char **argv) {
     time_t last_sec = (time_t)-1;
     bool redraw = true;
     bool running = true;
-    smooth_clock_state_t smooth_state = {0};
+    smooth_clock_state_t smooth_state = { 0 };
 
     while (running) {
         time_t now = time(NULL);
@@ -499,7 +464,7 @@ int main(int argc, char **argv) {
         }
 
         if (redraw) {
-            struct tm tm_now = {0};
+            struct tm tm_now = { 0 };
 
             if (!clock_tm_from_time(display_sec, &tm_now)) {
                 break;
@@ -512,7 +477,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        ws_input_event_t event = {0};
+        ws_input_event_t event = { 0 };
 
         int timeout_ms = opts.smooth ? k_clock_smooth_frame_ms : (redraw ? 0 : 100);
 

@@ -20,11 +20,9 @@ struct linked_list {
     list_node_t *tail;
 };
 
-#define ll_foreach(node, list) \
-    for (list_node_t *node = (list)->head; node != NULL; node = node->next)
+#define ll_foreach(node, list) for (list_node_t *node = (list)->head; node != NULL; node = node->next)
 
-#define ll_foreach_from(node, from) \
-    for (list_node_t *node = (from); node != NULL; node = node->next)
+#define ll_foreach_from(node, from) for (list_node_t *node = (from); node != NULL; node = node->next)
 
 
 linked_list_t *list_create(void);

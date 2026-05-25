@@ -20,8 +20,7 @@ static inline arch_syscall_t arch_syscall_arg4(const arch_int_state_t *state) {
     return state ? (arch_syscall_t)state->g_regs.a3 : 0;
 }
 
-static inline void
-arch_syscall_set_ret(arch_int_state_t *state, arch_syscall_t value) {
+static inline void arch_syscall_set_ret(arch_int_state_t *state, arch_syscall_t value) {
     if (!state) {
         return;
     }

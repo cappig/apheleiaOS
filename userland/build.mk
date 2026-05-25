@@ -36,11 +36,15 @@ USER_RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr -mabi=ilp32
 ifeq ($(ARCH_VARIANT), 64)
 USER_ARCH_NAME := riscv_64
 USER_LD_EMU    := -melf64lriscv
-USER_ARCH_CFLAGS := $(USER_RISCV_64_ISA_FLAGS) -mcmodel=medlow
+USER_ARCH_CFLAGS := \
+	$(USER_RISCV_64_ISA_FLAGS) \
+	-mcmodel=medlow
 else ifeq ($(ARCH_VARIANT), 32)
 USER_ARCH_NAME := riscv_32
 USER_LD_EMU    := -melf32lriscv
-USER_ARCH_CFLAGS := $(USER_RISCV_32_ISA_FLAGS) -mcmodel=medlow
+USER_ARCH_CFLAGS := \
+	$(USER_RISCV_32_ISA_FLAGS) \
+	-mcmodel=medlow
 else
 $(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
 endif

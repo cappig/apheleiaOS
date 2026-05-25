@@ -7,13 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 
-
-bool bitmap_alloc_init(
-    bitmap_allocator_t *alloc,
-    void *chunk_start,
-    size_t chunk_size,
-    size_t block_size
-) {
+bool bitmap_alloc_init(bitmap_allocator_t *alloc, void *chunk_start, size_t chunk_size, size_t block_size) {
     if (!alloc || !chunk_start || !chunk_size || !block_size) {
         return false;
     }
@@ -52,13 +46,7 @@ bool bitmap_alloc_init(
     return true;
 }
 
-static bool first_fit_in_range(
-    bitmap_allocator_t *alloc,
-    size_t blocks,
-    size_t begin,
-    size_t end,
-    size_t *out_block
-) {
+static bool first_fit_in_range(bitmap_allocator_t *alloc, size_t blocks, size_t begin, size_t end, size_t *out_block) {
     if (!alloc || !blocks || !out_block || begin >= end) {
         return false;
     }
@@ -71,11 +59,7 @@ static bool first_fit_in_range(
         size_t word = block / BITMAP_WORD_SIZE;
         bitmap_word_t bits = alloc->bitmap[word];
 
-        if (
-            bit == 0 &&
-            bits == (bitmap_word_t)-1 &&
-            (end - block) >= BITMAP_WORD_SIZE
-        ) {
+        if (bit == 0 && bits == (bitmap_word_t)-1 && (end - block) >= BITMAP_WORD_SIZE) {
             region_size = 0;
             block += BITMAP_WORD_SIZE - 1;
             continue;
@@ -101,11 +85,7 @@ static bool first_fit_in_range(
     return false;
 }
 
-static bool _first_fit(
-    bitmap_allocator_t *alloc,
-    size_t blocks,
-    size_t *out_block
-) {
+static bool _first_fit(bitmap_allocator_t *alloc, size_t blocks, size_t *out_block) {
     if (!alloc || !blocks || !out_block) {
         return false;
     }
@@ -115,26 +95,14 @@ static bool _first_fit(
         start = 0;
     }
 
-    if (
-        first_fit_in_range(
-            alloc,
-            blocks,
-            start,
-            alloc->block_count,
-            out_block
-        )
-    ) {
+    if (first_fit_in_range(alloc, blocks, start, alloc->block_count, out_block)) {
         return true;
     }
 
     return start && first_fit_in_range(alloc, blocks, 0, start, out_block);
 }
 
-static bool _last_fit(
-    bitmap_allocator_t *alloc,
-    size_t blocks,
-    size_t *out_block
-) {
+static bool _last_fit(bitmap_allocator_t *alloc, size_t blocks, size_t *out_block) {
     if (!alloc || !blocks || !out_block) {
         return false;
     }
@@ -219,8 +187,9 @@ void *bitmap_alloc_reserve_high(bitmap_allocator_t *alloc, size_t blocks) {
 }
 
 bool bitmap_alloc_free(bitmap_allocator_t *alloc, void *ptr, size_t blocks) {
-    if (!alloc || !ptr || !blocks || !alloc->block_size ||
-        !alloc->block_count || !alloc->chunk_size) {
+    bool bad_alloc = !alloc || !ptr || !blocks || !alloc->block_size || !alloc->block_count || !alloc->chunk_size;
+
+    if (bad_alloc) {
         return false;
     }
 
@@ -228,8 +197,10 @@ bool bitmap_alloc_free(bitmap_allocator_t *alloc, void *ptr, size_t blocks) {
     uintptr_t addr = (uintptr_t)ptr;
     uintptr_t end = start + alloc->chunk_size;
 
-    if (end <= start || addr < start || addr >= end ||
-        alloc->chunk_size / alloc->block_size < alloc->block_count) {
+    bool outside_chunk = end <= start || addr < start || addr >= end;
+    bool bad_layout = alloc->chunk_size / alloc->block_size < alloc->block_count;
+
+    if (outside_chunk || bad_layout) {
         return false;
     }
 
@@ -238,10 +209,7 @@ bool bitmap_alloc_free(bitmap_allocator_t *alloc, void *ptr, size_t blocks) {
     }
 
     size_t first_block = bitmap_alloc_to_block(alloc, ptr);
-    if (
-        first_block >= alloc->block_count ||
-        blocks > alloc->block_count - first_block
-    ) {
+    if (first_block >= alloc->block_count || blocks > alloc->block_count - first_block) {
         return false;
     }
 

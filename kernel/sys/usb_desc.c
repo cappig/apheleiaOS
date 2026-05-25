@@ -2,12 +2,7 @@
 
 #include <string.h>
 
-bool usb_desc_parse_config_identity(
-    const u8 *cfg,
-    size_t cfg_len,
-    usb_device_identity_t *identity,
-    u8 *out_config_value
-) {
+bool usb_desc_config_id(const u8 *cfg, size_t cfg_len, usb_device_identity_t *identity, u8 *out_config_value) {
     if (!cfg || cfg_len < 9 || !identity || !out_config_value) {
         return false;
     }
@@ -46,9 +41,7 @@ bool usb_desc_parse_config_identity(
                 parsed.interface_protocol = proto;
             }
 
-            in_target_iface =
-                alt == 0 &&
-                klass == USB_CLASS_MASS_STORAGE;
+            in_target_iface = alt == 0 && klass == USB_CLASS_MASS_STORAGE;
 
             if (in_target_iface) {
                 found_target_iface = true;
