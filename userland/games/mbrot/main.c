@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <term_size.h>
+#include <unistd.h>
 #include <ui.h>
 
 #define MBROT_RES_ADJUST_MIN   (-1)
@@ -43,6 +45,7 @@ typedef enum {
 
 typedef struct {
     mbrot_fractal_t fractal;
+    bool terminal;
 } mbrot_options_t;
 
 typedef u32 (*mbrot_iter_fn_t)(double cx, double cy, u32 max_iter);
@@ -106,6 +109,7 @@ static void print_usage(const char *prog) {
         "  --burning-ship  burning ship fractal\n"
         "  --tricorn       tricorn fractal\n"
         "  --mandelbrot    mandelbrot set\n"
+        "  -t, --term      draw once in the terminal\n"
         "  -h, --help      show this help\n",
         name
     );
@@ -127,6 +131,11 @@ static int parse_args(int argc, char **argv, mbrot_options_t *out) {
         if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
             print_usage(argv ? argv[0] : NULL);
             return 0;
+        }
+
+        if (!strcmp(arg, "-t") || !strcmp(arg, "--term")) {
+            out->terminal = true;
+            continue;
         }
 
         bool matched = false;
@@ -788,6 +797,87 @@ static void advance_progressive_state(bool *progressive_pending, u32 *progressiv
     *progressive_step = progressive_next_step(*progressive_step, progressive_target_step);
 }
 
+static size_t terminal_cols(void) {
+    const term_size_t fallback = {
+        .rows = 24,
+        .cols = 80,
+    };
+
+    term_size_t size = fallback;
+    term_get_size(STDIN_FILENO, STDOUT_FILENO, &size, &fallback);
+
+    return size.cols ? size.cols : fallback.cols;
+}
+
+static size_t terminal_rows(void) {
+    const term_size_t fallback = {
+        .rows = 24,
+        .cols = 80,
+    };
+
+    term_size_t size = fallback;
+    term_get_size(STDIN_FILENO, STDOUT_FILENO, &size, &fallback);
+
+    return size.rows ? size.rows : fallback.rows;
+}
+
+static char terminal_sample_char(u32 iter, u32 max_iter) {
+    static const char shades[] = " .:-=+*#%@";
+
+    if (iter >= max_iter) {
+        return '@';
+    }
+
+    size_t last = sizeof(shades) - 2;
+    size_t idx = ((size_t)iter * last) / max_iter;
+
+    return shades[idx];
+}
+
+static int render_terminal(mbrot_fractal_t fractal) {
+    size_t cols = terminal_cols();
+    size_t rows = terminal_rows();
+
+    if (cols < 20) {
+        cols = 20;
+    }
+
+    size_t image_rows = rows > 3 ? rows - 3 : rows;
+    if (image_rows < 8) {
+        image_rows = 8;
+    }
+
+    mandelbrot_view_t view = { 0 };
+    view_reset(&view, fractal);
+    view.scale *= 1.25;
+
+    mbrot_iter_fn_t iter_fn = fractal_iter_fn(fractal);
+    u32 max_iter = compute_max_iter(view.scale);
+
+    double aspect = ((double)image_rows * 2.0) / (double)cols;
+    double x_min = view.center_x - view.scale;
+    double y_max = view.center_y + view.scale * aspect;
+    double dx = (2.0 * view.scale) / (double)cols;
+    double dy = (2.0 * view.scale * aspect) / (double)image_rows;
+
+    for (size_t row = 0; row < image_rows; row++) {
+        double cy = y_max - ((double)row * dy);
+        double cx = x_min;
+
+        for (size_t col = 0; col < cols; col++) {
+            u32 iter = iter_fn(cx, cy, max_iter);
+            char ch = terminal_sample_char(iter, max_iter);
+
+            putchar(ch);
+            cx += dx;
+        }
+
+        putchar('\n');
+    }
+
+    return 0;
+}
+
 int main(int argc, char **argv) {
     mbrot_options_t opts = { 0 };
     int parse_status = parse_args(argc, argv, &opts);
@@ -795,8 +885,13 @@ int main(int argc, char **argv) {
         return parse_status < 0 ? 1 : 0;
     }
 
+    if (opts.terminal) {
+        return render_terminal(opts.fractal);
+    }
+
     window_t window = { 0 };
     if (window_init(&window, 760, 500, fractal_profile(opts.fractal)->title)) {
+        printf("mbrot: use --term or -t to draw in the terminal\n");
         return 1;
     }
 
