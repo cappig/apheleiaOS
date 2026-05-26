@@ -217,6 +217,43 @@ static int list_dir(const char *path, bool opt_all, bool opt_almost, bool opt_lo
     return 0;
 }
 
+static void list_file(const char *path, const struct stat *st, bool opt_long) {
+    const char *name = fs_path_basename(path);
+
+    if (!opt_long) {
+        io_write_str(name);
+        io_write_char('\n');
+        return;
+    }
+
+    char uid_buf[16];
+    char gid_buf[16];
+    const char *uname = account_uid_name(st->st_uid, uid_buf, sizeof(uid_buf));
+    const char *gname = account_gid_name(st->st_gid, gid_buf, sizeof(gid_buf));
+
+    char mode[11];
+    fs_format_mode(st->st_mode, mode);
+
+    char timebuf[32];
+    fs_format_time_short(st->st_mtime, timebuf, sizeof(timebuf));
+
+    char line[256];
+    snprintf(
+        line,
+        sizeof(line),
+        "%s %lu %s %s %llu %s %s\n",
+        mode,
+        (unsigned long)st->st_nlink,
+        uname,
+        gname,
+        (unsigned long long)st->st_size,
+        timebuf,
+        name
+    );
+
+    io_write_str(line);
+}
+
 int main(int argc, char **argv) {
     bool opt_all = false;
     bool opt_almost = false;
@@ -282,9 +319,7 @@ int main(int argc, char **argv) {
                 status = 1;
             }
         } else if (!fs_is_dir_mode(st.st_mode)) {
-            char msg[320];
-            snprintf(msg, sizeof(msg), "ls: %s: not a directory\n", path);
-            io_write_str(msg);
+            list_file(path, &st, opt_long);
         } else if (list_dir(path, opt_all, opt_almost, opt_long, opt_single) != 0) {
             status = 1;
         }
