@@ -3405,6 +3405,7 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
 
         if (thread) {
             thread->exit_code = code;
+            thread->exit_signal = 0;
         }
 
         sched_exit();

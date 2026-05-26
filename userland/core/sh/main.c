@@ -296,15 +296,6 @@ static int parse_job_id(const char *arg) {
     return id > 0 ? id : -1;
 }
 
-static bool wait_status_signaled(int status) {
-    int sig = status & 0x7f;
-    return sig > 0 && sig != 0x7f;
-}
-
-static int wait_status_termsig(int status) {
-    return status & 0x7f;
-}
-
 static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
     sh_wait_result_t result = {
         .stopped = false,
@@ -332,8 +323,8 @@ static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
 
                 if (WIFEXITED(status)) {
                     result.exit_status = WEXITSTATUS(status);
-                } else if (wait_status_signaled(status)) {
-                    result.exit_status = 128 + wait_status_termsig(status);
+                } else if (WIFSIGNALED(status)) {
+                    result.exit_status = 128 + WTERMSIG(status);
                 } else {
                     result.exit_status = 1;
                 }

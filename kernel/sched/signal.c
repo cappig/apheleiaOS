@@ -204,7 +204,8 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
 
     if (handler == SIG_DFL || !thread->signal_trampoline) {
         signal_clear_pending(thread, signum);
-        thread->exit_code = 128 + signum;
+        thread->exit_code = 0;
+        thread->exit_signal = signum;
         sched_exit();
     }
 
@@ -218,7 +219,8 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
 
         signal_clear_pending(thread, signum);
 
-        thread->exit_code = 128 + signum;
+        thread->exit_code = 0;
+        thread->exit_signal = signum;
         sched_exit();
     }
 

@@ -64,6 +64,7 @@ static void retire_bad(sched_thread_t *thread) {
     thread_unclaim(thread);
     thread_set_state(thread, THREAD_ZOMBIE);
     thread->exit_code = -EFAULT;
+    thread->exit_signal = 0;
 
     if (sched_state.procs.zombie_list && !thread->in_zombie_list) {
         thread->zombie_node.data = thread;

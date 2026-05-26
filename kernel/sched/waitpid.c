@@ -74,6 +74,20 @@ static bool waitpid_has_child(const sched_thread_t *self, pid_t pid) {
     return false;
 }
 
+static int waitpid_status(const sched_thread_t *thread) {
+    if (thread->exit_signal) {
+        return thread->exit_signal & 0x7f;
+    }
+
+    int code = thread->exit_code;
+
+    if (code < 0) {
+        code = 1;
+    }
+
+    return (code & 0xff) << 8;
+}
+
 pid_t sched_waitpid(pid_t pid, int *status, int options) {
     sched_thread_t *self = sched_local_current();
 
@@ -103,7 +117,7 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
 
         if (found) {
             if (status) {
-                *status = found->exit_code;
+                *status = waitpid_status(found);
             }
 
             list_remove(sched_state.procs.zombie_list, &found->zombie_node);

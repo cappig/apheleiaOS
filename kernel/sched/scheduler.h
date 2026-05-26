@@ -131,6 +131,7 @@ typedef struct sched_thread {
     size_t group_count;
     mode_t umask;
     int exit_code;
+    int exit_signal;
 
     arch_vm_space_t *vm_space;
     spinlock_t vm_lock;

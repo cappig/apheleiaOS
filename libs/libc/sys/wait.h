@@ -8,6 +8,9 @@
 #define WIFSTOPPED(status) (((status) & 0xff) == 0x7f)
 #define WSTOPSIG(status)   (((status) >> 8) & 0xff)
 
+#define WIFSIGNALED(status) (((status) & 0x7f) != 0 && ((status) & 0x7f) != 0x7f)
+#define WTERMSIG(status)    ((status) & 0x7f)
+
 #define WIFEXITED(status)   (!((status) & 0xff))
 #define WEXITSTATUS(status) (((status) >> 8) & 0xff)
 
