@@ -18,6 +18,7 @@ static void sched_fd_reset(sched_fd_t *fd) {
     fd->pipe = NULL;
     fd->offset = 0;
     fd->pty_index = -1;
+    fd->pty_master = false;
     fd->tty_index = TTY_NONE;
     fd->flags = 0;
     fd->fd_flags = 0;

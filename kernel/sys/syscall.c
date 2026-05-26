@@ -123,10 +123,6 @@ static int _tty_binding_from_dev_name(const char *dev_name) {
         return PROC_TTY_PTS(idx);
     }
 
-    if (!strncmp(dev_name, "pty", 3) && _parse_index(dev_name + 3, (int)PTY_COUNT, &idx)) {
-        return PROC_TTY_PTS(idx);
-    }
-
     return TTY_NONE;
 }
 
@@ -141,11 +137,17 @@ static int _pty_index_from_dev_name(const char *dev_name) {
         return idx;
     }
 
-    if (!strncmp(dev_name, "pty", 3) && _parse_index(dev_name + 3, (int)PTY_COUNT, &idx)) {
-        return idx;
+    return -1;
+}
+
+static bool _fd_pty_handle(const sched_fd_t *entry, pty_handle_t *out) {
+    if (!entry || !out || entry->pty_index < 0) {
+        return false;
     }
 
-    return -1;
+    out->index = (size_t)entry->pty_index;
+    out->is_master = entry->pty_master;
+    return true;
 }
 
 static void _sync_thread_tty(sched_thread_t *thread, const sched_fd_t *entry) {
@@ -1136,6 +1138,11 @@ static ssize_t _fd_read_vfs(
         return -EISDIR;
     }
 
+    pty_handle_t pty_handle;
+    if (_fd_pty_handle(entry, &pty_handle)) {
+        return pty_read_handle(&pty_handle, buf, len, _fd_vfs_io_flags(entry));
+    }
+
     ssize_t ws_result = 0;
     if (ws_node_read(entry->node, thread ? thread->pid : 0, buf, offset, len, _fd_vfs_io_flags(entry), &ws_result)) {
         if (ws_result == VFS_EOF) {
@@ -1182,6 +1189,11 @@ static ssize_t _fd_write_vfs(
 
     if (!_open_has_write(entry->flags)) {
         return -EBADF;
+    }
+
+    pty_handle_t pty_handle;
+    if (_fd_pty_handle(entry, &pty_handle)) {
+        return pty_write_handle(&pty_handle, buf, len, _fd_vfs_io_flags(entry));
     }
 
     if (append_mode && (entry->flags & O_APPEND)) {
@@ -1383,6 +1395,11 @@ static ssize_t sys_ioctl(int fd, u64 request, void *args) {
         if (entry->kind == SCHED_FD_VFS && entry->node) {
             _sync_thread_tty(thread, entry);
 
+            pty_handle_t pty_handle;
+            if (_fd_pty_handle(entry, &pty_handle)) {
+                return pty_ioctl_handle(&pty_handle, request, args);
+            }
+
             ssize_t ws_result = 0;
             if (ws_node_ioctl(entry->node, thread->pid, request, args, &ws_result)) {
                 return ws_result;
@@ -1437,6 +1454,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     size_t ptmx_index = 0;
     int fd_tty_index = TTY_NONE;
     int fd_pty_index = -1;
+    bool fd_pty_master = false;
 
     if (!strncmp(resolved, "/dev/", 5)) {
         const char *dev = resolved + 5;
@@ -1446,21 +1464,13 @@ static int sys_open(const char *path, int flags, mode_t mode) {
                 return -EAGAIN;
             }
 
-            char master_path[PATH_MAX];
-            snprintf(master_path, sizeof(master_path), "/dev/pty%zu", ptmx_index);
-            snprintf(resolved, sizeof(resolved), "%s", master_path);
             ptmx_open = true;
-            dev = resolved + 5;
-
-            int search_err = vfs_check_search(resolved, thread->uid, thread->gid, true);
-
-            if (search_err < 0) {
-                return _open_fail(ptmx_open, ptmx_index, search_err);
-            }
+            fd_pty_index = (int)ptmx_index;
+            fd_pty_master = true;
+        } else {
+            fd_tty_index = _tty_binding_from_dev_name(dev);
+            fd_pty_index = _pty_index_from_dev_name(dev);
         }
-
-        fd_tty_index = _tty_binding_from_dev_name(dev);
-        fd_pty_index = _pty_index_from_dev_name(dev);
     }
 
     vfs_node_t *node = vfs_lookup(resolved);
@@ -1568,6 +1578,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         .pipe = NULL,
         .offset = 0,
         .pty_index = fd_pty_index,
+        .pty_master = fd_pty_master,
         .tty_index = fd_tty_index,
         .flags = runtime_flags,
         .fd_flags = fd_flags,
@@ -3226,6 +3237,11 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
 
             if (entry->flags & O_NONBLOCK) {
                 vfs_flags |= VFS_NONBLOCK;
+            }
+
+            pty_handle_t pty_handle;
+            if (_fd_pty_handle(entry, &pty_handle)) {
+                return pty_poll_handle(&pty_handle, events, (u32)vfs_flags);
             }
 
             short ws_revents = 0;
