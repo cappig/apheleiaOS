@@ -840,7 +840,7 @@ static bool _upsert_dir(vfs_node_t *parent, const char *name, mode_t mode, vfs_n
         return false;
     }
 
-    vfs_clear_interface(dir);
+    vfs_make_virtual(dir);
 
     dir->type = VFS_DIR;
     dir->mode = mode;
@@ -866,6 +866,8 @@ static bool _upsert_file(vfs_node_t *parent, const char *name, mode_t mode, proc
     if (!node) {
         return false;
     }
+
+    vfs_make_virtual(node);
 
     if (!node->interface) {
         if (field == PROC_FIELD_STAT) {
@@ -946,7 +948,7 @@ bool procfs_init(void) {
         return false;
     }
 
-    vfs_clear_interface(proc);
+    vfs_make_virtual(proc);
 
     proc->type = VFS_DIR;
     proc->mode = 0555;

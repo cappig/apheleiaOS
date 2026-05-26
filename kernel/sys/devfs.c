@@ -89,41 +89,12 @@ static time_t _devfs_time_now(void) {
     return (time_t)_boot_seconds();
 }
 
-static time_t _devfs_latest_time(const vfs_node_t *node) {
-    if (!node) {
-        return 0;
-    }
-
-    time_t latest = node->time.created;
-
-    if (node->time.modified > latest) {
-        latest = node->time.modified;
-    }
-
-    if (node->time.accessed > latest) {
-        latest = node->time.accessed;
-    }
-
-    return latest;
-}
-
-static time_t _devfs_stamp_time(const vfs_node_t *parent) {
-    time_t parent_time = _devfs_latest_time(parent);
-    time_t now = _devfs_time_now();
-
-    if (parent_time > now) {
-        now = parent_time;
-    }
-
-    return now;
-}
-
-static void _stamp_dev_node(vfs_node_t *node, const vfs_node_t *parent) {
+static void _stamp_dev_node(vfs_node_t *node) {
     if (!node) {
         return;
     }
 
-    time_t stamp = _devfs_stamp_time(parent);
+    time_t stamp = _devfs_time_now();
 
     node->time.created = stamp;
     node->time.modified = stamp;
@@ -132,7 +103,6 @@ static void _stamp_dev_node(vfs_node_t *node, const vfs_node_t *parent) {
 
 static void _configure_dev_node(
     vfs_node_t *node,
-    const vfs_node_t *parent,
     u32 type,
     mode_t mode,
     vfs_interface_t *interface,
@@ -147,7 +117,7 @@ static void _configure_dev_node(
     vfs_make_virtual(node);
     vfs_set_interface(node, interface);
     node->private = priv;
-    _stamp_dev_node(node, parent);
+    _stamp_dev_node(node);
 }
 
 static ssize_t _dev_text_read(const char *text, void *buf, size_t offset, size_t len) {
@@ -493,7 +463,7 @@ bool devfs_register_node(
         return false;
     }
 
-    _configure_dev_node(node, parent, type, mode, interface, priv);
+    _configure_dev_node(node, type, mode, interface, priv);
 
     return true;
 }
@@ -515,7 +485,7 @@ vfs_node_t *devfs_register_dir(vfs_node_t *parent, const char *name, mode_t mode
     node->type = VFS_DIR;
     node->mode = mode;
     vfs_make_virtual(node);
-    _stamp_dev_node(node, parent);
+    _stamp_dev_node(node);
 
     return node;
 }
@@ -540,7 +510,7 @@ static vfs_node_t *_ensure_dev_dir(void) {
     dev_dir->type = VFS_DIR;
     dev_dir->mode = 0755;
     vfs_make_virtual(dev_dir);
-    _stamp_dev_node(dev_dir, root);
+    _stamp_dev_node(dev_dir);
 
     return dev_dir;
 }

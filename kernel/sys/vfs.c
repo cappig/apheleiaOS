@@ -188,40 +188,12 @@ static time_t _time_now(void) {
     return (time_t)(arch_realtime_ns() / 1000000000ULL);
 }
 
-static time_t _latest_node_time(const vfs_node_t *node) {
-    if (!node) {
-        return _time_now();
-    }
-
-    node = _follow_mounts_const(node);
-    if (!node) {
-        return _time_now();
-    }
-
-    time_t latest = node->time.created;
-
-    if (node->time.modified > latest) {
-        latest = node->time.modified;
-    }
-
-    if (node->time.accessed > latest) {
-        latest = node->time.accessed;
-    }
-
-    return latest;
-}
-
-static void _stamp_virtual_node(vfs_node_t *node, const vfs_node_t *parent) {
+static void _stamp_virtual_node(vfs_node_t *node) {
     if (!node) {
         return;
     }
 
     time_t now = _time_now();
-    time_t parent_time = _latest_node_time(parent);
-
-    if (parent_time > now) {
-        now = parent_time;
-    }
 
     node->time.created = now;
     node->time.modified = now;
@@ -1046,6 +1018,7 @@ void vfs_make_virtual(vfs_node_t *node) {
     node->gid = 0;
     node->size = 0;
     node->nlink = 1;
+    _stamp_virtual_node(node);
 }
 
 void vfs_adopt_interface(vfs_node_t *node, vfs_interface_t *interface) {
@@ -2013,7 +1986,7 @@ vfs_node_t *vfs_create_virtual(vfs_node_t *parent, char *name, u32 type, mode_t 
     }
 
     node->mode = mode;
-    _stamp_virtual_node(node, parent);
+    _stamp_virtual_node(node);
 
     if (vfs_insert_child_virtual(parent, node) < 0) {
         vfs_destroy_node(node);
