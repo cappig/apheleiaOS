@@ -119,7 +119,7 @@ static bool _usb_enum_candidate_better(usb_device_handle_t dev, usb_device_handl
 }
 
 static inline void _usb_log_attach_failed(const char *driver_name, size_t hcd_id, size_t port) {
-    log_warn("USB class driver '%s' failed while attaching (hcd=%zu port=%zu)", driver_name, hcd_id, port);
+    log_warn("USB class '%s' attach failed hcd=%zu port=%zu", driver_name, hcd_id, port);
 }
 
 static inline void
@@ -543,7 +543,7 @@ static void _usb_process_enum_task(const usb_enum_task_t *task) {
     }
 
     if (!stale && !enum_ok) {
-        log_warn("USB enumeration failed while probing device (hcd=%zu port=%zu)", task->hcd_id, task->port);
+        log_warn("USB probe failed hcd=%zu port=%zu", task->hcd_id, task->port);
     }
 }
 
@@ -594,7 +594,7 @@ static void _usb_start_enum_worker(void) {
 
     usb_core.enum_thread = sched_create_kernel_thread("usb-enum", _usb_enum_worker, NULL);
     if (!usb_core.enum_thread) {
-        log_warn("USB core failed while creating enumeration worker");
+        log_warn("failed to create USB enumeration worker");
         return;
     }
 
@@ -668,7 +668,7 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
 
     spin_unlock_irqrestore(&usb_core.lock, flags);
 
-    log_debug("registered USB class driver '%s'", driver->name);
+    log_debug("registered USB class '%s'", driver->name);
 
     if (attach_list && driver->attach) {
         for (size_t i = 0; i < attach_list->size; i++) {
@@ -688,7 +688,7 @@ bool usb_register_class_driver(const usb_class_driver_t *driver) {
     }
 
     if (attach_queue_failed) {
-        log_warn("USB class driver '%s' registered without immediate attach due low memory", driver->name);
+        log_warn("USB class '%s' attached later due low memory", driver->name);
     }
 
     return true;
@@ -1030,11 +1030,11 @@ bool usb_unregister_hcd(size_t hcd_id) {
     }
 
     if (inline_release_count > 0) {
-        log_warn("USB HCD id=%zu released %zu device context(s) inline due low memory", hcd_id, inline_release_count);
+        log_warn("USB HCD %zu released %zu context(s) inline due low memory", hcd_id, inline_release_count);
     }
 
     if (inline_free_count > 0) {
-        log_warn("USB HCD id=%zu freed %zu device record(s) inline due low memory", hcd_id, inline_free_count);
+        log_warn("USB HCD %zu freed %zu device record(s) inline due low memory", hcd_id, inline_free_count);
     }
 
     return true;
@@ -1552,7 +1552,7 @@ bool usb_core_init(void) {
     }
 
     if (!_usb_ensure_state()) {
-        log_warn("USB core failed while allocating state");
+        log_warn("failed to allocate USB core state");
         return false;
     }
 

@@ -214,11 +214,11 @@ void init_graphics(boot_info_t *info) {
             video->green_size = vesa.green.mask;
             video->blue_size = vesa.blue.mask;
 
-            log_info("video output graphics %ux%u", (unsigned int)video->width, (unsigned int)video->height);
+            log_info("video graphics %ux%u", (unsigned int)video->width, (unsigned int)video->height);
 
             return;
         }
     }
 
-    log_info("video output vga text");
+    log_info("video VGA text");
 }

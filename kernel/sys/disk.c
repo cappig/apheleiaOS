@@ -149,7 +149,7 @@ static bool _ensure_disk_name(disk_dev_t *dev) {
     dev->name = name;
 
     if (has_name) {
-        log_warn("disk name '%s' already exists, renamed to '%s'", old, name);
+        log_warn("disk name '%s' reused as '%s'", old, name);
     }
 
     return true;
@@ -780,7 +780,7 @@ bool disk_register(disk_dev_t *dev) {
         _publish_partition_nodes(dev);
     }
 
-    log_debug("registered disk %s (id=%zu)", dev->name ? dev->name : "disk", dev->id);
+    log_debug("registered disk %s id=%zu", dev->name ? dev->name : "disk", dev->id);
     dump_partitions(dev);
     mutex_unlock(&disk_state.lock);
     return true;
@@ -914,7 +914,7 @@ bool file_system_register(fs_t *fs) {
     fs->id = disk_state.next_fs_id++;
 
     vec_push(disk_state.file_systems, &fs);
-    log_debug("registered file system %s (%zu)", fs->name ? fs->name : "fs", fs->id);
+    log_debug("registered filesystem %s id=%zu", fs->name ? fs->name : "fs", fs->id);
     mutex_unlock(&disk_state.lock);
     return true;
 }
@@ -1079,7 +1079,7 @@ static bool _mount_rootfs_on_disk(disk_dev_t *dev, bool honor_preferred_uuid) {
     vfs_node_t *root = vfs_lookup("/");
 
     if (!root) {
-        log_warn("missing vfs root");
+        log_warn("vfs root missing");
         return false;
     }
 

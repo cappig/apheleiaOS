@@ -40,7 +40,7 @@ NORETURN void _load_entry(u16 boot_disk) {
     log_set_lvl(LOG_DEBUG);
     log_set_options(boot_log_options());
 
-    log_info("starting apheleiaOS");
+    log_info("BIOS boot started");
 
     get_e820(&info.memory_map);
     arch_init_alloc();
@@ -60,7 +60,7 @@ NORETURN void _load_entry(u16 boot_disk) {
     disk_init(boot_disk);
     bios_boot_root_hint(&info.boot_root_hint);
 
-    log_debug("parsing config");
+    log_debug("reading loader config");
     parse_config(&info.args);
 
     u64 rootfs_paddr = 0;
@@ -70,10 +70,10 @@ NORETURN void _load_entry(u16 boot_disk) {
         info.boot_rootfs_paddr = rootfs_paddr;
         info.boot_rootfs_size = rootfs_size;
 
-        log_debug("staged rootfs paddr=%#llx size=%llu", rootfs_paddr, rootfs_size);
+        log_debug("rootfs staged at %#llx size=%llu", rootfs_paddr, rootfs_size);
     }
 
-    log_debug("initializing video");
+    log_debug("setting up video");
     init_graphics(&info);
 
     if (info.video.mode == VIDEO_GRAPHICS && info.video.framebuffer) {
@@ -89,7 +89,7 @@ NORETURN void _load_entry(u16 boot_disk) {
         }
     }
 
-    log_info("jumping to kernel");
+    log_info("entering kernel");
 
     load_kerenel(&info);
 

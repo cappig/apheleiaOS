@@ -33,14 +33,14 @@ static bool _usb_enum_attempt(const usb_enum_request_t *req, usb_enum_result_t *
     const char *fail_while = NULL;
 
     if (!req->ops->port_reset(req->hcd_id, req->port, &speed)) {
-        log_debug("USB enum hcd=%zu port=%zu failed while resetting port", req->hcd_id, req->port);
+        log_debug("USB reset failed hcd=%zu port=%zu", req->hcd_id, req->port);
 
         return false;
     }
 
     void *device_ctx = NULL;
     if (!req->ops->device_open(req->hcd_id, req->port, speed, &device_ctx) || !device_ctx) {
-        log_debug("USB enum hcd=%zu port=%zu failed while opening device context", req->hcd_id, req->port);
+        log_debug("USB device context open failed hcd=%zu port=%zu", req->hcd_id, req->port);
 
         return false;
     }
@@ -166,7 +166,7 @@ fail:
         fail_while = "probing device";
     }
 
-    log_debug("USB enum hcd=%zu port=%zu failed while %s", req->hcd_id, req->port, fail_while);
+    log_debug("USB probe failed hcd=%zu port=%zu while %s", req->hcd_id, req->port, fail_while);
 
     req->ops->device_close(req->hcd_id, req->port, device_ctx);
 

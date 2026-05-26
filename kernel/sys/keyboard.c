@@ -264,7 +264,7 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (!keyboard.devices || !keyboard.buffer) {
-        log_warn("keyboard state not initialized");
+        log_warn("keyboard state not ready");
         return false;
     }
 

@@ -38,37 +38,37 @@ NORETURN void kernel_main(void *boot_info) {
         panic("failed to mount rootfs");
     }
 
-    log_info("initializing tty");
+    log_info("tty init");
     tty_init();
     pty_init();
 
-    log_info("initializing devfs");
+    log_info("devfs init");
     devfs_init();
     disk_publish_devices();
     driver_load_stage(DRIVER_STAGE_DEVFS);
 
-    log_info("loading kernel symbols");
+    log_info("loading symbols");
     load_symbols();
 
-    log_info("initializing procfs");
+    log_info("procfs init");
     if (!procfs_init()) {
-        log_warn("procfs init failed");
+        log_warn("procfs setup failed");
     }
 
     if (has_framebuffer) {
         if (args && args->font[0]) {
-            log_info("loading console font '%s'", args->font);
+            log_info("loading font '%s'", args->font);
         }
 
         psf_load_boot_font(args ? args->font : NULL);
 
-        log_info("initializing window system");
+        log_info("window system init");
         if (!ws_init()) {
-            log_warn("ws init failed");
+            log_warn("window system setup failed");
         }
     }
 
-    log_info("binding log devices");
+    log_info("binding logs");
     logsink_bind_devices();
 
     init_spawn();

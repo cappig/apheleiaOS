@@ -226,7 +226,7 @@ static heap_arena_t *_find_arena_by_ptr(const void *ptr) {
 
 
 void heap_init() {
-    log_debug("initializing kernel heap");
+    log_debug("kernel heap init");
     unsigned long irq_flags = spin_lock_irqsave(&heap_lock);
     size_t free_pages = pmm_free_mem() / PAGE_4KIB;
 
@@ -375,7 +375,7 @@ static void _kfree(void *ptr) {
 
 
 void arch_init_alloc() {
-    log_debug("initializing kernel malloc");
+    log_debug("kernel malloc init");
 
     libc_alloc_ops_t ops = {
         .malloc_fn = _kmalloc,

@@ -76,14 +76,14 @@ static elf_header_t *_load_kernel_image(bool want_64, bool *is_64) {
 
     elf_validity_t validity = elf_verify(kernel);
     if (validity) {
-        log_error("invalid ELF file %s (error %d)", path, validity);
+        log_error("invalid kernel ELF %s (error %d)", path, validity);
         free(kernel);
         return NULL;
     }
 
     if (want_64) {
         if (kernel->machine != EM_X86_64) {
-            log_error("expected 64-bit kernel at %s, found machine type %#x", path, kernel->machine);
+            log_error("kernel arch mismatch at %s: expected x86_64, machine=%#x", path, kernel->machine);
             free(kernel);
             return NULL;
         }
@@ -93,7 +93,7 @@ static elf_header_t *_load_kernel_image(bool want_64, bool *is_64) {
     }
 
     if (kernel->machine != EM_X86) {
-        log_error("expected 32-bit kernel at %s, found machine type %#x", path, kernel->machine);
+        log_error("kernel arch mismatch at %s: expected x86_32, machine=%#x", path, kernel->machine);
         free(kernel);
         return NULL;
     }
@@ -112,7 +112,7 @@ void load_kerenel(boot_info_t *info) {
     }
 
     if (!is_64) {
-        log_info("loading 32-bit kernel");
+        log_info("loading x86_32 kernel");
 
         setup_paging_32();
 
@@ -131,12 +131,12 @@ void load_kerenel(boot_info_t *info) {
 
         u32 boot_info = (u32)(uintptr_t)info;
 
-        log_debug("jumping to kernel at %#x", (unsigned int)entry);
+        log_debug("kernel entry %#x", (unsigned int)entry);
 
         _commit_boot_log(info);
         jump_to_kernel_32(entry, boot_info, stack);
     } else {
-        log_info("loading 64-bit kernel");
+        log_info("loading x86_64 kernel");
 
         setup_paging_64();
 
@@ -180,7 +180,7 @@ void load_kerenel(boot_info_t *info) {
 
         u64 boot_info = (uintptr_t)info + LINEAR_MAP_OFFSET_64;
 
-        log_debug("jumping to kernel at %#llx", entry);
+        log_debug("kernel entry %#llx", entry);
 
         _commit_boot_log(info);
         jump_to_kernel_64(entry, boot_info, stack);

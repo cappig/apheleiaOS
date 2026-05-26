@@ -187,7 +187,7 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
 
     vfs_interface_t *serial_if = vfs_create_interface(_read, _write, NULL);
     if (!serial_if) {
-        log_warn("interface alloc failed");
+        log_warn("failed to allocate serial interface");
         return false;
     }
 

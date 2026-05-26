@@ -97,7 +97,7 @@ void configure_int(size_t int_num, u16 selector, u8 ist, u8 attribs) {
 }
 
 void idt_init(void) {
-    log_debug("initializing IDT");
+    log_debug("IDT init");
     for (size_t entry = 0; entry < ISR_COUNT; entry++) {
         idt_entry_t *descriptor = &idt_entries[entry];
 

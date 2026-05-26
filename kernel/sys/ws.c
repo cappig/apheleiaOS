@@ -926,7 +926,7 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
 
     ws_window_t *window = _window_slot(free_id);
     if (!window) {
-        log_warn("WS allocation failed during slot lookup id=%u caller=%ld", (unsigned int)free_id, (long)caller_pid);
+        log_warn("window slot allocation failed id=%u caller=%ld", (unsigned int)free_id, (long)caller_pid);
 
         return -ENOMEM;
     }
@@ -1468,7 +1468,7 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (!_ws_state_init()) {
-        log_warn("init failed");
+        log_warn("window system setup failed");
         return false;
     }
 

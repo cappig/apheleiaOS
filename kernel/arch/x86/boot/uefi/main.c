@@ -899,7 +899,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     log_set_lvl(LOG_DEBUG);
     log_set_options(_boot_log_options());
 
-    log_info("UEFI boot starting");
+    log_info("UEFI boot started");
 
     if (g_bs->SetWatchdogTimer) {
         g_bs->SetWatchdogTimer(0, 0, 0, NULL);

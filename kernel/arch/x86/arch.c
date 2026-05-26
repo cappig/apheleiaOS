@@ -1010,7 +1010,7 @@ static bool _register_boot_rootfs(void) {
     }
 
     boot_rootfs_registered = true;
-    log_info("registered /dev/%s from boot image (%zu KiB)", disk->name, rootfs->size / 1024);
+    log_info("registered /dev/%s from boot rootfs (%zu KiB)", disk->name, rootfs->size / 1024);
 
     return true;
 }
@@ -1116,7 +1116,7 @@ const kernel_args_t *arch_init(void *boot_info) {
 #endif
 
     if (boot_rootfs_paddr && boot_rootfs_size) {
-        log_info("staged rootfs at %#" PRIx64 " (%zu KiB)", boot_rootfs_paddr, boot_rootfs_size / 1024);
+        log_info("boot rootfs at %#" PRIx64 " (%zu KiB)", boot_rootfs_paddr, boot_rootfs_size / 1024);
     }
 
     _route_irqs_to_pic();
@@ -1162,15 +1162,15 @@ const kernel_args_t *arch_init(void *boot_info) {
     pci_init();
 
     if (!keyboard_init()) {
-        log_warn("keyboard core init failed");
+        log_warn("keyboard core setup failed");
     }
 
     if (!mouse_init()) {
-        log_warn("mouse core init failed");
+        log_warn("mouse core setup failed");
     }
 
     if (!driver_registry_init()) {
-        log_warn("driver registry init failed");
+        log_warn("driver registry setup failed");
     } else {
         driver_load_stage(DRIVER_STAGE_ARCH_EARLY);
     }
@@ -1199,17 +1199,17 @@ void arch_storage_init(void) {
     set_boot_root_uuid();
 
     if (!usb_core_init()) {
-        log_warn("USB core init failed");
+        log_warn("USB core setup failed");
     }
 
     driver_load_stage(DRIVER_STAGE_STORAGE);
 
     if (!usb_wait_for_boot_enumeration(1500)) {
-        log_warn("USB boot enumeration did not settle before rootfs mount");
+        log_warn("USB boot scan timed out before rootfs mount");
     }
 
     if (boot_rootfs_paddr && boot_rootfs_size && !_register_boot_rootfs()) {
-        log_warn("failed to register staged rootfs fallback");
+        log_warn("failed to register boot rootfs fallback");
     }
 }
 

@@ -211,7 +211,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (TTY_SCREEN_COUNT && tty_state.current == TTY_NONE) {
-        log_warn("TTY state not initialized");
+        log_warn("tty state not ready");
         return false;
     }
 
@@ -220,7 +220,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
     vfs_interface_t *tty_if = vfs_create_interface(_dev_tty_read, _dev_tty_write, NULL);
 
     if (!tty_if) {
-        log_warn("TTY failed to allocate /dev interface");
+        log_warn("failed to allocate tty devfs interface");
         return false;
     }
 
@@ -231,7 +231,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
     vfs_interface_t *console_if = vfs_create_interface(_dev_console_read, _dev_tty_write, NULL);
 
     if (!console_if) {
-        log_warn("TTY failed to allocate /dev/console interface");
+        log_warn("failed to allocate console devfs interface");
         return false;
     }
 

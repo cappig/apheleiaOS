@@ -138,7 +138,7 @@ void gdt_init(void) {
     size_t core_id = _gdt_core_id();
     gdt_desc_t *gdtd = _gdt_desc_for(core_id);
 
-    log_debug("initializing GDT (core=%zu)", core_id);
+    log_debug("GDT init core=%zu", core_id);
     _build_segments(core_id);
 
     gdtd->size = sizeof(gdt_entry_t) * GDT_ENTRY_COUNT - 1;
@@ -184,7 +184,7 @@ void tss_init(uintptr_t kernel_stack_top) {
     tss_entry_t *tss = _tss_for(core_id);
     gdt_entry_t *entries = _gdt_entries_for(core_id);
 
-    log_debug("initializing TSS (core=%zu)", core_id);
+    log_debug("TSS init core=%zu", core_id);
 
     memset(tss, 0, sizeof(*tss));
 

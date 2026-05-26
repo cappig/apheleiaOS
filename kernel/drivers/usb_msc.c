@@ -792,9 +792,9 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
     }
 
     if (protocol == USB_MSC_PROTO_UAS && identity->bulk_in_ep && identity->bulk_out_ep) {
-        log_info("USB MSC hcd=%zu port=%zu protocol=UAS using BOT transport", hcd_id, port);
+        log_info("USB MSC hcd=%zu port=%zu UAS device using BOT", hcd_id, port);
     } else if (protocol == USB_MSC_PROTO_CBI || protocol == USB_MSC_PROTO_CBI_NOINTR) {
-        log_info("USB MSC hcd=%zu port=%zu protocol=CBI using control/bulk", hcd_id, port);
+        log_info("USB MSC hcd=%zu port=%zu CBI device using control/bulk", hcd_id, port);
     }
 
     u8 max_lun = 0;
@@ -814,7 +814,7 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
         usb_msc_lun_t *lun = _msc_alloc_slot_locked(hcd_id, port, lun_id);
         if (!lun) {
             spin_unlock_irqrestore(&msc.lock, state_flags);
-            log_warn("USB MSC table full, dropping hcd=%zu port=%zu lun=%u", hcd_id, port, lun_id);
+            log_warn("USB MSC table full hcd=%zu port=%zu lun=%u", hcd_id, port, lun_id);
             continue;
         }
 
@@ -830,7 +830,7 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
         spin_unlock_irqrestore(&msc.lock, state_flags);
 
         if (!_msc_inquiry(lun)) {
-            log_debug("USB MSC hcd=%zu port=%zu lun=%u failed while reading inquiry data", hcd_id, port, lun_id);
+            log_debug("USB MSC inquiry failed hcd=%zu port=%zu lun=%u", hcd_id, port, lun_id);
 
             state_flags = spin_lock_irqsave(&msc.lock);
             lun->online = false;
@@ -845,7 +845,7 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
         size_t block_size = 0;
 
         if (!_msc_read_capacity10(lun, &blocks, &block_size)) {
-            log_debug("USB MSC hcd=%zu port=%zu lun=%u failed while reading capacity", hcd_id, port, lun_id);
+            log_debug("USB MSC capacity read failed hcd=%zu port=%zu lun=%u", hcd_id, port, lun_id);
 
             state_flags = spin_lock_irqsave(&msc.lock);
             lun->online = false;
@@ -885,7 +885,7 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
         }
 
         if (!_msc_register_disk(lun)) {
-            log_warn("USB MSC hcd=%zu port=%zu lun=%u failed while registering disk", hcd_id, port, lun_id);
+            log_warn("USB MSC disk registration failed hcd=%zu port=%zu lun=%u", hcd_id, port, lun_id);
 
             state_flags = spin_lock_irqsave(&msc.lock);
             lun->online = false;
@@ -907,7 +907,7 @@ static bool _usb_msc_attach(usb_device_handle_t dev) {
     }
 
     if (!attached) {
-        log_warn("USB MSC attached on hcd=%zu port=%zu but no accessible LUNs", hcd_id, port);
+        log_warn("USB MSC hcd=%zu port=%zu has no accessible LUNs", hcd_id, port);
     }
 
     return attached != 0;
@@ -1032,7 +1032,7 @@ driver_err_t usb_msc_driver_unload(void) {
     }
 
     if (!usb_unregister_class_driver("usb-msc")) {
-        log_warn("USB MSC class driver unregister failed");
+        log_warn("USB MSC unregister failed");
     }
 
     for (size_t i = 0; i < ARRAY_LEN(msc.luns); i++) {

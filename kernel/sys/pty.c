@@ -460,7 +460,7 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (PTY_COUNT && !pty_state.ptys[0].master_rx.ready) {
-        log_warn("PTY state not initialized");
+        log_warn("pty state not ready");
         return false;
     }
 
@@ -469,7 +469,7 @@ static bool pty_register_devfs(vfs_node_t *dev_dir) {
     vfs_interface_t *pty_if = vfs_create_interface(_dev_pty_read, _dev_pty_write, NULL);
 
     if (!pty_if) {
-        log_warn("PTY failed to allocate /dev interface");
+        log_warn("failed to allocate pty devfs interface");
         return false;
     }
 

@@ -584,7 +584,7 @@ bool apic_init(void) {
     bool has_msr = (regs.edx & CPUID_FEAT_EDX_MSR) != 0;
 
     if (!has_apic || !has_msr) {
-        log_warn("apic not supported, falling back to legacy pic");
+        log_warn("APIC unavailable, using legacy PIC");
         return false;
     }
 

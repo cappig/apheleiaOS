@@ -109,7 +109,7 @@ void pmm_ref_init(void) {
 
     u16 *refs = calloc(block_count, sizeof(*refs));
     if (!refs) {
-        log_warn("failed to allocate RISC-V PMM refcount table");
+        log_warn("failed to allocate PMM refcount table");
         return;
     }
 

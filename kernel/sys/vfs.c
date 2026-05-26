@@ -738,7 +738,7 @@ vfs_t *vfs_init(void) {
     vfs->tree = tree_create_rooted(root->tree_entry);
     assert(vfs->tree);
 
-    log_debug("VFS initialized");
+    log_debug("vfs ready");
     return vfs;
 }
 
@@ -1918,7 +1918,7 @@ int vfs_mount(fs_instance_t *instance, vfs_node_t *mount) {
     instance->refcount++;
     mutex_unlock(&vfs_tree_lock);
 
-    log_debug("mounted '%s'", mount->name ? mount->name : "/");
+    log_debug("mounted %s", mount->name ? mount->name : "/");
     return 0;
 }
 
@@ -1969,7 +1969,7 @@ int vfs_unmount(vfs_node_t *mount, bool destroy_tree) {
     mount->link = NULL;
     mutex_unlock(&vfs_tree_lock);
 
-    log_debug("unmounted '%s'", mount->name ? mount->name : "/");
+    log_debug("unmounted %s", mount->name ? mount->name : "/");
     return 0;
 }
 
@@ -1994,7 +1994,7 @@ static void _dump_recursive(tree_node_t *parent, size_t depth) {
 void dump_vfs(void) {
     assert(vfs);
 
-    log_debug("recursive dump of the virtual file system:");
+    log_debug("vfs tree:");
     _dump_recursive(vfs->tree->root, 0);
 }
 

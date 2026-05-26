@@ -410,7 +410,7 @@ vfs_node_t *devfs_register_dir(vfs_node_t *parent, const char *name, mode_t mode
 static vfs_node_t *_ensure_dev_dir(void) {
     vfs_node_t *root = vfs_lookup("/");
     if (!root) {
-        log_warn("missing root");
+        log_warn("devfs root missing");
         return NULL;
     }
 
@@ -440,7 +440,7 @@ static bool _ensure_device_registry(void) {
 
     devfs.devices = vec_create(sizeof(devfs_device_entry_t));
     if (!devfs.devices) {
-        log_warn("failed to allocate devfs device registry");
+        log_warn("failed to allocate devfs registry");
         return false;
     }
 
@@ -469,14 +469,14 @@ bool devfs_register_device(const char *name, devfs_device_init_fn init_fn) {
     };
 
     if (!vec_push(devfs.devices, &entry)) {
-        log_warn("failed to grow devfs device registry");
+        log_warn("failed to grow devfs registry");
         return false;
     }
 
     if (devfs.ready) {
         vfs_node_t *dev_dir = _ensure_dev_dir();
         if (!dev_dir || !init_fn(dev_dir)) {
-            log_warn("%s registration failed", name);
+            log_warn("devfs registration failed for %s", name);
             return false;
         }
     }
@@ -546,7 +546,7 @@ static void _init_registered_devices(vfs_node_t *dev_dir) {
         devfs_device_init_fn init_fn = entry->init_fn;
 
         if (!init_fn || !init_fn(dev_dir)) {
-            log_warn("%s registration failed", name);
+            log_warn("devfs registration failed for %s", name);
         }
     }
 }
@@ -622,5 +622,5 @@ void devfs_init(void) {
     _register_builtin_nodes(dev_dir);
     devfs.ready = true;
 
-    log_debug("devfs devices ready");
+    log_debug("devfs ready");
 }

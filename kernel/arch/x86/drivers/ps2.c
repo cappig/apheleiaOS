@@ -547,7 +547,7 @@ done:
 
 static bool ps2_init(void) {
     if (!_controller_init()) {
-        log_warn("controller init failed");
+        log_warn("PS/2 controller init failed");
         return false;
     }
 
@@ -576,7 +576,7 @@ static bool ps2_init(void) {
         ps2.mouse_index = mouse_register("PS/2 mouse");
     }
 
-    log_debug("controller ready");
+    log_debug("PS/2 controller ready");
     return true;
 }
 

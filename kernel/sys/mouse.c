@@ -143,7 +143,7 @@ static bool mouse_register_devfs(vfs_node_t *dev_dir) {
     }
 
     if (!mouse_state.devices || !mouse_state.buffer) {
-        log_warn("mouse state not initialized");
+        log_warn("mouse state not ready");
         return false;
     }
 

@@ -32,7 +32,7 @@ static void _remap_pic(size_t offset1, size_t offset2) {
 }
 
 void pic_init(void) {
-    log_debug("initializing PIC controller");
+    log_debug("PIC init");
     _remap_pic(IRQ_OFFSET, IRQ_OFFSET + 8);
     pic_mask_all();
 }

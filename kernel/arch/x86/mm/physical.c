@@ -52,7 +52,7 @@ static void _pmm_ref_set_range(void *ptr, size_t blocks, u16 value) {
 }
 
 void pmm_init(e820_map_t *mmap) {
-    log_debug("initializing physical memory manager");
+    log_debug("physical memory init");
     unsigned long irq_flags = spin_lock_irqsave(&pmm.lock);
 
     if (!bitmap_alloc_init_mmap(&pmm.frames, mmap, PAGE_4KIB)) {
@@ -61,7 +61,7 @@ void pmm_init(e820_map_t *mmap) {
     }
 
     spin_unlock_irqrestore(&pmm.lock, irq_flags);
-    log_debug("PMM ready");
+    log_debug("physical memory ready");
 }
 
 void pmm_ref_init(void) {
@@ -77,7 +77,7 @@ void pmm_ref_init(void) {
 
     u16 *refs = calloc(block_count, sizeof(*refs));
     if (!refs) {
-        log_warn("failed to allocate refcount table");
+        log_warn("failed to allocate PMM refcount table");
         return;
     }
 
@@ -100,7 +100,7 @@ void pmm_ref_init(void) {
 
     pmm.refs_ready = true;
     spin_unlock_irqrestore(&pmm.lock, irq_flags);
-    log_debug("refcount table ready");
+    log_debug("PMM refcount table ready");
 }
 
 bool pmm_ref_ready(void) {
@@ -132,7 +132,7 @@ static void *pmm_alloc_frames(size_t count, bool high) {
 
 #ifdef MMU_DEBUG
     if (ret) {
-        log_debug("PMM allocated %zu frames paddr=%#" PRIx64, count, (u64)(uintptr_t)ret);
+        log_debug("PMM alloc frames=%zu paddr=%#" PRIx64, count, (u64)(uintptr_t)ret);
     }
 #endif
 
@@ -203,7 +203,7 @@ void free_frames(void *ptr, size_t size) {
     }
 
 #ifdef MMU_DEBUG
-    log_debug("PMM freed %zu frames paddr=%#" PRIx64, size, (u64)(uintptr_t)ptr);
+    log_debug("PMM free frames=%zu paddr=%#" PRIx64, size, (u64)(uintptr_t)ptr);
 #endif
 
     spin_unlock_irqrestore(&pmm.lock, irq_flags);

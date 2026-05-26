@@ -497,7 +497,7 @@ static void _uart_irq_handler(u32 irq, void *ctx) {
 
 static void _plic_init(u32 uart_irq) {
     if (!boot.dtb) {
-        log_debug("skipping PLIC setup, no DTB available");
+        log_debug("PLIC setup skipped: no DTB");
         return;
     }
 
@@ -511,11 +511,11 @@ static void _plic_init(u32 uart_irq) {
         bool found = false;
 
         for (size_t i = 0; i < sizeof(plic_compat) / sizeof(plic_compat[0]); i++) {
-            log_debug("probing PLIC compatible \"%s\"", plic_compat[i]);
+            log_debug("probing PLIC compatible '%s'", plic_compat[i]);
 
             if (fdt_find_compatible_reg(boot.dtb, plic_compat[i], &reg) && reg.addr && reg.size) {
                 log_debug(
-                    "found PLIC \"%s\" at %#llx size=%#llx",
+                    "found PLIC '%s' at %#llx size=%#llx",
                     plic_compat[i],
                     (unsigned long long)reg.addr,
                     (unsigned long long)reg.size
@@ -526,7 +526,7 @@ static void _plic_init(u32 uart_irq) {
         }
 
         if (!found) {
-            log_debug("no compatible PLIC node in DTB");
+            log_debug("no PLIC node in DTB");
             return;
         }
 
@@ -547,17 +547,17 @@ static void _plic_init(u32 uart_irq) {
             log_debug("registering UART IRQ %u", (unsigned int)uart_irq);
             if (irq_register(uart_irq, _uart_irq_handler, NULL)) {
                 serial_set_rx_interrupt(uart_console_base(), true);
-                log_debug("enabled UART RX interrupt");
+                log_debug("UART RX interrupt enabled");
             } else {
                 log_warn("failed to register UART IRQ %u", (unsigned int)uart_irq);
             }
         } else {
-            log_debug("using UART polling mode, no IRQ configured");
+            log_debug("UART polling mode");
         }
     }
 
     size_t cpu_id = _current_cpu_id();
-    log_debug("initialized PLIC context for cpu %zu hart=%llu", cpu_id, (unsigned long long)_cpu_hartid(cpu_id));
+    log_debug("PLIC context ready cpu=%zu hart=%llu", cpu_id, (unsigned long long)_cpu_hartid(cpu_id));
 
     _plic_init_context(cpu_id);
 }
@@ -833,7 +833,7 @@ static void _register_boot_rootfs(void) {
     if (!rootfs || !disk) {
         free(rootfs);
         free(disk);
-        log_warn("failed to allocate staged rootfs disk");
+        log_warn("failed to allocate boot rootfs disk");
         return;
     }
 
@@ -851,12 +851,12 @@ static void _register_boot_rootfs(void) {
         free(disk->name);
         free(disk);
         free(rootfs);
-        log_warn("failed to register staged rootfs");
+        log_warn("failed to register boot rootfs");
         return;
     }
 
     boot.rootfs_paddr = 0;
-    log_info("registered /dev/%s from boot image (%zu KiB)", disk->name, rootfs->size / 1024);
+    log_info("registered /dev/%s from boot rootfs (%zu KiB)", disk->name, rootfs->size / 1024);
 }
 
 static void _relocate_boot_dtb(boot_info_t *info, uintptr_t *reserved_end) {
@@ -985,13 +985,13 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
             panic("failed to register UART MMIO window");
         }
 
-        log_debug("mapped UART virt=%#lx", (unsigned long)mmio.uart_virt);
+        log_debug("UART mapped virt=%#lx", (unsigned long)mmio.uart_virt);
     } else {
         log_debug("no MMIO UART configured");
     }
 
     if (boot.rootfs_paddr && boot.rootfs_size) {
-        log_info("staged rootfs at %#llx (%zu KiB)", (unsigned long long)boot.rootfs_paddr, boot.rootfs_size / 1024);
+        log_info("boot rootfs at %#llx (%zu KiB)", (unsigned long long)boot.rootfs_paddr, boot.rootfs_size / 1024);
     }
 
     cpu_init_boot();
@@ -1001,7 +1001,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     riscv_write_sstatus(riscv_read_sstatus() | SSTATUS_SUM);
 
     log_debug(
-        "boot CPU hart=%llu stack_top=%#lx sstatus=%#lx",
+        "boot CPU hart=%llu stack=%#lx sstatus=%#lx",
         (unsigned long long)cpu.hartid[0],
         (unsigned long)(uintptr_t)&__stack_top,
         (unsigned long)riscv_read_sstatus()
@@ -1015,7 +1015,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     log_debug(
-        "reserved memory bss_end=%#lx info_end=%#lx reserved_end=%#lx",
+        "reserved memory bss=%#lx info=%#lx end=%#lx",
         (unsigned long)(uintptr_t)&__bss_end,
         (unsigned long)info_end,
         (unsigned long)reserved_end
@@ -1024,7 +1024,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     _relocate_boot_dtb(info, &reserved_end);
     if (boot.dtb) {
         log_debug(
-            "relocated DTB to %#lx reserved_end=%#lx",
+            "DTB relocated to %#lx reserved_end=%#lx",
             (unsigned long)(uintptr_t)boot.dtb,
             (unsigned long)reserved_end
         );
@@ -1093,7 +1093,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         }
 
         log_debug(
-            "rootfs paddr=%#llx size=%zu end=%#lx",
+        "rootfs paddr=%#llx size=%zu end=%#lx",
             (unsigned long long)boot.rootfs_paddr,
             boot.rootfs_size,
             (unsigned long)rootfs_end
@@ -1117,7 +1117,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     _early_map_range(mmio.root, boot.mem_paddr, boot.mem_paddr, boot.mem_size, PT_WRITE | PT_GLOBAL);
     log_debug(
-        "identity mapped memory %#llx+%#llx",
+        "identity map %#llx+%#llx",
         (unsigned long long)boot.mem_paddr,
         (unsigned long long)boot.mem_size
     );
@@ -1126,14 +1126,14 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     log_debug("mapped %zu MMIO regions", mmio.count);
 
     trap_init();
-    log_debug("installed trap handler");
+    log_debug("trap handler installed");
 
     vm_init_kernel(mmio.root);
-    log_debug("initialized kernel VM");
+    log_debug("kernel VM ready");
 
     uart_console_set_base(mmio.uart_virt);
     arch_vm_switch(arch_vm_kernel());
-    log_debug("switched to kernel address space");
+    log_debug("kernel address space active");
 
     _plic_init(uart_irq);
 
@@ -1144,13 +1144,13 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     u64 pmm_size = (u64)(pmm_limit - (uintptr_t)boot.mem_paddr);
     pmm_init(boot.mem_paddr, pmm_size, mmio.early_cursor);
     log_debug(
-        "initialized physical memory manager base=%#llx size=%#llx",
+        "physical memory ready base=%#llx size=%#llx",
         (unsigned long long)boot.mem_paddr,
         (unsigned long long)pmm_size
     );
 
     heap_init();
-    log_debug("initialized heap");
+    log_debug("heap ready");
 
     arch_init_alloc();
 
@@ -1176,7 +1176,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     if (!driver_registry_init()) {
-        log_warn("driver registry init failed");
+        log_warn("driver registry setup failed");
     } else {
         driver_load_stage(DRIVER_STAGE_ARCH_EARLY);
     }

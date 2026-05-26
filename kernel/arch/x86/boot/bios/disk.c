@@ -146,7 +146,7 @@ void disk_init(u16 disk) {
     disk_code = disk;
     _detect_sector_size();
 
-    log_debug("boot disk %#x sector_size=%u", disk_code, disk_sector_size);
+    log_debug("boot disk=%#x sector=%u", disk_code, disk_sector_size);
 
     mbr_partition_t part = { 0 };
     u8 rootfs_index = 0;

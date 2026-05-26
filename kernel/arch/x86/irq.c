@@ -157,13 +157,13 @@ static void _init_timer_source(bool apic_ok) {
 
     if (apic_ok && apic_timer_init(timer_hz)) {
         use_apic_timer = true;
-        log_info("APIC timer initialized at %u Hz", (unsigned int)apic_timer_hz());
+        log_info("APIC timer %u Hz", (unsigned int)apic_timer_hz());
 
         return;
     }
 
     pit_set_frequency(timer_hz);
-    log_info("PIT timer initialized at %u Hz", (unsigned int)pit_get_frequency());
+    log_info("PIT timer %u Hz", (unsigned int)pit_get_frequency());
 }
 
 bool irq_init(void) {
@@ -180,7 +180,7 @@ bool irq_init(void) {
         ioapic_mask_all();
         pic_mask_all();
         _route_irqs(true);
-        log_info("using IOAPIC for external interrupts");
+        log_info("routing external IRQs through IOAPIC");
     } else {
         _route_irqs(false);
     }
@@ -226,7 +226,7 @@ void irq_register(size_t irq, int_handler_t handler) {
         if (irq != IRQ_SYSTEM_TIMER || !use_apic_timer) {
             u32 dest = lapic_id();
             if (!ioapic_route_irq((u8)irq, (u8)vec, dest)) {
-                log_warn("failed to route irq %u via IOAPIC", (unsigned int)irq);
+                log_warn("failed to route IRQ %u via IOAPIC", (unsigned int)irq);
             }
         }
         return;

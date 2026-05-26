@@ -126,7 +126,7 @@ static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
     }
 
     log_debug(
-        "loading segment off=%#llx dst=%#llx filesz=%#llx memsz=%#llx flags=%#lx",
+        "ELF segment off=%#llx dst=%#llx filesz=%#llx memsz=%#llx flags=%#lx",
         (unsigned long long)seg->offset,
         (unsigned long long)dst,
         (unsigned long long)seg->file_size,
@@ -140,7 +140,7 @@ static bool load_kernel_segment(const elf_segment_t *seg, void *ctx) {
         void *bss = (void *)(uintptr_t)(dst + seg->file_size);
         size_t bss_len = seg->mem_size - seg->file_size;
 
-        log_debug("clearing segment bss addr=%#llx len=%#zx", (unsigned long long)(dst + seg->file_size), bss_len);
+        log_debug("ELF bss addr=%#llx len=%#zx", (unsigned long long)(dst + seg->file_size), bss_len);
 
         memset(bss, 0, bss_len);
     }
@@ -152,15 +152,15 @@ static bool load_kernel_elf(const u8 *blob, size_t blob_size, uintptr_t *out_ent
     struct riscv_elf_load_ctx ctx = { .blob = blob };
     elf_info_t info = { 0 };
 
-    log_debug("parsing ELF blob=%#lx size=%zu", (unsigned long)(uintptr_t)blob, blob_size);
+    log_debug("parsing kernel ELF blob=%#lx size=%zu", (unsigned long)(uintptr_t)blob, blob_size);
 
     if (!elf_foreach_segment(blob, blob_size, load_kernel_segment, &ctx, &info)) {
-        log_debug("ELF parse failed");
+        log_debug("kernel ELF parse failed");
         return false;
     }
 
     *out_entry = (uintptr_t)info.entry;
-    log_debug("ELF entry=%#lx class=%s", (unsigned long)*out_entry, info.is_64 ? "elf64" : "elf32");
+    log_debug("kernel entry=%#lx class=%s", (unsigned long)*out_entry, info.is_64 ? "elf64" : "elf32");
 
     return true;
 }
@@ -316,7 +316,7 @@ NORETURN static void enter_supervisor(uintptr_t entry, boot_info_t *info) {
         (unsigned long)(uintptr_t)info,
         (unsigned long long)(info ? info->hartid : 0)
     );
-    log_debug("supervisor delegation medeleg=%#lx mideleg=%#lx mstatus=%#lx", medeleg, mideleg, mstatus);
+    log_debug("delegation medeleg=%#lx mideleg=%#lx mstatus=%#lx", medeleg, mideleg, mstatus);
     commit_boot_log(info);
 
     riscv_write_medeleg(medeleg);
@@ -456,7 +456,7 @@ keep_out_of_heap(const char *name, uintptr_t start, size_t size, uintptr_t *heap
     }
 
     log_debug(
-        "%s: kept out of boot heap [%#lx, %#lx)",
+        "%s kept out of boot heap [%#lx, %#lx)",
         name ? name : "reservation",
         (unsigned long)start,
         (unsigned long)end
@@ -495,7 +495,7 @@ static void log_boot_hart(uintptr_t hartid, const void *dtb) {
     if (known) {
         log_debug("boot hart dtb=%llu current=%lu", (unsigned long long)boot_hart, (unsigned long)hartid);
     } else {
-        log_debug("boot hart missing from DTB, defaulting to hart 0 (current=%lu)", (unsigned long)hartid);
+        log_debug("boot hart missing; using hart 0 (current=%lu)", (unsigned long)hartid);
     }
 }
 
@@ -512,7 +512,7 @@ static bool secondary_hart(uintptr_t hartid, const void *dtb) {
 
 static void log_timer_status(const char *kind) {
     if (!riscv_boot_timer_ready) {
-        log_warn("no machine timer backend detected");
+        log_warn("machine timer unavailable");
         return;
     }
 
@@ -522,7 +522,7 @@ static void log_timer_status(const char *kind) {
     }
 
     log_debug(
-        "timer %s time=%#lx cmp=%#lx timebase=%lluHz interval=%llu",
+        "timer %s time=%#lx cmp=%#lx timebase=%llu Hz interval=%llu",
         kind,
         (unsigned long)riscv_boot_timer_time_addr,
         (unsigned long)riscv_boot_timer_cmp_addr,
@@ -562,12 +562,12 @@ static void *copy_dtb(const void *dtb, size_t size) {
 
     void *copy = boot_alloc_aligned(size, RISCV_BOOT_PAGE_SIZE, false);
     if (!copy) {
-        panic("failed to copy dtb");
+        panic("failed to copy DTB");
     }
 
     memcpy(copy, dtb, size);
 
-    log_debug("copied DTB %zu bytes to %#lx", size, (unsigned long)(uintptr_t)copy);
+    log_debug("copied DTB size=%zu dst=%#lx", size, (unsigned long)(uintptr_t)copy);
 
     return copy;
 }
@@ -604,7 +604,7 @@ static void init_rootfs(boot_ext2_t *rootfs, const u8 *image, size_t limit, bool
     }
 
     log_debug(
-        "rootfs ready block_size=%lu blocks=%lu size=%zu KiB",
+        "rootfs ready block=%lu blocks=%lu size=%zu KiB",
         (unsigned long)ext2_block_size(&rootfs->superblock),
         (unsigned long)rootfs->superblock.block_count,
         rootfs->size / 1024
@@ -683,7 +683,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     log_set_options(boot_log_options());
 
     log_info(
-        "entered boot stub hart=%lu dtb=%#lx valid=%s active=%s size=%zu",
+        "boot stub hart=%lu dtb=%#lx valid=%s active=%s size=%zu",
         (unsigned long)hartid,
         (unsigned long)(uintptr_t)dtb,
         dtb_valid ? "yes" : "no",
@@ -691,13 +691,13 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         dtb_size
     );
     log_debug(
-        "memory range base=%#llx size=%#llx end=%#lx",
+        "memory base=%#llx size=%#llx end=%#lx",
         (unsigned long long)memory_reg.addr,
         (unsigned long long)memory_reg.size,
         (unsigned long)memory_end
     );
     log_info(
-        "image layout image=%#lx rootfs=%#lx stack_top=%#lx scratch=%#lx uart=%#lx stride=%lu",
+        "layout image=%#lx rootfs=%#lx stack=%#lx scratch=%#lx uart=%#lx stride=%lu",
         (unsigned long)image_base,
         (unsigned long)(uintptr_t)embedded_rootfs,
         (unsigned long)(uintptr_t)&__stack_top,
@@ -742,7 +742,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     }
 
     log_debug(
-        "heap: [%#lx, %#lx) %lu KiB",
+        "boot heap [%#lx, %#lx) %lu KiB",
         (unsigned long)heap_start,
         (unsigned long)memory_end,
         (unsigned long)((memory_end - heap_start) / 1024UL)
