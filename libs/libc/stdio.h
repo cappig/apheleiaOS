@@ -23,6 +23,11 @@ typedef struct FILE {
     int flags;
     int eof;
     int error;
+    int buf_mode;
+    int buf_owned;
+    char *buf;
+    size_t buf_size;
+    size_t buf_len;
 } FILE;
 
 extern FILE *stdin;

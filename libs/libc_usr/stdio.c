@@ -18,6 +18,11 @@ static FILE std_in = {
     .flags = FILE_FLAG_READ | FILE_FLAG_STATIC,
     .eof = 0,
     .error = 0,
+    .buf_mode = _IONBF,
+    .buf_owned = 0,
+    .buf = NULL,
+    .buf_size = 0,
+    .buf_len = 0,
 };
 
 static FILE std_out = {
@@ -25,6 +30,11 @@ static FILE std_out = {
     .flags = FILE_FLAG_WRITE | FILE_FLAG_STATIC,
     .eof = 0,
     .error = 0,
+    .buf_mode = _IONBF,
+    .buf_owned = 0,
+    .buf = NULL,
+    .buf_size = 0,
+    .buf_len = 0,
 };
 
 static FILE std_err = {
@@ -32,12 +42,29 @@ static FILE std_err = {
     .flags = FILE_FLAG_WRITE | FILE_FLAG_STATIC,
     .eof = 0,
     .error = 0,
+    .buf_mode = _IONBF,
+    .buf_owned = 0,
+    .buf = NULL,
+    .buf_size = 0,
+    .buf_len = 0,
 };
 
 FILE *stdin = &std_in;
 FILE *stdout = &std_out;
 FILE *stderr = &std_err;
 
+
+static void init_stream(FILE *stream, int fd, int flags) {
+    stream->fd = fd;
+    stream->flags = flags;
+    stream->eof = 0;
+    stream->error = 0;
+    stream->buf_mode = _IOFBF;
+    stream->buf_owned = 0;
+    stream->buf = NULL;
+    stream->buf_size = 0;
+    stream->buf_len = 0;
+}
 
 static int write_all_fd(int fd, const char *buf, size_t len) {
     size_t off = 0;
@@ -52,6 +79,41 @@ static int write_all_fd(int fd, const char *buf, size_t len) {
     return 0;
 }
 
+static int flush_write_buf(FILE *stream) {
+    if (!stream || !stream->buf_len) {
+        return 0;
+    }
+
+    if (write_all_fd(stream->fd, stream->buf, stream->buf_len) < 0) {
+        stream->error = 1;
+        return -1;
+    }
+
+    stream->buf_len = 0;
+    return 0;
+}
+
+static int ensure_write_buf(FILE *stream) {
+    if (stream->buf_mode == _IONBF) {
+        return 0;
+    }
+
+    if (stream->buf) {
+        return 0;
+    }
+
+    stream->buf = malloc(BUFSIZ);
+    if (!stream->buf) {
+        errno = ENOMEM;
+        stream->error = 1;
+        return -1;
+    }
+
+    stream->buf_owned = 1;
+    stream->buf_size = BUFSIZ;
+    return 0;
+}
+
 static int stream_write_all(FILE *stream, const char *buf, size_t len) {
     if (!stream || stream->fd < 0 || !(stream->flags & FILE_FLAG_WRITE)) {
         errno = EBADF;
@@ -61,9 +123,47 @@ static int stream_write_all(FILE *stream, const char *buf, size_t len) {
         return -1;
     }
 
-    if (write_all_fd(stream->fd, buf, len) < 0) {
-        stream->error = 1;
+    if (!len) {
+        return 0;
+    }
+
+    if (ensure_write_buf(stream) < 0) {
         return -1;
+    }
+
+    if (stream->buf_mode == _IONBF || len >= BUFSIZ) {
+        if (flush_write_buf(stream) < 0) {
+            return -1;
+        }
+
+        if (write_all_fd(stream->fd, buf, len) < 0) {
+            stream->error = 1;
+            return -1;
+        }
+
+        return 0;
+    }
+
+    size_t off = 0;
+    while (off < len) {
+        size_t room = stream->buf_size - stream->buf_len;
+        if (!room && flush_write_buf(stream) < 0) {
+            return -1;
+        }
+
+        room = stream->buf_size - stream->buf_len;
+        size_t chunk = len - off;
+        if (chunk > room) {
+            chunk = room;
+        }
+
+        memcpy(stream->buf + stream->buf_len, buf + off, chunk);
+        stream->buf_len += chunk;
+        off += chunk;
+    }
+
+    if (stream->buf_mode == _IOLBF && memchr(buf, '\n', len)) {
+        return flush_write_buf(stream);
     }
 
     return 0;
@@ -124,10 +224,7 @@ FILE *fdopen(int fd, const char *mode) {
         return NULL;
     }
 
-    stream->fd = fd;
-    stream->flags = stream_flags;
-    stream->eof = 0;
-    stream->error = 0;
+    init_stream(stream, fd, stream_flags);
     return stream;
 }
 
@@ -152,10 +249,7 @@ FILE *fopen(const char *path, const char *mode) {
         return NULL;
     }
 
-    stream->fd = fd;
-    stream->flags = stream_flags;
-    stream->eof = 0;
-    stream->error = 0;
+    init_stream(stream, fd, stream_flags);
     return stream;
 }
 
@@ -172,6 +266,8 @@ FILE *freopen(const char *path, const char *mode, FILE *stream) {
         return NULL;
     }
 
+    (void)fflush(stream);
+
     int fd = (open_flags & O_CREAT) ? open(path, open_flags, 0666) : open(path, open_flags);
     if (fd < 0) {
         (void)close(stream->fd);
@@ -180,7 +276,6 @@ FILE *freopen(const char *path, const char *mode, FILE *stream) {
         return NULL;
     }
 
-    (void)fflush(stream);
     if (stream->fd >= 0) {
         (void)close(stream->fd);
     }
@@ -258,6 +353,14 @@ int remove(const char *path) {
 
 int fflush(FILE *stream) {
     if (!stream) {
+        if (flush_write_buf(stdout) < 0) {
+            return EOF;
+        }
+
+        if (flush_write_buf(stderr) < 0) {
+            return EOF;
+        }
+
         return 0;
     }
 
@@ -267,7 +370,7 @@ int fflush(FILE *stream) {
         return EOF;
     }
 
-    return 0;
+    return flush_write_buf(stream) < 0 ? EOF : 0;
 }
 
 int fclose(FILE *stream) {
@@ -276,15 +379,20 @@ int fclose(FILE *stream) {
         return EOF;
     }
 
-    (void)fflush(stream);
+    int flush_ret = fflush(stream);
     int ret = close(stream->fd);
     stream->fd = -1;
+
+    if (stream->buf_owned) {
+        free(stream->buf);
+        stream->buf = NULL;
+    }
 
     if (!(stream->flags & FILE_FLAG_STATIC)) {
         free(stream);
     }
 
-    return ret < 0 ? EOF : 0;
+    return flush_ret < 0 || ret < 0 ? EOF : 0;
 }
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
@@ -295,6 +403,10 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     if (stream->fd < 0 || !(stream->flags & FILE_FLAG_READ)) {
         errno = EBADF;
         stream->error = 1;
+        return 0;
+    }
+
+    if (flush_write_buf(stream) < 0) {
         return 0;
     }
 
@@ -340,17 +452,11 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
         return 0;
     }
 
-    size_t sent = 0;
-    while (sent < want) {
-        ssize_t n = write(stream->fd, (const char *)ptr + sent, want - sent);
-        if (n <= 0) {
-            stream->error = 1;
-            break;
-        }
-        sent += (size_t)n;
+    if (stream_write_all(stream, ptr, want) < 0) {
+        return 0;
     }
 
-    return sent / size;
+    return nmemb;
 }
 
 int fseek(FILE *stream, long offset, int whence) {
@@ -359,6 +465,10 @@ int fseek(FILE *stream, long offset, int whence) {
         if (stream) {
             stream->error = 1;
         }
+        return -1;
+    }
+
+    if (flush_write_buf(stream) < 0) {
         return -1;
     }
 
@@ -386,7 +496,7 @@ long ftell(FILE *stream) {
         return -1;
     }
 
-    return (long)off;
+    return (long)(off + (off_t)stream->buf_len);
 }
 
 int fgetc(FILE *stream) {
@@ -468,9 +578,6 @@ void clearerr(FILE *stream) {
 }
 
 int setvbuf(FILE *restrict stream, char *restrict buf, int mode, size_t size) {
-    (void)buf;
-    (void)size;
-
     if (!stream) {
         errno = EINVAL;
         return -1;
@@ -479,6 +586,42 @@ int setvbuf(FILE *restrict stream, char *restrict buf, int mode, size_t size) {
     if (mode != _IOFBF && mode != _IOLBF && mode != _IONBF) {
         errno = EINVAL;
         return -1;
+    }
+
+    if (fflush(stream) < 0) {
+        return -1;
+    }
+
+    if (stream->buf_owned) {
+        free(stream->buf);
+    }
+
+    stream->buf = NULL;
+    stream->buf_size = 0;
+    stream->buf_len = 0;
+    stream->buf_owned = 0;
+    stream->buf_mode = mode;
+
+    if (mode == _IONBF) {
+        return 0;
+    }
+
+    if (buf) {
+        stream->buf = buf;
+        stream->buf_size = size ? size : BUFSIZ;
+        return 0;
+    }
+
+    if (size) {
+        stream->buf = malloc(size);
+        if (!stream->buf) {
+            errno = ENOMEM;
+            stream->error = 1;
+            return -1;
+        }
+
+        stream->buf_owned = 1;
+        stream->buf_size = size;
     }
 
     return 0;
