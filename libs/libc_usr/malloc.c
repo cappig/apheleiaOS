@@ -3,8 +3,8 @@
 #include <string.h>
 #include <sys/mman.h>
 
-// Simple first-fit free-list allocator backed by mmap,
-// should probabily be improved in the future...
+// Simple first-fit free-list allocator backed by mmap.
+// This should grow into a real arena allocator eventually.
 
 #define ARENA_SIZE     (64U * 1024U)
 #define MMAP_THRESHOLD (ARENA_SIZE / 2U)
@@ -82,7 +82,7 @@ static block_t *_grow_heap(size_t needed) {
 
 void *malloc(size_t size) {
     if (!size) {
-        return NULL;
+        size = 1;
     }
 
     size = _align(size);
@@ -129,7 +129,7 @@ void *malloc(size_t size) {
 
 void *calloc(size_t num, size_t size) {
     if (!num || !size) {
-        return NULL;
+        return malloc(0);
     }
 
     size_t total = num * size;

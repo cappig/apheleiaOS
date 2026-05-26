@@ -51,7 +51,6 @@ static void _pmm_ref_set_range(void *ptr, size_t blocks, u16 value) {
     }
 }
 
-
 void pmm_init(e820_map_t *mmap) {
     log_debug("initializing physical memory manager");
     unsigned long irq_flags = spin_lock_irqsave(&pmm.lock);
@@ -125,52 +124,49 @@ size_t pmm_free_mem(void) {
     return free_mem;
 }
 
-
-void *alloc_frames(size_t count) {
+static void *pmm_alloc_frames(size_t count, bool high) {
     assert(count);
     unsigned long irq_flags = spin_lock_irqsave(&pmm.lock);
 
-    void *ret = bitmap_alloc_reserve(&pmm.frames, count);
-
-    if (UNLIKELY(!ret)) {
-        spin_unlock_irqrestore(&pmm.lock, irq_flags);
-        panic("Out of physical memory!");
-    }
+    void *ret = high ? bitmap_alloc_reserve_high(&pmm.frames, count) : bitmap_alloc_reserve(&pmm.frames, count);
 
 #ifdef MMU_DEBUG
-    log_debug("PMM allocated %zu frames paddr=%#" PRIx64, count, (u64)(uintptr_t)ret);
+    if (ret) {
+        log_debug("PMM allocated %zu frames paddr=%#" PRIx64, count, (u64)(uintptr_t)ret);
+    }
 #endif
 
-    _pmm_ref_set_range(ret, count, 1);
+    if (ret) {
+        _pmm_ref_set_range(ret, count, 1);
+    }
+
     spin_unlock_irqrestore(&pmm.lock, irq_flags);
     return ret;
 }
 
-void *alloc_frames_high(size_t count) {
-    assert(count);
-    unsigned long irq_flags = spin_lock_irqsave(&pmm.lock);
-
-    void *ret = bitmap_alloc_reserve_high(&pmm.frames, count);
-
+void *alloc_frames(size_t count) {
+    void *ret = pmm_alloc_frames(count, false);
     if (UNLIKELY(!ret)) {
-        spin_unlock_irqrestore(&pmm.lock, irq_flags);
         panic("Out of physical memory!");
     }
 
-#ifdef MMU_DEBUG
-    log_debug("PMM allocated %zu high frames paddr=%#" PRIx64, count, (u64)(uintptr_t)ret);
-#endif
+    return ret;
+}
 
-    _pmm_ref_set_range(ret, count, 1);
-    spin_unlock_irqrestore(&pmm.lock, irq_flags);
+void *alloc_frames_high(size_t count) {
+    void *ret = pmm_alloc_frames(count, true);
+    if (UNLIKELY(!ret)) {
+        panic("Out of physical memory!");
+    }
+
     return ret;
 }
 
 void *alloc_frames_user(size_t count) {
 #if defined(__i386__)
-    return alloc_frames_high(count);
+    return pmm_alloc_frames(count, true);
 #else
-    return alloc_frames(count);
+    return pmm_alloc_frames(count, false);
 #endif
 }
 

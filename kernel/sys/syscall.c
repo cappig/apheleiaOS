@@ -934,8 +934,8 @@ static bool _size_to_off(size_t value, off_t *out) {
         return false;
     }
 
-#if SIZE_MAX > LLONG_MAX
-    if (value > (size_t)LLONG_MAX) {
+#if SIZE_MAX > LONG_MAX
+    if (value > (size_t)LONG_MAX) {
         return false;
     }
 #endif
@@ -949,7 +949,7 @@ static bool _off_to_size(off_t value, size_t *out) {
         return false;
     }
 
-#if SIZE_MAX < LLONG_MAX
+#if SIZE_MAX < LONG_MAX
     if ((unsigned long long)value > (unsigned long long)SIZE_MAX) {
         return false;
     }
@@ -964,11 +964,11 @@ static bool _off_add(off_t base, off_t delta, off_t *out) {
         return false;
     }
 
-    if (delta > 0 && base > (off_t)LLONG_MAX - delta) {
+    if (delta > 0 && base > LONG_MAX - delta) {
         return false;
     }
 
-    if (delta < 0 && base < (off_t)LLONG_MIN - delta) {
+    if (delta < 0 && base < LONG_MIN - delta) {
         return false;
     }
 

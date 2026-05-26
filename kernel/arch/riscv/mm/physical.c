@@ -154,38 +154,40 @@ size_t pmm_free_mem(void) {
     return free_mem;
 }
 
-void *alloc_frames(size_t count) {
+static void *pmm_alloc_frames(size_t count, bool high) {
     assert(count);
 
     unsigned long irq_flags = spin_lock_irqsave(&pmm.lock);
-    void *ret = bitmap_alloc_reserve(&pmm.frames, count);
+    void *ret = high ? bitmap_alloc_reserve_high(&pmm.frames, count) : bitmap_alloc_reserve(&pmm.frames, count);
+
+    if (ret) {
+        _pmm_ref_set_range(ret, count, 1);
+    }
+
+    spin_unlock_irqrestore(&pmm.lock, irq_flags);
+    return ret;
+}
+
+void *alloc_frames(size_t count) {
+    void *ret = pmm_alloc_frames(count, false);
     if (!ret) {
-        spin_unlock_irqrestore(&pmm.lock, irq_flags);
         panic("RISC-V PMM exhausted");
     }
 
-    _pmm_ref_set_range(ret, count, 1);
-    spin_unlock_irqrestore(&pmm.lock, irq_flags);
     return ret;
 }
 
 void *alloc_frames_high(size_t count) {
-    assert(count);
-
-    unsigned long irq_flags = spin_lock_irqsave(&pmm.lock);
-    void *ret = bitmap_alloc_reserve_high(&pmm.frames, count);
+    void *ret = pmm_alloc_frames(count, true);
     if (!ret) {
-        spin_unlock_irqrestore(&pmm.lock, irq_flags);
         panic("RISC-V PMM exhausted");
     }
 
-    _pmm_ref_set_range(ret, count, 1);
-    spin_unlock_irqrestore(&pmm.lock, irq_flags);
     return ret;
 }
 
 void *alloc_frames_user(size_t count) {
-    return alloc_frames_high(count);
+    return pmm_alloc_frames(count, true);
 }
 
 void free_frames(void *ptr, size_t count) {
