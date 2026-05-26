@@ -81,7 +81,7 @@ int access(const char *path, int mode) {
 }
 
 off_t lseek(int fd, off_t offset, int whence) {
-    return SYSCALL_RET(off_t, syscall3(SYS_SEEK, (uintptr_t)fd, (uintptr_t)offset, (uintptr_t)whence));
+    return SYSCALL_RET(off_t, syscall3(SYS_LSEEK, (uintptr_t)fd, (uintptr_t)offset, (uintptr_t)whence));
 }
 
 static int _read_proc_value_path(const char *path, long long *out) {

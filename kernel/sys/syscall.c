@@ -2455,10 +2455,6 @@ static pid_t sys_waitpid(pid_t pid, int *status, int options) {
     return ret;
 }
 
-static pid_t sys_wait(pid_t pid, int *status) {
-    return sys_waitpid(pid, status, 0);
-}
-
 static int _sys_stat_path(const char *path, stat_t *st, bool follow_links) {
     sched_thread_t *thread = sched_current();
     if (!user_write_prepare(thread, st, sizeof(*st))) {
@@ -2975,7 +2971,7 @@ static int sys_umount(const char *target, u64 flags) {
     return 0;
 }
 
-static off_t sys_seek(int fd, off_t offset, int whence) {
+static off_t sys_lseek(int fd, off_t offset, int whence) {
     sched_thread_t *thread = sched_current();
     sched_fd_t *entry = NULL;
 
@@ -3557,10 +3553,10 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (size_t)arch_syscall_arg3(state),
             (off_t)arch_syscall_arg4(state)
         );
-    case SYS_SEEK:
+    case SYS_LSEEK:
         return (
             u64
-        )sys_seek((int)arch_syscall_arg1(state), (off_t)arch_syscall_arg2(state), (int)arch_syscall_arg3(state));
+        )sys_lseek((int)arch_syscall_arg1(state), (off_t)arch_syscall_arg2(state), (int)arch_syscall_arg3(state));
     case SYS_MMAP:
         return (u64)sys_mmap((const mmap_args_t *)arch_syscall_arg1(state));
     case SYS_MPROTECT:
@@ -3632,8 +3628,6 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (char *const *)arch_syscall_arg3(state),
             state
         );
-    case SYS_WAIT:
-        return (u64)sys_wait((pid_t)arch_syscall_arg1(state), (int *)arch_syscall_arg2(state));
     case SYS_WAITPID:
         return (
             u64
