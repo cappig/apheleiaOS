@@ -44,6 +44,22 @@
 
 #define SYSCALL_INT 0x80
 
+typedef struct {
+    const char *name;
+    u64 calls;
+    u64 errors;
+} syscall_counter_t;
+
+#define SYSCALL(symbol, call, number) [SYS_##symbol] = { .name = #call },
+
+static syscall_counter_t syscall_counters[APHELEIA_SYSCALL_COUNT] = {
+#include <apheleia/syscall.def>
+};
+
+#undef SYSCALL
+
+static u64 syscall_unknown_count = 0;
+
 static mode_t _apply_umask(mode_t mode, mode_t mask) {
     mode_t special = mode & 07000;
     mode_t perms = (mode & 0777) & ~(mask & 0777);
@@ -67,6 +83,44 @@ static bool _open_has_write(int flags) {
 static bool _open_access_valid(int flags) {
     int access = _open_access_mode(flags);
     return access == O_RDONLY || access == O_WRONLY || access == O_RDWR;
+}
+
+static void syscall_count(u64 number, u64 ret) {
+    if (number >= APHELEIA_SYSCALL_COUNT) {
+        __atomic_fetch_add(&syscall_unknown_count, 1, __ATOMIC_RELAXED);
+        return;
+    }
+
+    syscall_counter_t *counter = &syscall_counters[number];
+
+    __atomic_fetch_add(&counter->calls, 1, __ATOMIC_RELAXED);
+
+    if ((i64)ret < 0) {
+        __atomic_fetch_add(&counter->errors, 1, __ATOMIC_RELAXED);
+    }
+}
+
+size_t syscall_stats_snapshot(syscall_stat_t *stats, size_t max_stats, u64 *unknown_out) {
+    if (unknown_out) {
+        *unknown_out = __atomic_load_n(&syscall_unknown_count, __ATOMIC_RELAXED);
+    }
+
+    if (!stats || !max_stats) {
+        return APHELEIA_SYSCALL_COUNT;
+    }
+
+    size_t count = APHELEIA_SYSCALL_COUNT < max_stats ? APHELEIA_SYSCALL_COUNT : max_stats;
+
+    for (size_t i = 0; i < count; i++) {
+        syscall_counter_t *counter = &syscall_counters[i];
+
+        stats[i].number = i;
+        stats[i].name = counter->name ? counter->name : "unknown";
+        stats[i].calls = __atomic_load_n(&counter->calls, __ATOMIC_RELAXED);
+        stats[i].errors = __atomic_load_n(&counter->errors, __ATOMIC_RELAXED);
+    }
+
+    return APHELEIA_SYSCALL_COUNT;
 }
 
 static int _open_fail(bool ptmx_open, size_t ptmx_index, int error) {
@@ -3623,6 +3677,8 @@ static void _syscall_handler(arch_int_state_t *state) {
 
     u64 num = (u64)arch_syscall_num(state);
     u64 ret = _syscall_dispatch(state);
+
+    syscall_count(num, ret);
 
     if (num == SYS_SIGRETURN && !ret) {
         return;

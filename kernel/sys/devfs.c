@@ -1,5 +1,6 @@
 #include "devfs.h"
 
+#include <base/macros.h>
 #include <arch/arch.h>
 #include <base/units.h>
 #include <data/vector.h>
@@ -16,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/usercopy.h>
 
+#include "syscall.h"
 #include "vfs.h"
 
 #define SYSINFO_TEXT_MAX 384
@@ -355,6 +357,50 @@ static ssize_t _dev_sched_read(vfs_node_t *node, void *buf, size_t offset, size_
     return _dev_text_read(text, buf, offset, len);
 }
 
+static ssize_t _dev_syscalls_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+    (void)node;
+    (void)flags;
+
+    syscall_stat_t stats[SYSCALL_STAT_MAX];
+    u64 unknown = 0;
+    size_t total = syscall_stats_snapshot(stats, ARRAY_LEN(stats), &unknown);
+
+    char text[SYSINFO_TEXT_MAX * 10];
+    size_t used = 0;
+
+    int wrote = snprintf(text, sizeof(text), "unknown=%" PRIu64 "\n", unknown);
+    if (wrote <= 0) {
+        return _dev_text_read(text, buf, offset, len);
+    }
+
+    used = (size_t)wrote;
+
+    size_t count = total < ARRAY_LEN(stats) ? total : ARRAY_LEN(stats);
+    for (size_t i = 0; i < count; i++) {
+        if (!stats[i].calls && !stats[i].errors) {
+            continue;
+        }
+
+        wrote = snprintf(
+            text + used,
+            sizeof(text) - used,
+            "%02llu %-9s calls=%llu errors=%llu\n",
+            (unsigned long long)stats[i].number,
+            stats[i].name ? stats[i].name : "unknown",
+            (unsigned long long)stats[i].calls,
+            (unsigned long long)stats[i].errors
+        );
+
+        if (wrote <= 0 || (size_t)wrote >= sizeof(text) - used) {
+            break;
+        }
+
+        used += (size_t)wrote;
+    }
+
+    return _dev_text_read(text, buf, offset, len);
+}
+
 bool devfs_register_node(
     vfs_node_t *parent,
     const char *name,
@@ -599,6 +645,12 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
     vfs_interface_t *sched_if = vfs_create_interface(_dev_sched_read, NULL, NULL);
     if (!sched_if || !devfs_register_node(dev_dir, "sched", VFS_CHARDEV, 0444, sched_if, NULL)) {
         log_warn("failed to create /dev/sched");
+        ok = false;
+    }
+
+    vfs_interface_t *syscalls_if = vfs_create_interface(_dev_syscalls_read, NULL, NULL);
+    if (!syscalls_if || !devfs_register_node(dev_dir, "syscalls", VFS_CHARDEV, 0444, syscalls_if, NULL)) {
+        log_warn("failed to create /dev/syscalls");
         ok = false;
     }
 

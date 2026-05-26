@@ -1,44 +1,10 @@
 #pragma once
 
-#define SYS_EXIT      0
-#define SYS_READ      1
-#define SYS_WRITE     2
-#define SYS_OPEN      3
-#define SYS_CLOSE     4
-#define SYS_PIPE      5
-#define SYS_DUP       6
-#define SYS_FCNTL     7
-#define SYS_PREAD     8
-#define SYS_PWRITE    9
-#define SYS_SEEK      10
-#define SYS_IOCTL     11
-#define SYS_POLL      12
-#define SYS_CHDIR     13
-#define SYS_MKDIR     14
-#define SYS_RMDIR     15
-#define SYS_GETDENTS  16
-#define SYS_ACCESS    17
-#define SYS_STAT      18
-#define SYS_LSTAT     19
-#define SYS_FSTAT     20
-#define SYS_CHMOD     21
-#define SYS_CHOWN     22
-#define SYS_LINK      23
-#define SYS_SYMLINK   24
-#define SYS_READLINK  25
-#define SYS_UNLINK    26
-#define SYS_RENAME    27
-#define SYS_MOUNT     28
-#define SYS_UMOUNT    29
-#define SYS_MMAP      30
-#define SYS_MPROTECT  31
-#define SYS_MUNMAP    32
-#define SYS_FORK      33
-#define SYS_EXECVE    34
-#define SYS_WAIT      35
-#define SYS_WAITPID   36
-#define SYS_SLEEP     37
-#define SYS_SIGNAL    38
-#define SYS_SIGRETURN 39
-#define SYS_KILL      40
-#define SYS_TIME      41
+#define SYSCALL(symbol, call, number) SYS_##symbol = number,
+
+enum {
+#include <apheleia/syscall.def>
+    APHELEIA_SYSCALL_COUNT,
+};
+
+#undef SYSCALL
