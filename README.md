@@ -91,6 +91,14 @@ Common build knobs:
 - `RISCV_FRISC=true` builds the FRISC FPGA image, sets the default UART stride to `4`, builds `kernel/arch/riscv/dts/friscv.dts`, and stages it as `/boot/platform.dtb`
 - `RISCV_UART_STRIDE=<n>` overrides the RISC-V UART register stride manually
 - `STRIP_USER_SYMBOLS=true` strips user binaries more aggressively
+- `USERLAND_STAGE_HEADERS=false` omits `/usr/include` from the image
+- `USERLAND_EXTRAS=tcc` ships a native TinyCC build for the selected `ARCH`
+
+For example, this builds a FRISC image with an RV32 `tcc` in `/bin/tcc`:
+
+```bash
+make ARCH=riscv_32 TOOLCHAIN=llvm RISCV_FRISC=true USERLAND_EXTRAS=tcc
+```
 
 Run it with QEMU using the same `ARCH` you built:
 
