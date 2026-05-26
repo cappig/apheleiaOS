@@ -34,7 +34,8 @@ char *setlocale(int category, const char *locale) {
     }
 
     if (!locale[0] || !strcmp(locale, "C") || !strcmp(locale, "POSIX")) {
-        strcpy(current_locale, "C");
+        current_locale[0] = 'C';
+        current_locale[1] = '\0';
         return current_locale;
     }
 

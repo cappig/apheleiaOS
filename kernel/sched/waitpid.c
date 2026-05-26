@@ -93,18 +93,14 @@ static void waitpid_add_ticks(u64 *counter, u64 ticks) {
         return;
     }
 
-    for (;;) {
-        u64 current = __atomic_load_n(counter, __ATOMIC_RELAXED);
-        u64 next = current + ticks;
+    u64 current = *counter;
+    u64 next = current + ticks;
 
-        if (next < current) {
-            next = UINT64_MAX;
-        }
-
-        if (__atomic_compare_exchange_n(counter, &current, next, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
-            return;
-        }
+    if (next < current) {
+        next = UINT64_MAX;
     }
+
+    *counter = next;
 }
 
 static u64 waitpid_sum_ticks(u64 own_ticks, u64 child_ticks) {

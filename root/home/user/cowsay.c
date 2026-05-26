@@ -18,9 +18,11 @@ static void print_line(char left, char mid, char right, size_t width) {
 
 static char *make_message(int argc, char **argv) {
     if (argc <= 1) {
-        char *msg = malloc(strlen(DEFAULT_MESSAGE) + 1);
+        size_t len = strlen(DEFAULT_MESSAGE);
+        char *msg = malloc(len + 1);
+
         if (msg) {
-            strcpy(msg, DEFAULT_MESSAGE);
+            memcpy(msg, DEFAULT_MESSAGE, len + 1);
         }
 
         return msg;

@@ -6,6 +6,7 @@
 #include <arch/paging.h>
 #include <arch/syscall.h>
 #include <arch/thread.h>
+#include <base/attributes.h>
 #include <base/macros.h>
 #include <data/list.h>
 #include <data/ring.h>
@@ -46,8 +47,8 @@
 
 typedef struct {
     const char *name;
-    u64 calls;
-    u64 errors;
+    u64 calls ALIGNED(8);
+    u64 errors ALIGNED(8);
 } syscall_counter_t;
 
 #define SYSCALL(symbol, call, number) [SYS_##symbol] = { .name = #call },
