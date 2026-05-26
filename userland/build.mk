@@ -266,7 +266,7 @@ USER_PROG_MAKEFILES := $(sort $(wildcard \
 -include $(USER_PROG_MAKEFILES)
 
 STRIP_USER         ?= true
-STRIP_USER_SYMBOLS ?= false
+STRIP_USER_SYMBOLS ?= true
 USER_STRIP_FLAGS   ?= $(if $(filter true,$(STRIP_USER_SYMBOLS)),--strip-all,--strip-debug)
 
 ifeq ($(STRIP_USER), true)

@@ -110,3 +110,36 @@ index a68aa45..d47f4c1 100644
              write16le( ptr, ( read16le( ptr ) & 0xe003 ) | ( ( ( off32 >> 5 ) & 1 ) << 2 ) |
                                  ( ( ( off32 >> 1 ) & 7 ) << 3 ) | ( ( ( off32 >> 7 ) & 1 ) << 6 ) |
                                  ( ( ( off32 >> 6 ) & 1 ) << 7 ) | ( ( ( off32 >> 10 ) & 1 ) << 8 ) |
+diff --git a/libtcc.c b/libtcc.c
+index 985c532..e47ac78 100644
+--- a/libtcc.c
++++ b/libtcc.c
+@@ -814,6 +814,9 @@ LIBTCCAPI TCCState *tcc_new(void)
+ #ifdef CONFIG_NEW_DTAGS
+     s->enable_new_dtags = 1;
+ #endif
++#ifdef TCC_APHELEIA
++    s->static_link = 1;
++#endif
+     s->ppfp = stdout;
+     /* might be used in error() before preprocess_start() */
+     s->include_stack_ptr = s->include_stack;
+diff --git a/tcc.h b/tcc.h
+index 42f35ff..15d0c54 100644
+--- a/tcc.h
++++ b/tcc.h
+@@ -456,8 +456,14 @@ extern long double strtold (const char *__nptr, char **__endptr);
+ #else
+ # define ELFCLASSW ELFCLASS32
+ # define ElfW(type) Elf##32##_##type
+ # define ELFW(type) ELF##32##_##type
++# if defined TCC_TARGET_I386
++# define ElfW_Rel ElfW(Rel)
++# define SHT_RELX SHT_REL
++# define REL_SECTION_FMT ".rel%s"
++# else
+ # define ElfW_Rel ElfW(Rela)
+ # define SHT_RELX SHT_RELA
+ # define REL_SECTION_FMT ".rela%s"
++# endif
+ #endif
