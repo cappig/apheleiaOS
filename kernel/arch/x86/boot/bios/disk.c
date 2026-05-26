@@ -29,7 +29,6 @@ static size_t rootfs_size = 0;
 static mbr_partition_t rootfs_partition = { 0 };
 static bool rootfs_partition_valid = false;
 static u8 rootfs_partition_index = 0;
-static bool _read_rootfs_bytes(void *dest, size_t offset, size_t bytes, void *ctx);
 
 static boot_ext2_t rootfs = { 0 };
 static u8 bounce[BOUNCE_SIZE] = { 0 };
@@ -89,6 +88,12 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
     }
 
     return 0;
+}
+
+static bool _read_rootfs_bytes(void *dest, size_t offset, size_t bytes, void *ctx) {
+    (void)ctx;
+    read_disk(dest, rootfs_base + offset, bytes);
+    return true;
 }
 
 static bool _find_rootfs(mbr_partition_t *out_part, u8 *part_index) {
@@ -236,12 +241,6 @@ bool stage_rootfs_image(u64 *paddr, u64 *size) {
     return true;
 }
 
-
-static bool _read_rootfs_bytes(void *dest, size_t offset, size_t bytes, void *ctx) {
-    (void)ctx;
-    read_disk(dest, rootfs_base + offset, bytes);
-    return true;
-}
 
 void *read_rootfs(const char *path) {
     return boot_ext2_read_file(&rootfs, path, NULL);

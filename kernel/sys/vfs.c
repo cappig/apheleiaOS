@@ -16,60 +16,119 @@
 
 
 #define VFS_MAX_SYMLINKS 16
+#define VFS_PATH_CACHE_SIZE 64
+
+typedef struct {
+    char *path;
+    vfs_node_t *node;
+    u64 stamp;
+} vfs_path_cache_entry_t;
+
+typedef struct {
+    vfs_path_cache_entry_t entries[VFS_PATH_CACHE_SIZE];
+    u64 clock;
+} vfs_path_cache_t;
+
+struct vfs {
+    tree_t *tree;
+    vfs_path_cache_t path_cache;
+};
 
 static vfs_t *vfs = NULL;
 static mutex_t vfs_tree_lock = MUTEX_INIT;
 
 static vfs_node_t *_walk_from_locked(vfs_node_t *from, const char *path, size_t *depth);
-static vfs_node_t *_follow_link_locked(vfs_node_t *node, size_t *depth);
-static const vfs_node_t *_follow_mounts_const(const vfs_node_t *node);
-static vfs_node_t *_follow_mounts(vfs_node_t *node);
-static bool _mount_cycle(vfs_node_t *mount, vfs_node_t *target);
-static int _insert_child(vfs_node_t *parent, vfs_node_t *child, bool persist);
-static int _link_child(vfs_node_t *parent, vfs_node_t *child, vfs_node_t *target);
 
-static time_t _time_now(void) {
-    return (time_t)(arch_realtime_ns() / 1000000000ULL);
+static bool _cacheable_path(const char *path) {
+    return path && path[0] == '/';
 }
 
-static time_t _latest_node_time(const vfs_node_t *node) {
-    if (!node) {
-        return _time_now();
-    }
-
-    node = _follow_mounts_const(node);
-    if (!node) {
-        return _time_now();
-    }
-
-    time_t latest = node->time.created;
-
-    if (node->time.modified > latest) {
-        latest = node->time.modified;
-    }
-
-    if (node->time.accessed > latest) {
-        latest = node->time.accessed;
-    }
-
-    return latest;
-}
-
-static void _stamp_virtual_node(vfs_node_t *node, const vfs_node_t *parent) {
-    if (!node) {
+static void _path_cache_clear(void) {
+    if (!vfs) {
         return;
     }
 
-    time_t now = _time_now();
-    time_t parent_time = _latest_node_time(parent);
+    vfs_path_cache_t *cache = &vfs->path_cache;
 
-    if (parent_time > now) {
-        now = parent_time;
+    for (size_t i = 0; i < VFS_PATH_CACHE_SIZE; i++) {
+        free(cache->entries[i].path);
+        cache->entries[i].path = NULL;
+        cache->entries[i].node = NULL;
+        cache->entries[i].stamp = 0;
+    }
+}
+
+static vfs_node_t *_path_cache_get(const char *path) {
+    if (!vfs || !_cacheable_path(path)) {
+        return NULL;
     }
 
-    node->time.created = now;
-    node->time.modified = now;
-    node->time.accessed = now;
+    vfs_path_cache_t *cache = &vfs->path_cache;
+
+    for (size_t i = 0; i < VFS_PATH_CACHE_SIZE; i++) {
+        vfs_path_cache_entry_t *entry = &cache->entries[i];
+
+        if (!entry->path || strcmp(entry->path, path)) {
+            continue;
+        }
+
+        if (!entry->node || entry->node->removed || entry->node->busy) {
+            free(entry->path);
+            entry->path = NULL;
+            entry->node = NULL;
+            entry->stamp = 0;
+            return NULL;
+        }
+
+        entry->stamp = ++cache->clock;
+        return entry->node;
+    }
+
+    return NULL;
+}
+
+static void _path_cache_put(const char *path, vfs_node_t *node) {
+    if (!vfs || !_cacheable_path(path) || !node || node->removed || node->busy) {
+        return;
+    }
+
+    vfs_path_cache_t *cache = &vfs->path_cache;
+    vfs_path_cache_entry_t *slot = NULL;
+
+    for (size_t i = 0; i < VFS_PATH_CACHE_SIZE; i++) {
+        vfs_path_cache_entry_t *entry = &cache->entries[i];
+
+        if (entry->path && !strcmp(entry->path, path)) {
+            slot = entry;
+            break;
+        }
+
+        if (!entry->path) {
+            slot = entry;
+            break;
+        }
+
+        if (!slot || entry->stamp < slot->stamp) {
+            slot = entry;
+        }
+    }
+
+    if (!slot) {
+        return;
+    }
+
+    if (!slot->path || strcmp(slot->path, path)) {
+        char *copy = strdup(path);
+        if (!copy) {
+            return;
+        }
+
+        free(slot->path);
+        slot->path = copy;
+    }
+
+    slot->node = node;
+    slot->stamp = ++cache->clock;
 }
 
 static vfs_node_t *_link_target_locked(vfs_node_t *link, size_t *depth) {
@@ -123,6 +182,50 @@ static const vfs_node_t *_follow_mounts_const(const vfs_node_t *node) {
 
 static vfs_node_t *_follow_mounts(vfs_node_t *node) {
     return (vfs_node_t *)_follow_mounts_const(node);
+}
+
+static time_t _time_now(void) {
+    return (time_t)(arch_realtime_ns() / 1000000000ULL);
+}
+
+static time_t _latest_node_time(const vfs_node_t *node) {
+    if (!node) {
+        return _time_now();
+    }
+
+    node = _follow_mounts_const(node);
+    if (!node) {
+        return _time_now();
+    }
+
+    time_t latest = node->time.created;
+
+    if (node->time.modified > latest) {
+        latest = node->time.modified;
+    }
+
+    if (node->time.accessed > latest) {
+        latest = node->time.accessed;
+    }
+
+    return latest;
+}
+
+static void _stamp_virtual_node(vfs_node_t *node, const vfs_node_t *parent) {
+    if (!node) {
+        return;
+    }
+
+    time_t now = _time_now();
+    time_t parent_time = _latest_node_time(parent);
+
+    if (parent_time > now) {
+        now = parent_time;
+    }
+
+    node->time.created = now;
+    node->time.modified = now;
+    node->time.accessed = now;
 }
 
 static bool _mount_cycle(vfs_node_t *mount, vfs_node_t *target) {
@@ -349,6 +452,7 @@ static int _remove_child(vfs_node_t *parent, vfs_node_t *child) {
     }
 
     _child_index_remove(parent, child->name);
+    _path_cache_clear();
     child->removed = true;
     child->tree_entry->parent = NULL;
 
@@ -370,6 +474,7 @@ static int _detach_child(vfs_node_t *parent, vfs_node_t *child) {
     }
 
     _child_index_remove(parent, child->name);
+    _path_cache_clear();
     child->tree_entry->parent = NULL;
     return 0;
 }
@@ -625,8 +730,19 @@ static vfs_node_t *_walk_from_locked(vfs_node_t *from, const char *path, size_t 
 }
 
 static vfs_node_t *_lookup_from_locked(vfs_node_t *from, const char *path) {
+    vfs_node_t *cached = _path_cache_get(path);
+    if (cached) {
+        return cached;
+    }
+
     size_t depth = 0;
-    return _walk_from_locked(from, path, &depth);
+    vfs_node_t *node = _walk_from_locked(from, path, &depth);
+
+    if (node) {
+        _path_cache_put(path, node);
+    }
+
+    return node;
 }
 
 static vfs_node_t *_lookup_locked(const char *path) {
@@ -1249,6 +1365,179 @@ int vfs_chown(vfs_node_t *node, uid_t uid, gid_t gid) {
     return 0;
 }
 
+static int _insert_child(vfs_node_t *parent, vfs_node_t *child, bool persist) {
+    assert(vfs);
+    mutex_lock(&vfs_tree_lock);
+
+    if (!parent || !child) {
+        mutex_unlock(&vfs_tree_lock);
+        return -EINVAL;
+    }
+
+    if (!vfs_validate_name(child->name)) {
+        mutex_unlock(&vfs_tree_lock);
+        return -EBADF;
+    }
+
+    if (VFS_IS_LINK(parent->type)) {
+        size_t depth = 0;
+        parent = _follow_link_locked(parent, &depth);
+
+        if (!parent) {
+            mutex_unlock(&vfs_tree_lock);
+            return -EINVAL;
+        }
+    }
+
+    if (parent->removed) {
+        mutex_unlock(&vfs_tree_lock);
+        return -ENOENT;
+    }
+
+    tree_node_t *parent_entry = parent->tree_entry;
+
+    assert(parent_entry);
+    assert(child->tree_entry);
+
+    if (_find_any_child(parent, child->name, NULL)) {
+        mutex_unlock(&vfs_tree_lock);
+        return -EEXIST;
+    }
+
+    if (!tree_insert_child(parent_entry, child->tree_entry)) {
+        mutex_unlock(&vfs_tree_lock);
+        return -ENOMEM;
+    }
+
+    bool held_parent = false;
+    vfs_interface_t *interface = parent->interface;
+    if (persist && interface && interface->create) {
+        child->busy = true;
+        vfs_node_retain(parent);
+        held_parent = true;
+        _hold_interface(interface);
+        mutex_unlock(&vfs_tree_lock);
+
+        ssize_t fs_ret = interface->create(parent, child);
+        if (fs_ret < 0) {
+            vfs_destroy_interface(interface);
+
+            mutex_lock(&vfs_tree_lock);
+            tree_remove_child(parent_entry, child->tree_entry);
+            child->tree_entry->parent = NULL;
+            child->busy = false;
+            mutex_unlock(&vfs_tree_lock);
+            vfs_node_release(parent);
+            return fs_ret == -1 ? -EIO : (int)fs_ret;
+        }
+
+        vfs_destroy_interface(interface);
+
+        mutex_lock(&vfs_tree_lock);
+        child->busy = false;
+    }
+
+    _child_index_set(parent, child->name, child->tree_entry);
+    _path_cache_clear();
+    mutex_unlock(&vfs_tree_lock);
+
+    if (held_parent) {
+        vfs_node_release(parent);
+    }
+
+    return 0;
+}
+
+static int _link_child(vfs_node_t *parent, vfs_node_t *child, vfs_node_t *target) {
+    assert(vfs);
+    mutex_lock(&vfs_tree_lock);
+
+    if (!parent || !child || !target) {
+        mutex_unlock(&vfs_tree_lock);
+        return -EINVAL;
+    }
+
+    if (!vfs_validate_name(child->name)) {
+        mutex_unlock(&vfs_tree_lock);
+        return -EBADF;
+    }
+
+    if (VFS_IS_LINK(parent->type)) {
+        size_t depth = 0;
+        parent = _follow_link_locked(parent, &depth);
+
+        if (!parent) {
+            mutex_unlock(&vfs_tree_lock);
+            return -EINVAL;
+        }
+    }
+
+    if (parent->removed) {
+        mutex_unlock(&vfs_tree_lock);
+        return -ENOENT;
+    }
+
+    if (target->removed || target->type == VFS_DIR || target->type == VFS_MOUNT) {
+        mutex_unlock(&vfs_tree_lock);
+        return -EPERM;
+    }
+
+    vfs_interface_t *interface = parent->interface;
+    if (!interface || !interface->link) {
+        mutex_unlock(&vfs_tree_lock);
+        return -ENOTSUP;
+    }
+
+    if (parent->fs != target->fs) {
+        mutex_unlock(&vfs_tree_lock);
+        return -EXDEV;
+    }
+
+    tree_node_t *parent_entry = parent->tree_entry;
+
+    assert(parent_entry);
+    assert(child->tree_entry);
+
+    if (_find_any_child(parent, child->name, NULL)) {
+        mutex_unlock(&vfs_tree_lock);
+        return -EEXIST;
+    }
+
+    if (!tree_insert_child(parent_entry, child->tree_entry)) {
+        mutex_unlock(&vfs_tree_lock);
+        return -ENOMEM;
+    }
+
+    child->busy = true;
+    vfs_node_retain(parent);
+    vfs_node_retain(target);
+    _hold_interface(interface);
+    mutex_unlock(&vfs_tree_lock);
+
+    ssize_t link_ret = interface->link(parent, child, target);
+    vfs_destroy_interface(interface);
+
+    mutex_lock(&vfs_tree_lock);
+    child->busy = false;
+
+    if (link_ret < 0) {
+        tree_remove_child(parent_entry, child->tree_entry);
+        child->tree_entry->parent = NULL;
+        mutex_unlock(&vfs_tree_lock);
+        vfs_node_release(target);
+        vfs_node_release(parent);
+        return link_ret == -1 ? -EIO : (int)link_ret;
+    }
+
+    _child_index_set(parent, child->name, child->tree_entry);
+    _path_cache_clear();
+    mutex_unlock(&vfs_tree_lock);
+
+    vfs_node_release(target);
+    vfs_node_release(parent);
+    return 0;
+}
+
 static int _symlink_path(const char *target, const char *link_path) {
     if (!target || !target[0] || !link_path) {
         return -ENOENT;
@@ -1638,6 +1927,7 @@ int vfs_rename(const char *old_path, const char *new_path) {
 
     free(old_name);
     _child_index_set(new_parent, child->name, child_entry);
+    _path_cache_clear();
     ret = 0;
 
 out:
@@ -1646,177 +1936,6 @@ out:
     free(new_name);
     mutex_unlock(&vfs_tree_lock);
     return ret;
-}
-
-static int _insert_child(vfs_node_t *parent, vfs_node_t *child, bool persist) {
-    assert(vfs);
-    mutex_lock(&vfs_tree_lock);
-
-    if (!parent || !child) {
-        mutex_unlock(&vfs_tree_lock);
-        return -EINVAL;
-    }
-
-    if (!vfs_validate_name(child->name)) {
-        mutex_unlock(&vfs_tree_lock);
-        return -EBADF;
-    }
-
-    if (VFS_IS_LINK(parent->type)) {
-        size_t depth = 0;
-        parent = _follow_link_locked(parent, &depth);
-
-        if (!parent) {
-            mutex_unlock(&vfs_tree_lock);
-            return -EINVAL;
-        }
-    }
-
-    if (parent->removed) {
-        mutex_unlock(&vfs_tree_lock);
-        return -ENOENT;
-    }
-
-    tree_node_t *parent_entry = parent->tree_entry;
-
-    assert(parent_entry);
-    assert(child->tree_entry);
-
-    if (_find_any_child(parent, child->name, NULL)) {
-        mutex_unlock(&vfs_tree_lock);
-        return -EEXIST;
-    }
-
-    if (!tree_insert_child(parent_entry, child->tree_entry)) {
-        mutex_unlock(&vfs_tree_lock);
-        return -ENOMEM;
-    }
-
-    bool held_parent = false;
-    vfs_interface_t *interface = parent->interface;
-    if (persist && interface && interface->create) {
-        child->busy = true;
-        vfs_node_retain(parent);
-        held_parent = true;
-        _hold_interface(interface);
-        mutex_unlock(&vfs_tree_lock);
-
-        ssize_t fs_ret = interface->create(parent, child);
-        if (fs_ret < 0) {
-            vfs_destroy_interface(interface);
-
-            mutex_lock(&vfs_tree_lock);
-            tree_remove_child(parent_entry, child->tree_entry);
-            child->tree_entry->parent = NULL;
-            child->busy = false;
-            mutex_unlock(&vfs_tree_lock);
-            vfs_node_release(parent);
-            return fs_ret == -1 ? -EIO : (int)fs_ret;
-        }
-
-        vfs_destroy_interface(interface);
-
-        mutex_lock(&vfs_tree_lock);
-        child->busy = false;
-    }
-
-    _child_index_set(parent, child->name, child->tree_entry);
-    mutex_unlock(&vfs_tree_lock);
-
-    if (held_parent) {
-        vfs_node_release(parent);
-    }
-
-    return 0;
-}
-
-static int _link_child(vfs_node_t *parent, vfs_node_t *child, vfs_node_t *target) {
-    assert(vfs);
-    mutex_lock(&vfs_tree_lock);
-
-    if (!parent || !child || !target) {
-        mutex_unlock(&vfs_tree_lock);
-        return -EINVAL;
-    }
-
-    if (!vfs_validate_name(child->name)) {
-        mutex_unlock(&vfs_tree_lock);
-        return -EBADF;
-    }
-
-    if (VFS_IS_LINK(parent->type)) {
-        size_t depth = 0;
-        parent = _follow_link_locked(parent, &depth);
-
-        if (!parent) {
-            mutex_unlock(&vfs_tree_lock);
-            return -EINVAL;
-        }
-    }
-
-    if (parent->removed) {
-        mutex_unlock(&vfs_tree_lock);
-        return -ENOENT;
-    }
-
-    if (target->removed || target->type == VFS_DIR || target->type == VFS_MOUNT) {
-        mutex_unlock(&vfs_tree_lock);
-        return -EPERM;
-    }
-
-    vfs_interface_t *interface = parent->interface;
-    if (!interface || !interface->link) {
-        mutex_unlock(&vfs_tree_lock);
-        return -ENOTSUP;
-    }
-
-    if (parent->fs != target->fs) {
-        mutex_unlock(&vfs_tree_lock);
-        return -EXDEV;
-    }
-
-    tree_node_t *parent_entry = parent->tree_entry;
-
-    assert(parent_entry);
-    assert(child->tree_entry);
-
-    if (_find_any_child(parent, child->name, NULL)) {
-        mutex_unlock(&vfs_tree_lock);
-        return -EEXIST;
-    }
-
-    if (!tree_insert_child(parent_entry, child->tree_entry)) {
-        mutex_unlock(&vfs_tree_lock);
-        return -ENOMEM;
-    }
-
-    child->busy = true;
-    vfs_node_retain(parent);
-    vfs_node_retain(target);
-    _hold_interface(interface);
-    mutex_unlock(&vfs_tree_lock);
-
-    ssize_t link_ret = interface->link(parent, child, target);
-    vfs_destroy_interface(interface);
-
-    mutex_lock(&vfs_tree_lock);
-    child->busy = false;
-
-    if (link_ret < 0) {
-        tree_remove_child(parent_entry, child->tree_entry);
-        child->tree_entry->parent = NULL;
-        mutex_unlock(&vfs_tree_lock);
-        vfs_node_release(target);
-        vfs_node_release(parent);
-        return link_ret == -1 ? -EIO : (int)link_ret;
-    }
-
-    _child_index_set(parent, child->name, child->tree_entry);
-    mutex_unlock(&vfs_tree_lock);
-
-    vfs_node_release(target);
-    vfs_node_release(parent);
-    return 0;
 }
 
 int vfs_insert_child(vfs_node_t *parent, vfs_node_t *child) {
@@ -1916,6 +2035,7 @@ int vfs_mount(fs_instance_t *instance, vfs_node_t *mount) {
     mount->type = VFS_MOUNT;
     mount->link = target;
     instance->refcount++;
+    _path_cache_clear();
     mutex_unlock(&vfs_tree_lock);
 
     log_debug("mounted %s", mount->name ? mount->name : "/");
@@ -1967,6 +2087,7 @@ int vfs_unmount(vfs_node_t *mount, bool destroy_tree) {
 
     mount->type = VFS_DIR;
     mount->link = NULL;
+    _path_cache_clear();
     mutex_unlock(&vfs_tree_lock);
 
     log_debug("unmounted %s", mount->name ? mount->name : "/");

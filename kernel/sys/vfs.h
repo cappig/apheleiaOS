@@ -114,11 +114,6 @@ struct vfs_node {
     void *private;
 };
 
-struct vfs {
-    tree_t *tree;
-};
-
-
 vfs_t *vfs_init(void);
 
 vfs_node_t *vfs_create_node(char *name, u32 type);

@@ -93,7 +93,13 @@ typedef struct {
 
 static vi_app_t app = { 0 };
 
-static void raw_mode_off(void);
+static void raw_mode_off(void) {
+    if (!app.editor.saved_tty_valid) {
+        return;
+    }
+
+    ioctl(STDIN_FILENO, TCSETS, &app.editor.saved_tty);
+}
 
 static bool write_all_fd(int fd, const char *buf, size_t len) {
     size_t off = 0;
@@ -350,14 +356,6 @@ static bool raw_mode_on(void) {
     tos.c_cc[VTIME] = 0;
 
     return !ioctl(STDIN_FILENO, TCSETS, &tos);
-}
-
-static void raw_mode_off(void) {
-    if (!app.editor.saved_tty_valid) {
-        return;
-    }
-
-    ioctl(STDIN_FILENO, TCSETS, &app.editor.saved_tty);
 }
 
 static void key_push_back(char ch) {
