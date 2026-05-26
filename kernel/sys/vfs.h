@@ -125,6 +125,7 @@ void vfs_node_close(vfs_node_t *node);
 void vfs_set_interface(vfs_node_t *node, vfs_interface_t *interface);
 void vfs_adopt_interface(vfs_node_t *node, vfs_interface_t *interface);
 void vfs_clear_interface(vfs_node_t *node);
+void vfs_make_virtual(vfs_node_t *node);
 
 vfs_interface_t *vfs_create_interface(vfs_io_fn read, vfs_io_fn write, vfs_truncate_fn truncate);
 void vfs_destroy_interface(vfs_interface_t *interface);

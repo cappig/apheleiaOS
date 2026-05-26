@@ -80,6 +80,76 @@ static u64 _boot_seconds(void) {
     return devfs.boot_seconds;
 }
 
+static time_t _devfs_time_now(void) {
+    u64 now = arch_realtime_ns() / 1000000000ULL;
+    if (now) {
+        return (time_t)now;
+    }
+
+    return (time_t)_boot_seconds();
+}
+
+static time_t _devfs_latest_time(const vfs_node_t *node) {
+    if (!node) {
+        return 0;
+    }
+
+    time_t latest = node->time.created;
+
+    if (node->time.modified > latest) {
+        latest = node->time.modified;
+    }
+
+    if (node->time.accessed > latest) {
+        latest = node->time.accessed;
+    }
+
+    return latest;
+}
+
+static time_t _devfs_stamp_time(const vfs_node_t *parent) {
+    time_t parent_time = _devfs_latest_time(parent);
+    time_t now = _devfs_time_now();
+
+    if (parent_time > now) {
+        now = parent_time;
+    }
+
+    return now;
+}
+
+static void _stamp_dev_node(vfs_node_t *node, const vfs_node_t *parent) {
+    if (!node) {
+        return;
+    }
+
+    time_t stamp = _devfs_stamp_time(parent);
+
+    node->time.created = stamp;
+    node->time.modified = stamp;
+    node->time.accessed = stamp;
+}
+
+static void _configure_dev_node(
+    vfs_node_t *node,
+    const vfs_node_t *parent,
+    u32 type,
+    mode_t mode,
+    vfs_interface_t *interface,
+    void *priv
+) {
+    if (!node) {
+        return;
+    }
+
+    node->type = type;
+    node->mode = mode;
+    vfs_make_virtual(node);
+    vfs_set_interface(node, interface);
+    node->private = priv;
+    _stamp_dev_node(node, parent);
+}
+
 static ssize_t _dev_text_read(const char *text, void *buf, size_t offset, size_t len) {
     if (!text || !buf) {
         return -1;
@@ -423,10 +493,7 @@ bool devfs_register_node(
         return false;
     }
 
-    node->type = type;
-    node->mode = mode;
-    vfs_set_interface(node, interface);
-    node->private = priv;
+    _configure_dev_node(node, parent, type, mode, interface, priv);
 
     return true;
 }
@@ -447,8 +514,8 @@ vfs_node_t *devfs_register_dir(vfs_node_t *parent, const char *name, mode_t mode
 
     node->type = VFS_DIR;
     node->mode = mode;
-    vfs_clear_interface(node);
-    node->private = NULL;
+    vfs_make_virtual(node);
+    _stamp_dev_node(node, parent);
 
     return node;
 }
@@ -470,11 +537,10 @@ static vfs_node_t *_ensure_dev_dir(void) {
         return NULL;
     }
 
-    // Keep /dev purely in-memory even if a backing fs is mounted
-    vfs_clear_interface(dev_dir);
-
     dev_dir->type = VFS_DIR;
     dev_dir->mode = 0755;
+    vfs_make_virtual(dev_dir);
+    _stamp_dev_node(dev_dir, root);
 
     return dev_dir;
 }

@@ -858,7 +858,6 @@ vfs_t *vfs_init(void) {
     return vfs;
 }
 
-
 vfs_node_t *vfs_create_node(char *name, u32 type) {
     vfs_node_t *node = calloc(1, sizeof(vfs_node_t));
 
@@ -1016,6 +1015,37 @@ void vfs_set_interface(vfs_node_t *node, vfs_interface_t *interface) {
     _hold_interface(interface);
     vfs_clear_interface(node);
     node->interface = interface;
+}
+
+void vfs_make_virtual(vfs_node_t *node) {
+    if (!node) {
+        return;
+    }
+
+    fs_interface_t *node_iface = NULL;
+    if (node->fs && node->fs->filesystem) {
+        node_iface = node->fs->filesystem->node_interface;
+    }
+
+    if (node_iface && node_iface->destroy_node) {
+        node_iface->destroy_node(node->fs, node);
+    }
+
+    vfs_clear_interface(node);
+
+    if (node->symlink_target) {
+        free(node->symlink_target);
+        node->symlink_target = NULL;
+    }
+
+    node->link = NULL;
+    node->private = NULL;
+    node->fs = NULL;
+    node->inode = 0;
+    node->uid = 0;
+    node->gid = 0;
+    node->size = 0;
+    node->nlink = 1;
 }
 
 void vfs_adopt_interface(vfs_node_t *node, vfs_interface_t *interface) {

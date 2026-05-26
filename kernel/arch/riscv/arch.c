@@ -1034,6 +1034,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     timer.cpu_hz = RISCV_TIMEBASE_HZ;
     timer.platform_name[0] = '\0';
     timer.arm_fail_logged = false;
+
     if (boot.dtb) {
         u64 parsed_hz = 0;
         if (fdt_find_timebase_frequency(boot.dtb, &parsed_hz) && parsed_hz) {
@@ -1467,13 +1468,22 @@ u32 arch_timer_hz(void) {
 }
 
 u64 arch_realtime_ns(void) {
-    u64 ticks = arch_timer_ticks();
+    u64 hz = timer.timebase_hz;
+    u64 ticks = 0;
 
-    if (!ticks) {
+    if (!hz || !riscv_machine_timer_read(&ticks)) {
+        hz = TIMER_FREQ;
+        ticks = arch_timer_ticks();
+    }
+
+    if (!hz) {
         return 0;
     }
 
-    return (ticks * 1000000000ULL) / TIMER_FREQ;
+    u64 seconds = ticks / hz;
+    u64 rem = ticks % hz;
+
+    return (seconds * 1000000000ULL) + ((rem * 1000000000ULL) / hz);
 }
 
 const char *arch_name(void) {
