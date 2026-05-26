@@ -23,13 +23,17 @@
 static uintptr_t next_stack_top;
 static spinlock_t stack_lock = SPINLOCK_INIT;
 
+#define EXEC_PROBE_SIZE 512
+
 typedef struct {
     int argc;
+    size_t bytes;
     char *argv[EXEC_MAX_ARGS + 1];
 } exec_args_t;
 
 typedef struct {
     int envc;
+    size_t bytes;
     char *envp[EXEC_MAX_ENV + 1];
 } exec_env_t;
 
@@ -42,7 +46,8 @@ typedef struct {
 typedef struct {
     char resolved[PATH_MAX];
     vfs_node_t *node;
-    u8 *buffer;
+    u8 probe[EXEC_PROBE_SIZE];
+    size_t probe_size;
     size_t size;
 } exec_file_t;
 
@@ -312,8 +317,63 @@ _ensure_loaded_page(sched_thread_t *thread, exec_loaded_page_t **pages, uintptr_
     return page;
 }
 
-static bool _copy_segment_bytes(
-    const u8 *image,
+static bool _read_exact(vfs_node_t *node, void *buf, size_t offset, size_t len) {
+    if (!len) {
+        return true;
+    }
+
+    if (!node || !buf || node->size > SIZE_MAX) {
+        return false;
+    }
+
+    size_t size = (size_t)node->size;
+    if (offset > size || len > size - offset) {
+        return false;
+    }
+
+    return vfs_read(node, buf, offset, len, 0) == (ssize_t)len;
+}
+
+static bool _read_phdrs(
+    vfs_node_t *node,
+    size_t image_size,
+    u64 phoff,
+    u64 ph_num,
+    u64 phent_size,
+    size_t min_entry_size,
+    u8 **out
+) {
+    if (!out) {
+        return false;
+    }
+
+    *out = NULL;
+
+    if (!_phdr_table_ok(phoff, ph_num, phent_size, image_size, min_entry_size)) {
+        return false;
+    }
+
+    u64 ph_bytes = 0;
+    if (!_u64_mul(ph_num, phent_size, &ph_bytes) || !ph_bytes || ph_bytes > SIZE_MAX) {
+        return false;
+    }
+
+    u8 *table = malloc((size_t)ph_bytes);
+    if (!table) {
+        return false;
+    }
+
+    if (!_read_exact(node, table, (size_t)phoff, (size_t)ph_bytes)) {
+        free(table);
+        return false;
+    }
+
+    *out = table;
+    return true;
+}
+
+static bool _copy_segment_from_file(
+    vfs_node_t *node,
     size_t image_size,
     u64 offset,
     u64 file_size,
@@ -324,18 +384,27 @@ static bool _copy_segment_bytes(
         return true;
     }
 
-    if (!image || offset > image_size || file_size > image_size - offset) {
+    if (!node || offset > image_size || file_size > image_size - offset || file_size > SIZE_MAX) {
         return false;
     }
 
     size_t remaining = (size_t)file_size;
     size_t image_off = (size_t)offset;
     uintptr_t cursor = vaddr;
+    u8 *bounce = NULL;
+
+    if (!arch_phys_map_can_persist()) {
+        bounce = malloc(PAGE_4KIB);
+        if (!bounce) {
+            return false;
+        }
+    }
 
     while (remaining) {
         uintptr_t page_vaddr = ALIGN_DOWN(cursor, PAGE_4KIB);
         exec_loaded_page_t *page = _find_loaded_page(pages, page_vaddr);
         if (!page) {
+            free(bounce);
             return false;
         }
 
@@ -345,42 +414,70 @@ static bool _copy_segment_bytes(
             chunk = remaining;
         }
 
-        void *dst = arch_phys_map(page->paddr, PAGE_4KIB, 0);
-        if (!dst) {
+        if (bounce && !_read_exact(node, bounce, image_off, chunk)) {
+            free(bounce);
             return false;
         }
 
-        memcpy((u8 *)dst + page_off, image + image_off, chunk);
+        void *dst = arch_phys_map(page->paddr, PAGE_4KIB, 0);
+        if (!dst) {
+            free(bounce);
+            return false;
+        }
+
+        bool ok = true;
+        if (bounce) {
+            memcpy((u8 *)dst + page_off, bounce, chunk);
+        } else {
+            ok = _read_exact(node, (u8 *)dst + page_off, image_off, chunk);
+        }
+
         arch_phys_unmap(dst, PAGE_4KIB);
+
+        if (!ok) {
+            free(bounce);
+            return false;
+        }
 
         cursor += chunk;
         image_off += chunk;
         remaining -= chunk;
     }
 
+    free(bounce);
     return true;
 }
 
-static bool _load_segments_64(sched_thread_t *thread, const u8 *image, size_t size, u64 *entry_out) {
-    if (size < sizeof(elf_header_t)) {
+static bool _load_segments_64(sched_thread_t *thread, const exec_file_t *file, u64 *entry_out) {
+    if (!file || file->probe_size < sizeof(elf_header_t)) {
         return false;
     }
 
-    const elf_header_t *header = (const elf_header_t *)image;
+    elf_header_t header;
+    memcpy(&header, file->probe, sizeof(header));
 
-    if (header->magic != ELF_MAGIC || header->arch != EARCH_64) {
+    if (header.magic != ELF_MAGIC || header.arch != EARCH_64) {
         return false;
     }
 
-    if (!_phdr_table_ok(header->phoff, header->ph_num, header->phent_size, size, sizeof(elf_prog_header_t))) {
+    u8 *phdrs = NULL;
+    if (!_read_phdrs(
+            file->node,
+            file->size,
+            header.phoff,
+            header.ph_num,
+            header.phent_size,
+            sizeof(elf_prog_header_t),
+            &phdrs
+        )) {
         return false;
     }
 
-    const elf_prog_header_t *prog = (const elf_prog_header_t *)(image + header->phoff);
     exec_loaded_page_t *loaded_pages = NULL;
+    bool ok = false;
 
-    for (size_t i = 0; i < header->ph_num; i++) {
-        const u8 *ph_ptr = (const u8 *)prog + i * header->phent_size;
+    for (size_t i = 0; i < header.ph_num; i++) {
+        const u8 *ph_ptr = phdrs + i * header.phent_size;
         const elf_prog_header_t *ph = (const elf_prog_header_t *)ph_ptr;
 
         if (ph->type != PT_LOAD) {
@@ -391,67 +488,76 @@ static bool _load_segments_64(sched_thread_t *thread, const u8 *image, size_t si
             continue;
         }
 
-        bool segment_ok = _elf_segment_ok(ph->file_size, ph->mem_size, ph->offset, size, ph->vaddr);
+        bool segment_ok = _elf_segment_ok(ph->file_size, ph->mem_size, ph->offset, file->size, ph->vaddr);
 
         if (!segment_ok) {
-            _free_loaded_pages(loaded_pages);
-            return false;
+            goto out;
         }
 
         u64 map_base = 0;
         u64 map_end = 0;
         if (!_segment_range(ph->vaddr, ph->mem_size, UINT64_MAX, &map_base, &map_end)) {
-            _free_loaded_pages(loaded_pages);
-            return false;
+            goto out;
         }
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
         for (u64 page_vaddr = map_base; page_vaddr < map_end; page_vaddr += PAGE_4KIB) {
             if (!_ensure_loaded_page(thread, &loaded_pages, (uintptr_t)page_vaddr, flags)) {
-                _free_loaded_pages(loaded_pages);
-                return false;
+                goto out;
             }
         }
 
-        if (!_copy_segment_bytes(image, size, ph->offset, ph->file_size, (uintptr_t)ph->vaddr, loaded_pages)) {
-            _free_loaded_pages(loaded_pages);
-            return false;
+        if (!_copy_segment_from_file(file->node, file->size, ph->offset, ph->file_size, (uintptr_t)ph->vaddr, loaded_pages)) {
+            goto out;
         }
     }
 
-    if (!_entry_loaded(loaded_pages, header->entry)) {
-        _free_loaded_pages(loaded_pages);
-        return false;
+    if (!_entry_loaded(loaded_pages, header.entry)) {
+        goto out;
     }
 
     if (entry_out) {
-        *entry_out = header->entry;
+        *entry_out = header.entry;
     }
 
+    ok = true;
+
+out:
+    free(phdrs);
     _free_loaded_pages(loaded_pages);
-    return true;
+    return ok;
 }
 
-static bool _load_segments_32(sched_thread_t *thread, const u8 *image, size_t size, u32 *entry_out) {
-    if (size < sizeof(elf32_header_t)) {
+static bool _load_segments_32(sched_thread_t *thread, const exec_file_t *file, u32 *entry_out) {
+    if (!file || file->probe_size < sizeof(elf32_header_t)) {
         return false;
     }
 
-    const elf32_header_t *header = (const elf32_header_t *)image;
+    elf32_header_t header;
+    memcpy(&header, file->probe, sizeof(header));
 
-    if (header->magic != ELF_MAGIC || header->arch != EARCH_32) {
+    if (header.magic != ELF_MAGIC || header.arch != EARCH_32) {
         return false;
     }
 
-    if (!_phdr_table_ok(header->phoff, header->ph_num, header->phent_size, size, sizeof(elf32_prog_header_t))) {
+    u8 *phdrs = NULL;
+    if (!_read_phdrs(
+            file->node,
+            file->size,
+            header.phoff,
+            header.ph_num,
+            header.phent_size,
+            sizeof(elf32_prog_header_t),
+            &phdrs
+        )) {
         return false;
     }
 
-    const elf32_prog_header_t *prog = (const elf32_prog_header_t *)(image + header->phoff);
     exec_loaded_page_t *loaded_pages = NULL;
+    bool ok = false;
 
-    for (size_t i = 0; i < header->ph_num; i++) {
-        const u8 *ph_ptr = (const u8 *)prog + i * header->phent_size;
+    for (size_t i = 0; i < header.ph_num; i++) {
+        const u8 *ph_ptr = phdrs + i * header.phent_size;
         const elf32_prog_header_t *ph = (const elf32_prog_header_t *)ph_ptr;
 
         if (ph->type != PT_LOAD) {
@@ -462,53 +568,52 @@ static bool _load_segments_32(sched_thread_t *thread, const u8 *image, size_t si
             continue;
         }
 
-        bool segment_ok = _elf_segment_ok(ph->file_size, ph->mem_size, ph->offset, size, ph->vaddr);
+        bool segment_ok = _elf_segment_ok(ph->file_size, ph->mem_size, ph->offset, file->size, ph->vaddr);
 
         if (!segment_ok) {
-            _free_loaded_pages(loaded_pages);
-            return false;
+            goto out;
         }
 
         u64 map_base = 0;
         u64 map_end = 0;
         if (!_segment_range(ph->vaddr, ph->mem_size, UINT32_MAX, &map_base, &map_end)) {
-            _free_loaded_pages(loaded_pages);
-            return false;
+            goto out;
         }
 
         u64 flags = _elf_flags_to_page_flags(ph->flags);
         for (u64 page_vaddr = map_base; page_vaddr < map_end; page_vaddr += PAGE_4KIB) {
             if (!_ensure_loaded_page(thread, &loaded_pages, (uintptr_t)page_vaddr, flags)) {
-                _free_loaded_pages(loaded_pages);
-                return false;
+                goto out;
             }
         }
 
-        if (!_copy_segment_bytes(image, size, ph->offset, ph->file_size, (uintptr_t)ph->vaddr, loaded_pages)) {
-            _free_loaded_pages(loaded_pages);
-            return false;
+        if (!_copy_segment_from_file(file->node, file->size, ph->offset, ph->file_size, (uintptr_t)ph->vaddr, loaded_pages)) {
+            goto out;
         }
     }
 
-    if (!_entry_loaded(loaded_pages, header->entry)) {
-        _free_loaded_pages(loaded_pages);
-        return false;
+    if (!_entry_loaded(loaded_pages, header.entry)) {
+        goto out;
     }
 
     if (entry_out) {
-        *entry_out = header->entry;
+        *entry_out = header.entry;
     }
 
+    ok = true;
+
+out:
+    free(phdrs);
     _free_loaded_pages(loaded_pages);
-    return true;
+    return ok;
 }
 
-static bool _load_user_segments(sched_thread_t *thread, const u8 *image, size_t size, arch_word_t *entry_out) {
-    if (!thread || !image || size < 16) {
+static bool _load_user_segments(sched_thread_t *thread, const exec_file_t *file, arch_word_t *entry_out) {
+    if (!thread || !file || file->probe_size < 16) {
         return false;
     }
 
-    u8 arch = ((const elf_header_t *)image)->arch;
+    u8 arch = file->probe[4];
 
     if (arch == EARCH_64) {
         if (!arch_is_64bit()) {
@@ -516,7 +621,7 @@ static bool _load_user_segments(sched_thread_t *thread, const u8 *image, size_t 
         }
 
         u64 entry = 0;
-        bool ok = _load_segments_64(thread, image, size, &entry);
+        bool ok = _load_segments_64(thread, file, &entry);
 
         if (ok && entry_out) {
             *entry_out = (arch_word_t)entry;
@@ -531,7 +636,7 @@ static bool _load_user_segments(sched_thread_t *thread, const u8 *image, size_t 
         }
 
         u32 entry = 0;
-        bool ok = _load_segments_32(thread, image, size, &entry);
+        bool ok = _load_segments_32(thread, file, &entry);
 
         if (ok && entry_out) {
             *entry_out = (arch_word_t)entry;
@@ -563,23 +668,43 @@ static uintptr_t _alloc_stack_base(size_t size) {
     return base;
 }
 
-static bool _args_push(exec_args_t *args, const char *value) {
-    if (!args || !value) {
+static bool _exec_bytes_ok(size_t arg_bytes, size_t env_bytes) {
+    return arg_bytes <= EXEC_ARG_MAX && env_bytes <= EXEC_ARG_MAX - arg_bytes;
+}
+
+static bool _exec_add_ok(size_t base, size_t add, size_t *out) {
+    if (!out || add > SIZE_MAX - base) {
         return false;
     }
 
+    *out = base + add;
+    return true;
+}
+
+static int _args_push(exec_args_t *args, const char *value) {
+    if (!args || !value) {
+        return -EINVAL;
+    }
+
     if (args->argc >= EXEC_MAX_ARGS) {
-        return false;
+        return -E2BIG;
     }
 
     size_t len = strnlen(value, EXEC_MAX_ARG_LEN);
     if (len >= EXEC_MAX_ARG_LEN) {
-        return false;
+        return -E2BIG;
+    }
+
+    size_t bytes = len + 1 + sizeof(char *);
+    size_t next_bytes = 0;
+
+    if (!_exec_add_ok(args->bytes, bytes, &next_bytes) || !_exec_bytes_ok(next_bytes, 0)) {
+        return -E2BIG;
     }
 
     char *copy = malloc(len + 1);
     if (!copy) {
-        return false;
+        return -ENOMEM;
     }
 
     memcpy(copy, value, len);
@@ -587,8 +712,9 @@ static bool _args_push(exec_args_t *args, const char *value) {
 
     args->argv[args->argc++] = copy;
     args->argv[args->argc] = NULL;
+    args->bytes = next_bytes;
 
-    return true;
+    return 0;
 }
 
 static void _free_args(exec_args_t *args) {
@@ -602,27 +728,35 @@ static void _free_args(exec_args_t *args) {
     }
 
     args->argc = 0;
+    args->bytes = 0;
     args->argv[0] = NULL;
 }
 
-static bool _env_push(exec_env_t *env, const char *value) {
+static int _env_push(exec_env_t *env, const char *value) {
     if (!env || !value) {
-        return false;
+        return -EINVAL;
     }
 
     if (env->envc >= EXEC_MAX_ENV) {
-        return false;
+        return -E2BIG;
     }
 
     size_t len = strnlen(value, EXEC_MAX_ENV_LEN);
 
     if (len >= EXEC_MAX_ENV_LEN) {
-        return false;
+        return -E2BIG;
+    }
+
+    size_t bytes = len + 1 + sizeof(char *);
+    size_t next_bytes = 0;
+
+    if (!_exec_add_ok(env->bytes, bytes, &next_bytes) || !_exec_bytes_ok(next_bytes, 0)) {
+        return -E2BIG;
     }
 
     char *copy = malloc(len + 1);
     if (!copy) {
-        return false;
+        return -ENOMEM;
     }
 
     memcpy(copy, value, len);
@@ -630,8 +764,9 @@ static bool _env_push(exec_env_t *env, const char *value) {
 
     env->envp[env->envc++] = copy;
     env->envp[env->envc] = NULL;
+    env->bytes = next_bytes;
 
-    return true;
+    return 0;
 }
 
 static void _free_env(exec_env_t *env) {
@@ -645,18 +780,19 @@ static void _free_env(exec_env_t *env) {
     }
 
     env->envc = 0;
+    env->bytes = 0;
     env->envp[0] = NULL;
 }
 
-static bool _copy_args(char *const argv[], exec_args_t *out) {
+static int _copy_args(char *const argv[], exec_args_t *out) {
     if (!out) {
-        return false;
+        return -EINVAL;
     }
 
     memset(out, 0, sizeof(*out));
 
     if (!argv) {
-        return true;
+        return 0;
     }
 
     for (int i = 0; i < EXEC_MAX_ARGS; i++) {
@@ -665,25 +801,31 @@ static bool _copy_args(char *const argv[], exec_args_t *out) {
             break;
         }
 
-        if (!_args_push(out, arg)) {
+        int err = _args_push(out, arg);
+        if (err) {
             _free_args(out);
-            return false;
+            return err;
         }
     }
 
+    if (argv[EXEC_MAX_ARGS]) {
+        _free_args(out);
+        return -E2BIG;
+    }
+
     out->argv[out->argc] = NULL;
-    return true;
+    return 0;
 }
 
-static bool _copy_env(char *const envp[], exec_env_t *out) {
+static int _copy_env(char *const envp[], exec_env_t *out) {
     if (!out) {
-        return false;
+        return -EINVAL;
     }
 
     memset(out, 0, sizeof(*out));
 
     if (!envp) {
-        return true;
+        return 0;
     }
 
     for (int i = 0; i < EXEC_MAX_ENV; i++) {
@@ -692,14 +834,20 @@ static bool _copy_env(char *const envp[], exec_env_t *out) {
             break;
         }
 
-        if (!_env_push(out, env)) {
+        int err = _env_push(out, env);
+        if (err) {
             _free_env(out);
-            return false;
+            return err;
         }
     }
 
+    if (envp[EXEC_MAX_ENV]) {
+        _free_env(out);
+        return -E2BIG;
+    }
+
     out->envp[out->envc] = NULL;
-    return true;
+    return 0;
 }
 
 static uintptr_t _build_user_stack_args(uintptr_t stack_top, const exec_args_t *args, const exec_env_t *env) {
@@ -795,42 +943,42 @@ static bool _map_user_stack(sched_thread_t *thread, uintptr_t *stack_top_out) {
     return true;
 }
 
-static bool _read_file(vfs_node_t *node, u8 **buffer_out, size_t *size_out) {
-    if (!node || !buffer_out || !size_out) {
-        return false;
-    }
-
-    size_t size = (size_t)node->size;
-    if (!size) {
-        return false;
-    }
-
-    u8 *buffer = malloc(size);
-    if (!buffer) {
-        return false;
-    }
-
-    if (vfs_read(node, buffer, 0, size, 0) < 0) {
-        free(buffer);
-        return false;
-    }
-
-    *buffer_out = buffer;
-    *size_out = size;
-
-    return true;
-}
-
 static void _close_file(exec_file_t *file) {
     if (!file) {
         return;
     }
 
-    free(file->buffer);
-    file->buffer = NULL;
+    file->probe_size = 0;
     file->size = 0;
     file->node = NULL;
     file->resolved[0] = '\0';
+}
+
+static bool _read_file_probe(exec_file_t *file) {
+    if (!file || !file->node) {
+        return false;
+    }
+
+    if (file->node->size > SIZE_MAX) {
+        return false;
+    }
+
+    file->size = (size_t)file->node->size;
+    if (!file->size) {
+        return false;
+    }
+
+    size_t probe_size = file->size;
+    if (probe_size > sizeof(file->probe)) {
+        probe_size = sizeof(file->probe);
+    }
+
+    if (!_read_exact(file->node, file->probe, 0, probe_size)) {
+        return false;
+    }
+
+    file->probe_size = probe_size;
+    return true;
 }
 
 static int _open_file(sched_thread_t *thread, const char *path, exec_file_t *out, bool require_exec) {
@@ -872,7 +1020,7 @@ static int _open_file(sched_thread_t *thread, const char *path, exec_file_t *out
         }
     }
 
-    if (!_read_file(out->node, &out->buffer, &out->size)) {
+    if (!_read_file_probe(out)) {
         _close_file(out);
         return -EIO;
     }
@@ -953,41 +1101,45 @@ static bool _parse_shebang(const u8 *buffer, size_t size, exec_shebang_t *out) {
     return true;
 }
 
-static bool
+static int
 _build_shebang_args(const exec_args_t *orig, const exec_shebang_t *shebang, const char *script_path, exec_args_t *out) {
     if (!shebang || !script_path || !out) {
-        return false;
+        return -EINVAL;
     }
 
     memset(out, 0, sizeof(*out));
 
-    if (!_args_push(out, shebang->path)) {
+    int err = _args_push(out, shebang->path);
+    if (err) {
         _free_args(out);
-        return false;
+        return err;
     }
 
     if (shebang->has_arg) {
-        if (!_args_push(out, shebang->arg)) {
+        err = _args_push(out, shebang->arg);
+        if (err) {
             _free_args(out);
-            return false;
+            return err;
         }
     }
 
-    if (!_args_push(out, script_path)) {
+    err = _args_push(out, script_path);
+    if (err) {
         _free_args(out);
-        return false;
+        return err;
     }
 
     if (orig) {
         for (int i = 1; i < orig->argc; i++) {
-            if (!_args_push(out, orig->argv[i])) {
+            err = _args_push(out, orig->argv[i]);
+            if (err) {
                 _free_args(out);
-                return false;
+                return err;
             }
         }
     }
 
-    return true;
+    return 0;
 }
 
 static void _free_regions_list(sched_user_region_t *region) {
@@ -1063,10 +1215,11 @@ sched_thread_t *user_spawn(const char *path) {
     exec_args_t args = { 0 };
     exec_env_t env = { 0 };
 
-    bool is_script = _parse_shebang(file.buffer, file.size, &shebang);
+    bool is_script = _parse_shebang(file.probe, file.probe_size, &shebang);
 
     if (is_script) {
-        if (!_build_shebang_args(NULL, &shebang, exec_name_buf, &args)) {
+        err = _build_shebang_args(NULL, &shebang, exec_name_buf, &args);
+        if (err) {
             _close_file(&file);
             sched_discard_thread(thread);
             return NULL;
@@ -1085,7 +1238,8 @@ sched_thread_t *user_spawn(const char *path) {
         _close_file(&file);
         file = interp;
     } else {
-        if (!_args_push(&args, path)) {
+        err = _args_push(&args, path);
+        if (err) {
             _free_env(&env);
             _close_file(&file);
             sched_discard_thread(thread);
@@ -1095,7 +1249,7 @@ sched_thread_t *user_spawn(const char *path) {
 
     uintptr_t entry = 0;
     arch_word_t entry_raw = 0;
-    bool ok = _load_user_segments(thread, file.buffer, file.size, &entry_raw);
+    bool ok = _load_user_segments(thread, &file, &entry_raw);
     if (ok) {
         entry = (uintptr_t)entry_raw;
     }
@@ -1156,17 +1310,27 @@ int user_exec(
     exec_args_t args = { 0 };
     exec_env_t env = { 0 };
 
-    if (!_copy_args(argv, &args)) {
-        return -ENOMEM;
+    int err = 0;
+
+    err = _copy_args(argv, &args);
+    if (err) {
+        return err;
     }
 
-    if (!_copy_env(envp, &env)) {
+    err = _copy_env(envp, &env);
+    if (err) {
         _free_args(&args);
-        return -ENOMEM;
+        return err;
+    }
+
+    if (!_exec_bytes_ok(args.bytes, env.bytes)) {
+        _free_args(&args);
+        _free_env(&env);
+        return -E2BIG;
     }
 
     exec_file_t file = { 0 };
-    int err = _open_file(thread, path, &file, true);
+    err = _open_file(thread, path, &file, true);
     if (err) {
         _free_args(&args);
         _free_env(&env);
@@ -1180,16 +1344,23 @@ int user_exec(
     exec_shebang_t shebang = { 0 };
     exec_args_t script_args = { 0 };
 
-    bool is_script = _parse_shebang(file.buffer, file.size, &shebang);
+    bool is_script = _parse_shebang(file.probe, file.probe_size, &shebang);
 
     if (is_script) {
-        bool built_shebang = _build_shebang_args(&args, &shebang, exec_name_buf, &script_args);
-
-        if (!built_shebang) {
+        err = _build_shebang_args(&args, &shebang, exec_name_buf, &script_args);
+        if (err) {
             _free_args(&args);
             _free_env(&env);
             _close_file(&file);
-            return -ENOMEM;
+            return err;
+        }
+
+        if (!_exec_bytes_ok(script_args.bytes, env.bytes)) {
+            _free_args(&args);
+            _free_args(&script_args);
+            _free_env(&env);
+            _close_file(&file);
+            return -E2BIG;
         }
 
         _free_args(&args);
@@ -1233,7 +1404,7 @@ int user_exec(
     uintptr_t entry_point = 0;
     arch_word_t entry_raw = 0;
 
-    bool ok = _load_user_segments(thread, file.buffer, file.size, &entry_raw);
+    bool ok = _load_user_segments(thread, &file, &entry_raw);
     if (ok) {
         entry_point = (uintptr_t)entry_raw;
     }

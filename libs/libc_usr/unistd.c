@@ -710,7 +710,7 @@ int setgroups(size_t size, const gid_t list[]) {
 long sysconf(int name) {
     switch (name) {
     case _SC_ARG_MAX:
-        return 4096;
+        return ARG_MAX;
     case _SC_CHILD_MAX:
         return 1024;
     case _SC_CLK_TCK:

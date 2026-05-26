@@ -35,3 +35,7 @@
 #ifndef PATH_MAX
 #define PATH_MAX 256
 #endif
+
+#ifndef ARG_MAX
+#define ARG_MAX (64 * 1024)
+#endif

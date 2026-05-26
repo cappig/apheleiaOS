@@ -656,6 +656,48 @@ static u32 _block_for_index(ext2_private_t *priv, disk_partition_t *part, const 
     return block;
 }
 
+static u32 _block_from_table(
+    ext2_private_t *priv,
+    disk_partition_t *part,
+    const ext2_inode_t *inode,
+    u32 block_index,
+    u32 **table
+) {
+    if (!priv || !part || !inode) {
+        return 0;
+    }
+
+    if (block_index < 12) {
+        return inode->direct_block_ptr[block_index];
+    }
+
+    block_index -= 12;
+
+    u32 entries_per_block = priv->block_size / sizeof(u32);
+    if (block_index >= entries_per_block || !inode->indirect_block_ptr[0]) {
+        return 0;
+    }
+
+    if (!table) {
+        return _block_for_index(priv, part, inode, block_index + 12);
+    }
+
+    if (!*table) {
+        *table = malloc(priv->block_size);
+        if (!*table) {
+            return 0;
+        }
+
+        if (!_read_block(priv, part, inode->indirect_block_ptr[0], *table)) {
+            free(*table);
+            *table = NULL;
+            return 0;
+        }
+    }
+
+    return (*table)[block_index];
+}
+
 static bool _ensure_block(
     ext2_private_t *priv,
     disk_partition_t *part,
@@ -1316,13 +1358,6 @@ static ssize_t _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len
 
     mutex_lock(&priv->lock);
 
-    if (!_read_inode(priv, part, info->inode_num, &info->inode)) {
-        mutex_unlock(&priv->lock);
-        return -EIO;
-    }
-
-    _sync_vnode(node, &info->inode);
-
     u64 size = ext2_file_size(&info->inode);
     if (offset >= size) {
         mutex_unlock(&priv->lock);
@@ -1336,12 +1371,8 @@ static ssize_t _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len
 
     u8 *out = buf;
     u32 block_size = priv->block_size;
-    u8 *bounce = malloc(block_size);
-
-    if (!bounce) {
-        mutex_unlock(&priv->lock);
-        return -ENOMEM;
-    }
+    u8 *bounce = NULL;
+    u32 *indirect = NULL;
 
     size_t remaining = to_read;
     u64 cursor = offset;
@@ -1349,20 +1380,40 @@ static ssize_t _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len
     while (remaining) {
         u32 block_index = (u32)(cursor / block_size);
         size_t block_off = (size_t)(cursor % block_size);
-        u32 block = _block_for_index(priv, part, &info->inode, block_index);
-
-        if (!block) {
-            memset(bounce, 0, block_size);
-        } else if (!_read_block(priv, part, block, bounce)) {
-            free(bounce);
-            mutex_unlock(&priv->lock);
-            return -EIO;
-        }
+        u32 block = _block_from_table(priv, part, &info->inode, block_index, &indirect);
 
         size_t available = block_size - block_off;
         size_t chunk = remaining < available ? remaining : available;
 
-        memcpy(out, bounce + block_off, chunk);
+        if (block_off == 0 && chunk == block_size) {
+            if (!block) {
+                memset(out, 0, block_size);
+            } else if (!_read_block(priv, part, block, out)) {
+                free(indirect);
+                mutex_unlock(&priv->lock);
+                return -EIO;
+            }
+        } else {
+            if (!bounce) {
+                bounce = malloc(block_size);
+                if (!bounce) {
+                    free(indirect);
+                    mutex_unlock(&priv->lock);
+                    return -ENOMEM;
+                }
+            }
+
+            if (!block) {
+                memset(bounce, 0, block_size);
+            } else if (!_read_block(priv, part, block, bounce)) {
+                free(bounce);
+                free(indirect);
+                mutex_unlock(&priv->lock);
+                return -EIO;
+            }
+
+            memcpy(out, bounce + block_off, chunk);
+        }
 
         out += chunk;
         remaining -= chunk;
@@ -1370,6 +1421,7 @@ static ssize_t _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len
     }
 
     free(bounce);
+    free(indirect);
 
     u32 now = _now(priv);
     if (_should_update_atime(&info->inode, now)) {

@@ -1134,6 +1134,21 @@ bool mount_rootfs(void) {
     }
 
     if (disk_state.preferred_uuid_set) {
+        if (has_virtual) {
+            for (size_t i = 0; i < disk_state.disks->size; i++) {
+                disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
+
+                if (!dev || dev->type != DISK_VIRTUAL) {
+                    continue;
+                }
+
+                if (_mount_rootfs_on_disk(dev, true)) {
+                    mutex_unlock(&disk_state.lock);
+                    return true;
+                }
+            }
+        }
+
         for (size_t i = 0; i < disk_state.disks->size; i++) {
             disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
 
@@ -1145,23 +1160,6 @@ bool mount_rootfs(void) {
                 mutex_unlock(&disk_state.lock);
                 return true;
             }
-        }
-
-        if (has_virtual) {
-            for (size_t i = 0; i < disk_state.disks->size; i++) {
-                disk_dev_t *dev = vec_at_ptr(disk_state.disks, i);
-                if (!dev || dev->type != DISK_VIRTUAL) {
-                    continue;
-                }
-
-                if (_mount_rootfs_on_disk(dev, true)) {
-                    mutex_unlock(&disk_state.lock);
-                    return true;
-                }
-            }
-
-            mutex_unlock(&disk_state.lock);
-            return false;
         }
 
         log_warn(

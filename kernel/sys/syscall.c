@@ -213,8 +213,14 @@ static vfs_node_t *_resolve_link_node(vfs_node_t *node) {
     return vfs_resolve_node(node);
 }
 
+#if EXEC_MAX_ARGS > EXEC_MAX_ENV
+#define EXEC_VEC_ITEMS (EXEC_MAX_ARGS + 1)
+#else
+#define EXEC_VEC_ITEMS (EXEC_MAX_ENV + 1)
+#endif
+
 typedef struct {
-    char *items[EXEC_MAX_ENV + 1];
+    char *items[EXEC_VEC_ITEMS];
 } exec_vec_t;
 
 static void _free_exec_vec(exec_vec_t *vec) {
@@ -226,6 +232,15 @@ static void _free_exec_vec(exec_vec_t *vec) {
         free(vec->items[i]);
         vec->items[i] = NULL;
     }
+}
+
+static bool _charge_exec_bytes(size_t *left, size_t bytes) {
+    if (!left || bytes > *left) {
+        return false;
+    }
+
+    *left -= bytes;
+    return true;
 }
 
 static bool _user_field(const void *base, size_t index, size_t item_size, size_t member_offset, void **out) {
@@ -253,6 +268,7 @@ static int _copy_exec_vec(
     char *const user_vec[],
     size_t max_items,
     size_t max_len,
+    size_t *budget,
     exec_vec_t *out
 ) {
     if (!out || !max_len || max_items >= ARRAY_LEN(out->items)) {
@@ -279,6 +295,11 @@ static int _copy_exec_vec(
         }
 
         if (!item) {
+            if (!_charge_exec_bytes(budget, sizeof(char *))) {
+                _free_exec_vec(out);
+                return -E2BIG;
+            }
+
             return 0;
         }
 
@@ -300,6 +321,13 @@ static int _copy_exec_vec(
             return err;
         }
 
+        size_t bytes = strlen(copy) + 1 + sizeof(char *);
+        if (!_charge_exec_bytes(budget, bytes)) {
+            free(copy);
+            _free_exec_vec(out);
+            return -E2BIG;
+        }
+
         out->items[i] = copy;
     }
 
@@ -317,6 +345,11 @@ static int _copy_exec_vec(
     }
 
     if (sentinel) {
+        _free_exec_vec(out);
+        return -E2BIG;
+    }
+
+    if (!_charge_exec_bytes(budget, sizeof(char *))) {
         _free_exec_vec(out);
         return -E2BIG;
     }
@@ -3109,14 +3142,16 @@ static int sys_execve(const char *path, char *const argv[], char *const envp[], 
         return err;
     }
 
+    size_t arg_budget = EXEC_ARG_MAX;
+
     exec_vec_t argv_copy = { 0 };
-    err = _copy_exec_vec(thread, argv, EXEC_MAX_ARGS, EXEC_MAX_ARG_LEN, &argv_copy);
+    err = _copy_exec_vec(thread, argv, EXEC_MAX_ARGS, EXEC_MAX_ARG_LEN, &arg_budget, &argv_copy);
     if (err < 0) {
         return err;
     }
 
     exec_vec_t env_copy = { 0 };
-    err = _copy_exec_vec(thread, envp, EXEC_MAX_ENV, EXEC_MAX_ENV_LEN, &env_copy);
+    err = _copy_exec_vec(thread, envp, EXEC_MAX_ENV, EXEC_MAX_ENV_LEN, &arg_budget, &env_copy);
     if (err < 0) {
         _free_exec_vec(&argv_copy);
         return err;

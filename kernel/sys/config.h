@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits.h>
+
 #ifndef TIMER_FREQ
 #define TIMER_FREQ 100
 #endif
@@ -29,19 +31,23 @@
 #endif
 
 #ifndef EXEC_MAX_ARGS
-#define EXEC_MAX_ARGS 16
+#define EXEC_MAX_ARGS 64
 #endif
 
 #ifndef EXEC_MAX_ARG_LEN
-#define EXEC_MAX_ARG_LEN 128
+#define EXEC_MAX_ARG_LEN 4096
 #endif
 
 #ifndef EXEC_MAX_ENV
-#define EXEC_MAX_ENV 32
+#define EXEC_MAX_ENV 64
 #endif
 
 #ifndef EXEC_MAX_ENV_LEN
-#define EXEC_MAX_ENV_LEN 128
+#define EXEC_MAX_ENV_LEN 4096
+#endif
+
+#ifndef EXEC_ARG_MAX
+#define EXEC_ARG_MAX ARG_MAX
 #endif
 
 #ifndef SCHED_STACK_SIZE
@@ -170,6 +176,10 @@
 
 #if EXEC_MAX_ARG_LEN < 2 || EXEC_MAX_ENV_LEN < 2
 #error "exec string limits must leave room for a terminator"
+#endif
+
+#if EXEC_ARG_MAX < EXEC_MAX_ARG_LEN
+#error "EXEC_ARG_MAX must fit at least one exec argument"
 #endif
 
 #if SCHED_RQ_CAPACITY < 1 || SCHED_SLEEP_HEAP_CAPACITY < 1
