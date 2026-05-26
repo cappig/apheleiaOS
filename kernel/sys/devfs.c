@@ -184,9 +184,9 @@ static ssize_t _dev_cpu_read(vfs_node_t *node, void *buf, size_t offset, size_t 
         text + used,
         sizeof(text) - used,
         "model=%s\n"
-        "ncpu=%zu\n"
+        "cores=%zu\n"
         "pagesize=4096\n"
-        "clockrate_khz=%" PRIu64 "\n"
+        "clock_khz=%" PRIu64 "\n"
         "busy_ticks=%" PRIu64 "\n"
         "idle_ticks=%" PRIu64 "\n"
         "total_ticks=%" PRIu64 "\n",
@@ -293,7 +293,7 @@ static ssize_t _dev_clock_ioctl(vfs_node_t *node, u64 request, void *args) {
     return 0;
 }
 
-static ssize_t _dev_swap_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _dev_meminfo_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)node;
     (void)flags;
 
@@ -334,14 +334,14 @@ static ssize_t _dev_sched_read(vfs_node_t *node, void *buf, size_t offset, size_
     snprintf(
         text,
         sizeof(text),
-        "context_switches=%" PRIu64 "\n"
+        "switches=%" PRIu64 "\n"
         "syscalls=%" PRIu64 "\n"
         "migrations=%" PRIu64 "\n"
-        "work_steals=%" PRIu64 "\n"
+        "steals=%" PRIu64 "\n"
         "wake_ipis=%" PRIu64 "\n"
-        "runqueue_depth_peak=%" PRIu64 "\n"
-        "balance_passes=%" PRIu64 "\n"
-        "sleep_timeouts=%" PRIu64 "\n",
+        "runq_peak=%" PRIu64 "\n"
+        "balances=%" PRIu64 "\n"
+        "timeouts=%" PRIu64 "\n",
         sched_snapshot.sched_switch_count,
         sched_snapshot.syscall_count,
         sched_snapshot.sched_migrations,
@@ -584,9 +584,9 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
         ok = false;
     }
 
-    vfs_interface_t *swap_if = vfs_create_interface(_dev_swap_read, NULL, NULL);
-    if (!swap_if || !devfs_register_node(dev_dir, "swap", VFS_CHARDEV, 0444, swap_if, NULL)) {
-        log_warn("failed to create /dev/swap");
+    vfs_interface_t *mem_if = vfs_create_interface(_dev_meminfo_read, NULL, NULL);
+    if (!mem_if || !devfs_register_node(dev_dir, "meminfo", VFS_CHARDEV, 0444, mem_if, NULL)) {
+        log_warn("failed to create /dev/meminfo");
         ok = false;
     }
 

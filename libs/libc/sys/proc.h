@@ -36,11 +36,18 @@ typedef struct {
     pid_t sid;
     uid_t uid;
     gid_t gid;
+    mode_t umask;
     uint32_t signal_pending;
+    uint32_t signal_mask;
     char state;
     int core_id;
     int tty_index;
     uint64_t cpu_time_ms;
+    uint64_t user_time_ms;
+    uint64_t sys_time_ms;
+    uint64_t child_cpu_time_ms;
+    uint64_t child_user_time_ms;
+    uint64_t child_sys_time_ms;
     uint64_t vm_kib;
     char name[PROC_NAME_MAX];
 } proc_stat_t;

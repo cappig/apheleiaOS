@@ -12,7 +12,7 @@
 
 #include "vfs.h"
 
-#define PROCFS_TEXT_MAX  384
+#define PROCFS_TEXT_MAX  512
 #define PROCFS_WRITE_MAX 256
 
 typedef enum {
@@ -494,12 +494,17 @@ static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_
         "uid=%lld\n"
         "gid=%lld\n"
         "umask=%o\n"
-        "signal_pending=%u\n"
-        "signal_mask=%u\n"
+        "sig_pending=%u\n"
+        "sig_mask=%u\n"
         "state=%c\n"
-        "core_id=%d\n"
-        "tty_index=%d\n"
-        "cpu_time_ms=%llu\n"
+        "core=%d\n"
+        "tty=%d\n"
+        "cpu_ms=%llu\n"
+        "user_ms=%llu\n"
+        "sys_ms=%llu\n"
+        "child_cpu_ms=%llu\n"
+        "child_user_ms=%llu\n"
+        "child_sys_ms=%llu\n"
         "vm_kib=%llu\n"
         "name=%s\n",
         (long long)snapshot.pid,
@@ -515,6 +520,11 @@ static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_
         snapshot.core_id,
         snapshot.tty_index,
         (unsigned long long)snapshot.cpu_time_ms,
+        (unsigned long long)snapshot.user_time_ms,
+        (unsigned long long)snapshot.sys_time_ms,
+        (unsigned long long)snapshot.child_cpu_time_ms,
+        (unsigned long long)snapshot.child_user_time_ms,
+        (unsigned long long)snapshot.child_sys_time_ms,
         (unsigned long long)snapshot.vm_kib,
         snapshot.name
     );

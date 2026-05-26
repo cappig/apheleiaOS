@@ -13,8 +13,10 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/proc.h>
+#include <sys/times.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "complete.h"
@@ -80,6 +82,13 @@ typedef struct {
     char *text;
     sh_chain_op_t op;
 } sh_clause_t;
+
+typedef struct {
+    struct timespec real;
+    struct tms cpu;
+    bool have_real;
+    bool have_cpu;
+} sh_time_t;
 
 typedef struct {
     volatile sig_atomic_t got_sigint;
@@ -159,6 +168,92 @@ static void sh_errorf(const char *format, ...) {
     if (newline) {
         io_write_str("\n");
     }
+}
+
+static bool sh_clock_now(struct timespec *out) {
+    return out && clock_gettime(CLOCK_MONOTONIC, out) == 0;
+}
+
+static long long sh_elapsed_ms(const struct timespec *start, const struct timespec *end) {
+    if (!start || !end) {
+        return 0;
+    }
+
+    long long sec = (long long)(end->tv_sec - start->tv_sec);
+    long long nsec = (long long)(end->tv_nsec - start->tv_nsec);
+
+    return sec * 1000 + nsec / 1000000;
+}
+
+static bool sh_time_begin(sh_time_t *time) {
+    if (!time) {
+        return false;
+    }
+
+    memset(time, 0, sizeof(*time));
+    time->have_real = sh_clock_now(&time->real);
+    time->have_cpu = times(&time->cpu) != (clock_t)-1;
+
+    return time->have_real || time->have_cpu;
+}
+
+static long long sh_ticks_ms(clock_t ticks) {
+    if (ticks <= 0) {
+        return 0;
+    }
+
+    long ticks_per_sec = sysconf(_SC_CLK_TCK);
+    if (ticks_per_sec <= 0) {
+        ticks_per_sec = 100;
+    }
+
+    return ((long long)ticks * 1000LL) / ticks_per_sec;
+}
+
+static clock_t sh_tick_delta(clock_t start, clock_t end) {
+    return end > start ? end - start : 0;
+}
+
+static void sh_print_seconds(const char *label, long long ms) {
+    if (ms < 0) {
+        ms = 0;
+    }
+
+    fprintf(stderr, "%s %lld.%03llds\n", label, ms / 1000, ms % 1000);
+}
+
+static void sh_print_time(const sh_time_t *start) {
+    if (!start) {
+        return;
+    }
+
+    struct timespec end = { 0 };
+    long long real_ms = 0;
+
+    if (start->have_real && sh_clock_now(&end)) {
+        real_ms = sh_elapsed_ms(&start->real, &end);
+    }
+
+    long long user_ms = 0;
+    long long sys_ms = 0;
+
+    if (start->have_cpu) {
+        struct tms cpu = { 0 };
+
+        if (times(&cpu) != (clock_t)-1) {
+            clock_t user_ticks = sh_tick_delta(start->cpu.tms_utime, cpu.tms_utime);
+            clock_t child_user_ticks = sh_tick_delta(start->cpu.tms_cutime, cpu.tms_cutime);
+            clock_t sys_ticks = sh_tick_delta(start->cpu.tms_stime, cpu.tms_stime);
+            clock_t child_sys_ticks = sh_tick_delta(start->cpu.tms_cstime, cpu.tms_cstime);
+
+            user_ms = sh_ticks_ms(user_ticks + child_user_ticks);
+            sys_ms = sh_ticks_ms(sys_ticks + child_sys_ticks);
+        }
+    }
+
+    sh_print_seconds("real", real_ms);
+    sh_print_seconds("user", user_ms);
+    sh_print_seconds("sys ", sys_ms);
 }
 
 static void sigint_handler(int signum) {
@@ -1316,6 +1411,7 @@ static const char *sh_builtin_names[] = {
     "jobs",
     "fg",
     "bg",
+    "time",
     "where",
     "type",
     NULL,
@@ -1416,6 +1512,7 @@ static void builtin_help(void) {
         "  %-10s %s\n"
         "  %-10s %s\n"
         "  %-10s %s\n"
+        "  %-10s %s\n"
         "  %-10s %s\n",
         sh_color(SH_C_CYAN),
         sh_color(SH_C_RESET),
@@ -1433,6 +1530,8 @@ static void builtin_help(void) {
         "show command history",
         "jobs fg bg",
         "manage stopped/background jobs",
+        "time",
+        "measure a command's elapsed wall time",
         "; && ||",
         "chain commands by sequence or status",
         "echo env",
@@ -1642,6 +1741,12 @@ static bool handle_builtin(int argc, char *const argv[], int *status) {
 
     if (!strcmp(argv[0], "jobs")) {
         print_jobs();
+        return true;
+    }
+
+    if (!strcmp(argv[0], "time")) {
+        sh_errorf("time: usage: time COMMAND [ARG...]\n");
+        set_status(status, 1);
         return true;
     }
 
@@ -2011,6 +2116,25 @@ static void expand_stages(
     }
 }
 
+static bool strip_time_prefix(sh_stage_t *stages, int stage_count) {
+    if (!stages || stage_count <= 0 || stages[0].argc <= 0) {
+        return false;
+    }
+
+    if (strcmp(stages[0].argv[0], "time")) {
+        return false;
+    }
+
+    for (int i = 1; i < stages[0].argc; i++) {
+        stages[0].argv[i - 1] = stages[0].argv[i];
+    }
+
+    stages[0].argc--;
+    stages[0].argv[stages[0].argc] = NULL;
+
+    return true;
+}
+
 static char *trim_ascii_whitespace(char *text) {
     if (!text) {
         return NULL;
@@ -2210,10 +2334,24 @@ static int run_single_command(char *line) {
 
     expand_stages(stages, stage_count, exp->expanded, exp->in_paths, exp->out_paths);
 
+    bool timed = strip_time_prefix(stages, stage_count);
+    if (timed && stages[0].argc == 0) {
+        sh_errorf("time: usage: time COMMAND [ARG...]\n");
+        free(exp);
+        return 1;
+    }
+
+    sh_time_t time_start = { 0 };
+    bool have_time = timed && sh_time_begin(&time_start);
+
     bool simple_builtin = stage_count == 1 && !background;
 
     if (simple_builtin && stages[0].argc == 1) {
         if (apply_assignment_token(stages[0].argv[0])) {
+            if (have_time) {
+                sh_print_time(&time_start);
+            }
+
             free(exp);
             return 0;
         }
@@ -2222,12 +2360,21 @@ static int run_single_command(char *line) {
     if (simple_builtin) {
         int builtin_status = 0;
         if (run_builtin_in_shell(&stages[0], &builtin_status) == 0) {
+            if (have_time) {
+                sh_print_time(&time_start);
+            }
+
             free(exp);
             return builtin_status;
         }
     }
 
     int ret = run_pipeline(stages, stage_count, background, cmdline);
+
+    if (have_time) {
+        sh_print_time(&time_start);
+    }
+
     free(exp);
 
     if (ret < 0) {

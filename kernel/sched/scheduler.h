@@ -177,6 +177,11 @@ typedef struct sched_thread {
 
     int tty_index;
     u64 cpu_time_ticks ALIGNED(8);
+    u64 user_ticks ALIGNED(8);
+    u64 sys_ticks ALIGNED(8);
+    u64 child_cpu_time_ticks ALIGNED(8);
+    u64 child_user_ticks ALIGNED(8);
+    u64 child_sys_ticks ALIGNED(8);
     int running_cpu;
 
     u8 fpu_state[512] ALIGNED(16);
@@ -213,6 +218,11 @@ typedef struct {
     int core_id;
     int tty_index;
     u64 cpu_time_ms;
+    u64 user_time_ms;
+    u64 sys_time_ms;
+    u64 child_cpu_time_ms;
+    u64 child_user_time_ms;
+    u64 child_sys_time_ms;
     u64 vm_kib;
     char name[PROC_NAME_MAX];
 } sched_proc_snapshot_t;

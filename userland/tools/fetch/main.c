@@ -153,7 +153,7 @@ int main(void) {
     unsigned long long ncpu = 1;
 
     char os_kv[256] = { 0 };
-    char swap_kv[256] = { 0 };
+    char mem_kv[256] = { 0 };
     char cpu_kv[256] = { 0 };
 
     int os_fd = open("/dev/os", O_RDONLY, 0);
@@ -165,20 +165,20 @@ int main(void) {
         close(os_fd);
     }
 
-    int swap_fd = open("/dev/swap", O_RDONLY, 0);
-    if (swap_fd >= 0 && kv_read_fd(swap_fd, swap_kv, sizeof(swap_kv)) > 0) {
-        kv_read_u64(swap_kv, "installed_kib", &installed_kib);
-        kv_read_u64(swap_kv, "used_kib", &used_kib);
+    int mem_fd = open("/dev/meminfo", O_RDONLY, 0);
+    if (mem_fd >= 0 && kv_read_fd(mem_fd, mem_kv, sizeof(mem_kv)) > 0) {
+        kv_read_u64(mem_kv, "installed_kib", &installed_kib);
+        kv_read_u64(mem_kv, "used_kib", &used_kib);
     }
-    if (swap_fd >= 0) {
-        close(swap_fd);
+    if (mem_fd >= 0) {
+        close(mem_fd);
     }
 
     int cpu_fd = open("/dev/cpu", O_RDONLY, 0);
     if (cpu_fd >= 0 && kv_read_fd(cpu_fd, cpu_kv, sizeof(cpu_kv)) > 0) {
         kv_read_string(cpu_kv, "model", cpu_model, sizeof(cpu_model));
-        kv_read_u64(cpu_kv, "clockrate_khz", &freq_khz);
-        if (!kv_read_u64(cpu_kv, "ncpu", &ncpu) || !ncpu) {
+        kv_read_u64(cpu_kv, "clock_khz", &freq_khz);
+        if (!kv_read_u64(cpu_kv, "cores", &ncpu) || !ncpu) {
             ncpu = 1;
         }
     }

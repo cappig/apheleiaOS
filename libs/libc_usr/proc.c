@@ -6,7 +6,7 @@
 #include <sys/proc.h>
 #include <unistd.h>
 
-#define PROC_STAT_TEXT_MAX 512
+#define PROC_STAT_TEXT_MAX 768
 
 static bool _parse_i64(const char *text, long long *out) {
     if (!text || !out || !text[0]) {
@@ -30,13 +30,29 @@ static bool _parse_u64(const char *text, unsigned long long *out) {
     }
 
     char *end = NULL;
-    long long value = strtoll(text, &end, 10);
+    unsigned long long value = strtoull(text, &end, 10);
 
-    if (end == text || *end != '\0' || value < 0) {
+    if (end == text || *end != '\0') {
         return false;
     }
 
-    *out = (unsigned long long)value;
+    *out = value;
+    return true;
+}
+
+static bool _parse_mode(const char *text, mode_t *out) {
+    if (!text || !out || !text[0]) {
+        return false;
+    }
+
+    char *end = NULL;
+    unsigned long value = strtoul(text, &end, 8);
+
+    if (end == text || *end != '\0') {
+        return false;
+    }
+
+    *out = (mode_t)value;
     return true;
 }
 
@@ -112,27 +128,62 @@ int proc_stat_parse(const char *text, proc_stat_t *out) {
                     if (_parse_i64(value, &parsed)) {
                         out->gid = (gid_t)parsed;
                     }
-                } else if (!strcmp(key, "signal_pending")) {
+                } else if (!strcmp(key, "umask")) {
+                    mode_t parsed = 0;
+                    if (_parse_mode(value, &parsed)) {
+                        out->umask = parsed;
+                    }
+                } else if (!strcmp(key, "sig_pending")) {
                     unsigned long long parsed = 0;
                     if (_parse_u64(value, &parsed)) {
                         out->signal_pending = (uint32_t)parsed;
                     }
+                } else if (!strcmp(key, "sig_mask")) {
+                    unsigned long long parsed = 0;
+                    if (_parse_u64(value, &parsed)) {
+                        out->signal_mask = (uint32_t)parsed;
+                    }
                 } else if (!strcmp(key, "state")) {
                     out->state = value[0] ? value[0] : PROC_STATE_UNKNOWN;
-                } else if (!strcmp(key, "core_id")) {
+                } else if (!strcmp(key, "core")) {
                     long long parsed = 0;
                     if (_parse_i64(value, &parsed)) {
                         out->core_id = (int)parsed;
                     }
-                } else if (!strcmp(key, "tty_index")) {
+                } else if (!strcmp(key, "tty")) {
                     long long parsed = 0;
                     if (_parse_i64(value, &parsed)) {
                         out->tty_index = (int)parsed;
                     }
-                } else if (!strcmp(key, "cpu_time_ms")) {
+                } else if (!strcmp(key, "cpu_ms")) {
                     unsigned long long parsed = 0;
                     if (_parse_u64(value, &parsed)) {
                         out->cpu_time_ms = (uint64_t)parsed;
+                    }
+                } else if (!strcmp(key, "user_ms")) {
+                    unsigned long long parsed = 0;
+                    if (_parse_u64(value, &parsed)) {
+                        out->user_time_ms = (uint64_t)parsed;
+                    }
+                } else if (!strcmp(key, "sys_ms")) {
+                    unsigned long long parsed = 0;
+                    if (_parse_u64(value, &parsed)) {
+                        out->sys_time_ms = (uint64_t)parsed;
+                    }
+                } else if (!strcmp(key, "child_cpu_ms")) {
+                    unsigned long long parsed = 0;
+                    if (_parse_u64(value, &parsed)) {
+                        out->child_cpu_time_ms = (uint64_t)parsed;
+                    }
+                } else if (!strcmp(key, "child_user_ms")) {
+                    unsigned long long parsed = 0;
+                    if (_parse_u64(value, &parsed)) {
+                        out->child_user_time_ms = (uint64_t)parsed;
+                    }
+                } else if (!strcmp(key, "child_sys_ms")) {
+                    unsigned long long parsed = 0;
+                    if (_parse_u64(value, &parsed)) {
+                        out->child_sys_time_ms = (uint64_t)parsed;
                     }
                 } else if (!strcmp(key, "vm_kib")) {
                     unsigned long long parsed = 0;

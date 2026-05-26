@@ -47,9 +47,21 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
             }
         }
 
-        u64 cpu_ticks = __sync_fetch_and_add(&thread->cpu_time_ticks, 0);
+        u64 cpu_ticks = __atomic_load_n(&thread->cpu_time_ticks, __ATOMIC_RELAXED);
+        u64 user_ticks = __atomic_load_n(&thread->user_ticks, __ATOMIC_RELAXED);
+        u64 sys_ticks = __atomic_load_n(&thread->sys_ticks, __ATOMIC_RELAXED);
+
+        u64 child_cpu_ticks = __atomic_load_n(&thread->child_cpu_time_ticks, __ATOMIC_RELAXED);
+        u64 child_user_ticks = __atomic_load_n(&thread->child_user_ticks, __ATOMIC_RELAXED);
+        u64 child_sys_ticks = __atomic_load_n(&thread->child_sys_ticks, __ATOMIC_RELAXED);
 
         out->cpu_time_ms = hz ? ((cpu_ticks * 1000ULL) / hz) : 0;
+        out->user_time_ms = hz ? ((user_ticks * 1000ULL) / hz) : 0;
+        out->sys_time_ms = hz ? ((sys_ticks * 1000ULL) / hz) : 0;
+
+        out->child_cpu_time_ms = hz ? ((child_cpu_ticks * 1000ULL) / hz) : 0;
+        out->child_user_time_ms = hz ? ((child_user_ticks * 1000ULL) / hz) : 0;
+        out->child_sys_time_ms = hz ? ((child_sys_ticks * 1000ULL) / hz) : 0;
         out->vm_kib = sched_user_mem_kib(thread);
 
         memset(out->name, 0, sizeof(out->name));

@@ -38,6 +38,7 @@ static const char *sh_builtins[] = {
     "history",
     "jobs",
     "set",
+    "time",
     "type",
     "umask",
     "unset",

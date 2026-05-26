@@ -75,7 +75,7 @@ typedef struct {
 
 typedef struct {
     int clock_fd;
-    int swap_fd;
+    int mem_fd;
     int cpu_fd;
 } top_data_fds_t;
 
@@ -399,9 +399,9 @@ static bool top_read_cpu(int fd, top_cpu_t *out) {
         return false;
     }
 
-    unsigned long long parsed_ncpu = 0;
-    if (kv_read_u64(text, "ncpu", &parsed_ncpu) && parsed_ncpu > 0) {
-        out->ncpu = parsed_ncpu;
+    unsigned long long cores = 0;
+    if (kv_read_u64(text, "cores", &cores) && cores > 0) {
+        out->ncpu = cores;
     }
 
     size_t limit = out->ncpu < TOP_CPU_MAX_CORES ? (size_t)out->ncpu : TOP_CPU_MAX_CORES;
@@ -898,7 +898,7 @@ static int top_open_input(bool *interactive, bool *close_input) {
 static top_data_fds_t top_open_data_fds(void) {
     top_data_fds_t fds = {
         .clock_fd = open("/dev/clock", O_RDONLY, 0),
-        .swap_fd = open("/dev/swap", O_RDONLY, 0),
+        .mem_fd = open("/dev/meminfo", O_RDONLY, 0),
         .cpu_fd = open("/dev/cpu", O_RDONLY, 0),
     };
 
@@ -910,8 +910,8 @@ static void top_close_data_fds(top_data_fds_t *fds) {
         close(fds->clock_fd);
     }
 
-    if (fds->swap_fd >= 0) {
-        close(fds->swap_fd);
+    if (fds->mem_fd >= 0) {
+        close(fds->mem_fd);
     }
 
     if (fds->cpu_fd >= 0) {
@@ -1292,7 +1292,7 @@ int main(int argc, char **argv) {
         bool have_clock = top_read_clock(data_fds.clock_fd, &clock);
 
         top_mem_t mem = { 0 };
-        bool have_mem = top_read_mem(data_fds.swap_fd, &mem);
+        bool have_mem = top_read_mem(data_fds.mem_fd, &mem);
 
         top_cpu_t cpu = { 0 };
         bool have_cpu = top_read_cpu(data_fds.cpu_fd, &cpu);

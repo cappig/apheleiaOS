@@ -38,6 +38,20 @@ static bool tick_charges(sched_thread_t *thread) {
     return thread_get_state(thread) == THREAD_RUNNING;
 }
 
+static void charge_thread_tick(sched_thread_t *thread, const arch_int_state_t *state) {
+    if (!thread || !state) {
+        return;
+    }
+
+    __atomic_fetch_add(&thread->cpu_time_ticks, 1, __ATOMIC_RELAXED);
+
+    if (arch_signal_is_user(state)) {
+        __atomic_fetch_add(&thread->user_ticks, 1, __ATOMIC_RELAXED);
+    } else {
+        __atomic_fetch_add(&thread->sys_ticks, 1, __ATOMIC_RELAXED);
+    }
+}
+
 static bool bad_switch_target(sched_thread_t *next, sched_thread_t *current) {
     if (!next || next == current || !thread_ctx_ok(next)) {
         return false;
@@ -289,7 +303,7 @@ void sched_tick(arch_int_state_t *state) {
     if (tick_charges(thread)) {
         __atomic_fetch_add(&sched_state.usage.busy_ticks, 1, __ATOMIC_RELAXED);
         __atomic_fetch_add(&sched_state.usage.core_busy_ticks[cpu_id], 1, __ATOMIC_RELAXED);
-        __sync_fetch_and_add(&thread->cpu_time_ticks, 1);
+        charge_thread_tick(thread, state);
 
         if (tick_ns) {
             thread->sum_exec_ns += tick_ns;

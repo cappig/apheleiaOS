@@ -88,6 +88,53 @@ static int waitpid_status(const sched_thread_t *thread) {
     return (code & 0xff) << 8;
 }
 
+static void waitpid_add_ticks(u64 *counter, u64 ticks) {
+    if (!counter || !ticks) {
+        return;
+    }
+
+    for (;;) {
+        u64 current = __atomic_load_n(counter, __ATOMIC_RELAXED);
+        u64 next = current + ticks;
+
+        if (next < current) {
+            next = UINT64_MAX;
+        }
+
+        if (__atomic_compare_exchange_n(counter, &current, next, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+            return;
+        }
+    }
+}
+
+static u64 waitpid_sum_ticks(u64 own_ticks, u64 child_ticks) {
+    u64 total_ticks = own_ticks + child_ticks;
+
+    if (total_ticks < own_ticks) {
+        return UINT64_MAX;
+    }
+
+    return total_ticks;
+}
+
+static void waitpid_charge_child_time(sched_thread_t *parent, const sched_thread_t *child) {
+    if (!parent || !child) {
+        return;
+    }
+
+    u64 own_ticks = __atomic_load_n(&child->cpu_time_ticks, __ATOMIC_RELAXED);
+    u64 child_ticks = __atomic_load_n(&child->child_cpu_time_ticks, __ATOMIC_RELAXED);
+    waitpid_add_ticks(&parent->child_cpu_time_ticks, waitpid_sum_ticks(own_ticks, child_ticks));
+
+    u64 own_user = __atomic_load_n(&child->user_ticks, __ATOMIC_RELAXED);
+    u64 child_user = __atomic_load_n(&child->child_user_ticks, __ATOMIC_RELAXED);
+    waitpid_add_ticks(&parent->child_user_ticks, waitpid_sum_ticks(own_user, child_user));
+
+    u64 own_sys = __atomic_load_n(&child->sys_ticks, __ATOMIC_RELAXED);
+    u64 child_sys = __atomic_load_n(&child->child_sys_ticks, __ATOMIC_RELAXED);
+    waitpid_add_ticks(&parent->child_sys_ticks, waitpid_sum_ticks(own_sys, child_sys));
+}
+
 pid_t sched_waitpid(pid_t pid, int *status, int options) {
     sched_thread_t *self = sched_local_current();
 
@@ -119,6 +166,8 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
             if (status) {
                 *status = waitpid_status(found);
             }
+
+            waitpid_charge_child_time(self, found);
 
             list_remove(sched_state.procs.zombie_list, &found->zombie_node);
             found->in_zombie_list = false;
