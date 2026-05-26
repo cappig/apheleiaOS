@@ -5,6 +5,7 @@
 #include <io.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -24,6 +25,19 @@ typedef struct {
     bool recursive;
     bool color;
 } ls_opts_t;
+
+typedef struct {
+    char name[NAME_MAX + 1];
+    unsigned char type;
+    struct stat st;
+    bool have_stat;
+} ls_entry_t;
+
+typedef struct {
+    ls_entry_t *items;
+    size_t count;
+    size_t cap;
+} ls_entries_t;
 
 static size_t decimal_width_u64(unsigned long long value) {
     char buf[32];
@@ -72,30 +86,6 @@ static size_t size_width(unsigned long long size, bool human) {
     return strlen(buf);
 }
 
-static void read_entry_meta(
-    const char *dir_path,
-    const char *name,
-    struct stat *st,
-    const char **uname,
-    const char **gname,
-    char uid_buf[16],
-    char gid_buf[16]
-) {
-    if (!dir_path || !name || !st || !uname || !gname || !uid_buf || !gid_buf) {
-        return;
-    }
-
-    char full[256];
-    fs_join_path(full, sizeof(full), dir_path, name);
-
-    if (stat(full, st) < 0) {
-        memset(st, 0, sizeof(*st));
-    }
-
-    *uname = account_uid_name(st->st_uid, uid_buf, 16);
-    *gname = account_gid_name(st->st_gid, gid_buf, 16);
-}
-
 static bool is_dir_mode(mode_t mode) {
     return (mode & S_IFMT) == S_IFDIR;
 }
@@ -104,24 +94,44 @@ static bool is_exec_mode(mode_t mode) {
     return (mode & S_IFMT) == S_IFREG && (mode & (S_IXUSR | S_IXGRP | S_IXOTH));
 }
 
-static const char *name_color(const struct stat *st) {
-    if (!st) {
+static bool entry_is_dir(const ls_entry_t *entry) {
+    if (!entry) {
+        return false;
+    }
+
+    if (entry->type == DT_DIR) {
+        return true;
+    }
+
+    return entry->have_stat && is_dir_mode(entry->st.st_mode);
+}
+
+static bool entry_can_be_exec(const ls_entry_t *entry) {
+    if (!entry) {
+        return false;
+    }
+
+    return entry->type == DT_REG || entry->type == DT_UNKNOWN;
+}
+
+static const char *entry_color(const ls_entry_t *entry) {
+    if (!entry) {
         return NULL;
     }
 
-    if (is_dir_mode(st->st_mode)) {
+    if (entry_is_dir(entry)) {
         return LS_C_BLUE;
     }
 
-    if (is_exec_mode(st->st_mode)) {
+    if (entry->have_stat && is_exec_mode(entry->st.st_mode)) {
         return LS_C_GREEN;
     }
 
     return NULL;
 }
 
-static void write_name_color(const char *name, const struct stat *st, bool color) {
-    const char *prefix = color ? name_color(st) : NULL;
+static void write_entry_name(const char *name, const ls_entry_t *entry, bool color) {
+    const char *prefix = color ? entry_color(entry) : NULL;
 
     if (prefix) {
         io_write_str(prefix);
@@ -152,6 +162,58 @@ static bool want_name(const char *name, bool opt_all, bool opt_almost) {
     }
 
     return false;
+}
+
+static bool read_entry_stat(const char *path, ls_entry_t *entry) {
+    if (!path || !entry) {
+        return false;
+    }
+
+    if (entry->have_stat) {
+        return true;
+    }
+
+    char full[256];
+    fs_join_path(full, sizeof(full), path, entry->name);
+
+    if (stat(full, &entry->st) < 0) {
+        memset(&entry->st, 0, sizeof(entry->st));
+        return false;
+    }
+
+    entry->have_stat = true;
+    return true;
+}
+
+static bool add_entry(ls_entries_t *entries, const struct dirent *ent) {
+    if (!entries || !ent) {
+        return false;
+    }
+
+    if (entries->count >= entries->cap) {
+        size_t new_cap = entries->cap ? entries->cap * 2 : 32;
+
+        if (new_cap < entries->cap || new_cap > ((size_t)-1) / sizeof(*entries->items)) {
+            return false;
+        }
+
+        ls_entry_t *new_items = realloc(entries->items, new_cap * sizeof(*new_items));
+
+        if (!new_items) {
+            return false;
+        }
+
+        entries->items = new_items;
+        entries->cap = new_cap;
+    }
+
+    ls_entry_t *entry = &entries->items[entries->count++];
+
+    memset(entry, 0, sizeof(*entry));
+    snprintf(entry->name, sizeof(entry->name), "%s", ent->d_name);
+    entry->type = ent->d_type;
+
+    return true;
 }
 
 static size_t term_width(void) {
@@ -205,12 +267,24 @@ static int print_file(const char *path, const char *name, const ls_opts_t *opts)
         );
 
         io_write_str(line);
-        write_name_color(name ? name : path, &st, opts->color);
+        ls_entry_t entry = {
+            .type = fs_is_dir_mode(st.st_mode) ? DT_DIR : DT_REG,
+            .st = st,
+            .have_stat = true,
+        };
+
+        write_entry_name(name ? name : path, &entry, opts->color);
         io_write_char('\n');
         return 0;
     }
 
-    write_name_color(name ? name : path, &st, opts->color);
+    ls_entry_t entry = {
+        .type = fs_is_dir_mode(st.st_mode) ? DT_DIR : DT_REG,
+        .st = st,
+        .have_stat = true,
+    };
+
+    write_entry_name(name ? name : path, &entry, opts->color);
     io_write_char('\n');
 
     return 0;
@@ -240,6 +314,7 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
     size_t width_gname = 1;
     size_t width_size = 1;
 
+    ls_entries_t entries = { 0 };
     struct dirent *ent = NULL;
 
     while ((ent = readdir(dir)) != NULL) {
@@ -249,20 +324,39 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
             continue;
         }
 
+        if (!add_entry(&entries, ent)) {
+            closedir(dir);
+            free(entries.items);
+            io_write_str("ls: out of memory\n");
+            return 1;
+        }
+    }
+
+    closedir(dir);
+
+    for (size_t i = 0; i < entries.count; i++) {
+        ls_entry_t *entry = &entries.items[i];
+        const char *name = entry->name;
+
         size_t len = strlen(name);
 
         if (len > max_len) {
             max_len = len;
         }
 
+        if (opts->color && !opts->long_format && entry_can_be_exec(entry)) {
+            read_entry_stat(path, entry);
+        }
+
         if (opts->long_format) {
-            struct stat st = { 0 };
             char uid_buf[16];
             char gid_buf[16];
             const char *uname = "";
             const char *gname = "";
 
-            read_entry_meta(path, name, &st, &uname, &gname, uid_buf, gid_buf);
+            read_entry_stat(path, entry);
+            uname = account_uid_name(entry->st.st_uid, uid_buf, sizeof(uid_buf));
+            gname = account_gid_name(entry->st.st_gid, gid_buf, sizeof(gid_buf));
 
             size_t uname_len = strlen(uname);
             if (uname_len > width_uname) {
@@ -274,19 +368,17 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
                 width_gname = gname_len;
             }
 
-            size_t links_len = decimal_width_u64((unsigned long long)st.st_nlink);
+            size_t links_len = decimal_width_u64((unsigned long long)entry->st.st_nlink);
             if (links_len > width_links) {
                 width_links = links_len;
             }
 
-            size_t size_len = size_width((unsigned long long)st.st_size, opts->human_size);
+            size_t size_len = size_width((unsigned long long)entry->st.st_size, opts->human_size);
             if (size_len > width_size) {
                 width_size = size_len;
             }
         }
     }
-
-    rewinddir(dir);
 
     size_t cols = 1;
     size_t col_width = max_len + 2;
@@ -300,30 +392,24 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
     }
 
     size_t col = 0;
-    while ((ent = readdir(dir)) != NULL) {
-        const char *name = ent->d_name;
-
-        if (!want_name(name, opts->all, opts->almost_all)) {
-            continue;
-        }
+    for (size_t i = 0; i < entries.count; i++) {
+        ls_entry_t *entry = &entries.items[i];
+        const char *name = entry->name;
 
         if (opts->long_format) {
-            struct stat st = { 0 };
             char uid_buf[16];
             char gid_buf[16];
-            const char *uname = "";
-            const char *gname = "";
-
-            read_entry_meta(path, name, &st, &uname, &gname, uid_buf, gid_buf);
+            const char *uname = account_uid_name(entry->st.st_uid, uid_buf, sizeof(uid_buf));
+            const char *gname = account_gid_name(entry->st.st_gid, gid_buf, sizeof(gid_buf));
 
             char mode[11];
-            fs_format_mode(st.st_mode, mode);
+            fs_format_mode(entry->st.st_mode, mode);
 
             char timebuf[32];
-            fs_format_time_short(st.st_mtime, timebuf, sizeof(timebuf));
+            fs_format_time_short(entry->st.st_mtime, timebuf, sizeof(timebuf));
 
             char sizebuf[32];
-            format_size((unsigned long long)st.st_size, opts->human_size, sizebuf, sizeof(sizebuf));
+            format_size((unsigned long long)entry->st.st_size, opts->human_size, sizebuf, sizeof(sizebuf));
 
             char line[256];
             snprintf(
@@ -332,7 +418,7 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
                 "%s %*lu %-*s %-*s %*s %s ",
                 mode,
                 (int)width_links,
-                (unsigned long)st.st_nlink,
+                (unsigned long)entry->st.st_nlink,
                 (int)width_uname,
                 uname,
                 (int)width_gname,
@@ -343,22 +429,12 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
             );
 
             io_write_str(line);
-            write_name_color(name, &st, opts->color);
+            write_entry_name(name, entry, opts->color);
             io_write_char('\n');
             continue;
         }
 
-        struct stat st = { 0 };
-        if (opts->color) {
-            const char *uname = "";
-            const char *gname = "";
-            char uid_buf[16];
-            char gid_buf[16];
-
-            read_entry_meta(path, name, &st, &uname, &gname, uid_buf, gid_buf);
-        }
-
-        write_name_color(name, &st, opts->color);
+        write_entry_name(name, entry, opts->color);
 
         size_t name_len = strlen(name);
 
@@ -369,9 +445,7 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
         }
 
         size_t pad = col_width > name_len ? col_width - name_len : 1;
-        for (size_t i = 0; i < pad; i++) {
-            io_write_char(' ');
-        }
+        io_write_repeat(' ', pad);
 
         col++;
 
@@ -388,26 +462,24 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
     int status = 0;
 
     if (opts->recursive) {
-        rewinddir(dir);
-
-        while ((ent = readdir(dir)) != NULL) {
-            const char *name = ent->d_name;
-
-            if (!want_name(name, opts->all, opts->almost_all)) {
-                continue;
-            }
+        for (size_t i = 0; i < entries.count; i++) {
+            ls_entry_t *entry = &entries.items[i];
+            const char *name = entry->name;
 
             if (!strcmp(name, ".") || !strcmp(name, "..")) {
                 continue;
             }
 
-            char child[256];
-            fs_join_path(child, sizeof(child), path, name);
-
-            struct stat st = { 0 };
-            if (stat(child, &st) < 0 || !fs_is_dir_mode(st.st_mode)) {
+            if (entry->type == DT_UNKNOWN && !read_entry_stat(path, entry)) {
                 continue;
             }
+
+            if (!entry_is_dir(entry)) {
+                continue;
+            }
+
+            char child[256];
+            fs_join_path(child, sizeof(child), path, name);
 
             io_write_char('\n');
             if (list_dir(child, opts, true) != 0) {
@@ -416,7 +488,7 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
         }
     }
 
-    closedir(dir);
+    free(entries.items);
     return status;
 }
 

@@ -20,3 +20,24 @@ ssize_t io_write_str(const char *text) {
 ssize_t io_write_char(char ch) {
     return write(STDOUT_FILENO, &ch, 1);
 }
+
+ssize_t io_write_repeat(char ch, size_t count) {
+    char buf[64];
+    ssize_t total = 0;
+
+    memset(buf, ch, sizeof(buf));
+
+    while (count > 0) {
+        size_t chunk = count < sizeof(buf) ? count : sizeof(buf);
+        ssize_t written = write(STDOUT_FILENO, buf, chunk);
+
+        if (written <= 0) {
+            return total ? total : written;
+        }
+
+        total += written;
+        count -= (size_t)written;
+    }
+
+    return total;
+}
