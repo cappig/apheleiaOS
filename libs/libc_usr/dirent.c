@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-#define DIRENT_BUF_COUNT 8
+#define DIRENT_BUF_COUNT 32
 
 struct DIR {
     int fd;
