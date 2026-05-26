@@ -14,10 +14,6 @@ void arch_wallclock_maintain(void); // x86-internal, defined in arch.c
 #include <x86/serial.h>
 #include <x86/smp.h>
 
-#ifndef LEGACY_TIMER_SERIAL_RX
-#define LEGACY_TIMER_SERIAL_RX 1
-#endif
-
 static volatile u64 irq_tick_count ALIGNED(8) = 0;
 static volatile u64 irq_core_tick_count[MAX_CORES] ALIGNED(8) = { 0 };
 static bool use_apic_timer = false;
@@ -77,7 +73,7 @@ static void _route_irqs(bool to_apic) {
     outb(0x23, next);
 }
 
-static void _register_legacy(size_t irq, int_handler_t handler) {
+static void _register_pic_vector(size_t irq, int_handler_t handler) {
 #if defined(__i386__)
     if (irq < 8)
         set_int_handler(0x08 + irq, handler);
@@ -89,7 +85,7 @@ static void _register_legacy(size_t irq, int_handler_t handler) {
 #endif
 }
 
-static void _unregister_legacy(size_t irq) {
+static void _unregister_pic_vector(size_t irq) {
 #if defined(__i386__)
     if (irq < 8) {
         reset_int_handler(0x08 + irq);
@@ -111,22 +107,9 @@ static void _timer_handler(int_state_t *state) {
     }
     irq_ack(IRQ_SYSTEM_TIMER);
 
-#if LEGACY_TIMER_SERIAL_RX
-    for (size_t i = 0; i < 64; i++) {
-        char ch = 0;
-        if (!serial_try_receive(SERIAL_COM1, &ch)) {
-            break;
-        }
-        if (ch) {
-            serial_push_rx(0, ch);
-        }
-    }
-#endif
-
     sched_tick(state);
 }
 
-#if !LEGACY_TIMER_SERIAL_RX
 static void _com1_handler(UNUSED int_state_t *state) {
     irq_ack(IRQ_COM1);
 
@@ -141,7 +124,6 @@ static void _com1_handler(UNUSED int_state_t *state) {
         }
     }
 }
-#endif
 
 static void _spurious_handler(UNUSED int_state_t *state) {
 }
@@ -190,12 +172,8 @@ bool irq_init(void) {
     irq_register(IRQ_SYSTEM_TIMER, _timer_handler);
     timer_enable();
 
-#if LEGACY_TIMER_SERIAL_RX
-    serial_set_rx_interrupt(SERIAL_COM1, false);
-#else
     irq_register(IRQ_COM1, _com1_handler);
     serial_set_rx_interrupt(SERIAL_COM1, true);
-#endif
 
     return true;
 }
@@ -220,7 +198,7 @@ void irq_register(size_t irq, int_handler_t handler) {
     }
 
     set_int_handler(vec, handler);
-    _register_legacy(irq, handler);
+    _register_pic_vector(irq, handler);
 
     if (use_ioapic) {
         if (irq != IRQ_SYSTEM_TIMER || !use_apic_timer) {
@@ -250,7 +228,7 @@ void irq_unregister(size_t irq) {
     }
 
     reset_int_handler(vec);
-    _unregister_legacy(irq);
+    _unregister_pic_vector(irq);
 }
 
 void irq_ack(size_t irq) {

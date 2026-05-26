@@ -1,0 +1,5 @@
+# getty devices
+/dev/tty0
+/dev/tty1
+/dev/tty2
+/dev/tty3

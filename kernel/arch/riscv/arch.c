@@ -14,7 +14,6 @@
 #include <riscv/asm.h>
 #include <riscv/boot.h>
 #include <riscv/console.h>
-#include <riscv/drivers/serial.h>
 #include <riscv/mm/heap.h>
 #include <riscv/mm/physical.h>
 #include <riscv/mm/virtual.h>
@@ -485,7 +484,6 @@ static void _serial_drain_input(void) {
         }
 
         tty_input_push(ch);
-        serial_rx_push(ch);
     }
 }
 

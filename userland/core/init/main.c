@@ -7,34 +7,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define INIT_TTY_COUNT 5
-
-#ifndef ARCH_NAME
-#define ARCH_NAME "unknown"
-#endif
+#define INIT_MAX_TTYS     8
+#define INIT_TTY_PATH_MAX 64
 
 typedef struct {
-    const char *tty_path;
+    char tty_path[INIT_TTY_PATH_MAX];
     pid_t pid;
     bool optional;
 } getty_slot_t;
-
-static bool extra_serial_getty_enabled(void) {
-    // RISC-V already puts tty0 on the UART console; ttyS0 would race it.
-    return !strncmp(ARCH_NAME, "x86_", 4);
-}
-
-static bool getty_slot_enabled(const getty_slot_t *slot) {
-    if (!slot || !slot->tty_path) {
-        return false;
-    }
-
-    if (!strcmp(slot->tty_path, "/dev/ttyS0")) {
-        return extra_serial_getty_enabled();
-    }
-
-    return true;
-}
 
 static void write_str(const char *str) {
     if (!str) {
@@ -42,6 +22,111 @@ static void write_str(const char *str) {
     }
 
     write(STDOUT_FILENO, str, strlen(str));
+}
+
+static void set_getty_slot(getty_slot_t *slot, const char *path, bool optional) {
+    if (!slot || !path) {
+        return;
+    }
+
+    strncpy(slot->tty_path, path, sizeof(slot->tty_path) - 1);
+    slot->tty_path[sizeof(slot->tty_path) - 1] = '\0';
+    slot->pid = -1;
+    slot->optional = optional;
+}
+
+static size_t default_ttys(getty_slot_t *slots, size_t max_slots) {
+    if (!slots || max_slots < 4) {
+        return 0;
+    }
+
+    set_getty_slot(&slots[0], "/dev/tty0", false);
+    set_getty_slot(&slots[1], "/dev/tty1", false);
+    set_getty_slot(&slots[2], "/dev/tty2", false);
+    set_getty_slot(&slots[3], "/dev/tty3", false);
+    return 4;
+}
+
+static char *skip_space(char *s) {
+    while (*s == ' ' || *s == '\t') {
+        s++;
+    }
+
+    return s;
+}
+
+static void trim_line(char *s) {
+    size_t len = strlen(s);
+
+    while (len && (s[len - 1] == ' ' || s[len - 1] == '\t' || s[len - 1] == '\r' || s[len - 1] == '\n')) {
+        s[--len] = '\0';
+    }
+}
+
+static size_t parse_ttys(char *buf, getty_slot_t *slots, size_t max_slots) {
+    size_t count = 0;
+    char *line = buf;
+
+    while (line && count < max_slots) {
+        char *next = strchr(line, '\n');
+        if (next) {
+            *next++ = '\0';
+        }
+
+        char *comment = strchr(line, '#');
+        if (comment) {
+            *comment = '\0';
+        }
+
+        line = skip_space(line);
+        trim_line(line);
+
+        if (!line[0]) {
+            line = next;
+            continue;
+        }
+
+        bool optional = false;
+        char *mode = strchr(line, ' ');
+        if (!mode) {
+            mode = strchr(line, '\t');
+        }
+
+        if (mode) {
+            *mode++ = '\0';
+            mode = skip_space(mode);
+            optional = !strcmp(mode, "optional");
+        }
+
+        set_getty_slot(&slots[count++], line, optional);
+        line = next;
+    }
+
+    return count;
+}
+
+static size_t load_ttys(const char *path, getty_slot_t *slots, size_t max_slots) {
+    int fd = open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        return default_ttys(slots, max_slots);
+    }
+
+    char buf[512];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+
+    if (n <= 0) {
+        return default_ttys(slots, max_slots);
+    }
+
+    buf[n] = '\0';
+
+    size_t count = parse_ttys(buf, slots, max_slots);
+    if (!count) {
+        count = default_ttys(slots, max_slots);
+    }
+
+    return count;
 }
 
 static bool attach_stdio(const char *path) {
@@ -160,19 +245,10 @@ int main(int argc, char **argv) {
         (void)attach_stdio("/dev/console");
     }
 
-    getty_slot_t slots[INIT_TTY_COUNT] = {
-        { .tty_path = "/dev/ttyS0", .pid = -1, .optional = true },
-        { .tty_path = "/dev/tty0", .pid = -1, .optional = false },
-        { .tty_path = "/dev/tty1", .pid = -1, .optional = false },
-        { .tty_path = "/dev/tty2", .pid = -1, .optional = false },
-        { .tty_path = "/dev/tty3", .pid = -1, .optional = false },
-    };
+    getty_slot_t slots[INIT_MAX_TTYS] = { 0 };
+    size_t slot_count = load_ttys("/etc/ttys", slots, INIT_MAX_TTYS);
 
-    for (size_t i = 0; i < INIT_TTY_COUNT; i++) {
-        if (!getty_slot_enabled(&slots[i])) {
-            continue;
-        }
-
+    for (size_t i = 0; i < slot_count; i++) {
         slots[i].pid = spawn_getty(slots[i].tty_path);
         if (slots[i].pid < 0) {
             if (!slots[i].optional) {
@@ -192,7 +268,7 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        for (size_t i = 0; i < INIT_TTY_COUNT; i++) {
+        for (size_t i = 0; i < slot_count; i++) {
             if (slots[i].pid != pid) {
                 continue;
             }
