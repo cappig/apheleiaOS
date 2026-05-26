@@ -62,11 +62,11 @@ endif
 # QEMU settings
 # ---------------------------
 QEMU_CONSOLE ?= false
-BOOT         ?= bios
+X86_BOOT     ?= bios
 QEMU_MEMORY  ?= 256M
 QEMU_CPU     ?= max
 QEMU_SMP     ?= 1
-KVM          ?= false
+QEMU_KVM     ?= false
 QEMU_SNAPSHOT ?= false
 QEMU_MACHINE ?=
 
@@ -77,7 +77,7 @@ ifeq ($(ARCH), riscv_32)
 QEMU_MACHINE := virt
 endif
 
-ifeq ($(KVM), true)
+ifeq ($(QEMU_KVM), true)
 ifeq ($(QEMU_CPU), max)
 QEMU_CPU = host
 endif
@@ -112,7 +112,7 @@ QEMU_ARGS := \
 	-smp $(QEMU_SMP) \
 	$(QEMU_CONSOLE_ARGS)
 
-ifeq ($(KVM), true)
+ifeq ($(QEMU_KVM), true)
 QEMU_ARGS += -enable-kvm
 endif
 
@@ -128,7 +128,7 @@ QEMU_BOOT_DEPS :=
 QEMU_BOOT_SETUP := @:
 QEMU_BOOT_ARGS :=
 
-ifeq ($(BOOT), uefi)
+ifeq ($(X86_BOOT), uefi)
 ifeq ($(ARCH), x86_64)
 QEMU_BOOT_SETUP := @cp -f "$(OVMF_VARS)" "$(OVMF_VARS_RUNTIME)"
 QEMU_BOOT_ARGS := \
@@ -140,7 +140,7 @@ QEMU_BOOT_DEPS := ovmf-fetch
 endif
 endif
 else
-$(error BOOT=uefi requires ARCH=x86_64)
+$(error X86_BOOT=uefi requires ARCH=x86_64)
 endif
 endif
 
@@ -194,10 +194,10 @@ run-usb: all $(QEMU_BOOT_DEPS)
 	@if tty -s; then exec </dev/tty >/dev/tty 2>/dev/tty; fi; $(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_USB_IMAGE_ARGS)
 
 run-usb-bios:
-	@$(MAKE) run-usb BOOT=bios
+	@$(MAKE) run-usb X86_BOOT=bios
 
 run-usb-uefi:
-	@$(MAKE) run-usb BOOT=uefi
+	@$(MAKE) run-usb X86_BOOT=uefi
 
 run-spike: all $(SPIKE_MMIO_UART_DEPS)
 	@if [ "$(ARCH_TREE)" != "riscv" ]; then \

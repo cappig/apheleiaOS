@@ -91,6 +91,18 @@ static size_t display_cells(const char *buf, size_t len) {
 
     size_t cells = 0;
     for (size_t i = 0; i < len; i++) {
+        if (buf[i] == '\x1b') {
+            i++;
+
+            if (i < len && buf[i] == '[') {
+                while (i < len && (unsigned char)buf[i] < 0x40) {
+                    i++;
+                }
+            }
+
+            continue;
+        }
+
         if (((unsigned char)buf[i] & 0xc0) != 0x80) {
             cells++;
         }

@@ -15,15 +15,34 @@
 #define SH_MATCH_MAX 128
 #define SH_PATH_MAX  1024
 
+#define SH_C_RESET "\x1b[0m"
+#define SH_C_BLUE  "\x1b[34m"
+
 typedef struct {
     char name[NAME_MAX + 1];
     bool is_dir;
 } sh_match_t;
 
 static char sh_complete_path[SH_PATH_MAX] = "/bin";
+static bool sh_complete_color = true;
 
 static const char *sh_builtins[] = {
-    "bg", "cd", "echo", "env", "exit", "fg", "help", "history", "jobs", "set", "umask", "unset", "where", NULL,
+    "bg",
+    "cd",
+    "echo",
+    "env",
+    "exit",
+    "export",
+    "fg",
+    "help",
+    "history",
+    "jobs",
+    "set",
+    "type",
+    "umask",
+    "unset",
+    "where",
+    NULL,
 };
 
 
@@ -34,6 +53,10 @@ void complete_set_path(const char *path) {
     }
 
     snprintf(sh_complete_path, sizeof(sh_complete_path), "%s", path);
+}
+
+void complete_set_color_enabled(bool enabled) {
+    sh_complete_color = enabled;
 }
 
 static bool is_word_delim(char ch) {
@@ -328,7 +351,16 @@ static void list_matches(sh_match_t *matches, size_t count) {
     for (size_t i = 0; i < count; i++) {
         char item[NAME_MAX + 2];
         snprintf(item, sizeof(item), "%s%s", matches[i].name, matches[i].is_dir ? "/" : "");
+
+        if (sh_complete_color && matches[i].is_dir) {
+            io_write_str(SH_C_BLUE);
+        }
+
         io_write_str(item);
+
+        if (sh_complete_color && matches[i].is_dir) {
+            io_write_str(SH_C_RESET);
+        }
 
         bool end_row = ((i + 1) % per_row) == 0 || i + 1 == count;
         if (end_row) {

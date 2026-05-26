@@ -1,8 +1,4 @@
-USERLAND_TOOLS  ?= all
-USERLAND_UI     ?= all
-USERLAND_EXTRAS ?= all
-USERLAND_GAMES  ?= all
-USERLAND_STAGE_HEADERS ?= true
+USERLAND ?= default
 
 USER_OBJ_DIR                := bin/user/$(ARCH)
 USER_BIN_DIR                := $(USER_OBJ_DIR)/bin
@@ -113,25 +109,46 @@ USER_GAMES_OPTION_NAMES := $(sort \
 )
 
 USER_EXTRA_DEFAULT_SKIP := tcc
+USERLAND_MODE_NAMES := all core default
 
-define select_userland_group
-$(1)_SELECTED_NAMES := $$($(2))
-ifeq ($$($(2)), all)
-$(1)_SELECTED_NAMES := $$(filter-out $$($(1)_DEFAULT_SKIP),$$($(1)_OPTION_NAMES))
-else ifeq ($$($(2)), none)
-$(1)_SELECTED_NAMES :=
+ifeq ($(ARCH_TREE), riscv)
+USERLAND_DEFAULT_NAMES := $(USER_TOOLS_OPTION_NAMES)
+else
+USERLAND_DEFAULT_NAMES := \
+	$(USER_TOOLS_OPTION_NAMES) \
+	$(USER_UI_OPTION_NAMES) \
+	$(USER_GAMES_OPTION_NAMES) \
+	$(filter-out $(USER_EXTRA_DEFAULT_SKIP),$(USER_EXTRA_OPTION_NAMES))
 endif
 
-$(1)_UNKNOWN := $$(filter-out $$($(1)_OPTION_NAMES),$$($(1)_SELECTED_NAMES))
-ifneq ($$(strip $$($(1)_UNKNOWN)),)
-$$(error Unknown $(3) selection(s) in $(2): $$($(1)_UNKNOWN))
-endif
-endef
+USERLAND_ALL_NAMES := \
+	$(USER_TOOLS_OPTION_NAMES) \
+	$(USER_UI_OPTION_NAMES) \
+	$(USER_GAMES_OPTION_NAMES) \
+	$(USER_EXTRA_OPTION_NAMES)
 
-$(eval $(call select_userland_group,USER_TOOLS,USERLAND_TOOLS,tools))
-$(eval $(call select_userland_group,USER_UI,USERLAND_UI,UI))
-$(eval $(call select_userland_group,USER_EXTRA,USERLAND_EXTRAS,extra))
-$(eval $(call select_userland_group,USER_GAMES,USERLAND_GAMES,game))
+USERLAND_WORDS := $(strip $(USERLAND))
+USERLAND_UNKNOWN := $(filter-out $(USERLAND_MODE_NAMES) $(USERLAND_ALL_NAMES),$(USERLAND_WORDS))
+ifneq ($(strip $(USERLAND_UNKNOWN)),)
+$(error Unknown userland selection(s) in USERLAND: $(USERLAND_UNKNOWN))
+endif
+
+ifeq ($(filter all,$(USERLAND_WORDS)),all)
+USERLAND_SELECTED_NAMES := $(USERLAND_ALL_NAMES)
+else ifneq ($(filter core,$(USERLAND_WORDS)),)
+USERLAND_SELECTED_NAMES := $(filter-out $(USERLAND_MODE_NAMES),$(USERLAND_WORDS))
+else ifneq ($(filter default,$(USERLAND_WORDS)),)
+USERLAND_SELECTED_NAMES := \
+	$(USERLAND_DEFAULT_NAMES) \
+	$(filter-out $(USERLAND_MODE_NAMES),$(USERLAND_WORDS))
+else
+USERLAND_SELECTED_NAMES := $(USERLAND_DEFAULT_NAMES) $(USERLAND_WORDS)
+endif
+
+USER_TOOLS_SELECTED_NAMES := $(filter $(USER_TOOLS_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
+USER_UI_SELECTED_NAMES    := $(filter $(USER_UI_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
+USER_EXTRA_SELECTED_NAMES := $(filter $(USER_EXTRA_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
+USER_GAMES_SELECTED_NAMES := $(filter $(USER_GAMES_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
 
 ROOTFS_EXTRA_BYTES ?= $(if $(filter tcc,$(USER_EXTRA_SELECTED_NAMES)),4194304,0)
 
@@ -182,7 +199,6 @@ USER_USR_RUNTIME_OBJ := $(USER_USR_LIBC_A) $(USER_USR_CRT1_OBJ) \
 
 USER_STAGE_USR_INCLUDE_STAMP := $(USER_STAGE_STAMP_DIR)/usr-headers
 USER_STAGE_USR_LIB_STAMP     := $(USER_STAGE_STAMP_DIR)/usr-runtime
-USER_STAGE_USR_NO_HEADERS_STAMP := $(USER_STAGE_STAMP_DIR)/usr-no-headers
 
 $(USER_USR_LIBC_A): $(USER_LIBC_OBJ)
 	@mkdir -p $(@D)
@@ -214,12 +230,6 @@ $(USER_STAGE_USR_INCLUDE_STAMP): $(USER_USR_INCLUDE_HEADERS)
 	@cp -f libs/libc_ext/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/libc_ext/"
 	@touch $@
 
-$(USER_STAGE_USR_NO_HEADERS_STAMP):
-	@mkdir -p "$(@D)" "$(USER_STAGE_USR_DIR)"
-	@rm -f "$(USER_STAGE_USR_DIR)/.apheleia_no_headers"
-	@rm -rf "$(USER_STAGE_USR_INCLUDE_DIR)"
-	@touch $@
-
 $(USER_STAGE_USR_LIB_STAMP): $(USER_USR_RUNTIME_OBJ) $(USER_LINK_STAMP)
 	@mkdir -p "$(@D)" "$(USER_STAGE_USR_LIB_DIR)"
 	@rm -f "$(USER_STAGE_USR_LIB_DIR)/.apheleia_runtime"
@@ -240,14 +250,8 @@ USER_PROGS_BIN := $(addprefix $(USER_BIN_DIR)/,$(USER_PROGS))
 USER_STAGE_BIN_STAMP := $(USER_STAGE_DIR)/.apheleia_bins
 USER_BINARIES  := $(USER_STAGE_BIN_STAMP)
 USER_BINARIES  += $(USER_STAGE_USR_LIB_STAMP)
-
-ifeq ($(USERLAND_STAGE_HEADERS), true)
 USER_BINARIES  += $(USER_STAGE_USR_INCLUDE_STAMP)
-else
-USER_BINARIES  += $(USER_STAGE_USR_NO_HEADERS_STAMP)
-endif
 
-USER_SELECTED_TOOL_DIRS  := $(addprefix userland/tools/,$(USER_TOOLS_SELECTED_NAMES))
 USER_SELECTED_EXTRA_DIRS := $(addprefix userland/extra/,$(USER_EXTRA_SELECTED_NAMES))
 USER_SELECTED_GAME_DIRS  := $(addprefix userland/games/,$(USER_GAMES_SELECTED_NAMES))
 
@@ -255,7 +259,7 @@ USERLAND_INTEGRATION := true
 USER_PROG_MAKEFILES := $(sort $(wildcard \
 	$(USER_CORE_PROG_DIRS:%=%/Makefile) \
 	$(USER_UI_PROG_DIRS:%=%/Makefile) \
-	$(USER_SELECTED_TOOL_DIRS:%=%/Makefile) \
+	$(USER_TOOLS_PROG_DIRS:%=%/Makefile) \
 	$(USER_SELECTED_EXTRA_DIRS:%=%/Makefile) \
 	$(USER_SELECTED_GAME_DIRS:%=%/Makefile) \
 ))

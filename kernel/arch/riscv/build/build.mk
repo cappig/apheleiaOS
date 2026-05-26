@@ -2,11 +2,6 @@ ARCH_DIR        := kernel/arch/riscv
 IMAGE_STAGE_DIR := bin/image/$(ARCH)
 IMAGE_BOOT_DIR  := $(IMAGE_STAGE_DIR)/boot
 
-USERLAND_TOOLS  ?= all
-USERLAND_UI     ?= none
-USERLAND_EXTRAS ?= none
-USERLAND_GAMES  ?= none
-
 BOOT_ENTRY_DIR    := $(ARCH_DIR)/boot
 BOOT_ENTRY_LINKER := $(BOOT_ENTRY_DIR)/linker.ld
 ARCH_COMMON_DIR   := kernel/arch/common

@@ -4,12 +4,14 @@
 
 ### What is AOS?
 
-Apheleia is an x86 UNIX-like hobby operating system made for fun and as a learning opportunity.
+Apheleia is a small UNIX-like hobby operating system made for fun and as a learning opportunity.
 It aims to be as minimalistic and simple as possible while still providing basic functionality.
 
-The current tree supports `x86_64`, `x86_32`, `riscv_64`, and `riscv_32` builds, BIOS boot by default, optional x86_64 UEFI boot, early RISC-V bring-up, and a small windowed userland.
+The current tree supports `x86_64`, `x86_32`, `riscv_64`, and `riscv_32` builds, x86 BIOS boot by default, optional x86_64 UEFI boot, RISC-V emulator and [FRISC](https://github.com/friscv) FPGA images, and a small windowed userland.
 
-![Apheleia OS running](aos.png)
+![Apheleia OS text interface](aos-text.png)
+
+![Apheleia OS window manager](aos.png)
 
 ### What does this repository include?
 
@@ -17,119 +19,56 @@ The current tree supports `x86_64`, `x86_32`, `riscv_64`, and `riscv_32` builds,
 - the userspace tree in `userland/{core,ui,tools,games}`
 - the staged root filesystem content in `root/`
 - the libc and support libraries in `libs/`
-- image/QEMU/OVMF helpers in `utils/`
+- build, image, Docker, and emulator helpers in `utils/`
 - some other small miscellaneous libs with common functions/macros
 
 ### How to build and run?
 
-Build with Docker (*recommended for cross-platform builds*):
+Docker is the recommended first build path because it brings its own toolchain:
 
 ```bash
-# Default build: x86_64
 make docker_build
-
-# 32-bit x86
-make docker_build ARCH=x86_32
-
-# RISC-V
-make docker_build ARCH=riscv_32 TOOLCHAIN=llvm
-make docker_build ARCH=riscv_64 TOOLCHAIN=llvm
-
-# FRISC FPGA image
-make docker_build ARCH=riscv_32 TOOLCHAIN=llvm RISCV_FRISC=true
 ```
 
-`make docker_build` will build or refresh the Docker image automatically.
+That builds the Docker image if needed and then builds AOS inside it. Use `make docker_image` only when you want to rebuild the container image without building the OS.
 
-Docker also carries the cross tools needed for GNU RISC-V builds:
-
-```bash
-make docker_build ARCH=riscv_32 TOOLCHAIN=gnu RISCV_FRISC=true
-```
-
-If you want to prepare the image explicitly first:
+For a local Linux build, install the matching compiler, binutils, emulator, and image tools for the target architecture:
 
 ```bash
-make docker_image
-```
-
-Build locally on a Linux machine:
-
-```bash
-make
-```
-
-Useful local variants:
-
-```bash
-# 32-bit x86
-make ARCH=x86_32
-
-# RISC-V with LLVM
-make ARCH=riscv_32 TOOLCHAIN=llvm
-make ARCH=riscv_64 TOOLCHAIN=llvm
-
-# FRISC FPGA image
-make ARCH=riscv_32 TOOLCHAIN=llvm RISCV_FRISC=true
-
-# Build an ISO instead of the default raw disk image
-make IMAGE_FORMAT=iso
-```
-
-After a successful build, the disk image will be generated at:
-
-```bash
-bin/apheleia_<version>_<arch>.img
-```
-
-Common build knobs:
-
-- `ARCH=x86_64|x86_32|riscv_64|riscv_32`
-- `TOOLCHAIN=gnu|llvm`
-- `PROFILE=fast|normal|small|debug|debug_extra`
-- `IMAGE_FORMAT=img|iso` (`iso` is for x86 images)
-- `RISCV_FRISC=true` builds the FRISC FPGA image, sets the default UART stride to `4`, builds `kernel/arch/riscv/dts/friscv.dts`, and stages it as `/boot/platform.dtb`
-- `RISCV_UART_STRIDE=<n>` overrides the RISC-V UART register stride manually
-- `STRIP_USER_SYMBOLS=true` strips user binaries more aggressively
-- `USERLAND_STAGE_HEADERS=false` omits `/usr/include` from the image
-- `USERLAND_EXTRAS=tcc` ships a native TinyCC build for the selected `ARCH`
-
-For example, this builds a FRISC image with an RV32 `tcc` in `/bin/tcc`:
-
-```bash
-make ARCH=riscv_32 TOOLCHAIN=llvm RISCV_FRISC=true USERLAND_EXTRAS=tcc
-```
-
-Run it with QEMU using the same `ARCH` you built:
-
-```bash
+make all
 make run
 ```
 
-Useful variants:
+Build options are passed as normal make variables:
 
 ```bash
-# Run RISC-V 32-bit
-make ARCH=riscv_32 run
-
-# Run RISC-V 64-bit
-make ARCH=riscv_64 run
-
-# Run RISC-V in Spike
+make all ARCH=x86_32
 make ARCH=riscv_32 TOOLCHAIN=llvm run-spike
+make all ARCH=riscv_32 TOOLCHAIN=llvm RISCV_FRISC=true
+make all ARCH=riscv_32 TOOLCHAIN=llvm USERLAND=tcc
+```
 
-# Run with 4 virtual CPUs
-make run QEMU_SMP=4
+Common build variables:
 
-# Use KVM when available
-make run KVM=true
+| Variable | Default | Values | Notes |
+| --- | --- | --- | --- |
+| `ARCH` | `x86_64` | `x86_64`, `x86_32`, `riscv_64`, `riscv_32` | target architecture |
+| `TOOLCHAIN` | `gnu` | `gnu`, `llvm` | compiler/toolchain family |
+| `IMAGE_FORMAT` | `img` | `img`, `iso` | `iso` is for x86 images |
+| `PROFILE` | `fast` | `fast`, `normal`, `small`, `debug`, `debug_extra` | optimization and debug level |
+| `X86_BOOT` | `bios` | `bios`, `uefi` | x86 boot path for `make run` |
+| `RISCV_FRISC` | `false` | `true`, `false` | build a [FRISC](https://github.com/friscv) FPGA image |
+| `USERLAND` | `default` | `default`, `all`, `core`, or names such as `tcc` | select userland programs; names are added to `default`, while `core` keeps only core programs |
+| `DOCKER_IMAGE` | `apheleia:latest` | image tag | Docker image name |
 
-# x86_64 UEFI boot
-make run BOOT=uefi
+Successful builds write images to:
+
+```bash
+bin/apheleia_<version>_<arch>.<format>
 ```
 
 ### License
 
-This entire repo is released under the terms on the GPLv3 (see `license`). Feel free to reuse, build upon or reference this code as long as your projects respect the GPL i.e. are free software themselves.
+This entire repo is released under the terms of the GPLv3 (see `license`). Feel free to reuse, build upon or reference this code as long as your projects respect the GPL i.e. are free software themselves.
 
 `~ Happy hacking :^)`

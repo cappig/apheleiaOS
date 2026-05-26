@@ -12,5 +12,6 @@ typedef struct {
 } sh_complete_result_t;
 
 void complete_set_path(const char *path);
+void complete_set_color_enabled(bool enabled);
 
 void complete_line(char *buf, size_t cap, size_t *len, size_t *cursor, sh_complete_result_t *result);

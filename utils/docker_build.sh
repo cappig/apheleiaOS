@@ -10,6 +10,7 @@ image_format=$6
 profile=$7
 riscv_frisc=${8:-}
 riscv_uart_stride=${9:-}
+userland=${10:-}
 
 set -- \
     ARCH="$arch" \
@@ -23,6 +24,10 @@ fi
 
 if [ -n "$riscv_uart_stride" ]; then
     set -- "$@" RISCV_UART_STRIDE="$riscv_uart_stride"
+fi
+
+if [ -n "$userland" ]; then
+    set -- "$@" USERLAND="$userland"
 fi
 
 set -- "$@" \

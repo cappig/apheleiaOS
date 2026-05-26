@@ -33,6 +33,13 @@
 #define SH_LINE_MAX      SH_INPUT_LINE_MAX
 #define SH_ENV_ENTRY_MAX (SH_ENV_KEY_MAX + SH_ENV_VAL_MAX + 2)
 
+#define SH_C_RESET "\x1b[0m"
+#define SH_C_DIM   "\x1b[90m"
+#define SH_C_RED   "\x1b[31m"
+#define SH_C_GREEN "\x1b[32m"
+#define SH_C_BLUE  "\x1b[34m"
+#define SH_C_CYAN  "\x1b[36m"
+
 typedef enum {
     JOB_RUNNING,
     JOB_STOPPED,
@@ -63,6 +70,17 @@ typedef struct {
     int exit_status;
 } sh_wait_result_t;
 
+typedef enum {
+    SH_CHAIN_ALWAYS,
+    SH_CHAIN_AND,
+    SH_CHAIN_OR,
+} sh_chain_op_t;
+
+typedef struct {
+    char *text;
+    sh_chain_op_t op;
+} sh_clause_t;
+
 typedef struct {
     volatile sig_atomic_t got_sigint;
     volatile sig_atomic_t got_sigwinch;
@@ -79,6 +97,8 @@ typedef struct {
     int last_status;
     pid_t last_bg_pid;
     bool interactive;
+    bool color;
+    bool no_color;
 } sh_state_t;
 
 static sh_state_t sh = {
@@ -98,6 +118,47 @@ static void sh_printf(const char *format, ...) {
     va_end(args);
 
     io_write_str(line);
+}
+
+static const char *sh_color(const char *code) {
+    if (!sh.color || sh.no_color || !code) {
+        return "";
+    }
+
+    return code;
+}
+
+static void sh_errorf(const char *format, ...) {
+    if (!format) {
+        return;
+    }
+
+    char line[SH_LINE_MAX];
+    va_list args;
+
+    va_start(args, format);
+    vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+
+    if (sh.color && !sh.no_color) {
+        io_write_str(SH_C_RED);
+    }
+
+    size_t len = strlen(line);
+    bool newline = len > 0 && line[len - 1] == '\n';
+    if (newline) {
+        write(STDOUT_FILENO, line, len - 1);
+    } else {
+        io_write_str(line);
+    }
+
+    if (sh.color && !sh.no_color) {
+        io_write_str(SH_C_RESET);
+    }
+
+    if (newline) {
+        io_write_str("\n");
+    }
 }
 
 static void sigint_handler(int signum) {
@@ -271,7 +332,16 @@ static void print_jobs(void) {
     for (size_t i = 0; i < sh.job_count; i++) {
         job_t *job = &sh.jobs[i];
         const char *state = job->state == JOB_STOPPED ? "Stopped" : "Running";
-        sh_printf("[%d] %s  %s\n", job->id, state, job->cmd);
+        const char *state_color = job->state == JOB_STOPPED ? SH_C_BLUE : SH_C_GREEN;
+
+        sh_printf(
+            "[%d] %s%s%s  %s\n",
+            job->id,
+            sh_color(state_color),
+            state,
+            sh_color(SH_C_RESET),
+            job->cmd
+        );
     }
 }
 
@@ -482,6 +552,11 @@ static bool env_set(const char *key, const char *value) {
         complete_set_path(entry->value);
     }
 
+    if (!strcmp(key, "NO_COLOR")) {
+        sh.no_color = entry->value[0] != '\0';
+        complete_set_color_enabled(!sh.no_color);
+    }
+
     return true;
 }
 
@@ -501,6 +576,11 @@ static void env_unset(const char *key) {
     if (!strcmp(key, "PATH")) {
         complete_set_path(NULL);
     }
+
+    if (!strcmp(key, "NO_COLOR")) {
+        sh.no_color = false;
+        complete_set_color_enabled(true);
+    }
 }
 
 static void env_print(void) {
@@ -514,6 +594,51 @@ static void update_pwd(void) {
     if (getcwd(cwd, sizeof(cwd))) {
         env_set("PWD", cwd);
     }
+}
+
+static const char *prompt_path(void) {
+    const char *pwd = env_get("PWD");
+    const char *home = env_get("HOME");
+
+    if (!pwd || !pwd[0]) {
+        return "/";
+    }
+
+    static char short_pwd[PATH_MAX];
+
+    if (home && home[0] && !strcmp(pwd, home)) {
+        return "~";
+    }
+
+    size_t home_len = home ? strlen(home) : 0;
+    if (home_len > 1 && !strncmp(pwd, home, home_len) && pwd[home_len] == '/') {
+        snprintf(short_pwd, sizeof(short_pwd), "~%s", pwd + home_len);
+        return short_pwd;
+    }
+
+    return pwd;
+}
+
+static void build_prompt(char *out, size_t out_len) {
+    if (!out || !out_len) {
+        return;
+    }
+
+    const char *path = prompt_path();
+    const char *mark = getuid() == 0 ? "#" : "$";
+    const char *mark_color = sh.last_status ? SH_C_RED : SH_C_GREEN;
+
+    snprintf(
+        out,
+        out_len,
+        "%s%s%s %s%s%s ",
+        sh_color(SH_C_CYAN),
+        path,
+        sh_color(SH_C_RESET),
+        sh_color(mark_color),
+        mark,
+        sh_color(SH_C_RESET)
+    );
 }
 
 static bool env_key_is_valid(const char *key, size_t len) {
@@ -1135,25 +1260,25 @@ static void print_exec_error(const char *cmd, int err) {
 
     switch (err) {
     case ENOENT:
-        sh_printf("sh: %s: command not found\n", name);
+        sh_errorf("sh: %s: command not found\n", name);
         return;
     case EACCES:
-        sh_printf("sh: %s: permission denied (not executable)\n", name);
+        sh_errorf("sh: %s: permission denied (not executable)\n", name);
         return;
     case ENOEXEC:
-        sh_printf("sh: %s: unsupported executable format\n", name);
+        sh_errorf("sh: %s: unsupported executable format\n", name);
         return;
     case EISDIR:
-        sh_printf("sh: %s: is a directory\n", name);
+        sh_errorf("sh: %s: is a directory\n", name);
         return;
     case ENOTDIR:
-        sh_printf("sh: %s: not a directory\n", name);
+        sh_errorf("sh: %s: not a directory\n", name);
         return;
     case ENAMETOOLONG:
-        sh_printf("sh: %s: command name too long\n", name);
+        sh_errorf("sh: %s: command name too long\n", name);
         return;
     default:
-        sh_printf("sh: %s: %s\n", name, strerror(err));
+        sh_errorf("sh: %s: %s\n", name, strerror(err));
         return;
     }
 }
@@ -1178,7 +1303,22 @@ static bool parse_umask(const char *text, mode_t *out) {
 }
 
 static const char *sh_builtin_names[] = {
-    "help", "echo", "exit", "set", "unset", "env", "cd", "umask", "history", "jobs", "fg", "bg", "where", NULL,
+    "help",
+    "echo",
+    "exit",
+    "set",
+    "export",
+    "unset",
+    "env",
+    "cd",
+    "umask",
+    "history",
+    "jobs",
+    "fg",
+    "bg",
+    "where",
+    "type",
+    NULL,
 };
 
 static bool is_builtin_name(const char *name) {
@@ -1196,8 +1336,10 @@ static bool is_builtin_name(const char *name) {
 }
 
 static int builtin_where(int argc, char *const argv[]) {
+    const char *cmd = (argc > 0 && argv[0]) ? argv[0] : "where";
+
     if (argc < 2) {
-        io_write_str("where: usage: where NAME...\n");
+        sh_errorf("%s: usage: %s NAME...\n", cmd, cmd);
         return 1;
     }
 
@@ -1217,7 +1359,7 @@ static int builtin_where(int argc, char *const argv[]) {
         bool found = false;
 
         if (is_builtin_name(name)) {
-            sh_printf("%s: shell built-in\n", name);
+            sh_printf("%s%s%s: shell built-in\n", sh_color(SH_C_CYAN), name, sh_color(SH_C_RESET));
             found = true;
         }
 
@@ -1235,7 +1377,7 @@ static int builtin_where(int argc, char *const argv[]) {
                 size_t len = next ? (size_t)(next - cursor) : strlen(cursor);
 
                 if (build_exec_path(full, sizeof(full), cursor, len, name) && access(full, X_OK) == 0) {
-                    sh_printf("%s\n", full);
+                    sh_printf("%s%s%s\n", sh_color(SH_C_GREEN), full, sh_color(SH_C_RESET));
                     found = true;
                 }
 
@@ -1248,7 +1390,7 @@ static int builtin_where(int argc, char *const argv[]) {
         }
 
         if (!found) {
-            sh_printf("where: %s: not found\n", name);
+            sh_errorf("%s: %s: not found\n", cmd, name);
             status = 1;
         }
     }
@@ -1263,9 +1405,40 @@ static void set_status(int *status, int value) {
 }
 
 static void builtin_help(void) {
-    io_write_str(
-        "builtins: help, echo, exit, set, unset, env, cd, umask, "
-        "history, jobs, fg, bg, where\n"
+    sh_printf(
+        "%sBuiltins%s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n",
+        sh_color(SH_C_CYAN),
+        sh_color(SH_C_RESET),
+        "cd [dir]",
+        "change directory; cd - returns to the previous directory",
+        "set",
+        "print variables or set NAME=VALUE",
+        "export",
+        "same as set, for familiar scripts",
+        "unset",
+        "remove a shell variable",
+        "where/type",
+        "show whether a name is a builtin or executable",
+        "history",
+        "show command history",
+        "jobs fg bg",
+        "manage stopped/background jobs",
+        "; && ||",
+        "chain commands by sequence or status",
+        "echo env",
+        "print text or environment",
+        "help exit",
+        "show this help or leave the shell"
     );
 }
 
@@ -1322,6 +1495,39 @@ static void builtin_echo(int argc, char *const argv[]) {
     io_write_str("\n");
 }
 
+static int parse_exit_status(const char *text, int *out) {
+    if (!text || !text[0] || !out) {
+        return -1;
+    }
+
+    char *end = NULL;
+    long value = strtol(text, &end, 10);
+
+    if (!end || *end) {
+        return -1;
+    }
+
+    *out = (int)(value & 0xff);
+    return 0;
+}
+
+static void builtin_exit(int argc, char *const argv[], int *status) {
+    int code = sh.last_status;
+
+    if (argc > 2) {
+        sh_errorf("exit: too many arguments\n");
+        set_status(status, 1);
+        return;
+    }
+
+    if (argc == 2 && parse_exit_status(argv[1], &code) < 0) {
+        sh_errorf("exit: %s: numeric argument required\n", argv[1]);
+        _exit(2);
+    }
+
+    _exit(code);
+}
+
 static void builtin_cd(int argc, char *const argv[], int *status) {
     const char *target = "/";
 
@@ -1329,13 +1535,32 @@ static void builtin_cd(int argc, char *const argv[], int *status) {
         target = argv[1];
     }
 
+    const char *old_pwd = env_get("PWD");
+    if (!strcmp(target, "-")) {
+        target = env_get("OLDPWD");
+
+        if (!target || !target[0]) {
+            sh_errorf("cd: OLDPWD not set\n");
+            set_status(status, 1);
+            return;
+        }
+    }
+
     if (chdir(target) < 0) {
-        io_write_str("cd: failed\n");
+        sh_errorf("cd: %s: %s\n", target, strerror(errno));
         set_status(status, 1);
         return;
     }
 
+    if (old_pwd && old_pwd[0]) {
+        env_set("OLDPWD", old_pwd);
+    }
+
     update_pwd();
+
+    if (argc >= 2 && argv[1] && !strcmp(argv[1], "-")) {
+        sh_printf("%s\n", env_get("PWD"));
+    }
 }
 
 static void builtin_umask(int argc, char *const argv[], int *status) {
@@ -1371,7 +1596,8 @@ static bool handle_builtin(int argc, char *const argv[], int *status) {
     }
 
     if (!strcmp(argv[0], "exit")) {
-        _exit(0);
+        builtin_exit(argc, argv, status);
+        return true;
     }
 
     if (!strcmp(argv[0], "help")) {
@@ -1385,6 +1611,11 @@ static bool handle_builtin(int argc, char *const argv[], int *status) {
     }
 
     if (!strcmp(argv[0], "set")) {
+        builtin_set(argc, argv, status);
+        return true;
+    }
+
+    if (!strcmp(argv[0], "export")) {
         builtin_set(argc, argv, status);
         return true;
     }
@@ -1429,7 +1660,7 @@ static bool handle_builtin(int argc, char *const argv[], int *status) {
         return true;
     }
 
-    if (!strcmp(argv[0], "where")) {
+    if (!strcmp(argv[0], "where") || !strcmp(argv[0], "type")) {
         set_status(status, builtin_where(argc, argv));
         return true;
     }
@@ -1798,7 +2029,42 @@ static char *trim_ascii_whitespace(char *text) {
     return text;
 }
 
-static int split_and_clauses(char *line, char **clauses, int max_clauses) {
+static const char *chain_op_text(sh_chain_op_t op) {
+    switch (op) {
+    case SH_CHAIN_AND:
+        return "&&";
+    case SH_CHAIN_OR:
+        return "||";
+    case SH_CHAIN_ALWAYS:
+    default:
+        return ";";
+    }
+}
+
+static bool add_clause(sh_clause_t *clauses, int *count, int max_clauses, sh_chain_op_t op, char *text) {
+    if (!clauses || !count || !text) {
+        return false;
+    }
+
+    char *trimmed = trim_ascii_whitespace(text);
+    if (!trimmed || !trimmed[0]) {
+        sh_errorf("sh: syntax error near '%s'\n", chain_op_text(op));
+        return false;
+    }
+
+    if (*count >= max_clauses) {
+        sh_errorf("sh: too many command clauses\n");
+        return false;
+    }
+
+    clauses[*count].op = op;
+    clauses[*count].text = trimmed;
+    (*count)++;
+
+    return true;
+}
+
+static int split_command_list(char *line, sh_clause_t *clauses, int max_clauses) {
     if (!line || !clauses || max_clauses <= 0) {
         return -1;
     }
@@ -1808,6 +2074,7 @@ static int split_and_clauses(char *line, char **clauses, int max_clauses) {
     bool escape = false;
     int count = 0;
     char *start = line;
+    sh_chain_op_t next_op = SH_CHAIN_ALWAYS;
 
     for (char *cursor = line; *cursor; cursor++) {
         char ch = *cursor;
@@ -1832,39 +2099,64 @@ static int split_and_clauses(char *line, char **clauses, int max_clauses) {
             continue;
         }
 
-        if (in_single || in_double || ch != '&' || cursor[1] != '&') {
+        if (in_single || in_double) {
+            continue;
+        }
+
+        sh_chain_op_t op = SH_CHAIN_ALWAYS;
+        size_t op_len = 0;
+
+        if (ch == ';') {
+            op = SH_CHAIN_ALWAYS;
+            op_len = 1;
+        } else if (ch == '&' && cursor[1] == '&') {
+            op = SH_CHAIN_AND;
+            op_len = 2;
+        } else if (ch == '|' && cursor[1] == '|') {
+            op = SH_CHAIN_OR;
+            op_len = 2;
+        } else {
             continue;
         }
 
         *cursor = '\0';
-        char *clause = trim_ascii_whitespace(start);
-        if (!clause || !clause[0]) {
-            io_write_str("sh: syntax error near '&&'\n");
+
+        char *trimmed = trim_ascii_whitespace(start);
+        if (!trimmed || !trimmed[0]) {
+            if (op == SH_CHAIN_ALWAYS && count > 0) {
+                start = cursor + op_len;
+                next_op = op;
+                cursor += op_len - 1;
+                continue;
+            }
+
+            sh_errorf("sh: syntax error near '%s'\n", chain_op_text(op));
             return -1;
         }
 
-        if (count >= max_clauses) {
-            io_write_str("sh: too many && clauses\n");
+        if (!add_clause(clauses, &count, max_clauses, next_op, trimmed)) {
             return -1;
         }
 
-        clauses[count++] = clause;
-        cursor++;
-        start = cursor + 1;
+        start = cursor + op_len;
+        next_op = op;
+        cursor += op_len - 1;
     }
 
     char *tail = trim_ascii_whitespace(start);
     if (!tail || !tail[0]) {
-        io_write_str("sh: syntax error near '&&'\n");
+        if (next_op == SH_CHAIN_ALWAYS) {
+            return count;
+        }
+
+        sh_errorf("sh: syntax error near '%s'\n", chain_op_text(next_op));
         return -1;
     }
 
-    if (count >= max_clauses) {
-        io_write_str("sh: too many && clauses\n");
+    if (!add_clause(clauses, &count, max_clauses, next_op, tail)) {
         return -1;
     }
 
-    clauses[count++] = tail;
     return count;
 }
 
@@ -1960,8 +2252,8 @@ static int run_command(char *line) {
         return 0;
     }
 
-    char *clauses[SH_MAX_CLAUSES];
-    int clause_count = split_and_clauses(trimmed, clauses, SH_MAX_CLAUSES);
+    sh_clause_t clauses[SH_MAX_CLAUSES];
+    int clause_count = split_command_list(trimmed, clauses, SH_MAX_CLAUSES);
     if (clause_count < 0) {
         sh.last_status = 1;
         return 1;
@@ -1969,11 +2261,15 @@ static int run_command(char *line) {
 
     int status = 0;
     for (int i = 0; i < clause_count; i++) {
-        if (i > 0 && status != 0) {
-            break;
+        if (clauses[i].op == SH_CHAIN_AND && status != 0) {
+            continue;
         }
 
-        status = run_single_command(clauses[i]);
+        if (clauses[i].op == SH_CHAIN_OR && status == 0) {
+            continue;
+        }
+
+        status = run_single_command(clauses[i].text);
         sh.last_status = status;
     }
 
@@ -2015,6 +2311,7 @@ static int run_script(const char *path) {
 int main(int argc, char **argv) {
     char line[SH_LINE_MAX];
     sh.interactive = argc <= 1;
+    sh.color = sh.interactive;
 
     sh.pgid = getpid();
     if (sh.interactive) {
@@ -2037,6 +2334,12 @@ int main(int argc, char **argv) {
     env_set("PATH", "/bin");
     env_set("HOME", "/");
     env_set("SHELL", "/bin/sh");
+    env_set("TERM", "apheleia");
+
+    const char *no_color = getenv("NO_COLOR");
+    if (no_color && no_color[0]) {
+        env_set("NO_COLOR", no_color);
+    }
 
     struct passwd *pwd = getpwuid(getuid());
     if (pwd && pwd->pw_dir && pwd->pw_dir[0]) {
@@ -2056,13 +2359,15 @@ int main(int argc, char **argv) {
         return run_script(argv[1]);
     }
 
-    io_write_str("apheleiaOS sh\n");
     tty_set_pgrp(sh.pgid);
 
     for (;;) {
-        reap_jobs(true);
+        char prompt[PATH_MAX + 32];
 
-        if (read_line_interactive("sh$ ", line, sizeof(line), true) < 0) {
+        reap_jobs(true);
+        build_prompt(prompt, sizeof(prompt));
+
+        if (read_line_interactive(prompt, line, sizeof(line), true) < 0) {
             io_write_str("\n");
             continue;
         }

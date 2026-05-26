@@ -8,4 +8,4 @@ docker_image:
 docker_build: docker_image utils/docker_build.sh
 	@utils/docker_build.sh "$(DOCKER_IMAGE)" "$(CURDIR)" "make" \
 		"$(ARCH)" "$(TOOLCHAIN)" "$(IMAGE_FORMAT)" "$(PROFILE)" \
-		"$(RISCV_FRISC)" "$(RISCV_UART_STRIDE)"
+		"$(RISCV_FRISC)" "$(RISCV_UART_STRIDE)" "$(USERLAND)"
