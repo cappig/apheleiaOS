@@ -62,7 +62,15 @@ char *strncpy(char *restrict dest, const char *restrict src, size_t len) {
 }
 
 char *strcpy(char *restrict dest, const char *restrict src) {
-    return strncpy(dest, src, (size_t)-1);
+    char *out = dest;
+
+    while (*src) {
+        *dest++ = *src++;
+    }
+
+    *dest = '\0';
+
+    return out;
 }
 
 

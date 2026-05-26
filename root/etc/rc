@@ -1,4 +1,4 @@
 # apheleiaOS rc
 
-# mkdir -p /tmp /var /var/log /var/run
-# chmod 1777 /tmp
+mkdir -p /tmp
+chmod 1777 /tmp

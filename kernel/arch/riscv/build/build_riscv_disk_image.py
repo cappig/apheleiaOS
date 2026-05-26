@@ -23,6 +23,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create a RISC-V ext2 rootfs image."
     )
+    parser.add_argument("--extra-bytes", type=int, default=0)
     parser.add_argument("output_img", type=Path)
     parser.add_argument("rootfs_dir", type=Path)
     args = parser.parse_args()
@@ -39,6 +40,7 @@ def main() -> None:
             block_size=4096,
             growth_numerator=1,
             growth_denominator=1,
+            extra_bytes=args.extra_bytes,
             minimum_bytes=0,
         )
 

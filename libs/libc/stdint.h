@@ -1,5 +1,85 @@
 #pragma once
 
+#ifndef __INT8_TYPE__
+#define __INT8_TYPE__ signed char
+#endif
+
+#ifndef __INT16_TYPE__
+#define __INT16_TYPE__ short
+#endif
+
+#ifndef __INT32_TYPE__
+#define __INT32_TYPE__ int
+#endif
+
+#ifndef __INT64_TYPE__
+#define __INT64_TYPE__ long long
+#endif
+
+#ifndef __UINT8_TYPE__
+#define __UINT8_TYPE__ unsigned char
+#endif
+
+#ifndef __UINT16_TYPE__
+#define __UINT16_TYPE__ unsigned short
+#endif
+
+#ifndef __UINT32_TYPE__
+#define __UINT32_TYPE__ unsigned int
+#endif
+
+#ifndef __UINT64_TYPE__
+#define __UINT64_TYPE__ unsigned long long
+#endif
+
+#ifndef __INTMAX_TYPE__
+#define __INTMAX_TYPE__ long long
+#endif
+
+#ifndef __UINTMAX_TYPE__
+#define __UINTMAX_TYPE__ unsigned long long
+#endif
+
+#ifndef __INT8_MAX__
+#define __INT8_MAX__ 127
+#endif
+
+#ifndef __INT16_MAX__
+#define __INT16_MAX__ 32767
+#endif
+
+#ifndef __INT32_MAX__
+#define __INT32_MAX__ 2147483647
+#endif
+
+#ifndef __INT64_MAX__
+#define __INT64_MAX__ 9223372036854775807LL
+#endif
+
+#ifndef __UINT8_MAX__
+#define __UINT8_MAX__ 255U
+#endif
+
+#ifndef __UINT16_MAX__
+#define __UINT16_MAX__ 65535U
+#endif
+
+#ifndef __UINT32_MAX__
+#define __UINT32_MAX__ 4294967295U
+#endif
+
+#ifndef __UINT64_MAX__
+#define __UINT64_MAX__ 18446744073709551615ULL
+#endif
+
+#ifndef __INTMAX_MAX__
+#define __INTMAX_MAX__ __INT64_MAX__
+#endif
+
+#ifndef __UINTMAX_MAX__
+#define __UINTMAX_MAX__ __UINT64_MAX__
+#endif
+
 typedef __INT8_TYPE__ int8_t;
 typedef __INT16_TYPE__ int16_t;
 typedef __INT32_TYPE__ int32_t;

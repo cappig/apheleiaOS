@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #define ATEXIT_MAX_FUNCS 32
+#define TEMP_NAME_TRIES  10000
 
 static void (*atexit_funcs[ATEXIT_MAX_FUNCS])(void);
 static size_t atexit_count = 0;
@@ -193,6 +194,31 @@ int setenv(const char *name, const char *value, int overwrite) {
     return 0;
 }
 
+int putenv(char *string) {
+    if (!string) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    char *eq = strchr(string, '=');
+    if (!eq || eq == string) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t name_len = (size_t)(eq - string);
+    char name[256];
+    if (name_len >= sizeof(name)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    memcpy(name, string, name_len);
+    name[name_len] = '\0';
+
+    return setenv(name, eq + 1, 1);
+}
+
 int unsetenv(const char *name) {
     if (!_env_name_valid(name)) {
         errno = EINVAL;
@@ -218,6 +244,87 @@ int unsetenv(const char *name) {
     env_count = dst;
     environ[env_count] = NULL;
     return 0;
+}
+
+int clearenv(void) {
+    if (_ensure_owned_env() < 0) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < env_count; i++) {
+        free(environ[i]);
+    }
+
+    env_count = 0;
+    environ[0] = NULL;
+    return 0;
+}
+
+static bool _temp_template_ok(const char *template, int suffix_len, char **xs_out) {
+    if (!template || suffix_len < 0) {
+        errno = EINVAL;
+        return false;
+    }
+
+    size_t len = strlen(template);
+    size_t suffix = (size_t)suffix_len;
+    if (len < suffix + 6) {
+        errno = EINVAL;
+        return false;
+    }
+
+    char *xs = (char *)template + len - suffix - 6;
+    for (size_t i = 0; i < 6; i++) {
+        if (xs[i] != 'X') {
+            errno = EINVAL;
+            return false;
+        }
+    }
+
+    if (xs_out) {
+        *xs_out = xs;
+    }
+
+    return true;
+}
+
+static void _temp_suffix(char out[6], unsigned long value) {
+    static const char alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    for (size_t i = 0; i < 6; i++) {
+        out[5 - i] = alphabet[value % (sizeof(alphabet) - 1)];
+        value /= sizeof(alphabet) - 1;
+    }
+}
+
+int mkstemps(char *template, int suffix_len) {
+    char *xs = NULL;
+    if (!_temp_template_ok(template, suffix_len, &xs)) {
+        return -1;
+    }
+
+    static unsigned long counter = 0;
+    unsigned long seed = (unsigned long)time(NULL) ^ ((unsigned long)getpid() << 16);
+
+    for (unsigned long i = 0; i < TEMP_NAME_TRIES; i++) {
+        _temp_suffix(xs, seed + counter++ + i);
+
+        int fd = open(template, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (fd >= 0) {
+            return fd;
+        }
+
+        if (errno != EEXIST) {
+            return -1;
+        }
+    }
+
+    errno = EEXIST;
+    return -1;
+}
+
+int mkstemp(char *template) {
+    return mkstemps(template, 0);
 }
 
 static int _append_component(char *out, size_t out_cap, const char *comp) {

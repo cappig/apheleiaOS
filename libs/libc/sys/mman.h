@@ -26,5 +26,6 @@ typedef struct mmap_args {
 
 #ifndef _KERNEL
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
+int mprotect(void *addr, size_t len, int prot);
 int munmap(void *addr, size_t len);
 #endif

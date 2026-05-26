@@ -7,7 +7,7 @@
 #define EOF          (-1)
 #define BUFSIZ       1024
 #define FILENAME_MAX 255
-#define L_tmpnam     20
+#define L_tmpnam     64
 #define TMP_MAX      10000
 
 #define _IOFBF 0
@@ -33,6 +33,9 @@ int fflush(FILE *stream);
 int fclose(FILE *stream);
 FILE *fopen(const char *path, const char *mode);
 FILE *fdopen(int fd, const char *mode);
+FILE *freopen(const char *path, const char *mode, FILE *stream);
+FILE *tmpfile(void);
+char *tmpnam(char *str);
 int remove(const char *path);
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);

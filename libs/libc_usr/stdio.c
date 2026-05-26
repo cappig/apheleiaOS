@@ -159,6 +159,86 @@ FILE *fopen(const char *path, const char *mode) {
     return stream;
 }
 
+FILE *freopen(const char *path, const char *mode, FILE *stream) {
+    if (!stream) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    int open_flags = 0;
+    int stream_flags = 0;
+    if (mode_to_flags(mode, &open_flags, &stream_flags) < 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    int fd = (open_flags & O_CREAT) ? open(path, open_flags, 0666) : open(path, open_flags);
+    if (fd < 0) {
+        (void)close(stream->fd);
+        stream->fd = -1;
+        stream->error = 1;
+        return NULL;
+    }
+
+    (void)fflush(stream);
+    if (stream->fd >= 0) {
+        (void)close(stream->fd);
+    }
+
+    if (stream_flags & FILE_FLAG_APPEND) {
+        (void)lseek(fd, 0, SEEK_END);
+    }
+
+    stream->fd = fd;
+    stream->flags = (stream->flags & FILE_FLAG_STATIC) | stream_flags;
+    stream->eof = 0;
+    stream->error = 0;
+    return stream;
+}
+
+char *tmpnam(char *str) {
+    static char static_name[L_tmpnam];
+    static unsigned long counter = 0;
+
+    char *out = str ? str : static_name;
+
+    for (unsigned long i = 0; i < TMP_MAX; i++) {
+        int len = snprintf(out, L_tmpnam, "/tmp/tmp.%lu.%lu", (unsigned long)getpid(), counter++);
+        if (len <= 0 || (size_t)len >= L_tmpnam) {
+            errno = ENAMETOOLONG;
+            return NULL;
+        }
+
+        if (access(out, F_OK) < 0 && errno == ENOENT) {
+            return out;
+        }
+    }
+
+    errno = EEXIST;
+    return NULL;
+}
+
+FILE *tmpfile(void) {
+    char path[] = "/tmp/tmpfile.XXXXXX";
+    int fd = mkstemp(path);
+    if (fd < 0) {
+        return NULL;
+    }
+
+    FILE *stream = fdopen(fd, "w+");
+    if (!stream) {
+        int saved = errno;
+        close(fd);
+        unlink(path);
+        errno = saved;
+        return NULL;
+    }
+
+    // If the filesystem keeps open files alive, this makes tmpfile private.
+    (void)unlink(path);
+    return stream;
+}
+
 int remove(const char *path) {
     if (!path) {
         errno = EINVAL;

@@ -242,7 +242,8 @@ ifeq ($(RISCV_FRISC),true)
 	@cp -f "$(RISCV_FRISC_DTB)" "$(IMAGE_STAGE_DIR)$(RISCV_PLATFORM_DTB)"
 	@printf "%-3s  %s\n" "DTB" "$(IMAGE_STAGE_DIR)$(RISCV_PLATFORM_DTB)"
 endif
-	@python3 kernel/arch/riscv/build/build_riscv_disk_image.py $@ $(IMAGE_STAGE_DIR)
+	@python3 kernel/arch/riscv/build/build_riscv_disk_image.py \
+		--extra-bytes $(ROOTFS_EXTRA_BYTES) $@ $(IMAGE_STAGE_DIR)
 	@printf "%-3s  %s\n" "IM" "$@"
 
 bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE)

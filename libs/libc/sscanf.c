@@ -2,6 +2,7 @@
 #include "stdarg.h"
 #include "stdbool.h"
 #include "stddef.h"
+#include "stdint.h"
 #include "stdlib.h"
 
 
@@ -18,26 +19,131 @@ static int _get_width(const char *format, size_t *index) {
     return width;
 }
 
-static void _consume_size(const char *format, size_t *index) {
+enum scan_size {
+    SCAN_CHAR,
+    SCAN_SHORT,
+    SCAN_INT,
+    SCAN_LONG,
+    SCAN_LLONG,
+    SCAN_SIZE,
+    SCAN_PTRDIFF,
+    SCAN_INTMAX,
+    SCAN_PTR
+};
+
+static enum scan_size _read_size(const char *format, size_t *index) {
     switch (format[*index]) {
     case 'h':
         (*index)++;
         if (format[*index] == 'h') {
             (*index)++;
+            return SCAN_CHAR;
         }
-        break;
+        return SCAN_SHORT;
 
     case 'l':
         (*index)++;
         if (format[*index] == 'l') {
             (*index)++;
+            return SCAN_LLONG;
         }
-        break;
+        return SCAN_LONG;
 
     case 'z':
+        (*index)++;
+        return SCAN_SIZE;
+
     case 'j':
+        (*index)++;
+        return SCAN_INTMAX;
+
     case 't':
         (*index)++;
+        return SCAN_PTRDIFF;
+
+    default:
+        return SCAN_INT;
+    }
+}
+
+static bool _is_signed_number(char type) {
+    return type == 'd' || type == 'i';
+}
+
+static void _store_signed(void *ptr, enum scan_size size, long long value) {
+    switch (size) {
+    case SCAN_CHAR:
+        *(signed char *)ptr = (signed char)value;
+        break;
+
+    case SCAN_SHORT:
+        *(short *)ptr = (short)value;
+        break;
+
+    case SCAN_LONG:
+        *(long *)ptr = (long)value;
+        break;
+
+    case SCAN_LLONG:
+        *(long long *)ptr = value;
+        break;
+
+    case SCAN_SIZE:
+        *(size_t *)ptr = (size_t)value;
+        break;
+
+    case SCAN_PTRDIFF:
+        *(ptrdiff_t *)ptr = (ptrdiff_t)value;
+        break;
+
+    case SCAN_INTMAX:
+        *(intmax_t *)ptr = (intmax_t)value;
+        break;
+
+    case SCAN_INT:
+    default:
+        *(int *)ptr = (int)value;
+        break;
+    }
+}
+
+static void _store_unsigned(void *ptr, enum scan_size size, unsigned long long value) {
+    switch (size) {
+    case SCAN_CHAR:
+        *(unsigned char *)ptr = (unsigned char)value;
+        break;
+
+    case SCAN_SHORT:
+        *(unsigned short *)ptr = (unsigned short)value;
+        break;
+
+    case SCAN_LONG:
+        *(unsigned long *)ptr = (unsigned long)value;
+        break;
+
+    case SCAN_LLONG:
+        *(unsigned long long *)ptr = value;
+        break;
+
+    case SCAN_SIZE:
+        *(size_t *)ptr = (size_t)value;
+        break;
+
+    case SCAN_PTRDIFF:
+        *(ptrdiff_t *)ptr = (ptrdiff_t)value;
+        break;
+
+    case SCAN_INTMAX:
+        *(uintmax_t *)ptr = (uintmax_t)value;
+        break;
+
+    case SCAN_PTR:
+        *(void **)ptr = (void *)(uintptr_t)value;
+        break;
+
+    case SCAN_INT:
+    default:
+        *(unsigned int *)ptr = (unsigned int)value;
         break;
     }
 }
@@ -55,6 +161,8 @@ static int _get_base(char type) {
         return 16;
 
     case 'i':
+        return 0;
+
     case 'd':
     case 'u':
         return 10;
@@ -116,23 +224,47 @@ int vsnscanf(const char *restrict str, size_t max, const char *restrict format, 
 
             int width = _get_width(format, &i);
 
-            _consume_size(format, &i);
+            enum scan_size size = _read_size(format, &i);
 
             int base = _get_base(format[i]);
+            if (format[i] == 'p') {
+                size = SCAN_PTR;
+            }
 
             // Number
-            if (base > 0) {
+            if (base >= 0) {
                 char *end;
-                unsigned long long number = strtoll(&str[j], &end, base);
+                const char *start = &str[j];
 
-                j += (size_t)(end - &str[j]);
+                if (_is_signed_number(format[i])) {
+                    long long number = strtoll(start, &end, base);
+                    if (end == start) {
+                        break;
+                    }
+
+                    j += (size_t)(end - start);
+
+                    if (ignore) {
+                        continue;
+                    }
+
+                    _store_signed(va_arg(vlist, void *), size, number);
+                    filled++;
+                    continue;
+                }
+
+                unsigned long long number = strtoull(start, &end, base);
+                if (end == start) {
+                    break;
+                }
+
+                j += (size_t)(end - start);
 
                 if (ignore) {
                     continue;
                 }
 
-                unsigned long long *ptr = va_arg(vlist, void *);
-                *ptr = number;
+                _store_unsigned(va_arg(vlist, void *), size, number);
                 filled++;
             }
             // String

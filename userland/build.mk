@@ -2,7 +2,7 @@ USERLAND_TOOLS  ?= all
 USERLAND_UI     ?= all
 USERLAND_EXTRAS ?= all
 USERLAND_GAMES  ?= all
-USERLAND_STAGE_HEADERS ?= false
+USERLAND_STAGE_HEADERS ?= true
 
 USER_OBJ_DIR                := bin/user/$(ARCH)
 USER_BIN_DIR                := $(USER_OBJ_DIR)/bin
@@ -12,6 +12,7 @@ USER_STAGE_HOME_USER_DIR    := $(USER_STAGE_ROOT_DIR)/home/user
 USER_STAGE_USR_DIR          := $(USER_STAGE_ROOT_DIR)/usr
 USER_STAGE_USR_INCLUDE_DIR  := $(USER_STAGE_USR_DIR)/include
 USER_STAGE_USR_LIB_DIR      := $(USER_STAGE_USR_DIR)/lib
+USER_STAGE_STAMP_DIR        := $(USER_OBJ_DIR)/stage-stamps
 
 USER_LIBC_SRC := \
 	$(wildcard libs/libc/*.c) \
@@ -111,10 +112,12 @@ USER_GAMES_OPTION_NAMES := $(sort \
 	$(call user_makefile_dirs,userland/games) \
 )
 
+USER_EXTRA_DEFAULT_SKIP := tcc
+
 define select_userland_group
 $(1)_SELECTED_NAMES := $$($(2))
 ifeq ($$($(2)), all)
-$(1)_SELECTED_NAMES := $$($(1)_OPTION_NAMES)
+$(1)_SELECTED_NAMES := $$(filter-out $$($(1)_DEFAULT_SKIP),$$($(1)_OPTION_NAMES))
 else ifeq ($$($(2)), none)
 $(1)_SELECTED_NAMES :=
 endif
@@ -129,6 +132,8 @@ $(eval $(call select_userland_group,USER_TOOLS,USERLAND_TOOLS,tools))
 $(eval $(call select_userland_group,USER_UI,USERLAND_UI,UI))
 $(eval $(call select_userland_group,USER_EXTRA,USERLAND_EXTRAS,extra))
 $(eval $(call select_userland_group,USER_GAMES,USERLAND_GAMES,game))
+
+ROOTFS_EXTRA_BYTES ?= $(if $(filter tcc,$(USER_EXTRA_SELECTED_NAMES)),4194304,0)
 
 USER_TOOLS_PROG_DIRS := $(filter $(addprefix userland/tools/,$(USER_TOOLS_SELECTED_NAMES)),$(USER_TOOLS_ALL_DIRS))
 USER_UI_PROG_DIRS    := $(filter $(addprefix userland/ui/,$(USER_UI_SELECTED_NAMES)),$(USER_UI_ALL_DIRS))
@@ -175,9 +180,9 @@ USER_USR_CRTN_OBJ    := $(USER_USR_OBJ_DIR)/crtn.o
 USER_USR_RUNTIME_OBJ := $(USER_USR_LIBC_A) $(USER_USR_CRT1_OBJ) \
 	$(USER_USR_CRTI_OBJ) $(USER_USR_CRTN_OBJ)
 
-USER_STAGE_USR_INCLUDE_STAMP := $(USER_STAGE_USR_INCLUDE_DIR)/.apheleia_headers
-USER_STAGE_USR_LIB_STAMP     := $(USER_STAGE_USR_LIB_DIR)/.apheleia_runtime
-USER_STAGE_USR_NO_HEADERS_STAMP := $(USER_STAGE_USR_DIR)/.apheleia_no_headers
+USER_STAGE_USR_INCLUDE_STAMP := $(USER_STAGE_STAMP_DIR)/usr-headers
+USER_STAGE_USR_LIB_STAMP     := $(USER_STAGE_STAMP_DIR)/usr-runtime
+USER_STAGE_USR_NO_HEADERS_STAMP := $(USER_STAGE_STAMP_DIR)/usr-no-headers
 
 $(USER_USR_LIBC_A): $(USER_LIBC_OBJ)
 	@mkdir -p $(@D)
@@ -197,9 +202,12 @@ $(USER_USR_CRTN_OBJ): $(USER_CRTN_OBJ)
 	@cp $< $@
 
 $(USER_STAGE_USR_INCLUDE_STAMP): $(USER_USR_INCLUDE_HEADERS)
-	@mkdir -p "$(USER_STAGE_USR_INCLUDE_DIR)/sys" \
+	@mkdir -p "$(@D)" \
+		"$(USER_STAGE_USR_INCLUDE_DIR)/sys" \
 		"$(USER_STAGE_USR_INCLUDE_DIR)/libc_usr" \
 		"$(USER_STAGE_USR_INCLUDE_DIR)/libc_ext"
+	@rm -f "$(USER_STAGE_USR_DIR)/.apheleia_no_headers" \
+		"$(USER_STAGE_USR_INCLUDE_DIR)/.apheleia_headers"
 	@cp -f libs/libc/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/"
 	@cp -f libs/libc/sys/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/sys/"
 	@cp -f libs/libc_usr/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/libc_usr/"
@@ -207,16 +215,22 @@ $(USER_STAGE_USR_INCLUDE_STAMP): $(USER_USR_INCLUDE_HEADERS)
 	@touch $@
 
 $(USER_STAGE_USR_NO_HEADERS_STAMP):
-	@mkdir -p "$(USER_STAGE_USR_DIR)"
+	@mkdir -p "$(@D)" "$(USER_STAGE_USR_DIR)"
+	@rm -f "$(USER_STAGE_USR_DIR)/.apheleia_no_headers"
 	@rm -rf "$(USER_STAGE_USR_INCLUDE_DIR)"
 	@touch $@
 
-$(USER_STAGE_USR_LIB_STAMP): $(USER_USR_RUNTIME_OBJ)
-	@mkdir -p "$(USER_STAGE_USR_LIB_DIR)"
+$(USER_STAGE_USR_LIB_STAMP): $(USER_USR_RUNTIME_OBJ) $(USER_LINK_STAMP)
+	@mkdir -p "$(@D)" "$(USER_STAGE_USR_LIB_DIR)"
+	@rm -f "$(USER_STAGE_USR_LIB_DIR)/.apheleia_runtime"
 	@cp "$(USER_USR_LIBC_A)" "$(USER_STAGE_USR_LIB_DIR)/libc.a"
 	@cp "$(USER_USR_CRT1_OBJ)" "$(USER_STAGE_USR_LIB_DIR)/crt1.o"
 	@cp "$(USER_USR_CRTI_OBJ)" "$(USER_STAGE_USR_LIB_DIR)/crti.o"
 	@cp "$(USER_USR_CRTN_OBJ)" "$(USER_STAGE_USR_LIB_DIR)/crtn.o"
+	@$(ST) --strip-debug "$(USER_STAGE_USR_LIB_DIR)/libc.a"
+	@$(ST) --strip-debug "$(USER_STAGE_USR_LIB_DIR)/crt1.o"
+	@$(ST) --strip-debug "$(USER_STAGE_USR_LIB_DIR)/crti.o"
+	@$(ST) --strip-debug "$(USER_STAGE_USR_LIB_DIR)/crtn.o"
 	@touch $@
 
 USER_SHARED_OBJ := $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_COMMON_OBJ) \
@@ -293,7 +307,7 @@ define user_link_rule
 $(USER_BIN_DIR)/$(1): $(USER_SHARED_OBJ) $(USER_LIBGCC) \
 	$(call user_prog_objs,$(1)) $(USER_LD_SCRIPT) $(USER_LINK_STAMP)
 	@mkdir -p $$(@D)
-	$(call ld, $(USER_LD), $$@, $$(filter-out $(USER_LD_SCRIPT) $(USER_LINK_STAMP),$$^))
+	$(call ld, $(USER_LD), $$@, $$(filter-out $(USER_LD_SCRIPT) $(USER_LINK_STAMP) $(USER_LIBGCC),$$^) $(USER_LIBGCC))
 	$(call user_strip, $$@)
 endef
 

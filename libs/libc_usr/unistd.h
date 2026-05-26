@@ -5,6 +5,10 @@
 #include <sys/types.h>
 
 extern char **environ;
+extern char *optarg;
+extern int optind;
+extern int opterr;
+extern int optopt;
 
 ssize_t read(int fd, void *buf, size_t count);
 ssize_t write(int fd, const void *buf, size_t count);
@@ -64,5 +68,6 @@ int setgid(gid_t gid);
 int getgroups(int size, gid_t list[]);
 int setgroups(size_t size, const gid_t list[]);
 long sysconf(int name);
+int getopt(int argc, char *const argv[], const char *optstring);
 
 void _exit(int status) __attribute__((noreturn));

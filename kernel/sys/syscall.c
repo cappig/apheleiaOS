@@ -733,6 +733,47 @@ _find_region_exact(sched_thread_t *thread, uintptr_t addr, size_t pages, sched_u
     return NULL;
 }
 
+static sched_user_region_t *_find_region_at(sched_thread_t *thread, uintptr_t addr) {
+    if (!thread) {
+        return NULL;
+    }
+
+    for (sched_user_region_t *region = thread->regions; region; region = region->next) {
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+
+        if (!_region_bounds(region, &start, &end)) {
+            continue;
+        }
+
+        if (addr >= start && addr < end) {
+            return region;
+        }
+    }
+
+    return NULL;
+}
+
+static bool _user_range_mapped(sched_thread_t *thread, uintptr_t base, uintptr_t end) {
+    uintptr_t addr = base;
+
+    while (addr < end) {
+        sched_user_region_t *region = _find_region_at(thread, addr);
+        if (!region) {
+            return false;
+        }
+
+        uintptr_t region_end = _region_end(region);
+        if (region_end <= addr) {
+            return false;
+        }
+
+        addr = region_end < end ? region_end : end;
+    }
+
+    return true;
+}
+
 static u64 _mmap_prot_flags(int prot) {
     u64 flags = PT_USER;
 
@@ -750,6 +791,84 @@ static u64 _mmap_prot_flags(int prot) {
 static bool _mmap_prot_valid(int prot) {
     int known = PROT_READ | PROT_WRITE | PROT_EXEC;
     return prot != PROT_NONE && (prot & ~known) == 0;
+}
+
+static size_t _mprotect_split_count(sched_thread_t *thread, uintptr_t base, uintptr_t end) {
+    size_t count = 0;
+
+    sched_user_region_t *region = thread->regions;
+    while (region) {
+        sched_user_region_t *next = region->next;
+        uintptr_t start = 0;
+        uintptr_t finish = 0;
+
+        if (!_region_bounds(region, &start, &finish)) {
+            region = next;
+            continue;
+        }
+
+        uintptr_t left = base > start ? base : start;
+        uintptr_t right = end < finish ? end : finish;
+
+        if (left >= right) {
+            region = next;
+            continue;
+        }
+
+        bool before = left > start;
+        bool after = right < finish;
+
+        if (before) {
+            count++;
+        }
+
+        if (after) {
+            count++;
+        }
+
+        region = next;
+    }
+
+    return count;
+}
+
+static void _free_region_nodes(sched_user_region_t **nodes, size_t count) {
+    if (!nodes) {
+        return;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        free(nodes[i]);
+    }
+
+    free(nodes);
+}
+
+static int _alloc_region_nodes(size_t count, sched_user_region_t ***nodes_out) {
+    if (!nodes_out) {
+        return -EINVAL;
+    }
+
+    *nodes_out = NULL;
+    if (!count) {
+        return 0;
+    }
+
+    sched_user_region_t **nodes = calloc(count, sizeof(*nodes));
+    if (!nodes) {
+        return -ENOMEM;
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        nodes[i] = calloc(1, sizeof(*nodes[i]));
+        if (!nodes[i]) {
+            _free_region_nodes(nodes, i);
+            return -ENOMEM;
+        }
+    }
+
+    *nodes_out = nodes;
+    return 0;
 }
 
 static bool _mmap_flags_valid(int flags) {
@@ -1953,6 +2072,147 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
     arch_phys_unmap(dst, pages * PAGE_4KIB);
 
     return addr;
+}
+
+static int sys_mprotect(void *addr, size_t len, int prot) {
+    if (!addr || !len) {
+        return -EINVAL;
+    }
+
+    if (len > SIZE_MAX - (PAGE_4KIB - 1)) {
+        return -EINVAL;
+    }
+
+    if (!_mmap_prot_valid(prot)) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!thread || !thread->vm_space) {
+        return -EINVAL;
+    }
+
+    uintptr_t base = (uintptr_t)addr;
+    if (base % PAGE_4KIB) {
+        return -EINVAL;
+    }
+
+    size_t size = ALIGN(len, PAGE_4KIB);
+    uintptr_t end = base + size;
+
+    if (end < base) {
+        return -EINVAL;
+    }
+
+    if (!_user_range_mapped(thread, base, end)) {
+        return -ENOMEM;
+    }
+
+    void *root = arch_vm_root(thread->vm_space);
+    if (!root) {
+        return -EINVAL;
+    }
+
+    size_t split_count = _mprotect_split_count(thread, base, end);
+    sched_user_region_t **nodes = NULL;
+    int alloc_err = _alloc_region_nodes(split_count, &nodes);
+
+    if (alloc_err < 0) {
+        return alloc_err;
+    }
+
+    u64 new_flags = _mmap_prot_flags(prot);
+    size_t node_index = 0;
+
+    sched_user_region_t *region = thread->regions;
+    while (region) {
+        sched_user_region_t *next = region->next;
+        uintptr_t start = 0;
+        uintptr_t finish = 0;
+
+        if (!_region_bounds(region, &start, &finish)) {
+            region = next;
+            continue;
+        }
+
+        uintptr_t left = base > start ? base : start;
+        uintptr_t right = end < finish ? end : finish;
+
+        if (left >= right) {
+            region = next;
+            continue;
+        }
+
+        size_t before_pages = (left - start) / PAGE_4KIB;
+        size_t changed_pages = (right - left) / PAGE_4KIB;
+        size_t after_pages = (finish - right) / PAGE_4KIB;
+        size_t changed_index = before_pages;
+
+        uintptr_t changed_paddr = region->paddr + changed_index * PAGE_4KIB;
+        u64 old_flags = region->flags;
+        u64 region_flags = new_flags;
+        u64 map_flags = new_flags;
+
+        if (old_flags & SCHED_REGION_COW) {
+            region_flags |= SCHED_REGION_COW;
+
+            if (new_flags & PT_WRITE) {
+                map_flags &= ~PT_WRITE;
+            }
+        }
+
+        if (!before_pages) {
+            region->vaddr = left;
+            region->paddr = changed_paddr;
+            region->pages = changed_pages;
+            region->flags = region_flags;
+
+            if (after_pages) {
+                sched_user_region_t *after = nodes[node_index++];
+                after->vaddr = right;
+                after->paddr = changed_paddr + changed_pages * PAGE_4KIB;
+                after->pages = after_pages;
+                after->flags = old_flags;
+                after->next = next;
+                region->next = after;
+            }
+        } else {
+            sched_user_region_t *changed = nodes[node_index++];
+            changed->vaddr = left;
+            changed->paddr = changed_paddr;
+            changed->pages = changed_pages;
+            changed->flags = region_flags;
+
+            region->pages = before_pages;
+            region->next = changed;
+
+            if (after_pages) {
+                sched_user_region_t *after = nodes[node_index++];
+                after->vaddr = right;
+                after->paddr = changed_paddr + changed_pages * PAGE_4KIB;
+                after->pages = after_pages;
+                after->flags = old_flags;
+                after->next = next;
+                changed->next = after;
+            } else {
+                changed->next = next;
+            }
+        }
+
+        for (size_t i = 0; i < changed_pages; i++) {
+            uintptr_t vaddr = left + i * PAGE_4KIB;
+            uintptr_t paddr = changed_paddr + i * PAGE_4KIB;
+
+            unmap_page((page_t *)root, vaddr);
+            arch_map_region(root, 1, vaddr, paddr, map_flags);
+            arch_tlb_flush(vaddr);
+        }
+
+        region = next;
+    }
+
+    free(nodes);
+    return 0;
 }
 
 static int sys_munmap(void *addr, size_t len) {
@@ -3196,6 +3456,12 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
         )sys_seek((int)arch_syscall_arg1(state), (off_t)arch_syscall_arg2(state), (int)arch_syscall_arg3(state));
     case SYS_MMAP:
         return (u64)sys_mmap((const mmap_args_t *)arch_syscall_arg1(state));
+    case SYS_MPROTECT:
+        return (u64)sys_mprotect(
+            (void *)arch_syscall_arg1(state),
+            (size_t)arch_syscall_arg2(state),
+            (int)arch_syscall_arg3(state)
+        );
     case SYS_MUNMAP:
         return (u64)sys_munmap((void *)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_IOCTL:

@@ -31,7 +31,11 @@ def _meta(mode: int, owner: tuple[int, int] = ROOT_OWNER) -> dict[str, int]:
 
 
 ROOTFS_METADATA_OVERRIDES: dict[str, dict[str, int]] = {
-    **{rel: _meta(0o755) for rel in ("", "bin", "boot", "dev", "etc", "home")},
+    **{
+        rel: _meta(0o755)
+        for rel in ("", "bin", "boot", "dev", "etc", "home", "usr", "usr/include", "usr/lib")
+    },
+    "tmp": _meta(0o1777),
     "home/user": _meta(0o755, USER_OWNER),
     "home/john": _meta(0o755, JOHN_OWNER),
     "etc/passwd": _meta(0o644),
@@ -92,6 +96,7 @@ def prepare_root_tree(src_root: Path, dst_root: Path) -> None:
         shutil.rmtree(dst_root)
     shutil.copytree(src_root, dst_root, symlinks=True)
     (dst_root / "dev").mkdir(parents=True, exist_ok=True)
+    (dst_root / "tmp").mkdir(parents=True, exist_ok=True)
 
     for rel, meta in ROOTFS_METADATA_OVERRIDES.items():
         path = dst_root if not rel else (dst_root / rel)
@@ -397,6 +402,7 @@ def build_ext2_image(
     inode_count: int | None = None,
     growth_numerator: int = 3,
     growth_denominator: int = 2,
+    extra_bytes: int = 0,
     minimum_bytes: int = 16 * 1024 * 1024,
 ) -> None:
     if block_size not in (1024, 2048, 4096):
@@ -443,7 +449,11 @@ def build_ext2_image(
     data_start_block = inode_table_block + inode_table_blocks
 
     root_bytes = max(path_size(root_tree), 1)
-    target_bytes = max(root_bytes * growth_numerator // growth_denominator, minimum_bytes)
+    target_bytes = max(
+        root_bytes * growth_numerator // growth_denominator,
+        root_bytes + extra_bytes,
+        minimum_bytes,
+    )
     block_count = div_round_up(target_bytes, block_size)
 
     max_blocks_one_group = block_size * 8

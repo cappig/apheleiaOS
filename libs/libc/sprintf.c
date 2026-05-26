@@ -254,7 +254,9 @@ static int _num_prefix_len(uintmax_t number, int flags, int base, int size) {
     }
 
     if (flags & FLAGS_HASH) {
-        if (base == 2 || base == 16) {
+        if (base == 2 && number != 0) {
+            len += 2;
+        } else if (base == 16 && (number != 0 || size == SIZE_PTR)) {
             len += 2;
         } else if (base == 8) {
             len++;
@@ -282,15 +284,8 @@ static void _append_num_prefix(
     int flags,
     int base,
     int size,
-    int *padding,
     bool uppercase
 ) {
-    if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO)) {
-        while ((*padding)-- > 0) {
-            _buf_putc(buffer, written, max_size, ' ');
-        }
-    }
-
     char sign = 0;
     if (size < 0 && (intmax_t)number < 0) {
         sign = '-';
@@ -304,23 +299,17 @@ static void _append_num_prefix(
         _buf_putc(buffer, written, max_size, sign);
     }
 
-    char *prefix = "";
-    if (base == 2) {
+    const char *prefix = "";
+    if (base == 2 && number != 0) {
         prefix = "0b";
     } else if (base == 8) {
         prefix = "0";
-    } else if (base == 16) {
+    } else if (base == 16 && (number != 0 || size == SIZE_PTR)) {
         prefix = uppercase ? "0X" : "0x";
     }
 
     while (*prefix && (flags & FLAGS_HASH)) {
         _buf_putc(buffer, written, max_size, *prefix++);
-    }
-
-    if (flags & FLAGS_ZERO) {
-        while ((*padding)-- > 0) {
-            _buf_putc(buffer, written, max_size, '0');
-        }
     }
 }
 
@@ -411,6 +400,9 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
             flags |= FLAGS_MINUS;
             width = -width;
         }
+        if (flags & FLAGS_MINUS) {
+            flags &= ~FLAGS_ZERO;
+        }
 
         if (precision < 0) {
             precision = -1;
@@ -451,22 +443,48 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
             uintmax_t number = _get_var_number(size, &args);
             bool negative = (size < 0 && (intmax_t)number < 0);
 
-            if (precision > 0) {
-                flags |= FLAGS_ZERO;
-                width = (precision > width) ? precision : width;
+            if (precision >= 0) {
+                flags &= ~FLAGS_ZERO;
             }
 
             char num_buffer[66] = { 0 };
             uintmax_t absval = negative ? _signed_abs(number) : number;
 
             int len = (int)ulltoa((unsigned long long)absval, num_buffer, base);
+            if (precision == 0 && absval == 0) {
+                num_buffer[0] = '\0';
+                len = 0;
+            }
+
             int prefix_len = _num_prefix_len(number, flags, base, size);
-            size_t field_len = (size_t)len + (size_t)prefix_len;
+            int zeroes = 0;
+            if (precision > len) {
+                zeroes = precision - len;
+            }
+
+            size_t field_len = (size_t)len + (size_t)prefix_len + (size_t)zeroes;
 
             // Width includes the sign and 0x prefix, not just the digits.
             int padding = _padding_for_width(width, field_len);
+            int width_padding = padding;
 
-            _append_num_prefix(buffer, max_size, &written, number, flags, base, size, &padding, uppercase);
+            if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO)) {
+                while (padding-- > 0) {
+                    _buf_putc(buffer, &written, max_size, ' ');
+                }
+            }
+
+            _append_num_prefix(buffer, max_size, &written, number, flags, base, size, uppercase);
+
+            if (!(flags & FLAGS_MINUS) && (flags & FLAGS_ZERO)) {
+                while (padding-- > 0) {
+                    _buf_putc(buffer, &written, max_size, '0');
+                }
+            }
+
+            while (zeroes-- > 0) {
+                _buf_putc(buffer, &written, max_size, '0');
+            }
 
             if (uppercase) {
                 for (int j = 0; j < len; j++) {
@@ -474,7 +492,8 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
                 }
             }
 
-            _string_to_buffer(buffer, max_size, &written, num_buffer, flags, precision, &padding);
+            int tail_padding = (flags & FLAGS_MINUS) ? width_padding : 0;
+            _string_to_buffer(buffer, max_size, &written, num_buffer, flags, -1, &tail_padding);
         }
     }
 
