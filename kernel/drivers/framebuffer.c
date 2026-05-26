@@ -234,7 +234,7 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
     u8 green_size = fb->green_size;
     u8 blue_size = fb->blue_size;
 
-    pixel_apply_legacy_defaults(
+    pixel_fill_rgb_defaults(
         (u8)bpp_bytes,
         &red_shift,
         &green_shift,

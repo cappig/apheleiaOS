@@ -1837,10 +1837,10 @@ static void release_start_gate(int gate[2]) {
     gate[1] = -1;
 }
 
-static int redirect_path_to_fd(const char *path, int open_flags, mode_t mode, int target_fd, const char *open_err) {
+static int redirect_path_to_fd(const char *path, int open_flags, mode_t mode, int target_fd, const char *label) {
     int fd = open(path, open_flags, mode);
     if (fd < 0) {
-        io_write_str(open_err);
+        sh_errorf("sh: %s: %s: %s\n", label, path ? path : "", strerror(errno));
         return -1;
     }
 
@@ -1860,7 +1860,7 @@ static int open_redirection(const sh_stage_t *stage) {
     }
 
     if (stage->in_path && stage->in_path[0]) {
-        int input_rc = redirect_path_to_fd(stage->in_path, O_RDONLY, 0, STDIN_FILENO, "sh: failed to open input\n");
+        int input_rc = redirect_path_to_fd(stage->in_path, O_RDONLY, 0, STDIN_FILENO, "input");
         if (input_rc < 0) {
             return -1;
         }
@@ -1875,7 +1875,7 @@ static int open_redirection(const sh_stage_t *stage) {
             flags |= O_TRUNC;
         }
 
-        int redir_rc = redirect_path_to_fd(stage->out_path, flags, 0644, STDOUT_FILENO, "sh: failed to open output\n");
+        int redir_rc = redirect_path_to_fd(stage->out_path, flags, 0644, STDOUT_FILENO, "output");
 
         if (redir_rc < 0) {
             return -1;
@@ -2357,7 +2357,7 @@ static int run_single_command(char *line) {
         }
     }
 
-    if (simple_builtin) {
+    if (simple_builtin && is_builtin_name(stages[0].argv[0])) {
         int builtin_status = 0;
         if (run_builtin_in_shell(&stages[0], &builtin_status) == 0) {
             if (have_time) {
@@ -2367,6 +2367,9 @@ static int run_single_command(char *line) {
             free(exp);
             return builtin_status;
         }
+
+        free(exp);
+        return 1;
     }
 
     int ret = run_pipeline(stages, stage_count, background, cmdline);

@@ -88,7 +88,19 @@ char *strncat(char *dest, const char *src, size_t len) {
 }
 
 char *strcat(char *dest, const char *src) {
-    return strncat(dest, src, (size_t)-1);
+    char *out = dest;
+
+    while (*dest) {
+        dest++;
+    }
+
+    while (*src) {
+        *dest++ = *src++;
+    }
+
+    *dest = '\0';
+
+    return out;
 }
 
 
@@ -229,6 +241,26 @@ size_t strcspn(const char *dest, const char *src) {
     return (size_t)(d - dest);
 }
 
+size_t strspn(const char *dest, const char *src) {
+    const char *d = dest;
+
+    while (*d) {
+        const char *s = src;
+
+        while (*s && *d != *s) {
+            s++;
+        }
+
+        if (!*s) {
+            break;
+        }
+
+        d++;
+    }
+
+    return (size_t)(d - dest);
+}
+
 char *strpbrk(const char *str, const char *delim) {
     while (*str) {
         if (strchr(delim, *str)) {
@@ -267,7 +299,8 @@ void *memset(void *dest, int val, size_t len) {
 }
 
 size_t strlen(const char *str) {
-    int len = 0;
+    size_t len = 0;
+
     while (*str) {
         len++;
         str++;

@@ -1071,7 +1071,7 @@ static void _set_boot_disk_hint(void) {
 const kernel_args_t *arch_init(void *boot_info) {
     boot_info_t *info = boot_info;
 
-    init_serial(SERIAL_COM1, SERAIL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
+    init_serial(SERIAL_COM1, SERIAL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
     asm volatile("cld");
 
     if (!info) {

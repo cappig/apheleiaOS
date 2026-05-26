@@ -7,7 +7,7 @@
 #define SERIAL_MAX_BAUD     115200
 
 // 8 data bits, no parity, one stop bit
-#define SERAIL_DEFAULT_LINE 0x03
+#define SERIAL_DEFAULT_LINE 0x03
 
 enum serial_port_map {
     SERIAL_COM1 = 0x3f8,

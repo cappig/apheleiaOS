@@ -24,7 +24,7 @@ static inline u32 pixel_scale_u8(u8 value, u8 bits) {
     return ((u32)value * max + 127U) / 255U;
 }
 
-static inline void pixel_apply_legacy_defaults(
+static inline void pixel_fill_rgb_defaults(
     u8 bytes_per_pixel,
     u8 *red_shift,
     u8 *green_shift,

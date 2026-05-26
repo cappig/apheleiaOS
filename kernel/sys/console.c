@@ -1813,7 +1813,7 @@ void console_init(void *arch_boot_info) {
     console_state.blue_size = hw.blue_size;
 
     if (console_state.mode == CONSOLE_FRAMEBUFFER) {
-        pixel_apply_legacy_defaults(
+        pixel_fill_rgb_defaults(
             console_state.bytes_per_pixel,
             &console_state.red_shift,
             &console_state.green_shift,

@@ -239,19 +239,19 @@ elf_sect_header_t *elf_locate_section(elf_header_t *header, const char *name) {
         return (elf_sect_header_t *)((u8 *)header + view.shoff + idx * view.shent_size);
     }
 
-    static elf_sect_header_t compat_section;
-    compat_section.name = section.name;
-    compat_section.type = section.type;
-    compat_section.flags = section.flags;
-    compat_section.addr = section.addr;
-    compat_section.offset = section.offset;
-    compat_section.size = section.size;
-    compat_section.link = section.link;
-    compat_section.info = section.info;
-    compat_section.align = section.align;
-    compat_section.ent_size = section.ent_size;
+    static elf_sect_header_t section_header;
+    section_header.name = section.name;
+    section_header.type = section.type;
+    section_header.flags = section.flags;
+    section_header.addr = section.addr;
+    section_header.offset = section.offset;
+    section_header.size = section.size;
+    section_header.link = section.link;
+    section_header.info = section.info;
+    section_header.align = section.align;
+    section_header.ent_size = section.ent_size;
 
-    return &compat_section;
+    return &section_header;
 }
 
 elf_symbol_t *elf_locate_symbol(elf_symbol_t *symtab, size_t symtab_size, char *strtab, const char *name) {

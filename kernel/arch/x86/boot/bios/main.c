@@ -35,7 +35,7 @@ static unsigned int boot_log_options(void) {
 }
 
 NORETURN void _load_entry(u16 boot_disk) {
-    init_serial(SERIAL_COM1, SERAIL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
+    init_serial(SERIAL_COM1, SERIAL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
     log_init(boot_log_sink);
     log_set_lvl(LOG_DEBUG);
     log_set_options(boot_log_options());
