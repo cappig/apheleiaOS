@@ -46,6 +46,7 @@ make all ARCH=x86_32
 make ARCH=riscv_32 TOOLCHAIN=llvm run-spike
 make all ARCH=riscv_32 TOOLCHAIN=llvm RISCV_FRISC=true
 make all ARCH=riscv_32 TOOLCHAIN=llvm USERLAND=tcc
+make all ARCH=riscv_32 TOOLCHAIN=llvm USERLAND=mbrot,tcc
 ```
 
 Common build variables:
@@ -58,7 +59,7 @@ Common build variables:
 | `PROFILE` | `fast` | `fast`, `normal`, `small`, `debug`, `debug_extra` | optimization and debug level |
 | `X86_BOOT` | `bios` | `bios`, `uefi` | x86 boot path for `make run` |
 | `RISCV_FRISC` | `false` | `true`, `false` | build a [FRISC](https://github.com/friscv) FPGA image |
-| `USERLAND` | `default` | `default`, `all`, `core`, or names such as `tcc` | select userland programs; names are added to `default`, while `core` keeps only core programs |
+| `USERLAND` | `default` | `default`, `all`, `core`, or names such as `mbrot,tcc` | select userland programs; names are added to `default`, while `core` keeps only core programs |
 | `DOCKER_IMAGE` | `apheleia:latest` | image tag | Docker image name |
 
 Successful builds write images to:

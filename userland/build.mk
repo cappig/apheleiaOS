@@ -111,6 +111,10 @@ USER_GAMES_OPTION_NAMES := $(sort \
 USER_EXTRA_DEFAULT_SKIP := tcc
 USERLAND_MODE_NAMES := all core default
 
+comma := ,
+empty :=
+space := $(empty) $(empty)
+
 ifeq ($(ARCH_TREE), riscv)
 USERLAND_DEFAULT_NAMES := $(USER_TOOLS_OPTION_NAMES)
 else
@@ -127,7 +131,7 @@ USERLAND_ALL_NAMES := \
 	$(USER_GAMES_OPTION_NAMES) \
 	$(USER_EXTRA_OPTION_NAMES)
 
-USERLAND_WORDS := $(strip $(USERLAND))
+USERLAND_WORDS := $(strip $(subst $(comma),$(space),$(USERLAND)))
 USERLAND_UNKNOWN := $(filter-out $(USERLAND_MODE_NAMES) $(USERLAND_ALL_NAMES),$(USERLAND_WORDS))
 ifneq ($(strip $(USERLAND_UNKNOWN)),)
 $(error Unknown userland selection(s) in USERLAND: $(USERLAND_UNKNOWN))
@@ -184,6 +188,9 @@ USER_PARSE_OBJ  := $(patsubst %.c, $(USER_OBJ_DIR)/%.c.o, $(USER_PARSE_SRC))
 USER_APP_OBJ    := $(patsubst %.c, $(USER_OBJ_DIR)/%.c.o, $(USER_APP_SRC))
 
 USER_USR_INCLUDE_HEADERS := \
+	$(wildcard libs/arch/*.h) \
+	$(wildcard libs/arch/riscv/*.h) \
+	$(wildcard libs/arch/x86/*.h) \
 	$(wildcard libs/libc/*.h) \
 	$(wildcard libs/libc/sys/*.h) \
 	$(wildcard libs/libc_usr/*.h) \
@@ -219,6 +226,9 @@ $(USER_USR_CRTN_OBJ): $(USER_CRTN_OBJ)
 
 $(USER_STAGE_USR_INCLUDE_STAMP): $(USER_USR_INCLUDE_HEADERS)
 	@mkdir -p "$(@D)" \
+		"$(USER_STAGE_USR_INCLUDE_DIR)/arch" \
+		"$(USER_STAGE_USR_INCLUDE_DIR)/arch/riscv" \
+		"$(USER_STAGE_USR_INCLUDE_DIR)/arch/x86" \
 		"$(USER_STAGE_USR_INCLUDE_DIR)/sys" \
 		"$(USER_STAGE_USR_INCLUDE_DIR)/libc_usr" \
 		"$(USER_STAGE_USR_INCLUDE_DIR)/libc_ext"
@@ -226,6 +236,9 @@ $(USER_STAGE_USR_INCLUDE_STAMP): $(USER_USR_INCLUDE_HEADERS)
 		"$(USER_STAGE_USR_INCLUDE_DIR)/.apheleia_headers"
 	@cp -f libs/libc/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/"
 	@cp -f libs/libc/sys/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/sys/"
+	@cp -f libs/arch/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/arch/"
+	@cp -f libs/arch/riscv/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/arch/riscv/"
+	@cp -f libs/arch/x86/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/arch/x86/"
 	@cp -f libs/libc_usr/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/libc_usr/"
 	@cp -f libs/libc_ext/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/libc_ext/"
 	@touch $@
