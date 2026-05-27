@@ -6,7 +6,7 @@
 #include <unistd.h>
 
 static void copy_fd(int fd) {
-    char buf[256];
+    char buf[BUFSIZ];
 
     for (;;) {
         ssize_t read_len = read(fd, buf, sizeof(buf));

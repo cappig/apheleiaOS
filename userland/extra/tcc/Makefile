@@ -138,7 +138,7 @@ $(TCC_BIN): $(USER_SHARED_OBJ) $(USER_LIBGCC) $(TCC_OBJ) \
 	$(call user_strip, $@)
 	@printf "%-3s  %s (%s)\n" "TCC" "$@" "$(TCC_TARGET_NAME)"
 
-$(USER_STAGE_DIR)/tcc: $(TCC_BIN) | $(USER_STAGE_BIN_STAMP)
+$(USER_STAGE_DIR)/tcc: $(TCC_BIN) $(USER_STAGE_BIN_STAMP)
 	@mkdir -p "$(@D)"
 	@cp -f "$<" "$@"
 

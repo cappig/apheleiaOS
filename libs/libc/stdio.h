@@ -5,7 +5,7 @@
 #include <sys/types.h>
 
 #define EOF          (-1)
-#define BUFSIZ       1024
+#define BUFSIZ       4096
 #define FILENAME_MAX 255
 #define L_tmpnam     64
 #define TMP_MAX      10000
@@ -27,6 +27,7 @@ typedef struct FILE {
     int buf_owned;
     char *buf;
     size_t buf_size;
+    size_t buf_pos;
     size_t buf_len;
 } FILE;
 

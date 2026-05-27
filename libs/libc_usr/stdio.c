@@ -12,6 +12,8 @@
 #define FILE_FLAG_WRITE  (1 << 1)
 #define FILE_FLAG_APPEND (1 << 2)
 #define FILE_FLAG_STATIC (1 << 3)
+#define FILE_FLAG_RBUF   (1 << 4)
+#define FILE_FLAG_WBUF   (1 << 5)
 
 static FILE std_in = {
     .fd = STDIN_FILENO,
@@ -22,6 +24,7 @@ static FILE std_in = {
     .buf_owned = 0,
     .buf = NULL,
     .buf_size = 0,
+    .buf_pos = 0,
     .buf_len = 0,
 };
 
@@ -34,6 +37,7 @@ static FILE std_out = {
     .buf_owned = 0,
     .buf = NULL,
     .buf_size = 0,
+    .buf_pos = 0,
     .buf_len = 0,
 };
 
@@ -46,6 +50,7 @@ static FILE std_err = {
     .buf_owned = 0,
     .buf = NULL,
     .buf_size = 0,
+    .buf_pos = 0,
     .buf_len = 0,
 };
 
@@ -63,6 +68,17 @@ static void init_stream(FILE *stream, int fd, int flags) {
     stream->buf_owned = 0;
     stream->buf = NULL;
     stream->buf_size = 0;
+    stream->buf_pos = 0;
+    stream->buf_len = 0;
+}
+
+static void clear_read_buf(FILE *stream) {
+    if (!stream || !(stream->flags & FILE_FLAG_RBUF)) {
+        return;
+    }
+
+    stream->flags &= ~FILE_FLAG_RBUF;
+    stream->buf_pos = 0;
     stream->buf_len = 0;
 }
 
@@ -80,7 +96,7 @@ static int write_all_fd(int fd, const char *buf, size_t len) {
 }
 
 static int flush_write_buf(FILE *stream) {
-    if (!stream || !stream->buf_len) {
+    if (!stream || !(stream->flags & FILE_FLAG_WBUF) || !stream->buf_len) {
         return 0;
     }
 
@@ -90,6 +106,25 @@ static int flush_write_buf(FILE *stream) {
     }
 
     stream->buf_len = 0;
+    stream->buf_pos = 0;
+    stream->flags &= ~FILE_FLAG_WBUF;
+    return 0;
+}
+
+static int ensure_buf(FILE *stream, size_t size) {
+    if (!stream || stream->buf) {
+        return 0;
+    }
+
+    stream->buf = malloc(size);
+    if (!stream->buf) {
+        errno = ENOMEM;
+        stream->error = 1;
+        return -1;
+    }
+
+    stream->buf_owned = 1;
+    stream->buf_size = size;
     return 0;
 }
 
@@ -98,20 +133,15 @@ static int ensure_write_buf(FILE *stream) {
         return 0;
     }
 
-    if (stream->buf) {
+    return ensure_buf(stream, BUFSIZ);
+}
+
+static int ensure_read_buf(FILE *stream) {
+    if (stream->buf_mode == _IONBF) {
         return 0;
     }
 
-    stream->buf = malloc(BUFSIZ);
-    if (!stream->buf) {
-        errno = ENOMEM;
-        stream->error = 1;
-        return -1;
-    }
-
-    stream->buf_owned = 1;
-    stream->buf_size = BUFSIZ;
-    return 0;
+    return ensure_buf(stream, BUFSIZ);
 }
 
 static int stream_write_all(FILE *stream, const char *buf, size_t len) {
@@ -126,6 +156,8 @@ static int stream_write_all(FILE *stream, const char *buf, size_t len) {
     if (!len) {
         return 0;
     }
+
+    clear_read_buf(stream);
 
     if (ensure_write_buf(stream) < 0) {
         return -1;
@@ -159,6 +191,7 @@ static int stream_write_all(FILE *stream, const char *buf, size_t len) {
 
         memcpy(stream->buf + stream->buf_len, buf + off, chunk);
         stream->buf_len += chunk;
+        stream->flags |= FILE_FLAG_WBUF;
         off += chunk;
     }
 
@@ -418,8 +451,51 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     }
 
     size_t got = 0;
+    char *out = ptr;
+
+    if (stream->buf_mode != _IONBF && ensure_read_buf(stream) < 0) {
+        return 0;
+    }
+
     while (got < want) {
-        ssize_t n = read(stream->fd, (char *)ptr + got, want - got);
+        if (stream->buf_mode != _IONBF && (stream->flags & FILE_FLAG_RBUF) && stream->buf_pos < stream->buf_len) {
+            size_t have = stream->buf_len - stream->buf_pos;
+            size_t chunk = want - got;
+
+            if (chunk > have) {
+                chunk = have;
+            }
+
+            memcpy(out + got, stream->buf + stream->buf_pos, chunk);
+            stream->buf_pos += chunk;
+            got += chunk;
+
+            if (stream->buf_pos == stream->buf_len) {
+                clear_read_buf(stream);
+            }
+
+            continue;
+        }
+
+        if (stream->buf_mode != _IONBF && want - got < stream->buf_size) {
+            ssize_t n = read(stream->fd, stream->buf, stream->buf_size);
+            if (n < 0) {
+                stream->error = 1;
+                break;
+            }
+
+            if (!n) {
+                stream->eof = 1;
+                break;
+            }
+
+            stream->flags |= FILE_FLAG_RBUF;
+            stream->buf_pos = 0;
+            stream->buf_len = (size_t)n;
+            continue;
+        }
+
+        ssize_t n = read(stream->fd, out + got, want - got);
         if (n < 0) {
             stream->error = 1;
             break;
@@ -472,6 +548,13 @@ int fseek(FILE *stream, long offset, int whence) {
         return -1;
     }
 
+    if ((stream->flags & FILE_FLAG_RBUF) && whence == SEEK_CUR) {
+        size_t unread = stream->buf_len - stream->buf_pos;
+        offset -= (long)unread;
+    }
+
+    clear_read_buf(stream);
+
     if (lseek(stream->fd, (off_t)offset, whence) < 0) {
         stream->error = 1;
         return -1;
@@ -496,7 +579,13 @@ long ftell(FILE *stream) {
         return -1;
     }
 
-    return (long)(off + (off_t)stream->buf_len);
+    if (stream->flags & FILE_FLAG_RBUF) {
+        off -= (off_t)(stream->buf_len - stream->buf_pos);
+    } else if (stream->flags & FILE_FLAG_WBUF) {
+        off += (off_t)stream->buf_len;
+    }
+
+    return (long)off;
 }
 
 int fgetc(FILE *stream) {
@@ -596,8 +685,10 @@ int setvbuf(FILE *restrict stream, char *restrict buf, int mode, size_t size) {
         free(stream->buf);
     }
 
+    stream->flags &= ~(FILE_FLAG_RBUF | FILE_FLAG_WBUF);
     stream->buf = NULL;
     stream->buf_size = 0;
+    stream->buf_pos = 0;
     stream->buf_len = 0;
     stream->buf_owned = 0;
     stream->buf_mode = mode;
@@ -653,16 +744,26 @@ int ungetc(int ch, FILE *stream) {
         return EOF;
     }
 
-    off_t current = lseek(stream->fd, 0, SEEK_CUR);
-    if (current <= 0) {
-        errno = ENOTSUP;
-        stream->error = 1;
-        return EOF;
-    }
+    if (stream->flags & FILE_FLAG_RBUF) {
+        if (!stream->buf_pos || stream->buf[stream->buf_pos - 1] != (char)(unsigned char)ch) {
+            errno = ENOTSUP;
+            stream->error = 1;
+            return EOF;
+        }
 
-    if (lseek(stream->fd, -1, SEEK_CUR) < 0) {
-        stream->error = 1;
-        return EOF;
+        stream->buf_pos--;
+    } else {
+        off_t current = lseek(stream->fd, 0, SEEK_CUR);
+        if (current <= 0) {
+            errno = ENOTSUP;
+            stream->error = 1;
+            return EOF;
+        }
+
+        if (lseek(stream->fd, -1, SEEK_CUR) < 0) {
+            stream->error = 1;
+            return EOF;
+        }
     }
 
     stream->eof = 0;
