@@ -283,12 +283,17 @@ static void _build_font_map_index(const font_t *font) {
 
     _free_font_map_index();
 
-    font_map_t *sorted = malloc(sizeof(font_map_t) * font->map_count);
+    size_t map_count = font->map_count;
+    if (map_count > (size_t)-1 / sizeof(font_map_t)) {
+        return;
+    }
+
+    font_map_t *sorted = malloc(sizeof(font_map_t) * map_count);
     if (!sorted) {
         return;
     }
 
-    memcpy(sorted, font->map, sizeof(font_map_t) * font->map_count);
+    memcpy(sorted, font->map, sizeof(font_map_t) * map_count);
 
     for (u32 i = 1; i < font->map_count; i++) {
         font_map_t current = sorted[i];
@@ -1689,7 +1694,11 @@ static void _init_screens(size_t active_screen) {
         return;
     }
 
-    console_state.cells = calloc(console_state.screen_count * count, sizeof(console_cell_t));
+    if (console_state.screen_count > (size_t)-1 / count) {
+        console_state.cells = NULL;
+    } else {
+        console_state.cells = calloc(console_state.screen_count * count, sizeof(console_cell_t));
+    }
 
     if (!console_state.cells) {
         if (console_state.screens) {

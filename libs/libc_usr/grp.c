@@ -10,9 +10,12 @@
 #define GROUP_PATH "/etc/group"
 
 static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
-    size_t n = strlen(src) + 1;
+    if (!cursor || !left || !out || !src) {
+        return ERANGE;
+    }
 
-    if (!cursor || !left || !out || !src || n > *left) {
+    size_t n = strlen(src) + 1;
+    if (n > *left) {
         return ERANGE;
     }
 

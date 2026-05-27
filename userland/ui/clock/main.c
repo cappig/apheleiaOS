@@ -38,7 +38,7 @@ static void print_usage(const char *prog) {
 }
 
 static int parse_args(int argc, char **argv, clock_options_t *out) {
-    if (!out) {
+    if (!argv || !out) {
         return -1;
     }
 

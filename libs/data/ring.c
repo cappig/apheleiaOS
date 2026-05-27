@@ -1,6 +1,7 @@
 #include "ring.h"
 
 #include <base/types.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -112,6 +113,10 @@ static size_t ring_free(const ring_buffer_t *ring) {
 
 
 ring_buffer_t *ring_buffer_create(size_t size) {
+    if (size < 2 || (size & (size - 1))) {
+        return NULL;
+    }
+
     ring_buffer_t *ret = calloc(1, sizeof(ring_buffer_t));
 
     if (!ret) {
@@ -230,6 +235,10 @@ ring_queue_t *ring_queue_create(size_t elem_size, size_t cap) {
         return NULL;
     }
 
+    if (cap > SIZE_MAX / elem_size) {
+        return NULL;
+    }
+
     ring_queue_t *q = calloc(1, sizeof(*q));
     if (!q) {
         return NULL;
@@ -335,7 +344,7 @@ void ring_queue_clear(ring_queue_t *q) {
 }
 
 bool ring_queue_reserve(ring_queue_t *q, size_t needed) {
-    if (!q) {
+    if (!q || !q->elem_size) {
         return false;
     }
 
@@ -343,9 +352,17 @@ bool ring_queue_reserve(ring_queue_t *q, size_t needed) {
         return true;
     }
 
-    size_t new_cap = q->cap ? q->cap * 2 : needed;
+    size_t new_cap = needed;
+    if (q->cap && q->cap <= SIZE_MAX / 2) {
+        new_cap = q->cap * 2;
+    }
+
     if (new_cap < needed) {
         new_cap = needed;
+    }
+
+    if (new_cap > SIZE_MAX / q->elem_size) {
+        return false;
     }
 
     u8 *new_buf = malloc(new_cap * q->elem_size);

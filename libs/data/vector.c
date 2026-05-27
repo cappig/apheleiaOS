@@ -1,6 +1,7 @@
 #include "vector.h"
 
 #include <base/types.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -16,11 +17,11 @@ static size_t _vec_grow_capacity(size_t current, size_t needed) {
     }
 
     while (capacity < needed) {
-        size_t grown = capacity * VEC_GROWTH_RATE;
-        if (grown <= capacity) {
+        if (capacity > SIZE_MAX / VEC_GROWTH_RATE) {
             return needed;
         }
 
+        size_t grown = capacity * VEC_GROWTH_RATE;
         capacity = grown;
     }
 
@@ -29,6 +30,10 @@ static size_t _vec_grow_capacity(size_t current, size_t needed) {
 
 
 vector_t *vec_create_sized(size_t capacity, size_t elem_size) {
+    if (!elem_size || capacity > SIZE_MAX / elem_size) {
+        return NULL;
+    }
+
     vector_t *vec = calloc(1, sizeof(vector_t));
 
     if (!vec) {
@@ -95,7 +100,7 @@ size_t vec_capacity(const vector_t *vec) {
 }
 
 bool vec_resize(vector_t *vec, size_t size) {
-    if (!vec) {
+    if (!vec || !vec->elem_size || size > SIZE_MAX / vec->elem_size) {
         return false;
     }
 
@@ -116,7 +121,7 @@ bool vec_resize(vector_t *vec, size_t size) {
 
 
 bool vec_reserve(vector_t *vec, size_t capacity) {
-    if (!vec) {
+    if (!vec || !vec->elem_size || capacity > SIZE_MAX / vec->elem_size) {
         return false;
     }
 
@@ -146,6 +151,10 @@ bool vec_reserve(vector_t *vec, size_t capacity) {
 }
 
 bool vec_reserve_more(vector_t *vec, size_t additional) {
+    if (!vec || additional > SIZE_MAX - vec->capacity) {
+        return false;
+    }
+
     return vec_reserve(vec, vec->capacity + additional);
 }
 

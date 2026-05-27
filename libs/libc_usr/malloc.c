@@ -1,3 +1,5 @@
+#include <errno.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -23,12 +25,29 @@ typedef struct block {
 
 static block_t *free_list = NULL;
 
-static size_t _align(size_t n) {
-    return (n + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
+static int _align_size(size_t n, size_t align, size_t *out) {
+    if (!out || !align) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t mask = align - 1;
+    if (n > SIZE_MAX - mask) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    *out = (n + mask) & ~mask;
+    return 0;
 }
 
-static size_t _page_align(size_t n) {
-    return (n + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
+static int _alloc_total(size_t size, size_t *out) {
+    if (size > SIZE_MAX - HEADER_SIZE) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    return _align_size(HEADER_SIZE + size, PAGE_SIZE, out);
 }
 
 static void *_mmap_pages(size_t bytes) {
@@ -60,8 +79,13 @@ static void _split(block_t *block, size_t needed) {
 // Extend the heap by allocating a new arena
 static block_t *_grow_heap(size_t needed) {
     size_t arena = ARENA_SIZE;
-    if (needed + HEADER_SIZE > arena) {
-        arena = _page_align(needed + HEADER_SIZE);
+    if (needed > SIZE_MAX - HEADER_SIZE) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    if (needed + HEADER_SIZE > arena && _alloc_total(needed, &arena) < 0) {
+        return NULL;
     }
 
     void *mem = _mmap_pages(arena);
@@ -85,11 +109,17 @@ void *malloc(size_t size) {
         size = 1;
     }
 
-    size = _align(size);
+    if (_align_size(size, ALIGNMENT, &size) < 0) {
+        return NULL;
+    }
 
     // Large allocations get their own mmap region
     if (size >= MMAP_THRESHOLD) {
-        size_t total = _page_align(HEADER_SIZE + size);
+        size_t total = 0;
+        if (_alloc_total(size, &total) < 0) {
+            return NULL;
+        }
+
         void *mem = _mmap_pages(total);
 
         if (!mem) {
@@ -180,7 +210,9 @@ void *realloc(void *ptr, size_t size) {
     block_t *block = (block_t *)((char *)ptr - HEADER_SIZE);
     size_t old_size = block->size;
 
-    size = _align(size);
+    if (_align_size(size, ALIGNMENT, &size) < 0) {
+        return NULL;
+    }
 
     if (old_size >= size) {
         return ptr;

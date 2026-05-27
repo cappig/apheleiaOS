@@ -44,10 +44,26 @@ static bool _font_map_reserve(font_map_builder_t *builder, size_t needed) {
         return true;
     }
 
-    size_t new_cap = builder->cap ? builder->cap * 2 : 128;
+    size_t new_cap = builder->cap ? builder->cap : 128;
+
+    if (new_cap < needed && builder->cap) {
+        if (new_cap > (size_t)-1 / 2) {
+            return false;
+        }
+
+        new_cap *= 2;
+    }
 
     while (new_cap < needed) {
+        if (new_cap > (size_t)-1 / 2) {
+            return false;
+        }
+
         new_cap *= 2;
+    }
+
+    if (new_cap > (size_t)-1 / sizeof(font_map_t)) {
+        return false;
     }
 
     font_map_t *next = malloc(new_cap * sizeof(*next));

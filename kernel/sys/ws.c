@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <gui/input.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
@@ -1979,7 +1980,13 @@ static ssize_t _ws_ev_read_as(u32 id, pid_t caller_pid, void *buf, size_t offset
             ws_input_event_t event = *slot;
 
             if (apply_resize_ack && event.type == INPUT_EVENT_WINDOW_RESIZE && event.width && event.height) {
-                u32 io_stride = event.stride ? event.stride : event.width * sizeof(u32);
+                u64 auto_stride = (u64)event.width * sizeof(u32);
+                if (auto_stride > UINT32_MAX) {
+                    ring_queue_drop_head(window->ev_queue);
+                    continue;
+                }
+
+                u32 io_stride = event.stride ? event.stride : (u32)auto_stride;
                 u64 io_fb_size_u64 = (u64)io_stride * (u64)event.height;
 
                 if (io_stride && io_fb_size_u64 <= WS_MAX_FB_BYTES) {

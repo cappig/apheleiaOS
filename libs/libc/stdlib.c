@@ -347,13 +347,17 @@ void *malloc(size_t size) {
 }
 
 void *calloc(size_t num, size_t size) {
-    if (!num)
+    if (!num || !size)
         return NULL;
 
-    void *ret = malloc(size * num);
+    if (num > SIZE_MAX / size)
+        return NULL;
+
+    size_t total = size * num;
+    void *ret = malloc(total);
 
     if (ret)
-        memset(ret, 0, size * num);
+        memset(ret, 0, total);
 
     return ret;
 }

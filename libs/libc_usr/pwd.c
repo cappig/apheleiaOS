@@ -11,8 +11,12 @@
 #define PASSWD_PATH "/etc/passwd"
 
 static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
+    if (!cursor || !left || !out || !src) {
+        return ERANGE;
+    }
+
     size_t n = strlen(src) + 1;
-    if (!cursor || !left || !out || !src || n > *left) {
+    if (n > *left) {
         return ERANGE;
     }
 

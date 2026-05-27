@@ -51,6 +51,11 @@ static int _ensure_owned_env(void) {
     }
 
     size_t count = _count_env(environ);
+    if (count == SIZE_MAX) {
+        errno = ENOMEM;
+        return -1;
+    }
+
     char **copy = calloc(count + 1, sizeof(char *));
     if (!copy) {
         errno = ENOMEM;
@@ -165,7 +170,13 @@ int setenv(const char *name, const char *value, int overwrite) {
 
     size_t name_len = strlen(name);
     size_t value_len = strlen(value);
-    char *entry = malloc(name_len + 1 + value_len + 1);
+    if (name_len > SIZE_MAX - 2 || value_len > SIZE_MAX - name_len - 2) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    size_t entry_len = name_len + value_len + 2;
+    char *entry = malloc(entry_len);
     if (!entry) {
         errno = ENOMEM;
         return -1;
@@ -179,6 +190,12 @@ int setenv(const char *name, const char *value, int overwrite) {
         free(environ[idx]);
         environ[idx] = entry;
         return 0;
+    }
+
+    if (env_count > SIZE_MAX / sizeof(char *) - 2) {
+        free(entry);
+        errno = ENOMEM;
+        return -1;
     }
 
     char **new_env = realloc(environ, (env_count + 2) * sizeof(char *));

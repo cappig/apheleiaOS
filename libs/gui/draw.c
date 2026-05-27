@@ -125,9 +125,26 @@ static bool _reserve_font_map(size_t needed) {
         return true;
     }
 
-    size_t new_cap = font_cache.map_cap ? font_cache.map_cap * 2 : 128;
-    while (new_cap < needed) {
+    size_t new_cap = font_cache.map_cap ? font_cache.map_cap : 128;
+
+    if (new_cap < needed && font_cache.map_cap) {
+        if (new_cap > (size_t)-1 / 2) {
+            return false;
+        }
+
         new_cap *= 2;
+    }
+
+    while (new_cap < needed) {
+        if (new_cap > (size_t)-1 / 2) {
+            return false;
+        }
+
+        new_cap *= 2;
+    }
+
+    if (new_cap > (size_t)-1 / sizeof(draw_font_map_entry_t)) {
+        return false;
     }
 
     draw_font_map_entry_t *next = malloc(new_cap * sizeof(*next));
