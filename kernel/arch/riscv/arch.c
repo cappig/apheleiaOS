@@ -1092,7 +1092,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         }
 
         log_debug(
-        "rootfs paddr=%#llx size=%zu end=%#lx",
+            "rootfs paddr=%#llx size=%zu end=%#lx",
             (unsigned long long)boot.rootfs_paddr,
             boot.rootfs_size,
             (unsigned long)rootfs_end
@@ -1115,11 +1115,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     log_debug("kernel page table root=%#lx", (unsigned long)(uintptr_t)mmio.root);
 
     _early_map_range(mmio.root, boot.mem_paddr, boot.mem_paddr, boot.mem_size, PT_WRITE | PT_GLOBAL);
-    log_debug(
-        "identity map %#llx+%#llx",
-        (unsigned long long)boot.mem_paddr,
-        (unsigned long long)boot.mem_size
-    );
+    log_debug("identity map %#llx+%#llx", (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size);
 
     _mmio_map_regions(mmio.root);
     log_debug("mapped %zu MMIO regions", mmio.count);

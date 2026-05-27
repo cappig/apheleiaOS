@@ -27,23 +27,8 @@ static char sh_complete_path[SH_PATH_MAX] = "/bin";
 static bool sh_complete_color = true;
 
 static const char *sh_builtins[] = {
-    "bg",
-    "cd",
-    "echo",
-    "env",
-    "exit",
-    "export",
-    "fg",
-    "help",
-    "history",
-    "jobs",
-    "set",
-    "time",
-    "type",
-    "umask",
-    "unset",
-    "where",
-    NULL,
+    "bg",   "cd",  "echo", "env",  "exit",  "export", "fg",    "help", "history",
+    "jobs", "set", "time", "type", "umask", "unset",  "where", NULL,
 };
 
 

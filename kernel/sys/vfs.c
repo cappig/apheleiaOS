@@ -15,7 +15,7 @@
 #include "panic.h"
 
 
-#define VFS_MAX_SYMLINKS 16
+#define VFS_MAX_SYMLINKS    16
 #define VFS_PATH_CACHE_SIZE 64
 
 typedef struct {

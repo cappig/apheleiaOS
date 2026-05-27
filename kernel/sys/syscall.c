@@ -87,8 +87,8 @@ static bool _open_access_valid(int flags) {
 }
 
 static bool _open_flags_valid(int flags) {
-    const int known = O_ACCMODE | O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC | O_APPEND | O_NONBLOCK | O_SYNC |
-                      O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW;
+    const int known = O_ACCMODE | O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC | O_APPEND | O_NONBLOCK | O_SYNC | O_DIRECTORY |
+                      O_CLOEXEC | O_NOFOLLOW;
 
     return (flags & ~known) == 0;
 }

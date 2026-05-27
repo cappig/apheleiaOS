@@ -247,7 +247,12 @@ void driver_load_stage(driver_stage_t stage) {
             continue;
         }
 
-        log_warn("failed to load %s driver in %s stage: %s", desc->name, _driver_stage_name(stage), driver_err_string(err));
+        log_warn(
+            "failed to load %s driver in %s stage: %s",
+            desc->name,
+            _driver_stage_name(stage),
+            driver_err_string(err)
+        );
     }
 }
 

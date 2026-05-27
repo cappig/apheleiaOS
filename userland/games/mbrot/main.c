@@ -6,8 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <term_size.h>
-#include <unistd.h>
 #include <ui.h>
+#include <unistd.h>
 
 #define MBROT_RES_ADJUST_MIN   (-1)
 #define MBROT_RES_ADJUST_MAX   4

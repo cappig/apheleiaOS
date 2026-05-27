@@ -508,7 +508,14 @@ static bool _load_segments_64(sched_thread_t *thread, const exec_file_t *file, u
             }
         }
 
-        if (!_copy_segment_from_file(file->node, file->size, ph->offset, ph->file_size, (uintptr_t)ph->vaddr, loaded_pages)) {
+        if (!_copy_segment_from_file(
+                file->node,
+                file->size,
+                ph->offset,
+                ph->file_size,
+                (uintptr_t)ph->vaddr,
+                loaded_pages
+            )) {
             goto out;
         }
     }
@@ -588,7 +595,14 @@ static bool _load_segments_32(sched_thread_t *thread, const exec_file_t *file, u
             }
         }
 
-        if (!_copy_segment_from_file(file->node, file->size, ph->offset, ph->file_size, (uintptr_t)ph->vaddr, loaded_pages)) {
+        if (!_copy_segment_from_file(
+                file->node,
+                file->size,
+                ph->offset,
+                ph->file_size,
+                (uintptr_t)ph->vaddr,
+                loaded_pages
+            )) {
             goto out;
         }
     }

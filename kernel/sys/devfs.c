@@ -1,7 +1,7 @@
 #include "devfs.h"
 
-#include <base/macros.h>
 #include <arch/arch.h>
+#include <base/macros.h>
 #include <base/units.h>
 #include <data/vector.h>
 #include <errno.h>
@@ -101,13 +101,7 @@ static void _stamp_dev_node(vfs_node_t *node) {
     node->time.accessed = stamp;
 }
 
-static void _configure_dev_node(
-    vfs_node_t *node,
-    u32 type,
-    mode_t mode,
-    vfs_interface_t *interface,
-    void *priv
-) {
+static void _configure_dev_node(vfs_node_t *node, u32 type, mode_t mode, vfs_interface_t *interface, void *priv) {
     if (!node) {
         return;
     }

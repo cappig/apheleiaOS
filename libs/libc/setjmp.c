@@ -2,6 +2,7 @@
 
 #include <setjmp.h>
 
+// clang-format off
 #if defined(__riscv) && __riscv_xlen == 64
 __asm__(
     ".globl setjmp\n"
@@ -160,3 +161,4 @@ __asm__(
 #else
 #error "Unsupported architecture"
 #endif
+// clang-format on

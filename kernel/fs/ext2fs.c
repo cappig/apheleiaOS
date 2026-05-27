@@ -225,7 +225,8 @@ static bool _read_inode_bytes(ext2_private_t *priv, disk_partition_t *part, void
     return ok;
 }
 
-static bool _write_inode_bytes(ext2_private_t *priv, disk_partition_t *part, const void *in, size_t offset, size_t len) {
+static bool
+_write_inode_bytes(ext2_private_t *priv, disk_partition_t *part, const void *in, size_t offset, size_t len) {
     if (!priv || !part || !in) {
         return false;
     }
@@ -2411,7 +2412,7 @@ static ssize_t _dir_rename(
         int drop_ret = _drop_inode_locked(priv, part, new_info, target, target_ino, &target_inode);
 
         if (drop_ret < 0) {
-        log_warn("rename '%s': old inode cleanup failed", new_name);
+            log_warn("rename '%s': old inode cleanup failed", new_name);
         }
     }
 

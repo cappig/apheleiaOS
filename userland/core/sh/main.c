@@ -429,14 +429,7 @@ static void print_jobs(void) {
         const char *state = job->state == JOB_STOPPED ? "Stopped" : "Running";
         const char *state_color = job->state == JOB_STOPPED ? SH_C_BLUE : SH_C_GREEN;
 
-        sh_printf(
-            "[%d] %s%s%s  %s\n",
-            job->id,
-            sh_color(state_color),
-            state,
-            sh_color(SH_C_RESET),
-            job->cmd
-        );
+        sh_printf("[%d] %s%s%s  %s\n", job->id, sh_color(state_color), state, sh_color(SH_C_RESET), job->cmd);
     }
 }
 
@@ -1398,23 +1391,8 @@ static bool parse_umask(const char *text, mode_t *out) {
 }
 
 static const char *sh_builtin_names[] = {
-    "help",
-    "echo",
-    "exit",
-    "set",
-    "export",
-    "unset",
-    "env",
-    "cd",
-    "umask",
-    "history",
-    "jobs",
-    "fg",
-    "bg",
-    "time",
-    "where",
-    "type",
-    NULL,
+    "help",    "echo", "exit", "set", "export", "unset", "env",  "cd", "umask",
+    "history", "jobs", "fg",   "bg",  "time",   "where", "type", NULL,
 };
 
 static bool is_builtin_name(const char *name) {
