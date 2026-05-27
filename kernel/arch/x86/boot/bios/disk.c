@@ -3,6 +3,7 @@
 #include <base/macros.h>
 #include <base/types.h>
 #include <common/ext2.h>
+#include <limits.h>
 #include <log/log.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -59,6 +60,11 @@ static bool _bios_read_lba(void *dest, size_t lba, u16 sectors) {
 
 int read_disk(void *dest, size_t offset, size_t bytes) {
     size_t ss = disk_sector_size;
+
+    if (!ss) {
+        panic("invalid disk sector size");
+    }
+
     size_t lba = offset / ss;
     size_t sector_off = offset % ss;
 
@@ -68,6 +74,10 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
     uint8_t *out = dest;
 
     while (bytes > 0) {
+        if (bytes > SIZE_MAX - sector_off) {
+            panic("disk read size overflow");
+        }
+
         size_t bytes_window = bytes + sector_off;
         size_t sectors_window = DIV_ROUND_UP(bytes_window, ss);
         u16 sectors = (u16)min(sectors_window, (size_t)max_sectors);
@@ -92,6 +102,11 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
 
 static bool _read_rootfs_bytes(void *dest, size_t offset, size_t bytes, void *ctx) {
     (void)ctx;
+
+    if (offset > SIZE_MAX - rootfs_base) {
+        panic("rootfs read offset overflow");
+    }
+
     read_disk(dest, rootfs_base + offset, bytes);
     return true;
 }

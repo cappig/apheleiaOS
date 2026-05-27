@@ -2,6 +2,8 @@
 
 #include <arch/arch.h>
 #include <base/types.h>
+#include <errno.h>
+#include <limits.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
@@ -103,6 +105,19 @@ static void ata_delay(ata_device_t *dev) {
     for (size_t i = 0; i < 4; i++) {
         inb(dev->channel->ctrl_base);
     }
+}
+
+static bool ata_disk_size(const ata_device_t *ata, size_t *size_out) {
+    if (!ata || !size_out || !ata->sector_size) {
+        return false;
+    }
+
+    if (ata->sector_count > SIZE_MAX / ata->sector_size) {
+        return false;
+    }
+
+    *size_out = ata->sector_count * ata->sector_size;
+    return true;
 }
 
 static void ata_lock(ata_device_t *dev) {
@@ -650,14 +665,20 @@ static ssize_t ata_read(disk_dev_t *dev, void *dest, size_t offset, size_t bytes
     ata_lock(ata);
 
     ssize_t ret = -1;
-    size_t disk_size = ata->sector_count * ata->sector_size;
+    size_t disk_size = 0;
+
+    if (!ata_disk_size(ata, &disk_size)) {
+        ret = -EOVERFLOW;
+        goto done;
+    }
 
     if (offset >= disk_size) {
         goto done_empty;
     }
 
-    if (offset + bytes > disk_size) {
-        bytes = disk_size - offset;
+    size_t left = disk_size - offset;
+    if (bytes > left) {
+        bytes = left;
     }
 
     if (!bytes) {
@@ -779,14 +800,20 @@ static ssize_t ata_write(disk_dev_t *dev, void *src, size_t offset, size_t bytes
     ata_lock(ata);
 
     ssize_t ret = -1;
-    size_t disk_size = ata->sector_count * ata->sector_size;
+    size_t disk_size = 0;
+
+    if (!ata_disk_size(ata, &disk_size)) {
+        ret = -EOVERFLOW;
+        goto done;
+    }
 
     if (offset >= disk_size) {
         goto done_empty;
     }
 
-    if (offset + bytes > disk_size) {
-        bytes = disk_size - offset;
+    size_t left = disk_size - offset;
+    if (bytes > left) {
+        bytes = left;
     }
 
     if (!bytes) {
@@ -948,10 +975,17 @@ static bool ata_probe_device(ata_channel_t *ch, bool is_master, size_t dev_index
     }
 
     if (found_atapi) {
+        size_t scale = ATAPI_SECTOR_SIZE / ATA_SECTOR_SIZE;
+        if (ata->sector_count > SIZE_MAX / scale) {
+            free(disk);
+            free(ata);
+            return false;
+        }
+
         disk->name = strdup(atapi_disk_names[dev_index]);
         disk->type = DISK_OPTICAL;
         disk->sector_size = ATA_SECTOR_SIZE;
-        disk->sector_count = ata->sector_count * (ATAPI_SECTOR_SIZE / ATA_SECTOR_SIZE);
+        disk->sector_count = ata->sector_count * scale;
     } else {
         disk->name = strdup(ata_disk_names[dev_index]);
         disk->type = DISK_HARD;

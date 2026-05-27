@@ -217,7 +217,7 @@ static EFI_STATUS _uefi_fail(const CHAR16 *msg, EFI_STATUS status) {
     size_t i = 0;
 
     if (msg) {
-        while (msg[i] && i < sizeof(text) - 1) {
+        while (i < sizeof(text) - 1 && msg[i]) {
             CHAR16 c = msg[i];
             text[i] = (c <= 0x7f) ? (char)c : '?';
             i++;
@@ -251,7 +251,7 @@ static void _boot_log_sink(const char *s) {
         return;
     }
 
-    while (s[i] && i < LOG_BUF_SIZE - 1) {
+    while (i < LOG_BUF_SIZE - 1 && s[i]) {
         out[i] = (unsigned char)s[i];
         i++;
     }

@@ -1,6 +1,7 @@
 #include "elf.h"
 
 #include <parse/elf.h>
+#include <stdint.h>
 
 static bool elf_range_valid(size_t size, u64 offset, u64 length) {
     if (!size) {
@@ -55,6 +56,14 @@ static bool elf_walk_32(const u8 *blob, size_t size, elf_segment_cb cb, void *ct
             continue;
         }
 
+        if (ph->file_size > ph->mem_size) {
+            return false;
+        }
+
+        if ((u64)ph->vaddr > (u64)UINT32_MAX - ph->mem_size) {
+            return false;
+        }
+
         if (!elf_range_valid(size, ph->offset, ph->file_size)) {
             return false;
         }
@@ -107,6 +116,14 @@ static bool elf_walk_64(const u8 *blob, size_t size, elf_segment_cb cb, void *ct
 
         if (!ph->file_size && !ph->mem_size) {
             continue;
+        }
+
+        if (ph->file_size > ph->mem_size) {
+            return false;
+        }
+
+        if (ph->vaddr > (u64)-1 - ph->mem_size) {
+            return false;
         }
 
         if (!elf_range_valid(size, ph->offset, ph->file_size)) {

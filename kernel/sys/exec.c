@@ -8,6 +8,7 @@
 #include <base/macros.h>
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <log/log.h>
 #include <parse/elf.h>
 #include <sched/signal.h>

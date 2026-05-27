@@ -1,6 +1,8 @@
 #include "disk.h"
 
+#include <errno.h>
 #include <fs/ext2.h>
+#include <limits.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <stdio.h>
@@ -595,9 +597,14 @@ static ssize_t _vfs_read(vfs_node_t *node, void *buf, size_t offset, size_t len,
             return 0;
         }
 
-        if (offset + len > part->size) {
-            len = part->size - offset;
+        size_t left = part->size - offset;
+        if (len > left) {
+            len = left;
         }
+    }
+
+    if (offset > SIZE_MAX - part->offset) {
+        return -EOVERFLOW;
     }
 
     return part->disk->interface->read(part->disk, buf, part->offset + offset, len);
@@ -621,9 +628,14 @@ static ssize_t _vfs_write(vfs_node_t *node, void *buf, size_t offset, size_t len
             return 0;
         }
 
-        if (offset + len > part->size) {
-            len = part->size - offset;
+        size_t left = part->size - offset;
+        if (len > left) {
+            len = left;
         }
+    }
+
+    if (offset > SIZE_MAX - part->offset) {
+        return -EOVERFLOW;
     }
 
     return part->disk->interface->write(part->disk, buf, part->offset + offset, len);

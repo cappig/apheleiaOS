@@ -154,6 +154,10 @@ static bool _symbol_section_to_table(const elf_view_t *view, const elf_section_v
         return false;
     }
 
+    if (text_count > (size_t)-1 / sizeof(symbol_entry_t)) {
+        return false;
+    }
+
     symbols.table.map = malloc(text_count * sizeof(symbol_entry_t));
     if (!symbols.table.map) {
         return false;

@@ -62,6 +62,10 @@ static bool _ext2_read(disk_partition_t *part, void *dest, size_t offset, size_t
         return false;
     }
 
+    if (offset > (size_t)-1 - part->offset) {
+        return false;
+    }
+
     ssize_t read = part->disk->interface->read(part->disk, dest, part->offset + offset, bytes);
 
     return read == (ssize_t)bytes;
@@ -69,6 +73,10 @@ static bool _ext2_read(disk_partition_t *part, void *dest, size_t offset, size_t
 
 static bool _ext2_write(disk_partition_t *part, const void *src, size_t offset, size_t bytes) {
     if (!part || !part->disk || !part->disk->interface || !part->disk->interface->write) {
+        return false;
+    }
+
+    if (offset > (size_t)-1 - part->offset) {
         return false;
     }
 

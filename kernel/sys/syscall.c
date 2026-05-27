@@ -86,6 +86,13 @@ static bool _open_access_valid(int flags) {
     return access == O_RDONLY || access == O_WRONLY || access == O_RDWR;
 }
 
+static bool _open_flags_valid(int flags) {
+    const int known = O_ACCMODE | O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC | O_APPEND | O_NONBLOCK | O_SYNC |
+                      O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW;
+
+    return (flags & ~known) == 0;
+}
+
 static void syscall_count(u64 number, u64 ret) {
     if (number >= APHELEIA_SYSCALL_COUNT) {
         __atomic_fetch_add(&syscall_unknown_count, 1, __ATOMIC_RELAXED);
@@ -1490,7 +1497,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         return -EINVAL;
     }
 
-    if (!_open_access_valid(flags)) {
+    if (!_open_flags_valid(flags) || !_open_access_valid(flags)) {
         return -EINVAL;
     }
 
@@ -1573,6 +1580,10 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     }
 
     vfs_node_t *resolved_node = node;
+    if ((flags & O_NOFOLLOW) && VFS_IS_LINK(resolved_node->type)) {
+        return _open_fail(ptmx_open, ptmx_index, -ELOOP);
+    }
+
     if (VFS_IS_LINK(resolved_node->type)) {
         resolved_node = vfs_resolve_node(resolved_node);
     }

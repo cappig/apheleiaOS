@@ -207,8 +207,13 @@ bool elf_parse_header(elf_attributes_t *attribs, elf_header_t *header) {
             attribs->base = p_header->vaddr;
         }
 
-        if (attribs->top < p_header->vaddr + p_header->mem_size) {
-            attribs->top = p_header->vaddr + p_header->mem_size;
+        if (p_header->vaddr > (u64)-1 - p_header->mem_size) {
+            return false;
+        }
+
+        u64 top = p_header->vaddr + p_header->mem_size;
+        if (attribs->top < top) {
+            attribs->top = top;
         }
 
         if (attribs->alignment < p_header->align) {

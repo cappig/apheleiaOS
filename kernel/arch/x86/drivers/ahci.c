@@ -4,6 +4,8 @@
 #include <base/macros.h>
 #include <base/types.h>
 #include <base/units.h>
+#include <errno.h>
+#include <limits.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
 #include <sched/signal.h>
@@ -166,6 +168,19 @@ static bool ahci_wait_port_ready(ahci_hba_port_t *port, u64 timeout_ticks) {
         arch_cpu_relax();
     }
 
+    return true;
+}
+
+static bool ahci_disk_size(const ahci_device_t *dev, size_t *size_out) {
+    if (!dev || !size_out || !dev->sector_size) {
+        return false;
+    }
+
+    if (dev->sector_count > SIZE_MAX / dev->sector_size) {
+        return false;
+    }
+
+    *size_out = dev->sector_count * dev->sector_size;
     return true;
 }
 
@@ -593,14 +608,20 @@ static ssize_t ahci_read(disk_dev_t *disk, void *dest, size_t offset, size_t byt
     ahci_lock(dev);
 
     ssize_t ret = -1;
-    size_t disk_size = dev->sector_count * dev->sector_size;
+    size_t disk_size = 0;
+
+    if (!ahci_disk_size(dev, &disk_size)) {
+        ret = -EOVERFLOW;
+        goto done;
+    }
 
     if (offset >= disk_size) {
         goto done_empty;
     }
 
-    if (offset + bytes > disk_size) {
-        bytes = disk_size - offset;
+    size_t left = disk_size - offset;
+    if (bytes > left) {
+        bytes = left;
     }
 
     if (!bytes) {
@@ -675,14 +696,20 @@ static ssize_t ahci_write(disk_dev_t *disk, void *src, size_t offset, size_t byt
     ahci_lock(dev);
 
     ssize_t ret = -1;
-    size_t disk_size = dev->sector_count * dev->sector_size;
+    size_t disk_size = 0;
+
+    if (!ahci_disk_size(dev, &disk_size)) {
+        ret = -EOVERFLOW;
+        goto done;
+    }
 
     if (offset >= disk_size) {
         goto done_empty;
     }
 
-    if (offset + bytes > disk_size) {
-        bytes = disk_size - offset;
+    size_t left = disk_size - offset;
+    if (bytes > left) {
+        bytes = left;
     }
 
     if (!bytes) {
@@ -1020,12 +1047,15 @@ static bool ahci_disk_init(void) {
 
     ahci_primary_disk = disk;
 
+    size_t disk_size = 0;
+    size_t disk_mib = ahci_disk_size(dev, &disk_size) ? disk_size / MIB : 0;
+
     log_info(
         "AHCI initialized port %u irq=%u (%zu sectors, %zu MiB)",
-        (unsigned int)dev->port_index,
-        (unsigned int)dev->irq_line,
+        (unsigned)dev->port_index,
+        (unsigned)dev->irq_line,
         dev->sector_count,
-        (size_t)((dev->sector_count * dev->sector_size) / MIB)
+        disk_mib
     );
 
     return true;

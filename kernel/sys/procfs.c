@@ -905,6 +905,7 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     mode_t sid_mode = self ? 0666 : 0444;
     mode_t groups_mode = self ? 0666 : 0444;
     mode_t sigmask_mode = self ? 0666 : 0444;
+    mode_t pgid_mode = self ? 0666 : 0444;
     mode_t affinity_mode = 0644;
 
     ok &= _upsert_file(dir, "stat", 0444, PROC_FIELD_STAT, pid);
@@ -914,7 +915,7 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     ok &= _upsert_file(dir, "uid", uid_mode, PROC_FIELD_UID, pid);
     ok &= _upsert_file(dir, "gid", gid_mode, PROC_FIELD_GID, pid);
     ok &= _upsert_file(dir, "umask", umask_mode, PROC_FIELD_UMASK, pid);
-    ok &= _upsert_file(dir, "pgid", 0666, PROC_FIELD_PGID, pid);
+    ok &= _upsert_file(dir, "pgid", pgid_mode, PROC_FIELD_PGID, pid);
     ok &= _upsert_file(dir, "sid", sid_mode, PROC_FIELD_SID, pid);
     ok &= _upsert_file(dir, "groups", groups_mode, PROC_FIELD_GROUPS, pid);
     ok &= _upsert_file(dir, "sigmask", sigmask_mode, PROC_FIELD_SIGMASK, pid);

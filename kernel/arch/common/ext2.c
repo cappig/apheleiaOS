@@ -2,6 +2,7 @@
 
 #include <base/attributes.h>
 #include <base/macros.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -56,11 +57,12 @@ bool boot_ext2_init(boot_ext2_t *fs, boot_ext2_read_fn_t read, void *ctx, size_t
 
     u64 block_size = ext2_block_size(&fs->superblock);
     u64 blocks = fs->superblock.block_count;
-    u64 size = block_size * blocks;
 
-    if (!block_size || size > (u64)(size_t)-1) {
+    if (!block_size || blocks > (u64)SIZE_MAX / block_size) {
         panic("invalid rootfs size");
     }
+
+    u64 size = block_size * blocks;
 
     if (size_limit && size > size_limit) {
         panic("rootfs exceeds partition");
@@ -170,6 +172,10 @@ static void *_read_inode(boot_ext2_t *fs, const ext2_inode_t *inode) {
         return buffer;
     }
 
+    if (inode_blocks > SIZE_MAX / sizeof(u32)) {
+        panic("inode block list too large");
+    }
+
     u32 *blocks = (u32 *)malloc(inode_blocks * sizeof(u32));
 
     if (!blocks) {
@@ -193,6 +199,10 @@ static void *_read_inode(boot_ext2_t *fs, const ext2_inode_t *inode) {
         panic("inode block count mismatch");
     }
 
+    if (inode_blocks > SIZE_MAX / block_size - 1) {
+        panic("inode too large for bootloader");
+    }
+
     size_t buffer_size = inode_blocks * block_size;
     void *buffer = malloc(buffer_size + 1);
 
@@ -201,6 +211,10 @@ static void *_read_inode(boot_ext2_t *fs, const ext2_inode_t *inode) {
     }
 
     for (size_t i = 0; i < inode_blocks; i++) {
+        if (blocks[i] > SIZE_MAX / block_size) {
+            panic("inode block offset overflow");
+        }
+
         size_t block_offset = blocks[i] * block_size;
         void *out = (u8 *)buffer + (i * block_size);
 
