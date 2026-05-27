@@ -3,6 +3,7 @@
 #if defined(__x86_64__)
 typedef unsigned long arch_jmp_buf_t[8];
 
+#ifndef __TINYC__
 __attribute__((always_inline)) static inline int arch_setjmp(arch_jmp_buf_t env) {
     int ret;
 
@@ -45,9 +46,11 @@ __attribute__((always_inline, noreturn)) static inline void arch_longjmp(arch_jm
 
     __builtin_unreachable();
 }
+#endif
 #elif defined(__i386__)
 typedef unsigned int arch_jmp_buf_t[6];
 
+#ifndef __TINYC__
 __attribute__((always_inline)) static inline int arch_setjmp(arch_jmp_buf_t env) {
     int ret;
 
@@ -86,6 +89,7 @@ __attribute__((always_inline, noreturn)) static inline void arch_longjmp(arch_jm
 
     __builtin_unreachable();
 }
+#endif
 #else
 #error "Unsupported architecture"
 #endif

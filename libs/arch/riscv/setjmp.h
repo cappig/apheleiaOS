@@ -6,6 +6,7 @@
 
 typedef unsigned long arch_jmp_buf_t[14];
 
+#ifndef __TINYC__
 __attribute__((always_inline)) static inline int arch_setjmp(arch_jmp_buf_t env) {
     register int ret asm("a0");
 
@@ -109,3 +110,4 @@ __attribute__((always_inline, noreturn)) static inline void arch_longjmp(arch_jm
 
     __builtin_unreachable();
 }
+#endif
