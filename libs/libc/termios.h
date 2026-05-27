@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sys/types.h>
+
 // Defines strures related to the termios POSIX interface
 // https://pubs.opengroup.org/onlinepubs/7908799/xsh/termios.h.html
 // https://www.man7.org/linux/man-pages/man3/termios.3.html
@@ -207,4 +209,6 @@ speed_t cfgetospeed(const struct termios *tos);
 int cfsetispeed(struct termios *tos, speed_t speed);
 int cfsetospeed(struct termios *tos, speed_t speed);
 void cfmakeraw(struct termios *tos);
+pid_t tcgetpgrp(int fd);
+int tcsetpgrp(int fd, pid_t pgrp);
 #endif

@@ -84,3 +84,22 @@ void cfmakeraw(struct termios *tos) {
     tos->c_cc[VMIN] = 1;
     tos->c_cc[VTIME] = 0;
 }
+
+pid_t tcgetpgrp(int fd) {
+    pid_t pgrp = 0;
+
+    if (ioctl(fd, TIOCGPGRP, &pgrp) < 0) {
+        return -1;
+    }
+
+    return pgrp;
+}
+
+int tcsetpgrp(int fd, pid_t pgrp) {
+    if (pgrp <= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return ioctl(fd, TIOCSPGRP, &pgrp);
+}

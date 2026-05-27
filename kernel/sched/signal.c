@@ -97,6 +97,22 @@ void sched_signal_reset_thread(sched_thread_t *thread) {
     sched_signal_init_thread(thread);
 }
 
+void sched_signal_exec_thread(sched_thread_t *thread) {
+    if (!thread) {
+        return;
+    }
+
+    for (int signum = 1; signum < NSIG; signum++) {
+        if (thread->signal_handlers[signum] != SIG_IGN) {
+            thread->signal_handlers[signum] = SIG_DFL;
+        }
+    }
+
+    thread->signal_trampoline = 0;
+    __atomic_store_n(&thread->current_signal, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&thread->signal_saved_valid, 0, __ATOMIC_RELEASE);
+}
+
 sighandler_t sched_signal_set_handler(sched_thread_t *thread, int signum, sighandler_t handler, uintptr_t trampoline) {
     if (!thread || !signal_valid(signum)) {
         return SIG_ERR;

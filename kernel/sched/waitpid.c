@@ -138,6 +138,10 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
         return -ECHILD;
     }
 
+    if (options & ~(WNOHANG | WUNTRACED)) {
+        return -EINVAL;
+    }
+
     for (;;) {
         sched_thread_t *found = NULL;
         sched_thread_t *stopped = NULL;
