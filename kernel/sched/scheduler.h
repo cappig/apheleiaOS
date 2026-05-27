@@ -126,6 +126,7 @@ typedef struct sched_thread {
     pid_t ppid;
     pid_t pgid;
     pid_t sid;
+    bool did_exec;
     uid_t uid;
     gid_t gid;
     gid_t groups[SCHED_GROUP_MAX];

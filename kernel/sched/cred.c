@@ -405,6 +405,11 @@ int sched_setpgid(pid_t pid, pid_t pgid) {
         return -ESRCH;
     }
 
+    if (target != self && target->did_exec) {
+        sched_lock_restore(flags);
+        return -EACCES;
+    }
+
     if (target->sid != self->sid) {
         sched_lock_restore(flags);
         return -EPERM;

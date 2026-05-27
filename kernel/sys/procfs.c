@@ -905,7 +905,7 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     mode_t sid_mode = self ? 0666 : 0444;
     mode_t groups_mode = self ? 0666 : 0444;
     mode_t sigmask_mode = self ? 0666 : 0444;
-    mode_t pgid_mode = self ? 0666 : 0444;
+    mode_t pgid_mode = 0666;
     mode_t affinity_mode = 0644;
 
     ok &= _upsert_file(dir, "stat", 0444, PROC_FIELD_STAT, pid);

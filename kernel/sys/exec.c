@@ -1191,6 +1191,8 @@ static void _apply_exec_identity(sched_thread_t *thread, const vfs_node_t *node)
     if (node->mode & S_ISUID) {
         thread->uid = node->uid;
     }
+
+    thread->did_exec = true;
 }
 
 sched_thread_t *user_spawn(const char *path) {
