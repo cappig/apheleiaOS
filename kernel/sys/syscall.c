@@ -2550,6 +2550,82 @@ static int sys_fstat(int fd, stat_t *st) {
     return 0;
 }
 
+static int _truncate_node(sched_thread_t *thread, vfs_node_t *node, size_t len, bool check_access) {
+    if (!node) {
+        return -ENOENT;
+    }
+
+    if (node->type == VFS_DIR) {
+        return -EISDIR;
+    }
+
+    if (node->type != VFS_FILE) {
+        return -EINVAL;
+    }
+
+    if (check_access) {
+        int access = vfs_access(node, thread->uid, thread->gid, W_OK);
+        if (access < 0) {
+            return access;
+        }
+    }
+
+    ssize_t ret = vfs_truncate(node, len);
+    if (ret < 0) {
+        return (int)ret;
+    }
+
+    _maybe_clear_setid(thread, node);
+    return 0;
+}
+
+static int sys_truncate(const char *path, off_t length) {
+    if (length < 0) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    char resolved[PATH_MAX];
+    int resolve_err = _resolve_user_path(thread, path, resolved, sizeof(resolved));
+    if (resolve_err < 0) {
+        return resolve_err;
+    }
+
+    vfs_node_t *node = _resolve_link_node(vfs_lookup(resolved));
+    return _truncate_node(thread, node, (size_t)length, true);
+}
+
+static int sys_ftruncate(int fd, off_t length) {
+    if (length < 0) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    sched_fd_t *entry = NULL;
+
+    if (!_fd_lookup(thread, fd, &entry)) {
+        return -EBADF;
+    }
+
+    if (entry->kind != SCHED_FD_VFS || !entry->node) {
+        return -EINVAL;
+    }
+
+    if (!_open_has_write(entry->flags)) {
+        return -EINVAL;
+    }
+
+    return _truncate_node(thread, entry->node, (size_t)length, false);
+}
+
 static int sys_chmod(const char *path, mode_t mode) {
     sched_thread_t *thread = sched_current();
 
@@ -3597,6 +3673,10 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
         return (u64)sys_lstat((const char *)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state));
     case SYS_FSTAT:
         return (u64)sys_fstat((int)arch_syscall_arg1(state), (stat_t *)arch_syscall_arg2(state));
+    case SYS_TRUNCATE:
+        return (u64)sys_truncate((const char *)arch_syscall_arg1(state), (off_t)arch_syscall_arg2(state));
+    case SYS_FTRUNCATE:
+        return (u64)sys_ftruncate((int)arch_syscall_arg1(state), (off_t)arch_syscall_arg2(state));
     case SYS_CHMOD:
         return (u64)sys_chmod((const char *)arch_syscall_arg1(state), (mode_t)arch_syscall_arg2(state));
     case SYS_CHOWN:

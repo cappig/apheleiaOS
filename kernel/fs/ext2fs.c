@@ -961,6 +961,119 @@ static bool _release_inode_blocks(ext2_private_t *priv, disk_partition_t *part, 
     return true;
 }
 
+static bool _drop_file_tail(ext2_private_t *priv, disk_partition_t *part, ext2_node_info_t *info, u64 len) {
+    if (!priv || !part || !info) {
+        return false;
+    }
+
+    u32 sectors_per_block = priv->block_size / 512;
+    u32 keep_blocks = (u32)((len + priv->block_size - 1) / priv->block_size);
+
+    for (u32 i = keep_blocks; i < 12; i++) {
+        u32 block = info->inode.direct_block_ptr[i];
+        if (!block) {
+            continue;
+        }
+
+        if (!_free_block(priv, part, block)) {
+            return false;
+        }
+
+        info->inode.direct_block_ptr[i] = 0;
+        info->inode.disk_sector_count -= sectors_per_block;
+    }
+
+    u32 indirect_block = info->inode.indirect_block_ptr[0];
+    if (!indirect_block) {
+        return true;
+    }
+
+    u32 *table = malloc(priv->block_size);
+    if (!table) {
+        return false;
+    }
+
+    bool ok = false;
+    bool changed = false;
+    bool any_left = false;
+    u32 start = keep_blocks > 12 ? keep_blocks - 12 : 0;
+    u32 entries = priv->block_size / sizeof(u32);
+
+    if (!_read_block(priv, part, indirect_block, table)) {
+        goto out;
+    }
+
+    for (u32 i = 0; i < entries; i++) {
+        if (!table[i]) {
+            continue;
+        }
+
+        if (i >= start) {
+            if (!_free_block(priv, part, table[i])) {
+                goto out;
+            }
+
+            table[i] = 0;
+            info->inode.disk_sector_count -= sectors_per_block;
+            changed = true;
+            continue;
+        }
+
+        any_left = true;
+    }
+
+    if (any_left) {
+        ok = !changed || _write_block(priv, part, indirect_block, table);
+        goto out;
+    }
+
+    if (!_free_block(priv, part, indirect_block)) {
+        goto out;
+    }
+
+    info->inode.indirect_block_ptr[0] = 0;
+    info->inode.disk_sector_count -= sectors_per_block;
+    ok = true;
+
+out:
+    free(table);
+    return ok;
+}
+
+static bool _zero_file_tail(ext2_private_t *priv, disk_partition_t *part, ext2_node_info_t *info, u64 len) {
+    if (!priv || !part || !info) {
+        return false;
+    }
+
+    size_t block_off = (size_t)(len % priv->block_size);
+    if (!block_off) {
+        return true;
+    }
+
+    u32 block_index = (u32)(len / priv->block_size);
+    u32 block = _block_from_node(priv, part, info, block_index);
+    if (!block) {
+        return true;
+    }
+
+    u8 *bounce = malloc(priv->block_size);
+    if (!bounce) {
+        return false;
+    }
+
+    bool ok = false;
+    if (!_read_block(priv, part, block, bounce)) {
+        goto out;
+    }
+
+    memset(bounce + block_off, 0, priv->block_size - block_off);
+    ok = _write_block(priv, part, block, bounce);
+
+out:
+    free(bounce);
+    return ok;
+}
+
 static u16 _vfs_to_inode_type(u32 vfs_type) {
     switch (vfs_type) {
     case VFS_DIR:
@@ -1773,10 +1886,6 @@ static ssize_t _truncate_file(vfs_node_t *node, size_t len) {
         return -EINVAL;
     }
 
-    if (len != 0) {
-        return -ENOTSUP;
-    }
-
     ext2_node_info_t *info = node->private;
     ext2_private_t *priv = node->fs->private;
     disk_partition_t *part = node->fs->partition;
@@ -1792,12 +1901,32 @@ static ssize_t _truncate_file(vfs_node_t *node, size_t len) {
         return -EIO;
     }
 
-    if (!_release_inode_blocks(priv, part, &info->inode)) {
+    if (!ext2_is_type(&info->inode, EXT2_IT_FILE)) {
         mutex_unlock(&priv->lock);
-        return -EIO;
+        return -EINVAL;
     }
 
-    _drop_indirect(info);
+    u64 old_size = ext2_file_size(&info->inode);
+    if (len < old_size) {
+        if (!_zero_file_tail(priv, part, info, len)) {
+            mutex_unlock(&priv->lock);
+            return -EIO;
+        }
+
+        if (len == 0) {
+            if (!_release_inode_blocks(priv, part, &info->inode)) {
+                mutex_unlock(&priv->lock);
+                return -EIO;
+            }
+        } else if (!_drop_file_tail(priv, part, info, len)) {
+            mutex_unlock(&priv->lock);
+            return -EIO;
+        }
+
+        _drop_indirect(info);
+    }
+
+    _set_file_size(&info->inode, len);
 
     u32 now = _now(priv);
 

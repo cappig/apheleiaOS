@@ -402,17 +402,11 @@ int fchown(int fd, uid_t uid, gid_t gid) {
 }
 
 int truncate(const char *path, off_t length) {
-    (void)path;
-    (void)length;
-    errno = ENOSYS;
-    return -1;
+    return SYSCALL_RET(int, syscall2(SYS_TRUNCATE, (uintptr_t)path, (uintptr_t)length));
 }
 
 int ftruncate(int fd, off_t length) {
-    (void)fd;
-    (void)length;
-    errno = ENOSYS;
-    return -1;
+    return SYSCALL_RET(int, syscall2(SYS_FTRUNCATE, (uintptr_t)fd, (uintptr_t)length));
 }
 
 int fsync(int fd) {
