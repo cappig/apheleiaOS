@@ -15,7 +15,7 @@ static char boot_log_buf[BOOT_LOG_CAP];
 static size_t boot_log_len = 0;
 static bool bios_output_enabled = true;
 
-static void _boot_log_putc(char c) {
+static void boot_log_putc(char c) {
     if (boot_log_len >= BOOT_LOG_CAP) {
         return;
     }
@@ -55,7 +55,7 @@ int puts(const char *str) {
             }
         }
 
-        _boot_log_putc(c);
+        boot_log_putc(c);
         send_serial(SERIAL_COM1, c);
 
         if (bios_output_enabled) {

@@ -13,12 +13,10 @@
 #include "tty.h"
 #include "x86/e820.h"
 
-
 #define SMAP 0x534d4150
 
 static e820_map_t *e820_mmap = NULL;
 
-// http://www.uruk.org/orig-grub/mem64mb.html
 void get_e820(e820_map_t *mmap) {
     regs32_t out_regs = { 0 };
     regs32_t in_regs = {
@@ -37,7 +35,6 @@ void get_e820(e820_map_t *mmap) {
 
         in_regs.ebx = out_regs.ebx;
 
-        // End of chain, or error
         if (out_regs.eflags & FLAG_CF || out_regs.eax != SMAP) {
             break;
         }
@@ -49,7 +46,6 @@ void get_e820(e820_map_t *mmap) {
         mmap->entries[mmap->count] = entry;
         mmap->count++;
 
-        // End of chain
         if (!out_regs.ebx) {
             break;
         }
@@ -60,16 +56,12 @@ void get_e820(e820_map_t *mmap) {
     log_debug("e820 memory regions=%llu", (unsigned long long)mmap->count);
 }
 
-
-// https://wiki.osdev.org/RSDP#Detecting_the_RSDP
 void get_rsdp(u64 *rsdp) {
     u16 ebda_seg = 0;
     asm volatile("movw 0x40e, %0" : "=r"(ebda_seg));
     u64 ebda = ((u64)ebda_seg) << 4;
 
     for (u64 addr = ebda; addr <= 0xfffff; addr += 16) {
-        // No RSDP found in the EBDA
-        // Start searching the other possible memory region
         if (addr == ebda + 1024) {
             addr = 0xe0000;
         }
@@ -84,7 +76,6 @@ void get_rsdp(u64 *rsdp) {
 
     log_debug("RSDP not found");
 }
-
 
 void *mmap_alloc(size_t size, int type, size_t alignment) {
     if (!size) {
@@ -122,21 +113,20 @@ void *mmap_try_alloc_top(size_t size, int type, size_t alignment, u64 top) {
     return mmap_alloc_inner(e820_mmap, size, type, alignment, top);
 }
 
-static void *_balloc(size_t size) {
+static void *balloc(size_t size) {
     return mmap_alloc(size, E820_ALLOC, 1);
 }
 
-static void _bfree(void *ptr) {
+static void bfree(void *ptr) {
     if (mmap_free_inner(e820_mmap, ptr)) {
         panic("attempted to free non-allocated memory");
     }
 }
 
-
 void arch_init_alloc() {
     libc_alloc_ops_t ops = {
-        .malloc_fn = _balloc,
-        .free_fn = _bfree,
+        .malloc_fn = balloc,
+        .free_fn = bfree,
     };
     __libc_init_alloc(&ops);
 }

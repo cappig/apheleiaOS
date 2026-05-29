@@ -18,7 +18,7 @@
 ALIGNED(8)
 static boot_info_t info = { 0 };
 
-static void boot_log_sink(const char *msg) {
+static void log_sink(const char *msg) {
     puts(msg);
 }
 
@@ -26,7 +26,7 @@ static void boot_log_sink(const char *msg) {
 #define BOOT_LOG_COLOR true
 #endif
 
-static unsigned int boot_log_options(void) {
+static unsigned int log_opts(void) {
 #if BOOT_LOG_COLOR
     return LOG_OPT_LOCATION | LOG_OPT_COLOR;
 #else
@@ -36,9 +36,9 @@ static unsigned int boot_log_options(void) {
 
 NORETURN void _load_entry(u16 boot_disk) {
     init_serial(SERIAL_COM1, SERIAL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
-    log_init(boot_log_sink);
+    log_init(log_sink);
     log_set_lvl(LOG_DEBUG);
-    log_set_options(boot_log_options());
+    log_set_options(log_opts());
 
     log_info("BIOS boot started");
 
@@ -91,7 +91,7 @@ NORETURN void _load_entry(u16 boot_disk) {
 
     log_info("entering kernel");
 
-    load_kerenel(&info);
+    load_kernel(&info);
 
     halt();
     __builtin_unreachable();

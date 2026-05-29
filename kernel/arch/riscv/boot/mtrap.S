@@ -27,9 +27,12 @@
 #define SCR_T6 (5 * REGBYTES)
 #define SCR_GP (6 * REGBYTES)
 
+#define TIMER_TIME 0
+#define TIMER_CMP  REGBYTES
+
 .balign 16
-.globl riscv_boot_mtrap_scratch
-riscv_boot_mtrap_scratch:
+.globl trap_scratch
+trap_scratch:
     .space 7 * REGBYTES
 
 .section .text
@@ -67,8 +70,8 @@ mtrap_entry:
     j .Lhalt
 
 .Ltimer:
-    la t1, riscv_boot_timer_cmp_addr
-    LOAD t1, 0(t1)
+    la t1, boot_timer
+    LOAD t1, TIMER_CMP(t1)
     beqz t1, .Lhalt
 #if __riscv_xlen == 64
     li t2, -1
@@ -88,10 +91,9 @@ mtrap_entry:
     li t2, RISCV_MCALL_TIMER_ARM_DELTA
     bne a6, t2, .Lecall_other
 
-    la t1, riscv_boot_timer_time_addr
-    LOAD t1, 0(t1)
-    la t2, riscv_boot_timer_cmp_addr
-    LOAD t2, 0(t2)
+    la t3, boot_timer
+    LOAD t1, TIMER_TIME(t3)
+    LOAD t2, TIMER_CMP(t3)
     beqz t1, .Lecall_fail
     beqz t2, .Lecall_fail
 
@@ -134,8 +136,8 @@ mtrap_entry:
     li t2, RISCV_MCALL_TIMER_READ_TIME
     bne a6, t2, .Lecall_fail
 
-    la t1, riscv_boot_timer_time_addr
-    LOAD t1, 0(t1)
+    la t1, boot_timer
+    LOAD t1, TIMER_TIME(t1)
     beqz t1, .Lecall_fail
 
 #if __riscv_xlen == 64

@@ -11,15 +11,10 @@ void uefi_mem_zero(void *dst, size_t len);
 void uefi_mem_copy(void *dst, const void *src, size_t len);
 void uefi_str_copy(char *dst, size_t cap, const char *src);
 
-EFI_STATUS uefi_get_memory_map_and_key(
-    EFI_BOOT_SERVICES *bs,
-    boot_info_t *info,
-    void **map_buf,
-    UINTN *map_buf_size,
-    UINTN *map_key
-);
+EFI_STATUS
+uefi_memory_map(EFI_BOOT_SERVICES *bs, boot_info_t *info, void **map_buf, UINTN *map_buf_size, UINTN *map_key);
 
-EFI_STATUS uefi_load_boot_file(
+EFI_STATUS uefi_load_file(
     EFI_BOOT_SERVICES *bs,
     EFI_HANDLE image,
     const EFI_GUID *loaded_image_guid,

@@ -28,31 +28,17 @@ SPIKE_MMIO_UART_DEVICE ?= ns16550a
 SPIKE_MMIO_UART_BASE   ?= 0x10000000
 SPIKE_MMIO_UART_ARGS   ?= tty
 SPIKE_MMIO_UART_CXX    ?= c++
-SPIKE_DISABLE_DTB      ?= false
 SPIKE_REAL_TIME_CLINT  ?= false
 
 SPIKE_MMIO_UART_ENABLED := $(filter true,$(SPIKE_MMIO_UART))
-SPIKE_DISABLE_DTB_ENABLED := $(filter true,$(SPIKE_DISABLE_DTB))
 SPIKE_REAL_TIME_CLINT_ENABLED := $(filter true,$(SPIKE_REAL_TIME_CLINT))
 SPIKE_MMIO_UART_DEPS :=
 SPIKE_MMIO_UART_FLAGS :=
-SPIKE_DTB_FLAGS :=
 SPIKE_CLINT_FLAGS :=
-SPIKE_NO_DTB_IMAGE_NAME := $(IMAGE_NAME)-no-fdt
-SPIKE_NO_DTB_BOOT_DIR   := bin/boot/$(ARCH)-no-fdt
-SPIKE_NO_DTB_BOOT_ELF   := $(SPIKE_NO_DTB_BOOT_DIR)/riscv_boot.elf
-ifeq ($(ARCH_VARIANT), 64)
-SPIKE_NO_DTB_KERNEL_BASE := 0x80200000
-else
-SPIKE_NO_DTB_KERNEL_BASE := 0x80400000
-endif
 ifeq ($(SPIKE_MMIO_UART_ENABLED),true)
 SPIKE_MMIO_UART_DEPS += $(SPIKE_MMIO_UART_PLUGIN)
 SPIKE_MMIO_UART_FLAGS += --extlib="$(SPIKE_MMIO_UART_PLUGIN)"
 SPIKE_MMIO_UART_FLAGS += --device=$(SPIKE_MMIO_UART_DEVICE),$(SPIKE_MMIO_UART_BASE),$(SPIKE_MMIO_UART_ARGS)
-endif
-ifeq ($(SPIKE_DISABLE_DTB_ENABLED),true)
-SPIKE_DTB_FLAGS += --disable-dtb
 endif
 ifeq ($(SPIKE_REAL_TIME_CLINT_ENABLED),true)
 SPIKE_CLINT_FLAGS += --real-time-clint
@@ -165,7 +151,7 @@ QEMU_IMAGE_ARGS :=
 QEMU_USB_IMAGE_ARGS :=
 endif
 
-.PHONY: ovmf-fetch ovmf-clean run run-usb run-usb-bios run-usb-uefi run-spike run-spike-no-fdt
+.PHONY: ovmf-fetch ovmf-clean run run-usb run-usb-bios run-usb-uefi run-spike
 
 $(SPIKE_MMIO_UART_PLUGIN): utils/spike/mmio_uart_plugin.cpp
 	@mkdir -p "$(dir $@)"
@@ -224,53 +210,11 @@ run-spike: all $(SPIKE_MMIO_UART_DEPS)
 	else \
 		echo "Spike MMIO UART disabled (SPIKE_MMIO_UART=false); kernel will run without UART console if UART base is 0."; \
 	fi
-	@if [ "$(SPIKE_DISABLE_DTB_ENABLED)" = "true" ]; then \
-		echo "Spike DTB disabled (--disable-dtb): boot path will run with no FDT."; \
-	fi
 	@if [ "$(SPIKE_REAL_TIME_CLINT_ENABLED)" = "true" ]; then \
 		echo "Spike CLINT time: real-time (--real-time-clint)"; \
 	fi
 	@if [ "$(SPIKE_MMIO_UART_ARGS)" = "tty" ]; then \
-		$(SPIKE) --isa=$(SPIKE_ISA) -m$(SPIKE_RAM_MB) $(SPIKE_MMIO_UART_FLAGS) $(SPIKE_DTB_FLAGS) $(SPIKE_CLINT_FLAGS) --initrd="$(SPIKE_INITRD)" "$(BOOT_ENTRY_ELF)" </dev/null; \
+		$(SPIKE) --isa=$(SPIKE_ISA) -m$(SPIKE_RAM_MB) $(SPIKE_MMIO_UART_FLAGS) $(SPIKE_CLINT_FLAGS) --initrd="$(SPIKE_INITRD)" "$(BOOT_ENTRY_ELF)" </dev/null; \
 	else \
-		$(SPIKE) --isa=$(SPIKE_ISA) -m$(SPIKE_RAM_MB) $(SPIKE_MMIO_UART_FLAGS) $(SPIKE_DTB_FLAGS) $(SPIKE_CLINT_FLAGS) --initrd="$(SPIKE_INITRD)" "$(BOOT_ENTRY_ELF)"; \
-	fi
-
-run-spike-no-fdt: $(SPIKE_MMIO_UART_DEPS)
-	@if [ "$(ARCH_TREE)" != "riscv" ]; then \
-		echo "run-spike-no-fdt supports only ARCH=riscv_32 or ARCH=riscv_64"; \
-		exit 1; \
-	fi
-	@if ! command -v "$(SPIKE)" >/dev/null 2>&1; then \
-		echo "spike was not found in PATH (override with SPIKE=/path/to/spike)"; \
-		exit 1; \
-	fi
-	@$(MAKE) all RISCV_BOOT_FORCE_NO_DTB=true RISCV_BOOT_IMAGE_BASE_OVERRIDE=$(SPIKE_NO_DTB_KERNEL_BASE) IMAGE_NAME="$(SPIKE_NO_DTB_IMAGE_NAME)" BOOT_ENTRY_OBJ_DIR="$(SPIKE_NO_DTB_BOOT_DIR)" ARCH="$(ARCH)" TOOLCHAIN="$(TOOLCHAIN)" PROFILE="$(PROFILE)" VERSION="$(VERSION)" BUILD_DATE="$(BUILD_DATE)" GIT_COMMIT_SHORT="$(GIT_COMMIT_SHORT)"
-	@if [ ! -f "bin/$(SPIKE_NO_DTB_IMAGE_NAME).img" ]; then \
-		echo "Spike image not found: bin/$(SPIKE_NO_DTB_IMAGE_NAME).img"; \
-		echo "Build it with: make ARCH=$(ARCH) TOOLCHAIN=$(TOOLCHAIN)"; \
-		exit 1; \
-	fi
-	@if [ ! -f "$(SPIKE_NO_DTB_BOOT_ELF)" ]; then \
-		echo "Spike boot ELF not found: $(SPIKE_NO_DTB_BOOT_ELF)"; \
-		exit 1; \
-	fi
-	@if [ "$(SPIKE_MMIO_UART_ENABLED)" = "true" ] && [ ! -f "$(SPIKE_MMIO_UART_PLUGIN)" ]; then \
-		echo "Spike MMIO UART plugin not found: $(SPIKE_MMIO_UART_PLUGIN)"; \
-		exit 1; \
-	fi
-	@echo "Launching Spike with dedicated no-DTB boot ELF plus flat image"
-	@echo "No-FDT mode: DTB ignored, image base forced to $(SPIKE_NO_DTB_KERNEL_BASE)"
-	@if [ "$(SPIKE_MMIO_UART_ENABLED)" = "true" ]; then \
-		echo "Spike MMIO UART: plugin=$(SPIKE_MMIO_UART_PLUGIN) device=$(SPIKE_MMIO_UART_DEVICE) base=$(SPIKE_MMIO_UART_BASE) args=$(SPIKE_MMIO_UART_ARGS)"; \
-	else \
-		echo "Spike MMIO UART disabled (SPIKE_MMIO_UART=false); kernel will run without UART console if UART base is 0."; \
-	fi
-	@if [ "$(SPIKE_REAL_TIME_CLINT_ENABLED)" = "true" ]; then \
-		echo "Spike CLINT time: real-time (--real-time-clint)"; \
-	fi
-	@if [ "$(SPIKE_MMIO_UART_ARGS)" = "tty" ]; then \
-		$(SPIKE) --isa=$(SPIKE_ISA) -m$(SPIKE_RAM_MB) $(SPIKE_MMIO_UART_FLAGS) $(SPIKE_CLINT_FLAGS) --kernel="bin/$(SPIKE_NO_DTB_IMAGE_NAME).img" "$(SPIKE_NO_DTB_BOOT_ELF)" </dev/null; \
-	else \
-		$(SPIKE) --isa=$(SPIKE_ISA) -m$(SPIKE_RAM_MB) $(SPIKE_MMIO_UART_FLAGS) $(SPIKE_CLINT_FLAGS) --kernel="bin/$(SPIKE_NO_DTB_IMAGE_NAME).img" "$(SPIKE_NO_DTB_BOOT_ELF)"; \
+		$(SPIKE) --isa=$(SPIKE_ISA) -m$(SPIKE_RAM_MB) $(SPIKE_MMIO_UART_FLAGS) $(SPIKE_CLINT_FLAGS) --initrd="$(SPIKE_INITRD)" "$(BOOT_ENTRY_ELF)"; \
 	fi

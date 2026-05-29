@@ -18,7 +18,10 @@
 #include "paging64.h"
 #include "tty.h"
 
-static bool _cpu_has_long_mode(void) {
+#define BOOT_PAGE_WRITE    (1 << 1)
+#define BOOT_PAGE_PAT_HUGE (1ULL << 12)
+
+static bool has_long_mode(void) {
     cpuid_regs_t regs = { 0 };
     cpuid(0x80000000, &regs);
 
@@ -30,7 +33,7 @@ static bool _cpu_has_long_mode(void) {
     return (regs.edx & CPUID_EI_LM) != 0;
 }
 
-static u64 _get_map_top(const e820_map_t *map) {
+static u64 map_top(const e820_map_t *map) {
     u64 top = 0;
 
     for (size_t i = 0; i < map->count; i++) {
@@ -48,7 +51,7 @@ static u64 _get_map_top(const e820_map_t *map) {
     return top;
 }
 
-static void _commit_boot_log(boot_info_t *info) {
+static void commit_log(boot_info_t *info) {
     if (!info) {
         return;
     }
@@ -66,7 +69,7 @@ static void _commit_boot_log(boot_info_t *info) {
     info->boot_log_cap = (u32)cap;
 }
 
-static elf_header_t *_load_kernel_image(bool want_64, bool *is_64) {
+static elf_header_t *read_kernel(bool want_64, bool *is_64) {
     const char *path = boot_kernel_path(want_64);
     elf_header_t *kernel = read_rootfs(path);
 
@@ -102,10 +105,10 @@ static elf_header_t *_load_kernel_image(bool want_64, bool *is_64) {
     return kernel;
 }
 
-void load_kerenel(boot_info_t *info) {
-    bool want_64 = _cpu_has_long_mode();
+void load_kernel(boot_info_t *info) {
+    bool want_64 = has_long_mode();
     bool is_64 = false;
-    elf_header_t *kernel = _load_kernel_image(want_64, &is_64);
+    elf_header_t *kernel = read_kernel(want_64, &is_64);
 
     if (!kernel) {
         panic("no suitable kernel image found");
@@ -118,8 +121,12 @@ void load_kerenel(boot_info_t *info) {
 
         u32 entry = load_elf_sections_32(kernel);
 
-        u64 mem_top = _get_map_top(&info->memory_map);
-        u32 phys_top = (mem_top > 0xffffffffULL) ? 0xffffffffU : (u32)mem_top;
+        u64 mem_top = map_top(&info->memory_map);
+        u32 phys_top = (u32)mem_top;
+
+        if (mem_top > 0xffffffffULL) {
+            phys_top = 0xffffffffU;
+        }
 
         identity_map_32(phys_top, 0, false);
 
@@ -133,7 +140,7 @@ void load_kerenel(boot_info_t *info) {
 
         log_debug("kernel entry %#x", (unsigned int)entry);
 
-        _commit_boot_log(info);
+        commit_log(info);
         jump_to_kernel_32(entry, boot_info, stack);
     } else {
         log_info("loading x86_64 kernel");
@@ -153,8 +160,7 @@ void load_kerenel(boot_info_t *info) {
 
             u64 fb_size = pitch * info->video.height;
             if (fb_size) {
-                // PT_WRITE | PT_PAT_HUGE
-                u64 flags = (1 << 1) | (1ULL << 12);
+                u64 flags = BOOT_PAGE_WRITE | BOOT_PAGE_PAT_HUGE;
 
                 u64 fb_base = ALIGN_DOWN(info->video.framebuffer, 2 * MIB);
                 u64 fb_end = ALIGN(info->video.framebuffer + fb_size, 2 * MIB);
@@ -182,7 +188,7 @@ void load_kerenel(boot_info_t *info) {
 
         log_debug("kernel entry %#llx", entry);
 
-        _commit_boot_log(info);
+        commit_log(info);
         jump_to_kernel_64(entry, boot_info, stack);
     }
 }

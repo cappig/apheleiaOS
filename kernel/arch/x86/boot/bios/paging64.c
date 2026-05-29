@@ -15,7 +15,15 @@
 static page_t *lvl4;
 static bool nx_supported = false;
 
-static bool _cpu_has_nx(void) {
+static u32 table_type(bool is_kernel) {
+    if (is_kernel) {
+        return E820_KERNEL;
+    }
+
+    return E820_PAGE_TABLE;
+}
+
+static bool has_nx(void) {
     cpuid_regs_t regs = { 0 };
     cpuid(0x80000000, &regs);
 
@@ -27,14 +35,13 @@ static bool _cpu_has_nx(void) {
     return (regs.edx & CPUID_EI_NX) != 0;
 }
 
-
-static page_t *_walk_table_once(page_t *table, size_t index, bool is_kernel) {
+static page_t *walk_table(page_t *table, size_t index, bool is_kernel) {
     page_t *next_table;
 
     if (table[index] & PT_PRESENT) {
         next_table = (page_t *)(uintptr_t)page_get_paddr(&table[index]);
     } else {
-        u32 type = is_kernel ? E820_KERNEL : E820_PAGE_TABLE;
+        u32 type = table_type(is_kernel);
 
         next_table = (page_t *)mmap_alloc(PAGE_4KIB, type, PAGE_4KIB);
         memset(next_table, 0, PAGE_4KIB);
@@ -52,7 +59,7 @@ void map_page_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     size_t lvl4_index = GET_LVL4_INDEX(vaddr);
 
     size_t lvl3_index = GET_LVL3_INDEX(vaddr);
-    page_t *lvl3 = _walk_table_once(lvl4, lvl4_index, is_kernel);
+    page_t *lvl3 = walk_table(lvl4, lvl4_index, is_kernel);
 
     page_t *entry;
 
@@ -65,7 +72,7 @@ void map_page_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     }
 
     size_t lvl2_index = GET_LVL2_INDEX(vaddr);
-    page_t *lvl2 = _walk_table_once(lvl3, lvl3_index, is_kernel);
+    page_t *lvl2 = walk_table(lvl3, lvl3_index, is_kernel);
 
     if (size == PAGE_2MIB) {
         entry = &lvl2[lvl2_index];
@@ -76,7 +83,7 @@ void map_page_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     }
 
     size_t lvl1_index = GET_LVL1_INDEX(vaddr);
-    page_t *lvl1 = _walk_table_once(lvl2, lvl2_index, is_kernel);
+    page_t *lvl1 = walk_table(lvl2, lvl2_index, is_kernel);
 
     entry = &lvl1[lvl1_index];
 
@@ -84,7 +91,12 @@ finalize:
     page_set_paddr(entry, paddr);
 
     flags |= PT_PRESENT;
-    u64 pat_huge = (flags & PT_HUGE) ? (flags & PT_PAT_HUGE) : 0;
+    u64 pat_huge = 0;
+
+    if (flags & PT_HUGE) {
+        pat_huge = flags & PT_PAT_HUGE;
+    }
+
     *entry |= (flags & FLAGS_MASK) | pat_huge;
 }
 
@@ -107,46 +119,39 @@ void map_region_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel)
 }
 
 void identity_map_64(u64 top_address, u64 offset, bool is_kernel) {
-    // Should we be assuming the existence of huge pages?
     for (u64 i = 0; i < top_address; i += PAGE_2MIB) {
         map_page_64(PAGE_2MIB, i + offset, i, PT_WRITE, is_kernel);
     }
 }
 
 void setup_paging_64(void) {
-    // Allocate the root table
     lvl4 = (page_t *)mmap_alloc(PAGE_4KIB, E820_KERNEL, PAGE_4KIB);
     memset(lvl4, 0, PAGE_4KIB);
     write_cr3((u32)(uintptr_t)lvl4);
 
-    nx_supported = _cpu_has_nx();
+    nx_supported = has_nx();
 
     if (nx_supported) {
         u64 efer = read_msr(EFER_MSR);
         write_msr(EFER_MSR, efer | EFER_NX);
     }
 
-    // Enable write protect
     u32 cr0 = read_cr0();
     write_cr0(cr0 | CR0_WP);
 }
 
 void init_paging_64(void) {
-    // Enable Physical Address Extension
     u32 cr4 = read_cr4();
     write_cr4(cr4 | CR4_PAE);
 
-    // Set the long mode bit
     u64 efer = read_msr(EFER_MSR);
     write_msr(EFER_MSR, efer | EFER_LME);
 
-    // Set the paging bit in cr0
     u32 cr0 = read_cr0();
     write_cr0(cr0 | CR0_PG);
 }
 
-
-static page_t _elf_to_page_flags(u32 elf_flags) {
+static page_t elf_flags(u32 elf_flags) {
     u64 flags = PT_PRESENT;
 
     if (elf_flags & PF_W) {
@@ -168,18 +173,15 @@ static bool load_segment_64(const elf_segment_t *seg, void *ctx_ptr) {
     struct elf_load_ctx64 *load_ctx = ctx_ptr;
 
     u64 size = ALIGN(seg->mem_size, PAGE_4KIB);
-    u64 flags = _elf_to_page_flags(seg->flags);
+    u64 flags = elf_flags(seg->flags);
 
     u64 pbase = (u64)(uintptr_t)mmap_alloc(size, E820_KERNEL, (size_t)seg->align);
     u64 vbase = seg->vaddr;
 
-    // Map the segment
     map_region_64(size, vbase, pbase, flags, true);
 
-    // Copy all loadable data from the file
     memcpy((void *)(uintptr_t)pbase, (u8 *)load_ctx->elf + seg->offset, (size_t)seg->file_size);
 
-    // Zero out any additional space
     size_t zero_len = (size_t)(seg->mem_size - seg->file_size);
     memset((void *)(uintptr_t)pbase + seg->file_size, 0, zero_len);
 

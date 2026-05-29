@@ -25,8 +25,10 @@
 static u16 disk_code = 0;
 static u16 disk_sector_size = MBR_SECTOR_SIZE;
 static u16 disk_flags = 0;
+
 static size_t rootfs_base = 0;
 static size_t rootfs_size = 0;
+
 static mbr_partition_t rootfs_partition = { 0 };
 static bool rootfs_partition_valid = false;
 static u8 rootfs_partition_index = 0;
@@ -34,8 +36,7 @@ static u8 rootfs_partition_index = 0;
 static boot_ext2_t rootfs = { 0 };
 static u8 bounce[BOUNCE_SIZE] = { 0 };
 
-
-static bool _bios_read_lba(void *dest, size_t lba, u16 sectors) {
+static bool read_lba(void *dest, size_t lba, u16 sectors) {
     if (!dest || !sectors) {
         return false;
     }
@@ -82,7 +83,7 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
         size_t sectors_window = DIV_ROUND_UP(bytes_window, ss);
         u16 sectors = (u16)min(sectors_window, (size_t)max_sectors);
 
-        if (!_bios_read_lba(bounce, lba, sectors)) {
+        if (!read_lba(bounce, lba, sectors)) {
             panic("disk read error");
         }
 
@@ -100,7 +101,7 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
     return 0;
 }
 
-static bool _read_rootfs_bytes(void *dest, size_t offset, size_t bytes, void *ctx) {
+static bool read_rootfs_cb(void *dest, size_t offset, size_t bytes, void *ctx) {
     (void)ctx;
 
     if (offset > SIZE_MAX - rootfs_base) {
@@ -111,7 +112,7 @@ static bool _read_rootfs_bytes(void *dest, size_t offset, size_t bytes, void *ct
     return true;
 }
 
-static bool _find_rootfs(mbr_partition_t *out_part, u8 *part_index) {
+static bool find_part(mbr_partition_t *out_part, u8 *part_index) {
     mbr_t mbr;
 
     read_disk(&mbr, 0, sizeof(mbr_t));
@@ -142,7 +143,7 @@ static bool _find_rootfs(mbr_partition_t *out_part, u8 *part_index) {
     return false;
 }
 
-static void _detect_sector_size(void) {
+static void detect_sector(void) {
     disk_params_t params;
     memset(&params, 0, sizeof(params));
     params.size = sizeof(params);
@@ -164,14 +165,14 @@ static void _detect_sector_size(void) {
 
 void disk_init(u16 disk) {
     disk_code = disk;
-    _detect_sector_size();
 
+    detect_sector();
     log_debug("boot disk=%#x sector=%u", disk_code, disk_sector_size);
 
     mbr_partition_t part = { 0 };
     u8 rootfs_index = 0;
 
-    if (!_find_rootfs(&part, &rootfs_index)) {
+    if (!find_part(&part, &rootfs_index)) {
         panic("rootfs partition not found");
     }
 
@@ -192,7 +193,7 @@ void disk_init(u16 disk) {
 
     log_debug("rootfs partition lba=%u base=%#zx size=%zu", (unsigned int)part.lba_first, rootfs_base, rootfs_size);
 
-    if (!boot_ext2_init(&rootfs, _read_rootfs_bytes, NULL, rootfs_size)) {
+    if (!boot_ext2_init(&rootfs, read_rootfs_cb, NULL, rootfs_size)) {
         panic("not an ext2 filesystem");
     }
 }
@@ -209,6 +210,7 @@ bool bios_boot_root_hint(boot_root_hint_t *out) {
     }
 
     out->valid = 1;
+
     bool removable = (disk_flags & (1U << 2)) != 0;
 
     if (removable) {
@@ -255,7 +257,6 @@ bool stage_rootfs_image(u64 *paddr, u64 *size) {
 
     return true;
 }
-
 
 void *read_rootfs(const char *path) {
     return boot_ext2_read_file(&rootfs, path, NULL);

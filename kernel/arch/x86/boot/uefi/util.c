@@ -55,7 +55,7 @@ void uefi_str_copy(char *dst, size_t cap, const char *src) {
     dst[i] = '\0';
 }
 
-static u32 _efi_mem_type_to_e820(u32 type) {
+static u32 e820_type(u32 type) {
     switch (type) {
     case EfiConventionalMemory:
         return E820_AVAILABLE;
@@ -68,7 +68,7 @@ static u32 _efi_mem_type_to_e820(u32 type) {
     }
 }
 
-static void _build_e820_map(boot_info_t *info, EFI_MEMORY_DESCRIPTOR *descs, UINTN map_size, UINTN desc_size) {
+static void build_e820(boot_info_t *info, EFI_MEMORY_DESCRIPTOR *descs, UINTN map_size, UINTN desc_size) {
     if (!info || !descs || !desc_size) {
         return;
     }
@@ -94,7 +94,7 @@ static void _build_e820_map(boot_info_t *info, EFI_MEMORY_DESCRIPTOR *descs, UIN
             size = PROTECTED_MODE_TOP - base;
         }
 
-        u32 type = _efi_mem_type_to_e820(desc->Type);
+        u32 type = e820_type(desc->Type);
 
         if (info->memory_map.count > 0) {
             e820_entry_t *prev = &info->memory_map.entries[info->memory_map.count - 1];
@@ -120,23 +120,20 @@ static void _build_e820_map(boot_info_t *info, EFI_MEMORY_DESCRIPTOR *descs, UIN
         entry->address = base;
         entry->size = size;
         entry->type = type;
+
         entry->acpi = 0;
     }
 }
 
-EFI_STATUS uefi_get_memory_map_and_key(
-    EFI_BOOT_SERVICES *bs,
-    boot_info_t *info,
-    void **map_buf,
-    UINTN *map_buf_size,
-    UINTN *map_key
-) {
+EFI_STATUS
+uefi_memory_map(EFI_BOOT_SERVICES *bs, boot_info_t *info, void **map_buf, UINTN *map_buf_size, UINTN *map_key) {
     if (!bs || !info || !map_buf || !map_buf_size || !map_key) {
         return EFI_INVALID_PARAM;
     }
 
     UINTN query_size = 0;
     UINTN query_key = 0;
+
     UINTN desc_size = 0;
     UINT32 desc_version = 0;
 
@@ -168,12 +165,12 @@ EFI_STATUS uefi_get_memory_map_and_key(
         return status;
     }
 
-    _build_e820_map(info, (EFI_MEMORY_DESCRIPTOR *)(*map_buf), map_size, desc_size);
+    build_e820(info, (EFI_MEMORY_DESCRIPTOR *)(*map_buf), map_size, desc_size);
 
     return EFI_SUCCESS;
 }
 
-EFI_STATUS uefi_load_boot_file(
+EFI_STATUS uefi_load_file(
     EFI_BOOT_SERVICES *bs,
     EFI_HANDLE image,
     const EFI_GUID *loaded_image_guid,
@@ -296,7 +293,7 @@ void uefi_detect_acpi(boot_info_t *info, EFI_SYSTEM_TABLE *st, const EFI_GUID *a
     }
 }
 
-static void _set_default_rgb888(video_info_t *video) {
+static void rgb888(video_info_t *video) {
     if (!video) {
         return;
     }
@@ -304,12 +301,30 @@ static void _set_default_rgb888(video_info_t *video) {
     video->red_shift = 16;
     video->green_shift = 8;
     video->blue_shift = 0;
+
     video->red_size = 8;
     video->green_size = 8;
     video->blue_size = 8;
 }
 
-static bool _parse_bitmask_channel(u32 mask, u8 *shift_out, u8 *size_out) {
+static void text_video(video_info_t *video) {
+    if (!video) {
+        return;
+    }
+
+    uefi_mem_zero(video, sizeof(*video));
+
+    video->mode = VIDEO_TEXT;
+    video->framebuffer = VGA_ADDR;
+
+    video->width = VGA_WIDTH;
+    video->height = VGA_HEIGHT;
+
+    video->bytes_per_pixel = 2;
+    video->bytes_per_line = VGA_WIDTH * 2;
+}
+
+static bool parse_mask(u32 mask, u8 *shift_out, u8 *size_out) {
     if (!shift_out || !size_out || !mask) {
         return false;
     }
@@ -335,7 +350,7 @@ static bool _parse_bitmask_channel(u32 mask, u8 *shift_out, u8 *size_out) {
     return true;
 }
 
-static bool _fill_video_format_from_gop(video_info_t *video, const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode) {
+static bool gop_format(video_info_t *video, const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode) {
     if (!video || !mode) {
         return false;
     }
@@ -345,29 +360,33 @@ static bool _fill_video_format_from_gop(video_info_t *video, const EFI_GRAPHICS_
         video->red_shift = 16;
         video->green_shift = 8;
         video->blue_shift = 0;
+
         video->red_size = 8;
         video->green_size = 8;
         video->blue_size = 8;
+
         return true;
     case PixelRedGreenBlueReserved8BitPerColor:
         video->red_shift = 0;
         video->green_shift = 8;
         video->blue_shift = 16;
+
         video->red_size = 8;
         video->green_size = 8;
         video->blue_size = 8;
+
         return true;
     case PixelBitMask: {
-        bool ok_r = _parse_bitmask_channel(mode->PixelInformation.RedMask, &video->red_shift, &video->red_size);
-        bool ok_g = _parse_bitmask_channel(mode->PixelInformation.GreenMask, &video->green_shift, &video->green_size);
-        bool ok_b = _parse_bitmask_channel(mode->PixelInformation.BlueMask, &video->blue_shift, &video->blue_size);
+        bool ok_r = parse_mask(mode->PixelInformation.RedMask, &video->red_shift, &video->red_size);
+        bool ok_g = parse_mask(mode->PixelInformation.GreenMask, &video->green_shift, &video->green_size);
+        bool ok_b = parse_mask(mode->PixelInformation.BlueMask, &video->blue_shift, &video->blue_size);
 
         return ok_r && ok_g && ok_b;
     }
     case PixelBltOnly:
         return false;
     default:
-        _set_default_rgb888(video);
+        rgb888(video);
         return true;
     }
 }
@@ -377,20 +396,7 @@ void uefi_detect_video(boot_info_t *info, EFI_BOOT_SERVICES *bs, const EFI_GUID 
         return;
     }
 
-    uefi_mem_zero(&info->video, sizeof(info->video));
-
-    info->video.mode = VIDEO_TEXT;
-    info->video.framebuffer = VGA_ADDR;
-    info->video.width = VGA_WIDTH;
-    info->video.height = VGA_HEIGHT;
-    info->video.bytes_per_pixel = 2;
-    info->video.bytes_per_line = VGA_WIDTH * 2;
-    info->video.red_shift = 0;
-    info->video.green_shift = 0;
-    info->video.blue_shift = 0;
-    info->video.red_size = 0;
-    info->video.green_size = 0;
-    info->video.blue_size = 0;
+    text_video(&info->video);
 
     if (!bs || !gop_guid) {
         return;
@@ -410,23 +416,19 @@ void uefi_detect_video(boot_info_t *info, EFI_BOOT_SERVICES *bs, const EFI_GUID 
 
     info->video.mode = VIDEO_GRAPHICS;
     info->video.framebuffer = (u64)gop->Mode->FrameBufferBase;
+
     info->video.width = (u16)mode->HorizontalResolution;
     info->video.height = (u16)mode->VerticalResolution;
+
     info->video.bytes_per_pixel = 4;
     info->video.bytes_per_line = (u16)(mode->PixelsPerScanLine * 4);
 
-    if (!_fill_video_format_from_gop(&info->video, mode)) {
+    if (!gop_format(&info->video, mode)) {
         if (mode->PixelFormat == PixelBltOnly) {
-            uefi_mem_zero(&info->video, sizeof(info->video));
-            info->video.mode = VIDEO_TEXT;
-            info->video.framebuffer = VGA_ADDR;
-            info->video.width = VGA_WIDTH;
-            info->video.height = VGA_HEIGHT;
-            info->video.bytes_per_pixel = 2;
-            info->video.bytes_per_line = VGA_WIDTH * 2;
+            text_video(&info->video);
             return;
         }
 
-        _set_default_rgb888(&info->video);
+        rgb888(&info->video);
     }
 }
