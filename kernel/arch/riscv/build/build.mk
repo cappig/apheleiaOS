@@ -64,14 +64,7 @@ else
 RISCV_UART_STRIDE ?= 1
 endif
 
-# the flat image may keep early boot data before the embedded rootfs
-RISCV_DTB_OFFSET     := 0
-RISCV_ROOTFS_OFFSET  := 1441792
 RISCV_SCRATCH_OFFSET := 50331648
-
-ifeq ($(RISCV_FRISC),true)
-RISCV_DTB_OFFSET := 1310720
-endif
 
 RISCV_FRISC_DTS := $(ARCH_DIR)/dts/friscv.dts
 RISCV_FRISC_DTB := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
@@ -106,8 +99,6 @@ BOOT_ENTRY_CFLAGS_COMMON := \
 	-fno-builtin \
 	-fno-pic \
 	-fno-pie \
-	-DBOOT_DTB_OFFSET=$(RISCV_DTB_OFFSET) \
-	-DBOOT_ROOTFS_OFFSET=$(RISCV_ROOTFS_OFFSET) \
 	-DBOOT_SCRATCH_OFFSET=$(RISCV_SCRATCH_OFFSET) \
 	-DSERIAL_UART0=$(RISCV_UART0) \
 	-DRISCV_UART_STRIDE=$(RISCV_UART_STRIDE) \
@@ -199,9 +190,8 @@ $(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS)) \
 IMAGE_SCRIPT_DEPS := \
 	utils/stage_image.sh \
 	kernel/build_image_common.py \
-	kernel/arch/riscv/build/check_boot_stub.py \
-	kernel/arch/riscv/build/build_riscv_disk_image.py \
-	kernel/arch/riscv/build/check_image_layout.py
+	kernel/arch/riscv/build/build_flat_image.py \
+	kernel/arch/riscv/build/build_riscv_disk_image.py
 
 IMAGE_ROOT_DEPS := $(shell find root -type f -o -type l)
 
@@ -216,7 +206,7 @@ $(RISCV_FRISC_DTB): $(RISCV_FRISC_DTS)
 
 ifeq ($(RISCV_FRISC),true)
 RISCV_IMAGE_DTB_DEPS := $(RISCV_FRISC_DTB)
-RISCV_IMAGE_DTB_ARGS := $(RISCV_DTB_OFFSET) $(RISCV_FRISC_DTB)
+RISCV_IMAGE_DTB_ARGS := --dtb $(RISCV_FRISC_DTB)
 endif
 
 $(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) \
@@ -229,16 +219,12 @@ $(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) \
 
 bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE) $(RISCV_IMAGE_DTB_DEPS)
 	@mkdir -p $(@D)
-	@python3 kernel/arch/riscv/build/check_boot_stub.py $(BOOT_ENTRY_ELF) \
-		$(BOOT_ENTRY_BIN) $(RISCV_ROOTFS_OFFSET) $(RISCV_IMAGE_DTB_ARGS)
-	@python3 kernel/arch/riscv/build/check_image_layout.py \
-	    $(KERNEL_ELF) $(ROOTFS_IMAGE) $(RISCV_ROOTFS_OFFSET) \
-	    $(RISCV_SCRATCH_OFFSET)
-	@cp $(BOOT_ENTRY_BIN) $@
-ifneq ($(RISCV_IMAGE_DTB_DEPS),)
-	@truncate -s $(RISCV_DTB_OFFSET) $@
-	@cat $(RISCV_FRISC_DTB) >> $@
-endif
-	@truncate -s $(RISCV_ROOTFS_OFFSET) $@
-	@cat $(ROOTFS_IMAGE) >> $@
+	@python3 kernel/arch/riscv/build/build_flat_image.py \
+		--boot-elf $(BOOT_ENTRY_ELF) \
+		--boot-bin $(BOOT_ENTRY_BIN) \
+		--kernel-elf $(KERNEL_ELF) \
+		--rootfs $(ROOTFS_IMAGE) \
+		--output $@ \
+		--scratch-offset $(RISCV_SCRATCH_OFFSET) \
+		$(RISCV_IMAGE_DTB_ARGS)
 	@printf "%-3s  %s\n" "IM" "$@"

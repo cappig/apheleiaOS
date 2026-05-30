@@ -25,12 +25,6 @@ extern char __image_start;
 #ifndef BOOT_SCRATCH_OFFSET
 #define BOOT_SCRATCH_OFFSET (48ULL * MIB)
 #endif
-#ifndef BOOT_ROOTFS_OFFSET
-#define BOOT_ROOTFS_OFFSET (2ULL * MIB)
-#endif
-#ifndef BOOT_DTB_OFFSET
-#define BOOT_DTB_OFFSET 0
-#endif
 
 #define DEFAULT_TIMEBASE_HZ 10000000ULL
 #define CLINT_BASE          0x02000000ULL
@@ -42,6 +36,19 @@ extern char __image_start;
 #ifndef BOOT_LOG_COLOR
 #define BOOT_LOG_COLOR true
 #endif
+
+#define RISCV_IMAGE_MAGIC   0x52564941U // "AIRV" in little endian
+#define RISCV_IMAGE_VERSION 1U
+
+typedef struct PACKED {
+    u32 magic;
+    u16 version;
+    u16 size;
+    u64 dtb_offset;
+    u64 dtb_size;
+    u64 rootfs_offset;
+    u64 rootfs_size;
+} riscv_image_header_t;
 
 typedef struct {
     const u8 *blob;
@@ -65,7 +72,9 @@ typedef struct {
 
 typedef struct {
     uintptr_t image_base;
+    const riscv_image_header_t *header;
     const u8 *embedded_rootfs;
+    size_t embedded_rootfs_size;
     uintptr_t heap_start;
     uintptr_t memory_end;
     uintptr_t scratch_base;
@@ -86,6 +95,9 @@ typedef struct {
 boot_timer_t boot_timer = {
     .hz = DEFAULT_TIMEBASE_HZ,
 };
+
+// patched by the flat image builder after objcopy
+riscv_image_header_t ATTRIBUTE(section(".data.image_header")) ALIGNED(8) ATTRIBUTE(used) riscv_image_header = { 0 };
 
 static void log_sink(const char *msg) {
     puts(msg);
@@ -229,29 +241,63 @@ static uintptr_t addr_add(uintptr_t base, u64 offset, const char *what) {
     return base + (uintptr_t)offset;
 }
 
-static const u8 *rootfs_at(uintptr_t image_base) {
-    uintptr_t rootfs = addr_add(image_base, BOOT_ROOTFS_OFFSET, "embedded rootfs address overflow");
-
-    return (const u8 *)rootfs;
-}
-
-static const void *dtb_at(uintptr_t image_base) {
-    if (!BOOT_DTB_OFFSET) {
+static const void *image_ptr(uintptr_t image_base, u64 offset, const char *what) {
+    if (!offset) {
         return NULL;
     }
 
-    uintptr_t addr = addr_add(image_base, BOOT_DTB_OFFSET, "embedded DTB address overflow");
-
-    return valid_dtb((const void *)addr);
+    return (const void *)addr_add(image_base, offset, what);
 }
 
-static layout_t make_layout(fdt_reg_t memory) {
+static const riscv_image_header_t *image_header(void) {
+    const riscv_image_header_t *header = &riscv_image_header;
+
+    if (header->magic != RISCV_IMAGE_MAGIC) {
+        return NULL;
+    }
+
+    if (header->version != RISCV_IMAGE_VERSION || header->size < sizeof(*header)) {
+        panic("unsupported RISC-V image header");
+    }
+
+    return header;
+}
+
+static const void *image_dtb(uintptr_t image_base, const riscv_image_header_t *header) {
+    if (!header || !header->dtb_offset || !header->dtb_size) {
+        return NULL;
+    }
+
+    const void *dtb = image_ptr(image_base, header->dtb_offset, "embedded DTB address overflow");
+    if (!dtb || !valid_dtb(dtb)) {
+        return NULL;
+    }
+
+    if ((u64)fdt_size(dtb) > header->dtb_size) {
+        return NULL;
+    }
+
+    return dtb;
+}
+
+static layout_t make_layout(fdt_reg_t memory, const riscv_image_header_t *header) {
     layout_t layout = {
         .image_base = (uintptr_t)&__image_start,
+        .header = header,
         .heap_start = (uintptr_t)&__stack_top,
     };
 
-    layout.embedded_rootfs = rootfs_at(layout.image_base);
+    if (layout.header) {
+        if (layout.header->rootfs_offset && layout.header->rootfs_size) {
+            layout.embedded_rootfs = image_ptr(
+                layout.image_base,
+                layout.header->rootfs_offset,
+                "embedded rootfs address overflow"
+            );
+            layout.embedded_rootfs_size = (size_t)layout.header->rootfs_size;
+        }
+    }
+
     layout.memory_end = addr_add((uintptr_t)memory.addr, memory.size, "memory range overflow");
     layout.scratch_base = addr_add((uintptr_t)memory.addr, BOOT_SCRATCH_OFFSET, "scratch address overflow");
 
@@ -653,10 +699,11 @@ static void *copy_dtb(const void *dtb, size_t size) {
     return copy;
 }
 
-static rootfs_src_t pick_rootfs(const void *dtb, const u8 *embedded, fdt_reg_t memory, uintptr_t memory_end) {
+static rootfs_src_t
+pick_rootfs(const void *dtb, const u8 *embedded, size_t embedded_size, fdt_reg_t memory, uintptr_t memory_end) {
     rootfs_src_t rootfs = {
         .image = embedded,
-        .limit = 0,
+        .limit = embedded_size,
         .from_initrd = false,
     };
 
@@ -783,14 +830,15 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     boot_ext2_t rootfs = { 0 };
 
     const void *entry_dtb = valid_dtb(dtb);
-    const void *image_dtb = dtb_at((uintptr_t)&__image_start);
-    const void *boot_dtb = pick_dtb(entry_dtb, image_dtb);
+    const riscv_image_header_t *header = image_header();
+    const void *flat_dtb = image_dtb((uintptr_t)&__image_start, header);
+    const void *boot_dtb = pick_dtb(entry_dtb, flat_dtb);
 
     bool entry_dtb_valid = entry_dtb != NULL;
     size_t dtb_size = dtb_len(boot_dtb);
 
     fdt_reg_t memory = find_memory(boot_dtb);
-    layout_t layout = make_layout(memory);
+    layout_t layout = make_layout(memory, header);
 
     uintptr_t uart = find_uart(boot_dtb);
     uintptr_t stride = find_stride(boot_dtb);
@@ -807,7 +855,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         (unsigned long)hartid,
         (unsigned long)(uintptr_t)dtb,
         yesno(entry_dtb_valid),
-        dtb_source(boot_dtb, entry_dtb, image_dtb),
+        dtb_source(boot_dtb, entry_dtb, flat_dtb),
         dtb_size
     );
     log_debug(
@@ -825,8 +873,23 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         (unsigned long)uart,
         (unsigned long)stride
     );
+    if (layout.header) {
+        log_debug(
+            "image header dtb=%#llx+%llu rootfs=%#llx+%llu",
+            (unsigned long long)layout.header->dtb_offset,
+            (unsigned long long)layout.header->dtb_size,
+            (unsigned long long)layout.header->rootfs_offset,
+            (unsigned long long)layout.header->rootfs_size
+        );
+    }
 
-    rootfs_src_t rootfs_src = pick_rootfs(boot_dtb, layout.embedded_rootfs, memory, layout.memory_end);
+    rootfs_src_t rootfs_src = pick_rootfs(
+        boot_dtb,
+        layout.embedded_rootfs,
+        layout.embedded_rootfs_size,
+        memory,
+        layout.memory_end
+    );
 
     log_hart(hartid, boot_dtb);
 
