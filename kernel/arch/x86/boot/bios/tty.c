@@ -11,32 +11,38 @@
 #include "bios.h"
 #include "stdarg.h"
 
-static char boot_log_buf[BOOT_LOG_CAP];
-static size_t boot_log_len = 0;
-static bool bios_output_enabled = true;
+typedef struct {
+    char log[BOOT_LOG_CAP];
+    size_t log_len;
+    bool bios_output;
+} bios_tty_t;
+
+static bios_tty_t bios_tty = {
+    .bios_output = true,
+};
 
 static void boot_log_putc(char c) {
-    if (boot_log_len >= BOOT_LOG_CAP) {
+    if (bios_tty.log_len >= BOOT_LOG_CAP) {
         return;
     }
 
-    boot_log_buf[boot_log_len++] = c;
+    bios_tty.log[bios_tty.log_len++] = c;
 }
 
 const char *boot_log_buffer(size_t *len, size_t *cap) {
     if (len) {
-        *len = boot_log_len;
+        *len = bios_tty.log_len;
     }
 
     if (cap) {
         *cap = BOOT_LOG_CAP;
     }
 
-    return boot_log_buf;
+    return bios_tty.log;
 }
 
 void tty_disable_bios_output(void) {
-    bios_output_enabled = false;
+    bios_tty.bios_output = false;
 }
 
 int puts(const char *str) {
@@ -49,7 +55,7 @@ int puts(const char *str) {
         if (c == '\n') {
             send_serial(SERIAL_COM1, '\r');
 
-            if (bios_output_enabled) {
+            if (bios_tty.bios_output) {
                 regs.al = '\r';
                 bios_call(0x10, &regs, &regs);
             }
@@ -58,7 +64,7 @@ int puts(const char *str) {
         boot_log_putc(c);
         send_serial(SERIAL_COM1, c);
 
-        if (bios_output_enabled) {
+        if (bios_tty.bios_output) {
             regs.al = c;
             bios_call(0x10, &regs, &regs);
         }

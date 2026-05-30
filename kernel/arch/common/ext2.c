@@ -2,12 +2,10 @@
 
 #include <base/attributes.h>
 #include <base/macros.h>
+#include <common/bootio.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
-
-int printf(const char *fmt, ...);
-NORETURN void panic(const char *msg);
 
 static size_t strnlen_delim(const char *str, char delim, size_t max) {
     size_t len = 0;

@@ -51,15 +51,20 @@ typedef struct {
     u64 errors ALIGNED(8);
 } syscall_counter_t;
 
+typedef struct {
+    syscall_counter_t counters[APHELEIA_SYSCALL_COUNT];
+    u64 unknown_count;
+} syscall_stats_t;
+
 #define SYSCALL(symbol, call, number) [SYS_##symbol] = { .name = #call },
 
-static syscall_counter_t syscall_counters[APHELEIA_SYSCALL_COUNT] = {
+static syscall_stats_t syscall_stats = {
+    .counters = {
 #include <apheleia/syscall.def>
+    },
 };
 
 #undef SYSCALL
-
-static u64 syscall_unknown_count = 0;
 
 static mode_t _apply_umask(mode_t mode, mode_t mask) {
     mode_t special = mode & 07000;
@@ -95,11 +100,11 @@ static bool _open_flags_valid(int flags) {
 
 static void syscall_count(u64 number, u64 ret) {
     if (number >= APHELEIA_SYSCALL_COUNT) {
-        __atomic_fetch_add(&syscall_unknown_count, 1, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&syscall_stats.unknown_count, 1, __ATOMIC_RELAXED);
         return;
     }
 
-    syscall_counter_t *counter = &syscall_counters[number];
+    syscall_counter_t *counter = &syscall_stats.counters[number];
 
     __atomic_fetch_add(&counter->calls, 1, __ATOMIC_RELAXED);
 
@@ -110,7 +115,7 @@ static void syscall_count(u64 number, u64 ret) {
 
 size_t syscall_stats_snapshot(syscall_stat_t *stats, size_t max_stats, u64 *unknown_out) {
     if (unknown_out) {
-        *unknown_out = __atomic_load_n(&syscall_unknown_count, __ATOMIC_RELAXED);
+        *unknown_out = __atomic_load_n(&syscall_stats.unknown_count, __ATOMIC_RELAXED);
     }
 
     if (!stats || !max_stats) {
@@ -120,7 +125,7 @@ size_t syscall_stats_snapshot(syscall_stat_t *stats, size_t max_stats, u64 *unkn
     size_t count = APHELEIA_SYSCALL_COUNT < max_stats ? APHELEIA_SYSCALL_COUNT : max_stats;
 
     for (size_t i = 0; i < count; i++) {
-        syscall_counter_t *counter = &syscall_counters[i];
+        syscall_counter_t *counter = &syscall_stats.counters[i];
 
         stats[i].number = i;
         stats[i].name = counter->name ? counter->name : "unknown";
@@ -162,7 +167,7 @@ static bool _parse_index(const char *text, int max, int *out_index) {
     return true;
 }
 
-static int _tty_binding_from_dev_name(const char *dev_name) {
+static int _tty_from_dev(const char *dev_name) {
     if (!dev_name || !dev_name[0]) {
         return TTY_NONE;
     }
@@ -188,7 +193,7 @@ static int _tty_binding_from_dev_name(const char *dev_name) {
     return TTY_NONE;
 }
 
-static int _pty_index_from_dev_name(const char *dev_name) {
+static int _pty_from_dev(const char *dev_name) {
     if (!dev_name || !dev_name[0]) {
         return -1;
     }
@@ -312,7 +317,7 @@ static bool _user_field(const void *base, size_t index, size_t item_size, size_t
         return false;
     }
 
-    // argv, envp, and pollfd arrays are user memory too; do not index them raw.
+    // argv, envp, and pollfd arrays are user memory too; do not index them raw
     uintptr_t addr = (uintptr_t)base;
     if (index > ((uintptr_t)-1 - addr) / item_size) {
         return false;
@@ -642,7 +647,7 @@ static bool _split_parent(const char *path, char *parent, size_t parent_len, cha
     return true;
 }
 
-static int _resolve_writable_parent(
+static int _write_parent(
     const sched_thread_t *thread,
     const char *path,
     char *parent_path,
@@ -1118,6 +1123,7 @@ static ssize_t _fd_getdents(sched_fd_t *entry, void *buf, size_t len, size_t off
         return -EINVAL;
     }
 
+    // userspace sees fixed size records, so the fd offset is a record index
     size_t max_entries = len / sizeof(dirent_t);
     if (!max_entries) {
         return 0;
@@ -1128,7 +1134,7 @@ static ssize_t _fd_getdents(sched_fd_t *entry, void *buf, size_t len, size_t off
     size_t current = 0;
     size_t written = 0;
     unsigned long procfs_irq_flags = 0;
-    bool procfs_locked = procfs_dir_lock_if_needed(node, &procfs_irq_flags);
+    bool procfs_locked = procfs_lock_dir(node, &procfs_irq_flags);
     ssize_t ret = 0;
 
     ll_foreach(child, node->tree_entry->children) {
@@ -1174,7 +1180,7 @@ static ssize_t _fd_getdents(sched_fd_t *entry, void *buf, size_t len, size_t off
     ret = (ssize_t)bytes;
 
 out:
-    procfs_dir_unlock_if_needed(procfs_locked, procfs_irq_flags);
+    procfs_unlock_dir(procfs_locked, procfs_irq_flags);
     return ret;
 }
 
@@ -1258,6 +1264,7 @@ static ssize_t _fd_write_vfs(
         return pty_write_handle(&pty_handle, buf, len, _fd_vfs_io_flags(entry));
     }
 
+    // append is resolved at write time so shared fds observe the newest size
     if (append_mode && (entry->flags & O_APPEND)) {
         offset = (size_t)entry->node->size;
     }
@@ -1521,6 +1528,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
     if (!strncmp(resolved, "/dev/", 5)) {
         const char *dev = resolved + 5;
 
+        // ptmx is allocated at open time so idle PTYs do not clutter /dev
         if (!strcmp(dev, "ptmx")) {
             if (!pty_reserve(&ptmx_index)) {
                 return -EAGAIN;
@@ -1530,8 +1538,8 @@ static int sys_open(const char *path, int flags, mode_t mode) {
             fd_pty_index = (int)ptmx_index;
             fd_pty_master = true;
         } else {
-            fd_tty_index = _tty_binding_from_dev_name(dev);
-            fd_pty_index = _pty_index_from_dev_name(dev);
+            fd_tty_index = _tty_from_dev(dev);
+            fd_pty_index = _pty_from_dev(dev);
         }
     }
 
@@ -1549,15 +1557,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         char base[PATH_MAX];
         vfs_node_t *parent = NULL;
 
-        int parent_err = _resolve_writable_parent(
-            thread,
-            resolved,
-            parent_path,
-            sizeof(parent_path),
-            base,
-            sizeof(base),
-            &parent
-        );
+        int parent_err = _write_parent(thread, resolved, parent_path, sizeof(parent_path), base, sizeof(base), &parent);
 
         if (parent_err < 0) {
             return _open_fail(ptmx_open, ptmx_index, parent_err);
@@ -1638,6 +1638,7 @@ static int sys_open(const char *path, int flags, mode_t mode) {
 
     u32 runtime_flags = (u32)flags & (u32)(O_ACCMODE | O_APPEND | O_NONBLOCK | O_SYNC);
 
+    // creation flags are consumed by open; the fd keeps only runtime behavior
     sched_fd_t fd = {
         .kind = SCHED_FD_VFS,
         .node = resolved_node,
@@ -1854,15 +1855,7 @@ static int sys_mkdir(const char *path, mode_t mode) {
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
     vfs_node_t *parent = NULL;
-    int parent_err = _resolve_writable_parent(
-        thread,
-        resolved,
-        parent_path,
-        sizeof(parent_path),
-        base,
-        sizeof(base),
-        &parent
-    );
+    int parent_err = _write_parent(thread, resolved, parent_path, sizeof(parent_path), base, sizeof(base), &parent);
 
     if (parent_err < 0) {
         return parent_err;
@@ -1920,15 +1913,7 @@ static int sys_rmdir(const char *path) {
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
     vfs_node_t *parent = NULL;
-    int parent_err = _resolve_writable_parent(
-        thread,
-        resolved,
-        parent_path,
-        sizeof(parent_path),
-        base,
-        sizeof(base),
-        &parent
-    );
+    int parent_err = _write_parent(thread, resolved, parent_path, sizeof(parent_path), base, sizeof(base), &parent);
 
     if (parent_err < 0) {
         return parent_err;
@@ -2736,15 +2721,7 @@ static int sys_link(const char *oldpath, const char *newpath) {
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
     vfs_node_t *parent = NULL;
-    int parent_err = _resolve_writable_parent(
-        thread,
-        resolved_new,
-        parent_path,
-        sizeof(parent_path),
-        base,
-        sizeof(base),
-        &parent
-    );
+    int parent_err = _write_parent(thread, resolved_new, parent_path, sizeof(parent_path), base, sizeof(base), &parent);
     if (parent_err < 0) {
         return parent_err;
     }
@@ -2777,7 +2754,7 @@ static int sys_symlink(const char *target, const char *linkpath) {
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
     vfs_node_t *parent = NULL;
-    int parent_err = _resolve_writable_parent(
+    int parent_err = _write_parent(
         thread,
         resolved_link,
         parent_path,
@@ -2840,15 +2817,7 @@ static int sys_unlink(const char *path) {
     char parent_path[PATH_MAX];
     char base[PATH_MAX];
     vfs_node_t *parent = NULL;
-    int parent_err = _resolve_writable_parent(
-        thread,
-        resolved,
-        parent_path,
-        sizeof(parent_path),
-        base,
-        sizeof(base),
-        &parent
-    );
+    int parent_err = _write_parent(thread, resolved, parent_path, sizeof(parent_path), base, sizeof(base), &parent);
 
     if (parent_err < 0) {
         return parent_err;
@@ -2888,7 +2857,7 @@ static int sys_rename(const char *oldpath, const char *newpath) {
     char old_base[PATH_MAX];
     vfs_node_t *old_parent = NULL;
 
-    int old_parent_err = _resolve_writable_parent(
+    int old_parent_err = _write_parent(
         thread,
         resolved_old,
         old_parent_path,
@@ -2905,7 +2874,7 @@ static int sys_rename(const char *oldpath, const char *newpath) {
     char new_parent_path[PATH_MAX];
     char new_base[PATH_MAX];
     vfs_node_t *new_parent = NULL;
-    int new_parent_err = _resolve_writable_parent(
+    int new_parent_err = _write_parent(
         thread,
         resolved_new,
         new_parent_path,
@@ -3258,7 +3227,7 @@ static u64 sys_kill(pid_t pid, int signum) {
         return !signum && ret > 0 ? 0 : (u64)ret;
     }
 
-    // Permission check: non-root can only signal processes with the same uid
+    // permission check: non-root can only signal processes with the same uid
     sched_thread_t *target = sched_find_thread(pid);
     if (!target) {
         return (u64)-ESRCH;

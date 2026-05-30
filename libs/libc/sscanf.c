@@ -5,7 +5,6 @@
 #include "stdint.h"
 #include "stdlib.h"
 
-
 static int _get_width(const char *format, size_t *index) {
     int width = -1;
 
@@ -207,7 +206,6 @@ static void _adjust_width(int base, const char *restrict str, int *width) {
     }
 }
 
-
 int vsnscanf(const char *restrict str, size_t max, const char *restrict format, va_list vlist) {
     size_t filled = 0;
     size_t j = 0;
@@ -231,7 +229,7 @@ int vsnscanf(const char *restrict str, size_t max, const char *restrict format, 
                 size = SCAN_PTR;
             }
 
-            // Number
+            // number
             if (base >= 0) {
                 char *end;
                 const char *start = &str[j];
@@ -267,7 +265,7 @@ int vsnscanf(const char *restrict str, size_t max, const char *restrict format, 
                 _store_unsigned(va_arg(vlist, void *), size, number);
                 filled++;
             }
-            // String
+            // string
             else if (base == BASE_CHAR || base == BASE_STRING) {
                 _adjust_width(base, &str[j], &width);
 
@@ -288,13 +286,13 @@ int vsnscanf(const char *restrict str, size_t max, const char *restrict format, 
                 }
             }
         }
-        // Handle spaces
+        // handle spaces
         else if (format[i] == ' ') {
             while (isspace(str[j]) && str[j]) {
                 j++;
             }
         }
-        // Check str against format
+        // check str against format
         else {
             if (format[i] != str[j]) {
                 break;

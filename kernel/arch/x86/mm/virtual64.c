@@ -11,7 +11,7 @@
 #include "x86/asm.h"
 #include "x86/boot.h"
 
-// Locate the requested index in the child table, allocate if it doesn't exist
+// locate the requested index in the child table, allocate if it doesn't exist
 static page_t *_walk_table_once(page_t *table, size_t index, u64 flags) {
     page_t *next_table;
 
@@ -68,7 +68,7 @@ void map_page(page_t *lvl4_paddr, size_t size, u64 vaddr, u64 paddr, u64 flags) 
 finalize:
     page_set_paddr(entry, paddr);
 
-    flags |= PT_PRESENT; // Should this be assumed?
+    flags |= PT_PRESENT; // present is required for every mapped leaf
     *entry |= flags & FLAGS_MASK;
 }
 
@@ -83,7 +83,6 @@ void unmap_page(page_t *lvl4_paddr, u64 vaddr) {
     }
 }
 
-
 void map_region(page_t *lvl4_paddr, size_t pages, u64 vaddr, u64 paddr, u64 flags) {
     for (size_t i = 0; i < pages; i++) {
         u64 page_vaddr = vaddr + i * PAGE_4KIB;
@@ -97,17 +96,16 @@ void identity_map(page_t *lvl4_paddr, u64 from, u64 to, u64 map_offset, u64 flag
     from = ALIGN_DOWN(from, PAGE_4KIB);
     to = ALIGN(to, PAGE_4KIB);
 
-    // The bottom 4GiB are already mapped by the bootloader
+    // the bottom 4GiB are already mapped by the bootloader
     if (!remap) {
         from = max(PROTECTED_MODE_TOP, from);
     }
 
-    // Map in a range [from, to>
+    // map in a range [from, to>
     for (u64 i = from; i < to; i += PAGE_4KIB) {
         map_page(lvl4_paddr, PAGE_4KIB, i + map_offset, i, flags);
     }
 }
-
 
 size_t get_page(page_t *lvl4_paddr, u64 vaddr, page_t **entry) {
     size_t lvl4_index = GET_LVL4_INDEX(vaddr);

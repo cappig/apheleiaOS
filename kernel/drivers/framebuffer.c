@@ -58,7 +58,7 @@ static void _fb_handoff_clear(const framebuffer_info_t *fb) {
         }
     }
 
-    // Ensure the first frame after acquire repaints the entire display.
+    // ensure the first frame after acquire repaints the entire display
     fb_driver.force_full_present = true;
     mutex_unlock(&fb_driver.present_lock);
 }

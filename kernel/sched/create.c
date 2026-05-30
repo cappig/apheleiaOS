@@ -236,7 +236,7 @@ static size_t sched_pick_target_cpu(const sched_thread_t *thread) {
     if (preferred_cpu < ncpu) {
         size_t preferred_load = sched_cpu_load(preferred_cpu);
 
-        if (preferred_load <= min_load + SCHED_WAKE_LOCAL_LOAD_SLOP) {
+        if (preferred_load <= min_load + SCHED_WAKE_LOAD_SLOP) {
             return preferred_cpu;
         }
     }
@@ -596,8 +596,8 @@ pid_t sched_fork(arch_int_state_t *state) {
 
     child->context = build_fork_stack(child, state);
 
-    // Let freshly forked children compete at current rq baseline instead of
-    // inheriting a potentially stale/high vruntime from interactive parents.
+    // let freshly forked children compete at current rq baseline instead of
+    // inheriting a potentially stale/high vruntime from interactive parents
     child->vruntime_ns = 0;
 
     enqueue_thread(child);

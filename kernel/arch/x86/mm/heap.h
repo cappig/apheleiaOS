@@ -8,7 +8,7 @@
 
 typedef struct PACKED {
     u32 magic; // 4 bytes = 8 hex digits
-    u32 size; // Size in blocks
+    u32 size; // size in blocks
 } kheap_header;
 
 

@@ -18,6 +18,7 @@ static bool waitpid_target_matches(const sched_thread_t *parent, const sched_thr
     }
 
     if (!pid) {
+        // pid 0 waits within the caller's process group
         return child->pgid == parent->pgid;
     }
 
@@ -120,6 +121,7 @@ static void waitpid_charge_child_time(sched_thread_t *parent, const sched_thread
 
     u64 own_ticks = __atomic_load_n(&child->cpu_time_ticks, __ATOMIC_RELAXED);
     u64 child_ticks = __atomic_load_n(&child->child_cpu_time_ticks, __ATOMIC_RELAXED);
+    // waited children roll their accumulated descendants into the parent totals
     waitpid_add_ticks(&parent->child_cpu_time_ticks, waitpid_sum_ticks(own_ticks, child_ticks));
 
     u64 own_user = __atomic_load_n(&child->user_ticks, __ATOMIC_RELAXED);

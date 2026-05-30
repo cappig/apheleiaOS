@@ -1,6 +1,7 @@
 #include "internal.h"
 
 static void make_zombie(sched_thread_t *thread, int code) {
+    // zombies leave the run queues but stay visible until the parent waits
     thread_unclaim(thread);
     thread_set_state(thread, THREAD_ZOMBIE);
     thread->exit_code = code;
@@ -65,6 +66,7 @@ static sched_thread_t *pick_local(size_t cpu_id) {
 }
 
 static sched_thread_t *rescue_stranded(size_t cpu_id) {
+    // affinity changes can strand runnable threads on queues they can no longer run on
     sched_thread_t *stranded = rq_pop_disallowed_from_cpu(cpu_id, cpu_id);
     if (!stranded) {
         return NULL;
@@ -121,6 +123,7 @@ static sched_thread_t *steal_idle_work(size_t cpu_id) {
 
     sched_thread_t *first = NULL;
 
+    // keep one stolen thread local and enqueue the rest behind it for fairness
     for (size_t i = 0; i < SCHED_IDLE_STEAL_BATCH; i++) {
         sched_thread_t *victim = rq_pop_worst_allowed_from_cpu(cpu, cpu_id);
 

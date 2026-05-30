@@ -87,8 +87,12 @@ typedef struct {
     bool show_bars;
 } top_opts_t;
 
-static char top_key_push = 0;
-static bool top_key_push_valid = false;
+typedef struct {
+    char ch;
+    bool valid;
+} top_key_push_t;
+
+static top_key_push_t top_key = { 0 };
 
 static void top_write(const char *text) {
     if (!text) {
@@ -885,6 +889,7 @@ static int top_open_input(bool *interactive, bool *close_input) {
         return input_fd;
     }
 
+    // piped output still needs a controlling tty for interactive commands
     input_fd = open("/dev/tty", O_RDONLY, 0);
     if (input_fd >= 0) {
         *close_input = true;
@@ -926,9 +931,9 @@ static bool top_read_byte(int input_fd, char *out, int timeout_ms, void *ctx) {
         return false;
     }
 
-    if (top_key_push_valid) {
-        top_key_push_valid = false;
-        *out = top_key_push;
+    if (top_key.valid) {
+        top_key.valid = false;
+        *out = top_key.ch;
         return true;
     }
 
@@ -973,8 +978,8 @@ static void top_push_byte(int input_fd, char ch, void *ctx) {
     (void)input_fd;
     (void)ctx;
 
-    top_key_push = ch;
-    top_key_push_valid = true;
+    top_key.ch = ch;
+    top_key.valid = true;
 }
 
 static void top_probe_winsize(int input_fd) {

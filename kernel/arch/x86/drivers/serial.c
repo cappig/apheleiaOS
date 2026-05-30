@@ -28,14 +28,17 @@ typedef struct {
     bool rx_wait_ready;
 } serial_port_t;
 
-static serial_port_t serial_devices[] = {
-    { .index = 0, .port = SERIAL_COM1 },
-    // we should probably add more
+typedef struct {
+    serial_port_t devices[1];
+    bool nodes_ready;
+    bool loaded;
+} serial_driver_state_t;
+
+static serial_driver_state_t serial_driver = {
+    .devices = {
+        { .index = 0, .port = SERIAL_COM1 },
+    },
 };
-
-
-static bool serial_nodes_ready = false;
-static bool serial_driver_loaded = false;
 
 const driver_desc_t serial_driver_desc = {
     .name = "serial",
@@ -127,7 +130,7 @@ static ssize_t _write(vfs_node_t *node, void *buf, size_t offset, size_t len, u3
     }
 
     unsigned long irq_flags = spin_lock_irqsave(&serial->tx_lock);
-    send_serial_sized_string(serial->port, buf, len);
+    send_serial_buf(serial->port, buf, len);
     spin_unlock_irqrestore(&serial->tx_lock, irq_flags);
     return (ssize_t)len;
 }
@@ -197,22 +200,22 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
 
     char name[] = "ttySX";
 
-    size_t count = sizeof(serial_devices) / sizeof(serial_devices[0]);
+    size_t count = sizeof(serial_driver.devices) / sizeof(serial_driver.devices[0]);
 
     for (size_t i = 0; i < count; i++) {
-        if (!serial_devices[i].rx_wait_ready) {
-            spinlock_init(&serial_devices[i].rx_lock);
-            spinlock_init(&serial_devices[i].tx_lock);
-            sched_wait_queue_init(&serial_devices[i].rx_wait);
-            sched_waitq_set_poll(&serial_devices[i].rx_wait, true);
-            serial_devices[i].rx_wait_ready = true;
+        if (!serial_driver.devices[i].rx_wait_ready) {
+            spinlock_init(&serial_driver.devices[i].rx_lock);
+            spinlock_init(&serial_driver.devices[i].tx_lock);
+            sched_wait_queue_init(&serial_driver.devices[i].rx_wait);
+            sched_waitq_set_poll(&serial_driver.devices[i].rx_wait, true);
+            serial_driver.devices[i].rx_wait_ready = true;
         }
 
-        serial_tty_init(&serial_devices[i].tty);
+        serial_tty_init(&serial_driver.devices[i].tty);
 
-        name[4] = (char)('0' + serial_devices[i].index);
+        name[4] = (char)('0' + serial_driver.devices[i].index);
 
-        if (!_create_node(dev_dir, name, serial_if, &serial_devices[i])) {
+        if (!_create_node(dev_dir, name, serial_if, &serial_driver.devices[i])) {
             log_warn("failed to create /dev/%s", name);
             continue;
         }
@@ -220,16 +223,16 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
         log_debug("created /dev/%s", name);
     }
 
-    serial_nodes_ready = true;
+    serial_driver.nodes_ready = true;
     return true;
 }
 
 void serial_push_rx(size_t index, char ch) {
-    if (!ch || index >= sizeof(serial_devices) / sizeof(serial_devices[0])) {
+    if (!ch || index >= sizeof(serial_driver.devices) / sizeof(serial_driver.devices[0])) {
         return;
     }
 
-    serial_port_t *serial = &serial_devices[index];
+    serial_port_t *serial = &serial_driver.devices[index];
 
     unsigned long irq_flags = spin_lock_irqsave(&serial->rx_lock);
 
@@ -251,10 +254,10 @@ void serial_push_rx(size_t index, char ch) {
 
 bool serial_driver_busy(void) {
     char path[32] = { 0 };
-    size_t count = sizeof(serial_devices) / sizeof(serial_devices[0]);
+    size_t count = sizeof(serial_driver.devices) / sizeof(serial_driver.devices[0]);
 
     for (size_t i = 0; i < count; i++) {
-        snprintf(path, sizeof(path), "/dev/ttyS%zu", serial_devices[i].index);
+        snprintf(path, sizeof(path), "/dev/ttyS%zu", serial_driver.devices[i].index);
         vfs_node_t *node = vfs_lookup(path);
         if (node && sched_fd_refs_node(node)) {
             return true;
@@ -265,7 +268,7 @@ bool serial_driver_busy(void) {
 }
 
 driver_err_t serial_driver_load(void) {
-    if (serial_driver_loaded) {
+    if (serial_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -273,12 +276,12 @@ driver_err_t serial_driver_load(void) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
-    serial_driver_loaded = true;
+    serial_driver.loaded = true;
     return DRIVER_OK;
 }
 
 driver_err_t serial_driver_unload(void) {
-    if (!serial_driver_loaded) {
+    if (!serial_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -286,11 +289,11 @@ driver_err_t serial_driver_unload(void) {
         return DRIVER_ERR_BUSY;
     }
 
-    size_t count = sizeof(serial_devices) / sizeof(serial_devices[0]);
+    size_t count = sizeof(serial_driver.devices) / sizeof(serial_driver.devices[0]);
     char path[32] = { 0 };
 
     for (size_t i = 0; i < count; i++) {
-        snprintf(path, sizeof(path), "/dev/ttyS%zu", serial_devices[i].index);
+        snprintf(path, sizeof(path), "/dev/ttyS%zu", serial_driver.devices[i].index);
         vfs_node_t *node = vfs_lookup(path);
         if (node && !devfs_unregister_node(path)) {
             return DRIVER_ERR_BUSY;
@@ -301,7 +304,7 @@ driver_err_t serial_driver_unload(void) {
         log_warn("failed to unregister serial devfs callback");
     }
 
-    serial_nodes_ready = false;
-    serial_driver_loaded = false;
+    serial_driver.nodes_ready = false;
+    serial_driver.loaded = false;
     return DRIVER_OK;
 }

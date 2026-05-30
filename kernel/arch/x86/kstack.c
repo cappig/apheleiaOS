@@ -10,9 +10,15 @@
 #include <x86/boot.h>
 
 #if defined(__i386__)
-static spinlock_t kstack_lock = SPINLOCK_INIT;
-static uintptr_t kstack_floor = 0;
-static uintptr_t kstack_next = 0;
+typedef struct {
+    spinlock_t lock;
+    uintptr_t floor;
+    uintptr_t next;
+} kstack_alloc_t;
+
+static kstack_alloc_t kstack = {
+    .lock = SPINLOCK_INIT,
+};
 
 static uintptr_t kstack_region_top(void) {
     return ALIGN_DOWN(KSTACK_REGION_TOP_32, PAGE_4KIB);
@@ -28,18 +34,19 @@ static uintptr_t kstack_region_floor(void) {
     return floor;
 }
 
+// i386 kernel stacks live below the reserved kernel stack window and grow down
 static uintptr_t kstack_alloc_vaddr(size_t size) {
-    if (!kstack_next) {
-        kstack_floor = kstack_region_floor();
-        kstack_next = kstack_region_top();
+    if (!kstack.next) {
+        kstack.floor = kstack_region_floor();
+        kstack.next = kstack_region_top();
     }
 
-    if (kstack_next < kstack_floor + size) {
+    if (kstack.next < kstack.floor + size) {
         return 0;
     }
 
-    kstack_next -= size;
-    return kstack_next;
+    kstack.next -= size;
+    return kstack.next;
 }
 #endif
 
@@ -52,9 +59,9 @@ bool arch_kernel_stack_alloc(sched_thread_t *thread) {
     size_t size = ALIGN(thread->stack_size, PAGE_4KIB);
     size_t pages = size / PAGE_4KIB;
 
-    unsigned long flags = spin_lock_irqsave(&kstack_lock);
+    unsigned long flags = spin_lock_irqsave(&kstack.lock);
     uintptr_t vaddr = kstack_alloc_vaddr(size);
-    spin_unlock_irqrestore(&kstack_lock, flags);
+    spin_unlock_irqrestore(&kstack.lock, flags);
 
     if (!vaddr) {
         return false;

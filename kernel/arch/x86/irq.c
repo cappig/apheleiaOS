@@ -1,7 +1,5 @@
 #include "irq.h"
 
-void arch_wallclock_maintain(void); // x86-internal, defined in arch.c
-
 #include <arch/arch.h>
 #include <base/attributes.h>
 #include <log/log.h>
@@ -14,21 +12,25 @@ void arch_wallclock_maintain(void); // x86-internal, defined in arch.c
 #include <x86/serial.h>
 #include <x86/smp.h>
 
-static volatile u64 irq_tick_count ALIGNED(8) = 0;
-static volatile u64 irq_core_tick_count[MAX_CORES] ALIGNED(8) = { 0 };
-static bool use_apic_timer = false;
-static bool use_ioapic = false;
+typedef struct {
+    volatile u64 ticks ALIGNED(8);
+    volatile u64 core_ticks[MAX_CORES] ALIGNED(8);
+    bool apic_timer;
+    bool ioapic;
+} irq_state_t;
+
+static irq_state_t irq_state = { 0 };
 
 static inline void _align_core_tick_floor(size_t cpu_id) {
     if (cpu_id >= MAX_CORES) {
         return;
     }
 
-    u64 global = __atomic_load_n(&irq_tick_count, __ATOMIC_ACQUIRE);
-    u64 local = __atomic_load_n(&irq_core_tick_count[cpu_id], __ATOMIC_RELAXED);
+    u64 global = __atomic_load_n(&irq_state.ticks, __ATOMIC_ACQUIRE);
+    u64 local = __atomic_load_n(&irq_state.core_ticks[cpu_id], __ATOMIC_RELAXED);
     while (local < global) {
         bool raised_floor = __atomic_compare_exchange_n(
-            &irq_core_tick_count[cpu_id],
+            &irq_state.core_ticks[cpu_id],
             &local,
             global,
             false,
@@ -47,12 +49,12 @@ static inline void _publish_tick(size_t cpu_id) {
         cpu_id = 0;
     }
 
-    u64 core_ticks = __atomic_add_fetch(&irq_core_tick_count[cpu_id], 1, __ATOMIC_RELAXED);
-    u64 observed = __atomic_load_n(&irq_tick_count, __ATOMIC_RELAXED);
+    u64 core_ticks = __atomic_add_fetch(&irq_state.core_ticks[cpu_id], 1, __ATOMIC_RELAXED);
+    u64 observed = __atomic_load_n(&irq_state.ticks, __ATOMIC_RELAXED);
 
     while (core_ticks > observed) {
         bool published = __atomic_compare_exchange_n(
-            &irq_tick_count,
+            &irq_state.ticks,
             &observed,
             core_ticks,
             false,
@@ -135,10 +137,10 @@ static void _soft_resched_handler(int_state_t *state) {
 static void _init_timer_source(bool apic_ok) {
     const u32 timer_hz = TIMER_FREQ;
 
-    use_apic_timer = false;
+    irq_state.apic_timer = false;
 
     if (apic_ok && apic_timer_init(timer_hz)) {
-        use_apic_timer = true;
+        irq_state.apic_timer = true;
         log_info("APIC timer %u Hz", (unsigned int)apic_timer_hz());
 
         return;
@@ -151,14 +153,14 @@ static void _init_timer_source(bool apic_ok) {
 bool irq_init(void) {
     bool apic_ok = apic_init();
 
-    set_int_handler(SCHED_SOFT_RESCHED_VECTOR, _soft_resched_handler);
+    set_int_handler(SMP_SOFT_RESCHED_VECTOR, _soft_resched_handler);
 
     if (apic_ok) {
         set_int_handler(INT_SPURIOUS, _spurious_handler);
     }
 
     if (apic_ok && ioapic_available()) {
-        use_ioapic = true;
+        irq_state.ioapic = true;
         ioapic_mask_all();
         pic_mask_all();
         _route_irqs(true);
@@ -200,8 +202,8 @@ void irq_register(size_t irq, int_handler_t handler) {
     set_int_handler(vec, handler);
     _register_pic_vector(irq, handler);
 
-    if (use_ioapic) {
-        if (irq != IRQ_SYSTEM_TIMER || !use_apic_timer) {
+    if (irq_state.ioapic) {
+        if (irq != IRQ_SYSTEM_TIMER || !irq_state.apic_timer) {
             u32 dest = lapic_id();
             if (!ioapic_route_irq((u8)irq, (u8)vec, dest)) {
                 log_warn("failed to route IRQ %u via IOAPIC", (unsigned int)irq);
@@ -210,7 +212,7 @@ void irq_register(size_t irq, int_handler_t handler) {
         return;
     }
 
-    if (!use_apic_timer || irq != IRQ_SYSTEM_TIMER) {
+    if (!irq_state.apic_timer || irq != IRQ_SYSTEM_TIMER) {
         pic_clear_mask((u8)irq);
     }
 }
@@ -221,7 +223,7 @@ void irq_unregister(size_t irq) {
         return;
     }
 
-    if (use_ioapic) {
+    if (irq_state.ioapic) {
         ioapic_mask_irq((u8)irq, true);
     } else {
         pic_set_mask((u8)irq);
@@ -232,12 +234,12 @@ void irq_unregister(size_t irq) {
 }
 
 void irq_ack(size_t irq) {
-    if (use_ioapic) {
+    if (irq_state.ioapic) {
         lapic_end_int();
         return;
     }
 
-    if (use_apic_timer && irq == IRQ_SYSTEM_TIMER) {
+    if (irq_state.apic_timer && irq == IRQ_SYSTEM_TIMER) {
         lapic_end_int();
         return;
     }
@@ -246,27 +248,27 @@ void irq_ack(size_t irq) {
 }
 
 bool irq_using_ioapic(void) {
-    return use_ioapic;
+    return irq_state.ioapic;
 }
 
 u64 irq_ticks(void) {
-    return __atomic_load_n(&irq_tick_count, __ATOMIC_ACQUIRE);
+    return __atomic_load_n(&irq_state.ticks, __ATOMIC_ACQUIRE);
 }
 
 u32 irq_timer_hz(void) {
-    if (use_apic_timer) {
+    if (irq_state.apic_timer) {
         return apic_timer_hz();
     }
     return pit_get_frequency();
 }
 
 void timer_enable(void) {
-    if (use_apic_timer) {
+    if (irq_state.apic_timer) {
         apic_timer_enable();
         return;
     }
 
-    if (use_ioapic) {
+    if (irq_state.ioapic) {
         ioapic_mask_irq(IRQ_SYSTEM_TIMER, false);
     } else {
         pic_clear_mask(IRQ_SYSTEM_TIMER);
@@ -274,12 +276,12 @@ void timer_enable(void) {
 }
 
 void timer_disable(void) {
-    if (use_apic_timer) {
+    if (irq_state.apic_timer) {
         apic_timer_disable();
         return;
     }
 
-    if (use_ioapic) {
+    if (irq_state.ioapic) {
         ioapic_mask_irq(IRQ_SYSTEM_TIMER, true);
     } else {
         pic_set_mask(IRQ_SYSTEM_TIMER);

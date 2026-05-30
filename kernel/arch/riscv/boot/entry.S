@@ -11,15 +11,15 @@ _start:
     la gp, __global_pointer$
 .option pop
 
-    /* Reset satp and disable interrupts for now */
+    /* reset satp and disable interrupts for now */
     csrw satp, zero
     csrw mie, zero
     csrw mstatus, zero
 
-    /* Setup stack */
+    /* setup stack */
     la sp, __stack_top
 
-    /* Clear the BSS section */
+    /* clear the BSS section */
     la t0, __bss_start
     la t1, __bss_end
 1:

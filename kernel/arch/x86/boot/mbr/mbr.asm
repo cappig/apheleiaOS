@@ -1,8 +1,8 @@
 bits 16
 section .mbr
 
-; Tiny MBR stub that gets placed at the beginning of the disk image
-; It loads and jums to the second stage loader
+; tiny MBR stub that gets placed at the beginning of the disk image
+; it loads and jumps to the second stage loader
 
 global _start
 _start:
@@ -15,7 +15,7 @@ _start:
 
     mov sp, 0x7c00
 
-    ; Move the MBR to a lower address so that we can load the real bootloader at 0x7c00
+    ; move the MBR to a lower address so that we can load the real bootloader at 0x7c00
     mov si, sp
     mov di, 0x500
     mov cx, 512/2
@@ -27,7 +27,7 @@ relocated:
     sti
     mov [boot_drive], dl
 
-    ; Check if we have int 0x13 extensions
+    ; check if we have int 0x13 extensions
     mov ah, 0x41
     mov bx, 0x55aa
     int 0x13
@@ -37,7 +37,7 @@ relocated:
     test cx, 1                   ; bit 0: AH=42h/43h extended disk access
     jz no_int13
 
-    ; Look for the boot partition
+    ; look for the boot partition
     mov si, 0x500 + 0x1be
     mov cx, 4
 
@@ -56,7 +56,7 @@ found_part:
     mov eax, [si + 8]           ; start lba
     mov ecx, [si + 12]          ; number of sectors
 
-    ; Load in 64K-safe chunks to avoid DMA boundary crossings
+    ; load in 64K-safe chunks to avoid DMA boundary crossings
     mov [save_lba], eax
     mov [save_cnt], cx
 
@@ -131,7 +131,7 @@ no_partition:
     jmp $
 
 
-; Disk address packet
+; disk address packet
 align 4
 dap:
     db 16                       ; size
@@ -152,5 +152,5 @@ msg_no_part db 'no valid partition found', 0
 msg_read_error db 'disk read error', 0
 msg_no_int13 db 'extended read not supported', 0
 
-; Save space for a partition table
+; save space for a partition table
 times 446-($-$$) db 0

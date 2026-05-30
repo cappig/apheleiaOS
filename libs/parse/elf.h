@@ -3,7 +3,7 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-// Structs representing 64 bit elf file headers
+// structs representing 64 bit elf file headers
 // https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
 
 // 0x4f 'E' 'L' 'F'
@@ -92,7 +92,7 @@ enum elf_endianness {
     EEND_BIG = 2,
 };
 
-// Both of these represent the SYSV ABI
+// both of these represent the SYSV ABI
 enum elf_abi {
     EABI_SYSV = 0x00,
     EABI_LINUX = 0x03,
@@ -106,7 +106,7 @@ enum elf_type {
     ET_CORE = 4,
 };
 
-// Only the important ones
+// only the important ones
 enum elf_machine {
     EM_NONE = 0x00,
     EM_X86 = 0x03,
@@ -131,9 +131,9 @@ typedef struct PACKED {
 } elf_prog_header_t;
 
 enum elf_program_flags {
-    PF_X = 0x1, // Executable
-    PF_W = 0x2, // Writable
-    PF_R = 0x4, // Readable
+    PF_X = 0x1, // executable
+    PF_W = 0x2, // writable
+    PF_R = 0x4, // readable
 };
 
 enum elf_program_type {
@@ -265,11 +265,10 @@ typedef struct {
     u64 value;
 } elf_symbol_view_t;
 
-
 bool elf_is_executable(elf_header_t *eheader);
 elf_validity_t elf_verify(elf_header_t *header);
 
-// u64 elf_to_page_flags(u32 elf_flags);
+// u64 elf_to_page_flags(u32 elf_flags)
 u64 elf_to_mmap_prot(u32 elf_flags);
 
 bool elf_parse_header(elf_attributes_t *attribs, elf_header_t *header);

@@ -3,7 +3,6 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-
 NORETURN static inline void halt(void) {
     for (;;)
         asm("hlt");
@@ -11,11 +10,9 @@ NORETURN static inline void halt(void) {
     __builtin_unreachable();
 }
 
-
 static inline void swapgs(void) {
     asm volatile("swapgs");
 }
-
 
 static inline void enable_interrupts(void) {
     asm volatile("sti" ::: "memory");
@@ -73,7 +70,6 @@ static inline void irq_restore(u32 flags) {
 }
 #endif
 
-
 static inline void outb(u16 port, u8 data) {
     asm volatile("outb %0, %1" : : "a"(data), "Nd"(port));
 }
@@ -104,7 +100,6 @@ static inline u32 inl(u16 port) {
     return value;
 }
 
-
 #if defined(__x86_64__)
 static inline void tlb_flush(u64 addr) {
     asm volatile("invlpg (%0)" : : "r"(addr) : "memory");
@@ -114,7 +109,6 @@ static inline void tlb_flush(u32 addr) {
     asm volatile("invlpg (%0)" : : "r"(addr) : "memory");
 }
 #endif
-
 
 #define CR0_EM (1ULL << 2)
 #define CR0_TS (1ULL << 3)
@@ -172,7 +166,6 @@ static inline u64 read_cr3(void) {
     return value;
 }
 
-
 #if defined(__x86_64__)
 static inline void write_cr3(u64 value) {
     asm volatile("movq %0, %%cr3" : : "r"(value));
@@ -212,7 +205,6 @@ static inline void write_cr4(u32 value) {
 }
 #endif
 
-
 #define CPUID_EXTENDED_INFO 0x80000001
 #define CPUID_EI_LM         (1 << 29)
 #define CPUID_EI_1G_PAGES   (1 << 26)
@@ -230,19 +222,18 @@ static inline void cpuid(u32 leaf, cpuid_regs_t *r) {
     );
 }
 
-
 #define EFER_MSR 0xC0000080
 #define EFER_NX  (1 << 11)
 #define EFER_LME (1 << 8)
 
 #define MSR_PAT 0x277
 
-// PAT memory types
+// pat memory types
 #define PAT_TYPE_UC  0x00
 #define PAT_TYPE_WC  0x01
 #define PAT_TYPE_WT  0x04
 #define PAT_TYPE_WB  0x06
-#define PAT_TYPE_UCM 0x07 // UC-
+#define PAT_TYPE_UCM 0x07 // uncached minus
 
 static inline u64 read_msr(u32 msr) {
     u32 edx = 0, eax = 0;
@@ -259,14 +250,14 @@ static inline void write_msr(u32 msr, u64 value) {
 }
 
 static inline void pat_init(void) {
-    u64 pat = (u64)PAT_TYPE_WB // PAT0: WB  (PCD=0 PWT=0 PAT=0)
-              | ((u64)PAT_TYPE_WT << 8) // PAT1: WT  (PCD=0 PWT=1 PAT=0)
-              | ((u64)PAT_TYPE_UCM << 16) // PAT2: UC- (PCD=1 PWT=0 PAT=0)
-              | ((u64)PAT_TYPE_UC << 24) // PAT3: UC  (PCD=1 PWT=1 PAT=0)
-              | ((u64)PAT_TYPE_WC << 32) // PAT4: WC  (PCD=0 PWT=0 PAT=1)
-              | ((u64)PAT_TYPE_WT << 40) // PAT5: WT  (PCD=0 PWT=1 PAT=1)
-              | ((u64)PAT_TYPE_UCM << 48) // PAT6: UC- (PCD=1 PWT=0 PAT=1)
-              | ((u64)PAT_TYPE_UC << 56); // PAT7: UC  (PCD=1 PWT=1 PAT=1)
+    u64 pat = (u64)PAT_TYPE_WB // pat0 wb, pcd=0 pwt=0 pat=0
+              | ((u64)PAT_TYPE_WT << 8) // pat1 wt, pcd=0 pwt=1 pat=0
+              | ((u64)PAT_TYPE_UCM << 16) // pat2 uc minus, pcd=1 pwt=0 pat=0
+              | ((u64)PAT_TYPE_UC << 24) // pat3 uc, pcd=1 pwt=1 pat=0
+              | ((u64)PAT_TYPE_WC << 32) // pat4 wc, pcd=0 pwt=0 pat=1
+              | ((u64)PAT_TYPE_WT << 40) // pat5 wt, pcd=0 pwt=1 pat=1
+              | ((u64)PAT_TYPE_UCM << 48) // pat6 uc minus, pcd=1 pwt=0 pat=1
+              | ((u64)PAT_TYPE_UC << 56); // pat7 uc, pcd=1 pwt=1 pat=1
     write_msr(MSR_PAT, pat);
 }
 

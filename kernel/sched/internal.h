@@ -78,7 +78,7 @@ typedef struct {
 } sched_exit_event_state_t;
 
 typedef struct {
-    sched_thread_t *heap[SCHED_SLEEP_HEAP_CAPACITY];
+    sched_thread_t *heap[SCHED_SLEEP_CAPACITY];
     size_t count;
     volatile u64 wake_tick ALIGNED(8);
 } sched_sleep_state_t;

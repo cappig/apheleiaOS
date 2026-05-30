@@ -12,8 +12,12 @@ struct arch_vm_space {
     page_t *root;
 };
 
-static struct arch_vm_space kernel_space = { 0 };
-static page_t *current_root[MAX_CORES] = { 0 };
+typedef struct {
+    struct arch_vm_space kernel;
+    page_t *current_root[MAX_CORES];
+} vm_state_t;
+
+static vm_state_t vm = { 0 };
 
 static size_t _current_cpu_id(void) {
     cpu_core_t *core = cpu_current();
@@ -25,11 +29,11 @@ static bool _leaf_pte(page_t entry) {
 }
 
 void vm_init_kernel(page_t *root) {
-    kernel_space.root = root;
+    vm.kernel.root = root;
 }
 
 arch_vm_space_t *arch_vm_kernel(void) {
-    return &kernel_space;
+    return &vm.kernel;
 }
 
 arch_vm_space_t *arch_vm_create_user(void) {
@@ -49,13 +53,13 @@ arch_vm_space_t *arch_vm_create_user(void) {
 #if __riscv_xlen == 64
     memcpy(
         &space->root[GET_LVL3_INDEX(RISCV_KERNEL_BASE)],
-        &kernel_space.root[GET_LVL3_INDEX(RISCV_KERNEL_BASE)],
+        &vm.kernel.root[GET_LVL3_INDEX(RISCV_KERNEL_BASE)],
         (512 - GET_LVL3_INDEX(RISCV_KERNEL_BASE)) * sizeof(page_t)
     );
 #else
     memcpy(
         &space->root[GET_LVL2_INDEX(RISCV_KERNEL_BASE)],
-        &kernel_space.root[GET_LVL2_INDEX(RISCV_KERNEL_BASE)],
+        &vm.kernel.root[GET_LVL2_INDEX(RISCV_KERNEL_BASE)],
         (1024 - GET_LVL2_INDEX(RISCV_KERNEL_BASE)) * sizeof(page_t)
     );
 #endif
@@ -68,7 +72,7 @@ static void _free_tables_64(page_t *root) {
     for (size_t i = 0; i < GET_LVL3_INDEX(RISCV_KERNEL_BASE); i++) {
         page_t entry = root[i];
 
-        if (!(entry & PT_PRESENT) || (kernel_space.root && entry == kernel_space.root[i])) {
+        if (!(entry & PT_PRESENT) || (vm.kernel.root && entry == vm.kernel.root[i])) {
             continue;
         }
 
@@ -97,7 +101,7 @@ static void _free_tables_32(page_t *root) {
     for (size_t i = 0; i < GET_LVL2_INDEX(RISCV_KERNEL_BASE); i++) {
         page_t entry = root[i];
 
-        if (!(entry & PT_PRESENT) || (kernel_space.root && entry == kernel_space.root[i])) {
+        if (!(entry & PT_PRESENT) || (vm.kernel.root && entry == vm.kernel.root[i])) {
             continue;
         }
 
@@ -112,7 +116,7 @@ static void _free_tables_32(page_t *root) {
 #endif
 
 void arch_vm_destroy(arch_vm_space_t *space) {
-    if (!space || space == &kernel_space) {
+    if (!space || space == &vm.kernel) {
         return;
     }
 
@@ -132,11 +136,11 @@ void arch_vm_switch(arch_vm_space_t *space) {
     }
 
     size_t cpu_id = _current_cpu_id();
-    if (current_root[cpu_id] == space->root) {
+    if (vm.current_root[cpu_id] == space->root) {
         return;
     }
 
-    current_root[cpu_id] = space->root;
+    vm.current_root[cpu_id] = space->root;
     riscv_write_satp((uintptr_t)space->root, RISCV_PAGING_MODE);
 }
 

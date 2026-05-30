@@ -18,18 +18,18 @@
 #include <x86/irq.h>
 #include <x86/tsc.h>
 
-#define SMP_AP_STACK_SIZE        (16 * 1024)
-#define SMP_AP_START_TIMEOUT_MS  250
-#define SMP_TLB_TIMEOUT_MS       5000
-#define SMP_TLB_MAX_TARGET_CORES 64
-#define SMP_TRAMPOLINE_PAGE_SIZE 0x1000U
+#define AP_STACK_SIZE        (16 * 1024)
+#define AP_START_TIMEOUT_MS  250
+#define TLB_TIMEOUT_MS       5000
+#define TLB_MAX_TARGETS      64
+#define TRAMPOLINE_PAGE_SIZE 0x1000U
 
 typedef struct {
     const boot_info_t *boot_info;
     bool started;
     bool shootdown_enabled;
 
-    u8 ap_stacks[MAX_CORES][SMP_AP_STACK_SIZE] ALIGNED(16);
+    u8 ap_stacks[MAX_CORES][AP_STACK_SIZE] ALIGNED(16);
     volatile u8 ap_ready[MAX_CORES];
 
     spinlock_t tlb_lock;
@@ -58,8 +58,6 @@ extern const u8 smp_trampoline32_entry;
 extern const u8 smp_trampoline32_arg;
 extern const u8 smp_trampoline32_stack;
 #endif
-
-NORETURN static void _smp_ap_entry(void *arg);
 
 static uintptr_t _read_stack_ptr(void) {
     uintptr_t sp = 0;
@@ -110,6 +108,62 @@ static void _write64(void *base, size_t off, u64 value) {
     memcpy((u8 *)base + off, &value, sizeof(value));
 }
 #endif
+
+NORETURN static void _smp_ap_entry(void *arg) {
+    size_t expected = (size_t)(uintptr_t)arg;
+    disable_interrupts();
+
+    if (!apic_init()) {
+        cpu_halt();
+    }
+
+    cpu_core_t *core = cpu_find_by_lapic(lapic_id());
+
+    if (!core || core->id >= MAX_CORES) {
+        cpu_halt();
+    }
+
+    cpuid_regs_t regs = { 0 };
+    cpuid(1, &regs);
+    u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
+
+    if (cpuid_apic_id != core->lapic_id) {
+        log_warn(
+            "AP core %zu APIC ID mismatch (cpuid=%u lapic=%u)",
+            core->id,
+            (unsigned int)cpuid_apic_id,
+            (unsigned int)core->lapic_id
+        );
+    }
+
+    if (expected < MAX_CORES && core->id != expected) {
+        log_warn("AP core mismatch (expected=%zu, actual=%zu)", expected, core->id);
+    }
+
+    cpu_set_current(core);
+    _fpu_enable_local();
+
+    gdt_init();
+    tss_init(_read_stack_ptr());
+    idt_load();
+    irq_init_ap();
+    scheduler_init_core();
+    cpu_set_online(core, true);
+
+    __atomic_store_n(&smp.ap_ready[core->id], 1, __ATOMIC_RELEASE);
+
+    while (!sched_is_running()) {
+        arch_cpu_relax();
+    }
+
+    if (smp_online_count() > 1) {
+        smp.shootdown_enabled = true;
+    }
+
+    scheduler_start_secondary();
+    enable_interrupts();
+    cpu_halt();
+}
 
 static const u8 *_trampoline_start(void) {
 #if defined(__x86_64__)
@@ -216,7 +270,7 @@ static void _tlb_ipi_handler(UNUSED int_state_t *state) {
     }
 
     cpu_core_t *core = cpu_current();
-    if (core && core->id < SMP_TLB_MAX_TARGET_CORES) {
+    if (core && core->id < TLB_MAX_TARGETS) {
         __atomic_or_fetch(&smp.tlb_acks, 1ULL << core->id, __ATOMIC_SEQ_CST);
     }
 
@@ -226,62 +280,6 @@ static void _tlb_ipi_handler(UNUSED int_state_t *state) {
 static void _resched_ipi_handler(UNUSED int_state_t *state) {
     lapic_end_int();
     sched_resched_softirq((arch_int_state_t *)state);
-}
-
-NORETURN static void _smp_ap_entry(void *arg) {
-    size_t expected = (size_t)(uintptr_t)arg;
-    disable_interrupts();
-
-    if (!apic_init()) {
-        cpu_halt();
-    }
-
-    cpu_core_t *core = cpu_find_by_lapic(lapic_id());
-
-    if (!core || core->id >= MAX_CORES) {
-        cpu_halt();
-    }
-
-    cpuid_regs_t regs = { 0 };
-    cpuid(1, &regs);
-    u32 cpuid_apic_id = (regs.ebx >> 24) & 0xffU;
-
-    if (cpuid_apic_id != core->lapic_id) {
-        log_warn(
-            "AP core %zu APIC ID mismatch (cpuid=%u lapic=%u)",
-            core->id,
-            (unsigned int)cpuid_apic_id,
-            (unsigned int)core->lapic_id
-        );
-    }
-
-    if (expected < MAX_CORES && core->id != expected) {
-        log_warn("AP core mismatch (expected=%zu, actual=%zu)", expected, core->id);
-    }
-
-    cpu_set_current(core);
-    _fpu_enable_local();
-
-    gdt_init();
-    tss_init(_read_stack_ptr());
-    idt_load();
-    irq_init_ap();
-    scheduler_init_core();
-    cpu_set_online(core, true);
-
-    __atomic_store_n(&smp.ap_ready[core->id], 1, __ATOMIC_RELEASE);
-
-    while (!sched_is_running()) {
-        arch_cpu_relax();
-    }
-
-    if (smp_online_count() > 1) {
-        smp.shootdown_enabled = true;
-    }
-
-    scheduler_start_secondary();
-    enable_interrupts();
-    cpu_halt();
 }
 
 void smp_set_boot_info(const boot_info_t *info) {
@@ -313,13 +311,13 @@ void smp_init(void) {
 
     u64 trampoline_paddr = smp.boot_info->smp_trampoline_paddr;
 
-    if ((trampoline_paddr & (SMP_TRAMPOLINE_PAGE_SIZE - 1)) || trampoline_paddr >= 0x100000ULL) {
+    if ((trampoline_paddr & (TRAMPOLINE_PAGE_SIZE - 1)) || trampoline_paddr >= 0x100000ULL) {
         log_warn("invalid trampoline address %#" PRIx64, trampoline_paddr);
         return;
     }
 
     u8 sipi_vector = (u8)(trampoline_paddr >> 12);
-    void *trampoline = arch_phys_map(trampoline_paddr, SMP_TRAMPOLINE_PAGE_SIZE, PHYS_MAP_DEFAULT);
+    void *trampoline = arch_phys_map(trampoline_paddr, TRAMPOLINE_PAGE_SIZE, PHYS_MAP_DEFAULT);
 
     if (!trampoline) {
         log_warn("failed to map trampoline page");
@@ -328,13 +326,13 @@ void smp_init(void) {
 
     size_t trampoline_size = _trampoline_size();
 
-    if (!trampoline_size || trampoline_size > SMP_TRAMPOLINE_PAGE_SIZE) {
-        arch_phys_unmap(trampoline, SMP_TRAMPOLINE_PAGE_SIZE);
+    if (!trampoline_size || trampoline_size > TRAMPOLINE_PAGE_SIZE) {
+        arch_phys_unmap(trampoline, TRAMPOLINE_PAGE_SIZE);
         log_warn("invalid trampoline blob size");
         return;
     }
 
-    memset(trampoline, 0, SMP_TRAMPOLINE_PAGE_SIZE);
+    memset(trampoline, 0, TRAMPOLINE_PAGE_SIZE);
     memcpy(trampoline, _trampoline_start(), trampoline_size);
     size_t started = 0;
 
@@ -353,7 +351,7 @@ void smp_init(void) {
             continue;
         }
 
-        if (!_wait_ap_ready(i, SMP_AP_START_TIMEOUT_MS)) {
+        if (!_wait_ap_ready(i, AP_START_TIMEOUT_MS)) {
             log_warn("AP bring-up timed out for core %zu (lapic=%u)", i, (unsigned int)core->lapic_id);
             continue;
         }
@@ -361,7 +359,7 @@ void smp_init(void) {
         started++;
     }
 
-    arch_phys_unmap(trampoline, SMP_TRAMPOLINE_PAGE_SIZE);
+    arch_phys_unmap(trampoline, TRAMPOLINE_PAGE_SIZE);
 
     size_t online = smp_online_count();
     if (online > 1) {
@@ -405,7 +403,7 @@ void smp_tlb_shootdown(uintptr_t addr) {
     }
 
     cpu_core_t *self = cpu_current();
-    if (!self || self->id >= SMP_TLB_MAX_TARGET_CORES) {
+    if (!self || self->id >= TLB_MAX_TARGETS) {
         return;
     }
 
@@ -420,7 +418,7 @@ void smp_tlb_shootdown(uintptr_t addr) {
 
     u64 targets = 0;
 
-    for (size_t i = 0; i < core_count && i < SMP_TLB_MAX_TARGET_CORES; i++) {
+    for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
         cpu_core_t *core = &cores_local[i];
 
         if (!core->valid || !core->online || i == self->id) {
@@ -449,7 +447,7 @@ void smp_tlb_shootdown(uintptr_t addr) {
     __atomic_store_n(&smp.tlb_targets, targets, __ATOMIC_RELEASE);
     __atomic_store_n(&smp.tlb_acks, 0, __ATOMIC_RELEASE);
 
-    for (size_t i = 0; i < core_count && i < SMP_TLB_MAX_TARGET_CORES; i++) {
+    for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
         if (!(targets & (1ULL << i))) {
             continue;
         }
@@ -460,8 +458,8 @@ void smp_tlb_shootdown(uintptr_t addr) {
         }
     }
 
-    u64 deadline = _tsc_timeout_deadline(SMP_TLB_TIMEOUT_MS);
-    size_t fallback = (size_t)(4000000ULL * SMP_TLB_TIMEOUT_MS);
+    u64 deadline = _tsc_timeout_deadline(TLB_TIMEOUT_MS);
+    size_t fallback = (size_t)(4000000ULL * TLB_TIMEOUT_MS);
 
     while ((__atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE) & __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE)) !=
            targets) {

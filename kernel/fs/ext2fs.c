@@ -30,7 +30,7 @@ typedef struct {
     u32 block;
     u64 stamp;
     u8 *data;
-} ext2_block_cache_entry_t;
+} ext2_cache_entry_t;
 
 typedef struct {
     mutex_t lock;
@@ -43,7 +43,9 @@ typedef struct {
     u64 time_tick_base;
     size_t gdt_offset;
     size_t gdt_size;
-    ext2_block_cache_entry_t cache[EXT2_BLOCK_CACHE_SIZE];
+
+    // small write through block cache for inode tables, bitmaps, and directories
+    ext2_cache_entry_t cache[EXT2_BLOCK_CACHE_SIZE];
     u8 *cache_data;
     u64 cache_clock;
 } ext2_private_t;
@@ -55,7 +57,6 @@ typedef struct {
     u32 *indirect;
     bool reclaimed;
 } ext2_node_info_t;
-
 
 static bool _ext2_read(disk_partition_t *part, void *dest, size_t offset, size_t bytes) {
     if (!part || !part->disk || !part->disk->interface || !part->disk->interface->read) {
@@ -85,13 +86,13 @@ static bool _ext2_write(disk_partition_t *part, const void *src, size_t offset, 
     return written == (ssize_t)bytes;
 }
 
-static ext2_block_cache_entry_t *_cache_find(ext2_private_t *priv, u32 block) {
+static ext2_cache_entry_t *_cache_find(ext2_private_t *priv, u32 block) {
     if (!priv || !priv->cache_data) {
         return NULL;
     }
 
     for (size_t i = 0; i < EXT2_BLOCK_CACHE_SIZE; i++) {
-        ext2_block_cache_entry_t *entry = &priv->cache[i];
+        ext2_cache_entry_t *entry = &priv->cache[i];
 
         if (entry->valid && entry->block == block) {
             return entry;
@@ -101,15 +102,16 @@ static ext2_block_cache_entry_t *_cache_find(ext2_private_t *priv, u32 block) {
     return NULL;
 }
 
-static ext2_block_cache_entry_t *_cache_slot(ext2_private_t *priv) {
+static ext2_cache_entry_t *_cache_slot(ext2_private_t *priv) {
     if (!priv || !priv->cache_data) {
         return NULL;
     }
 
-    ext2_block_cache_entry_t *victim = NULL;
+    ext2_cache_entry_t *victim = NULL;
 
+    // first free slot wins; otherwise evict the least recently used block
     for (size_t i = 0; i < EXT2_BLOCK_CACHE_SIZE; i++) {
-        ext2_block_cache_entry_t *entry = &priv->cache[i];
+        ext2_cache_entry_t *entry = &priv->cache[i];
 
         if (!entry->data) {
             continue;
@@ -132,7 +134,7 @@ static void _cache_store(ext2_private_t *priv, u32 block, const void *data) {
         return;
     }
 
-    ext2_block_cache_entry_t *entry = _cache_find(priv, block);
+    ext2_cache_entry_t *entry = _cache_find(priv, block);
     if (!entry) {
         entry = _cache_slot(priv);
     }
@@ -153,11 +155,12 @@ static bool _read_block(ext2_private_t *priv, disk_partition_t *part, u32 block,
     }
 
     if (!block) {
+        // ext2 block zero is never a real data block
         memset(dest, 0, priv->block_size);
         return true;
     }
 
-    ext2_block_cache_entry_t *cached = _cache_find(priv, block);
+    ext2_cache_entry_t *cached = _cache_find(priv, block);
     if (cached && cached->data) {
         memcpy(dest, cached->data, priv->block_size);
         cached->stamp = ++priv->cache_clock;
@@ -369,7 +372,7 @@ static bool _group_block_bitmap(ext2_private_t *priv, disk_partition_t *part, u3
     return _read_block(priv, part, bitmap_block, bitmap);
 }
 
-static bool _write_group_block_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, const u8 *bitmap) {
+static bool _write_block_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, const u8 *bitmap) {
     if (!priv || !part || !bitmap || group >= priv->group_count) {
         return false;
     }
@@ -389,7 +392,7 @@ static bool _group_inode_bitmap(ext2_private_t *priv, disk_partition_t *part, u3
     return _read_block(priv, part, bitmap_block, bitmap);
 }
 
-static bool _write_group_inode_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, const u8 *bitmap) {
+static bool _write_inode_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, const u8 *bitmap) {
     if (!priv || !part || !bitmap || group >= priv->group_count) {
         return false;
     }
@@ -434,6 +437,7 @@ static bool _should_update_atime(const ext2_inode_t *inode, u32 now) {
     (void)now;
     return true;
 #elif EXT2_ATIME_POLICY == EXT2_ATIME_RELATIME
+    // relatime avoids a disk write on every read while preserving useful atime changes
     if (inode->last_access_time <= inode->last_modification_time) {
         return true;
     }
@@ -449,7 +453,7 @@ static bool _should_update_atime(const ext2_inode_t *inode, u32 now) {
 #endif
 }
 
-static bool _update_super_write_time(ext2_private_t *priv, disk_partition_t *part, u32 now) {
+static bool _touch_super(ext2_private_t *priv, disk_partition_t *part, u32 now) {
     if (!priv || !part) {
         return false;
     }
@@ -508,9 +512,10 @@ static bool _alloc_block(ext2_private_t *priv, disk_partition_t *part, u32 *out_
             continue;
         }
 
+        // bitmap writes happen before counters so a crash leaks space instead of aliasing it
         bitmap_set((bitmap_word_t *)bitmap, bit);
 
-        if (!_write_group_block_bitmap(priv, part, group, bitmap)) {
+        if (!_write_block_bitmap(priv, part, group, bitmap)) {
             break;
         }
 
@@ -570,7 +575,7 @@ static bool _free_block(ext2_private_t *priv, disk_partition_t *part, u32 block)
 
     bitmap_clear((bitmap_word_t *)bitmap, index);
 
-    if (!_write_group_block_bitmap(priv, part, group, bitmap)) {
+    if (!_write_block_bitmap(priv, part, group, bitmap)) {
         goto out;
     }
 
@@ -628,7 +633,7 @@ static bool _alloc_inode(ext2_private_t *priv, disk_partition_t *part, u32 *out_
 
         bitmap_set((bitmap_word_t *)bitmap, bit);
 
-        if (!_write_group_inode_bitmap(priv, part, group, bitmap)) {
+        if (!_write_inode_bitmap(priv, part, group, bitmap)) {
             break;
         }
 
@@ -686,7 +691,7 @@ static bool _free_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_
 
     bitmap_clear((bitmap_word_t *)bitmap, index);
 
-    if (!_write_group_inode_bitmap(priv, part, group, bitmap)) {
+    if (!_write_inode_bitmap(priv, part, group, bitmap)) {
         goto out;
     }
 
@@ -1882,7 +1887,7 @@ static ssize_t _write_file(vfs_node_t *node, void *buf, size_t offset, size_t le
         return -EIO;
     }
 
-    _update_super_write_time(priv, part, now);
+    _touch_super(priv, part, now);
 
     _sync_vnode(node, &info->inode);
 
@@ -1947,7 +1952,7 @@ static ssize_t _truncate_file(vfs_node_t *node, size_t len) {
         return -EIO;
     }
 
-    if (!_update_super_write_time(priv, part, now)) {
+    if (!_touch_super(priv, part, now)) {
         mutex_unlock(&priv->lock);
         return -EIO;
     }
@@ -2083,7 +2088,7 @@ static ssize_t _dir_remove(vfs_node_t *node, vfs_node_t *child) {
         return -EIO;
     }
 
-    _update_super_write_time(priv, part, now);
+    _touch_super(priv, part, now);
 
     _sync_vnode(node, &parent_info->inode);
     if (child_info && child_info->inode_num == inode_num) {
@@ -2095,16 +2100,6 @@ static ssize_t _dir_remove(vfs_node_t *node, vfs_node_t *child) {
     return 0;
 }
 
-static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child);
-static ssize_t _dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target);
-static ssize_t _dir_rename(
-    vfs_node_t *old_parent,
-    vfs_node_t *child,
-    vfs_node_t *new_parent,
-    vfs_node_t *target,
-    const char *new_name
-);
-
 static vfs_interface_t ext2_file_interface = {
     .refcount = VFS_INTERFACE_STATIC,
     .read = _read_file,
@@ -2114,10 +2109,7 @@ static vfs_interface_t ext2_file_interface = {
 
 static vfs_interface_t ext2_dir_interface = {
     .refcount = VFS_INTERFACE_STATIC,
-    .create = _dir_create,
-    .link = _dir_link,
     .remove = _dir_remove,
-    .rename = _dir_rename,
 };
 
 static bool _assign_ext2_interface(vfs_node_t *node, u32 type) {
@@ -2212,7 +2204,7 @@ static ssize_t _dir_link(vfs_node_t *node, vfs_node_t *child, vfs_node_t *target
         return -EIO;
     }
 
-    _update_super_write_time(priv, part, now);
+    _touch_super(priv, part, now);
 
     child->type = target->type;
     child->mode = target->mode;
@@ -2426,7 +2418,7 @@ static ssize_t _dir_rename(
         }
     }
 
-    if (!_update_super_write_time(priv, part, now)) {
+    if (!_touch_super(priv, part, now)) {
         log_warn("rename '%s': superblock time update failed", new_name);
     }
 
@@ -2550,7 +2542,7 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
         return -EIO;
     }
 
-    if (!_update_super_write_time(priv, part, now)) {
+    if (!_touch_super(priv, part, now)) {
         log_warn("create '%s': superblock time update failed", child->name);
     }
 
@@ -2589,6 +2581,12 @@ static ssize_t _dir_create(vfs_node_t *node, vfs_node_t *child) {
 
     mutex_unlock(&priv->lock);
     return 0;
+}
+
+static void _init_dir_interface(void) {
+    ext2_dir_interface.create = _dir_create;
+    ext2_dir_interface.link = _dir_link;
+    ext2_dir_interface.rename = _dir_rename;
 }
 
 static bool _assign_interface(vfs_node_t *node, u32 vfs_type) {
@@ -2877,7 +2875,7 @@ static bool _node_chmod(fs_instance_t *instance, vfs_node_t *node, mode_t mode) 
         return false;
     }
 
-    if (!_update_super_write_time(priv, instance->partition, now)) {
+    if (!_touch_super(priv, instance->partition, now)) {
         mutex_unlock(&priv->lock);
         return false;
     }
@@ -2907,7 +2905,7 @@ static bool _node_chown(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gi
         return false;
     }
 
-    if (!_update_super_write_time(priv, instance->partition, now)) {
+    if (!_touch_super(priv, instance->partition, now)) {
         mutex_unlock(&priv->lock);
         return false;
     }
@@ -2941,7 +2939,7 @@ static void _node_destroy(fs_instance_t *instance, vfs_node_t *node) {
 
             if (freed_inode) {
                 _drop_indirect(info);
-                _update_super_write_time(priv, part, now);
+                _touch_super(priv, part, now);
                 info->reclaimed = true;
             }
         }
@@ -3000,6 +2998,8 @@ static bool _destroy_tree(fs_instance_t *instance) {
 }
 
 bool ext2fs_init(void) {
+    _init_dir_interface();
+
     static fs_interface_t ext2_interface = {
         .probe = _probe,
         .build_tree = _build_tree,

@@ -83,7 +83,7 @@ enum ps2_mouse_flags {
     PS2_MOUSE_YOVERFLOW = 1 << 7,
 };
 
-// Code set 1
+// code set 1
 static const u8 ps2_codes[128] = {
     0,
     KBD_ESCAPE,

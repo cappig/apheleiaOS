@@ -15,14 +15,20 @@
 
 #define SH_HISTORY_MAX 64
 
-static volatile sig_atomic_t *sh_sigint = NULL;
-static volatile sig_atomic_t *sh_sigwinch = NULL;
-static volatile sig_atomic_t *sh_sigchld = NULL;
-static void (*sh_sigchld_cb)(void) = NULL;
-static char *sh_history[SH_HISTORY_MAX];
-static size_t sh_history_count = 0;
-static termios_t sh_tty_saved = { 0 };
-static bool sh_tty_saved_valid = false;
+typedef struct {
+    volatile sig_atomic_t *sigint;
+    volatile sig_atomic_t *sigwinch;
+    volatile sig_atomic_t *sigchld;
+    void (*sigchld_cb)(void);
+
+    char *history[SH_HISTORY_MAX];
+    size_t history_count;
+
+    termios_t tty_saved;
+    bool tty_saved_valid;
+} sh_input_state_t;
+
+static sh_input_state_t sh_input = { 0 };
 
 typedef struct {
     size_t rows;
@@ -33,7 +39,6 @@ typedef struct {
     size_t cols;
     size_t prompt_cells;
 } sh_layout_ctx_t;
-
 
 static void ansi_clear_to_eos(void) {
     io_write_str("\x1b[J");
@@ -92,6 +97,7 @@ static size_t display_cells(const char *buf, size_t len) {
     size_t cells = 0;
     for (size_t i = 0; i < len; i++) {
         if (buf[i] == '\x1b') {
+            // prompt colors should not count as editable columns
             i++;
 
             if (i < len && buf[i] == '[') {
@@ -112,19 +118,19 @@ static size_t display_cells(const char *buf, size_t len) {
 }
 
 void input_set_sigint_flag(volatile sig_atomic_t *flag) {
-    sh_sigint = flag;
+    sh_input.sigint = flag;
 }
 
 void input_set_sigwinch_flag(volatile sig_atomic_t *flag) {
-    sh_sigwinch = flag;
+    sh_input.sigwinch = flag;
 }
 
 void input_set_sigchld_flag(volatile sig_atomic_t *flag) {
-    sh_sigchld = flag;
+    sh_input.sigchld = flag;
 }
 
 void input_set_sigchld_callback(void (*callback)(void)) {
-    sh_sigchld_cb = callback;
+    sh_input.sigchld_cb = callback;
 }
 
 static bool tty_read(termios_t *out) {
@@ -144,15 +150,15 @@ static bool tty_write(const termios_t *in) {
 }
 
 static bool tty_init_saved(void) {
-    if (sh_tty_saved_valid) {
+    if (sh_input.tty_saved_valid) {
         return true;
     }
 
-    if (!tty_read(&sh_tty_saved)) {
+    if (!tty_read(&sh_input.tty_saved)) {
         return false;
     }
 
-    sh_tty_saved_valid = true;
+    sh_input.tty_saved_valid = true;
     return true;
 }
 
@@ -162,10 +168,10 @@ static bool tty_set_line_mode(bool edit_mode) {
     }
 
     if (!edit_mode) {
-        return tty_write(&sh_tty_saved);
+        return tty_write(&sh_input.tty_saved);
     }
 
-    termios_t tos = sh_tty_saved;
+    termios_t tos = sh_input.tty_saved;
     tos.c_lflag &= (tcflag_t) ~(ICANON | ECHO);
     tos.c_cc[VMIN] = 1;
     tos.c_cc[VTIME] = 0;
@@ -173,32 +179,32 @@ static bool tty_set_line_mode(bool edit_mode) {
 }
 
 static bool got_sigint(void) {
-    return sh_sigint && *sh_sigint;
+    return sh_input.sigint && *sh_input.sigint;
 }
 
 static void clear_sigint(void) {
-    if (sh_sigint) {
-        *sh_sigint = 0;
+    if (sh_input.sigint) {
+        *sh_input.sigint = 0;
     }
 }
 
 static bool got_sigwinch(void) {
-    return sh_sigwinch && *sh_sigwinch;
+    return sh_input.sigwinch && *sh_input.sigwinch;
 }
 
 static void clear_sigwinch(void) {
-    if (sh_sigwinch) {
-        *sh_sigwinch = 0;
+    if (sh_input.sigwinch) {
+        *sh_input.sigwinch = 0;
     }
 }
 
 static bool got_sigchld(void) {
-    return sh_sigchld && *sh_sigchld;
+    return sh_input.sigchld && *sh_input.sigchld;
 }
 
 static void clear_sigchld(void) {
-    if (sh_sigchld) {
-        *sh_sigchld = 0;
+    if (sh_input.sigchld) {
+        *sh_input.sigchld = 0;
     }
 }
 
@@ -371,26 +377,26 @@ void history_add(const char *line) {
         return;
     }
 
-    if (sh_history_count > 0 && !strcmp(sh_history[sh_history_count - 1], line)) {
+    if (sh_input.history_count > 0 && !strcmp(sh_input.history[sh_input.history_count - 1], line)) {
         return;
     }
 
-    if (sh_history_count < SH_HISTORY_MAX) {
-        sh_history[sh_history_count] = strdup(line);
-        sh_history_count++;
+    if (sh_input.history_count < SH_HISTORY_MAX) {
+        sh_input.history[sh_input.history_count] = strdup(line);
+        sh_input.history_count++;
         return;
     }
 
-    free(sh_history[0]);
-    memmove(&sh_history[0], &sh_history[1], (SH_HISTORY_MAX - 1) * sizeof(char *));
-    sh_history[SH_HISTORY_MAX - 1] = strdup(line);
+    free(sh_input.history[0]);
+    memmove(&sh_input.history[0], &sh_input.history[1], (SH_HISTORY_MAX - 1) * sizeof(char *));
+    sh_input.history[SH_HISTORY_MAX - 1] = strdup(line);
 }
 
 void history_print(void) {
     char line[320];
 
-    for (size_t i = 0; i < sh_history_count; i++) {
-        snprintf(line, sizeof(line), "%zu %s\n", i + 1, sh_history[i]);
+    for (size_t i = 0; i < sh_input.history_count; i++) {
+        snprintf(line, sizeof(line), "%zu %s\n", i + 1, sh_input.history[i]);
         io_write_str(line);
     }
 }
@@ -494,8 +500,8 @@ int read_line_interactive(const char *prompt, char *buf, size_t len, bool use_hi
         if (got_sigchld()) {
             clear_sigchld();
 
-            if (sh_sigchld_cb) {
-                sh_sigchld_cb();
+            if (sh_input.sigchld_cb) {
+                sh_input.sigchld_cb();
             }
         }
 
@@ -609,26 +615,35 @@ int read_line_interactive(const char *prompt, char *buf, size_t len, bool use_hi
             }
 
             if (seq2 == 'A' && use_history) {
-                if (!sh_history_count) {
+                if (!sh_input.history_count) {
                     continue;
                 }
 
                 if (history_cursor < 0) {
                     snprintf(scratch, sizeof(scratch), "%s", buf);
-                    history_cursor = (int)sh_history_count - 1;
+                    history_cursor = (int)sh_input.history_count - 1;
                 } else if (history_cursor > 0) {
                     history_cursor--;
                 }
 
-                load_history_line(prompt, &layout, &render, sh_history[history_cursor], buf, len, &pos, &cursor);
+                load_history_line(prompt, &layout, &render, sh_input.history[history_cursor], buf, len, &pos, &cursor);
             } else if (seq2 == 'B' && use_history) {
                 if (history_cursor < 0) {
                     continue;
                 }
 
-                if ((size_t)(history_cursor + 1) < sh_history_count) {
+                if ((size_t)(history_cursor + 1) < sh_input.history_count) {
                     history_cursor++;
-                    load_history_line(prompt, &layout, &render, sh_history[history_cursor], buf, len, &pos, &cursor);
+                    load_history_line(
+                        prompt,
+                        &layout,
+                        &render,
+                        sh_input.history[history_cursor],
+                        buf,
+                        len,
+                        &pos,
+                        &cursor
+                    );
                 } else {
                     history_cursor = -1;
                     load_history_line(prompt, &layout, &render, scratch, buf, len, &pos, &cursor);

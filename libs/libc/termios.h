@@ -2,7 +2,7 @@
 
 #include <sys/types.h>
 
-// Defines strures related to the termios POSIX interface
+// termios structures and flags used by tty clients
 // https://pubs.opengroup.org/onlinepubs/7908799/xsh/termios.h.html
 // https://www.man7.org/linux/man-pages/man3/termios.3.html
 
@@ -168,7 +168,7 @@ enum termios_flush_queue {
     TCIOFLUSH = 2,
 };
 
-// Some sane defaults for termios to use
+// some sane defaults for termios to use
 #ifndef NO_LIBC_EXTENTIONS
 static inline termios_t *__termios_default_init(termios_t *tos) {
     if (!tos)

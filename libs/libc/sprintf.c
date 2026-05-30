@@ -7,7 +7,6 @@
 #include "stdlib.h"
 #include "string.h"
 
-
 #define FLAGS_MINUS (1 << 0)
 #define FLAGS_PLUS  (1 << 1)
 #define FLAGS_SPACE (1 << 2)
@@ -90,7 +89,7 @@ static int _get_precision(const char *format, size_t *index, va_list *vlist) {
     return precision;
 }
 
-// Negative values represent signed types
+// negative values represent signed types
 #define SIZE_CHAR    1
 #define SIZE_SHORT   2
 #define SIZE_INT     3
@@ -272,7 +271,7 @@ static uintmax_t _signed_abs(uintmax_t number) {
         return (uintmax_t)value;
     }
 
-    // INTMAX_MIN cannot be negated directly.
+    // intmax_min cannot be negated directly
     return (uintmax_t)(-(value + 1)) + 1;
 }
 
@@ -313,11 +312,11 @@ static void _append_num_prefix(
     }
 }
 
-// String and char are special
+// string and char are special
 #define BASE_STRING  -314
 #define BASE_CHAR    -271
 #define BASE_UNKNOWN 0
-// These represent an actual radix, we use the minus like a flag
+// these represent an actual radix, we use the minus like a flag
 #define BASE_BIN  2
 #define BASE_OCT  8
 #define BASE_UDEC 10
@@ -355,7 +354,6 @@ static int _get_base(char type) {
         return BASE_UNKNOWN;
     }
 }
-
 
 int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict format, va_list vlist) {
     if (!format) {
@@ -464,7 +462,7 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
 
             size_t field_len = (size_t)len + (size_t)prefix_len + (size_t)zeroes;
 
-            // Width includes the sign and 0x prefix, not just the digits.
+            // width includes the sign and 0x prefix, not just the digits
             int padding = _padding_for_width(width, field_len);
             int width_padding = padding;
 

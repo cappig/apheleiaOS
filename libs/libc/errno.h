@@ -1,6 +1,6 @@
 #pragma once
 
-// Error codes as defined by POSIX
+// error codes as defined by POSIX
 // https://pubs.opengroup.org/onlinepubs/9699919799/basedefs/errno.h.html
 
 #define E2BIG           1

@@ -15,7 +15,7 @@
 
 
 enum disk_dev_type {
-    DISK_VIRTUAL, // ramdisks, etc...
+    DISK_VIRTUAL, // ramdisks and other virtual devices
     DISK_HARD,
     DISK_FLOPPY,
     DISK_OPTICAL,

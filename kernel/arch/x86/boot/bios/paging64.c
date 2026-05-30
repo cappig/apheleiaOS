@@ -12,8 +12,12 @@
 #include "x86/asm.h"
 #include "x86/paging64.h"
 
-static page_t *lvl4;
-static bool nx_supported = false;
+typedef struct {
+    page_t *lvl4;
+    bool nx;
+} paging64_state_t;
+
+static paging64_state_t paging64;
 
 static u32 table_type(bool is_kernel) {
     if (is_kernel) {
@@ -55,11 +59,12 @@ static page_t *walk_table(page_t *table, size_t index, bool is_kernel) {
     return next_table;
 }
 
+// huge pages are used only when the caller has already aligned the range
 void map_page_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel) {
     size_t lvl4_index = GET_LVL4_INDEX(vaddr);
 
     size_t lvl3_index = GET_LVL3_INDEX(vaddr);
-    page_t *lvl3 = walk_table(lvl4, lvl4_index, is_kernel);
+    page_t *lvl3 = walk_table(paging64.lvl4, lvl4_index, is_kernel);
 
     page_t *entry;
 
@@ -125,17 +130,19 @@ void identity_map_64(u64 top_address, u64 offset, bool is_kernel) {
 }
 
 void setup_paging_64(void) {
-    lvl4 = (page_t *)mmap_alloc(PAGE_4KIB, E820_KERNEL, PAGE_4KIB);
-    memset(lvl4, 0, PAGE_4KIB);
-    write_cr3((u32)(uintptr_t)lvl4);
+    paging64.lvl4 = (page_t *)mmap_alloc(PAGE_4KIB, E820_KERNEL, PAGE_4KIB);
+    memset(paging64.lvl4, 0, PAGE_4KIB);
+    write_cr3((u32)(uintptr_t)paging64.lvl4);
 
-    nx_supported = has_nx();
+    paging64.nx = has_nx();
 
-    if (nx_supported) {
+    // NX is optional on older machines, so the bootloader enables it only if CPUID says so
+    if (paging64.nx) {
         u64 efer = read_msr(EFER_MSR);
         write_msr(EFER_MSR, efer | EFER_NX);
     }
 
+    // write protect keeps supervisor writes honest once readonly kernel pages exist
     u32 cr0 = read_cr0();
     write_cr0(cr0 | CR0_WP);
 }
@@ -158,7 +165,7 @@ static page_t elf_flags(u32 elf_flags) {
         flags |= PT_WRITE;
     }
 
-    if (nx_supported && !(elf_flags & PF_X)) {
+    if (paging64.nx && !(elf_flags & PF_X)) {
         flags |= PT_NO_EXECUTE;
     }
 

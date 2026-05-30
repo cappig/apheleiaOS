@@ -32,5 +32,7 @@ bool irq_using_ioapic(void);
 u64 irq_ticks(void);
 u32 irq_timer_hz(void);
 
+void arch_wallclock_maintain(void);
+
 void timer_enable(void);
 void timer_disable(void);

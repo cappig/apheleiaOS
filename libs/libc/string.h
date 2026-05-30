@@ -6,7 +6,6 @@
 #include <libc_ext/string.h>
 #endif
 
-
 void *memcpy(void *restrict dest, const void *restrict src, size_t len);
 void *memmove(void *dest, const void *src, size_t len);
 char *strcpy(char *restrict dest, const char *restrict src);
@@ -18,7 +17,7 @@ char *strncat(char *dest, const char *src, size_t len);
 int memcmp(const void *s1, const void *s2, size_t n);
 int strcmp(const char *s1, const char *s2);
 int strncmp(const char *s1, const char *s2, size_t n);
-// Locale-aware string APIs can be added once libc grows locale state.
+// locale-aware string APIs can be added once libc grows locale state
 
 char *strchr(const char *str, int ch);
 char *strrchr(const char *str, int ch);

@@ -3,7 +3,7 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-// The Unix Standard TAR (tape archive)
+// the Unix Standard TAR (tape archive)
 // https://wiki.osdev.org/USTAR
 // https://en.wikipedia.org/wiki/Tar_(computing)#UStar_format
 
@@ -23,7 +23,7 @@ typedef struct PACKED {
     char type;
     char link_name[100];
 
-    // USTAR extension
+    // ustar extension
     char ustar[6];
     char version[2];
 
@@ -35,7 +35,7 @@ typedef struct PACKED {
 
     char prefix[155];
 
-    // This struct has to take 512 bytes
+    // this struct has to take 512 bytes
     u8 _padding[12];
 } ustar_header_t;
 
@@ -53,12 +53,5 @@ enum ustar_type {
     USTAR_TYPE_DIR = '5',
     USTAR_TYPE_FIFO = '6',
     USTAR_TYPE_CONTIGUOUS_FILE = '7', // treated as a normal file
-    // Some other flags exist as well but we don't support them
+    // some other flags exist as well but we don't support them
 };
-
-
-// u32 ustar_to_num(char* str, int size);
-//
-// ustar_file* ustar_find(void* addr, size_t size, const char* file);
-//
-// int ustar_read(ustar_header_t* head, void* buf, size_t offset, size_t len);

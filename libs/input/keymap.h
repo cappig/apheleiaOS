@@ -3,15 +3,15 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-// There are 63 printable characters (48 without the numpad)
-// This means that a keymap must provide two sets of 64 characters
+// there are 63 printable characters (48 without the numpad)
+// this means that a keymap must provide two sets of 64 characters
 
 typedef struct {
     char normal[64];
     char shifted[64];
 } ascii_keymap;
 
-// Default EN-US ASCII keymap
+// default EN-US ASCII keymap
 UNUSED static ascii_keymap us_keymap = {
     .normal =
         {

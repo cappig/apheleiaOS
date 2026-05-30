@@ -17,11 +17,16 @@
 #define BOOT_LOG_COLOR true
 #endif
 
-static EFI_SYSTEM_TABLE *efi_st = NULL;
-static EFI_BOOT_SERVICES *efi_bs = NULL;
-static page_t *kernel_lvl4 = NULL;
-static char boot_log_buf[BOOT_LOG_CAP];
-static size_t boot_log_len = 0;
+typedef struct {
+    EFI_SYSTEM_TABLE *st;
+    EFI_BOOT_SERVICES *bs;
+    page_t *lvl4;
+
+    char log[BOOT_LOG_CAP];
+    size_t log_len;
+} uefi_state_t;
+
+static uefi_state_t uefi = { 0 };
 
 static const EFI_GUID loaded_image_guid = {
     0x5b1b31a1,
@@ -92,24 +97,24 @@ static void log_append(const CHAR16 *s) {
     }
 
     while (*s) {
-        if (boot_log_len >= BOOT_LOG_CAP) {
+        if (uefi.log_len >= BOOT_LOG_CAP) {
             return;
         }
 
-        boot_log_buf[boot_log_len++] = ascii16(*s++);
+        uefi.log[uefi.log_len++] = ascii16(*s++);
     }
 }
 
 static void set_attr(UINTN fg, UINTN bg) {
-    if (!efi_st || !efi_st->ConOut || !efi_st->ConOut->SetAttribute) {
+    if (!uefi.st || !uefi.st->ConOut || !uefi.st->ConOut->SetAttribute) {
         return;
     }
 
-    efi_st->ConOut->SetAttribute(efi_st->ConOut, fg | (bg << 4));
+    uefi.st->ConOut->SetAttribute(uefi.st->ConOut, fg | (bg << 4));
 }
 
 static void write_text(const CHAR16 *s, size_t len) {
-    if (!efi_st || !efi_st->ConOut || !efi_st->ConOut->OutputString || !s || !len) {
+    if (!uefi.st || !uefi.st->ConOut || !uefi.st->ConOut->OutputString || !s || !len) {
         return;
     }
 
@@ -122,7 +127,7 @@ static void write_text(const CHAR16 *s, size_t len) {
         }
 
         chunk[count] = 0;
-        efi_st->ConOut->OutputString(efi_st->ConOut, chunk);
+        uefi.st->ConOut->OutputString(uefi.st->ConOut, chunk);
 
         s += count;
         len -= count;
@@ -272,9 +277,9 @@ static EFI_STATUS fail(const CHAR16 *msg, EFI_STATUS status) {
     text[i] = '\0';
     log_error("%s%#llx", text, (unsigned long long)status);
 
-    if (efi_bs && efi_bs->Stall) {
+    if (uefi.bs && uefi.bs->Stall) {
         typedef EFI_STATUS(EFIAPI * efi_stall_t)(UINTN);
-        ((efi_stall_t)efi_bs->Stall)(3000000);
+        ((efi_stall_t)uefi.bs->Stall)(3000000);
     }
 
     return status;
@@ -406,7 +411,7 @@ static bool split_conf_line(span_t line, span_t *key, span_t *value) {
 }
 
 static void load_conf(EFI_HANDLE image, boot_info_t *info) {
-    if (!image || !info || !efi_bs) {
+    if (!image || !info || !uefi.bs) {
         return;
     }
 
@@ -422,7 +427,7 @@ static void load_conf(EFI_HANDLE image, boot_info_t *info) {
         config_data = NULL;
         config_size = 0;
         status = uefi_load_file(
-            efi_bs,
+            uefi.bs,
             image,
             &loaded_image_guid,
             &simple_fs_guid,
@@ -437,7 +442,7 @@ static void load_conf(EFI_HANDLE image, boot_info_t *info) {
         }
 
         if (config_data) {
-            efi_bs->FreePool(config_data);
+            uefi.bs->FreePool(config_data);
             config_data = NULL;
         }
     }
@@ -480,7 +485,7 @@ static void load_conf(EFI_HANDLE image, boot_info_t *info) {
         }
     }
 
-    efi_bs->FreePool(config_data);
+    uefi.bs->FreePool(config_data);
 }
 
 static EFI_STATUS alloc_low(UINTN pages, EFI_PHYSICAL_ADDRESS *addr) {
@@ -489,7 +494,7 @@ static EFI_STATUS alloc_low(UINTN pages, EFI_PHYSICAL_ADDRESS *addr) {
     }
 
     *addr = 0xffffffffULL;
-    return efi_bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, addr);
+    return uefi.bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, addr);
 }
 
 static EFI_STATUS alloc_below(UINTN pages, EFI_PHYSICAL_ADDRESS max, EFI_PHYSICAL_ADDRESS *addr) {
@@ -498,7 +503,7 @@ static EFI_STATUS alloc_below(UINTN pages, EFI_PHYSICAL_ADDRESS max, EFI_PHYSICA
     }
 
     *addr = max;
-    return efi_bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, addr);
+    return uefi.bs->AllocatePages(AllocateMaxAddress, EfiLoaderData, pages, addr);
 }
 
 static EFI_STATUS new_table(page_t **table) {
@@ -545,7 +550,7 @@ static EFI_STATUS map_page_4k(u64 vaddr, u64 paddr, u64 flags) {
     page_t *lvl2 = NULL;
     page_t *lvl1 = NULL;
 
-    EFI_STATUS status = walk_table(kernel_lvl4, GET_LVL4_INDEX(vaddr), &lvl3);
+    EFI_STATUS status = walk_table(uefi.lvl4, GET_LVL4_INDEX(vaddr), &lvl3);
     if (efi_error(status)) {
         return status;
     }
@@ -569,7 +574,7 @@ static EFI_STATUS map_page_2m(u64 vaddr, u64 paddr, u64 flags) {
     page_t *lvl3 = NULL;
     page_t *lvl2 = NULL;
 
-    EFI_STATUS status = walk_table(kernel_lvl4, GET_LVL4_INDEX(vaddr), &lvl3);
+    EFI_STATUS status = walk_table(uefi.lvl4, GET_LVL4_INDEX(vaddr), &lvl3);
     if (efi_error(status)) {
         return status;
     }
@@ -638,11 +643,11 @@ static EFI_STATUS map_boot(u64 paddr, u64 size, u64 flags) {
 }
 
 static EFI_STATUS map_loader(EFI_HANDLE image) {
-    if (!image || !efi_bs) {
+    if (!image || !uefi.bs) {
         return EFI_INVALID_PARAM;
     }
 
-    EFI_BOOT_SERVICES *bs = efi_bs;
+    EFI_BOOT_SERVICES *bs = uefi.bs;
     EFI_LOADED_IMAGE_PROTOCOL *loaded_image = NULL;
 
     EFI_GUID *guid = (EFI_GUID *)(uintptr_t)&loaded_image_guid;
@@ -872,7 +877,7 @@ static void set_root_hint(boot_info_t *info, const void *rootfs_file, UINTN root
 }
 
 static void stage_rootfs(EFI_HANDLE image, boot_info_t *info) {
-    if (!image || !info || !efi_bs) {
+    if (!image || !info || !uefi.bs) {
         return;
     }
 
@@ -890,7 +895,7 @@ static void stage_rootfs(EFI_HANDLE image, boot_info_t *info) {
         rootfs_file = NULL;
         rootfs_size = 0;
         status = uefi_load_file(
-            efi_bs,
+            uefi.bs,
             image,
             &loaded_image_guid,
             &simple_fs_guid,
@@ -922,7 +927,7 @@ static void stage_rootfs(EFI_HANDLE image, boot_info_t *info) {
         set_root_hint(info, rootfs_file, rootfs_size);
     }
 
-    efi_bs->FreePool(rootfs_file);
+    uefi.bs->FreePool(rootfs_file);
 }
 
 static NORETURN void jump_to_kernel(u64 entry, u64 stack_top, boot_info_t *info) {
@@ -939,14 +944,14 @@ static NORETURN void jump_to_kernel(u64 entry, u64 stack_top, boot_info_t *info)
 }
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
-    efi_st = system_table;
-    efi_bs = NULL;
+    uefi.st = system_table;
+    uefi.bs = NULL;
 
     if (system_table) {
-        efi_bs = system_table->BootServices;
+        uefi.bs = system_table->BootServices;
     }
 
-    if (!efi_bs || !efi_st) {
+    if (!uefi.bs || !uefi.st) {
         return EFI_LOAD_ERROR;
     }
 
@@ -956,14 +961,14 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
     log_info("UEFI boot started");
 
-    if (efi_bs->SetWatchdogTimer) {
-        efi_bs->SetWatchdogTimer(0, 0, 0, NULL);
+    if (uefi.bs->SetWatchdogTimer) {
+        uefi.bs->SetWatchdogTimer(0, 0, 0, NULL);
     }
 
     void *kernel_file = NULL;
     UINTN kernel_file_size = 0;
     EFI_STATUS status = uefi_load_file(
-        efi_bs,
+        uefi.bs,
         image,
         &loaded_image_guid,
         &simple_fs_guid,
@@ -987,7 +992,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
     boot_info_t *info = (boot_info_t *)(uintptr_t)info_phys;
     uefi_mem_zero(info, sizeof(*info));
-    info->boot_log_paddr = (u64)(uintptr_t)boot_log_buf;
+    info->boot_log_paddr = (u64)(uintptr_t)uefi.log;
     info->boot_log_cap = BOOT_LOG_CAP;
 
     EFI_PHYSICAL_ADDRESS smp_trampoline = 0;
@@ -999,10 +1004,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     default_args(info);
     load_conf(image, info);
 
-    uefi_detect_acpi(info, efi_st, &acpi2_guid, &acpi_guid);
-    uefi_detect_video(info, efi_bs, &gop_guid);
+    uefi_detect_acpi(info, uefi.st, &acpi2_guid, &acpi_guid);
+    uefi_detect_video(info, uefi.bs, &gop_guid);
 
-    status = new_table(&kernel_lvl4);
+    status = new_table(&uefi.lvl4);
     if (efi_error(status)) {
         return fail((const CHAR16 *)L"page table allocation failed ", status);
     }
@@ -1049,13 +1054,13 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     UINTN map_key = 0;
 
     for (int attempts = 0; attempts < 8; attempts++) {
-        status = uefi_memory_map(efi_bs, info, &map_buf, &map_buf_size, &map_key);
+        status = uefi_memory_map(uefi.bs, info, &map_buf, &map_buf_size, &map_key);
 
         if (efi_error(status)) {
             return fail((const CHAR16 *)L"memory map fetch failed ", status);
         }
 
-        status = efi_bs->ExitBootServices(image, map_key);
+        status = uefi.bs->ExitBootServices(image, map_key);
         if (!efi_error(status)) {
             break;
         }
@@ -1065,10 +1070,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
         return fail((const CHAR16 *)L"ExitBootServices failed ", status);
     }
 
-    info->boot_log_len = (u32)boot_log_len;
+    info->boot_log_len = (u32)uefi.log_len;
     pat_init();
 
-    write_cr3((u64)(uintptr_t)kernel_lvl4);
+    write_cr3((u64)(uintptr_t)uefi.lvl4);
 
     u64 cr0 = read_cr0();
     write_cr0(cr0 | CR0_WP);

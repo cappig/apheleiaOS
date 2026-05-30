@@ -8,11 +8,11 @@ section .text
 isr_stub_%+%1:
 %if (%1 == 8) || (%1 == 10) || (%1 == 11) || (%1 == 12) || (%1 == 13) \
    || (%1 == 14) || (%1 == 17) || %1 == 21 || %1 == 29 || %1 == 30
-    ; CPU will already have pushed the hardware error code for these vectors,
-    ; our stub should not push another. We still push the vector number.
+    ; cpu will already have pushed the hardware error code for these vectors
+    ; our stub should not push another. We still push the vector number
     push qword %1
 %else
-    ; For vectors that don't push an error code, we push a 0 as placeholder
+    ; for vectors that don't push an error code, we push a 0 as placeholder
     push qword 0
     push qword %1
 %endif
@@ -84,7 +84,7 @@ isr_common_stub:
 
     swapgs_if_necessary
 
-    ; Pop the error code and interrupt number
+    ; pop the error code and interrupt number
     add rsp, 8*2
 
     iretq

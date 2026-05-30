@@ -25,6 +25,5 @@ typedef enum {
     VGA_WHITE = 15,
 } vga_colors;
 
-
-// int ansi_to_vga(int ansi_index);
-// int rgb_to_closest_vga(rgba_color color);
+// int ansi_to_vga(int ansi_index)
+// int rgb_to_closest_vga(rgba_color color)

@@ -37,42 +37,42 @@
 
 #define LOG_BOOT_HISTORY_CAP    (128 * 1024)
 #define BOOT_ROOTFS_SECTOR_SIZE 512
-#define RISCV_BOOT_STACK_SIZE   (64 * KIB)
-#define RISCV_TIMEBASE_HZ       10000000ULL
-#define RISCV_UART_WINDOW_SIZE  PAGE_4KIB
-#define RISCV_MMIO_MAX_REGIONS  24
-#define RISCV_UART_DEFAULT_IRQ  10
-#define RISCV_STACKTRACE_MAX    32U
-#define RISCV_PLATFORM_NAME_MAX 64U
+#define BOOT_STACK_SIZE         (64 * KIB)
+#define DEFAULT_TIMEBASE_HZ     10000000ULL
+#define UART_WINDOW_SIZE        PAGE_4KIB
+#define MMIO_MAX_REGIONS        24
+#define UART_DEFAULT_IRQ        10
+#define STACKTRACE_MAX          32U
+#define PLATFORM_NAME_MAX       64U
 
-#define RISCV_IRQ_SOFT     1
-#define RISCV_IRQ_TIMER    5
-#define RISCV_IRQ_EXTERNAL 9
+#define IRQ_SOFT     1
+#define IRQ_TIMER    5
+#define IRQ_EXTERNAL 9
 
-#define RISCV_TRAP_LOG_LIMIT 8U
+#define TRAP_LOG_LIMIT 8U
 
-#define RISCV_EXC_ILL        2
-#define RISCV_EXC_BREAK      3
-#define RISCV_EXC_U_ECALL    8
-#define RISCV_EXC_INST_PAGE  12
-#define RISCV_EXC_LOAD_PAGE  13
-#define RISCV_EXC_STORE_PAGE 15
+#define EXC_ILL        2
+#define EXC_BREAK      3
+#define EXC_U_ECALL    8
+#define EXC_INST_PAGE  12
+#define EXC_LOAD_PAGE  13
+#define EXC_STORE_PAGE 15
 
-#define RISCV_PLIC_MAX_IRQS         128U
-#define RISCV_PLIC_PRIORITY_BASE    0x000000U
-#define RISCV_PLIC_PRIORITY_STRIDE  4U
-#define RISCV_PLIC_ENABLE_BASE      0x002000U
-#define RISCV_PLIC_ENABLE_STRIDE    0x000080U
-#define RISCV_PLIC_ENABLE_WORD_BITS 32U
-#define RISCV_PLIC_CONTEXT_BASE     0x200000U
-#define RISCV_PLIC_CONTEXT_STRIDE   0x001000U
-#define RISCV_PLIC_THRESHOLD_OFF    0x0U
-#define RISCV_PLIC_CLAIM_OFF        0x4U
+#define PLIC_MAX_IRQS         128U
+#define PLIC_PRIORITY_BASE    0x000000U
+#define PLIC_PRIORITY_STRIDE  4U
+#define PLIC_ENABLE_BASE      0x002000U
+#define PLIC_ENABLE_STRIDE    0x000080U
+#define PLIC_ENABLE_WORD_BITS 32U
+#define PLIC_CONTEXT_BASE     0x200000U
+#define PLIC_CONTEXT_STRIDE   0x001000U
+#define PLIC_THRESHOLD_OFFSET 0x0U
+#define PLIC_CLAIM_OFFSET     0x4U
 
-// S-mode PLIC context index: each hart has two contexts (M and S), S is the odd one
-#define RISCV_PLIC_SMODE_CTX(hartid) ((hartid) * 2U + 1U)
+// s-mode PLIC context index: each hart has two contexts (M and S), S is the odd one
+#define PLIC_SMODE_CTX(hartid) ((hartid) * 2U + 1U)
 
-#define RISCV_REG_FMT "%#lx"
+#define REG_FMT "%#lx"
 
 typedef struct {
     u64 paddr;
@@ -109,11 +109,11 @@ static struct {
 static struct {
     u64 timebase_hz;
     u64 cpu_hz;
-    char platform_name[RISCV_PLATFORM_NAME_MAX];
+    char platform_name[PLATFORM_NAME_MAX];
     bool arm_fail_logged;
 } timer = {
-    .timebase_hz = RISCV_TIMEBASE_HZ,
-    .cpu_hz = RISCV_TIMEBASE_HZ,
+    .timebase_hz = DEFAULT_TIMEBASE_HZ,
+    .cpu_hz = DEFAULT_TIMEBASE_HZ,
     .platform_name = "riscv",
     .arm_fail_logged = false,
 };
@@ -131,7 +131,7 @@ static struct {
     uintptr_t early_cursor;
     uintptr_t early_limit;
     uintptr_t uart_virt;
-    mmio_region_t regions[RISCV_MMIO_MAX_REGIONS];
+    mmio_region_t regions[MMIO_MAX_REGIONS];
     size_t count;
     uintptr_t next_vaddr;
 } mmio = { .next_vaddr = RISCV_MMIO_BASE };
@@ -139,7 +139,7 @@ static struct {
 static struct {
     uintptr_t virt;
     bool ready;
-    irq_slot_t table[RISCV_PLIC_MAX_IRQS];
+    irq_slot_t table[PLIC_MAX_IRQS];
 } plic;
 
 static struct {
@@ -158,7 +158,6 @@ uintptr_t cpu_local_ptr = 0;
 
 extern char __bss_end;
 extern char __stack_top;
-extern void trap_entry(void);
 
 static inline size_t _current_cpu_id(void) {
     cpu_core_t *core = cpu_current();
@@ -194,7 +193,7 @@ static void _log_history_append(const char *s, size_t len) {
     klog.history_len += len;
 }
 
-static void _log_history_replay_console(void) {
+static void _replay_boot_log(void) {
     if (!klog.console_ready || !klog.history_len) {
         return;
     }
@@ -228,7 +227,7 @@ static void _log_write_early(const char *s, size_t len) {
         return;
     }
 
-    send_serial_sized_string(uart_console_base(), s, len);
+    send_serial_buf(uart_console_base(), s, len);
 }
 
 static void _log_mirror_console(const char *s, size_t len) {
@@ -241,9 +240,9 @@ static void _log_mirror_console(const char *s, size_t len) {
         return;
     }
 
-    uart_console_set_suppressed(true);
+    uart_console_mute(true);
     console_write_screen(TTY_CONSOLE, s, len);
-    uart_console_set_suppressed(false);
+    uart_console_mute(false);
 }
 
 static void _log_puts(const char *s) {
@@ -358,7 +357,7 @@ static void _log_user_trap_once(u32 *counter, u32 limit, const char *label, arch
 
     sched_thread_t *thread = sched_current();
     log_debug(
-        "%s pid=%ld sepc=" RISCV_REG_FMT " stval=" RISCV_REG_FMT " a7=" RISCV_REG_FMT " a0=" RISCV_REG_FMT,
+        "%s pid=%ld sepc=" REG_FMT " stval=" REG_FMT " a7=" REG_FMT " a0=" REG_FMT,
         label,
         thread ? (long)thread->pid : 0L,
         (unsigned long)frame->s_regs.sepc,
@@ -369,39 +368,39 @@ static void _log_user_trap_once(u32 *counter, u32 limit, const char *label, arch
 }
 
 static inline uintptr_t _plic_context_base(size_t cpu_id) {
-    uintptr_t ctx = RISCV_PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
-    return plic.virt + RISCV_PLIC_CONTEXT_BASE + ctx * RISCV_PLIC_CONTEXT_STRIDE;
+    uintptr_t ctx = PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
+    return plic.virt + PLIC_CONTEXT_BASE + ctx * PLIC_CONTEXT_STRIDE;
 }
 
 static inline volatile u32 *_plic_priority_reg(u32 irq) {
-    uintptr_t offset = RISCV_PLIC_PRIORITY_BASE + irq * RISCV_PLIC_PRIORITY_STRIDE;
+    uintptr_t offset = PLIC_PRIORITY_BASE + irq * PLIC_PRIORITY_STRIDE;
 
     return (volatile u32 *)(plic.virt + offset);
 }
 
 static inline volatile u32 *_plic_enable_reg(size_t cpu_id, u32 irq) {
-    uintptr_t ctx = RISCV_PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
-    uintptr_t enable_base = plic.virt + RISCV_PLIC_ENABLE_BASE + ctx * RISCV_PLIC_ENABLE_STRIDE;
-    return (volatile u32 *)(enable_base + (irq / RISCV_PLIC_ENABLE_WORD_BITS) * sizeof(u32));
+    uintptr_t ctx = PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
+    uintptr_t enable_base = plic.virt + PLIC_ENABLE_BASE + ctx * PLIC_ENABLE_STRIDE;
+    return (volatile u32 *)(enable_base + (irq / PLIC_ENABLE_WORD_BITS) * sizeof(u32));
 }
 
 static inline volatile u32 *_plic_threshold_reg(size_t cpu_id) {
-    return (volatile u32 *)(_plic_context_base(cpu_id) + RISCV_PLIC_THRESHOLD_OFF);
+    return (volatile u32 *)(_plic_context_base(cpu_id) + PLIC_THRESHOLD_OFFSET);
 }
 
 static inline volatile u32 *_plic_claim_reg(size_t cpu_id) {
-    return (volatile u32 *)(_plic_context_base(cpu_id) + RISCV_PLIC_CLAIM_OFF);
+    return (volatile u32 *)(_plic_context_base(cpu_id) + PLIC_CLAIM_OFFSET);
 }
 
-static void _plic_toggle_irq_for_cpu(size_t cpu_id, u32 irq, bool enable) {
-    if (!plic.ready || !irq || irq >= RISCV_PLIC_MAX_IRQS) {
+static void _plic_set_irq(size_t cpu_id, u32 irq, bool enable) {
+    if (!plic.ready || !irq || irq >= PLIC_MAX_IRQS) {
         return;
     }
 
     *_plic_priority_reg(irq) = enable ? 1U : 0U;
 
     volatile u32 *enable_reg = _plic_enable_reg(cpu_id, irq);
-    u32 mask = 1U << (irq % RISCV_PLIC_ENABLE_WORD_BITS);
+    u32 mask = 1U << (irq % PLIC_ENABLE_WORD_BITS);
     u32 value = *enable_reg;
 
     if (enable) {
@@ -422,17 +421,17 @@ static void _plic_toggle_irq(u32 irq, bool enable) {
             continue;
         }
 
-        _plic_toggle_irq_for_cpu(cpu_id, irq, enable);
+        _plic_set_irq(cpu_id, irq, enable);
         applied = true;
     }
 
     if (!applied) {
-        _plic_toggle_irq_for_cpu(0, irq, enable);
+        _plic_set_irq(0, irq, enable);
     }
 }
 
 static bool irq_register(u32 irq, irq_handler_t handler, void *ctx) {
-    if (!irq || irq >= RISCV_PLIC_MAX_IRQS || !handler) {
+    if (!irq || irq >= PLIC_MAX_IRQS || !handler) {
         return false;
     }
 
@@ -452,9 +451,9 @@ static void _plic_sync_irqs_for_cpu(size_t cpu_id) {
         return;
     }
 
-    for (u32 irq = 1; irq < RISCV_PLIC_MAX_IRQS; irq++) {
+    for (u32 irq = 1; irq < PLIC_MAX_IRQS; irq++) {
         if (plic.table[irq].handler) {
-            _plic_toggle_irq_for_cpu(cpu_id, irq, true);
+            _plic_set_irq(cpu_id, irq, true);
         }
     }
 }
@@ -464,10 +463,10 @@ static void _plic_init_context(size_t cpu_id) {
         return;
     }
 
-    uintptr_t ctx = RISCV_PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
-    uintptr_t enable_base = plic.virt + RISCV_PLIC_ENABLE_BASE + ctx * RISCV_PLIC_ENABLE_STRIDE;
+    uintptr_t ctx = PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
+    uintptr_t enable_base = plic.virt + PLIC_ENABLE_BASE + ctx * PLIC_ENABLE_STRIDE;
 
-    for (size_t i = 0; i < RISCV_PLIC_MAX_IRQS / RISCV_PLIC_ENABLE_WORD_BITS; i++) {
+    for (size_t i = 0; i < PLIC_MAX_IRQS / PLIC_ENABLE_WORD_BITS; i++) {
         *(volatile u32 *)(enable_base + i * sizeof(u32)) = 0;
     }
 
@@ -572,12 +571,12 @@ static bool _plic_handle_external(void) {
         return false;
     }
 
-    if (irq < RISCV_PLIC_MAX_IRQS && plic.table[irq].handler) {
+    if (irq < PLIC_MAX_IRQS && plic.table[irq].handler) {
         plic.table[irq].handler(irq, plic.table[irq].ctx);
     } else {
         u32 cnt = __atomic_fetch_add(&cpu.irq_log, 1, __ATOMIC_RELAXED);
 
-        if (cnt < RISCV_TRAP_LOG_LIMIT) {
+        if (cnt < TRAP_LOG_LIMIT) {
             log_warn("unhandled RISC-V external irq %u", (unsigned int)irq);
         }
     }
@@ -664,7 +663,7 @@ static uintptr_t _mmio_register_region(u64 paddr, size_t size) {
         }
     }
 
-    if (mmio.count >= RISCV_MMIO_MAX_REGIONS) {
+    if (mmio.count >= MMIO_MAX_REGIONS) {
         log_warn("RISC-V MMIO region table full");
         return 0;
     }
@@ -716,7 +715,7 @@ static bool _timer_program_next(void) {
         interval = 1;
     }
 
-    if (riscv_machine_timer_arm_delta(interval)) {
+    if (riscv_mtimer_arm(interval)) {
         return true;
     }
 
@@ -728,7 +727,7 @@ static bool _timer_program_next(void) {
     return false;
 }
 
-static void _timer_mark_rearm_pending(void) {
+static void _defer_timer_rearm(void) {
     cpu.timer_rearm_pending[_current_cpu_id()] = true;
 }
 
@@ -763,7 +762,7 @@ static bool _handle_user_signal(int signum, arch_int_state_t *frame) {
 static void _handle_page_fault(arch_int_state_t *frame, uintptr_t cause) {
     uintptr_t addr = frame ? frame->s_regs.stval : 0;
 
-    bool write = cause == RISCV_EXC_STORE_PAGE;
+    bool write = cause == EXC_STORE_PAGE;
     bool user = arch_signal_is_user(frame);
 
     if (write && user && sched_is_running()) {
@@ -775,7 +774,7 @@ static void _handle_page_fault(arch_int_state_t *frame, uintptr_t cause) {
     }
 
     if (user) {
-        _log_user_trap_once(&cpu.fault_log, RISCV_TRAP_LOG_LIMIT, "riscv user page fault", frame, cause);
+        _log_user_trap_once(&cpu.fault_log, TRAP_LOG_LIMIT, "riscv user page fault", frame, cause);
     }
 
     if (_handle_user_signal(SIGSEGV, frame)) {
@@ -785,7 +784,7 @@ static void _handle_page_fault(arch_int_state_t *frame, uintptr_t cause) {
     panic_prepare();
 
     log_fatal(
-        "page fault cause=" RISCV_REG_FMT " addr=" RISCV_REG_FMT " sepc=" RISCV_REG_FMT,
+        "page fault cause=" REG_FMT " addr=" REG_FMT " sepc=" REG_FMT,
         (unsigned long)cause,
         (unsigned long)addr,
         frame ? (unsigned long)frame->s_regs.sepc : 0UL
@@ -963,7 +962,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     if (!uart_irq && uart_phys == SERIAL_UART0) {
-        uart_irq = RISCV_UART_DEFAULT_IRQ;
+        uart_irq = UART_DEFAULT_IRQ;
     }
 
     log_debug(
@@ -978,7 +977,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     mmio.uart_virt = 0;
 
     if (uart_phys) {
-        mmio.uart_virt = _mmio_register_region(uart_phys, RISCV_UART_WINDOW_SIZE);
+        mmio.uart_virt = _mmio_register_region(uart_phys, UART_WINDOW_SIZE);
         if (!mmio.uart_virt) {
             panic("failed to register UART MMIO window");
         }
@@ -1030,8 +1029,8 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         log_debug("no DTB to relocate");
     }
 
-    timer.timebase_hz = RISCV_TIMEBASE_HZ;
-    timer.cpu_hz = RISCV_TIMEBASE_HZ;
+    timer.timebase_hz = DEFAULT_TIMEBASE_HZ;
+    timer.cpu_hz = DEFAULT_TIMEBASE_HZ;
     timer.platform_name[0] = '\0';
     timer.arm_fail_logged = false;
 
@@ -1165,9 +1164,9 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     size_t text_cols = 0, text_rows = 0;
     if (console_get_size(&text_cols, &text_rows) && text_cols && text_rows) {
-        uart_console_set_suppressed(true);
+        uart_console_mute(true);
         arch_log_replay_console();
-        uart_console_set_suppressed(false);
+        uart_console_mute(false);
     }
 
     if (!driver_registry_init()) {
@@ -1206,7 +1205,7 @@ void arch_late_init(void) {
 
 void arch_log_replay_console(void) {
     unsigned long irq_flags = spin_lock_irqsave(&klog.lock);
-    _log_history_replay_console();
+    _replay_boot_log();
     spin_unlock_irqrestore(&klog.lock, irq_flags);
 }
 
@@ -1289,11 +1288,11 @@ static bool _stack_trace_bounds(uintptr_t *low_out, uintptr_t *high_out) {
     }
 
     uintptr_t high = (uintptr_t)&__stack_top;
-    if (high < RISCV_BOOT_STACK_SIZE) {
+    if (high < BOOT_STACK_SIZE) {
         return false;
     }
 
-    *low_out = high - RISCV_BOOT_STACK_SIZE;
+    *low_out = high - BOOT_STACK_SIZE;
     *high_out = high;
 
     return true;
@@ -1327,14 +1326,14 @@ void arch_dump_stack_trace(void) {
 
     log_info("stack trace");
 
-    for (size_t i = 0; frame && i < RISCV_STACKTRACE_MAX; i++) {
+    for (size_t i = 0; frame && i < STACKTRACE_MAX; i++) {
         if (have_bounds && !_stack_frame_valid(frame, stack_low, stack_high)) {
-            log_info("stack trace stopped at invalid frame " RISCV_REG_FMT, (unsigned long)(uintptr_t)frame);
+            log_info("stack trace stopped at invalid frame " REG_FMT, (unsigned long)(uintptr_t)frame);
             break;
         }
 
         uintptr_t ret = frame->ret;
-        log_info("<" RISCV_REG_FMT ">", (unsigned long)ret);
+        log_info("<" REG_FMT ">", (unsigned long)ret);
 
         stack_frame_t *next = frame->next;
         if (!next || next <= frame) {
@@ -1342,7 +1341,7 @@ void arch_dump_stack_trace(void) {
         }
 
         if (have_bounds && !_stack_frame_valid(next, stack_low, stack_high)) {
-            log_info("stack trace next frame invalid " RISCV_REG_FMT, (unsigned long)(uintptr_t)next);
+            log_info("stack trace next frame invalid " REG_FMT, (unsigned long)(uintptr_t)next);
             break;
         }
 
@@ -1356,8 +1355,7 @@ void arch_dump_registers(const arch_int_state_t *frame) {
     }
 
     log_fatal(
-        "sepc=" RISCV_REG_FMT " sp=" RISCV_REG_FMT " sstatus=" RISCV_REG_FMT " scause=" RISCV_REG_FMT
-        " stval=" RISCV_REG_FMT,
+        "sepc=" REG_FMT " sp=" REG_FMT " sstatus=" REG_FMT " scause=" REG_FMT " stval=" REG_FMT,
         (unsigned long)frame->s_regs.sepc,
         (unsigned long)frame->s_regs.sp,
         (unsigned long)frame->s_regs.sstatus,
@@ -1467,7 +1465,7 @@ u64 arch_realtime_ns(void) {
     u64 hz = timer.timebase_hz;
     u64 ticks = 0;
 
-    if (!hz || !riscv_machine_timer_read(&ticks)) {
+    if (!hz || !riscv_mtimer_read(&ticks)) {
         hz = TIMER_FREQ;
         ticks = arch_timer_ticks();
     }
@@ -1616,20 +1614,20 @@ void trap_handle(arch_int_state_t *frame) {
 
     if (interrupt) {
         switch (cause) {
-        case RISCV_IRQ_SOFT:
+        case IRQ_SOFT:
             riscv_clear_sip_bits(SIP_SSIP);
 
             _serial_drain_input();
             sched_resched_softirq(frame);
             return;
-        case RISCV_IRQ_TIMER:
+        case IRQ_TIMER:
             __atomic_add_fetch(&cpu.ticks, 1, __ATOMIC_RELAXED);
-            _timer_mark_rearm_pending();
+            _defer_timer_rearm();
             _serial_drain_input();
 
             sched_tick(frame);
             return;
-        case RISCV_IRQ_EXTERNAL:
+        case IRQ_EXTERNAL:
             _plic_handle_external();
             return;
         default:
@@ -1638,14 +1636,14 @@ void trap_handle(arch_int_state_t *frame) {
     }
 
     switch (cause) {
-    case RISCV_EXC_BREAK:
+    case EXC_BREAK:
         if (!arch_signal_is_user(frame) && (uintptr_t)frame->s_regs.sepc == (uintptr_t)trap_resched) {
             frame->s_regs.sepc += 4;
             sched_resched_softirq(frame);
             return;
         }
         break;
-    case RISCV_EXC_U_ECALL:
+    case EXC_U_ECALL:
         sched_capture_context(frame);
         frame->s_regs.sepc += 4;
 
@@ -1661,20 +1659,20 @@ void trap_handle(arch_int_state_t *frame) {
             frame->g_regs.a0 = (uintptr_t)-ENOSYS;
         }
         return;
-    case RISCV_EXC_INST_PAGE:
-    case RISCV_EXC_LOAD_PAGE:
-    case RISCV_EXC_STORE_PAGE:
+    case EXC_INST_PAGE:
+    case EXC_LOAD_PAGE:
+    case EXC_STORE_PAGE:
         _handle_page_fault(frame, cause);
         return;
-    case RISCV_EXC_ILL:
-        _log_user_trap_once(&cpu.ill_log, RISCV_TRAP_LOG_LIMIT, "riscv user illegal instruction", frame, cause);
+    case EXC_ILL:
+        _log_user_trap_once(&cpu.ill_log, TRAP_LOG_LIMIT, "riscv user illegal instruction", frame, cause);
 
         if (_handle_user_signal(SIGILL, frame)) {
             return;
         }
 
         panic_prepare();
-        log_fatal("illegal instruction at " RISCV_REG_FMT, (unsigned long)frame->s_regs.sepc);
+        log_fatal("illegal instruction at " REG_FMT, (unsigned long)frame->s_regs.sepc);
 
         panic_dump_state(frame);
         panic_halt();
@@ -1682,7 +1680,7 @@ void trap_handle(arch_int_state_t *frame) {
     default:
         panic_prepare();
         log_fatal(
-            "unhandled trap cause=" RISCV_REG_FMT " sepc=" RISCV_REG_FMT " stval=" RISCV_REG_FMT,
+            "unhandled trap cause=" REG_FMT " sepc=" REG_FMT " stval=" REG_FMT,
             (unsigned long)cause,
             (unsigned long)frame->s_regs.sepc,
             (unsigned long)frame->s_regs.stval

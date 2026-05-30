@@ -7,9 +7,9 @@
 #error "atomic32.c is only meant for 32-bit x86 builds"
 #endif
 
-// Clang lowers some 64-bit atomics in i386 freestanding code to libatomic
+// clang lowers some 64-bit atomics in i386 freestanding code to libatomic
 // calls. The kernel cannot link libatomic, so keep the small operations we use
-// here and serialize them with a raw lock.
+// here and serialize them with a raw lock
 
 static volatile int atomic64_lock = 0;
 

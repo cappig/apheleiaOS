@@ -6,7 +6,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 
-// EXT2 filesystem structures
+// ext2 filesystem structures
 // https://wiki.osdev.org/Ext2
 // https://cscie28.dce.harvard.edu/lectures/lect04/6_Extras/ext2-struct.html
 // https://www.nongnu.org/ext2-doc/ext2.html
@@ -50,7 +50,7 @@ typedef struct PACKED {
     u16 uid_reserved;
     u16 gid_reserved;
 
-    // Extended superblock, present if version_major >= 1
+    // extended superblock, present if version_major >= 1
     u32 first_inode;
     u16 inode_size;
     u16 superblock_group;
@@ -75,7 +75,7 @@ typedef struct PACKED {
     u32 journal_device;
     u32 orphan_list_head;
 
-    // some other stuff might be here ...
+    // reserved space for optional ext2 superblock fields
     u8 _reserved1[788];
 } ext2_superblock_t;
 
@@ -112,7 +112,6 @@ enum ext2_write_features {
     EXT2_WF_DIR_BTREE = (1 << 2),
 };
 
-
 typedef struct PACKED {
     u32 usage_bitmap_offset;
     u32 inode_bitmap_offset;
@@ -126,7 +125,6 @@ typedef struct PACKED {
 
     u8 _padding0[14];
 } ext2_group_descriptor_t;
-
 
 typedef struct PACKED {
     u16 type;
@@ -228,7 +226,6 @@ enum ext2_directory_type {
     EXT2_DIR_SOCKET = 6,
     EXT2_DIR_SYMLINK = 7,
 };
-
 
 static inline u32 ext2_block_size(const ext2_superblock_t *sb) {
     return 1024 << sb->block_size_shift;

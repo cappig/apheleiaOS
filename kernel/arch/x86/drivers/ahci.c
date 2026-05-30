@@ -24,16 +24,22 @@
 #include <x86/paging32.h>
 #endif
 
-// OSdevWiki provides extensive documentation on AHCI:
+// osdevwiki provides extensive documentation on AHCI
 // https://wiki.osdev.org/AHCI
 
 #define AHCI_MSI_VECTOR 0x40
 
-static ahci_device_t *ahci_primary = NULL;
-static disk_dev_t *ahci_primary_disk = NULL;
-static u8 ahci_primary_irq_line = 0xff;
-static bool ahci_warned_irq_fallback = false;
-static bool ahci_driver_loaded = false;
+typedef struct {
+    ahci_device_t *primary;
+    disk_dev_t *disk;
+    u8 irq_line;
+    bool warned_irq_fallback;
+    bool loaded;
+} ahci_driver_state_t;
+
+static ahci_driver_state_t ahci_driver = {
+    .irq_line = 0xff,
+};
 
 const driver_desc_t ahci_driver_desc = {
     .name = "ahci",
@@ -78,8 +84,8 @@ static inline u32 ahci_port_ack(ahci_hba_port_t *port) {
 }
 
 static void ahci_primary_irq(UNUSED int_state_t *s) {
-    ahci_device_t *dev = ahci_primary;
-    u8 irq_line = ahci_primary_irq_line;
+    ahci_device_t *dev = ahci_driver.primary;
+    u8 irq_line = ahci_driver.irq_line;
 
     if (dev && dev->irq_enabled) {
         unsigned long flags = arch_irq_save();
@@ -220,8 +226,8 @@ static void ahci_destroy_device(ahci_device_t *dev) {
         return;
     }
 
-    if (ahci_primary == dev) {
-        ahci_primary = NULL;
+    if (ahci_driver.primary == dev) {
+        ahci_driver.primary = NULL;
     }
 
     if (dev->io_wait.list) {
@@ -508,9 +514,9 @@ static bool ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, 
     }
 
     if (need_poll_fallback) {
-        if (!ahci_warned_irq_fallback) {
+        if (!ahci_driver.warned_irq_fallback) {
             log_warn("IRQ timeout on port %u, falling back to completion polling", (unsigned int)dev->port_index);
-            ahci_warned_irq_fallback = true;
+            ahci_driver.warned_irq_fallback = true;
         }
 
         ok = ahci_wait_cmd_poll(dev, port, slot_mask);
@@ -875,7 +881,7 @@ static bool ahci_find_controller(ahci_device_t *dev) {
                 abar |= ((u64)bar5_hi << 32);
             }
 
-            // The current MMIO mapping path is limited to 32-bit ABARs.
+            // the current MMIO mapping path is limited to 32-bit ABARs
             if (!abar || abar > 0xffffffffULL) {
                 continue;
             }
@@ -968,11 +974,11 @@ static bool ahci_disk_init(void) {
 
     pci_enable_bus_mastering(dev->bus, dev->slot, dev->func);
 
-    // Try MSI first, fall back to legacy INTx
+    // try MSI first, fall back to legacy INTx
     bool msi_enabled = pci_enable_msi(dev->bus, dev->slot, dev->func, AHCI_MSI_VECTOR, lapic_id());
 
     if (msi_enabled) {
-        ahci_primary = dev;
+        ahci_driver.primary = dev;
         dev->irq_enabled = true;
         dev->msi_enabled = true;
 
@@ -982,8 +988,8 @@ static bool ahci_disk_init(void) {
         log_warn("IRQ line %u out of range, falling back to polling", (unsigned int)dev->irq_line);
         dev->irq_enabled = false;
     } else {
-        ahci_primary = dev;
-        ahci_primary_irq_line = dev->irq_line;
+        ahci_driver.primary = dev;
+        ahci_driver.irq_line = dev->irq_line;
         dev->irq_enabled = true;
         irq_register(dev->irq_line, ahci_primary_irq);
     }
@@ -1045,7 +1051,7 @@ static bool ahci_disk_init(void) {
         return false;
     }
 
-    ahci_primary_disk = disk;
+    ahci_driver.disk = disk;
 
     size_t disk_size = 0;
     size_t disk_mib = ahci_disk_size(dev, &disk_size) ? disk_size / MIB : 0;
@@ -1062,11 +1068,11 @@ static bool ahci_disk_init(void) {
 }
 
 bool ahci_driver_busy(void) {
-    return ahci_primary_disk && disk_is_busy(ahci_primary_disk);
+    return ahci_driver.disk && disk_is_busy(ahci_driver.disk);
 }
 
 driver_err_t ahci_driver_load(void) {
-    if (ahci_driver_loaded) {
+    if (ahci_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -1074,12 +1080,12 @@ driver_err_t ahci_driver_load(void) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
-    ahci_driver_loaded = true;
+    ahci_driver.loaded = true;
     return DRIVER_OK;
 }
 
 driver_err_t ahci_driver_unload(void) {
-    if (!ahci_driver_loaded) {
+    if (!ahci_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -1087,10 +1093,10 @@ driver_err_t ahci_driver_unload(void) {
         return DRIVER_ERR_BUSY;
     }
 
-    ahci_device_t *dev = ahci_primary;
+    ahci_device_t *dev = ahci_driver.primary;
 
-    if (ahci_primary_disk) {
-        if (!disk_unregister(ahci_primary_disk)) {
+    if (ahci_driver.disk) {
+        if (!disk_unregister(ahci_driver.disk)) {
             return DRIVER_ERR_BUSY;
         }
     }
@@ -1106,20 +1112,20 @@ driver_err_t ahci_driver_unload(void) {
         irq_unregister(dev->irq_line);
     }
 
-    if (ahci_primary_disk) {
-        free(ahci_primary_disk->name);
-        free(ahci_primary_disk);
-        ahci_primary_disk = NULL;
+    if (ahci_driver.disk) {
+        free(ahci_driver.disk->name);
+        free(ahci_driver.disk);
+        ahci_driver.disk = NULL;
     }
 
     if (dev) {
         ahci_destroy_device(dev);
     }
 
-    ahci_primary = NULL;
-    ahci_primary_irq_line = 0xff;
-    ahci_warned_irq_fallback = false;
-    ahci_driver_loaded = false;
+    ahci_driver.primary = NULL;
+    ahci_driver.irq_line = 0xff;
+    ahci_driver.warned_irq_fallback = false;
+    ahci_driver.loaded = false;
 
     return DRIVER_OK;
 }

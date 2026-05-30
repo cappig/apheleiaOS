@@ -15,7 +15,6 @@
 #include <x86/asm.h>
 #include <x86/irq.h>
 
-
 #define ATA_PRIMARY_BASE   0x1f0
 #define ATA_PRIMARY_CTRL   0x3f6
 #define ATA_SECONDARY_BASE 0x170
@@ -83,10 +82,14 @@ typedef struct {
     size_t sector_count;
 } ata_device_t;
 
-static ata_channel_t ata_channels[2]; // 0 = primary, 1 = secondary
-static bool ata_channel_irq_done[2];
-static disk_dev_t *ata_registered_disks[4] = { 0 };
-static bool ata_driver_loaded = false;
+typedef struct {
+    ata_channel_t channels[2]; // 0 = primary, 1 = secondary
+    bool irq_done[2];
+    disk_dev_t *disks[4];
+    bool loaded;
+} ata_driver_state_t;
+
+static ata_driver_state_t ata_driver = { 0 };
 
 const driver_desc_t ata_driver_desc = {
     .name = "ata",
@@ -246,7 +249,7 @@ static bool ata_wait_irq_event(ata_device_t *dev, u32 *seq) {
             }
 
             if (!(status & ATA_SR_BUSY)) {
-                // Lost or delayed IRQ: continue via status polling path.
+                // lost or delayed IRQ: continue via status polling path
                 return true;
             }
 
@@ -426,7 +429,7 @@ static bool ata_wait_ready_event(ata_device_t *dev, u32 *seq) {
 }
 
 static void ata_primary_irq(UNUSED int_state_t *s) {
-    ata_channel_t *ch = &ata_channels[0];
+    ata_channel_t *ch = &ata_driver.channels[0];
 
     u8 status = inb(ch->io_base + ATA_REG_STATUS);
 
@@ -445,7 +448,7 @@ static void ata_primary_irq(UNUSED int_state_t *s) {
 }
 
 static void ata_secondary_irq(UNUSED int_state_t *s) {
-    ata_channel_t *ch = &ata_channels[1];
+    ata_channel_t *ch = &ata_driver.channels[1];
 
     u8 status = inb(ch->io_base + ATA_REG_STATUS);
 
@@ -547,15 +550,15 @@ static bool atapi_read_sectors(ata_device_t *dev, u32 lba, u16 count, void *buff
 
         outb(dev->channel->io_base + ATA_REG_COMMAND, ATA_CMD_PACKET);
 
-        // CDB phase: the device sets DRQ when ready for the command packet
-        // This transition does NOT always assert INTRQ, so we poll for it
+        // cdb phase: the device sets DRQ when ready for the command packet
+        // this transition does not always assert INTRQ, so we poll for it
         if (!ata_poll(dev)) {
             return false;
         }
 
-        // READ(12) SCSI CDB
+        // read(12) scsi cdb
         u8 cdb[12] = { 0 };
-        cdb[0] = 0xa8; // READ(12) opcode
+        cdb[0] = 0xa8; // read(12) opcode
         cdb[2] = (u8)((cur_lba >> 24) & 0xff);
         cdb[3] = (u8)((cur_lba >> 16) & 0xff);
         cdb[4] = (u8)((cur_lba >> 8) & 0xff);
@@ -566,7 +569,7 @@ static bool atapi_read_sectors(ata_device_t *dev, u32 lba, u16 count, void *buff
             outw(dev->channel->io_base + ATA_REG_DATA, (u16)cdb[i * 2] | ((u16)cdb[i * 2 + 1] << 8));
         }
 
-        // Data phase: the device asserts INTRQ when data is ready
+        // data phase: the device asserts INTRQ when data is ready
         if (!ata_wait_drq(dev, &seq)) {
             return false;
         }
@@ -793,7 +796,7 @@ static ssize_t ata_write(disk_dev_t *dev, void *src, size_t offset, size_t bytes
     ata_device_t *ata = dev->private;
 
     if (ata->is_atapi) {
-        // Treat packet devices as read-only until ATAPI writes are implemented.
+        // treat packet devices as read-only until ATAPI writes are implemented
         return -1;
     }
 
@@ -1009,8 +1012,8 @@ static bool ata_probe_device(ata_channel_t *ch, bool is_master, size_t dev_index
         log_info("%s ready (%zu sectors)", ata_pos_names[dev_index], disk->sector_count);
     }
 
-    if (dev_index < (sizeof(ata_registered_disks) / sizeof(ata_registered_disks[0]))) {
-        ata_registered_disks[dev_index] = disk;
+    if (dev_index < (sizeof(ata_driver.disks) / sizeof(ata_driver.disks[0]))) {
+        ata_driver.disks[dev_index] = disk;
     }
 
     return true;
@@ -1022,7 +1025,7 @@ static bool ata_probe_channel(u16 io_base, u16 ctrl_base, bool is_primary, bool 
     }
 
     size_t ch_index = is_primary ? 0 : 1;
-    ata_channel_t *ch = &ata_channels[ch_index];
+    ata_channel_t *ch = &ata_driver.channels[ch_index];
 
     ch->io_base = io_base;
     ch->ctrl_base = ctrl_base;
@@ -1039,13 +1042,13 @@ static bool ata_probe_channel(u16 io_base, u16 ctrl_base, bool is_primary, bool 
 
     outb(ctrl_base, ATA_CTRL_IRQ_ENABLE);
 
-    if (use_irq && !ata_channel_irq_done[ch_index]) {
+    if (use_irq && !ata_driver.irq_done[ch_index]) {
         if (is_primary) {
             irq_register(IRQ_PRIMARY_ATA, ata_primary_irq);
         } else {
             irq_register(IRQ_SECONDARY_ATA, ata_secondary_irq);
         }
-        ata_channel_irq_done[ch_index] = true;
+        ata_driver.irq_done[ch_index] = true;
     }
 
     // 0 = primary master, 1 = primary slave, 2 = secondary master, 3 = secondary slave
@@ -1169,8 +1172,8 @@ static bool ata_disk_init(void) {
 }
 
 bool ata_driver_busy(void) {
-    for (size_t i = 0; i < (sizeof(ata_registered_disks) / sizeof(ata_registered_disks[0])); i++) {
-        disk_dev_t *disk = ata_registered_disks[i];
+    for (size_t i = 0; i < (sizeof(ata_driver.disks) / sizeof(ata_driver.disks[0])); i++) {
+        disk_dev_t *disk = ata_driver.disks[i];
         if (disk && disk_is_busy(disk)) {
             return true;
         }
@@ -1180,7 +1183,7 @@ bool ata_driver_busy(void) {
 }
 
 driver_err_t ata_driver_load(void) {
-    if (ata_driver_loaded) {
+    if (ata_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -1188,12 +1191,12 @@ driver_err_t ata_driver_load(void) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
-    ata_driver_loaded = true;
+    ata_driver.loaded = true;
     return DRIVER_OK;
 }
 
 driver_err_t ata_driver_unload(void) {
-    if (!ata_driver_loaded) {
+    if (!ata_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -1201,8 +1204,8 @@ driver_err_t ata_driver_unload(void) {
         return DRIVER_ERR_BUSY;
     }
 
-    for (size_t i = 0; i < (sizeof(ata_registered_disks) / sizeof(ata_registered_disks[0])); i++) {
-        disk_dev_t *disk = ata_registered_disks[i];
+    for (size_t i = 0; i < (sizeof(ata_driver.disks) / sizeof(ata_driver.disks[0])); i++) {
+        disk_dev_t *disk = ata_driver.disks[i];
         if (!disk) {
             continue;
         }
@@ -1212,8 +1215,8 @@ driver_err_t ata_driver_unload(void) {
         }
     }
 
-    for (size_t i = 0; i < (sizeof(ata_registered_disks) / sizeof(ata_registered_disks[0])); i++) {
-        disk_dev_t *disk = ata_registered_disks[i];
+    for (size_t i = 0; i < (sizeof(ata_driver.disks) / sizeof(ata_driver.disks[0])); i++) {
+        disk_dev_t *disk = ata_driver.disks[i];
         if (!disk) {
             continue;
         }
@@ -1222,27 +1225,27 @@ driver_err_t ata_driver_unload(void) {
         free(disk->name);
         free(disk);
         free(ata);
-        ata_registered_disks[i] = NULL;
+        ata_driver.disks[i] = NULL;
     }
 
     for (size_t i = 0; i < 2; i++) {
-        ata_channel_t *channel = &ata_channels[i];
+        ata_channel_t *channel = &ata_driver.channels[i];
         if (channel->ctrl_base) {
             outb(channel->ctrl_base, ATA_CTRL_IRQ_DISABLE);
         }
     }
 
-    if (ata_channel_irq_done[0]) {
+    if (ata_driver.irq_done[0]) {
         irq_unregister(IRQ_PRIMARY_ATA);
     }
 
-    if (ata_channel_irq_done[1]) {
+    if (ata_driver.irq_done[1]) {
         irq_unregister(IRQ_SECONDARY_ATA);
     }
 
-    memset(ata_channels, 0, sizeof(ata_channels));
-    memset(ata_channel_irq_done, 0, sizeof(ata_channel_irq_done));
-    ata_driver_loaded = false;
+    memset(ata_driver.channels, 0, sizeof(ata_driver.channels));
+    memset(ata_driver.irq_done, 0, sizeof(ata_driver.irq_done));
+    ata_driver.loaded = false;
 
     return DRIVER_OK;
 }

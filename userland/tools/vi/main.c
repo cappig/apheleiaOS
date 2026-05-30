@@ -165,6 +165,7 @@ static bool ensure_frame_cache(size_t cols, size_t rows, bool *resized_out) {
         return true;
     }
 
+    // cached cells let the renderer skip unchanged screen positions on slow serial consoles
     if (!cols || !rows) {
         free(app.frame_cache);
 

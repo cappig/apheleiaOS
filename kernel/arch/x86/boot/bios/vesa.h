@@ -6,7 +6,7 @@
 
 #include "x86/boot.h"
 
-// Implementations of VESA data structures
+// implementations of VESA data structures
 // https://pdos.csail.mit.edu/6.828/2018/readings/hardware/vbe3.pdf
 
 typedef struct PACKED {
@@ -15,7 +15,7 @@ typedef struct PACKED {
 
     u32 oem_string;
     u32 capabilities;
-    // u32 video_mode;
+    // u32 video_mode
     u16 video_mode_off;
     u16 video_mode_seg;
     u16 total_memory_blocks;
@@ -111,6 +111,5 @@ typedef struct PACKED {
 
     u8 checksum;
 } edid_data_t;
-
 
 void init_graphics(boot_info_t *info);

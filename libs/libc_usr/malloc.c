@@ -5,8 +5,8 @@
 #include <string.h>
 #include <sys/mman.h>
 
-// Simple first-fit free-list allocator backed by mmap.
-// This should grow into a real arena allocator eventually.
+// simple first-fit free-list allocator backed by mmap
+// this should grow into a real arena allocator eventually
 
 #define ARENA_SIZE     (64U * 1024U)
 #define MMAP_THRESHOLD (ARENA_SIZE / 2U)
@@ -21,7 +21,6 @@ typedef struct block {
 } block_t;
 
 #define HEADER_SIZE ((sizeof(block_t) + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1))
-
 
 static block_t *free_list = NULL;
 
@@ -76,7 +75,7 @@ static void _split(block_t *block, size_t needed) {
     block->next = rest;
 }
 
-// Extend the heap by allocating a new arena
+// extend the heap by allocating a new arena
 static block_t *_grow_heap(size_t needed) {
     size_t arena = ARENA_SIZE;
     if (needed > SIZE_MAX - HEADER_SIZE) {
@@ -113,7 +112,7 @@ void *malloc(size_t size) {
         return NULL;
     }
 
-    // Large allocations get their own mmap region
+    // large allocations get their own mmap region
     if (size >= MMAP_THRESHOLD) {
         size_t total = 0;
         if (_alloc_total(size, &total) < 0) {
@@ -146,7 +145,7 @@ void *malloc(size_t size) {
         curr = curr->next;
     }
 
-    // No suitable block — grow the heap
+    // no suitable block — grow the heap
     block_t *block = _grow_heap(size);
     if (!block) {
         return NULL;
@@ -190,7 +189,7 @@ void free(void *ptr) {
 
     block->free = 1;
 
-    // Coalesce with next block if it is also free
+    // coalesce with next block if it is also free
     if (block->next && block->next->free) {
         block->size += HEADER_SIZE + block->next->size;
         block->next = block->next->next;

@@ -20,7 +20,7 @@ void arch_smp_init(void);
 #define PHYS_MAP_DEFAULT 0U
 #define PHYS_MAP_WC      (1U << 0) // write-combining
 #define PHYS_MAP_UC      (1U << 1) // uncached
-#define PHYS_MAP_MMIO    (1U << 2) // MMIO-safe (uncached)
+#define PHYS_MAP_MMIO    (1U << 2) // mmio safe uncached
 
 void *arch_phys_map(u64 paddr, size_t size, u32 flags);
 void arch_phys_unmap(void *vaddr, size_t size);

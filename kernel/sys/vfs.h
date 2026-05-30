@@ -37,12 +37,11 @@ typedef struct {
 } vfs_time_t;
 
 enum vfs_flags {
-    // Flags 0...16 are reserved for the OS
-    // Reads and writes should not append the process to a list of waiters
+    // flags 0...16 are reserved for the OS
+    // reads and writes should not append the process to a list of waiters
     VFS_NONBLOCK = 1 << 0,
-    // Flags 16...32 may be used for device specific flags
+    // flags 16...32 may be used for device specific flags
 };
-
 
 typedef struct vfs vfs_t;
 typedef struct vfs_node vfs_node_t;
@@ -68,7 +67,7 @@ typedef ssize_t (*vfs_rename_fn)(
 struct vfs_interface {
     u32 refcount;
 
-    // Operations on the node itself
+    // operations on the node itself
     vfs_io_fn read;
     vfs_io_fn write;
     vfs_truncate_fn truncate;
@@ -77,7 +76,7 @@ struct vfs_interface {
     vfs_io_fn mmap;
     vfs_ioctl_fn ioctl;
 
-    // Operations on children
+    // operations on children
     vfs_create_fn create;
     vfs_link_fn link;
     vfs_remove_fn remove;
@@ -98,7 +97,7 @@ struct vfs_node {
     u64 inode;
     u32 nlink;
 
-    struct vfs_node *link; // Mount target.
+    struct vfs_node *link; // mount target
     char *symlink_target;
 
     vfs_interface_t *interface;
@@ -106,10 +105,10 @@ struct vfs_node {
 
     tree_node_t *tree_entry;
     hashmap_str_t *children_index;
-    volatile u32 refs; // Internal VFS holds.
-    volatile u32 open_refs; // Live file descriptors.
-    bool busy; // Create/remove is in progress; path lookup should skip it.
-    bool removed; // Unlinked from the tree, but still held by open files.
+    volatile u32 refs; // internal VFS holds
+    volatile u32 open_refs; // live file descriptors
+    bool busy; // create/remove is in progress; path lookup should skip it
+    bool removed; // unlinked from the tree, but still held by open files
 
     void *private;
 };

@@ -3,7 +3,6 @@
 #include <stddef.h>
 #include <string.h>
 
-
 void memswap(void *a, void *b, size_t len) {
     char *a_byte = a;
     char *b_byte = b;
@@ -44,7 +43,6 @@ size_t strnlen(const char *str, size_t max) {
     return found ? (size_t)(found - str) : max;
 }
 
-
 size_t strnlend(const char *str, char delim, size_t max) {
     size_t len = 0;
 
@@ -82,7 +80,6 @@ int strncasecmp(const char *s1, const char *s2, size_t n) {
     }
 }
 
-
 char *strtrim(char *str) {
     if (!str) {
         return NULL;
@@ -111,7 +108,6 @@ char *strtrunc(char *str) {
     return str;
 }
 
-
 char *basename_ptr(const char *path) {
     char *slash = strrchr(path, '/');
 
@@ -122,7 +118,6 @@ char *basename_ptr(const char *path) {
     return NULL;
 }
 
-
 char *dirname(char *path) {
     size_t len = strlen(path);
 
@@ -132,21 +127,21 @@ char *dirname(char *path) {
 
     size_t i = len - 1;
 
-    // Strip trailing slashes at the end of the path
+    // strip trailing slashes at the end of the path
     while (path[i] == '/') {
         if (!i--) {
             return "/";
         }
     }
 
-    // Remove the base name
+    // remove the base name
     while (path[i] != '/') {
         if (!i--) {
             return ".";
         }
     }
 
-    // Strip the slashes before the basename
+    // strip the slashes before the basename
     while (path[i] == '/') {
         if (!i--) {
             return "/";
@@ -167,7 +162,7 @@ char *basename(char *path) {
 
     size_t i = len - 1;
 
-    // Strip trailing slashes at the end of the path
+    // strip trailing slashes at the end of the path
     while (path[i] == '/') {
         path[i] = 0;
 
@@ -176,7 +171,7 @@ char *basename(char *path) {
         }
     }
 
-    // Find the beginning of the basename
+    // find the beginning of the basename
     while (path[i] != '/') {
         if (!i--) {
             break;

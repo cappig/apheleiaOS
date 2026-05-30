@@ -1,7 +1,7 @@
-# Emulator helpers shared by QEMU and Spike run targets.
+# emulator helpers shared by QEMU and Spike run targets
 
 # ---------------------------
-# Architecture normalization
+# architecture normalization
 # ---------------------------
 QEMU_ARCH := $(ARCH)
 
@@ -16,7 +16,7 @@ endif
 QEMU := qemu-system-$(QEMU_ARCH)
 
 # ---------------------------
-# Spike settings
+# spike settings
 # ---------------------------
 SPIKE                  ?= spike
 SPIKE_ISA              ?= rv$(ARCH_VARIANT)ima_zicsr
@@ -45,7 +45,7 @@ SPIKE_CLINT_FLAGS += --real-time-clint
 endif
 
 # ---------------------------
-# QEMU settings
+# qemu settings
 # ---------------------------
 QEMU_CONSOLE ?= false
 X86_BOOT     ?= bios

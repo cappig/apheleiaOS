@@ -24,21 +24,21 @@
 #define XHCI_MAX_SCRATCHPADS 512U
 #define XHCI_DMA_BYTES       4096U
 
-#define XHCI_CAPLENGTH_OFF  0x00
-#define XHCI_HCSPARAMS1_OFF 0x04
-#define XHCI_HCSPARAMS2_OFF 0x08
-#define XHCI_HCCPARAMS1_OFF 0x10
-#define XHCI_DBOFF_OFF      0x14
-#define XHCI_RTSOFF_OFF     0x18
+#define XHCI_CAPLENGTH_OFFSET  0x00
+#define XHCI_HCSPARAMS1_OFFSET 0x04
+#define XHCI_HCSPARAMS2_OFFSET 0x08
+#define XHCI_HCCPARAMS1_OFFSET 0x10
+#define XHCI_DBOFF_OFFSET      0x14
+#define XHCI_RTSOFF_OFFSET     0x18
 
-#define XHCI_OP_USBCMD_OFF    0x00
-#define XHCI_OP_USBSTS_OFF    0x04
-#define XHCI_OP_PAGESIZE_OFF  0x08
-#define XHCI_OP_CRCR_OFF      0x18
-#define XHCI_OP_DCBAAP_OFF    0x30
-#define XHCI_OP_CONFIG_OFF    0x38
-#define XHCI_OP_PORTSC_BASE   0x400
-#define XHCI_OP_PORTSC_STRIDE 0x10
+#define XHCI_OP_USBCMD_OFFSET   0x00
+#define XHCI_OP_USBSTS_OFFSET   0x04
+#define XHCI_OP_PAGESIZE_OFFSET 0x08
+#define XHCI_OP_CRCR_OFFSET     0x18
+#define XHCI_OP_DCBAAP_OFFSET   0x30
+#define XHCI_OP_CONFIG_OFFSET   0x38
+#define XHCI_OP_PORTSC_BASE     0x400
+#define XHCI_OP_PORTSC_STRIDE   0x10
 
 #define XHCI_USBCMD_RUNSTOP (1U << 0)
 #define XHCI_USBCMD_HCRST   (1U << 1)
@@ -52,12 +52,12 @@
 
 #define XHCI_CONFIG_MAX_SLOTS_MASK 0xffU
 
-#define XHCI_RT_IR0_OFF    0x20
-#define XHCI_IR_IMAN_OFF   0x00
-#define XHCI_IR_IMOD_OFF   0x04
-#define XHCI_IR_ERSTSZ_OFF 0x08
-#define XHCI_IR_ERSTBA_OFF 0x10
-#define XHCI_IR_ERDP_OFF   0x18
+#define XHCI_RT_IR0_OFFSET    0x20
+#define XHCI_IR_IMAN_OFFSET   0x00
+#define XHCI_IR_IMOD_OFFSET   0x04
+#define XHCI_IR_ERSTSZ_OFFSET 0x08
+#define XHCI_IR_ERSTBA_OFFSET 0x10
+#define XHCI_IR_ERDP_OFFSET   0x18
 
 #define XHCI_IMAN_IP  (1U << 0)
 #define XHCI_IMAN_IE  (1U << 1)
@@ -285,7 +285,6 @@ extern sched_thread_t *xhci_watchdog_thread;
 extern volatile bool xhci_watchdog_stop;
 extern const usb_hcd_ops_t xhci_hcd_ops;
 
-
 static inline u32 _read32(const volatile void *base, size_t offset) {
     const volatile u8 *ptr = base;
     return *(const volatile u32 *)(ptr + offset);
@@ -344,7 +343,6 @@ static inline u8 _ep_to_dci(u8 endpoint) {
 
     return (u8)(num * 2U);
 }
-
 
 bool _xhci_write64_checked(xhci_controller_t *ctrl, volatile void *base, size_t offset, u64 value, u64 verify_mask);
 bool _wait_bits32(const volatile u32 *reg, u32 mask, bool set, u32 timeout_ms);

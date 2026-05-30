@@ -40,7 +40,6 @@
 #include <x86/smp.h>
 #include <x86/tsc.h>
 
-
 #define LOG_BOOT_HISTORY_CAP     (256 * 1024)
 #define BOOT_ROOTFS_SECTOR_SIZE  512
 #define CPUID_FEATURES           0x00000001
@@ -48,21 +47,40 @@
 #define CPUID_FEAT_EDX_SSE       (1U << 25)
 #define WALLCLOCK_RTC_RESYNC_SEC 60ULL
 
-static bool log_console_ready = false;
-static kernel_args_t boot_args = { 0 };
-static u64 boot_rootfs_paddr = 0;
-static size_t boot_rootfs_size = 0;
-static bool boot_rootfs_registered = false;
-static boot_root_hint_t boot_root_hint = { 0 };
-static bool arch_fpu_fxsr = false;
+typedef struct {
+    bool console_ready;
+    char history[LOG_BOOT_HISTORY_CAP];
+    size_t history_len;
+    spinlock_t lock;
+} x86_log_state_t;
 
-static char boot_log_history[LOG_BOOT_HISTORY_CAP];
-static size_t boot_log_history_len = 0;
-static spinlock_t boot_log_lock = SPINLOCK_INIT;
+typedef struct {
+    kernel_args_t args;
+    u64 rootfs_paddr;
+    size_t rootfs_size;
+    bool rootfs_registered;
+    boot_root_hint_t root_hint;
+    volatile u32 wallclock_sync_inflight;
+} x86_boot_state_t;
+
+typedef struct {
+    bool fxsr;
+    char name[64];
+} x86_cpu_state_t;
+
+static x86_log_state_t x86_log = {
+    .lock = SPINLOCK_INIT,
+};
+
+static x86_boot_state_t x86_boot = { 0 };
+
+static x86_cpu_state_t x86_cpu = {
+    .name = "x86",
+};
+
 static volatile u64 wallclock_base_seconds ALIGNED(8) = 0;
 static volatile u64 wallclock_base_ticks ALIGNED(8) = 0;
-static volatile u64 wallclock_last_sync_ticks ALIGNED(8) = 0;
-static volatile u32 wallclock_sync_inflight = 0;
+static volatile u64 rtc_sync_ticks ALIGNED(8) = 0;
 
 #if defined(__x86_64__)
 static bool _cpu_ptr_is_core_local(const cpu_core_t *core) {
@@ -89,7 +107,6 @@ typedef struct {
 #define FX_HELPER_ATTR __attribute__((noinline))
 #endif
 
-
 static void FX_HELPER_ATTR _fxsave_unaligned(void *buf) {
     u8 bounce[512] __attribute__((aligned(16)));
     asm volatile("fxsave %0" : "=m"(*(u8(*)[512])bounce));
@@ -102,27 +119,26 @@ static void FX_HELPER_ATTR _fxrstor_unaligned(const void *buf) {
     asm volatile("fxrstor %0" : : "m"(*(const u8(*)[512])bounce));
 }
 
-
 static void _log_history_append(const char *s, size_t len) {
     if (!s || !len || !LOG_BOOT_HISTORY_CAP) {
         return;
     }
 
     if (len >= LOG_BOOT_HISTORY_CAP) {
-        memcpy(boot_log_history, s + (len - LOG_BOOT_HISTORY_CAP), LOG_BOOT_HISTORY_CAP);
-        boot_log_history_len = LOG_BOOT_HISTORY_CAP;
+        memcpy(x86_log.history, s + (len - LOG_BOOT_HISTORY_CAP), LOG_BOOT_HISTORY_CAP);
+        x86_log.history_len = LOG_BOOT_HISTORY_CAP;
         return;
     }
 
-    if (boot_log_history_len + len > LOG_BOOT_HISTORY_CAP) {
-        size_t drop = (boot_log_history_len + len) - LOG_BOOT_HISTORY_CAP;
+    if (x86_log.history_len + len > LOG_BOOT_HISTORY_CAP) {
+        size_t drop = (x86_log.history_len + len) - LOG_BOOT_HISTORY_CAP;
 
-        memmove(boot_log_history, boot_log_history + drop, boot_log_history_len - drop);
-        boot_log_history_len -= drop;
+        memmove(x86_log.history, x86_log.history + drop, x86_log.history_len - drop);
+        x86_log.history_len -= drop;
     }
 
-    memcpy(boot_log_history + boot_log_history_len, s, len);
-    boot_log_history_len += len;
+    memcpy(x86_log.history + x86_log.history_len, s, len);
+    x86_log.history_len += len;
 }
 
 static const char *_boot_log_ptr(u64 paddr) {
@@ -152,9 +168,9 @@ static void _append_bootloader_log(const boot_info_t *info) {
         return;
     }
 
-    unsigned long flags = spin_lock_irqsave(&boot_log_lock);
+    unsigned long flags = spin_lock_irqsave(&x86_log.lock);
     _log_history_append(buf, len);
-    spin_unlock_irqrestore(&boot_log_lock, flags);
+    spin_unlock_irqrestore(&x86_log.lock, flags);
 }
 
 static bool _e820_range_reserved(const e820_map_t *map, u64 start, size_t size) {
@@ -202,23 +218,23 @@ static bool _e820_range_reserved(const e820_map_t *map, u64 start, size_t size) 
     return true;
 }
 
-static void _log_history_replay_console(void) {
-    if (!log_console_ready || !boot_log_history_len) {
+static void _replay_boot_log(void) {
+    if (!x86_log.console_ready || !x86_log.history_len) {
         return;
     }
 
-    console_write_screen(TTY_CONSOLE, boot_log_history, boot_log_history_len);
+    console_write_screen(TTY_CONSOLE, x86_log.history, x86_log.history_len);
 }
 
 void arch_log_replay_console(void) {
-    if (!log_console_ready) {
+    if (!x86_log.console_ready) {
         return;
     }
 
     size_t snapshot_len = 0;
-    unsigned long flags = spin_lock_irqsave(&boot_log_lock);
-    snapshot_len = boot_log_history_len;
-    spin_unlock_irqrestore(&boot_log_lock, flags);
+    unsigned long flags = spin_lock_irqsave(&x86_log.lock);
+    snapshot_len = x86_log.history_len;
+    spin_unlock_irqrestore(&x86_log.lock, flags);
 
     if (!snapshot_len) {
         return;
@@ -248,7 +264,7 @@ void arch_debug_write(const char *s, size_t len) {
         return;
     }
 
-    send_serial_sized_string(SERIAL_COM1, s, len);
+    send_serial_buf(SERIAL_COM1, s, len);
 }
 
 ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
@@ -260,11 +276,11 @@ ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
         return 0;
     }
 
-    unsigned long irq_flags = spin_lock_irqsave(&boot_log_lock);
-    size_t history_len = boot_log_history_len;
+    unsigned long irq_flags = spin_lock_irqsave(&x86_log.lock);
+    size_t history_len = x86_log.history_len;
 
     if (offset >= history_len) {
-        spin_unlock_irqrestore(&boot_log_lock, irq_flags);
+        spin_unlock_irqrestore(&x86_log.lock, irq_flags);
         return 0;
     }
 
@@ -273,15 +289,15 @@ ssize_t arch_log_ring_read(void *buf, size_t offset, size_t len) {
         copy_len = len;
     }
 
-    memcpy(buf, boot_log_history + offset, copy_len);
-    spin_unlock_irqrestore(&boot_log_lock, irq_flags);
+    memcpy(buf, x86_log.history + offset, copy_len);
+    spin_unlock_irqrestore(&x86_log.lock, irq_flags);
     return (ssize_t)copy_len;
 }
 
 size_t arch_log_ring_size(void) {
-    unsigned long irq_flags = spin_lock_irqsave(&boot_log_lock);
-    size_t history_len = boot_log_history_len;
-    spin_unlock_irqrestore(&boot_log_lock, irq_flags);
+    unsigned long irq_flags = spin_lock_irqsave(&x86_log.lock);
+    size_t history_len = x86_log.history_len;
+    spin_unlock_irqrestore(&x86_log.lock, irq_flags);
     return history_len;
 }
 
@@ -290,9 +306,9 @@ static void _log_write_early(const char *s, size_t len) {
         return;
     }
 
-    send_serial_sized_string(SERIAL_COM1, s, len);
+    send_serial_buf(SERIAL_COM1, s, len);
 
-    if (log_console_ready) {
+    if (x86_log.console_ready) {
         console_write_screen(TTY_CONSOLE, s, len);
     }
 }
@@ -307,9 +323,9 @@ static void _log_puts(const char *s) {
         return;
     }
 
-    unsigned long flags = spin_lock_irqsave(&boot_log_lock);
+    unsigned long flags = spin_lock_irqsave(&x86_log.lock);
     _log_history_append(s, len);
-    spin_unlock_irqrestore(&boot_log_lock, flags);
+    spin_unlock_irqrestore(&x86_log.lock, flags);
 
     if (!logsink_is_bound()) {
         _log_write_early(s, len);
@@ -321,7 +337,7 @@ static void _log_puts(const char *s) {
 
 void arch_panic_enter(void) {
     logsink_unbind_devices();
-    log_console_ready = true;
+    x86_log.console_ready = true;
     console_panic();
 }
 
@@ -358,7 +374,6 @@ bool arch_supports_nx(void) {
 #endif
 }
 
-
 static inline void _fxsave_buf(void *buf) {
     if (!buf) {
         return;
@@ -390,7 +405,7 @@ void arch_fpu_init(void *buf) {
         return;
     }
 
-    if (arch_fpu_fxsr) {
+    if (x86_cpu.fxsr) {
         asm volatile("fninit");
         _fxsave_buf(buf);
         asm volatile("fninit");
@@ -407,7 +422,7 @@ void arch_fpu_save(void *buf) {
         return;
     }
 
-    if (arch_fpu_fxsr) {
+    if (x86_cpu.fxsr) {
         _fxsave_buf(buf);
         return;
     }
@@ -420,15 +435,13 @@ void arch_fpu_restore(const void *buf) {
         return;
     }
 
-    if (arch_fpu_fxsr) {
+    if (x86_cpu.fxsr) {
         _fxrstor_buf(buf);
         return;
     }
 
     asm volatile("frstor %0" : : "m"(*(const u8(*)[108])buf));
 }
-
-static char cpu_name[64] = "x86";
 
 static void _trim_cpu_name(char *name) {
     if (!name || !name[0]) {
@@ -469,20 +482,20 @@ static void _detect_cpu_name(void) {
         brand[10] = leaf.ecx;
         brand[11] = leaf.edx;
 
-        memcpy(cpu_name, brand, sizeof(brand));
-        cpu_name[sizeof(cpu_name) - 1] = '\0';
-        _trim_cpu_name(cpu_name);
+        memcpy(x86_cpu.name, brand, sizeof(brand));
+        x86_cpu.name[sizeof(x86_cpu.name) - 1] = '\0';
+        _trim_cpu_name(x86_cpu.name);
 
-        if (cpu_name[0]) {
+        if (x86_cpu.name[0]) {
             return;
         }
     }
 
     cpuid(0x00000000, &regs);
     u32 vendor[3] = { regs.ebx, regs.edx, regs.ecx };
-    memcpy(cpu_name, vendor, sizeof(vendor));
+    memcpy(x86_cpu.name, vendor, sizeof(vendor));
 
-    cpu_name[sizeof(vendor)] = '\0';
+    x86_cpu.name[sizeof(vendor)] = '\0';
 }
 
 static void _select_log_level(const boot_info_t *info) {
@@ -526,8 +539,8 @@ static void _fpu_hw_enable(void) {
     cr0 |= (u64)CR0_MP;
     write_cr0(cr0);
 
-    arch_fpu_fxsr = _cpu_has_fxsr_sse();
-    if (!arch_fpu_fxsr) {
+    x86_cpu.fxsr = _cpu_has_fxsr_sse();
+    if (!x86_cpu.fxsr) {
 #if defined(__i386__)
         panic("x86_32 build requires SSE/FXSR support");
 #else
@@ -632,7 +645,7 @@ static bool _handle_user_signal(int signum, int_state_t *state) {
 #define PF_ERR_WRITE   (1U << 1)
 #define PF_ERR_USER    (1U << 2)
 
-static bool _page_fault_is_user_addr(u64 addr, bool user) {
+static bool _is_user_fault_addr(u64 addr, bool user) {
     arch_word_t user_top = arch_user_stack_top();
     return user || (user_top && addr < (u64)user_top);
 }
@@ -649,7 +662,7 @@ static void _page_fault_handler(int_state_t *state) {
     if (present && write) {
         sched_thread_t *thread = sched_current();
 
-        bool is_user_addr = _page_fault_is_user_addr(addr, user);
+        bool is_user_addr = _is_user_fault_addr(addr, user);
         bool can_cow = thread && thread->user_thread && is_user_addr;
 
         bool cow_handled = false;
@@ -974,7 +987,7 @@ static ssize_t _boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, siz
 }
 
 static bool _register_boot_rootfs(void) {
-    if (!boot_rootfs_paddr || !boot_rootfs_size || boot_rootfs_registered) {
+    if (!x86_boot.rootfs_paddr || !x86_boot.rootfs_size || x86_boot.rootfs_registered) {
         return false;
     }
 
@@ -987,8 +1000,8 @@ static bool _register_boot_rootfs(void) {
         return false;
     }
 
-    rootfs->paddr = boot_rootfs_paddr;
-    rootfs->size = boot_rootfs_size;
+    rootfs->paddr = x86_boot.rootfs_paddr;
+    rootfs->size = x86_boot.rootfs_size;
 
     static disk_interface_t interface = {
         .read = _boot_rootfs_read,
@@ -1009,30 +1022,30 @@ static bool _register_boot_rootfs(void) {
         return false;
     }
 
-    boot_rootfs_registered = true;
+    x86_boot.rootfs_registered = true;
     log_info("registered /dev/%s from boot rootfs (%zu KiB)", disk->name, rootfs->size / 1024);
 
     return true;
 }
 
 static void set_boot_root_uuid(void) {
-    if (boot_root_hint.valid && boot_root_hint.rootfs_uuid_valid) {
-        disk_set_root_uuid(boot_root_hint.rootfs_uuid);
+    if (x86_boot.root_hint.valid && x86_boot.root_hint.rootfs_uuid_valid) {
+        disk_set_root_uuid(x86_boot.root_hint.rootfs_uuid);
         return;
     }
 
-    if (!boot_rootfs_paddr || !boot_rootfs_size) {
+    if (!x86_boot.rootfs_paddr || !x86_boot.rootfs_size) {
         disk_clear_root_uuid();
         return;
     }
 
-    if (boot_rootfs_size < sizeof(ext2_superblock_t) + 1024) {
+    if (x86_boot.rootfs_size < sizeof(ext2_superblock_t) + 1024) {
         disk_clear_root_uuid();
         return;
     }
 
     ext2_superblock_t sb = { 0 };
-    void *map = arch_phys_map(boot_rootfs_paddr + 1024, sizeof(sb), 0);
+    void *map = arch_phys_map(x86_boot.rootfs_paddr + 1024, sizeof(sb), 0);
 
     if (!map) {
         disk_clear_root_uuid();
@@ -1051,18 +1064,18 @@ static void set_boot_root_uuid(void) {
 }
 
 static void _set_boot_disk_hint(void) {
-    if (!boot_root_hint.valid) {
+    if (!x86_boot.root_hint.valid) {
         disk_clear_boot_hint();
         return;
     }
 
     disk_boot_hint_t hint = {
-        .valid = boot_root_hint.valid != 0,
-        .media = boot_root_hint.media,
-        .transport = boot_root_hint.transport,
-        .part_style = boot_root_hint.part_style,
-        .part_index = boot_root_hint.part_index,
-        .bios_drive = boot_root_hint.bios_drive,
+        .valid = x86_boot.root_hint.valid != 0,
+        .media = x86_boot.root_hint.media,
+        .transport = x86_boot.root_hint.transport,
+        .part_style = x86_boot.root_hint.part_style,
+        .part_index = x86_boot.root_hint.part_index,
+        .bios_drive = x86_boot.root_hint.bios_drive,
     };
 
     disk_set_boot_hint(&hint);
@@ -1078,25 +1091,25 @@ const kernel_args_t *arch_init(void *boot_info) {
         panic("boot info missing");
     }
 
-    memcpy(&boot_args, &info->args, sizeof(boot_args));
+    memcpy(&x86_boot.args, &info->args, sizeof(x86_boot.args));
     smp_set_boot_info(info);
     _append_bootloader_log(info);
 
-    boot_rootfs_paddr = info->boot_rootfs_paddr;
-    boot_rootfs_size = 0;
-    boot_root_hint = info->boot_root_hint;
+    x86_boot.rootfs_paddr = info->boot_rootfs_paddr;
+    x86_boot.rootfs_size = 0;
+    x86_boot.root_hint = info->boot_root_hint;
 
     if (info->boot_rootfs_size > (u64)(size_t)-1) {
-        boot_rootfs_paddr = 0;
+        x86_boot.rootfs_paddr = 0;
     } else {
-        boot_rootfs_size = (size_t)info->boot_rootfs_size;
+        x86_boot.rootfs_size = (size_t)info->boot_rootfs_size;
     }
 
-    bool staged_rootfs = boot_rootfs_paddr && boot_rootfs_size;
+    bool staged_rootfs = x86_boot.rootfs_paddr && x86_boot.rootfs_size;
     bool rootfs_reserved = false;
 
     if (staged_rootfs) {
-        rootfs_reserved = _e820_range_reserved(&info->memory_map, boot_rootfs_paddr, boot_rootfs_size);
+        rootfs_reserved = _e820_range_reserved(&info->memory_map, x86_boot.rootfs_paddr, x86_boot.rootfs_size);
     }
 
     if (staged_rootfs && !rootfs_reserved) {
@@ -1115,8 +1128,8 @@ const kernel_args_t *arch_init(void *boot_info) {
     log_info("apheleiaOS kernel (x86_32) booting");
 #endif
 
-    if (boot_rootfs_paddr && boot_rootfs_size) {
-        log_info("boot rootfs at %#" PRIx64 " (%zu KiB)", boot_rootfs_paddr, boot_rootfs_size / 1024);
+    if (x86_boot.rootfs_paddr && x86_boot.rootfs_size) {
+        log_info("boot rootfs at %#" PRIx64 " (%zu KiB)", x86_boot.rootfs_paddr, x86_boot.rootfs_size / 1024);
     }
 
     _route_irqs_to_pic();
@@ -1150,9 +1163,9 @@ const kernel_args_t *arch_init(void *boot_info) {
 
     x86_console_backend_init();
     console_init(info);
-    log_console_ready = true;
+    x86_log.console_ready = true;
 
-    _log_history_replay_console();
+    _replay_boot_log();
     _publish_framebuffer(info);
 
     acpi_init(info->acpi_root_ptr);
@@ -1187,7 +1200,7 @@ const kernel_args_t *arch_init(void *boot_info) {
     log_info("apheleiaOS kernel (x86_32) booted");
 #endif
 
-    return &boot_args;
+    return &x86_boot.args;
 }
 
 void arch_smp_init(void) {
@@ -1208,7 +1221,7 @@ void arch_storage_init(void) {
         log_warn("USB boot scan timed out before rootfs mount");
     }
 
-    if (boot_rootfs_paddr && boot_rootfs_size && !_register_boot_rootfs()) {
+    if (x86_boot.rootfs_paddr && x86_boot.rootfs_size && !_register_boot_rootfs()) {
         log_warn("failed to register boot rootfs fallback");
     }
 }
@@ -1393,7 +1406,7 @@ void arch_cpu_relax(void) {
 }
 
 void arch_resched_self(void) {
-    asm volatile("int %0" : : "i"(SCHED_SOFT_RESCHED_VECTOR) : "memory");
+    asm volatile("int %0" : : "i"(SMP_SOFT_RESCHED_VECTOR) : "memory");
 }
 
 bool arch_resched_cpu(size_t cpu_id) {
@@ -1411,7 +1424,7 @@ u32 arch_timer_hz(void) {
 static void _wallclock_set_base(u64 seconds, u64 ticks) {
     __atomic_store_n(&wallclock_base_seconds, seconds, __ATOMIC_RELEASE);
     __atomic_store_n(&wallclock_base_ticks, ticks, __ATOMIC_RELEASE);
-    __atomic_store_n(&wallclock_last_sync_ticks, ticks, __ATOMIC_RELEASE);
+    __atomic_store_n(&rtc_sync_ticks, ticks, __ATOMIC_RELEASE);
 }
 
 static void _wallclock_try_rtc_sync(u64 now_ticks, bool force) {
@@ -1422,7 +1435,7 @@ static void _wallclock_try_rtc_sync(u64 now_ticks, bool force) {
 
     u64 base_seconds = __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
     u64 base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
-    u64 last_sync = __atomic_load_n(&wallclock_last_sync_ticks, __ATOMIC_ACQUIRE);
+    u64 last_sync = __atomic_load_n(&rtc_sync_ticks, __ATOMIC_ACQUIRE);
     u64 sync_interval = hz * WALLCLOCK_RTC_RESYNC_SEC;
 
     if (!force && base_seconds && last_sync && now_ticks >= last_sync && (now_ticks - last_sync) < sync_interval) {
@@ -1431,7 +1444,7 @@ static void _wallclock_try_rtc_sync(u64 now_ticks, bool force) {
 
     u32 expected = 0;
     if (!__atomic_compare_exchange_n(
-            &wallclock_sync_inflight,
+            &x86_boot.wallclock_sync_inflight,
             &expected,
             1,
             false,
@@ -1461,10 +1474,10 @@ static void _wallclock_try_rtc_sync(u64 now_ticks, bool force) {
         _wallclock_set_base(now_ticks / hz, now_ticks);
     }
 
-    __atomic_store_n(&wallclock_sync_inflight, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&x86_boot.wallclock_sync_inflight, 0, __ATOMIC_RELEASE);
 }
 
-static u64 _wallclock_seconds_from_ticks(u64 now_ticks, u64 hz) {
+static u64 _seconds_from_ticks(u64 now_ticks, u64 hz) {
     if (!hz) {
         return 0;
     }
@@ -1499,7 +1512,7 @@ u64 arch_realtime_ns(void) {
     }
 
     u64 now_ticks = arch_timer_ticks();
-    u64 seconds = _wallclock_seconds_from_ticks(now_ticks, hz);
+    u64 seconds = _seconds_from_ticks(now_ticks, hz);
     u64 base_seconds = __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
     u64 base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
 
@@ -1529,7 +1542,7 @@ const char *arch_name(void) {
 }
 
 const char *arch_cpu_name(void) {
-    return cpu_name;
+    return x86_cpu.name;
 }
 
 u64 arch_cpu_khz(void) {

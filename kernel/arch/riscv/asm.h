@@ -31,9 +31,9 @@
 #define RISCV_COUNTEREN_TM (1UL << 1)
 #define RISCV_COUNTEREN_IR (1UL << 2)
 
-#define RISCV_MCALL_EXT_TIMER       0x4154494dUL
-#define RISCV_MCALL_TIMER_ARM_DELTA 0UL
-#define RISCV_MCALL_TIMER_READ_TIME 1UL
+#define MCALL_TIMER_EXT  0x4154494dUL
+#define MCALL_TIMER_ARM  0UL
+#define MCALL_TIMER_READ 1UL
 
 #define PMP_R       0x01U
 #define PMP_W       0x02U
@@ -200,7 +200,8 @@ static inline void riscv_write_pmpcfg0(unsigned long value) {
     asm volatile("csrw pmpcfg0, %0" : : "r"(value) : "memory");
 }
 
-static inline bool riscv_machine_timer_arm_delta(u64 delta) {
+// s-mode asks the boot trap shim to program machine timer registers
+static inline bool riscv_mtimer_arm(u64 delta) {
 #if __riscv_xlen == 64
     register unsigned long a0 asm("a0") = (unsigned long)delta;
     register unsigned long a1 asm("a1") = 0;
@@ -208,15 +209,16 @@ static inline bool riscv_machine_timer_arm_delta(u64 delta) {
     register unsigned long a0 asm("a0") = (u32)delta;
     register unsigned long a1 asm("a1") = (u32)(delta >> 32);
 #endif
-    register unsigned long a6 asm("a6") = RISCV_MCALL_TIMER_ARM_DELTA;
-    register unsigned long a7 asm("a7") = RISCV_MCALL_EXT_TIMER;
+    register unsigned long a6 asm("a6") = MCALL_TIMER_ARM;
+    register unsigned long a7 asm("a7") = MCALL_TIMER_EXT;
 
     asm volatile("ecall" : "+r"(a0), "+r"(a1) : "r"(a6), "r"(a7) : "memory");
 
     return (long)a0 == 0;
 }
 
-static inline bool riscv_machine_timer_read(u64 *value) {
+// rv32 returns the machine timer as two words, matching the arm path ABI
+static inline bool riscv_mtimer_read(u64 *value) {
     if (!value) {
         return false;
     }
@@ -230,8 +232,8 @@ static inline bool riscv_machine_timer_read(u64 *value) {
     register unsigned long a1 asm("a1") = 0;
     register unsigned long a2 asm("a2") = 0;
 #endif
-    register unsigned long a6 asm("a6") = RISCV_MCALL_TIMER_READ_TIME;
-    register unsigned long a7 asm("a7") = RISCV_MCALL_EXT_TIMER;
+    register unsigned long a6 asm("a6") = MCALL_TIMER_READ;
+    register unsigned long a7 asm("a7") = MCALL_TIMER_EXT;
 
     asm volatile("ecall" : "+r"(a0), "+r"(a1), "+r"(a2) : "r"(a6), "r"(a7) : "memory");
 
@@ -256,5 +258,6 @@ static inline void riscv_write_satp(uintptr_t root, u64 mode) {
     u32 value = (u32)((mode << 31) | ((u32)root >> 12));
     asm volatile("csrw satp, %0" : : "r"(value) : "memory");
 #endif
+    // SATP switches are visible only after the address translation fence
     sfence_vma();
 }

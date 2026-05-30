@@ -1,9 +1,9 @@
 
 bits 32
 section .text
-; Enter long mode and jump to the kernel entry point
+; enter long mode and jump to the kernel entry point
 
-; void jump_to_kernel_64(u64 entry, u64 boot_info, u64 stack);
+; void jump_to_kernel_64(u64 entry, u64 boot_info, u64 stack)
 global jump_to_kernel_64
 jump_to_kernel_64:
     lgdt [gdt_desc_64]

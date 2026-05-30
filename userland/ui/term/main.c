@@ -584,7 +584,7 @@ int main(void) {
             if (errno == EAGAIN || errno == EINTR) {
                 continue;
             }
-            // Keep terminal alive through transient geometry/write races
+            // keep terminal alive through transient geometry/write races
             pending_flush = false;
             continue;
         }

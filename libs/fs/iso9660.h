@@ -3,7 +3,7 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
-// ISO 9660 filesystem structures as defined by ECMA-119
+// iso 9660 filesystem structures as defined by ECMA-119
 // https://www.ecma-international.org/wp-content/uploads/ECMA-119_4th_edition_june_2019.pdf
 
 #define ISO_SECTOR_SIZE  2048
@@ -12,7 +12,7 @@
 
 #define ISO_PATH_TERMINATOR ";1"
 
-// With the rock ridge extension
+// with the rock ridge extension
 #define ISO_FILE_NAME_LENGTH 255
 
 typedef struct {
@@ -36,7 +36,7 @@ typedef struct PACKED {
     u8 time_zone_offset;
 } iso_date_t;
 
-// Different date format for directory records for some reason
+// different date format for directory records for some reason
 typedef struct PACKED {
     u8 year;
     u8 month;
@@ -84,7 +84,7 @@ enum iso_volume_type {
     ISO_TERMINATOR = 255
 };
 
-// As defined in table 4 of the ECMA standard
+// as defined in table 4 of the ECMA standard
 typedef struct PACKED {
     u8 type;
     char id[5]; // "CD001"
@@ -108,7 +108,7 @@ typedef struct PACKED {
     u32 path_table_msb;
     u32 optional_path_table_msb;
 
-    // iso_dir root;
+    // iso_dir root
     // flexible array member cannot be used in the middle of a struct
     u8 root[34];
 

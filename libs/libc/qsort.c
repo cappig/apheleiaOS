@@ -6,7 +6,6 @@
 
 typedef int (*comp_fn)(const void *, const void *);
 
-
 static size_t _partition(void *base, size_t low, size_t high, size_t size, comp_fn comp) {
     size_t pivot_index = ((high - low) / 2) + low;
     void *pivot = ELEM_PTR(base, size, pivot_index);
@@ -31,7 +30,7 @@ static size_t _partition(void *base, size_t low, size_t high, size_t size, comp_
     }
 }
 
-// A quicksort algorithm based on the pseudocode from wikipedia:
+// a quicksort algorithm based on the pseudocode from wikipedia
 // https://en.wikipedia.org/wiki/Quicksort#algorithm (Hoare partition scheme)
 static void _quick_sort(void *base, size_t low, size_t high, size_t size, comp_fn comp) {
     if (low < high) {

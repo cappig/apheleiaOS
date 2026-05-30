@@ -31,15 +31,15 @@ bool bitmap_alloc_init(bitmap_allocator_t *alloc, void *chunk_start, size_t chun
     alloc->block_count = block_count;
     alloc->word_count = word_count;
 
-    // Place the bitmap at the start of the chunk
+    // place the bitmap at the start of the chunk
     alloc->bitmap = chunk_start;
 
-    // Mark the whole bitmap as free
+    // mark the whole bitmap as free
     memset(alloc->bitmap, 0, bitmap_bytes);
     alloc->free_blocks = alloc->block_count - bitmap_blocks;
     alloc->usable_blocks = alloc->free_blocks;
 
-    // Mark the space occupied by the bitmap itself as used
+    // mark the space occupied by the bitmap itself as used
     bitmap_set_region(alloc->bitmap, 0, bitmap_blocks);
     alloc->next_fit_block = bitmap_blocks;
 
@@ -213,7 +213,7 @@ bool bitmap_alloc_free(bitmap_allocator_t *alloc, void *ptr, size_t blocks) {
         return false;
     }
 
-    // Catch double-free before we clear anything. The heap trusts this check.
+    // catch double-free before we clear anything. The heap trusts this check
     for (size_t i = 0; i < blocks; i++) {
         if (!bitmap_get(alloc->bitmap, first_block + i)) {
             return false;

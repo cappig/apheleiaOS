@@ -19,29 +19,34 @@
 
 #define MBR_SECTOR_SIZE 512
 
-#define MAX_BIOS_SECTORS_PER_CALL 64
-#define BOUNCE_SIZE               8192
+#define BIOS_MAX_SECTORS 64
+#define BOUNCE_SIZE      8192
 
-static u16 disk_code = 0;
-static u16 disk_sector_size = MBR_SECTOR_SIZE;
-static u16 disk_flags = 0;
+typedef struct {
+    u16 drive;
+    u16 sector_size;
+    u16 flags;
 
-static size_t rootfs_base = 0;
-static size_t rootfs_size = 0;
+    size_t root_base;
+    size_t root_size;
 
-static mbr_partition_t rootfs_partition = { 0 };
-static bool rootfs_partition_valid = false;
-static u8 rootfs_partition_index = 0;
+    bool root_found;
+    u8 root_part;
 
-static boot_ext2_t rootfs = { 0 };
-static u8 bounce[BOUNCE_SIZE] = { 0 };
+    boot_ext2_t fs;
+    u8 bounce[BOUNCE_SIZE];
+} bios_disk_t;
+
+static bios_disk_t bios_disk = {
+    .sector_size = MBR_SECTOR_SIZE,
+};
 
 static bool read_lba(void *dest, size_t lba, u16 sectors) {
     if (!dest || !sectors) {
         return false;
     }
 
-    u32 real_dest = (u32)REAL_OFF(dest) | ((u32)REAL_SEG(dest) << 16);
+    u32 real_dest = (u32)REAL_OFFSET(dest) | ((u32)REAL_SEG(dest) << 16);
 
     dap_t dap = {
         .size = sizeof(dap_t),
@@ -52,7 +57,7 @@ static bool read_lba(void *dest, size_t lba, u16 sectors) {
 
     regs32_t r = { 0 };
     r.ah = 0x42;
-    r.dl = disk_code;
+    r.dl = bios_disk.drive;
     r.esi = (uintptr_t)&dap;
 
     bios_call(0x13, &r, &r);
@@ -60,7 +65,7 @@ static bool read_lba(void *dest, size_t lba, u16 sectors) {
 }
 
 int read_disk(void *dest, size_t offset, size_t bytes) {
-    size_t ss = disk_sector_size;
+    size_t ss = bios_disk.sector_size;
 
     if (!ss) {
         panic("invalid disk sector size");
@@ -70,7 +75,7 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
     size_t sector_off = offset % ss;
 
     u16 bounce_sectors = BOUNCE_SIZE / ss;
-    u16 max_sectors = (u16)min((size_t)MAX_BIOS_SECTORS_PER_CALL, (size_t)bounce_sectors);
+    u16 max_sectors = (u16)min((size_t)BIOS_MAX_SECTORS, (size_t)bounce_sectors);
 
     uint8_t *out = dest;
 
@@ -83,14 +88,14 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
         size_t sectors_window = DIV_ROUND_UP(bytes_window, ss);
         u16 sectors = (u16)min(sectors_window, (size_t)max_sectors);
 
-        if (!read_lba(bounce, lba, sectors)) {
+        if (!read_lba(bios_disk.bounce, lba, sectors)) {
             panic("disk read error");
         }
 
         size_t available = (size_t)sectors * ss - sector_off;
         size_t to_copy = min(bytes, available);
 
-        memcpy(out, bounce + sector_off, to_copy);
+        memcpy(out, bios_disk.bounce + sector_off, to_copy);
 
         out += to_copy;
         bytes -= to_copy;
@@ -104,11 +109,11 @@ int read_disk(void *dest, size_t offset, size_t bytes) {
 static bool read_rootfs_cb(void *dest, size_t offset, size_t bytes, void *ctx) {
     (void)ctx;
 
-    if (offset > SIZE_MAX - rootfs_base) {
+    if (offset > SIZE_MAX - bios_disk.root_base) {
         panic("rootfs read offset overflow");
     }
 
-    read_disk(dest, rootfs_base + offset, bytes);
+    read_disk(dest, bios_disk.root_base + offset, bytes);
     return true;
 }
 
@@ -150,24 +155,24 @@ static void detect_sector(void) {
 
     regs32_t r = { 0 };
     r.ah = 0x48;
-    r.dl = disk_code;
+    r.dl = bios_disk.drive;
     r.esi = (uintptr_t)&params;
 
     bios_call(0x13, &r, &r);
 
     if (!(r.flags & FLAG_CF)) {
-        disk_flags = params.flags;
+        bios_disk.flags = params.flags;
         if (params.bytes_per_sector >= 512) {
-            disk_sector_size = params.bytes_per_sector;
+            bios_disk.sector_size = params.bytes_per_sector;
         }
     }
 }
 
-void disk_init(u16 disk) {
-    disk_code = disk;
+void disk_init(u16 drive) {
+    bios_disk.drive = drive;
 
     detect_sector();
-    log_debug("boot disk=%#x sector=%u", disk_code, disk_sector_size);
+    log_debug("boot disk=%#x sector=%u", bios_disk.drive, bios_disk.sector_size);
 
     mbr_partition_t part = { 0 };
     u8 rootfs_index = 0;
@@ -176,9 +181,8 @@ void disk_init(u16 disk) {
         panic("rootfs partition not found");
     }
 
-    rootfs_partition = part;
-    rootfs_partition_valid = true;
-    rootfs_partition_index = rootfs_index;
+    bios_disk.root_found = true;
+    bios_disk.root_part = rootfs_index;
 
     if (part.lba_first > ((size_t)-1 / MBR_SECTOR_SIZE)) {
         panic("rootfs offset too large");
@@ -188,12 +192,17 @@ void disk_init(u16 disk) {
         panic("rootfs partition too large");
     }
 
-    rootfs_base = part.lba_first * MBR_SECTOR_SIZE;
-    rootfs_size = part.sector_count * MBR_SECTOR_SIZE;
+    bios_disk.root_base = part.lba_first * MBR_SECTOR_SIZE;
+    bios_disk.root_size = part.sector_count * MBR_SECTOR_SIZE;
 
-    log_debug("rootfs partition lba=%u base=%#zx size=%zu", (unsigned int)part.lba_first, rootfs_base, rootfs_size);
+    log_debug(
+        "rootfs partition lba=%u base=%#zx size=%zu",
+        (unsigned int)part.lba_first,
+        bios_disk.root_base,
+        bios_disk.root_size
+    );
 
-    if (!boot_ext2_init(&rootfs, read_rootfs_cb, NULL, rootfs_size)) {
+    if (!boot_ext2_init(&bios_disk.fs, read_rootfs_cb, NULL, bios_disk.root_size)) {
         panic("not an ext2 filesystem");
     }
 }
@@ -205,13 +214,13 @@ bool bios_boot_root_hint(boot_root_hint_t *out) {
 
     memset(out, 0, sizeof(*out));
 
-    if (!rootfs_partition_valid) {
+    if (!bios_disk.root_found) {
         return false;
     }
 
     out->valid = 1;
 
-    bool removable = (disk_flags & (1U << 2)) != 0;
+    bool removable = (bios_disk.flags & (1U << 2)) != 0;
 
     if (removable) {
         out->media = BOOT_MEDIA_USB;
@@ -222,42 +231,42 @@ bool bios_boot_root_hint(boot_root_hint_t *out) {
     }
 
     out->part_style = BOOT_PARTSTYLE_MBR;
-    out->part_index = (u8)(rootfs_partition_index + 1);
-    out->bios_drive = (u8)(disk_code & 0xffU);
+    out->part_index = (u8)(bios_disk.root_part + 1);
+    out->bios_drive = (u8)(bios_disk.drive & 0xffU);
 
-    if (rootfs.superblock.signature == EXT2_SIGNATURE) {
+    if (bios_disk.fs.superblock.signature == EXT2_SIGNATURE) {
         out->rootfs_uuid_valid = 1;
-        memcpy(out->rootfs_uuid, rootfs.superblock.fs_id, sizeof(out->rootfs_uuid));
+        memcpy(out->rootfs_uuid, bios_disk.fs.superblock.fs_id, sizeof(out->rootfs_uuid));
     }
 
     return true;
 }
 
 bool stage_rootfs_image(u64 *paddr, u64 *size) {
-    if (!paddr || !size || !rootfs_size) {
+    if (!paddr || !size || !bios_disk.root_size) {
         return false;
     }
 
-    size_t alloc_size = ALIGN(rootfs_size, 0x1000);
+    size_t alloc_size = ALIGN(bios_disk.root_size, 0x1000);
 
-    if (alloc_size < rootfs_size) {
+    if (alloc_size < bios_disk.root_size) {
         return false;
     }
 
     void *image = mmap_alloc_top(alloc_size, E820_KERNEL, 0x1000, PROTECTED_MODE_TOP);
 
-    read_disk(image, rootfs_base, rootfs_size);
+    read_disk(image, bios_disk.root_base, bios_disk.root_size);
 
-    if (alloc_size > rootfs_size) {
-        memset((u8 *)image + rootfs_size, 0, alloc_size - rootfs_size);
+    if (alloc_size > bios_disk.root_size) {
+        memset((u8 *)image + bios_disk.root_size, 0, alloc_size - bios_disk.root_size);
     }
 
     *paddr = (u64)(uintptr_t)image;
-    *size = (u64)rootfs_size;
+    *size = (u64)bios_disk.root_size;
 
     return true;
 }
 
 void *read_rootfs(const char *path) {
-    return boot_ext2_read_file(&rootfs, path, NULL);
+    return boot_ext2_read_file(&bios_disk.fs, path, NULL);
 }

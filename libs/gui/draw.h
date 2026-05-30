@@ -8,7 +8,7 @@ typedef struct {
     i32 y;
 } draw_point_t;
 
-// Colors are encoded as 0x00RRGGBB
+// colors are encoded as 0x00RRGGBB
 enum draw_color {
     DRAW_TRANSPARENT = 0x00000000U,
     DRAW_BLACK = 0x00000000U,

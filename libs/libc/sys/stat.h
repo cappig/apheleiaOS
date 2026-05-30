@@ -3,45 +3,44 @@
 #include <sys/types.h>
 #include <time.h>
 
-// File type
+// file type
 #define S_IFMT 0170000
 
-// Socket
+// socket
 #define S_IFSOCK 0140000
-// Symbolic link
+// symbolic link
 #define S_IFLNK 0120000
-// Regular
+// regular
 #define S_IFREG 0100000
-// Block device
+// block device
 #define S_IFBLK 0060000
-// Directory
+// directory
 #define S_IFDIR 0040000
-// Character device
+// character device
 #define S_IFCHR 0020000
-// FIFO
+// fifo
 #define S_IFIFO 0010000
 
-
-// Owner
+// owner
 #define S_IRUSR 00400
 #define S_IWUSR 00200
 #define S_IXUSR 00100
 
-// Group
+// group
 #define S_IRGRP 00040
 #define S_IWGRP 00020
 #define S_IXGRP 00010
 
-// Others
+// others
 #define S_IROTH 00004
 #define S_IWOTH 00002
 #define S_IXOTH 00001
 
-// Set UID bit
+// set UID bit
 #define S_ISUID 04000
-// Set GID bit
+// set GID bit
 #define S_ISGID 02000
-// Sticky bit
+// sticky bit
 #define S_ISVTX 01000
 
 struct stat {

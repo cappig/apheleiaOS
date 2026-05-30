@@ -33,7 +33,6 @@ bool test_serial(size_t port) {
     return true;
 }
 
-
 void send_serial(size_t port, char c) {
     while (!(inb(port + 5) & 0x20)) {
         continue;
@@ -56,7 +55,7 @@ void send_serial_string(size_t port, const char *s) {
     }
 }
 
-void send_serial_sized_string(size_t port, const char *s, size_t len) {
+void send_serial_buf(size_t port, const char *s, size_t len) {
     for (size_t i = 0; i < len; i++) {
         send_serial(port, s[i]);
     }

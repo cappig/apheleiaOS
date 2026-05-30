@@ -23,26 +23,32 @@ typedef struct {
     bool is_dir;
 } sh_match_t;
 
-static char sh_complete_path[SH_PATH_MAX] = "/bin";
-static bool sh_complete_color = true;
+typedef struct {
+    char path[SH_PATH_MAX];
+    bool color;
+} sh_complete_state_t;
+
+static sh_complete_state_t sh_complete = {
+    .path = "/bin",
+    .color = true,
+};
 
 static const char *sh_builtins[] = {
     "bg",   "cd",  "echo", "env",  "exit",  "export", "fg",    "help", "history",
     "jobs", "set", "time", "type", "umask", "unset",  "where", NULL,
 };
 
-
 void complete_set_path(const char *path) {
     if (!path || !path[0]) {
-        snprintf(sh_complete_path, sizeof(sh_complete_path), "/bin");
+        snprintf(sh_complete.path, sizeof(sh_complete.path), "/bin");
         return;
     }
 
-    snprintf(sh_complete_path, sizeof(sh_complete_path), "%s", path);
+    snprintf(sh_complete.path, sizeof(sh_complete.path), "%s", path);
 }
 
 void complete_set_color_enabled(bool enabled) {
-    sh_complete_color = enabled;
+    sh_complete.color = enabled;
 }
 
 static bool is_word_delim(char ch) {
@@ -239,7 +245,7 @@ static size_t collect_command_matches(const char *prefix, bool include_hidden, s
     }
 
     char path_buf[SH_PATH_MAX];
-    snprintf(path_buf, sizeof(path_buf), "%s", sh_complete_path);
+    snprintf(path_buf, sizeof(path_buf), "%s", sh_complete.path);
 
     size_t count = 0;
 
@@ -338,13 +344,13 @@ static void list_matches(sh_match_t *matches, size_t count) {
         char item[NAME_MAX + 2];
         snprintf(item, sizeof(item), "%s%s", matches[i].name, matches[i].is_dir ? "/" : "");
 
-        if (sh_complete_color && matches[i].is_dir) {
+        if (sh_complete.color && matches[i].is_dir) {
             io_write_str(SH_C_BLUE);
         }
 
         io_write_str(item);
 
-        if (sh_complete_color && matches[i].is_dir) {
+        if (sh_complete.color && matches[i].is_dir) {
             io_write_str(SH_C_RESET);
         }
 

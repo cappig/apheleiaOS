@@ -21,10 +21,16 @@
 #include <sys/vfs.h>
 #include <unistd.h>
 
-static uintptr_t next_stack_top;
-static spinlock_t stack_lock = SPINLOCK_INIT;
-
 #define EXEC_PROBE_SIZE 512
+
+typedef struct {
+    uintptr_t next_top;
+    spinlock_t lock;
+} stack_alloc_t;
+
+static stack_alloc_t stack_alloc = {
+    .lock = SPINLOCK_INIT,
+};
 
 typedef struct {
     int argc;
@@ -59,8 +65,7 @@ typedef struct exec_loaded_page {
     struct exec_loaded_page *next;
 } exec_loaded_page_t;
 
-
-static u64 _elf_flags_to_page_flags(u32 elf_flags) {
+static u64 _elf_page_flags(u32 elf_flags) {
     u64 flags = PT_USER;
 
     if (elf_flags & PF_W) {
@@ -147,7 +152,7 @@ static bool _segment_range(u64 vaddr, u64 mem_size, u64 max_addr, u64 *base_out,
         return false;
     }
 
-    // Keep this in u64 until the range is proven sane; 32-bit ELFs can wrap too.
+    // keep this in u64 until the range is proven sane; 32-bit ELFs can wrap too
     u64 mem_end = 0;
     if (!_u64_add(vaddr, mem_size, &mem_end)) {
         return false;
@@ -501,7 +506,7 @@ static bool _load_segments_64(sched_thread_t *thread, const exec_file_t *file, u
             goto out;
         }
 
-        u64 flags = _elf_flags_to_page_flags(ph->flags);
+        u64 flags = _elf_page_flags(ph->flags);
         for (u64 page_vaddr = map_base; page_vaddr < map_end; page_vaddr += PAGE_4KIB) {
             if (!_ensure_loaded_page(thread, &loaded_pages, (uintptr_t)page_vaddr, flags)) {
                 goto out;
@@ -588,7 +593,7 @@ static bool _load_segments_32(sched_thread_t *thread, const exec_file_t *file, u
             goto out;
         }
 
-        u64 flags = _elf_flags_to_page_flags(ph->flags);
+        u64 flags = _elf_page_flags(ph->flags);
         for (u64 page_vaddr = map_base; page_vaddr < map_end; page_vaddr += PAGE_4KIB) {
             if (!_ensure_loaded_page(thread, &loaded_pages, (uintptr_t)page_vaddr, flags)) {
                 goto out;
@@ -666,20 +671,20 @@ static bool _load_user_segments(sched_thread_t *thread, const exec_file_t *file,
 static uintptr_t _alloc_stack_base(size_t size) {
     size = ALIGN(size, PAGE_4KIB);
 
-    unsigned long irq_flags = spin_lock_irqsave(&stack_lock);
+    unsigned long irq_flags = spin_lock_irqsave(&stack_alloc.lock);
 
-    if (!next_stack_top) {
-        next_stack_top = (uintptr_t)arch_user_stack_top();
+    if (!stack_alloc.next_top) {
+        stack_alloc.next_top = (uintptr_t)arch_user_stack_top();
     }
 
     uintptr_t base = 0;
 
-    if (next_stack_top > size) {
-        next_stack_top = ALIGN_DOWN(next_stack_top - size, PAGE_4KIB);
-        base = next_stack_top;
+    if (stack_alloc.next_top > size) {
+        stack_alloc.next_top = ALIGN_DOWN(stack_alloc.next_top - size, PAGE_4KIB);
+        base = stack_alloc.next_top;
     }
 
-    spin_unlock_irqrestore(&stack_lock, irq_flags);
+    spin_unlock_irqrestore(&stack_alloc.lock, irq_flags);
     return base;
 }
 
@@ -874,6 +879,7 @@ static uintptr_t _build_user_stack_args(uintptr_t stack_top, const exec_args_t *
     uintptr_t arg_ptrs[EXEC_MAX_ARGS] = { 0 };
     uintptr_t env_ptrs[EXEC_MAX_ENV] = { 0 };
 
+    // strings are copied first so the pointer tables can be written last
     for (int i = (int)envc - 1; i >= 0; i--) {
         size_t len = strlen(env->envp[i]) + 1;
         sp -= len;
@@ -902,6 +908,7 @@ static uintptr_t _build_user_stack_args(uintptr_t stack_top, const exec_args_t *
         *(uintptr_t *)sp = 0;
     }
 
+    // final stack layout is argc, argv[], null, envp[], null
     sp -= sizeof(uintptr_t);
     *(uintptr_t *)sp = 0;
 
@@ -1462,7 +1469,7 @@ int user_exec(
         return -ENOMEM;
     }
 
-    // The current thread's VM, stack, and trap frame switch as one image.
+    // the current thread's VM, stack, and trap frame switch as one image
     _apply_exec_identity(thread, file.node);
 
     arch_vm_switch(thread->vm_space);

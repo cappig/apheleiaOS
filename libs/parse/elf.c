@@ -99,7 +99,6 @@ typedef struct PACKED {
     u64 size;
 } elf64_sym_t;
 
-
 static bool _range_ok(size_t offset, size_t len, size_t total) {
     if (offset > total) {
         return false;
@@ -132,10 +131,6 @@ static bool _name_is_terminated(const char *name, size_t max_len) {
     return name && memchr(name, '\0', max_len);
 }
 
-static bool
-_find_section_index(const elf_view_t *view, const char *name, size_t *out_idx, elf_section_view_t *out_section);
-
-
 bool elf_is_executable(elf_header_t *header) {
     if (header->type != ET_EXEC) {
         return false;
@@ -154,7 +149,7 @@ elf_validity_t elf_verify(elf_header_t *header) {
     }
 
     // if (header->arch != EARCH_X64)
-    //     return INVALID_ELF64;
+    //     return INVALID_ELF64
 
     if (header->endianness != EEND_LITTLE) {
         return WRONG_ENDIAN_ELF;
@@ -162,7 +157,6 @@ elf_validity_t elf_verify(elf_header_t *header) {
 
     return VALID_ELF;
 }
-
 
 u64 elf_to_mmap_prot(u32 elf_flags) {
     u64 prot = 0;
@@ -222,41 +216,6 @@ bool elf_parse_header(elf_attributes_t *attribs, elf_header_t *header) {
     }
 
     return has_load;
-}
-
-elf_sect_header_t *elf_locate_section(elf_header_t *header, const char *name) {
-    if (!header || !name) {
-        return NULL;
-    }
-
-    elf_view_t view = { 0 };
-    if (!elf_view_init(&view, header, (size_t)-1)) {
-        return NULL;
-    }
-
-    size_t idx = 0;
-    elf_section_view_t section = { 0 };
-    if (!_find_section_index(&view, name, &idx, &section)) {
-        return NULL;
-    }
-
-    if (view.elf_class == ELFCLASS64 && view.shent_size >= sizeof(elf_sect_header_t)) {
-        return (elf_sect_header_t *)((u8 *)header + view.shoff + idx * view.shent_size);
-    }
-
-    static elf_sect_header_t section_header;
-    section_header.name = section.name;
-    section_header.type = section.type;
-    section_header.flags = section.flags;
-    section_header.addr = section.addr;
-    section_header.offset = section.offset;
-    section_header.size = section.size;
-    section_header.link = section.link;
-    section_header.info = section.info;
-    section_header.align = section.align;
-    section_header.ent_size = section.ent_size;
-
-    return &section_header;
 }
 
 elf_symbol_t *elf_locate_symbol(elf_symbol_t *symtab, size_t symtab_size, char *strtab, const char *name) {
@@ -455,6 +414,41 @@ _find_section_index(const elf_view_t *view, const char *name, size_t *out_idx, e
     }
 
     return false;
+}
+
+elf_sect_header_t *elf_locate_section(elf_header_t *header, const char *name) {
+    if (!header || !name) {
+        return NULL;
+    }
+
+    elf_view_t view = { 0 };
+    if (!elf_view_init(&view, header, (size_t)-1)) {
+        return NULL;
+    }
+
+    size_t idx = 0;
+    elf_section_view_t section = { 0 };
+    if (!_find_section_index(&view, name, &idx, &section)) {
+        return NULL;
+    }
+
+    if (view.elf_class == ELFCLASS64 && view.shent_size >= sizeof(elf_sect_header_t)) {
+        return (elf_sect_header_t *)((u8 *)header + view.shoff + idx * view.shent_size);
+    }
+
+    static elf_sect_header_t section_header;
+    section_header.name = section.name;
+    section_header.type = section.type;
+    section_header.flags = section.flags;
+    section_header.addr = section.addr;
+    section_header.offset = section.offset;
+    section_header.size = section.size;
+    section_header.link = section.link;
+    section_header.info = section.info;
+    section_header.align = section.align;
+    section_header.ent_size = section.ent_size;
+
+    return &section_header;
 }
 
 bool elf_view_find_section(const elf_view_t *view, const char *name, elf_section_view_t *out_section) {

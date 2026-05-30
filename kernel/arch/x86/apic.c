@@ -39,21 +39,21 @@
 #define IOAPIC_REDTBL_BASE 0x10
 #define IOAPIC_REDTBL_STEP 2
 
-#define IOAPIC_VERSION_MAX_REDIR_SHIFT 16
-#define IOAPIC_VERSION_MAX_REDIR_MASK  0xffU
-#define IOAPIC_DEST_ID_MASK            0xffU
-#define IOAPIC_DEST_ID_SHIFT           56
-#define IOAPIC_REDTBL_HIGH_WORD        1
+#define IOAPIC_MAX_REDIR_SHIFT  16
+#define IOAPIC_MAX_REDIR_MASK   0xffU
+#define IOAPIC_DEST_ID_MASK     0xffU
+#define IOAPIC_DEST_ID_SHIFT    56
+#define IOAPIC_REDTBL_HIGH_WORD 1
 
 #define IOAPIC_ENTRY_MASK          (1ULL << 16)
 #define IOAPIC_ENTRY_POLARITY_LOW  (1ULL << 13)
 #define IOAPIC_ENTRY_TRIGGER_LEVEL (1ULL << 15)
 
-#define MADT_ISO_POLARITY_MASK       0x3U
-#define MADT_ISO_TRIGGER_SHIFT       2
-#define MADT_ISO_TRIGGER_MASK        0x3U
-#define MADT_ISO_POLARITY_ACTIVE_LOW 3U
-#define MADT_ISO_TRIGGER_LEVEL       3U
+#define MADT_ISO_POLARITY_MASK 0x3U
+#define MADT_ISO_TRIGGER_SHIFT 2
+#define MADT_ISO_TRIGGER_MASK  0x3U
+#define MADT_ISO_ACTIVE_LOW    3U
+#define MADT_ISO_LEVEL_TRIGGER 3U
 
 #define APIC_TIMER_INITIAL_MAX 0xffffffffU
 
@@ -239,7 +239,7 @@ static void _ioapic_update_info(ioapic_info_t *info) {
     }
 
     u32 ver = _ioapic_read_reg(info, IOAPIC_REG_VER);
-    u32 max_redir = (ver >> IOAPIC_VERSION_MAX_REDIR_SHIFT) & IOAPIC_VERSION_MAX_REDIR_MASK;
+    u32 max_redir = (ver >> IOAPIC_MAX_REDIR_SHIFT) & IOAPIC_MAX_REDIR_MASK;
 
     info->int_count = max_redir + 1;
 }
@@ -304,11 +304,11 @@ static u64 _ioapic_flags_to_entry(u16 flags) {
     u16 polarity = flags & MADT_ISO_POLARITY_MASK;
     u16 trigger = (flags >> MADT_ISO_TRIGGER_SHIFT) & MADT_ISO_TRIGGER_MASK;
 
-    if (polarity == MADT_ISO_POLARITY_ACTIVE_LOW) {
+    if (polarity == MADT_ISO_ACTIVE_LOW) {
         entry |= IOAPIC_ENTRY_POLARITY_LOW;
     }
 
-    if (trigger == MADT_ISO_TRIGGER_LEVEL) {
+    if (trigger == MADT_ISO_LEVEL_TRIGGER) {
         entry |= IOAPIC_ENTRY_TRIGGER_LEVEL;
     }
 

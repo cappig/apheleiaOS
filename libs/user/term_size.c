@@ -181,6 +181,7 @@ bool term_probe_size(
     const char query[] = "\x1b"
                          "7\x1b[999;999H\x1b[6n\x1b"
                          "8";
+    // ask the terminal for the cursor position after clamping to the lower right corner
     if (!write_all(output_fd, query, sizeof(query) - 1)) {
         return false;
     }
@@ -191,6 +192,7 @@ bool term_probe_size(
     }
 
     if (ch != '\x1b') {
+        // not a cursor report, so the caller can process the byte normally
         if (push_byte) {
             push_byte(input_fd, ch, ctx);
         }

@@ -18,7 +18,7 @@ bool _xhci_poll_events(xhci_controller_t *ctrl, bool process_port_events, bool f
     }
 
     volatile u8 *op = (volatile u8 *)map + ctrl->cap_length;
-    u32 status = _read32(op, XHCI_OP_USBSTS_OFF);
+    u32 status = _read32(op, XHCI_OP_USBSTS_OFFSET);
 
     bool progressed = false;
 
@@ -41,18 +41,18 @@ bool _xhci_poll_events(xhci_controller_t *ctrl, bool process_port_events, bool f
     }
 
     if (ctrl->runtime_ready && _xhci_runtime_available(ctrl)) {
-        volatile u8 *ir = (volatile u8 *)map + ctrl->rt_offset + XHCI_RT_IR0_OFF;
-        u32 iman = _read32(ir, XHCI_IR_IMAN_OFF);
+        volatile u8 *ir = (volatile u8 *)map + ctrl->rt_offset + XHCI_RT_IR0_OFFSET;
+        u32 iman = _read32(ir, XHCI_IR_IMAN_OFFSET);
 
         if (iman & XHCI_IMAN_IP) {
-            _write32(ir, XHCI_IR_IMAN_OFF, iman | XHCI_IMAN_IP);
+            _write32(ir, XHCI_IR_IMAN_OFFSET, iman | XHCI_IMAN_IP);
             progressed = true;
         }
     }
 
     u32 ack = status & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD);
     if (ack) {
-        _write32(op, XHCI_OP_USBSTS_OFF, ack);
+        _write32(op, XHCI_OP_USBSTS_OFFSET, ack);
         progressed = true;
     }
 

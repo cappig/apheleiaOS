@@ -8,10 +8,10 @@
 
 #include "file.h"
 
-#define WM_CURSOR_MAX_FILE_BYTES (1U * 1024U * 1024U)
-#define WM_CURSOR_WIDTH          16U
-#define WM_CURSOR_HEIGHT         16U
-#define WM_CURSOR_KEY_COLOR      0x00ff00ffU
+#define CURSOR_MAX_BYTES (1U * 1024U * 1024U)
+#define CURSOR_WIDTH     16U
+#define CURSOR_HEIGHT    16U
+#define CURSOR_KEY_COLOR 0x00ff00ffU
 
 typedef struct {
     u32 width;
@@ -20,7 +20,6 @@ typedef struct {
 } wm_cursor_t;
 
 static wm_cursor_t cursors[WM_CURSOR_KIND_COUNT];
-
 
 static void _cursor_release(wm_cursor_t *cursor) {
     if (!cursor) {
@@ -48,7 +47,7 @@ static bool _cursor_load_into(wm_cursor_t *cursor, const char *path) {
     u8 *file_data = NULL;
     size_t file_len = 0;
 
-    bool read_ok = wm_file_read_all(path, WM_CURSOR_MAX_FILE_BYTES, &file_data, &file_len);
+    bool read_ok = wm_file_read_all(path, CURSOR_MAX_BYTES, &file_data, &file_len);
 
     if (!read_ok) {
         return false;
@@ -63,7 +62,7 @@ static bool _cursor_load_into(wm_cursor_t *cursor, const char *path) {
     u32 width = ppm_blob.width;
     u32 height = ppm_blob.height;
 
-    if (width != WM_CURSOR_WIDTH || height != WM_CURSOR_HEIGHT) {
+    if (width != CURSOR_WIDTH || height != CURSOR_HEIGHT) {
         free(file_data);
         return false;
     }
@@ -165,7 +164,7 @@ bool wm_cursor_draw_kind(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32
 
         for (u32 cx = 0; cx < cursor->width; cx++) {
             u32 color = cursor->pixels[src_row + cx];
-            if (color == WM_CURSOR_KEY_COLOR) {
+            if (color == CURSOR_KEY_COLOR) {
                 continue;
             }
 

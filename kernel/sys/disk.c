@@ -391,7 +391,7 @@ static const u8 _gpt_linux_fs_guid[16] = {
     0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47, 0x7D, 0xE4,
 };
 
-// C12A7328-F81F-11D2-BA4B-00A0C93EC93B
+// c12a7328-f81f-11d2-ba4b-00a0c93ec93b
 static const u8 _gpt_efi_system_guid[16] = {
     0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
 };
@@ -508,7 +508,7 @@ static size_t _parse_partitions(disk_dev_t *dev) {
         return dev->partitions ? dev->partitions->size : 0;
     }
 
-    // Always expose /dev/<disk> in addition to partition nodes
+    // always expose /dev/<disk> in addition to partition nodes
     (void)_create_partition(dev, -1, 0, 0, 0, dev->sector_count);
 
     if (!_parse_gpt(dev)) {

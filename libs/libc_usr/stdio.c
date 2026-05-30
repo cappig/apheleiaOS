@@ -58,7 +58,6 @@ FILE *stdin = &std_in;
 FILE *stdout = &std_out;
 FILE *stderr = &std_err;
 
-
 static void init_stream(FILE *stream, int fd, int flags) {
     stream->fd = fd;
     stream->flags = flags;
@@ -362,7 +361,7 @@ FILE *tmpfile(void) {
         return NULL;
     }
 
-    // If the filesystem keeps open files alive, this makes tmpfile private.
+    // if the filesystem keeps open files alive, this makes tmpfile private
     (void)unlink(path);
     return stream;
 }

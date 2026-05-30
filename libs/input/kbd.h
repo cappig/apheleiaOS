@@ -4,7 +4,7 @@
 
 #include "keymap.h"
 
-// These are essentially just PS2 codes from set 1
+// these are essentially just PS2 codes from set 1
 // https://wiki.osdev.org/PS/2_Keyboard
 
 enum kbd_codes {
@@ -62,7 +62,7 @@ enum kbd_codes {
 
     KBD_SPACE = 48,
 
-    // Extended keypad
+    // extended keypad
     KBD_KP_DIVIDE = 49,
     KBD_KP_MULTIPLY = 50,
     KBD_KP_MINUS = 51,
@@ -79,7 +79,7 @@ enum kbd_codes {
     KBD_KP_8 = 62,
     KBD_KP_9 = 63,
 
-    // Control keys that have ASCII codes
+    // control keys that have ASCII codes
     KBD_KP_ENTER = 64,
     KBD_ENTER = 65,
     KBD_BACKSPACE = 66,
@@ -87,7 +87,7 @@ enum kbd_codes {
     KBD_ESCAPE = 68,
     KBD_DELETE = 69,
 
-    // Other control keys that don't have ASCII codes
+    // other control keys that don't have ASCII codes
     KBD_LEFT_CTRL = 70,
     KBD_RIGHT_CTRL = 71,
     KBD_LEFT_ALT = 72,
@@ -146,7 +146,7 @@ typedef struct {
 char kbd_to_ascii(key_event event, ascii_keymap *map, bool shift);
 char kbd_to_ascii_default(key_event event);
 
-// Convert ASCII control codes to caret notation: ^X
+// convert ASCII control codes to caret notation: ^X
 // https://en.wikipedia.org/wiki/Caret_notation
 bool iscaret(char ch);
 

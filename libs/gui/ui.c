@@ -978,7 +978,7 @@ int window_flush(window_t *window) {
             return -1;
         }
 
-        // Resize events can race flush writes; pull pending events and retry.
+        // resize events can race flush writes; pull pending events and retry
         ws_input_event_t event_batch[8];
         for (;;) {
             ssize_t m = read(window->ev_fd, event_batch, sizeof(event_batch));

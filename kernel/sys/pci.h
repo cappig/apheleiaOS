@@ -74,7 +74,7 @@ typedef struct PACKED {
     u16 bridge_control;
 } pci_bridge_t;
 
-// This struct is 256 bytes long under conventional PCI
+// this struct is 256 bytes long under conventional PCI
 // and 4096 bytes long under PCI express
 typedef struct PACKED {
     pci_header_t header;

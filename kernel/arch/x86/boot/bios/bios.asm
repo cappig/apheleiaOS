@@ -1,44 +1,44 @@
 bits 32
 section .text
 
-; Temporarily drop back to real mode to call a BIOS interrupt
-; Based on the Linux implementation (arch/x86/boot/bioscall.S)
+; temporarily drop back to real mode to call a BIOS interrupt
+; based on the Linux implementation (arch/x86/boot/bioscall.S)
 
-%define REGS_B 44                           ; Size of the x_regs struct
-%define SREGS_B 16                          ; Size of non scratch regs
+%define REGS_B 44                           ; size of the x_regs struct
+%define SREGS_B 16                          ; size of non scratch regs
 
 extern _gdt_desc
 
-; void bios_call(u8 number, regs* in_regs, regs* out_regs);
+; void bios_call(u8 number, regs* in_regs, regs* out_regs)
 global bios_call
 bios_call:
-    ; Self modify the code
+    ; self modify the code
     mov al, byte [esp+4]
     mov byte [.n], al
 
-    ; Save non scratch regs
+    ; save non scratch regs
     push ebx
     push esi
     push edi
     push ebp
 
-    ;; Jump to real mode
+    ;; jump to real mode
     cli
     jmp 0x08:.real_entry
 
 bits 16
 .real_entry:
 
-    ; Unset protected mode bit
+    ; unset protected mode bit
     mov eax, cr0
     and al, ~1
     mov cr0, eax
 
-    ; Actually enter real mode
+    ; actually enter real mode
     jmp 0x00:.real_start
 .real_start:
 
-    ; Set up real mode segments
+    ; set up real mode segments
     xor ax, ax
     mov ds, ax
     mov es, ax
@@ -46,20 +46,20 @@ bits 16
     mov fs, ax
     mov gs, ax
 
-    ; Enable interrupts
+    ; enable interrupts
     sti
 
-    ; Move in_regs to the stack
-    mov esi, dword [esp+SREGS_B+8]          ; Address of in_regs
+    ; move in_regs to the stack
+    mov esi, dword [esp+SREGS_B+8]          ; address of in_regs
 
-    sub esp, REGS_B                         ; Make space for the registers
-    mov edi, esp                            ; Destination address
+    sub esp, REGS_B                         ; make space for the registers
+    mov edi, esp                            ; destination address
 
     mov ecx, REGS_B/4                       ; repeat cx times
     cld
     rep movsd
 
-    ; *Pop* the in_regs form the stack
+    ; pop the in_regs from the stack
     popad
     popfd
     pop gs
@@ -70,7 +70,7 @@ bits 16
     db 0xcd                                 ; int opcode
 .n: db 0                                    ; int number is written here
 
-    ; Save return registers
+    ; save return registers
     push ds
     push es
     push fs
@@ -78,11 +78,11 @@ bits 16
     pushfd
     pushad
 
-    ;; Return to protected mode
+    ;; return to protected mode
     cli
-    lgdt [_gdt_desc]                        ; Load 32 bit GDT
+    lgdt [_gdt_desc]                        ; load 32 bit GDT
 
-    ; Set protected mode bit
+    ; set protected mode bit
     mov eax, cr0
     or al, 1
     mov cr0, eax
@@ -92,7 +92,7 @@ bits 16
 bits 32
 .protected_mode:
 
-    ; Set up protected mode segments
+    ; set up protected mode segments
     mov ax, 0x20
     mov ds, ax
     mov es, ax
@@ -100,18 +100,18 @@ bits 32
     mov fs, ax
     mov gs, ax
 
-    ; Move out_regs from stack
-    mov esi, esp                            ; Start address
+    ; move out_regs from stack
+    mov esi, esp                            ; start address
 
-    mov edi, dword [esp+REGS_B+SREGS_B+12]  ; Destination address
+    mov edi, dword [esp+REGS_B+SREGS_B+12]  ; destination address
 
     mov ecx, REGS_B/4                       ; repeat cx times
     cld
     rep movsd
 
-    add esp, REGS_B                         ; Move the stack back
+    add esp, REGS_B                         ; move the stack back
 
-    ; Restore non scratch regs
+    ; restore non scratch regs
     pop ebp
     pop edi
     pop esi

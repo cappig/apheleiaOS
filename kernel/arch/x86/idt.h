@@ -81,7 +81,7 @@ typedef struct PACKED {
     seg_regs_t seg_regs;
 #endif
 
-    // Pushed by the isr_stub_xx
+    // pushed by the isr_stub_xx
 #if defined(__x86_64__)
     u64 int_num;
     u64 error_code;
@@ -94,7 +94,6 @@ typedef struct PACKED {
 } int_state_t;
 
 typedef void (*int_handler_t)(int_state_t *state);
-
 
 void set_int_handler(size_t int_num, int_handler_t handler);
 void reset_int_handler(size_t int_num);

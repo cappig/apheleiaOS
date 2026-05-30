@@ -2,10 +2,10 @@
 
 #include <base/types.h>
 
-// Each arch provides <arch_paging.h> defining:
-//   page_t, PT_PRESENT, PT_WRITE, PT_USER, PT_NO_EXECUTE, PT_HUGE,
-//   PT_NO_CACHE, PT_WRITE_THROUGH, PT_DIRTY, PT_ACCESSED, PT_GLOBAL,
-//   PAGE_4KIB, PAGE_2MIB, page_get_paddr(), page_set_paddr()
+// each arch provides <arch_paging.h> defining
+//   page_t, PT_PRESENT, PT_WRITE, PT_USER, PT_NO_EXECUTE, PT_HUGE
+//   pt_no_cache, PT_WRITE_THROUGH, PT_DIRTY, PT_ACCESSED, PT_GLOBAL
+//   page_4kib, PAGE_2MIB, page_get_paddr(), page_set_paddr()
 #include_next <arch_paging.h>
 
 bool arch_supports_nx(void);

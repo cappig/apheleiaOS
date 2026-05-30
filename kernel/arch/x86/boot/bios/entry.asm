@@ -23,7 +23,7 @@ main:
 
     mov sp, 0x7c00
 
-    ; Enable the A20 line via the fast method
+    ; enable the A20 line via the fast method
     in al, 0x92
     or al, 2
     and al, 0xfe        ; clear bit 0 (system reset) before writing back
@@ -31,7 +31,7 @@ main:
 
     sti
 
-    ; Clear screen by resetting the VGA mode to 80x25
+    ; clear screen by resetting the VGA mode to 80x25
     mov ah, 0x00
     mov al, 0x03
     int 0x10
@@ -39,7 +39,7 @@ main:
     cli
     lgdt [_gdt_desc]
 
-    ; Set the protected mode bit
+    ; set the protected mode bit
     mov eax, cr0
     or al, 1
     mov cr0, eax
@@ -55,14 +55,14 @@ protected_mode:
     mov fs, ax
     mov gs, ax
 
-    ; Zero out the .BSS
+    ; zero out the .BSS
     xor al, al
     mov edi, __bss_start
     mov ecx, __bss_end
     sub ecx, edi
     rep stosb
 
-    ; Jump to the C entrypoint with the saved boot drive number
+    ; jump to the C entrypoint with the saved boot drive number
     movzx edx, byte [boot_drive]
     push edx
     call _load_entry

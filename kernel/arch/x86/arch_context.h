@@ -1,7 +1,7 @@
 #pragma once
 
 // x86 implementation of arch_int_state_t
-// This is the interrupt/exception frame pushed by the ISR stubs
+// this is the interrupt/exception frame pushed by the ISR stubs
 
 #include <x86/idt.h>
 

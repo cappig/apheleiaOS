@@ -13,10 +13,10 @@ typedef enum {
     E820_NVS = 4,
     E820_CORRUPTED = 5,
 
-    // Custom types used internaly here by the kernel
-    E820_ALLOC = 100, // Temporary allocation
-    E820_PAGE_TABLE = 101, // Temporary page tables set up by the bootloader
-    E820_KERNEL = 102, // Kernel ELF segments and kernel page tables
+    // custom types used internally by the kernel
+    E820_ALLOC = 100, // temporary allocation
+    E820_PAGE_TABLE = 101, // temporary page tables set up by the bootloader
+    E820_KERNEL = 102, // kernel ELF segments and kernel page tables
 } e820_type_t;
 
 typedef struct PACKED {
@@ -30,7 +30,6 @@ typedef struct PACKED {
     u64 count;
     e820_entry_t entries[E820_MAX];
 } e820_map_t;
-
 
 void mmap_remove_entry(e820_map_t *map, size_t index);
 bool mmap_add_entry(e820_map_t *map, u64 address, u64 size, u32 type);

@@ -33,8 +33,12 @@ typedef struct {
     int fd;
 } tty_state_t;
 
-static char key_push = 0;
-static bool key_push_valid = false;
+typedef struct {
+    char ch;
+    bool valid;
+} key_push_t;
+
+static key_push_t key_push = { 0 };
 
 static int write_all(int fd, const char *buf, size_t len) {
     size_t off = 0;
@@ -194,9 +198,9 @@ static bool read_key_byte(int fd, char *out, int timeout_ms) {
         return false;
     }
 
-    if (key_push_valid) {
-        key_push_valid = false;
-        *out = key_push;
+    if (key_push.valid) {
+        key_push.valid = false;
+        *out = key_push.ch;
         return true;
     }
 
@@ -245,8 +249,8 @@ static void push_term_byte(int fd, char ch, void *ctx) {
     (void)fd;
     (void)ctx;
 
-    key_push = ch;
-    key_push_valid = true;
+    key_push.ch = ch;
+    key_push.valid = true;
 }
 
 static void probe_terminal_size(int input_fd) {

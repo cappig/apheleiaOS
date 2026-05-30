@@ -15,32 +15,33 @@
 #include <sys/config.h>
 
 #include "memory.h"
+#include "mtrap.h"
 #include "tty.h"
 
 extern char __stack_top;
 extern char __image_start;
 
-#define RISCV_BOOT_PAGE_SIZE 4096UL
-#ifndef RISCV_BOOT_SCRATCH_OFFSET
-#define RISCV_BOOT_SCRATCH_OFFSET (48ULL * MIB)
+#define BOOT_PAGE_SIZE 4096UL
+#ifndef BOOT_SCRATCH_OFFSET
+#define BOOT_SCRATCH_OFFSET (48ULL * MIB)
 #endif
-#ifndef RISCV_BOOT_IMAGE_ROOTFS_OFFSET
-#define RISCV_BOOT_IMAGE_ROOTFS_OFFSET (2ULL * MIB)
+#ifndef BOOT_ROOTFS_OFFSET
+#define BOOT_ROOTFS_OFFSET (2ULL * MIB)
 #endif
 
-#define RISCV_TIMEBASE_HZ_DEFAULT 10000000ULL
-#define RISCV_CLINT_DEFAULT_BASE  0x02000000ULL
-#define RISCV_CLINT_MTIMECMP_OFF  0x00004000ULL
-#define RISCV_CLINT_MTIME_OFF     0x0000BFF8ULL
-#define RISCV_DTB_LOW_WINDOW_MAX  (16ULL * MIB)
-#define RISCV_DTB_RAM_WINDOW_SIZE (256ULL * MIB)
+#define DEFAULT_TIMEBASE_HZ 10000000ULL
+#define CLINT_BASE          0x02000000ULL
+#define MTIMECMP_OFFSET     0x00004000ULL
+#define MTIME_OFFSET        0x0000BFF8ULL
+#define DTB_LOW_LIMIT       (16ULL * MIB)
+#define DTB_RAM_WINDOW      (256ULL * MIB)
 
 #ifndef RISCV_FRISC
 #define RISCV_FRISC 0
 #endif
 
-#ifndef RISCV_BOOT_PLATFORM_DTB
-#define RISCV_BOOT_PLATFORM_DTB "/boot/platform.dtb"
+#ifndef BOOT_DTB_PATH
+#define BOOT_DTB_PATH "/boot/platform.dtb"
 #endif
 
 #ifndef BOOT_LOG_COLOR
@@ -88,11 +89,8 @@ typedef struct {
 } boot_timer_t;
 
 boot_timer_t boot_timer = {
-    .hz = RISCV_TIMEBASE_HZ_DEFAULT,
+    .hz = DEFAULT_TIMEBASE_HZ,
 };
-
-extern void mtrap_entry(void);
-extern char trap_scratch[];
 
 static void log_sink(const char *msg) {
     puts(msg);
@@ -201,6 +199,7 @@ static bool load_elf(const u8 *blob, size_t blob_size, uintptr_t *out_entry) {
     return true;
 }
 
+// accept only pointers that look like firmware dtbs in low memory or ram
 static const void *valid_dtb(const void *dtb) {
     uintptr_t addr = (uintptr_t)dtb;
 
@@ -208,8 +207,8 @@ static const void *valid_dtb(const void *dtb) {
         return NULL;
     }
 
-    bool low_window = addr >= RISCV_BOOT_PAGE_SIZE && addr < RISCV_DTB_LOW_WINDOW_MAX;
-    bool ram_window = addr >= RISCV_KERNEL_BASE && addr < (RISCV_KERNEL_BASE + RISCV_DTB_RAM_WINDOW_SIZE);
+    bool low_window = addr >= BOOT_PAGE_SIZE && addr < DTB_LOW_LIMIT;
+    bool ram_window = addr >= RISCV_KERNEL_BASE && addr < (RISCV_KERNEL_BASE + DTB_RAM_WINDOW);
 
     if (!low_window && !ram_window) {
         return NULL;
@@ -236,7 +235,7 @@ static uintptr_t addr_add(uintptr_t base, u64 offset, const char *what) {
 }
 
 static const u8 *rootfs_at(uintptr_t image_base) {
-    uintptr_t rootfs = addr_add(image_base, RISCV_BOOT_IMAGE_ROOTFS_OFFSET, "embedded rootfs address overflow");
+    uintptr_t rootfs = addr_add(image_base, BOOT_ROOTFS_OFFSET, "embedded rootfs address overflow");
 
     return (const u8 *)rootfs;
 }
@@ -249,7 +248,7 @@ static layout_t make_layout(fdt_reg_t memory) {
 
     layout.embedded_rootfs = rootfs_at(layout.image_base);
     layout.memory_end = addr_add((uintptr_t)memory.addr, memory.size, "memory range overflow");
-    layout.scratch_base = addr_add((uintptr_t)memory.addr, RISCV_BOOT_SCRATCH_OFFSET, "scratch address overflow");
+    layout.scratch_base = addr_add((uintptr_t)memory.addr, BOOT_SCRATCH_OFFSET, "scratch address overflow");
 
     if (layout.scratch_base > layout.heap_start) {
         layout.heap_start = layout.scratch_base;
@@ -275,14 +274,14 @@ static bool find_mtimer(
     }
 
     if (hz_out) {
-        *hz_out = RISCV_TIMEBASE_HZ_DEFAULT;
+        *hz_out = DEFAULT_TIMEBASE_HZ;
     }
 
     if (kind) {
         *kind = "none";
     }
 
-    u64 hz = RISCV_TIMEBASE_HZ_DEFAULT;
+    u64 hz = DEFAULT_TIMEBASE_HZ;
     if (dtb) {
         u64 dtb_hz = 0;
         if (fdt_find_timebase_frequency(dtb, &dtb_hz) && dtb_hz) {
@@ -332,11 +331,11 @@ static bool find_mtimer(
 
     if (clint) {
         if (time_out) {
-            *time_out = (uintptr_t)(reg.addr + RISCV_CLINT_MTIME_OFF);
+            *time_out = (uintptr_t)(reg.addr + MTIME_OFFSET);
         }
 
         if (cmp_out) {
-            *cmp_out = (uintptr_t)(reg.addr + RISCV_CLINT_MTIMECMP_OFF + (u64)hartid * 8ULL);
+            *cmp_out = (uintptr_t)(reg.addr + MTIMECMP_OFFSET + (u64)hartid * 8ULL);
         }
 
         if (hz_out) {
@@ -358,11 +357,11 @@ static bool find_mtimer(
 
     if (spike) {
         if (time_out) {
-            *time_out = (uintptr_t)(RISCV_CLINT_DEFAULT_BASE + RISCV_CLINT_MTIME_OFF);
+            *time_out = (uintptr_t)(CLINT_BASE + MTIME_OFFSET);
         }
 
         if (cmp_out) {
-            *cmp_out = (uintptr_t)(RISCV_CLINT_DEFAULT_BASE + RISCV_CLINT_MTIMECMP_OFF + (u64)hartid * 8ULL);
+            *cmp_out = (uintptr_t)(CLINT_BASE + MTIMECMP_OFFSET + (u64)hartid * 8ULL);
         }
 
         if (hz_out) {
@@ -379,6 +378,7 @@ static bool find_mtimer(
     return false;
 }
 
+// all boot state is committed before mret because s-mode owns the console next
 static NORETURN void enter_supervisor(uintptr_t entry, boot_info_t *info) {
     unsigned long medeleg = (1UL << 0) | (1UL << 1) | (1UL << 2) | (1UL << 3) | (1UL << 4) | (1UL << 5) | (1UL << 6) |
                             (1UL << 7) | (1UL << 8) | (1UL << 12) | (1UL << 13) | (1UL << 15);
@@ -529,8 +529,8 @@ static void reserve(const char *name, uintptr_t start, size_t size, range_t *hea
         return;
     }
 
-    uintptr_t low_end = ALIGN_DOWN(start, RISCV_BOOT_PAGE_SIZE);
-    uintptr_t high_start = ALIGN(end, RISCV_BOOT_PAGE_SIZE);
+    uintptr_t low_end = ALIGN_DOWN(start, BOOT_PAGE_SIZE);
+    uintptr_t high_start = ALIGN(end, BOOT_PAGE_SIZE);
 
     size_t low_size = 0;
     size_t high_size = 0;
@@ -636,13 +636,13 @@ static void load_dtb(boot_ext2_t *rootfs, const void **dtb, size_t *size) {
     }
 
     size_t file_size = 0;
-    void *file = boot_ext2_read_file(rootfs, RISCV_BOOT_PLATFORM_DTB, &file_size);
+    void *file = boot_ext2_read_file(rootfs, BOOT_DTB_PATH, &file_size);
 
     if (file && fdt_valid(file)) {
         *dtb = file;
         *size = fdt_size(file);
 
-        log_debug("loaded DTB %s size=%zu", RISCV_BOOT_PLATFORM_DTB, *size);
+        log_debug("loaded DTB %s size=%zu", BOOT_DTB_PATH, *size);
         return;
     }
 
@@ -650,7 +650,7 @@ static void load_dtb(boot_ext2_t *rootfs, const void **dtb, size_t *size) {
         free(file);
     }
 
-    log_warn("DTB %s unavailable", RISCV_BOOT_PLATFORM_DTB);
+    log_warn("DTB %s unavailable", BOOT_DTB_PATH);
 }
 
 static void *copy_dtb(const void *dtb, size_t size) {
@@ -659,7 +659,7 @@ static void *copy_dtb(const void *dtb, size_t size) {
         return NULL;
     }
 
-    void *copy = boot_alloc_aligned(size, RISCV_BOOT_PAGE_SIZE, false);
+    void *copy = boot_alloc_aligned(size, BOOT_PAGE_SIZE, false);
     if (!copy) {
         panic("failed to copy DTB");
     }
@@ -840,8 +840,8 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     log_timer(timer_kind);
 
     range_t heap = {
-        .start = ALIGN(layout.heap_start, RISCV_BOOT_PAGE_SIZE),
-        .end = ALIGN_DOWN(layout.memory_end, RISCV_BOOT_PAGE_SIZE),
+        .start = ALIGN(layout.heap_start, BOOT_PAGE_SIZE),
+        .end = ALIGN_DOWN(layout.memory_end, BOOT_PAGE_SIZE),
     };
 
     if (rootfs_src.from_initrd) {

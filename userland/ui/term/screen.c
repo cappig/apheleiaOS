@@ -12,14 +12,14 @@
 #include <term/glyph.h>
 #include <term/utf8.h>
 
-#define FONT_BUF_SIZE               (256 * 1024)
-#define TERM_TAB_WIDTH              8
-#define TERM_SCROLLBACK_LINES       4096
-#define TERM_SCROLLBAR_WIDTH_PX     3
-#define TERM_SCROLLBAR_MIN_THUMB_PX 8
-#define TERM_SCROLLBAR_TRACK_COLOR  0x00262626U
-#define TERM_SCROLLBAR_THUMB_COLOR  0x00545454U
-#define TERM_SCROLLBAR_THUMB_ACTIVE 0x007a7a7aU
+#define FONT_BUF_SIZE       (256 * 1024)
+#define TAB_WIDTH           8
+#define SCROLLBACK_LINES    4096
+#define SCROLLBAR_WIDTH     3
+#define SCROLLBAR_MIN_THUMB 8
+#define SCROLLBAR_TRACK     0x00262626U
+#define SCROLLBAR_THUMB     0x00545454U
+#define SCROLLBAR_ACTIVE    0x007a7a7aU
 
 typedef struct {
     u32 codepoint;
@@ -36,7 +36,7 @@ typedef struct {
     u32 cell_height;
     u32 cell_src_x;
     term_cell_t cells[TERM_MAX_ROWS * TERM_MAX_COLS];
-    term_cell_t history[TERM_SCROLLBACK_LINES * TERM_MAX_COLS];
+    term_cell_t history[SCROLLBACK_LINES * TERM_MAX_COLS];
     u8 *font_buf;
     pixel_t *pixels;
     size_t pixels_count;
@@ -106,7 +106,7 @@ static term_cell_t *history_line_at(size_t logical_index) {
         return NULL;
     }
 
-    size_t physical = (term_screen.history_head + logical_index) % TERM_SCROLLBACK_LINES;
+    size_t physical = (term_screen.history_head + logical_index) % SCROLLBACK_LINES;
     return &term_screen.history[physical * TERM_MAX_COLS];
 }
 
@@ -132,12 +132,12 @@ static void push_history_row(const term_cell_t *row) {
     }
 
     size_t physical = 0;
-    if (term_screen.history_count < TERM_SCROLLBACK_LINES) {
-        physical = (term_screen.history_head + term_screen.history_count) % TERM_SCROLLBACK_LINES;
+    if (term_screen.history_count < SCROLLBACK_LINES) {
+        physical = (term_screen.history_head + term_screen.history_count) % SCROLLBACK_LINES;
         term_screen.history_count++;
     } else {
         physical = term_screen.history_head;
-        term_screen.history_head = (term_screen.history_head + 1) % TERM_SCROLLBACK_LINES;
+        term_screen.history_head = (term_screen.history_head + 1) % SCROLLBACK_LINES;
     }
 
     term_cell_t *dst = &term_screen.history[physical * TERM_MAX_COLS];
@@ -301,8 +301,8 @@ static bool find_mapped_glyph(u32 codepoint, u32 *glyph_out) {
 static u32 glyph_index_for(u32 codepoint) {
     u32 glyph = 0;
 
-    // PSF2 fonts may have sparse/non-linear Unicode mappings.
-    // Prefer explicit table lookup whenever available.
+    // psf2 fonts may have sparse/non-linear Unicode mappings
+    // prefer explicit table lookup whenever available
     if (find_mapped_glyph(codepoint, &glyph)) {
         if (glyph < term_screen.font.glyph_count) {
             return glyph;
@@ -387,9 +387,9 @@ static void derive_cell_metrics(void) {
     u32 max_right = 0;
     bool have_bounds = false;
 
-    // Derive terminal cell advance from printable ASCII glyphs.
-    // This matches monospace terminal expectations and avoids wider
-    // extended symbols inflating the cell width.
+    // derive terminal cell advance from printable ASCII glyphs
+    // this matches monospace terminal expectations and avoids wider
+    // extended symbols inflating the cell width
     for (u32 cp = 32; cp < 127; cp++) {
         u32 glyph = 0;
         if (term_screen.font_map_count) {
@@ -490,8 +490,8 @@ static void mark_dirty_rect(size_t x0, size_t y0, size_t x1, size_t y1) {
         return;
     }
 
-    // While detached from bottom, keep viewport stable and avoid
-    // repaint churn from incoming PTY output.
+    // while detached from bottom, keep viewport stable and avoid
+    // repaint churn from incoming PTY output
     if (term_screen.scroll_offset > 0) {
         return;
     }
@@ -616,7 +616,7 @@ static void newline(void) {
 }
 
 static size_t next_tab_stop(size_t cursor_x) {
-    return ((cursor_x / TERM_TAB_WIDTH) + 1) * TERM_TAB_WIDTH;
+    return ((cursor_x / TAB_WIDTH) + 1) * TAB_WIDTH;
 }
 
 static void put_codepoint(u32 codepoint) {
@@ -883,7 +883,7 @@ static void draw_glyph(size_t px, size_t py, u32 codepoint, u32 fg, u32 bg) {
         return;
     }
 
-    // Always clear the full cell so sub-glyph updates do not leave stale pixels.
+    // always clear the full cell so sub-glyph updates do not leave stale pixels
     for (u32 by = 0; by < cell_h; by++) {
         u32 *row = dst + (size_t)by * stride;
         for (u32 bx = 0; bx < cell_w; bx++) {
@@ -932,7 +932,7 @@ static void draw_scrollbar(void) {
 
     framebuffer_t fb = _screen_framebuffer();
     i32 track_x = (i32)(term_screen.width - term_screen.scrollbar_width);
-    draw_rect(&fb, track_x, 0, term_screen.scrollbar_width, term_screen.height, TERM_SCROLLBAR_TRACK_COLOR);
+    draw_rect(&fb, track_x, 0, term_screen.scrollbar_width, term_screen.height, SCROLLBAR_TRACK);
 
     size_t total_lines = term_screen.history_count + term_screen.rows;
     if (total_lines <= term_screen.rows) {
@@ -941,8 +941,8 @@ static void draw_scrollbar(void) {
 
     u32 track_h = term_screen.height;
     u32 thumb_h = (u32)(((u64)term_screen.rows * (u64)track_h) / (u64)total_lines);
-    if (thumb_h < TERM_SCROLLBAR_MIN_THUMB_PX) {
-        thumb_h = TERM_SCROLLBAR_MIN_THUMB_PX;
+    if (thumb_h < SCROLLBAR_MIN_THUMB) {
+        thumb_h = SCROLLBAR_MIN_THUMB;
     }
     if (thumb_h > track_h) {
         thumb_h = track_h;
@@ -957,7 +957,7 @@ static void draw_scrollbar(void) {
         thumb_y = (u32)(((u64)pos_from_top * (u64)range) / (u64)max_offset);
     }
 
-    pixel_t thumb_color = offset ? TERM_SCROLLBAR_THUMB_ACTIVE : TERM_SCROLLBAR_THUMB_COLOR;
+    pixel_t thumb_color = offset ? SCROLLBAR_ACTIVE : SCROLLBAR_THUMB;
     draw_rect(&fb, track_x, (i32)thumb_y, term_screen.scrollbar_width, thumb_h, thumb_color);
 }
 
@@ -983,8 +983,8 @@ static bool term_screen_layout(
     }
 
     u32 scrollbar_width = 0;
-    if (width > (term_screen.cell_width + TERM_SCROLLBAR_WIDTH_PX)) {
-        scrollbar_width = TERM_SCROLLBAR_WIDTH_PX;
+    if (width > (term_screen.cell_width + SCROLLBAR_WIDTH)) {
+        scrollbar_width = SCROLLBAR_WIDTH;
     }
 
     u32 text_width = width - scrollbar_width;

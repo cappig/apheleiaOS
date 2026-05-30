@@ -223,7 +223,7 @@ bool sleep_heap_insert(sched_thread_t *thread) {
         sleep_heap_remove_at((size_t)found);
     }
 
-    if (sched_state.wait.sleep.count >= SCHED_SLEEP_HEAP_CAPACITY) {
+    if (sched_state.wait.sleep.count >= SCHED_SLEEP_CAPACITY) {
         return false;
     }
 

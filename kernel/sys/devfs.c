@@ -60,6 +60,7 @@ static u64 _boot_seconds(void) {
         return devfs.boot_seconds;
     }
 
+    // platforms without an RTC report realtime as uptime from the Unix epoch
     u64 now = arch_realtime_ns() / 1000000000ULL;
     u64 ticks = arch_timer_ticks();
     u64 hz = arch_timer_hz();
@@ -108,6 +109,7 @@ static void _configure_dev_node(vfs_node_t *node, u32 type, mode_t mode, vfs_int
 
     node->type = type;
     node->mode = mode;
+    // devfs nodes have no backing inode, but still obey normal VFS permissions
     vfs_make_virtual(node);
     vfs_set_interface(node, interface);
     node->private = priv;

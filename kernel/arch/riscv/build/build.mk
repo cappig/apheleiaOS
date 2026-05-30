@@ -64,11 +64,11 @@ else
 RISCV_UART_STRIDE ?= 1
 endif
 
-# The embedded rootfs sits at this byte offset inside the flat image.
-# FRISC keeps its DTB in /boot/platform.dtb; the boot stub uses board defaults
-# only long enough to read that file from the rootfs.
-RISCV_BOOT_IMAGE_ROOTFS_OFFSET := 1441792
-RISCV_BOOT_SCRATCH_OFFSET      := 50331648
+# the embedded rootfs sits at this byte offset inside the flat image
+# frisc keeps its DTB in /boot/platform.dtb; the boot stub uses board defaults
+# only long enough to read that file from the rootfs
+RISCV_ROOTFS_OFFSET  := 1441792
+RISCV_SCRATCH_OFFSET := 50331648
 
 RISCV_FRISC_DTS        := $(ARCH_DIR)/dts/friscv.dts
 RISCV_FRISC_DTB        := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
@@ -89,8 +89,8 @@ KERNEL_CC_COMMON := \
 
 KERNEL_LD_COMMON := --gc-sections
 
-# Flags shared by both the 64-bit and 32-bit boot stub builds.
-# The arch-specific ISA flags are appended per-variant below.
+# flags shared by both the 64-bit and 32-bit boot stub builds
+# the arch-specific ISA flags are appended per-variant below
 BOOT_ENTRY_CFLAGS_COMMON := \
 	-Ilibs \
 	-Ilibs/libc \
@@ -104,8 +104,8 @@ BOOT_ENTRY_CFLAGS_COMMON := \
 	-fno-builtin \
 	-fno-pic \
 	-fno-pie \
-	-DRISCV_BOOT_IMAGE_ROOTFS_OFFSET=$(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) \
-	-DRISCV_BOOT_SCRATCH_OFFSET=$(RISCV_BOOT_SCRATCH_OFFSET) \
+	-DBOOT_ROOTFS_OFFSET=$(RISCV_ROOTFS_OFFSET) \
+	-DBOOT_SCRATCH_OFFSET=$(RISCV_SCRATCH_OFFSET) \
 	-DSERIAL_UART0=$(RISCV_UART0) \
 	-DRISCV_UART_STRIDE=$(RISCV_UART_STRIDE) \
 	-DBOOT_LOG_COLOR=$(BOOT_LOG_COLOR) \
@@ -114,7 +114,7 @@ BOOT_ENTRY_CFLAGS_COMMON := \
 ifeq ($(RISCV_FRISC),true)
 BOOT_ENTRY_CFLAGS_COMMON += \
 	-DRISCV_FRISC=1 \
-	-DRISCV_BOOT_PLATFORM_DTB=\"$(RISCV_PLATFORM_DTB)\"
+	-DBOOT_DTB_PATH=\"$(RISCV_PLATFORM_DTB)\"
 endif
 
 BOOT_ENTRY_LDFLAGS := \
@@ -236,11 +236,11 @@ endif
 bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE)
 	@mkdir -p $(@D)
 	@python3 kernel/arch/riscv/build/check_boot_stub.py \
-		$(BOOT_ENTRY_ELF) $(BOOT_ENTRY_BIN) $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET)
+		$(BOOT_ENTRY_ELF) $(BOOT_ENTRY_BIN) $(RISCV_ROOTFS_OFFSET)
 	@python3 kernel/arch/riscv/build/check_image_layout.py \
-	    $(KERNEL_ELF) $(ROOTFS_IMAGE) $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) \
-	    $(RISCV_BOOT_SCRATCH_OFFSET)
+	    $(KERNEL_ELF) $(ROOTFS_IMAGE) $(RISCV_ROOTFS_OFFSET) \
+	    $(RISCV_SCRATCH_OFFSET)
 	@cp $(BOOT_ENTRY_BIN) $@
-	@truncate -s $(RISCV_BOOT_IMAGE_ROOTFS_OFFSET) $@
+	@truncate -s $(RISCV_ROOTFS_OFFSET) $@
 	@cat $(ROOTFS_IMAGE) >> $@
 	@printf "%-3s  %s\n" "IM" "$@"

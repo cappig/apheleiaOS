@@ -14,22 +14,22 @@ isr_stub_%+%1:
     cmp eax, 0x1b
     je .no_error%+%1
 
-    ; Double fault: CPU already pushed error code.
+    ; double fault: CPU already pushed error code
     push dword %1
     jmp isr_common_stub
 .no_error%+%1:
-    ; IRQ0 style: no error code pushed.
+    ; irq0 style: no error code pushed
     push dword 0
     push dword %1
 
     jmp isr_common_stub
 %elif (%1 == 10) || (%1 == 11) || (%1 == 12) || (%1 == 13) || (%1 == 14) \
    || (%1 == 17) || %1 == 21 || %1 == 29 || %1 == 30
-    ; CPU already pushed error code, only push vector number
+    ; cpu already pushed error code, only push vector number
     push dword %1
     jmp isr_common_stub
 %else
-    ; For vectors without error code, push placeholder then vector
+    ; for vectors without error code, push placeholder then vector
     push dword 0
     push dword %1
 

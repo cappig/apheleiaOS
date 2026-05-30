@@ -28,7 +28,7 @@ void get_e820(e820_map_t *mmap) {
     while (mmap->count < E820_MAX) {
         e820_entry_t entry = { 0 };
 
-        in_regs.edi = REAL_OFF(&entry);
+        in_regs.edi = REAL_OFFSET(&entry);
         in_regs.es = REAL_SEG(&entry);
 
         bios_call(0x15, &in_regs, &out_regs);

@@ -21,6 +21,7 @@ static bool _user_page_flags_ok(const sched_thread_t *thread, uintptr_t addr, bo
 
     page_t *entry = NULL;
     size_t size = arch_get_page(root, addr, &entry);
+    // page tables are checked after the region list so stale metadata cannot authorize access
     if (!entry || !size || !(*entry & PT_PRESENT) || !(*entry & PT_USER)) {
         return false;
     }
@@ -54,7 +55,7 @@ bool user_range_ok(const sched_thread_t *thread, const void *ptr, size_t len, bo
         const sched_user_region_t *match = NULL;
         uintptr_t match_end = 0;
 
-        // The region list says what should exist; the PTEs say what exists now.
+        // the region list says what should exist; the PTEs say what exists now
         for (const sched_user_region_t *region = thread->regions; region; region = region->next) {
             uintptr_t region_start = region->vaddr;
             if (region->pages > SIZE_MAX / PAGE_4KIB) {
@@ -86,7 +87,7 @@ bool user_range_ok(const sched_thread_t *thread, const void *ptr, size_t len, bo
         uintptr_t segment_end = match_end < end ? match_end : end;
         bool require_write = write && !(match->flags & SCHED_REGION_COW);
 
-        // COW pages are fine for reads. Writes have to fault them private first.
+        // cow pages are fine for reads. Writes have to fault them private first
         for (uintptr_t page = ALIGN_DOWN(cursor, PAGE_4KIB); page < segment_end; page += PAGE_4KIB) {
             if (!_user_page_flags_ok(thread, page, require_write)) {
                 return false;

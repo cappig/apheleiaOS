@@ -5,7 +5,7 @@
 
 #define MBR_SIGNATURE 0xaa55
 
-// Common MBR partition types
+// common MBR partition types
 // https://en.wikipedia.org/wiki/Partition_type
 enum mbr_partition_type {
     MBR_EMPTY = 0x00,
@@ -49,7 +49,6 @@ typedef struct PACKED {
     mbr_table_t table;
     u16 signature;
 } mbr_t;
-
 
 static inline char *mbr_type_string(enum mbr_partition_type type) {
     switch (type) {

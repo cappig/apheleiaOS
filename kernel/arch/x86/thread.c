@@ -4,7 +4,6 @@
 #include <sched/scheduler.h>
 #include <x86/gdt.h>
 
-
 arch_word_t arch_user_stack_top(void) {
 #if defined(__x86_64__)
     return (arch_word_t)0x0000000080000000ULL;
@@ -93,19 +92,19 @@ uintptr_t arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point)
     sp -= sizeof(u64);
     *(u64 *)sp = (u64)entry_rsp;
     sp -= sizeof(u64);
-    *(u64 *)sp = 0x202; // RFLAGS with IF set
+    *(u64 *)sp = 0x202; // rflags with IF set
     sp -= sizeof(u64);
     *(u64 *)sp = GDT_KERNEL_CODE;
     sp -= sizeof(u64);
     *(u64 *)sp = (u64)entry_point;
 
-    // Error code and vector
+    // error code and vector
     sp -= sizeof(u64);
     *(u64 *)sp = 0;
     sp -= sizeof(u64);
     *(u64 *)sp = 0;
 
-    // General registers in push order
+    // general registers in push order
     u64 regs[15] = { 0 };
 
     for (size_t i = 0; i < ARRAY_LEN(regs); i++) {
@@ -121,19 +120,19 @@ uintptr_t arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point)
     *(u32 *)sp = (u32)(uintptr_t)sched_exit;
 
     sp -= sizeof(u32);
-    *(u32 *)sp = 0x202; // EFLAGS with IF set
+    *(u32 *)sp = 0x202; // eflags with IF set
     sp -= sizeof(u32);
     *(u32 *)sp = GDT_KERNEL_CODE;
     sp -= sizeof(u32);
     *(u32 *)sp = (u32)entry_point;
 
-    // Error code and vector
+    // error code and vector
     sp -= sizeof(u32);
     *(u32 *)sp = 0;
     sp -= sizeof(u32);
     *(u32 *)sp = 0;
 
-    // Saved segment registers
+    // saved segment registers
     sp -= sizeof(u32);
     *(u32 *)sp = (u32)GDT_KERNEL_DATA;
     sp -= sizeof(u32);
@@ -143,7 +142,7 @@ uintptr_t arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point)
     sp -= sizeof(u32);
     *(u32 *)sp = (u32)GDT_KERNEL_DATA;
 
-    // General registers in push order
+    // general registers in push order
     u32 regs[7] = { 0 };
 
     for (size_t i = 0; i < ARRAY_LEN(regs); i++) {

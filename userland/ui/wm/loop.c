@@ -23,20 +23,20 @@
 
 extern char **environ;
 
-#define WM_POLL_DRAG_MS         16
-#define WM_POLL_FRAME_MS        16
-#define WM_CURSOR_WIDTH         16
-#define WM_CURSOR_HEIGHT        16
-#define WM_CURSOR_CENTER_HOT_X  (WM_CURSOR_WIDTH / 2)
-#define WM_CURSOR_CENTER_HOT_Y  (WM_CURSOR_HEIGHT / 2)
-#define WM_RESIZE_EDGE_MARGIN   6
-#define WM_RESIZE_CORNER_MARGIN 12
-#define WM_MIN_CLIENT_W         160
-#define WM_MIN_CLIENT_H         96
-#define WM_WS_EVENT_BATCH       32
-#define WM_INPUT_EVENT_BATCH    32
-#define WM_WS_EVENT_BUDGET      512
-#define WM_INPUT_EVENT_BUDGET   512
+#define WM_POLL_DRAG_MS      16
+#define WM_POLL_FRAME_MS     16
+#define CURSOR_WIDTH         16
+#define CURSOR_HEIGHT        16
+#define CURSOR_HOT_X         (CURSOR_WIDTH / 2)
+#define CURSOR_HOT_Y         (CURSOR_HEIGHT / 2)
+#define RESIZE_EDGE_MARGIN   6
+#define RESIZE_CORNER_MARGIN 12
+#define MIN_CLIENT_WIDTH     160
+#define MIN_CLIENT_HEIGHT    96
+#define WS_EVENT_BATCH       32
+#define INPUT_EVENT_BATCH    32
+#define WS_EVENT_BUDGET      512
+#define INPUT_EVENT_BUDGET   512
 
 typedef enum {
     WM_DRAG_NONE = 0,
@@ -74,7 +74,6 @@ typedef struct {
     bool term_hotkey_down;
     wm_cursor_kind_t cursor_kind;
 } wm_runtime_t;
-
 
 static bool _rect_clip_to_fb(wm_rect_t *rect, const fb_info_t *fb_info) {
     if (!rect || !wm_rect_valid(rect) || !fb_info) {
@@ -117,10 +116,10 @@ static bool _rect_clip_to_fb(wm_rect_t *rect, const fb_info_t *fb_info) {
 
 static wm_rect_t _cursor_rect(i32 x, i32 y) {
     wm_rect_t rect = {
-        .x = x - WM_CURSOR_CENTER_HOT_X,
-        .y = y - WM_CURSOR_CENTER_HOT_Y,
-        .width = WM_CURSOR_WIDTH + WM_CURSOR_CENTER_HOT_X,
-        .height = WM_CURSOR_HEIGHT + WM_CURSOR_CENTER_HOT_Y,
+        .x = x - CURSOR_HOT_X,
+        .y = y - CURSOR_HOT_Y,
+        .width = CURSOR_WIDTH + CURSOR_HOT_X,
+        .height = CURSOR_HEIGHT + CURSOR_HOT_Y,
     };
 
     return rect;
@@ -489,14 +488,14 @@ static u32 _resize_hit_edges(const wm_window_t *window, i32 px, i32 py) {
         return 0;
     }
 
-    bool near_left_edge = (px - left) < WM_RESIZE_EDGE_MARGIN;
-    bool near_right_edge = (right - px) < WM_RESIZE_EDGE_MARGIN;
-    bool near_bottom_edge = (bottom - py) < WM_RESIZE_EDGE_MARGIN;
+    bool near_left_edge = (px - left) < RESIZE_EDGE_MARGIN;
+    bool near_right_edge = (right - px) < RESIZE_EDGE_MARGIN;
+    bool near_bottom_edge = (bottom - py) < RESIZE_EDGE_MARGIN;
 
-    bool near_left_corner = (px - left) < WM_RESIZE_CORNER_MARGIN;
-    bool near_right_corner = (right - px) < WM_RESIZE_CORNER_MARGIN;
-    bool near_top_corner = (py - top) < WM_RESIZE_CORNER_MARGIN;
-    bool near_bottom_corner = (bottom - py) < WM_RESIZE_CORNER_MARGIN;
+    bool near_left_corner = (px - left) < RESIZE_CORNER_MARGIN;
+    bool near_right_corner = (right - px) < RESIZE_CORNER_MARGIN;
+    bool near_top_corner = (py - top) < RESIZE_CORNER_MARGIN;
+    bool near_bottom_corner = (bottom - py) < RESIZE_CORNER_MARGIN;
 
     if (near_left_corner && near_top_corner) {
         return WM_RESIZE_LEFT | WM_RESIZE_TOP;
@@ -680,8 +679,8 @@ static bool _compute_resize_geometry(
 
     i32 frame_w = (i32)fb_info->width;
     i32 frame_h = (i32)fb_info->height;
-    i32 min_w = WM_MIN_CLIENT_W;
-    i32 min_total_h = TITLE_H + WM_MIN_CLIENT_H;
+    i32 min_w = MIN_CLIENT_WIDTH;
+    i32 min_total_h = TITLE_H + MIN_CLIENT_HEIGHT;
 
     bool left = (rt->drag_edges & WM_RESIZE_LEFT) != 0;
     bool right = (rt->drag_edges & WM_RESIZE_RIGHT) != 0;
@@ -773,11 +772,11 @@ static bool _apply_drag(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm
 }
 
 static int _handle_ws_events(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm_rect_t *damage) {
-    ws_event_t events[WM_WS_EVENT_BATCH];
+    ws_event_t events[WS_EVENT_BATCH];
     size_t processed = 0;
 
     for (;;) {
-        if (processed >= WM_WS_EVENT_BUDGET) {
+        if (processed >= WS_EVENT_BUDGET) {
             return 0;
         }
 
@@ -838,7 +837,7 @@ static int _handle_ws_events(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_inf
                 }
             }
 
-            if (processed >= WM_WS_EVENT_BUDGET) {
+            if (processed >= WS_EVENT_BUDGET) {
                 return 0;
             }
         }
@@ -1009,12 +1008,12 @@ static int _handle_input_events(
     bool *changed,
     wm_rect_t *damage
 ) {
-    input_event_t events[WM_INPUT_EVENT_BATCH];
+    input_event_t events[INPUT_EVENT_BATCH];
     wm_forward_batch_t forward_batch = { 0 };
     size_t processed = 0;
 
     for (;;) {
-        if (processed >= WM_INPUT_EVENT_BUDGET) {
+        if (processed >= INPUT_EVENT_BUDGET) {
             _flush_forward_batch(ui, &forward_batch);
             return 0;
         }
@@ -1112,7 +1111,7 @@ static int _handle_input_events(
                 }
             }
 
-            if (processed >= WM_INPUT_EVENT_BUDGET) {
+            if (processed >= INPUT_EVENT_BUDGET) {
                 _flush_forward_batch(ui, &forward_batch);
                 return 0;
             }

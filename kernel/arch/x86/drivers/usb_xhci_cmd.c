@@ -236,7 +236,7 @@ bool _xhci_submit_command(xhci_controller_t *ctrl, const xhci_trb_t *cmd, u8 *ou
 
         if (map) {
             volatile u8 *op = (volatile u8 *)map + ctrl->cap_length;
-            usbsts = _read32(op, XHCI_OP_USBSTS_OFF);
+            usbsts = _read32(op, XHCI_OP_USBSTS_OFFSET);
             arch_phys_unmap(map, XHCI_MMIO_SIZE);
         }
 

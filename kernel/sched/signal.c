@@ -148,7 +148,7 @@ int sched_signal_send_thread(sched_thread_t *thread, int signum) {
         return 0;
     }
 
-    // SIGCONT always continues a stopped process, regardless of handler
+    // sigcont always continues a stopped process, regardless of handler
     if (signal_is_continue(signum)) {
         sched_continue_thread(thread);
     }

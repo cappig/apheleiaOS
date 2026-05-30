@@ -26,7 +26,7 @@ static bool fetch_vbe(vesa_info_t *buffer) {
     regs32_t r = { 0 };
     r.ax = 0x4f00;
     r.es = REAL_SEG(buffer);
-    r.edi = REAL_OFF(buffer);
+    r.edi = REAL_OFFSET(buffer);
 
     bios_call(0x10, &r, &r);
 
@@ -48,7 +48,7 @@ static bool fetch_mode(vesa_mode_t *buffer, u16 mode) {
     r.cx = mode;
 
     r.es = REAL_SEG(buffer);
-    r.edi = REAL_OFF(buffer);
+    r.edi = REAL_OFFSET(buffer);
 
     bios_call(0x10, &r, &r);
 
@@ -66,7 +66,7 @@ static bool fetch_edid(edid_data_t *buffer) {
     r.bx = 0x01;
 
     r.es = REAL_SEG(buffer);
-    r.edi = REAL_OFF(buffer);
+    r.edi = REAL_OFFSET(buffer);
 
     bios_call(0x10, &r, &r);
 

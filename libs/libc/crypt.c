@@ -7,7 +7,7 @@
 #define FNV1A_OFFSET 2166136261u
 #define FNV1A_PRIME  16777619u
 
-// WARN: simple non crytographic hash for the simple toy os :^)
+// toy password hash, not suitable for real authentication
 char *crypt(const char *key, const char *salt) {
     static char buf[64];
 

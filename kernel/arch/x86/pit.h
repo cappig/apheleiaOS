@@ -2,7 +2,7 @@
 
 #include <base/types.h>
 
-// PIT ports
+// pit ports
 #define PIT_A       0x40
 #define PIT_B       0x41
 #define PIT_C       0x42

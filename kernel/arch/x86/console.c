@@ -6,9 +6,13 @@
 #include <x86/console.h>
 #include <x86/vga.h>
 
-static u8 *x86_fb_base = NULL;
-static u64 x86_fb_phys = 0;
-static bool x86_fb_use_phys_window = false;
+typedef struct {
+    u8 *fb;
+    u64 phys;
+    bool use_phys_window;
+} x86_console_t;
+
+static x86_console_t x86_console = { 0 };
 
 static bool _x86_console_probe(void *arch_boot_info, console_hw_desc_t *out) {
     if (!arch_boot_info || !out) {
@@ -48,9 +52,9 @@ static bool _x86_console_probe(void *arch_boot_info, console_hw_desc_t *out) {
             out->green_size = info->video.green_size;
             out->blue_size = info->video.blue_size;
 
-            x86_fb_base = NULL;
-            x86_fb_phys = info->video.framebuffer;
-            x86_fb_use_phys_window = true;
+            x86_console.fb = NULL;
+            x86_console.phys = info->video.framebuffer;
+            x86_console.use_phys_window = true;
 
             return true;
         }
@@ -71,9 +75,9 @@ static bool _x86_console_probe(void *arch_boot_info, console_hw_desc_t *out) {
             out->green_size = info->video.green_size;
             out->blue_size = info->video.blue_size;
 
-            x86_fb_base = mapped;
-            x86_fb_phys = info->video.framebuffer;
-            x86_fb_use_phys_window = false;
+            x86_console.fb = mapped;
+            x86_console.phys = info->video.framebuffer;
+            x86_console.use_phys_window = false;
 
             return true;
         }
@@ -103,9 +107,9 @@ static bool _x86_console_probe(void *arch_boot_info, console_hw_desc_t *out) {
     }
 #endif
 
-    x86_fb_base = out->fb;
-    x86_fb_phys = VGA_ADDR;
-    x86_fb_use_phys_window = false;
+    x86_console.fb = out->fb;
+    x86_console.phys = VGA_ADDR;
+    x86_console.use_phys_window = false;
 
     return true;
 }
@@ -116,21 +120,23 @@ static u8 *_x86_fb_map(size_t offset, size_t size) {
     }
 
 #if defined(__i386__)
-    if (x86_fb_use_phys_window)
-        return arch_phys_map(x86_fb_phys + (u64)offset, size, PHYS_MAP_WC);
+    if (x86_console.use_phys_window) {
+        return arch_phys_map(x86_console.phys + (u64)offset, size, PHYS_MAP_WC);
+    }
 #endif
 
-    if (!x86_fb_base) {
+    if (!x86_console.fb) {
         return NULL;
     }
 
-    return x86_fb_base + offset;
+    return x86_console.fb + offset;
 }
 
 static void _x86_fb_unmap(void *ptr, size_t size) {
 #if defined(__i386__)
-    if (x86_fb_use_phys_window)
+    if (x86_console.use_phys_window) {
         arch_phys_unmap(ptr, size);
+    }
 #endif
 
     (void)ptr;

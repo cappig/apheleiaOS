@@ -12,7 +12,7 @@
 
 #define __PRI32 ""
 
-// A lot of stuff is missing here
+// only the format macros used by the tree are defined here
 #define PRId8  "d"
 #define PRId16 "d"
 #define PRId32 __PRI32 "d"

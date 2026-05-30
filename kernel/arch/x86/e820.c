@@ -19,7 +19,6 @@ static inline u64 _region_top(u64 base, u64 size) {
     return base + size;
 }
 
-
 void mmap_remove_entry(e820_map_t *map, size_t index) {
     map->count--;
 
@@ -56,7 +55,7 @@ static int _comp_mmap(const void *a, const void *b) {
     return 0;
 }
 
-// Should be called every time the map is altered
+// should be called every time the map is altered
 void clean_mmap(e820_map_t *map) {
     if (map->count > E820_MAX) {
         map->count = E820_MAX;
@@ -77,13 +76,13 @@ void clean_mmap(e820_map_t *map) {
 
         u64 top = _region_top(entries[i].address, entries[i].size);
 
-        // Not touching or overlapping, skip
+        // not touching or overlapping, skip
         if (top < entries[i + 1].address) {
             continue;
         }
 
         if (entries[i].type == entries[i + 1].type) {
-            // Don't merge allocations so that we can free individual blocks
+            // don't merge allocations so that we can free individual blocks
             if (entries[i].type == E820_ALLOC) {
                 continue;
             }
@@ -115,7 +114,7 @@ void *mmap_alloc_inner(e820_map_t *mmap, size_t bytes, u32 type, u32 alignment, 
 
     e820_entry_t *entries = (e820_entry_t *)&mmap->entries;
 
-    // An alignment of 0 means 'do not align'
+    // an alignment of 0 means 'do not align'
     if (!alignment) {
         alignment = 1;
     }
@@ -124,7 +123,7 @@ void *mmap_alloc_inner(e820_map_t *mmap, size_t bytes, u32 type, u32 alignment, 
         top = (u64)-1;
     }
 
-    // Protected mode can't handle addresses larger than 4 Gib
+    // protected mode can't handle addresses larger than 4 Gib
 #if defined(__i386__)
     top = min(top, 0x100000000UL);
 #endif
@@ -148,7 +147,7 @@ void *mmap_alloc_inner(e820_map_t *mmap, size_t bytes, u32 type, u32 alignment, 
             entry_top = top;
         }
 
-        // Only map conventional memory if asked explicitly to do so
+        // only map conventional memory if asked explicitly to do so
         if (top > 0xfffff && entry_top <= 0xfffff) {
             continue;
         }
@@ -159,14 +158,14 @@ void *mmap_alloc_inner(e820_map_t *mmap, size_t bytes, u32 type, u32 alignment, 
             continue;
         }
 
-        // Shrink current entry
+        // shrink current entry
         u64 old_addr = entries[i].address;
         u64 old_size = entries[i].size;
         u64 size = entry_top - base;
         entries[i].address += size;
         entries[i].size -= size;
 
-        // Create new entry with memory taken from the current one
+        // create new entry with memory taken from the current one
         if (!mmap_add_entry(mmap, base, (u64)bytes, type)) {
             entries[i].address = old_addr;
             entries[i].size = old_size;
@@ -219,7 +218,6 @@ char *mem_map_type_string(e820_type_t type) {
     }
 }
 
-
 bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t block_size) {
     if (mmap->count > E820_MAX) {
         mmap->count = E820_MAX;
@@ -239,7 +237,7 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t 
         u64 top = _region_top(current->address, current->size);
         u64 base = current->address;
 
-        // We only map the low 4 GiB in the current setup
+        // we only map the low 4 GiB in the current setup
         if (base >= max_addr) {
             continue;
         }
@@ -286,7 +284,7 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t 
         return false;
     }
 
-    // Find some space for the bitmap (low to avoid clobbering high allocations)
+    // find some space for the bitmap (low to avoid clobbering high allocations)
     void *bitmap_addr = NULL;
 
     for (size_t i = 0; i < mmap->count; i++) {
@@ -332,7 +330,7 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t 
         return false;
     }
 
-    // The allocator tracks physical addresses, but the bitmap itself must be
+    // the allocator tracks physical addresses, but the bitmap itself must be
     // accessed via a valid virtual mapping
 #if defined(__x86_64__)
     alloc->bitmap = (bitmap_word_t *)((uintptr_t)bitmap_addr + LINEAR_MAP_OFFSET_64);
@@ -340,7 +338,7 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t 
     alloc->bitmap = (bitmap_word_t *)(bitmap_addr);
 #endif
 
-    // Mark the whole bitmap as used
+    // mark the whole bitmap as used
     memset(alloc->bitmap, (unsigned int)-1, bitmap_size);
     alloc->free_blocks = 0;
     alloc->usable_blocks = 0;

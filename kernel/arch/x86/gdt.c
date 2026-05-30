@@ -8,18 +8,22 @@
 #include <sys/cpu.h>
 #include <x86/apic.h>
 
-static tss_entry_t tss_entries[MAX_CORES] = { 0 };
-static gdt_desc_t gdt_descs[MAX_CORES] = { 0 };
-
 #if defined(__x86_64__)
 #define IST_STACK_SIZE 4096
-ALIGNED(16)
-static u8 ist_double_fault_stack[MAX_CORES][IST_STACK_SIZE];
 #endif
 
-ALIGNED(0x10)
-static gdt_entry_t gdt_entries[MAX_CORES][GDT_ENTRY_COUNT] = { 0 };
+typedef struct {
+    tss_entry_t tss[MAX_CORES];
+    gdt_desc_t descs[MAX_CORES];
 
+#if defined(__x86_64__)
+    u8 ist_double_fault_stack[MAX_CORES][IST_STACK_SIZE] ALIGNED(16);
+#endif
+
+    gdt_entry_t entries[MAX_CORES][GDT_ENTRY_COUNT] ALIGNED(0x10);
+} gdt_state_t;
+
+static gdt_state_t gdt = { 0 };
 
 bool gdt_current_core_id(size_t *out) {
     if (!out) {
@@ -31,7 +35,7 @@ bool gdt_current_core_id(size_t *out) {
 
     uintptr_t active_gdt = (uintptr_t)current.gdt_ptr;
     for (size_t i = 0; i < MAX_CORES; i++) {
-        if (active_gdt == (uintptr_t)&gdt_entries[i][0]) {
+        if (active_gdt == (uintptr_t)&gdt.entries[i][0]) {
             *out = i;
             return true;
         }
@@ -79,17 +83,16 @@ static size_t _gdt_core_id(void) {
 }
 
 static gdt_entry_t *_gdt_entries_for(size_t core_id) {
-    return gdt_entries[core_id];
+    return gdt.entries[core_id];
 }
 
 static gdt_desc_t *_gdt_desc_for(size_t core_id) {
-    return &gdt_descs[core_id];
+    return &gdt.descs[core_id];
 }
 
 static tss_entry_t *_tss_for(size_t core_id) {
-    return &tss_entries[core_id];
+    return &gdt.tss[core_id];
 }
-
 
 static void _set_gdt_entry(gdt_entry_t *entries, size_t index, u64 base, u32 limit, u8 access, u8 flags) {
     entries[index].limit_low = (limit & 0xffff);
@@ -111,7 +114,7 @@ static void _set_gdt_high_entry(gdt_entry_t *entries, size_t index, u64 base) {
 static void _build_segments(size_t core_id) {
     gdt_entry_t *entries = _gdt_entries_for(core_id);
 
-    memset(entries, 0, sizeof(gdt_entries[core_id]));
+    memset(entries, 0, sizeof(gdt.entries[core_id]));
 
     u32 limit = 0;
     u8 code_flags = 0;
@@ -127,11 +130,11 @@ static void _build_segments(size_t core_id) {
     data_flags = 0x0C;
 #endif
 
-    _set_gdt_entry(entries, 0, 0, 0, 0, 0); // Null segment
-    _set_gdt_entry(entries, 1, 0, limit, 0x9a, code_flags); // Kernel code segment
-    _set_gdt_entry(entries, 2, 0, limit, 0x92, data_flags); // Kernel data segment
-    _set_gdt_entry(entries, 3, 0, limit, 0xfa, code_flags); // User code segment
-    _set_gdt_entry(entries, 4, 0, limit, 0xf2, data_flags); // User data segment
+    _set_gdt_entry(entries, 0, 0, 0, 0, 0); // null segment
+    _set_gdt_entry(entries, 1, 0, limit, 0x9a, code_flags); // kernel code segment
+    _set_gdt_entry(entries, 2, 0, limit, 0x92, data_flags); // kernel data segment
+    _set_gdt_entry(entries, 3, 0, limit, 0xfa, code_flags); // user code segment
+    _set_gdt_entry(entries, 4, 0, limit, 0xf2, data_flags); // user data segment
 }
 
 void gdt_init(void) {
@@ -193,7 +196,7 @@ void tss_init(uintptr_t kernel_stack_top) {
     _set_gdt_entry(entries, 5, tss_addr, sizeof(tss_entry_t) - 1, 0x89, 0);
 #if defined(__x86_64__)
     _set_gdt_high_entry(entries, 5, tss_addr);
-    tss->ist[0] = (u64)(uintptr_t)(ist_double_fault_stack[core_id] + IST_STACK_SIZE);
+    tss->ist[0] = (u64)(uintptr_t)(gdt.ist_double_fault_stack[core_id] + IST_STACK_SIZE);
 #endif
 
     set_tss_stack(kernel_stack_top);

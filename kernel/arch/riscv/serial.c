@@ -4,7 +4,6 @@
 
 #ifdef _KERNEL
 #include <sys/lock.h>
-static spinlock_t tx_lock = SPINLOCK_INIT;
 #endif
 
 #define UART_THR 0x00
@@ -18,10 +17,22 @@ static spinlock_t tx_lock = SPINLOCK_INIT;
 
 #define UART_TX_IRQ_CHUNK 16
 
-static uintptr_t uart_reg_stride = RISCV_UART_STRIDE;
+typedef struct {
+    uintptr_t stride;
+#ifdef _KERNEL
+    spinlock_t tx_lock;
+#endif
+} serial_state_t;
+
+static serial_state_t serial = {
+    .stride = RISCV_UART_STRIDE,
+#ifdef _KERNEL
+    .tx_lock = SPINLOCK_INIT,
+#endif
+};
 
 static inline uintptr_t _uart_reg(uintptr_t base, uintptr_t reg) {
-    return base + reg * uart_reg_stride;
+    return base + reg * serial.stride;
 }
 
 static inline u8 _uart_read(uintptr_t base, uintptr_t reg) {
@@ -41,11 +52,11 @@ void serial_set_reg_stride(uintptr_t stride) {
         stride = RISCV_UART_STRIDE;
     }
 
-    uart_reg_stride = stride ? stride : 1;
+    serial.stride = stride ? stride : 1;
 }
 
 uintptr_t serial_reg_stride(void) {
-    return uart_reg_stride;
+    return serial.stride;
 }
 
 static void _send_serial_unlocked(uintptr_t base, char c) {
@@ -64,13 +75,13 @@ void send_serial(uintptr_t base, char c) {
     }
 
 #ifdef _KERNEL
-    unsigned long flags = spin_lock_irqsave(&tx_lock);
+    unsigned long flags = spin_lock_irqsave(&serial.tx_lock);
 #endif
 
     _send_serial_unlocked(base, c);
 
 #ifdef _KERNEL
-    spin_unlock_irqrestore(&tx_lock, flags);
+    spin_unlock_irqrestore(&serial.tx_lock, flags);
 #endif
 }
 
@@ -118,10 +129,10 @@ void serial_set_rx_interrupt(uintptr_t base, bool enable) {
 }
 
 void send_serial_string(uintptr_t base, const char *s) {
-    send_serial_sized_string(base, s, s ? strlen(s) : 0);
+    send_serial_buf(base, s, s ? strlen(s) : 0);
 }
 
-void send_serial_sized_string(uintptr_t base, const char *s, size_t len) {
+void send_serial_buf(uintptr_t base, const char *s, size_t len) {
     if (!base || !s || !len) {
         return;
     }
@@ -134,7 +145,7 @@ void send_serial_sized_string(uintptr_t base, const char *s, size_t len) {
         }
 
 #ifdef _KERNEL
-        unsigned long flags = spin_lock_irqsave(&tx_lock);
+        unsigned long flags = spin_lock_irqsave(&serial.tx_lock);
 #endif
 
         for (size_t i = 0; i < chunk; i++) {
@@ -142,7 +153,7 @@ void send_serial_sized_string(uintptr_t base, const char *s, size_t len) {
         }
 
 #ifdef _KERNEL
-        spin_unlock_irqrestore(&tx_lock, flags);
+        spin_unlock_irqrestore(&serial.tx_lock, flags);
 #endif
 
         off += chunk;

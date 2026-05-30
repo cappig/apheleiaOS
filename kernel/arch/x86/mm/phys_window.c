@@ -79,7 +79,6 @@ static void _window_lock_release(void) {
     }
 }
 
-
 static u64 _map_flags_to_pt_flags(u32 flags) {
     u64 pt_flags = PT_WRITE;
 
@@ -223,8 +222,8 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
             chunk = kChunk;
         }
 
-        // The phys window is a single sliding mapping. Never hold two mapped
-        // windows at once or src/dst can alias and silently corrupt copies.
+        // the phys window is a single sliding mapping. Never hold two mapped
+        // windows at once or src/dst can alias and silently corrupt copies
         void *src = arch_phys_map(src_paddr + offset, chunk, 0);
         if (!src) {
             return false;

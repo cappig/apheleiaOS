@@ -7,7 +7,6 @@
 #include "stddef.h"
 #include "stdint.h"
 
-
 void *memcpy(void *restrict dest, const void *restrict src, size_t len) {
     unsigned char *d = (unsigned char *)dest;
     const unsigned char *s = (const unsigned char *)src;
@@ -73,7 +72,6 @@ char *strcpy(char *restrict dest, const char *restrict src) {
     return out;
 }
 
-
 char *strncat(char *dest, const char *src, size_t len) {
     char *end = dest;
     dest += strlen(dest);
@@ -102,7 +100,6 @@ char *strcat(char *dest, const char *src) {
 
     return out;
 }
-
 
 int memcmp(const void *s1, const void *s2, size_t n) {
     const char *p1 = (const char *)s1;
@@ -151,7 +148,6 @@ int strncmp(const char *s1, const char *s2, size_t n) {
         return *(const unsigned char *)s1 - *(const unsigned char *)s2;
     }
 }
-
 
 char *strchr(const char *str, int ch) {
     while (*str) {
@@ -273,7 +269,6 @@ char *strpbrk(const char *str, const char *delim) {
     return NULL;
 }
 
-
 void *memset(void *dest, int val, size_t len) {
     unsigned char c = (unsigned char)val;
     unsigned char *d = (unsigned char *)dest;
@@ -309,7 +304,6 @@ size_t strlen(const char *str) {
     return len;
 }
 
-
 void *memchr(const void *ptr, int ch, size_t len) {
     const char *str = (const char *)ptr;
 
@@ -321,7 +315,6 @@ void *memchr(const void *ptr, int ch, size_t len) {
 
     return NULL;
 }
-
 
 static bool _is_delim(char c, const char *delim) {
     while (*delim) {
@@ -349,7 +342,7 @@ char *strtok_r(char *str, const char *delim, char **save_ptr) {
         return NULL;
     }
 
-    // Trim leading deliminators
+    // trim leading delimiters
     while (*str && _is_delim(*str, delim)) {
         str++;
     }
@@ -359,7 +352,7 @@ char *strtok_r(char *str, const char *delim, char **save_ptr) {
         return NULL;
     }
 
-    // Find the end of the token
+    // find the end of the token
     char *end = str;
     while (*end && !_is_delim(*end, delim)) {
         end++;
@@ -380,7 +373,6 @@ char *strtok(char *restrict str, const char *restrict delim) {
     static char *save = NULL;
     return strtok_r(str, delim, &save);
 }
-
 
 char *strndup(const char *str, size_t size) {
     if (!str) {
@@ -404,7 +396,6 @@ char *strdup(const char *str) {
 
     return strndup(str, strlen(str));
 }
-
 
 static char *error_strings[] = { [0] = "No error",
                                  [E2BIG] = "Argument list too long",

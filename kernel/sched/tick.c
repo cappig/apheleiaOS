@@ -119,8 +119,8 @@ pick_switch_to(sched_thread_t *current, bool preempted_running, size_t cpu_id, u
 }
 
 static void stage_preempted(sched_thread_t *thread, size_t cpu_id) {
-    // Do not enqueue this thread before we switch away. Another CPU could
-    // otherwise pick it up while it is still running here.
+    // do not enqueue this thread before we switch away. Another CPU could
+    // otherwise pick it up while it is still running here
     sched_thread_t *pending = sched_local()->handoff_ready;
 
     if (pending && pending != thread) {

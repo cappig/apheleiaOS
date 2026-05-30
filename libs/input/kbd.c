@@ -10,11 +10,11 @@ char kbd_to_ascii(key_event event, ascii_keymap *map, bool shift) {
     u8 code = event.code;
 
     switch (code) {
-    // Mapped printable keys
+    // mapped printable keys
     case 1 ... 63:
         return shift ? map->shifted[code] : map->normal[code];
 
-    // ASCII control codes
+    // ascii control codes
     case KBD_KP_ENTER ... KBD_DELETE:
         return ctrl_ascii[code - KBD_KP_ENTER];
 

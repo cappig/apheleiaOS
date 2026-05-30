@@ -306,7 +306,7 @@ static void _init_express(mcfg_t *table) {
             continue;
         }
 
-        // ECAM base in MCFG entries is anchored to start_bus;
+        // ecam base in MCFG entries is anchored to start_bus
         // convert to a synthetic bus-0 base so _ecam_addr() can use absolute bus
         u64 ecam_base = entry->base_addr - start_bus_off;
         _register_ecam_window(ecam_base, entry->pci_seg_group, entry->start_bus, entry->end_bus);
@@ -359,7 +359,7 @@ size_t pci_init(void) {
     return pci_state.devices->length;
 }
 
-// NOTE: returns the conventional 256 bytes, not the full 4096 bytes for PCIe
+// note: returns the conventional 256 bytes, not the full 4096 bytes for PCIe
 pci_device_t *pci_find_device(u8 class, u8 subclass, pci_device_t *from) {
     list_node_t *start = pci_state.devices ? pci_state.devices->head : NULL;
     bool matched_from = (from == NULL);
@@ -581,7 +581,7 @@ bool pci_enable_msi(u8 bus, u8 slot, u8 func, u8 vector, u32 lapic_dest) {
     u16 msg_ctrl = (u16)pci_read_config(bus, slot, func, cap + 2, 2);
     bool is_64bit = (msg_ctrl & (1U << 7)) != 0;
 
-    // Disable MSI while programming
+    // disable MSI while programming
     pci_write_config(bus, slot, func, cap + 2, msg_ctrl & ~1U, 2);
 
     u32 addr_lo = 0xFEE00000U | (lapic_dest << 12);
@@ -596,15 +596,15 @@ bool pci_enable_msi(u8 bus, u8 slot, u8 func, u8 vector, u32 lapic_dest) {
         data_offset = cap + 8;
     }
 
-    // Message Data: vector number, fixed delivery
+    // message Data: vector number, fixed delivery
     pci_write_config(bus, slot, func, data_offset, vector, 2);
 
-    // Request single message, enable MSI
+    // request single message, enable MSI
     msg_ctrl &= ~(0x70U);
     msg_ctrl |= 1U;
     pci_write_config(bus, slot, func, cap + 2, msg_ctrl, 2);
 
-    // Disable legacy INTx
+    // disable legacy INTx
     u16 cmd = (u16)pci_read_config(bus, slot, func, PCI_CFG_COMMAND, 2);
     cmd |= PCI_COMMAND_INT_DIS;
     pci_write_config(bus, slot, func, PCI_CFG_COMMAND, cmd, 2);

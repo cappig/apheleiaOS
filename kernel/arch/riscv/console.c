@@ -11,15 +11,21 @@
 #define COLS 80
 #define ROWS 25
 
-static uintptr_t uart_base = SERIAL_UART0;
+typedef struct {
+    uintptr_t uart;
+    u16 shadow[COLS * ROWS];
 
-static u16 text_shadow[COLS * ROWS];
+    size_t col;
+    size_t row;
 
-static size_t cur_col = 0;
-static size_t cur_row = 0;
-static bool cursor_valid = false;
-static bool wrap_pending = false;
-static bool suppressed = false;
+    bool cursor_valid;
+    bool wrap_pending;
+    bool muted;
+} riscv_console_t;
+
+static riscv_console_t riscv_console = {
+    .uart = SERIAL_UART0,
+};
 
 static void _emit_escape(const char *fmt, ...) {
     char buf[64];
@@ -28,49 +34,49 @@ static void _emit_escape(const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
-    if (!suppressed) {
-        send_serial_string(uart_base, buf);
+    if (!riscv_console.muted) {
+        send_serial_string(riscv_console.uart, buf);
     }
 }
 
 static void _put(char ch) {
-    if (!suppressed) {
-        send_serial(uart_base, ch);
+    if (!riscv_console.muted) {
+        send_serial(riscv_console.uart, ch);
     }
 
-    if (!cursor_valid) {
+    if (!riscv_console.cursor_valid) {
         return;
     }
 
     if (ch == '\r') {
-        cur_col = 0;
-        wrap_pending = false;
+        riscv_console.col = 0;
+        riscv_console.wrap_pending = false;
         return;
     }
 
     if (ch == '\n') {
-        cur_col = 0;
-        if (cur_row + 1 < ROWS) {
-            cur_row++;
+        riscv_console.col = 0;
+        if (riscv_console.row + 1 < ROWS) {
+            riscv_console.row++;
         }
-        wrap_pending = false;
+        riscv_console.wrap_pending = false;
         return;
     }
 
-    if (wrap_pending) {
-        cur_col = 0;
-        if (cur_row + 1 < ROWS) {
-            cur_row++;
+    if (riscv_console.wrap_pending) {
+        riscv_console.col = 0;
+        if (riscv_console.row + 1 < ROWS) {
+            riscv_console.row++;
         }
-        wrap_pending = false;
+        riscv_console.wrap_pending = false;
     }
 
-    if (cur_col + 1 < COLS) {
-        cur_col++;
+    if (riscv_console.col + 1 < COLS) {
+        riscv_console.col++;
         return;
     }
 
-    wrap_pending = true;
+    riscv_console.wrap_pending = true;
 }
 
 static void _move_up(size_t n) {
@@ -106,51 +112,52 @@ static void _sync_cursor(size_t col, size_t row) {
         row = ROWS - 1;
     }
 
-    if (suppressed || !cursor_valid) {
-        cur_col = col;
-        cur_row = row;
-        cursor_valid = true;
-        wrap_pending = false;
+    if (riscv_console.muted || !riscv_console.cursor_valid) {
+        riscv_console.col = col;
+        riscv_console.row = row;
+        riscv_console.cursor_valid = true;
+        riscv_console.wrap_pending = false;
         return;
     }
 
-    bool same = cur_col == col && cur_row == row;
-    bool wrapped_next = wrap_pending && col == 0 &&
-                        ((cur_row + 1 < ROWS && row == cur_row + 1) || (cur_row + 1 >= ROWS && row == ROWS - 1));
+    bool same = riscv_console.col == col && riscv_console.row == row;
+    bool wrapped_next = riscv_console.wrap_pending && col == 0 &&
+                        ((riscv_console.row + 1 < ROWS && row == riscv_console.row + 1) ||
+                         (riscv_console.row + 1 >= ROWS && row == ROWS - 1));
 
     if (same || wrapped_next) {
         return;
     }
 
-    if (row == cur_row && col == 0) {
+    if (row == riscv_console.row && col == 0) {
         _put('\r');
         return;
     }
 
-    if (col == 0 && row > cur_row) {
+    if (col == 0 && row > riscv_console.row) {
         _put('\r');
-        while (cur_row < row) {
+        while (riscv_console.row < row) {
             _put('\n');
         }
         return;
     }
 
-    if (row < cur_row) {
-        _move_up(cur_row - row);
-    } else if (row > cur_row) {
-        _move_down(row - cur_row);
+    if (row < riscv_console.row) {
+        _move_up(riscv_console.row - row);
+    } else if (row > riscv_console.row) {
+        _move_down(row - riscv_console.row);
     }
 
-    if (col < cur_col) {
-        _move_left(cur_col - col);
-    } else if (col > cur_col) {
-        _move_right(col - cur_col);
+    if (col < riscv_console.col) {
+        _move_left(riscv_console.col - col);
+    } else if (col > riscv_console.col) {
+        _move_right(col - riscv_console.col);
     }
 
-    cur_col = col;
-    cur_row = row;
-    cursor_valid = true;
-    wrap_pending = false;
+    riscv_console.col = col;
+    riscv_console.row = row;
+    riscv_console.cursor_valid = true;
+    riscv_console.wrap_pending = false;
 }
 
 static bool _probe(void *arch_boot_info, console_hw_desc_t *out) {
@@ -162,8 +169,8 @@ static bool _probe(void *arch_boot_info, console_hw_desc_t *out) {
 
     memset(out, 0, sizeof(*out));
     out->mode = CONSOLE_TEXT;
-    out->fb = (u8 *)text_shadow;
-    out->fb_size = sizeof(text_shadow);
+    out->fb = (u8 *)riscv_console.shadow;
+    out->fb_size = sizeof(riscv_console.shadow);
     out->width = COLS;
     out->height = ROWS;
     out->pitch = COLS * sizeof(u16);
@@ -172,15 +179,15 @@ static bool _probe(void *arch_boot_info, console_hw_desc_t *out) {
 }
 
 static u8 *_fb_map(size_t offset, size_t size) {
-    if (!size || offset >= sizeof(text_shadow)) {
+    if (!size || offset >= sizeof(riscv_console.shadow)) {
         return NULL;
     }
 
-    if (offset + size > sizeof(text_shadow)) {
+    if (offset + size > sizeof(riscv_console.shadow)) {
         return NULL;
     }
 
-    return (u8 *)text_shadow + offset;
+    return (u8 *)riscv_console.shadow + offset;
 }
 
 static void _fb_unmap(void *ptr, size_t size) {
@@ -188,8 +195,8 @@ static void _fb_unmap(void *ptr, size_t size) {
     (void)size;
 }
 
-static void _set_suppressed(bool val) {
-    uart_console_set_suppressed(val);
+static void _set_suppressed(bool muted) {
+    uart_console_mute(muted);
 }
 
 static ssize_t _stream_write(const void *buf, size_t len) {
@@ -201,7 +208,7 @@ static ssize_t _stream_write(const void *buf, size_t len) {
         return 0;
     }
 
-    send_serial_sized_string(uart_base, buf, len);
+    send_serial_buf(riscv_console.uart, buf, len);
     return (ssize_t)len;
 }
 
@@ -245,10 +252,10 @@ static void _text_clear(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
         text[i] = blank;
     }
 
-    cur_col = 0;
-    cur_row = 0;
-    cursor_valid = true;
-    wrap_pending = false;
+    riscv_console.col = 0;
+    riscv_console.row = 0;
+    riscv_console.cursor_valid = true;
+    riscv_console.wrap_pending = false;
 }
 
 static void _text_scroll_up(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
@@ -282,15 +289,15 @@ static const console_backend_ops_t uart_console_ops = {
 };
 
 void uart_console_set_base(uintptr_t base) {
-    uart_base = base;
+    riscv_console.uart = base;
 }
 
 uintptr_t uart_console_base(void) {
-    return uart_base;
+    return riscv_console.uart;
 }
 
-void uart_console_set_suppressed(bool val) {
-    suppressed = val;
+void uart_console_mute(bool muted) {
+    riscv_console.muted = muted;
 }
 
 void uart_console_init(uintptr_t base) {

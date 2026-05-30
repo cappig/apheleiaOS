@@ -30,10 +30,15 @@ typedef enum {
     PROC_FIELD_AFFINITY,
 } proc_field_t;
 
-static vfs_node_t *proc_root = NULL;
-static mutex_t procfs_tree_lock = MUTEX_INIT;
-static linked_list_t *procfs_dead_nodes = NULL;
+typedef struct {
+    vfs_node_t *root;
+    mutex_t lock;
+    linked_list_t *dead_nodes;
+} procfs_state_t;
 
+static procfs_state_t procfs = {
+    .lock = MUTEX_INIT,
+};
 
 static uintptr_t _proc_key(pid_t pid, proc_field_t field) {
     return ((((uintptr_t)(u32)pid) & 0xffffffffULL) << 8) | (uintptr_t)field;
@@ -44,14 +49,14 @@ static void _procfs_dead_add(vfs_node_t *node) {
         return;
     }
 
-    if (!procfs_dead_nodes) {
-        procfs_dead_nodes = list_create();
-        if (!procfs_dead_nodes) {
+    if (!procfs.dead_nodes) {
+        procfs.dead_nodes = list_create();
+        if (!procfs.dead_nodes) {
             return;
         }
     }
 
-    if (list_find(procfs_dead_nodes, node)) {
+    if (list_find(procfs.dead_nodes, node)) {
         return;
     }
 
@@ -60,12 +65,12 @@ static void _procfs_dead_add(vfs_node_t *node) {
         return;
     }
 
-    if (!list_append(procfs_dead_nodes, entry)) {
+    if (!list_append(procfs.dead_nodes, entry)) {
         list_destroy_node(entry);
     }
 }
 
-static bool _procfs_subtree_has_refs(tree_node_t *tnode) {
+static bool _subtree_has_refs(tree_node_t *tnode) {
     if (!tnode) {
         return false;
     }
@@ -81,7 +86,7 @@ static bool _procfs_subtree_has_refs(tree_node_t *tnode) {
 
     ll_foreach(child, tnode->children) {
         tree_node_t *child_tnode = child->data;
-        if (_procfs_subtree_has_refs(child_tnode)) {
+        if (_subtree_has_refs(child_tnode)) {
             return true;
         }
     }
@@ -342,13 +347,13 @@ static bool _parse_pid_name(const char *name, pid_t *pid_out) {
 }
 
 static bool _procfs_contains_node(vfs_node_t *node) {
-    if (!proc_root || !node || !node->tree_entry) {
+    if (!procfs.root || !node || !node->tree_entry) {
         return false;
     }
 
     tree_node_t *entry = node->tree_entry;
     while (entry) {
-        if (entry->data == proc_root) {
+        if (entry->data == procfs.root) {
             return true;
         }
 
@@ -358,7 +363,7 @@ static bool _procfs_contains_node(vfs_node_t *node) {
     return false;
 }
 
-bool procfs_path_lock_if_needed(const char *path, unsigned long *flags_out) {
+bool procfs_lock_path(const char *path, unsigned long *flags_out) {
     if (!flags_out) {
         return false;
     }
@@ -374,11 +379,11 @@ bool procfs_path_lock_if_needed(const char *path, unsigned long *flags_out) {
         return false;
     }
 
-    mutex_lock(&procfs_tree_lock);
+    mutex_lock(&procfs.lock);
     return true;
 }
 
-bool procfs_dir_lock_if_needed(vfs_node_t *node, unsigned long *flags_out) {
+bool procfs_lock_dir(vfs_node_t *node, unsigned long *flags_out) {
     if (!flags_out) {
         return false;
     }
@@ -389,14 +394,14 @@ bool procfs_dir_lock_if_needed(vfs_node_t *node, unsigned long *flags_out) {
         return false;
     }
 
-    mutex_lock(&procfs_tree_lock);
+    mutex_lock(&procfs.lock);
     return true;
 }
 
-void procfs_dir_unlock_if_needed(bool locked, unsigned long flags) {
+void procfs_unlock_dir(bool locked, unsigned long flags) {
     (void)flags;
     if (locked) {
-        mutex_unlock(&procfs_tree_lock);
+        mutex_unlock(&procfs.lock);
     }
 }
 
@@ -424,7 +429,7 @@ static bool _owner_for_pid(pid_t pid, uid_t *uid_out, gid_t *gid_out) {
 }
 
 bool procfs_stat_owner(vfs_node_t *node, uid_t *uid_out, gid_t *gid_out) {
-    if (!node || !uid_out || !gid_out || !proc_root) {
+    if (!node || !uid_out || !gid_out || !procfs.root) {
         return false;
     }
 
@@ -436,7 +441,7 @@ bool procfs_stat_owner(vfs_node_t *node, uid_t *uid_out, gid_t *gid_out) {
     vfs_node_t *parent = parent_tnode ? parent_tnode->data : NULL;
 
     if (!parent || !parent->tree_entry || !parent->tree_entry->parent) {
-        if (parent == proc_root && node->name && !strcmp(node->name, "self")) {
+        if (parent == procfs.root && node->name && !strcmp(node->name, "self")) {
             return _owner_for_pid(0, uid_out, gid_out);
         }
 
@@ -449,22 +454,22 @@ bool procfs_stat_owner(vfs_node_t *node, uid_t *uid_out, gid_t *gid_out) {
     pid_t pid = 0;
 
     // /proc/self/<entry>
-    if (parent == proc_root && node->name && !strcmp(node->name, "self")) {
+    if (parent == procfs.root && node->name && !strcmp(node->name, "self")) {
         return _owner_for_pid(0, uid_out, gid_out);
     }
 
     // /proc/<pid>
-    if (parent == proc_root && _parse_pid_name(node->name, &pid)) {
+    if (parent == procfs.root && _parse_pid_name(node->name, &pid)) {
         return _owner_for_pid(pid, uid_out, gid_out);
     }
 
     // /proc/self/<entry>
-    if (grand == proc_root && parent->name && !strcmp(parent->name, "self")) {
+    if (grand == procfs.root && parent->name && !strcmp(parent->name, "self")) {
         return _owner_for_pid(0, uid_out, gid_out);
     }
 
     // /proc/<pid>/<entry>
-    if (grand == proc_root && _parse_pid_name(parent->name, &pid)) {
+    if (grand == procfs.root && _parse_pid_name(parent->name, &pid)) {
         return _owner_for_pid(pid, uid_out, gid_out);
     }
 
@@ -925,11 +930,11 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
 }
 
 bool procfs_init(void) {
-    mutex_lock(&procfs_tree_lock);
+    mutex_lock(&procfs.lock);
 
     vfs_node_t *root = vfs_lookup("/");
     if (!root) {
-        mutex_unlock(&procfs_tree_lock);
+        mutex_unlock(&procfs.lock);
         log_warn("procfs missing root");
         return false;
     }
@@ -944,7 +949,7 @@ bool procfs_init(void) {
     }
 
     if (!proc) {
-        mutex_unlock(&procfs_tree_lock);
+        mutex_unlock(&procfs.lock);
         log_warn("failed to create /proc");
         return false;
     }
@@ -954,38 +959,38 @@ bool procfs_init(void) {
     proc->type = VFS_DIR;
     proc->mode = 0555;
     proc->private = NULL;
-    proc_root = proc;
+    procfs.root = proc;
 
     vfs_node_t *self_dir = NULL;
-    if (!_upsert_dir(proc_root, "self", 0555, &self_dir)) {
-        mutex_unlock(&procfs_tree_lock);
+    if (!_upsert_dir(procfs.root, "self", 0555, &self_dir)) {
+        mutex_unlock(&procfs.lock);
         log_warn("failed to create /proc/self");
         return false;
     }
 
     if (!_ensure_proc_entry(self_dir, 0, true)) {
-        mutex_unlock(&procfs_tree_lock);
+        mutex_unlock(&procfs.lock);
         log_warn("failed to populate /proc/self");
         return false;
     }
 
-    mutex_unlock(&procfs_tree_lock);
+    mutex_unlock(&procfs.lock);
     return true;
 }
 
 void procfs_register_pid(pid_t pid) {
-    if (pid <= 0 || !proc_root) {
+    if (pid <= 0 || !procfs.root) {
         return;
     }
 
-    mutex_lock(&procfs_tree_lock);
+    mutex_lock(&procfs.lock);
 
     char pid_name[24];
     snprintf(pid_name, sizeof(pid_name), "%lld", (long long)pid);
 
     vfs_node_t *proc_dir = NULL;
-    if (!_upsert_dir(proc_root, pid_name, 0555, &proc_dir)) {
-        mutex_unlock(&procfs_tree_lock);
+    if (!_upsert_dir(procfs.root, pid_name, 0555, &proc_dir)) {
+        mutex_unlock(&procfs.lock);
         return;
     }
 
@@ -993,24 +998,24 @@ void procfs_register_pid(pid_t pid) {
         log_warn("failed to populate /proc/%lld", (long long)pid);
     }
 
-    mutex_unlock(&procfs_tree_lock);
+    mutex_unlock(&procfs.lock);
 }
 
 void procfs_sweep_dead(void) {
-    if (!procfs_dead_nodes || !procfs_dead_nodes->length) {
+    if (!procfs.dead_nodes || !procfs.dead_nodes->length) {
         return;
     }
 
-    mutex_lock(&procfs_tree_lock);
+    mutex_lock(&procfs.lock);
 
-    list_node_t *node = procfs_dead_nodes->head;
+    list_node_t *node = procfs.dead_nodes->head;
     while (node) {
         list_node_t *next = node->next;
         vfs_node_t *dir = node->data;
         tree_node_t *entry = dir ? dir->tree_entry : NULL;
 
-        if (!dir || !entry || !_procfs_subtree_has_refs(entry)) {
-            list_remove(procfs_dead_nodes, node);
+        if (!dir || !entry || !_subtree_has_refs(entry)) {
+            list_remove(procfs.dead_nodes, node);
             list_destroy_node(node);
 
             if (dir && entry) {
@@ -1021,32 +1026,32 @@ void procfs_sweep_dead(void) {
         node = next;
     }
 
-    mutex_unlock(&procfs_tree_lock);
+    mutex_unlock(&procfs.lock);
 }
 
 void procfs_unregister_pid(pid_t pid) {
-    if (pid <= 0 || !proc_root) {
+    if (pid <= 0 || !procfs.root) {
         return;
     }
 
     char pid_name[24];
     snprintf(pid_name, sizeof(pid_name), "%lld", (long long)pid);
 
-    mutex_lock(&procfs_tree_lock);
+    mutex_lock(&procfs.lock);
 
-    vfs_node_t *proc_dir = vfs_lookup_from(proc_root, pid_name);
+    vfs_node_t *proc_dir = vfs_lookup_from(procfs.root, pid_name);
     if (!proc_dir) {
-        mutex_unlock(&procfs_tree_lock);
+        mutex_unlock(&procfs.lock);
         return;
     }
 
-    if (vfs_detach_child(proc_root, proc_dir) < 0) {
-        mutex_unlock(&procfs_tree_lock);
+    if (vfs_detach_child(procfs.root, proc_dir) < 0) {
+        mutex_unlock(&procfs.lock);
         return;
     }
 
     _procfs_dead_add(proc_dir);
-    mutex_unlock(&procfs_tree_lock);
+    mutex_unlock(&procfs.lock);
 
     procfs_sweep_dead();
 }

@@ -8,32 +8,38 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-static uintptr_t tty_uart_base = SERIAL_UART0;
-static char boot_log_buf[BOOT_LOG_CAP];
-static size_t boot_log_len = 0;
+typedef struct {
+    uintptr_t uart;
+    char log[BOOT_LOG_CAP];
+    size_t log_len;
+} boot_tty_t;
+
+static boot_tty_t boot_tty = {
+    .uart = SERIAL_UART0,
+};
 
 static void boot_log_putc(char c) {
-    if (boot_log_len >= BOOT_LOG_CAP) {
+    if (boot_tty.log_len >= BOOT_LOG_CAP) {
         return;
     }
 
-    boot_log_buf[boot_log_len++] = c;
+    boot_tty.log[boot_tty.log_len++] = c;
 }
 
 const char *boot_log_buffer(size_t *len, size_t *cap) {
     if (len) {
-        *len = boot_log_len;
+        *len = boot_tty.log_len;
     }
 
     if (cap) {
         *cap = BOOT_LOG_CAP;
     }
 
-    return boot_log_buf;
+    return boot_tty.log;
 }
 
 void tty_set_uart_base(uintptr_t base) {
-    tty_uart_base = base;
+    boot_tty.uart = base;
 }
 
 int puts(const char *str) {
@@ -43,11 +49,11 @@ int puts(const char *str) {
         char c = *str++;
 
         if (c == '\n') {
-            send_serial(tty_uart_base, '\r');
+            send_serial(boot_tty.uart, '\r');
         }
 
         boot_log_putc(c);
-        send_serial(tty_uart_base, c);
+        send_serial(boot_tty.uart, c);
         count++;
     }
 

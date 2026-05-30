@@ -15,9 +15,9 @@
 #define MCAUSE_M_TIMER 7
 #define MIP_STIP_BIT   (1 << 5)
 
-#define RISCV_MCALL_EXT_TIMER       0x4154494d
-#define RISCV_MCALL_TIMER_ARM_DELTA 0
-#define RISCV_MCALL_TIMER_READ_TIME 1
+#define MCALL_TIMER_EXT  0x4154494d
+#define MCALL_TIMER_ARM  0
+#define MCALL_TIMER_READ 1
 
 #define SCR_T1 (0 * REGBYTES)
 #define SCR_T2 (1 * REGBYTES)
@@ -86,9 +86,9 @@ mtrap_entry:
     j .Lreturn
 
 .Lecall:
-    li t2, RISCV_MCALL_EXT_TIMER
+    li t2, MCALL_TIMER_EXT
     bne a7, t2, .Lecall_fail
-    li t2, RISCV_MCALL_TIMER_ARM_DELTA
+    li t2, MCALL_TIMER_ARM
     bne a6, t2, .Lecall_other
 
     la t3, boot_timer
@@ -133,7 +133,7 @@ mtrap_entry:
     j .Lreturn
 
 .Lecall_other:
-    li t2, RISCV_MCALL_TIMER_READ_TIME
+    li t2, MCALL_TIMER_READ
     bne a6, t2, .Lecall_fail
 
     la t1, boot_timer

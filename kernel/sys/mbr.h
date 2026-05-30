@@ -5,7 +5,7 @@
 
 #define MBR_SIGNATURE 0xaa55
 
-// Common MBR partition types
+// common MBR partition types
 // https://en.wikipedia.org/wiki/Partition_type
 enum mbr_partition_type {
     MBR_EMPTY = 0x00,

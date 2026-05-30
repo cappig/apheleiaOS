@@ -1,7 +1,7 @@
 #pragma once
 
 // x86 memory management wrappers
-// Provides arch_* inline wrappers around the x86 PMM and VMM
+// provides arch_* inline wrappers around the x86 PMM and VMM
 
 #include <arch/paging.h>
 #include <base/types.h>

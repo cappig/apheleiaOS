@@ -12,8 +12,13 @@ static tty_handle_t serial_console = {
     .index = 0,
 };
 
-static bool driver_loaded = false;
-static bool node_ready = false;
+// the devfs node is a view of the boot console, not a second UART owner
+typedef struct {
+    bool loaded;
+    bool node_ready;
+} serial_driver_state_t;
+
+static serial_driver_state_t serial_driver = { 0 };
 
 const driver_desc_t serial_driver_desc = {
     .name = "riscv-serial",
@@ -64,12 +69,13 @@ static bool register_serial_dev(vfs_node_t *dev_dir) {
     iface->poll = serial_poll;
     iface->wait_queue = serial_wait_queue;
 
-    node_ready = devfs_register_node(dev_dir, "ttyS0", VFS_CHARDEV, 0600, iface, &serial_console);
-    return node_ready;
+    // keep /dev/ttyS0 root only so arbitrary users cannot scribble on firmware logs
+    serial_driver.node_ready = devfs_register_node(dev_dir, "ttyS0", VFS_CHARDEV, 0600, iface, &serial_console);
+    return serial_driver.node_ready;
 }
 
 driver_err_t serial_driver_load(void) {
-    if (driver_loaded) {
+    if (serial_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -77,12 +83,12 @@ driver_err_t serial_driver_load(void) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
-    driver_loaded = true;
+    serial_driver.loaded = true;
     return DRIVER_OK;
 }
 
 driver_err_t serial_driver_unload(void) {
-    if (!driver_loaded) {
+    if (!serial_driver.loaded) {
         return DRIVER_OK;
     }
 
@@ -90,7 +96,7 @@ driver_err_t serial_driver_unload(void) {
         return DRIVER_ERR_BUSY;
     }
 
-    if (node_ready && !devfs_unregister_node("/dev/ttyS0")) {
+    if (serial_driver.node_ready && !devfs_unregister_node("/dev/ttyS0")) {
         return DRIVER_ERR_BUSY;
     }
 
@@ -98,8 +104,8 @@ driver_err_t serial_driver_unload(void) {
         return DRIVER_ERR_BUSY;
     }
 
-    node_ready = false;
-    driver_loaded = false;
+    serial_driver.node_ready = false;
+    serial_driver.loaded = false;
     return DRIVER_OK;
 }
 

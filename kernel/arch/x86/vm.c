@@ -104,8 +104,8 @@ static page_t *_clone_kernel_root_32(page_t *kernel_root) {
             continue;
         }
 
-        // Share the higher-half kernel mapping tree so new kernel mappings
-        // are visible in every user address space.
+        // share the higher-half kernel mapping tree so new kernel mappings
+        // are visible in every user address space
         if (i == kernel_pdpt_index) {
             root[i] = entry;
             continue;

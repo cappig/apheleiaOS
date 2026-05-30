@@ -11,7 +11,7 @@ typedef struct PACKED {
     u8 revision;
     u32 rsdt_addr;
 
-    // Versions >= 2.0 use the fields below
+    // versions >= 2.0 use the fields below
     u32 length;
     u64 xsdt_addr;
     u8 checksum_extended;

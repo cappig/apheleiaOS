@@ -70,8 +70,8 @@
 #define SCHED_RQ_CAPACITY 4096
 #endif
 
-#ifndef SCHED_SLEEP_HEAP_CAPACITY
-#define SCHED_SLEEP_HEAP_CAPACITY SCHED_RQ_CAPACITY
+#ifndef SCHED_SLEEP_CAPACITY
+#define SCHED_SLEEP_CAPACITY SCHED_RQ_CAPACITY
 #endif
 
 #ifndef SCHED_IDLE_STEAL_BATCH
@@ -86,8 +86,8 @@
 #define SCHED_EXIT_EVENT_CAP 512
 #endif
 
-#ifndef SCHED_WAKE_LOCAL_LOAD_SLOP
-#define SCHED_WAKE_LOCAL_LOAD_SLOP 2
+#ifndef SCHED_WAKE_LOAD_SLOP
+#define SCHED_WAKE_LOAD_SLOP 2
 #endif
 
 #ifndef KERNEL_HEAP_BLOCK_SIZE
@@ -182,7 +182,7 @@
 #error "EXEC_ARG_MAX must fit at least one exec argument"
 #endif
 
-#if SCHED_RQ_CAPACITY < 1 || SCHED_SLEEP_HEAP_CAPACITY < 1
+#if SCHED_RQ_CAPACITY < 1 || SCHED_SLEEP_CAPACITY < 1
 #error "scheduler queue capacities must be at least 1"
 #endif
 

@@ -10,14 +10,14 @@
 #include <unistd.h>
 #include <user/kv.h>
 
-#define DRAW_FONT_BUF_SIZE      (256 * 1024)
-#define DRAW_FONT_PATH_DEFAULT  "/etc/font.psf"
-#define DRAW_WM_CONFIG_PATH     "/etc/wm.conf"
-#define DRAW_WM_CONFIG_BUF_SIZE 2048
+#define FONT_BUF_SIZE      (256 * 1024)
+#define DEFAULT_FONT_PATH  "/etc/font.psf"
+#define WM_CONFIG_PATH     "/etc/wm.conf"
+#define WM_CONFIG_BUF_SIZE 2048
 #if defined(PATH_MAX)
-#define DRAW_FONT_PATH_MAX PATH_MAX
+#define FONT_PATH_MAX PATH_MAX
 #else
-#define DRAW_FONT_PATH_MAX 4096
+#define FONT_PATH_MAX 4096
 #endif
 
 typedef struct {
@@ -26,7 +26,7 @@ typedef struct {
 } draw_font_map_entry_t;
 
 typedef struct {
-    u8 buf[DRAW_FONT_BUF_SIZE];
+    u8 buf[FONT_BUF_SIZE];
     psf_font_t psf;
 
     draw_font_map_entry_t *map;
@@ -40,13 +40,13 @@ typedef struct {
     bool load_attempted;
     bool loaded;
     bool path_ready;
-    char path[DRAW_FONT_PATH_MAX];
+    char path[FONT_PATH_MAX];
 } draw_font_cache_t;
 
 static draw_font_cache_t font_cache = {
     .cell_width = 8,
     .cell_height = 16,
-    .path = DRAW_FONT_PATH_DEFAULT,
+    .path = DEFAULT_FONT_PATH,
 };
 
 static i32 min3(i32 a, i32 b, i32 c) {
@@ -297,7 +297,7 @@ static void _derive_font_metrics(void) {
     u32 max_right = 0;
     bool have_bounds = false;
 
-    // Base spacing on printable ASCII to keep text layout stable.
+    // base spacing on printable ASCII to keep text layout stable
     for (u32 cp = 32; cp < 127; cp++) {
         u32 glyph = 0;
         if (font_cache.map_count) {
@@ -355,8 +355,8 @@ static void _resolve_draw_font_path(void) {
 
     font_cache.path_ready = true;
 
-    char cfg_text[DRAW_WM_CONFIG_BUF_SIZE];
-    int cfg_fd = open(DRAW_WM_CONFIG_PATH, O_RDONLY, 0);
+    char cfg_text[WM_CONFIG_BUF_SIZE];
+    int cfg_fd = open(WM_CONFIG_PATH, O_RDONLY, 0);
     if (cfg_fd < 0) {
         return;
     }
@@ -367,7 +367,7 @@ static void _resolve_draw_font_path(void) {
         return;
     }
 
-    char configured[DRAW_FONT_PATH_MAX] = { 0 };
+    char configured[FONT_PATH_MAX] = { 0 };
     if (!kv_read_string(cfg_text, "font", configured, sizeof(configured))) {
         return;
     }
@@ -451,7 +451,7 @@ bool draw_set_font_path(const char *path) {
 const char *draw_get_font_path(void) {
     _resolve_draw_font_path();
     if (!font_cache.path[0]) {
-        return DRAW_FONT_PATH_DEFAULT;
+        return DEFAULT_FONT_PATH;
     }
     return font_cache.path;
 }
@@ -551,7 +551,7 @@ void draw_rect(framebuffer_t *fb, i32 x, i32 y, u32 width, u32 height, pixel_t c
     size_t span = (size_t)(x1 - x0);
     size_t span_bytes = span * sizeof(pixel_t);
 
-    // Check if all 4 bytes are the same — memset is fastest for this case
+    // check if all 4 bytes are the same — memset is fastest for this case
     u8 b0 = (u8)color;
     bool byte_fill = (b0 == (u8)(color >> 8)) && (b0 == (u8)(color >> 16)) && (b0 == (u8)(color >> 24));
 
@@ -562,7 +562,7 @@ void draw_rect(framebuffer_t *fb, i32 x, i32 y, u32 width, u32 height, pixel_t c
         return;
     }
 
-    // Fill the first row manually, then memcpy to subsequent rows
+    // fill the first row manually, then memcpy to subsequent rows
     pixel_t *first_row = fb->pixels + (size_t)y0 * stride_pixels + (size_t)x0;
 
     for (size_t i = 0; i < span; i++) {

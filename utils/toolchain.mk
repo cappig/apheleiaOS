@@ -12,8 +12,8 @@ GNU_CC_CANDIDATES_x86_32   := i686-elf-gcc i386-elf-gcc i686-linux-gnu-gcc i386-
 GNU_CC_CANDIDATES_riscv_64 := riscv64-unknown-elf-gcc riscv-none-elf-gcc riscv64-elf-gcc
 GNU_CC_CANDIDATES_riscv_32 := riscv32-unknown-elf-gcc riscv32-elf-gcc $(GNU_CC_CANDIDATES_riscv_64)
 
-# Per-arch, per-toolchain tool overrides. Defaults are resolved from common
-# bare-metal and distro names; callers can still pass GNU_CC_x86_32=/path/gcc.
+# per-arch, per-toolchain tool overrides. Defaults are resolved from common
+# bare-metal and distro names; callers can still pass GNU_CC_x86_32=/path/gcc
 ifndef GNU_CC_x86_64
 GNU_CC_x86_64 := $(call pick_tool,$(GNU_CC_CANDIDATES_x86_64))
 endif
@@ -143,8 +143,8 @@ define log
 	@printf "%-3s  %s\n" "$(strip $(1))" "$(strip $(2))"
 endef
 
-# Rebuild objects when command-line flags change. Make tracks source
-# dependencies, but it does not know when the recipe text has changed.
+# rebuild objects when command-line flags change. Make tracks source
+# dependencies, but it does not know when the recipe text has changed
 .PHONY: FORCE
 FORCE:
 
@@ -153,7 +153,7 @@ $(1): FORCE
 	@utils/write_flag_stamp.sh "$$@" '$(strip $($(2)))'
 endef
 
-# Compiler / assembler / linker wrappers used by arch build.mk files.
+# compiler / assembler / linker wrappers used by arch build.mk files
 define cc
 	@$(CC) $(CC_BASE) $(strip $(1)) -c -o $(strip $(2)) $(strip $(3))
 	$(call log, CC, $(3))
@@ -181,7 +181,7 @@ endef
 
 LIBC_DIRS := libs/libc libs/libc_ext
 
-# Split ARCH into tree (x86, riscv) and variant (64, 32).
+# split ARCH into tree (x86, riscv) and variant (64, 32)
 ARCH_TREE    := $(word 1, $(subst _, ,$(ARCH)))
 ARCH_VARIANT := $(word 2, $(subst _, ,$(ARCH)))
 
@@ -217,7 +217,6 @@ CC_BASE_PROFILE := -O3
 else
 $(error Unsupported PROFILE '$(PROFILE)')
 endif
-
 
 GCC_ANALYZER ?= false
 CC_BASE_ANALYZER :=
@@ -255,9 +254,9 @@ CC_BASE := \
 	$(CC_BASE_TRACE) \
 	$(CC_BASE_PROFILE)
 
-# Returns the runtime helper archive for the given CFLAGS, or empty if missing.
-# Some Clang packages print a compiler-rt path they do not ship, so RISC-V
-# builds also try the bare-metal GCC toolchain when it is installed.
+# returns the runtime helper archive for the given CFLAGS, or empty if missing
+# some Clang packages print a compiler-rt path they do not ship, so RISC-V
+# builds also try the bare-metal GCC toolchain when it is installed
 LIBGCC = $(shell \
 	lib=$$($(CC) $(CC_BASE) $(1) -print-libgcc-file-name 2>/dev/null); \
 	if [ -f "$$lib" ]; then echo "$$lib"; exit 0; fi; \

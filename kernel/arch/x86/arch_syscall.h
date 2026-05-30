@@ -1,7 +1,7 @@
 #pragma once
 
 // x86 syscall register accessors
-// Requires arch_int_state_t and arch_syscall_t to be defined before inclusion
+// requires arch_int_state_t and arch_syscall_t to be defined before inclusion
 
 static inline arch_syscall_t arch_syscall_num(const arch_int_state_t *state) {
 #if defined(__x86_64__)
