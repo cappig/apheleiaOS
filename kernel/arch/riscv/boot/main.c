@@ -28,6 +28,9 @@ extern char __image_start;
 #ifndef BOOT_ROOTFS_OFFSET
 #define BOOT_ROOTFS_OFFSET (2ULL * MIB)
 #endif
+#ifndef BOOT_DTB_OFFSET
+#define BOOT_DTB_OFFSET 0
+#endif
 
 #define DEFAULT_TIMEBASE_HZ 10000000ULL
 #define CLINT_BASE          0x02000000ULL
@@ -35,14 +38,6 @@ extern char __image_start;
 #define MTIME_OFFSET        0x0000BFF8ULL
 #define DTB_LOW_LIMIT       (16ULL * MIB)
 #define DTB_RAM_WINDOW      (256ULL * MIB)
-
-#ifndef RISCV_FRISC
-#define RISCV_FRISC 0
-#endif
-
-#ifndef BOOT_DTB_PATH
-#define BOOT_DTB_PATH "/boot/platform.dtb"
-#endif
 
 #ifndef BOOT_LOG_COLOR
 #define BOOT_LOG_COLOR true
@@ -238,6 +233,16 @@ static const u8 *rootfs_at(uintptr_t image_base) {
     uintptr_t rootfs = addr_add(image_base, BOOT_ROOTFS_OFFSET, "embedded rootfs address overflow");
 
     return (const u8 *)rootfs;
+}
+
+static const void *dtb_at(uintptr_t image_base) {
+    if (!BOOT_DTB_OFFSET) {
+        return NULL;
+    }
+
+    uintptr_t addr = addr_add(image_base, BOOT_DTB_OFFSET, "embedded DTB address overflow");
+
+    return valid_dtb((const void *)addr);
 }
 
 static layout_t make_layout(fdt_reg_t memory) {
@@ -630,29 +635,6 @@ static void log_timer(const char *kind) {
     );
 }
 
-static void load_dtb(boot_ext2_t *rootfs, const void **dtb, size_t *size) {
-    if (!RISCV_FRISC) {
-        return;
-    }
-
-    size_t file_size = 0;
-    void *file = boot_ext2_read_file(rootfs, BOOT_DTB_PATH, &file_size);
-
-    if (file && fdt_valid(file)) {
-        *dtb = file;
-        *size = fdt_size(file);
-
-        log_debug("loaded DTB %s size=%zu", BOOT_DTB_PATH, *size);
-        return;
-    }
-
-    if (file) {
-        free(file);
-    }
-
-    log_warn("DTB %s unavailable", BOOT_DTB_PATH);
-}
-
 static void *copy_dtb(const void *dtb, size_t size) {
     if (!dtb || !size) {
         log_warn("no DTB available");
@@ -757,12 +739,28 @@ static boot_info_t *make_info(const boot_desc_t *desc) {
     return info;
 }
 
-static const void *pick_dtb(const void *entry_dtb) {
-    if (RISCV_FRISC) {
-        return NULL;
+static const void *pick_dtb(const void *entry_dtb, const void *image_dtb) {
+    if (entry_dtb) {
+        return entry_dtb;
     }
 
-    return entry_dtb;
+    return image_dtb;
+}
+
+static const char *dtb_source(const void *dtb, const void *entry_dtb, const void *image_dtb) {
+    if (!dtb) {
+        return "none";
+    }
+
+    if (dtb == entry_dtb) {
+        return "firmware";
+    }
+
+    if (dtb == image_dtb) {
+        return "image";
+    }
+
+    return "unknown";
 }
 
 static size_t dtb_len(const void *dtb) {
@@ -785,9 +783,10 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     boot_ext2_t rootfs = { 0 };
 
     const void *entry_dtb = valid_dtb(dtb);
-    const void *boot_dtb = pick_dtb(entry_dtb);
+    const void *image_dtb = dtb_at((uintptr_t)&__image_start);
+    const void *boot_dtb = pick_dtb(entry_dtb, image_dtb);
 
-    bool dtb_valid = entry_dtb != NULL;
+    bool entry_dtb_valid = entry_dtb != NULL;
     size_t dtb_size = dtb_len(boot_dtb);
 
     fdt_reg_t memory = find_memory(boot_dtb);
@@ -804,11 +803,11 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     log_set_options(log_opts());
 
     log_info(
-        "boot stub hart=%lu dtb=%#lx valid=%s active=%s size=%zu",
+        "boot stub hart=%lu dtb=%#lx entry_valid=%s source=%s size=%zu",
         (unsigned long)hartid,
         (unsigned long)(uintptr_t)dtb,
-        yesno(dtb_valid),
-        yesno(boot_dtb != NULL),
+        yesno(entry_dtb_valid),
+        dtb_source(boot_dtb, entry_dtb, image_dtb),
         dtb_size
     );
     log_debug(
@@ -862,8 +861,6 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     boot_heap_init(heap.start, heap.end);
 
     mount_rootfs(&rootfs, rootfs_src.image, rootfs_src.limit, rootfs_src.from_initrd);
-
-    load_dtb(&rootfs, &boot_dtb, &dtb_size);
 
     const char *path = kernel_file();
     size_t kernel_size = 0;

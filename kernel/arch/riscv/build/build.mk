@@ -64,15 +64,17 @@ else
 RISCV_UART_STRIDE ?= 1
 endif
 
-# the embedded rootfs sits at this byte offset inside the flat image
-# frisc keeps its DTB in /boot/platform.dtb; the boot stub uses board defaults
-# only long enough to read that file from the rootfs
+# the flat image may keep early boot data before the embedded rootfs
+RISCV_DTB_OFFSET     := 0
 RISCV_ROOTFS_OFFSET  := 1441792
 RISCV_SCRATCH_OFFSET := 50331648
 
-RISCV_FRISC_DTS        := $(ARCH_DIR)/dts/friscv.dts
-RISCV_FRISC_DTB        := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
-RISCV_PLATFORM_DTB     := /boot/platform.dtb
+ifeq ($(RISCV_FRISC),true)
+RISCV_DTB_OFFSET := 1310720
+endif
+
+RISCV_FRISC_DTS := $(ARCH_DIR)/dts/friscv.dts
+RISCV_FRISC_DTB := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
 
 RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr -mabi=lp64
 RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr -mabi=ilp32
@@ -104,18 +106,13 @@ BOOT_ENTRY_CFLAGS_COMMON := \
 	-fno-builtin \
 	-fno-pic \
 	-fno-pie \
+	-DBOOT_DTB_OFFSET=$(RISCV_DTB_OFFSET) \
 	-DBOOT_ROOTFS_OFFSET=$(RISCV_ROOTFS_OFFSET) \
 	-DBOOT_SCRATCH_OFFSET=$(RISCV_SCRATCH_OFFSET) \
 	-DSERIAL_UART0=$(RISCV_UART0) \
 	-DRISCV_UART_STRIDE=$(RISCV_UART_STRIDE) \
 	-DBOOT_LOG_COLOR=$(BOOT_LOG_COLOR) \
 	-mcmodel=medany
-
-ifeq ($(RISCV_FRISC),true)
-BOOT_ENTRY_CFLAGS_COMMON += \
-	-DRISCV_FRISC=1 \
-	-DBOOT_DTB_PATH=\"$(RISCV_PLATFORM_DTB)\"
-endif
 
 BOOT_ENTRY_LDFLAGS := \
 	-nostdlib \
@@ -218,29 +215,30 @@ $(RISCV_FRISC_DTB): $(RISCV_FRISC_DTS)
 	@printf "%-3s  %s\n" "DTB" "$@"
 
 ifeq ($(RISCV_FRISC),true)
-RISCV_ROOTFS_DTB_DEPS := $(RISCV_FRISC_DTB)
+RISCV_IMAGE_DTB_DEPS := $(RISCV_FRISC_DTB)
+RISCV_IMAGE_DTB_ARGS := $(RISCV_DTB_OFFSET) $(RISCV_FRISC_DTB)
 endif
 
 $(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) \
-	$(IMAGE_ROOT_DEPS) $(RISCV_ROOTFS_DTB_DEPS)
+	$(IMAGE_ROOT_DEPS)
 	@utils/stage_image.sh "$(IMAGE_STAGE_DIR)" "$(IMAGE_BOOT_DIR)" \
 		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root" riscv
-ifeq ($(RISCV_FRISC),true)
-	@cp -f "$(RISCV_FRISC_DTB)" "$(IMAGE_STAGE_DIR)$(RISCV_PLATFORM_DTB)"
-	@printf "%-3s  %s\n" "DTB" "$(IMAGE_STAGE_DIR)$(RISCV_PLATFORM_DTB)"
-endif
 	@python3 kernel/arch/riscv/build/build_riscv_disk_image.py \
 		--extra-bytes $(ROOTFS_EXTRA_BYTES) $@ $(IMAGE_STAGE_DIR)
 	@printf "%-3s  %s\n" "IM" "$@"
 
-bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE)
+bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE) $(RISCV_IMAGE_DTB_DEPS)
 	@mkdir -p $(@D)
-	@python3 kernel/arch/riscv/build/check_boot_stub.py \
-		$(BOOT_ENTRY_ELF) $(BOOT_ENTRY_BIN) $(RISCV_ROOTFS_OFFSET)
+	@python3 kernel/arch/riscv/build/check_boot_stub.py $(BOOT_ENTRY_ELF) \
+		$(BOOT_ENTRY_BIN) $(RISCV_ROOTFS_OFFSET) $(RISCV_IMAGE_DTB_ARGS)
 	@python3 kernel/arch/riscv/build/check_image_layout.py \
 	    $(KERNEL_ELF) $(ROOTFS_IMAGE) $(RISCV_ROOTFS_OFFSET) \
 	    $(RISCV_SCRATCH_OFFSET)
 	@cp $(BOOT_ENTRY_BIN) $@
+ifneq ($(RISCV_IMAGE_DTB_DEPS),)
+	@truncate -s $(RISCV_DTB_OFFSET) $@
+	@cat $(RISCV_FRISC_DTB) >> $@
+endif
 	@truncate -s $(RISCV_ROOTFS_OFFSET) $@
 	@cat $(ROOTFS_IMAGE) >> $@
 	@printf "%-3s  %s\n" "IM" "$@"

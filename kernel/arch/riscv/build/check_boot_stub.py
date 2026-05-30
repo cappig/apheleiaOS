@@ -26,14 +26,28 @@ def main() -> None:
     parser.add_argument("boot_elf", type=Path)
     parser.add_argument("boot_bin", type=Path)
     parser.add_argument("rootfs_offset", type=int)
+    parser.add_argument("dtb_offset", type=int, nargs="?", default=0)
+    parser.add_argument("dtb_path", type=Path, nargs="?")
     args = parser.parse_args()
 
     footprint = stack_top(args.boot_elf) - IMAGE_BASE
-    if footprint > args.rootfs_offset:
-        raise RuntimeError("boot image footprint exceeds embedded rootfs offset")
+    first_payload = args.rootfs_offset
+    if args.dtb_offset:
+        first_payload = min(first_payload, args.dtb_offset)
 
-    if args.boot_bin.stat().st_size > args.rootfs_offset:
-        raise RuntimeError("boot binary exceeds embedded rootfs offset")
+    if footprint > first_payload:
+        raise RuntimeError("boot image footprint exceeds first embedded payload offset")
+
+    if args.boot_bin.stat().st_size > first_payload:
+        raise RuntimeError("boot binary exceeds first embedded payload offset")
+
+    if args.dtb_offset and args.dtb_offset >= args.rootfs_offset:
+        raise RuntimeError("embedded DTB offset must be before embedded rootfs offset")
+
+    if args.dtb_offset and args.dtb_path:
+        dtb_end = args.dtb_offset + args.dtb_path.stat().st_size
+        if dtb_end > args.rootfs_offset:
+            raise RuntimeError("embedded DTB exceeds space before embedded rootfs")
 
 
 if __name__ == "__main__":
