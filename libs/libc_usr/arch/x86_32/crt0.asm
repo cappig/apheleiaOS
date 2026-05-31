@@ -2,6 +2,7 @@ bits 32
 section .text
 
 global _start
+extern exit
 extern main
 extern environ
 
@@ -16,9 +17,8 @@ _start:
     push edx
     push eax
     call main
-    mov ebx, eax
-    mov eax, 0
-    int 0x80
+    push eax
+    call exit
 
 halt:
     hlt

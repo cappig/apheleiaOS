@@ -3,6 +3,7 @@
 .type _start, @function
 
 .extern environ
+.extern exit
 .extern main
 
 _start:
@@ -23,8 +24,7 @@ _start:
 
     call main
 
-    li a7, 0
-    ecall
+    call exit
 
 1:
     wfi

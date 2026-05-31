@@ -2,6 +2,7 @@ bits 64
 section .text
 
 global _start
+extern exit
 extern main
 extern environ
 
@@ -13,8 +14,7 @@ _start:
     mov [rel environ], rdx
     call main
     mov rdi, rax
-    mov rax, 0
-    int 0x80
+    call exit
 
 halt:
     hlt

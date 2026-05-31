@@ -4,6 +4,7 @@
 #include <limits.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -131,6 +132,7 @@ void exit(int status) {
         }
     }
 
+    (void)fflush(NULL);
     _Exit(status);
 }
 

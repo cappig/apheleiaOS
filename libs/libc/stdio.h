@@ -29,6 +29,8 @@ typedef struct FILE {
     size_t buf_size;
     size_t buf_pos;
     size_t buf_len;
+    volatile int lock;
+    struct FILE *next;
 } FILE;
 
 extern FILE *stdin;

@@ -8,16 +8,17 @@
 
 #define PRINTF_STACK_BUF 1024
 
-#define FILE_FLAG_READ   (1 << 0)
-#define FILE_FLAG_WRITE  (1 << 1)
-#define FILE_FLAG_APPEND (1 << 2)
-#define FILE_FLAG_STATIC (1 << 3)
-#define FILE_FLAG_RBUF   (1 << 4)
-#define FILE_FLAG_WBUF   (1 << 5)
+#define FILE_FLAG_READ    (1 << 0)
+#define FILE_FLAG_WRITE   (1 << 1)
+#define FILE_FLAG_APPEND  (1 << 2)
+#define FILE_FLAG_STATIC  (1 << 3)
+#define FILE_FLAG_RBUF    (1 << 4)
+#define FILE_FLAG_WBUF    (1 << 5)
+#define FILE_FLAG_AUTOBUF (1 << 6)
 
 static FILE std_in = {
     .fd = STDIN_FILENO,
-    .flags = FILE_FLAG_READ | FILE_FLAG_STATIC,
+    .flags = FILE_FLAG_READ | FILE_FLAG_STATIC | FILE_FLAG_AUTOBUF,
     .eof = 0,
     .error = 0,
     .buf_mode = _IONBF,
@@ -26,11 +27,13 @@ static FILE std_in = {
     .buf_size = 0,
     .buf_pos = 0,
     .buf_len = 0,
+    .lock = 0,
+    .next = NULL,
 };
 
 static FILE std_out = {
     .fd = STDOUT_FILENO,
-    .flags = FILE_FLAG_WRITE | FILE_FLAG_STATIC,
+    .flags = FILE_FLAG_WRITE | FILE_FLAG_STATIC | FILE_FLAG_AUTOBUF,
     .eof = 0,
     .error = 0,
     .buf_mode = _IONBF,
@@ -39,6 +42,8 @@ static FILE std_out = {
     .buf_size = 0,
     .buf_pos = 0,
     .buf_len = 0,
+    .lock = 0,
+    .next = NULL,
 };
 
 static FILE std_err = {
@@ -52,15 +57,81 @@ static FILE std_err = {
     .buf_size = 0,
     .buf_pos = 0,
     .buf_len = 0,
+    .lock = 0,
+    .next = NULL,
 };
 
 FILE *stdin = &std_in;
 FILE *stdout = &std_out;
 FILE *stderr = &std_err;
 
+static FILE *open_streams = NULL;
+static volatile int open_streams_lock = 0;
+
+static void stream_list_lock(void) {
+    while (__atomic_test_and_set(&open_streams_lock, __ATOMIC_ACQUIRE)) {
+        ;
+    }
+}
+
+static void stream_list_unlock(void) {
+    __atomic_clear(&open_streams_lock, __ATOMIC_RELEASE);
+}
+
+static void register_stream(FILE *stream) {
+    if (!stream || (stream->flags & FILE_FLAG_STATIC)) {
+        return;
+    }
+
+    stream_list_lock();
+    stream->next = open_streams;
+    open_streams = stream;
+    stream_list_unlock();
+}
+
+static void unregister_stream(FILE *stream) {
+    if (!stream || (stream->flags & FILE_FLAG_STATIC)) {
+        return;
+    }
+
+    stream_list_lock();
+
+    FILE **slot = &open_streams;
+    while (*slot) {
+        if (*slot == stream) {
+            *slot = stream->next;
+            stream->next = NULL;
+            break;
+        }
+
+        slot = &(*slot)->next;
+    }
+
+    stream_list_unlock();
+}
+
+static void configure_auto_buf(FILE *stream) {
+    if (!stream || !(stream->flags & FILE_FLAG_AUTOBUF)) {
+        return;
+    }
+
+    int saved_errno = errno;
+    stream->flags &= ~FILE_FLAG_AUTOBUF;
+
+    if (stream->fd == STDERR_FILENO) {
+        stream->buf_mode = _IONBF;
+    } else if (isatty(stream->fd)) {
+        stream->buf_mode = _IOLBF;
+    } else {
+        stream->buf_mode = _IOFBF;
+    }
+
+    errno = saved_errno;
+}
+
 static void init_stream(FILE *stream, int fd, int flags) {
     stream->fd = fd;
-    stream->flags = flags;
+    stream->flags = flags | FILE_FLAG_AUTOBUF;
     stream->eof = 0;
     stream->error = 0;
     stream->buf_mode = _IOFBF;
@@ -69,6 +140,26 @@ static void init_stream(FILE *stream, int fd, int flags) {
     stream->buf_size = 0;
     stream->buf_pos = 0;
     stream->buf_len = 0;
+    stream->lock = 0;
+    stream->next = NULL;
+}
+
+static void stream_lock(FILE *stream) {
+    if (!stream) {
+        return;
+    }
+
+    while (__atomic_test_and_set(&stream->lock, __ATOMIC_ACQUIRE)) {
+        ;
+    }
+}
+
+static void stream_unlock(FILE *stream) {
+    if (!stream) {
+        return;
+    }
+
+    __atomic_clear(&stream->lock, __ATOMIC_RELEASE);
 }
 
 static void clear_read_buf(FILE *stream) {
@@ -86,6 +177,10 @@ static int write_all_fd(int fd, const char *buf, size_t len) {
 
     while (off < len) {
         ssize_t n = write(fd, buf + off, len - off);
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+
         if (n <= 0) {
             return -1;
         }
@@ -110,6 +205,32 @@ static int flush_write_buf(FILE *stream) {
     return 0;
 }
 
+static void flush_line_stream(FILE *stream) {
+    if (!stream || !(stream->flags & FILE_FLAG_WRITE)) {
+        return;
+    }
+
+    configure_auto_buf(stream);
+    if (stream->buf_mode != _IOLBF) {
+        return;
+    }
+
+    stream_lock(stream);
+    (void)flush_write_buf(stream);
+    stream_unlock(stream);
+}
+
+static void flush_line_streams(void) {
+    flush_line_stream(stdout);
+    flush_line_stream(stderr);
+
+    stream_list_lock();
+    for (FILE *current = open_streams; current; current = current->next) {
+        flush_line_stream(current);
+    }
+    stream_list_unlock();
+}
+
 static int ensure_buf(FILE *stream, size_t size) {
     if (!stream || stream->buf) {
         return 0;
@@ -128,6 +249,8 @@ static int ensure_buf(FILE *stream, size_t size) {
 }
 
 static int ensure_write_buf(FILE *stream) {
+    configure_auto_buf(stream);
+
     if (stream->buf_mode == _IONBF) {
         return 0;
     }
@@ -136,6 +259,8 @@ static int ensure_write_buf(FILE *stream) {
 }
 
 static int ensure_read_buf(FILE *stream) {
+    configure_auto_buf(stream);
+
     if (stream->buf_mode == _IONBF) {
         return 0;
     }
@@ -143,7 +268,7 @@ static int ensure_read_buf(FILE *stream) {
     return ensure_buf(stream, BUFSIZ);
 }
 
-static int stream_write_all(FILE *stream, const char *buf, size_t len) {
+static int stream_write_all_locked(FILE *stream, const char *buf, size_t len) {
     if (!stream || stream->fd < 0 || !(stream->flags & FILE_FLAG_WRITE)) {
         errno = EBADF;
         if (stream) {
@@ -199,6 +324,14 @@ static int stream_write_all(FILE *stream, const char *buf, size_t len) {
     }
 
     return 0;
+}
+
+static int stream_write_all(FILE *stream, const char *buf, size_t len) {
+    stream_lock(stream);
+    int ret = stream_write_all_locked(stream, buf, len);
+    stream_unlock(stream);
+
+    return ret;
 }
 
 static int mode_to_flags(const char *mode, int *open_flags, int *stream_flags) {
@@ -257,6 +390,7 @@ FILE *fdopen(int fd, const char *mode) {
     }
 
     init_stream(stream, fd, stream_flags);
+    register_stream(stream);
     return stream;
 }
 
@@ -282,6 +416,7 @@ FILE *fopen(const char *path, const char *mode) {
     }
 
     init_stream(stream, fd, stream_flags);
+    register_stream(stream);
     return stream;
 }
 
@@ -316,10 +451,20 @@ FILE *freopen(const char *path, const char *mode, FILE *stream) {
         (void)lseek(fd, 0, SEEK_END);
     }
 
+    if (stream->buf_owned) {
+        free(stream->buf);
+    }
+
     stream->fd = fd;
-    stream->flags = (stream->flags & FILE_FLAG_STATIC) | stream_flags;
+    stream->flags = (stream->flags & FILE_FLAG_STATIC) | stream_flags | FILE_FLAG_AUTOBUF;
     stream->eof = 0;
     stream->error = 0;
+    stream->buf_owned = 0;
+    stream->buf = NULL;
+    stream->buf_size = 0;
+    stream->buf_pos = 0;
+    stream->buf_len = 0;
+    stream->buf_mode = _IOFBF;
     return stream;
 }
 
@@ -385,15 +530,37 @@ int remove(const char *path) {
 
 int fflush(FILE *stream) {
     if (!stream) {
-        if (flush_write_buf(stdout) < 0) {
-            return EOF;
+        int ret = 0;
+
+        stream_lock(stdout);
+        int stdout_ret = flush_write_buf(stdout);
+        stream_unlock(stdout);
+
+        if (stdout_ret < 0) {
+            ret = EOF;
         }
 
-        if (flush_write_buf(stderr) < 0) {
-            return EOF;
+        stream_lock(stderr);
+        int stderr_ret = flush_write_buf(stderr);
+        stream_unlock(stderr);
+
+        if (stderr_ret < 0) {
+            ret = EOF;
         }
 
-        return 0;
+        stream_list_lock();
+        for (FILE *current = open_streams; current; current = current->next) {
+            stream_lock(current);
+            int stream_ret = flush_write_buf(current);
+            stream_unlock(current);
+
+            if (stream_ret < 0) {
+                ret = EOF;
+            }
+        }
+        stream_list_unlock();
+
+        return ret;
     }
 
     if (stream->fd < 0) {
@@ -402,7 +569,11 @@ int fflush(FILE *stream) {
         return EOF;
     }
 
-    return flush_write_buf(stream) < 0 ? EOF : 0;
+    stream_lock(stream);
+    int ret = flush_write_buf(stream);
+    stream_unlock(stream);
+
+    return ret < 0 ? EOF : 0;
 }
 
 int fclose(FILE *stream) {
@@ -414,6 +585,8 @@ int fclose(FILE *stream) {
     int flush_ret = fflush(stream);
     int ret = close(stream->fd);
     stream->fd = -1;
+
+    unregister_stream(stream);
 
     if (stream->buf_owned) {
         free(stream->buf);
@@ -436,6 +609,10 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
         errno = EBADF;
         stream->error = 1;
         return 0;
+    }
+
+    if (isatty(stream->fd)) {
+        flush_line_streams();
     }
 
     if (flush_write_buf(stream) < 0) {
@@ -684,7 +861,7 @@ int setvbuf(FILE *restrict stream, char *restrict buf, int mode, size_t size) {
         free(stream->buf);
     }
 
-    stream->flags &= ~(FILE_FLAG_RBUF | FILE_FLAG_WBUF);
+    stream->flags &= ~(FILE_FLAG_RBUF | FILE_FLAG_WBUF | FILE_FLAG_AUTOBUF);
     stream->buf = NULL;
     stream->buf_size = 0;
     stream->buf_pos = 0;
