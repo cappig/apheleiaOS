@@ -752,8 +752,8 @@ static size_t _copy_len(size_t size, size_t offset, size_t len) {
 }
 
 static void
-_copy_from_store(const ws_window_t *window, void *dst, size_t offset, size_t len, u32 view_height, u32 view_stride) {
-    if (!window || !window->fb || !dst || !len || !view_height || !view_stride || !window->fb_store_stride) {
+_copy_store(ws_window_t *window, void *buf, size_t offset, size_t len, u32 view_height, u32 view_stride, bool write) {
+    if (!window || !window->fb || !buf || !len || !view_height || !view_stride || !window->fb_store_stride) {
         return;
     }
 
@@ -761,11 +761,14 @@ _copy_from_store(const ws_window_t *window, void *dst, size_t offset, size_t len
     size_t store_stride = (size_t)window->fb_store_stride;
 
     if (view_stride_bytes == store_stride) {
-        memcpy(dst, window->fb + offset, len);
+        if (write) {
+            memcpy(window->fb + offset, buf, len);
+        } else {
+            memcpy(buf, window->fb + offset, len);
+        }
         return;
     }
 
-    u8 *out = dst;
     size_t done = 0;
     size_t remaining = len;
 
@@ -781,48 +784,12 @@ _copy_from_store(const ws_window_t *window, void *dst, size_t offset, size_t len
             chunk = remaining;
         }
 
-        size_t src_off = row * store_stride + col;
-        memcpy(out + done, window->fb + src_off, chunk);
-
-        done += chunk;
-        offset += chunk;
-        remaining -= chunk;
-    }
-}
-
-static void
-_copy_to_store(ws_window_t *window, const void *src, size_t offset, size_t len, u32 view_height, u32 view_stride) {
-    if (!window || !window->fb || !src || !len || !view_height || !view_stride || !window->fb_store_stride) {
-        return;
-    }
-
-    size_t view_stride_bytes = (size_t)view_stride;
-    size_t store_stride = (size_t)window->fb_store_stride;
-
-    if (view_stride_bytes == store_stride) {
-        memcpy(window->fb + offset, src, len);
-        return;
-    }
-
-    const u8 *in = src;
-    size_t done = 0;
-    size_t remaining = len;
-
-    while (remaining > 0) {
-        size_t row = offset / view_stride_bytes;
-        size_t col = offset % view_stride_bytes;
-
-        if (row >= view_height) {
-            break;
+        size_t store_off = row * store_stride + col;
+        if (write) {
+            memcpy(window->fb + store_off, (const u8 *)buf + done, chunk);
+        } else {
+            memcpy((u8 *)buf + done, window->fb + store_off, chunk);
         }
-
-        size_t chunk = view_stride_bytes - col;
-        if (chunk > remaining) {
-            chunk = remaining;
-        }
-
-        size_t dst_off = row * store_stride + col;
-        memcpy(window->fb + dst_off, in + done, chunk);
 
         done += chunk;
         offset += chunk;
@@ -1801,7 +1768,7 @@ static ssize_t _ws_fb_read_as(u32 id, pid_t caller_pid, void *buf, size_t offset
     window->io_refs++;
     mutex_unlock(&ws_state.lock);
 
-    _copy_from_store(window, buf, offset, copy_len, view_height, view_stride);
+    _copy_store(window, buf, offset, copy_len, view_height, view_stride, false);
 
     mutex_lock(&ws_state.lock);
     _window_release_io(id, window);
@@ -1855,7 +1822,7 @@ static ssize_t _ws_fb_write_as(u32 id, pid_t caller_pid, const void *buf, size_t
     window->io_refs++;
     mutex_unlock(&ws_state.lock);
 
-    _copy_to_store(window, buf, offset, copy_len, view_height, view_stride);
+    _copy_store(window, (void *)buf, offset, copy_len, view_height, view_stride, true);
 
     mutex_lock(&ws_state.lock);
     _queue_dirty_write(id, window, offset, copy_len, view_width);

@@ -563,50 +563,49 @@ static bool _has_back_buffer(void) {
     return console_state.mode == CONSOLE_FRAMEBUFFER && console_state.fb_back && console_state.fb_size > 0;
 }
 
+static bool _clip_rect(size_t *x, size_t *y, size_t *width, size_t *height) {
+    if (!x || !y || !width || !height || !*width || !*height) {
+        return false;
+    }
+
+    if (*x >= console_state.width || *y >= console_state.height) {
+        return false;
+    }
+
+    size_t max_width = console_state.width - *x;
+    if (*width > max_width) {
+        *width = max_width;
+    }
+
+    size_t max_height = console_state.height - *y;
+    if (*height > max_height) {
+        *height = max_height;
+    }
+
+    return *width && *height;
+}
+
 static void _mark_dirty_rect(size_t x, size_t y, size_t width, size_t height) {
-    if (!_has_back_buffer() || !width || !height) {
+    if (!_has_back_buffer() || !_clip_rect(&x, &y, &width, &height)) {
         return;
-    }
-
-    if (x >= console_state.width || y >= console_state.height) {
-        return;
-    }
-
-    if (x + width > console_state.width) {
-        width = console_state.width - x;
-    }
-
-    if (y + height > console_state.height) {
-        height = console_state.height - y;
     }
 
     size_t x1 = x + width;
     size_t y1 = y + height;
 
-    if (!console_state.dirty) {
-        console_state.dirty = true;
-        console_state.dirty_x0 = x;
-        console_state.dirty_y0 = y;
-        console_state.dirty_x1 = x1;
-        console_state.dirty_y1 = y1;
+    if (console_state.dirty) {
+        console_state.dirty_x0 = min(console_state.dirty_x0, x);
+        console_state.dirty_y0 = min(console_state.dirty_y0, y);
+        console_state.dirty_x1 = max(console_state.dirty_x1, x1);
+        console_state.dirty_y1 = max(console_state.dirty_y1, y1);
         return;
     }
 
-    if (x < console_state.dirty_x0) {
-        console_state.dirty_x0 = x;
-    }
-
-    if (y < console_state.dirty_y0) {
-        console_state.dirty_y0 = y;
-    }
-
-    if (x1 > console_state.dirty_x1) {
-        console_state.dirty_x1 = x1;
-    }
-
-    if (y1 > console_state.dirty_y1) {
-        console_state.dirty_y1 = y1;
-    }
+    console_state.dirty = true;
+    console_state.dirty_x0 = x;
+    console_state.dirty_y0 = y;
+    console_state.dirty_x1 = x1;
+    console_state.dirty_y1 = y1;
 }
 
 static void _flush_dirty(void) {
@@ -669,20 +668,8 @@ static void _write_pixel(u8 *dst, u32 color) {
 }
 
 static void _fill_rect(size_t x, size_t y, size_t width, size_t height, u32 color) {
-    if (!console_state.fb_size || !width || !height) {
+    if (!console_state.fb_size || !_clip_rect(&x, &y, &width, &height)) {
         return;
-    }
-
-    if (x >= console_state.width || y >= console_state.height) {
-        return;
-    }
-
-    if (x + width > console_state.width) {
-        width = console_state.width - x;
-    }
-
-    if (y + height > console_state.height) {
-        height = console_state.height - y;
     }
 
     if (_has_back_buffer()) {
