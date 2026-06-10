@@ -20,6 +20,4 @@ void init_spawn(void) {
 
     sched_make_runnable(init);
     log_info("spawned /bin/init as pid %ld", (long)init->pid);
-
-    // log_debug("marked pid %ld runnable", (long)init->pid)
 }

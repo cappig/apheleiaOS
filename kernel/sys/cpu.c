@@ -13,7 +13,7 @@ static cpu_core_t *cpu_boot_local = NULL;
 static bool _cpu_ptr_is_core(cpu_core_t *core) {
     uintptr_t ptr = (uintptr_t)core;
     uintptr_t first = (uintptr_t)&cores_local[0];
-    uintptr_t last = (uintptr_t)&cores_local[MAX_CORES];
+    uintptr_t last = first + sizeof(cores_local);
 
     if (ptr < first || ptr >= last) {
         return false;

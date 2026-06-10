@@ -190,7 +190,7 @@ static bool load_segment_64(const elf_segment_t *seg, void *ctx_ptr) {
     memcpy((void *)(uintptr_t)pbase, (u8 *)load_ctx->elf + seg->offset, (size_t)seg->file_size);
 
     size_t zero_len = (size_t)(seg->mem_size - seg->file_size);
-    memset((void *)(uintptr_t)pbase + seg->file_size, 0, zero_len);
+    memset((u8 *)(uintptr_t)pbase + seg->file_size, 0, zero_len);
 
     return true;
 }

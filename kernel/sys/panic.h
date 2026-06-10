@@ -15,6 +15,7 @@ void panic_dump_state(const arch_int_state_t *state);
         log_fatal("kernel panic "__VA_ARGS__); \
         panic_dump_state(NULL);                \
         panic_halt();                          \
+        __builtin_unreachable();               \
     })
 
 #define assert(expression)                               \

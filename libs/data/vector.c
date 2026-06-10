@@ -164,7 +164,7 @@ void *vec_at(vector_t *vec, size_t index) {
         return NULL;
     }
 
-    return vec->data + index * vec->elem_size;
+    return (u8 *)vec->data + index * vec->elem_size;
 }
 
 void *vec_at_ptr(vector_t *vec, size_t index) {
@@ -197,7 +197,7 @@ void *vec_set(vector_t *vec, size_t index, void *data) {
         return NULL;
     }
 
-    void *ptr = vec->data + index * vec->elem_size;
+    void *ptr = (u8 *)vec->data + index * vec->elem_size;
     memcpy(ptr, data, vec->elem_size);
 
     return ptr;
@@ -270,7 +270,7 @@ bool vec_push_array(vector_t *vec, void *array, size_t len) {
     }
 
     for (size_t i = 0; i < len; i++) {
-        void *data = array + i * vec->elem_size;
+        void *data = (u8 *)array + i * vec->elem_size;
         if (!vec_push(vec, data)) {
             return false;
         }

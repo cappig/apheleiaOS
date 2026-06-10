@@ -131,16 +131,6 @@ bool _xhci_write64_checked(xhci_controller_t *ctrl, volatile void *base, size_t 
         cpu_pause();
     }
 
-    // if (!ctrl->write64_order_tested) {
-    //     log_debug(
-    //         "xHCI %u:%u.%u selected %s 64-bit MMIO write order"
-    //         ctrl->bus
-    //         ctrl->slot
-    //         ctrl->func
-    //         hi_first ? "hi->lo" : "lo->hi"
-    //     )
-    // }
-
     ctrl->write64_order_tested = true;
     return matched;
 }

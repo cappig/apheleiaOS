@@ -285,7 +285,9 @@ static void _configure_log_sinks(const boot_info_t *info) {
     char buf[sizeof(info->args.console)];
     bool want_serial = false, want_screen = false;
 
-    strncpy(buf, info->args.console, sizeof(buf));
+    strncpy(buf, info->args.console, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
     for (char *p = buf; p && *p;) {
         char *sep = strchr(p, ',');
 
@@ -309,7 +311,9 @@ static void _configure_log_sinks(const boot_info_t *info) {
 
     klog.mirror = want_serial && want_screen;
 
-    strncpy(buf, info->args.console, sizeof(buf));
+    strncpy(buf, info->args.console, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
     bool any = false;
 
     for (char *p = buf; p && *p;) {

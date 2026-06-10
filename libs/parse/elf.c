@@ -148,9 +148,6 @@ elf_validity_t elf_verify(elf_header_t *header) {
         return INVALID_ELF;
     }
 
-    // if (header->arch != EARCH_X64)
-    //     return INVALID_ELF64
-
     if (header->endianness != EEND_LITTLE) {
         return WRONG_ENDIAN_ELF;
     }

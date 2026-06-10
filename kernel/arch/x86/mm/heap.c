@@ -387,6 +387,4 @@ void arch_init_alloc() {
         .free_fn = _kfree,
     };
     __libc_init_alloc(&ops);
-
-    // log_debug("malloc ready")
 }

@@ -1,8 +1,10 @@
 #pragma once
 
+#include <stdint.h>
+
 #define SIG_DFL ((sighandler_t)0)
-#define SIG_IGN ((sighandler_t)1)
-#define SIG_ERR ((sighandler_t)(-1))
+#define SIG_IGN ((sighandler_t)(uintptr_t)1)
+#define SIG_ERR ((sighandler_t)(uintptr_t)-1)
 
 typedef void (*sighandler_t)(int);
 typedef void (*sigaction_fn_t)(int);

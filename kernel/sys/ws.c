@@ -848,7 +848,7 @@ static bool _ensure_slot_nodes(u32 id) {
 
     void *priv = _slot_priv_encode(id);
 
-    bool fb_registered = devfs_register_node(slot, "fb", VFS_CHARDEV, 0666, ws_state.ws_fb_if, priv);
+    bool fb_registered = devfs_register_node(slot, "fb", VFS_CHARDEV, 0660, ws_state.ws_fb_if, priv);
 
     if (!fb_registered) {
         return false;
@@ -858,7 +858,7 @@ static bool _ensure_slot_nodes(u32 id) {
         return false;
     }
 
-    bool ev_registered = devfs_register_node(slot, "ev", VFS_CHARDEV, 0666, ws_state.ws_ev_if, priv);
+    bool ev_registered = devfs_register_node(slot, "ev", VFS_CHARDEV, 0660, ws_state.ws_ev_if, priv);
 
     if (!ev_registered) {
         return false;
@@ -1486,7 +1486,7 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
     } else {
         wsctl_if->ioctl = ws_ctl_ioctl;
         wsctl_if->poll = ws_ctl_poll;
-        bool wsctl_registered = devfs_register_node(dev_dir, "wsctl", VFS_CHARDEV, 0666, wsctl_if, NULL);
+        bool wsctl_registered = devfs_register_node(dev_dir, "wsctl", VFS_CHARDEV, 0660, wsctl_if, NULL);
 
         if (!wsctl_registered) {
             log_warn("failed to create /dev/wsctl");
@@ -1509,7 +1509,7 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
     } else {
         wsmgr_if->poll = ws_mgr_poll;
         wsmgr_if->wait_queue = _dev_wsmgr_wait_queue;
-        bool wsmgr_registered = devfs_register_node(dev_dir, "wsmgr", VFS_CHARDEV, 0666, wsmgr_if, NULL);
+        bool wsmgr_registered = devfs_register_node(dev_dir, "wsmgr", VFS_CHARDEV, 0660, wsmgr_if, NULL);
 
         if (!wsmgr_registered) {
             log_warn("failed to create /dev/wsmgr");

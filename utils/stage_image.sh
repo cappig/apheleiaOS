@@ -7,6 +7,16 @@ kernel_elf=$3
 user_root=$4
 mode=${5:-default}
 
+check_stage_dir() {
+    case "$1" in
+        "" | "/" | "." | "..")
+            echo "refusing unsafe stage directory: '$1'" >&2
+            exit 1
+            ;;
+    esac
+}
+
+check_stage_dir "$stage_dir"
 rm -rf "$stage_dir"
 mkdir -p "$boot_dir"
 

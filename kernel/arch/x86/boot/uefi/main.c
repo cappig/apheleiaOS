@@ -268,9 +268,9 @@ static EFI_STATUS fail(const CHAR16 *msg, EFI_STATUS status) {
     size_t i = 0;
 
     if (msg) {
-        while (i < sizeof(text) - 1 && msg[i]) {
-            text[i] = ascii16(msg[i]);
-            i++;
+        const CHAR16 *p = msg;
+        while (i < sizeof(text) - 1 && *p) {
+            text[i++] = ascii16(*p++);
         }
     }
 
