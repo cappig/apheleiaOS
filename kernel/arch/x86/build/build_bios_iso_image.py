@@ -15,14 +15,11 @@ sys.path.insert(0, str(KERNEL_DIR))
 from build_image_common import (
     BuildError,
     SECTOR_SIZE,
-    build_esp_fat16_image,
     build_ext2_image,
     div_round_up,
-    esp_fat16_size_sectors,
     prepare_root_tree,
     write_at,
     write_file_to_lba,
-    write_gpt,
     write_mbr,
 )
 
@@ -30,9 +27,6 @@ ISO_SECTOR_SIZE = 2048
 VD_PRIMARY_LBA = 16
 VD_BOOT_RECORD_LBA = 17
 VD_TERMINATOR_LBA = 18
-
-GPT_ESP_GUID = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
-GPT_LINUX_GUID = "0FC63DAF-8483-4772-8E79-3D69D8477DE4"
 
 
 class IsoLayout:
@@ -51,8 +45,6 @@ class IsoLayout:
         bios_size: int,
         rootfs_lba: int,
         rootfs_size: int,
-        efi_lba: int | None,
-        efi_size: int,
         iso_blocks: int,
     ) -> None:
         self.l_path_lba = l_path_lba
@@ -67,8 +59,6 @@ class IsoLayout:
         self.bios_size = bios_size
         self.rootfs_lba = rootfs_lba
         self.rootfs_size = rootfs_size
-        self.efi_lba = efi_lba
-        self.efi_size = efi_size
         self.iso_blocks = iso_blocks
 
 
@@ -204,7 +194,7 @@ def _build_path_tables(root_lba: int, boot_lba: int) -> tuple[bytes, bytes, int]
     return l_raw, m_raw, len(l_raw)
 
 
-def _build_boot_catalog(*, bios_lba: int, bios_load_sectors_512: int, efi_lba: int | None) -> bytes:
+def _build_boot_catalog(*, bios_lba: int, bios_load_sectors_512: int) -> bytes:
     if bios_load_sectors_512 > 0xFFFF:
         raise BuildError("bios.bin is too large for El Torito load-size field")
 
@@ -229,23 +219,6 @@ def _build_boot_catalog(*, bios_lba: int, bios_load_sectors_512: int, efi_lba: i
 
     catalog[0:32] = validation
     catalog[32:64] = default_entry
-
-    if efi_lba is not None:
-        section_header = bytearray(32)
-        section_header[0] = 0x91
-        section_header[1] = 0xEF
-        struct.pack_into("<H", section_header, 2, 1)
-        section_header[4:32] = _pad_ascii("UEFI", 28)
-
-        section_entry = bytearray(32)
-        section_entry[0] = 0x88
-        section_entry[1] = 0x00
-        section_entry[4] = 0xEF
-        struct.pack_into("<H", section_entry, 6, 0)
-        struct.pack_into("<I", section_entry, 8, efi_lba)
-
-        catalog[64:96] = section_header
-        catalog[96:128] = section_entry
 
     return bytes(catalog)
 
@@ -321,7 +294,6 @@ def _layout_iso(
     *,
     bios_size: int,
     rootfs_size: int,
-    efi_size: int,
 ) -> IsoLayout:
     # Minimal ISO has two directories (root + BOOT), one boot catalog, and file extents
     path_table_size = len(
@@ -345,13 +317,7 @@ def _layout_iso(
     rootfs_lba = bios_lba + bios_blocks
     rootfs_blocks = div_round_up(rootfs_size, ISO_SECTOR_SIZE)
 
-    efi_lba: int | None = None
-    efi_blocks = 0
-    if efi_size:
-        efi_lba = rootfs_lba + rootfs_blocks
-        efi_blocks = div_round_up(efi_size, ISO_SECTOR_SIZE)
-
-    iso_blocks = rootfs_lba + rootfs_blocks + efi_blocks
+    iso_blocks = rootfs_lba + rootfs_blocks
 
     return IsoLayout(
         l_path_lba=l_path_lba,
@@ -366,8 +332,6 @@ def _layout_iso(
         bios_size=bios_size,
         rootfs_lba=rootfs_lba,
         rootfs_size=rootfs_size,
-        efi_lba=efi_lba,
-        efi_size=efi_size,
         iso_blocks=iso_blocks,
     )
 
@@ -433,19 +397,7 @@ def _build_directories(layout: IsoLayout, now: int) -> tuple[bytes, bytes, bytes
         timestamp=now,
     )
 
-    boot_records = [boot_self, boot_parent, boot_cat, bios_rec, rootfs_rec]
-
-    if layout.efi_lba is not None and layout.efi_size:
-        efi_rec = _iso_dir_record(
-            name=b"EFI.IMG;1",
-            extent_lba=layout.efi_lba,
-            data_size=layout.efi_size,
-            is_dir=False,
-            timestamp=now,
-        )
-        boot_records.append(efi_rec)
-
-    boot_dir = _pack_directory(boot_records)
+    boot_dir = _pack_directory([boot_self, boot_parent, boot_cat, bios_rec, rootfs_rec])
     return root_record, root_dir, boot_dir
 
 
@@ -455,18 +407,13 @@ def _write_iso(
     mbr_bin: Path,
     bios_bin: Path,
     rootfs_img: Path,
-    efi_img: Path | None,
 ) -> None:
     bios_size = bios_bin.stat().st_size
     rootfs_size = rootfs_img.stat().st_size
-    efi_size = efi_img.stat().st_size if efi_img else 0
 
-    layout = _layout_iso(bios_size=bios_size, rootfs_size=rootfs_size, efi_size=efi_size)
+    layout = _layout_iso(bios_size=bios_size, rootfs_size=rootfs_size)
 
-    # Keep ISO file 2048-byte aligned while reserving space for GPT backup
-    # structures. 36 * 512 = 9 * 2048 bytes
-    gpt_tail_sectors = 36 if efi_img else 0
-    total_512_sectors = layout.iso_blocks * (ISO_SECTOR_SIZE // SECTOR_SIZE) + gpt_tail_sectors
+    total_512_sectors = layout.iso_blocks * (ISO_SECTOR_SIZE // SECTOR_SIZE)
 
     with output_iso.open("wb") as f:
         f.truncate(total_512_sectors * SECTOR_SIZE)
@@ -484,7 +431,6 @@ def _write_iso(
     boot_catalog = _build_boot_catalog(
         bios_lba=layout.bios_lba,
         bios_load_sectors_512=div_round_up(bios_size, SECTOR_SIZE),
-        efi_lba=layout.efi_lba,
     )
 
     pvd = _build_pvd(
@@ -511,8 +457,6 @@ def _write_iso(
 
     write_file_to_lba(output_iso, bios_bin, layout.bios_lba, sector_size=ISO_SECTOR_SIZE)
     write_file_to_lba(output_iso, rootfs_img, layout.rootfs_lba, sector_size=ISO_SECTOR_SIZE)
-    if efi_img and layout.efi_lba is not None:
-        write_file_to_lba(output_iso, efi_img, layout.efi_lba, sector_size=ISO_SECTOR_SIZE)
 
     bios_start_512 = layout.bios_lba * (ISO_SECTOR_SIZE // SECTOR_SIZE)
     bios_sectors_512 = div_round_up(bios_size, SECTOR_SIZE)
@@ -525,31 +469,6 @@ def _write_iso(
         (0x00, 0x83, rootfs_start_512, rootfs_sectors_512),
     ]
 
-    if efi_img and layout.efi_lba is not None:
-        efi_start_512 = layout.efi_lba * (ISO_SECTOR_SIZE // SECTOR_SIZE)
-        efi_sectors_512 = div_round_up(efi_size, SECTOR_SIZE)
-        mbr_entries.append((0x00, 0xEF, efi_start_512, efi_sectors_512))
-        mbr_entries.append((0x00, 0xEE, 1, min(total_512_sectors - 1, 0xFFFFFFFF)))
-
-        write_gpt(
-            output_iso,
-            total_sectors=total_512_sectors,
-            partitions=[
-                {
-                    "type_guid": GPT_LINUX_GUID,
-                    "name": "apheleiaOS",
-                    "start_lba": rootfs_start_512,
-                    "end_lba": rootfs_start_512 + rootfs_sectors_512 - 1,
-                },
-                {
-                    "type_guid": GPT_ESP_GUID,
-                    "name": "EFI System",
-                    "start_lba": efi_start_512,
-                    "end_lba": efi_start_512 + efi_sectors_512 - 1,
-                },
-            ],
-        )
-
     write_mbr(
         output_iso,
         code440=mbr_bin.read_bytes()[:440],
@@ -559,25 +478,18 @@ def _write_iso(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Create BIOS/UEFI bootable ISO using pure Python image builders."
+        description="Create BIOS bootable ISO using pure Python image builders."
     )
     parser.add_argument("output_iso", type=Path)
     parser.add_argument("mbr_bin", type=Path)
     parser.add_argument("bios_bin", type=Path)
-    parser.add_argument("efi_app", nargs="?", default="", type=str)
-    parser.add_argument("kernel_elf", nargs="?", default="", type=str)
     parser.add_argument("rootfs_dir", type=Path)
     args = parser.parse_args()
-
-    efi_app = Path(args.efi_app) if args.efi_app else None
-    kernel_elf = Path(args.kernel_elf) if args.kernel_elf else None
-    uefi_enabled = bool(efi_app and kernel_elf and efi_app.is_file() and kernel_elf.is_file())
 
     with tempfile.TemporaryDirectory(prefix="apheleia-iso-") as td:
         td_path = Path(td)
         root_tree = td_path / "root"
         ext2_img = td_path / "rootfs.ext2"
-        esp_img = td_path / "esp.img"
 
         prepare_root_tree(args.rootfs_dir, root_tree)
         build_ext2_image(
@@ -589,28 +501,11 @@ def main() -> None:
             minimum_bytes=0,
         )
 
-        efi_img: Path | None = None
-        if uefi_enabled:
-            esp_sectors = esp_fat16_size_sectors(
-                efi_app=efi_app,
-                kernel_elf=kernel_elf,
-                rootfs_image=ext2_img,
-            )
-            build_esp_fat16_image(
-                esp_img,
-                size_sectors=esp_sectors,
-                efi_app=efi_app,
-                kernel_elf=kernel_elf,
-                rootfs_image=ext2_img,
-            )
-            efi_img = esp_img
-
         _write_iso(
             output_iso=args.output_iso,
             mbr_bin=args.mbr_bin,
             bios_bin=args.bios_bin,
             rootfs_img=ext2_img,
-            efi_img=efi_img,
         )
 
     print(f"ISO {args.output_iso}")

@@ -35,7 +35,6 @@ KERNEL_SRC_64     := $(filter-out %/div64.c, $(KERNEL_ARCH64_SRC)) $(KERNEL_COMM
 KERNEL_SRC_32     := $(filter %32.c %32.asm, $(KERNEL_ALL_SRC)) $(KERNEL_COMMON_SRC)
 
 include kernel/arch/x86/boot/bios/build.mk
-include kernel/arch/x86/boot/uefi/build.mk
 
 CC_BASE += -mno-red-zone
 
@@ -97,47 +96,25 @@ $(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS))
 
 
 IMAGE_BOOT_DEPS := bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF)
-ifeq ($(ARCH_VARIANT), 64)
-IMAGE_BOOT_DEPS += bin/boot/BOOTX64.EFI
-endif
-
-IMAGE_UEFI_BOOTLOADER :=
-IMAGE_UEFI_KERNEL :=
-ifeq ($(ARCH_VARIANT), 64)
-IMAGE_UEFI_BOOTLOADER := bin/boot/BOOTX64.EFI
-IMAGE_UEFI_KERNEL := $(KERNEL_ELF)
-endif
 
 IMAGE_SCRIPT_DEPS := \
 	utils/stage_image.sh \
 	kernel/build_image_common.py \
 	kernel/arch/x86/build/build_bios_disk_image.py \
-	kernel/arch/x86/build/build_hybrid_disk_image.py \
-	kernel/arch/x86/build/build_hybrid_iso_image.py
+	kernel/arch/x86/build/build_bios_iso_image.py
 
 IMAGE_ROOT_DEPS := $(shell find root -type f -o -type l)
 
 bin/$(IMAGE_NAME).img: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
 	@utils/stage_image.sh "$(IMAGE_STAGE_DIR)" "$(IMAGE_BOOT_DIR)" \
 		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root"
-ifeq ($(ARCH_VARIANT), 64)
-	@python3 kernel/arch/x86/build/build_hybrid_disk_image.py $@ \
-		bin/boot/mbr.bin \
-		bin/boot/bios.bin \
-		bin/boot/BOOTX64.EFI \
-		$(KERNEL_ELF) \
-		$(IMAGE_STAGE_DIR)
-else
 	@python3 kernel/arch/x86/build/build_bios_disk_image.py $@ \
 		bin/boot/mbr.bin bin/boot/bios.bin $(IMAGE_STAGE_DIR)
-endif
 
 bin/$(IMAGE_NAME).iso: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS)
 	@utils/stage_image.sh "$(IMAGE_STAGE_DIR)" "$(IMAGE_BOOT_DIR)" \
 		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root"
-	@python3 kernel/arch/x86/build/build_hybrid_iso_image.py $@ \
+	@python3 kernel/arch/x86/build/build_bios_iso_image.py $@ \
 		bin/boot/mbr.bin \
 		bin/boot/bios.bin \
-		"$(IMAGE_UEFI_BOOTLOADER)" \
-		"$(IMAGE_UEFI_KERNEL)" \
 		$(IMAGE_STAGE_DIR)

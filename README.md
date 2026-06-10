@@ -7,7 +7,7 @@
 Apheleia is a small UNIX-like hobby operating system made for fun and as a learning opportunity.
 It aims to be as minimalistic and simple as possible while still providing basic functionality.
 
-The current tree supports `x86_64`, `x86_32`, `riscv_64`, and `riscv_32` builds, x86 BIOS boot by default, optional x86_64 UEFI boot, RISC-V emulator and [FRISC](https://github.com/friscv) FPGA images, and a small windowed userland.
+The current tree supports `x86_64`, `x86_32`, `riscv_64`, and `riscv_32` builds, x86 BIOS boot, RISC-V emulator and [FRISC](https://github.com/friscv) FPGA images, and a small windowed userland.
 
 ![Apheleia OS text interface](aos-text.png)
 
@@ -57,7 +57,6 @@ Common build variables:
 | `TOOLCHAIN` | `gnu` | `gnu`, `llvm` | compiler/toolchain family |
 | `IMAGE_FORMAT` | `img` | `img`, `iso` | `iso` is for x86 images |
 | `PROFILE` | `fast` | `fast`, `normal`, `small`, `debug`, `debug_extra` | optimization and debug level |
-| `X86_BOOT` | `bios` | `bios`, `uefi` | x86 boot path for `make run` |
 | `RISCV_FRISC` | `false` | `true`, `false` | build a [FRISC](https://github.com/friscv) FPGA image |
 | `USERLAND` | `default` | `default`, `all`, `core`, or names such as `mbrot,tcc` | select userland programs; names are added to `default`, while `core` keeps only core programs |
 | `DOCKER_IMAGE` | `apheleia:latest` | image tag | Docker image name |

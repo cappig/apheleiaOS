@@ -20,6 +20,7 @@ endif
 
 CC_BASE := \
 	-MD \
+	-MP \
 	-Wall \
 	-Wextra \
 	-Wshadow \

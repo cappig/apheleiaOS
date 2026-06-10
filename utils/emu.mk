@@ -47,14 +47,13 @@ endif
 # ---------------------------
 # qemu settings
 # ---------------------------
-QEMU_CONSOLE ?= false
-X86_BOOT     ?= bios
-QEMU_MEMORY  ?= 256M
-QEMU_CPU     ?= max
-QEMU_SMP     ?= 1
-QEMU_KVM     ?= false
+QEMU_CONSOLE  ?= false
+QEMU_MEMORY   ?= 256M
+QEMU_CPU      ?= max
+QEMU_SMP      ?= 1
+QEMU_KVM      ?= false
 QEMU_SNAPSHOT ?= false
-QEMU_MACHINE ?=
+QEMU_MACHINE  ?=
 
 ifeq ($(ARCH), riscv_64)
 QEMU_MACHINE := virt
@@ -68,17 +67,6 @@ ifeq ($(QEMU_CPU), max)
 QEMU_CPU = host
 endif
 endif
-
-OVMF_DIR          := .cache/ovmf
-OVMF_CODE_LOCAL   := $(OVMF_DIR)/OVMF_CODE.fd
-OVMF_VARS_LOCAL   := $(OVMF_DIR)/OVMF_VARS.fd
-OVMF_FETCH_SCRIPT := utils/ovmf_fetch.py
-
-OVMF_DEB_URL ?= https://deb.debian.org/debian/pool/main/e/edk2/ovmf_2022.11-6+deb12u2_all.deb
-
-OVMF_CODE         ?= $(OVMF_CODE_LOCAL)
-OVMF_VARS         ?= $(OVMF_VARS_LOCAL)
-OVMF_VARS_RUNTIME := bin/ovmf_vars.fd
 
 QEMU_CONSOLE_ARGS :=
 ifeq ($(QEMU_CONSOLE), true)
@@ -110,48 +98,31 @@ ifeq ($(QEMU_SNAPSHOT), true)
 QEMU_ARGS += -snapshot
 endif
 
-QEMU_BOOT_DEPS :=
-QEMU_BOOT_SETUP := @:
 QEMU_BOOT_ARGS :=
 
-ifeq ($(X86_BOOT), uefi)
-ifeq ($(ARCH), x86_64)
-QEMU_BOOT_SETUP := @cp -f "$(OVMF_VARS)" "$(OVMF_VARS_RUNTIME)"
-QEMU_BOOT_ARGS := \
-	-drive if=pflash,format=raw,readonly=on,file="$(OVMF_CODE)" \
-	-drive if=pflash,format=raw,file="$(OVMF_VARS_RUNTIME)"
-ifeq ($(OVMF_CODE), $(OVMF_CODE_LOCAL))
-ifeq ($(OVMF_VARS), $(OVMF_VARS_LOCAL))
-QEMU_BOOT_DEPS := ovmf-fetch
+ifeq ($(IMAGE_FORMAT),iso)
+ifneq ($(filter x86_64 x86_32,$(ARCH)),$(ARCH))
+$(error IMAGE_FORMAT=iso is supported only for ARCH=x86_64 or ARCH=x86_32)
 endif
-endif
+QEMU_IMAGE_ARGS := -cdrom bin/$(IMAGE_NAME).iso -boot d
 else
-$(error X86_BOOT=uefi requires ARCH=x86_64)
-endif
-endif
-
 QEMU_IMAGE_ARGS := -drive format=raw,file=bin/$(IMAGE_NAME).img
-QEMU_USB_IMAGE_ARGS := \
-	-drive if=none,id=usbstick,format=raw,file=bin/$(IMAGE_NAME).img \
-	-device qemu-xhci,id=xhci \
-	-device usb-storage,bus=xhci.0,drive=usbstick
+endif
 
 ifeq ($(ARCH), riscv_64)
 QEMU_BOOT_ARGS := \
 	-bios none \
 	-device loader,file=bin/$(IMAGE_NAME).img,addr=0x80000000,cpu-num=0,force-raw=on
 QEMU_IMAGE_ARGS :=
-QEMU_USB_IMAGE_ARGS :=
 endif
 ifeq ($(ARCH), riscv_32)
 QEMU_BOOT_ARGS := \
 	-bios none \
 	-device loader,file=bin/$(IMAGE_NAME).img,addr=0x80000000,cpu-num=0,force-raw=on
 QEMU_IMAGE_ARGS :=
-QEMU_USB_IMAGE_ARGS :=
 endif
 
-.PHONY: ovmf-fetch ovmf-clean run run-usb run-usb-bios run-usb-uefi run-spike
+.PHONY: run run-spike
 
 $(SPIKE_MMIO_UART_PLUGIN): utils/spike/mmio_uart_plugin.cpp
 	@mkdir -p "$(dir $@)"
@@ -165,25 +136,8 @@ $(SPIKE_MMIO_UART_PLUGIN): utils/spike/mmio_uart_plugin.cpp
 		-I/usr/include \
 		-o "$@" "$<"
 
-ovmf-fetch:
-	@python3 $(OVMF_FETCH_SCRIPT) "$(OVMF_DIR)" "$(OVMF_DEB_URL)"
-
-ovmf-clean:
-	@rm -rf "$(OVMF_DIR)"
-
-run: all $(QEMU_BOOT_DEPS)
-	$(QEMU_BOOT_SETUP)
+run: all
 	@if tty -s; then exec </dev/tty >/dev/tty 2>/dev/tty; fi; $(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_IMAGE_ARGS)
-
-run-usb: all $(QEMU_BOOT_DEPS)
-	$(QEMU_BOOT_SETUP)
-	@if tty -s; then exec </dev/tty >/dev/tty 2>/dev/tty; fi; $(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_USB_IMAGE_ARGS)
-
-run-usb-bios:
-	@$(MAKE) run-usb X86_BOOT=bios
-
-run-usb-uefi:
-	@$(MAKE) run-usb X86_BOOT=uefi
 
 run-spike: all $(SPIKE_MMIO_UART_DEPS)
 	@if [ "$(ARCH_TREE)" != "riscv" ]; then \
