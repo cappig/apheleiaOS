@@ -85,7 +85,7 @@ static volatile u64 rtc_sync_ticks ALIGNED(8) = 0;
 static bool _cpu_ptr_is_core_local(const cpu_core_t *core) {
     uintptr_t ptr = (uintptr_t)core;
     uintptr_t first = (uintptr_t)&cores_local[0];
-    uintptr_t last = (uintptr_t)&cores_local[MAX_CORES];
+    uintptr_t last = (uintptr_t)(cores_local + MAX_CORES);
 
     if (ptr < first || ptr >= last) {
         return false;

@@ -58,6 +58,11 @@ typedef struct {
     bool reclaimed;
 } ext2_node_info_t;
 
+typedef enum {
+    EXT2_ALLOC_BLOCK,
+    EXT2_ALLOC_INODE,
+} ext2_alloc_kind_t;
+
 static bool _ext2_read(disk_partition_t *part, void *dest, size_t offset, size_t bytes) {
     if (!part || !part->disk || !part->disk->interface || !part->disk->interface->read) {
         return false;
@@ -190,12 +195,12 @@ static bool _write_block(ext2_private_t *priv, disk_partition_t *part, u32 block
     return true;
 }
 
-static bool _read_inode_bytes(ext2_private_t *priv, disk_partition_t *part, void *out, size_t offset, size_t len) {
-    if (!priv || !part || !out) {
+static bool
+_inode_bytes_io(ext2_private_t *priv, disk_partition_t *part, void *buf, size_t offset, size_t len, bool write) {
+    if (!priv || !part || !buf) {
         return false;
     }
 
-    u8 *dest = out;
     u8 *block = malloc(priv->block_size);
     if (!block) {
         return false;
@@ -220,7 +225,17 @@ static bool _read_inode_bytes(ext2_private_t *priv, disk_partition_t *part, void
             break;
         }
 
-        memcpy(dest + copied, block + block_off, chunk);
+        if (write) {
+            memcpy(block + block_off, (const u8 *)buf + copied, chunk);
+            ok = _write_block(priv, part, block_num, block);
+        } else {
+            memcpy((u8 *)buf + copied, block + block_off, chunk);
+        }
+
+        if (!ok) {
+            break;
+        }
+
         copied += chunk;
     }
 
@@ -228,49 +243,13 @@ static bool _read_inode_bytes(ext2_private_t *priv, disk_partition_t *part, void
     return ok;
 }
 
+static bool _read_inode_bytes(ext2_private_t *priv, disk_partition_t *part, void *out, size_t offset, size_t len) {
+    return _inode_bytes_io(priv, part, out, offset, len, false);
+}
+
 static bool
 _write_inode_bytes(ext2_private_t *priv, disk_partition_t *part, const void *in, size_t offset, size_t len) {
-    if (!priv || !part || !in) {
-        return false;
-    }
-
-    const u8 *src = in;
-    u8 *block = malloc(priv->block_size);
-    if (!block) {
-        return false;
-    }
-
-    size_t copied = 0;
-    bool ok = true;
-
-    while (copied < len) {
-        size_t pos = offset + copied;
-        u32 block_num = (u32)(pos / priv->block_size);
-        size_t block_off = pos % priv->block_size;
-        size_t available = priv->block_size - block_off;
-        size_t chunk = len - copied;
-
-        if (chunk > available) {
-            chunk = available;
-        }
-
-        if (!_read_block(priv, part, block_num, block)) {
-            ok = false;
-            break;
-        }
-
-        memcpy(block + block_off, src + copied, chunk);
-
-        if (!_write_block(priv, part, block_num, block)) {
-            ok = false;
-            break;
-        }
-
-        copied += chunk;
-    }
-
-    free(block);
-    return ok;
+    return _inode_bytes_io(priv, part, (void *)in, offset, len, true);
 }
 
 static bool _read_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num, ext2_inode_t *inode) {
@@ -474,127 +453,66 @@ static void _sync_vnode(vfs_node_t *node, const ext2_inode_t *inode) {
     node->time.modified = inode->last_modification_time;
 }
 
-static bool _alloc_block(ext2_private_t *priv, disk_partition_t *part, u32 *out_block) {
-    if (!priv || !part || !out_block) {
-        return false;
-    }
-
-    u8 *bitmap = malloc(priv->block_size);
-    if (!bitmap) {
-        return false;
-    }
-
-    bool ok = false;
-
-    for (u32 group = 0; group < priv->group_count; group++) {
-        ext2_group_descriptor_t *gd = &priv->groups[group];
-        if (!gd->unallocated_block_count) {
-            continue;
-        }
-
-        if (!_group_block_bitmap(priv, part, group, bitmap)) {
-            break;
-        }
-
-        u32 first = group * priv->superblock.blocks_in_group;
-        size_t count = priv->superblock.blocks_in_group;
-
-        if (first >= priv->superblock.block_count) {
-            continue;
-        }
-
-        if (first + count > priv->superblock.block_count) {
-            count = priv->superblock.block_count - first;
-        }
-
-        size_t bit = 0;
-        if (!bitmap_find_first_clear((bitmap_word_t *)bitmap, count, &bit)) {
-            continue;
-        }
-
-        // bitmap writes happen before counters so a crash leaks space instead of aliasing it
-        bitmap_set((bitmap_word_t *)bitmap, bit);
-
-        if (!_write_block_bitmap(priv, part, group, bitmap)) {
-            break;
-        }
-
-        gd->unallocated_block_count--;
-
-        if (priv->superblock.free_block_count) {
-            priv->superblock.free_block_count--;
-        }
-
-        if (!_flush_alloc_metadata(priv, part)) {
-            break;
-        }
-
-        *out_block = first + (u32)bit;
-        if (!*out_block) {
-            continue;
-        }
-        ok = true;
-        break;
-    }
-
-    free(bitmap);
-    return ok;
+static u32 _alloc_total(const ext2_private_t *priv, ext2_alloc_kind_t kind) {
+    return kind == EXT2_ALLOC_INODE ? priv->superblock.inode_count : priv->superblock.block_count;
 }
 
-static bool _free_block(ext2_private_t *priv, disk_partition_t *part, u32 block) {
-    if (!priv || !part || !block) {
-        return false;
+static u32 _alloc_per_group(const ext2_private_t *priv, ext2_alloc_kind_t kind) {
+    return kind == EXT2_ALLOC_INODE ? priv->superblock.inodes_in_group : priv->superblock.blocks_in_group;
+}
+
+static u32 _alloc_group_free(const ext2_group_descriptor_t *gd, ext2_alloc_kind_t kind) {
+    return kind == EXT2_ALLOC_INODE ? gd->unallocated_inode_count : gd->unallocated_block_count;
+}
+
+static bool
+_alloc_read_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, u8 *bitmap, ext2_alloc_kind_t kind) {
+    if (kind == EXT2_ALLOC_INODE) {
+        return _group_inode_bitmap(priv, part, group, bitmap);
     }
 
-    if (block >= priv->superblock.block_count) {
-        return false;
+    return _group_block_bitmap(priv, part, group, bitmap);
+}
+
+static bool
+_alloc_write_bitmap(ext2_private_t *priv, disk_partition_t *part, u32 group, const u8 *bitmap, ext2_alloc_kind_t kind) {
+    if (kind == EXT2_ALLOC_INODE) {
+        return _write_inode_bitmap(priv, part, group, bitmap);
     }
 
-    u32 group = block / priv->superblock.blocks_in_group;
-    u32 index = block % priv->superblock.blocks_in_group;
+    return _write_block_bitmap(priv, part, group, bitmap);
+}
 
-    if (group >= priv->group_count) {
-        return false;
+static void _alloc_count_used(ext2_private_t *priv, u32 group, ext2_alloc_kind_t kind) {
+    ext2_group_descriptor_t *gd = &priv->groups[group];
+
+    if (kind == EXT2_ALLOC_INODE) {
+        gd->unallocated_inode_count--;
+        if (priv->superblock.free_inode_count) {
+            priv->superblock.free_inode_count--;
+        }
+        return;
     }
 
-    u8 *bitmap = malloc(priv->block_size);
-    if (!bitmap) {
-        return false;
+    gd->unallocated_block_count--;
+    if (priv->superblock.free_block_count) {
+        priv->superblock.free_block_count--;
     }
+}
 
-    bool ok = false;
-
-    if (!_group_block_bitmap(priv, part, group, bitmap)) {
-        goto out;
-    }
-
-    if (!bitmap_get((bitmap_word_t *)bitmap, index)) {
-        ok = true;
-        goto out;
-    }
-
-    bitmap_clear((bitmap_word_t *)bitmap, index);
-
-    if (!_write_block_bitmap(priv, part, group, bitmap)) {
-        goto out;
+static void _alloc_count_free(ext2_private_t *priv, u32 group, ext2_alloc_kind_t kind) {
+    if (kind == EXT2_ALLOC_INODE) {
+        priv->groups[group].unallocated_inode_count++;
+        priv->superblock.free_inode_count++;
+        return;
     }
 
     priv->groups[group].unallocated_block_count++;
     priv->superblock.free_block_count++;
-
-    if (!_flush_alloc_metadata(priv, part)) {
-        goto out;
-    }
-
-    ok = true;
-
-out:
-    free(bitmap);
-    return ok;
 }
 
-static bool _alloc_inode(ext2_private_t *priv, disk_partition_t *part, u32 *out_inode) {
-    if (!priv || !part || !out_inode) {
+static bool _alloc_item(ext2_private_t *priv, disk_partition_t *part, ext2_alloc_kind_t kind, u32 *out) {
+    if (!priv || !part || !out) {
         return false;
     }
 
@@ -603,27 +521,29 @@ static bool _alloc_inode(ext2_private_t *priv, disk_partition_t *part, u32 *out_
         return false;
     }
 
+    u32 total = _alloc_total(priv, kind);
+    u32 per_group = _alloc_per_group(priv, kind);
     bool ok = false;
 
     for (u32 group = 0; group < priv->group_count; group++) {
         ext2_group_descriptor_t *gd = &priv->groups[group];
-        if (!gd->unallocated_inode_count) {
+        if (!_alloc_group_free(gd, kind)) {
             continue;
         }
 
-        if (!_group_inode_bitmap(priv, part, group, bitmap)) {
+        if (!_alloc_read_bitmap(priv, part, group, bitmap, kind)) {
             break;
         }
 
-        u32 first = group * priv->superblock.inodes_in_group;
-        size_t count = priv->superblock.inodes_in_group;
+        u32 first = group * per_group;
+        size_t count = per_group;
 
-        if (first >= priv->superblock.inode_count) {
+        if (first >= total) {
             continue;
         }
 
-        if (first + count > priv->superblock.inode_count) {
-            count = priv->superblock.inode_count - first;
+        if (first + count > total) {
+            count = total - first;
         }
 
         size_t bit = 0;
@@ -633,41 +553,44 @@ static bool _alloc_inode(ext2_private_t *priv, disk_partition_t *part, u32 *out_
 
         bitmap_set((bitmap_word_t *)bitmap, bit);
 
-        if (!_write_inode_bitmap(priv, part, group, bitmap)) {
+        if (!_alloc_write_bitmap(priv, part, group, bitmap, kind)) {
             break;
         }
 
-        gd->unallocated_inode_count--;
-
-        if (priv->superblock.free_inode_count) {
-            priv->superblock.free_inode_count--;
-        }
+        _alloc_count_used(priv, group, kind);
 
         if (!_flush_alloc_metadata(priv, part)) {
             break;
         }
 
-        *out_inode = first + (u32)bit + 1;
-        ok = true;
-        break;
+        u32 value = first + (u32)bit;
+        *out = kind == EXT2_ALLOC_INODE ? value + 1 : value;
+        ok = kind == EXT2_ALLOC_INODE || *out != 0;
+
+        if (ok) {
+            break;
+        }
     }
 
     free(bitmap);
     return ok;
 }
 
-static bool _free_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num) {
-    if (!priv || !part || !inode_num) {
+static bool _free_item(ext2_private_t *priv, disk_partition_t *part, ext2_alloc_kind_t kind, u32 value) {
+    if (!priv || !part || !value) {
         return false;
     }
 
-    u32 zero = inode_num - 1;
-    if (zero >= priv->superblock.inode_count) {
+    u32 zero = kind == EXT2_ALLOC_INODE ? value - 1 : value;
+    u32 total = _alloc_total(priv, kind);
+    u32 per_group = _alloc_per_group(priv, kind);
+
+    if (zero >= total) {
         return false;
     }
 
-    u32 group = zero / priv->superblock.inodes_in_group;
-    u32 index = zero % priv->superblock.inodes_in_group;
+    u32 group = zero / per_group;
+    u32 index = zero % per_group;
 
     if (group >= priv->group_count) {
         return false;
@@ -680,7 +603,7 @@ static bool _free_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_
 
     bool ok = false;
 
-    if (!_group_inode_bitmap(priv, part, group, bitmap)) {
+    if (!_alloc_read_bitmap(priv, part, group, bitmap, kind)) {
         goto out;
     }
 
@@ -691,22 +614,32 @@ static bool _free_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_
 
     bitmap_clear((bitmap_word_t *)bitmap, index);
 
-    if (!_write_inode_bitmap(priv, part, group, bitmap)) {
+    if (!_alloc_write_bitmap(priv, part, group, bitmap, kind)) {
         goto out;
     }
 
-    priv->groups[group].unallocated_inode_count++;
-    priv->superblock.free_inode_count++;
-
-    if (!_flush_alloc_metadata(priv, part)) {
-        goto out;
-    }
-
-    ok = true;
+    _alloc_count_free(priv, group, kind);
+    ok = _flush_alloc_metadata(priv, part);
 
 out:
     free(bitmap);
     return ok;
+}
+
+static bool _alloc_block(ext2_private_t *priv, disk_partition_t *part, u32 *out_block) {
+    return _alloc_item(priv, part, EXT2_ALLOC_BLOCK, out_block);
+}
+
+static bool _free_block(ext2_private_t *priv, disk_partition_t *part, u32 block) {
+    return _free_item(priv, part, EXT2_ALLOC_BLOCK, block);
+}
+
+static bool _alloc_inode(ext2_private_t *priv, disk_partition_t *part, u32 *out_inode) {
+    return _alloc_item(priv, part, EXT2_ALLOC_INODE, out_inode);
+}
+
+static bool _free_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num) {
+    return _free_item(priv, part, EXT2_ALLOC_INODE, inode_num);
 }
 
 static bool _zero_block(ext2_private_t *priv, disk_partition_t *part, u32 block) {
@@ -1386,11 +1319,13 @@ static bool _dir_add_entry(
     return true;
 }
 
-static bool _dir_remove_entry(
+static bool _dir_change_entry(
     ext2_private_t *priv,
     disk_partition_t *part,
     const ext2_node_info_t *dir_info,
     const char *name,
+    u32 inode_num,
+    u8 type,
     u32 *inode_out,
     u8 *type_out
 ) {
@@ -1418,14 +1353,25 @@ static bool _dir_remove_entry(
     }
 
     ext2_directory_t *entry = (ext2_directory_t *)(block + pos);
-    entry->inode = 0;
-    entry->type = EXT2_DIR_UNKNOWN;
+    entry->inode = inode_num;
+    entry->type = type;
 
     bool ok = _write_block(priv, part, block_num, block);
 
     free(block);
 
     return ok;
+}
+
+static bool _dir_remove_entry(
+    ext2_private_t *priv,
+    disk_partition_t *part,
+    const ext2_node_info_t *dir_info,
+    const char *name,
+    u32 *inode_out,
+    u8 *type_out
+) {
+    return _dir_change_entry(priv, part, dir_info, name, 0, EXT2_DIR_UNKNOWN, inode_out, type_out);
 }
 
 static bool _dir_set_entry(
@@ -1436,37 +1382,11 @@ static bool _dir_set_entry(
     u32 inode_num,
     u8 type
 ) {
-    if (!priv || !part || !dir_info || !name || !name[0] || !inode_num) {
+    if (!inode_num) {
         return false;
     }
 
-    u32 block_num = 0;
-    size_t pos = 0;
-
-    bool found_entry = _dir_find_entry(priv, part, dir_info, name, NULL, &block_num, &pos, NULL, NULL);
-
-    if (!found_entry) {
-        return false;
-    }
-
-    u8 *block = malloc(priv->block_size);
-    if (!block) {
-        return false;
-    }
-
-    if (!_read_block(priv, part, block_num, block)) {
-        free(block);
-        return false;
-    }
-
-    ext2_directory_t *entry = (ext2_directory_t *)(block + pos);
-    entry->inode = inode_num;
-    entry->type = type;
-
-    bool ok = _write_block(priv, part, block_num, block);
-
-    free(block);
-    return ok;
+    return _dir_change_entry(priv, part, dir_info, name, inode_num, type, NULL, NULL);
 }
 
 static bool _dir_is_empty(ext2_private_t *priv, disk_partition_t *part, const ext2_inode_t *inode) {
@@ -1560,6 +1480,160 @@ static bool _init_vnode(vfs_node_t *node, fs_instance_t *instance, u32 inode_num
     return true;
 }
 
+static int _read_data_locked(
+    ext2_private_t *priv,
+    disk_partition_t *part,
+    ext2_node_info_t *info,
+    u64 offset,
+    void *buf,
+    size_t len,
+    size_t *read_out
+) {
+    if (!priv || !part || !info || !buf || !read_out) {
+        return -EINVAL;
+    }
+
+    *read_out = 0;
+
+    u64 size = ext2_file_size(&info->inode);
+    if (offset >= size) {
+        return 0;
+    }
+
+    size_t todo = len;
+    if (todo > size - offset) {
+        todo = (size_t)(size - offset);
+    }
+
+    u8 *out = buf;
+    u8 *bounce = NULL;
+    u64 cursor = offset;
+    size_t left = todo;
+
+    while (left) {
+        u32 block_index = (u32)(cursor / priv->block_size);
+        size_t block_off = (size_t)(cursor % priv->block_size);
+        size_t space = priv->block_size - block_off;
+        size_t chunk = left < space ? left : space;
+        u32 block = _block_from_node(priv, part, info, block_index);
+
+        if (block_off == 0 && chunk == priv->block_size) {
+            if (!block) {
+                memset(out, 0, priv->block_size);
+            } else if (!_read_block(priv, part, block, out)) {
+                free(bounce);
+                return -EIO;
+            }
+        } else {
+            if (!bounce) {
+                bounce = malloc(priv->block_size);
+                if (!bounce) {
+                    return -ENOMEM;
+                }
+            }
+
+            if (!block) {
+                memset(bounce, 0, priv->block_size);
+            } else if (!_read_block(priv, part, block, bounce)) {
+                free(bounce);
+                return -EIO;
+            }
+
+            memcpy(out, bounce + block_off, chunk);
+        }
+
+        out += chunk;
+        left -= chunk;
+        cursor += chunk;
+    }
+
+    free(bounce);
+    *read_out = todo;
+    return 0;
+}
+
+static int _write_data_locked(
+    ext2_private_t *priv,
+    disk_partition_t *part,
+    ext2_node_info_t *info,
+    u64 offset,
+    const void *buf,
+    size_t len
+) {
+    if (!priv || !part || !info || (len && !buf)) {
+        return -EINVAL;
+    }
+
+    if (!len) {
+        _set_file_size(&info->inode, offset);
+        return _write_inode(priv, part, info->inode_num, &info->inode) ? 0 : -EIO;
+    }
+
+    u8 *bounce = malloc(priv->block_size);
+    if (!bounce) {
+        return -ENOMEM;
+    }
+
+    const u8 *in = buf;
+    u64 cursor = offset;
+    size_t left = len;
+    bool inode_changed = false;
+
+    while (left) {
+        u32 block_index = (u32)(cursor / priv->block_size);
+        size_t block_off = (size_t)(cursor % priv->block_size);
+        size_t space = priv->block_size - block_off;
+        size_t chunk = left < space ? left : space;
+
+        u32 block = 0;
+        bool changed = false;
+        if (!_ensure_block(priv, part, info, block_index, &block, &changed)) {
+            free(bounce);
+            return -ENOSPC;
+        }
+
+        inode_changed |= changed;
+
+        if (block_off || chunk < priv->block_size) {
+            if (!_read_block(priv, part, block, bounce)) {
+                free(bounce);
+                return -EIO;
+            }
+        } else {
+            memset(bounce, 0, priv->block_size);
+        }
+
+        memcpy(bounce + block_off, in, chunk);
+
+        if (!_write_block(priv, part, block, bounce)) {
+            free(bounce);
+            return -EIO;
+        }
+
+        in += chunk;
+        left -= chunk;
+        cursor += chunk;
+    }
+
+    free(bounce);
+
+    if (cursor > ext2_file_size(&info->inode)) {
+        _set_file_size(&info->inode, cursor);
+        inode_changed = true;
+    }
+
+    u32 now = _now(priv);
+    info->inode.last_access_time = now;
+    info->inode.last_modification_time = now;
+    inode_changed = true;
+
+    if (inode_changed && !_write_inode(priv, part, info->inode_num, &info->inode)) {
+        return -EIO;
+    }
+
+    return 0;
+}
+
 static ssize_t _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
@@ -1577,65 +1651,12 @@ static ssize_t _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len
 
     mutex_lock(&priv->lock);
 
-    u64 size = ext2_file_size(&info->inode);
-    if (offset >= size) {
+    size_t read = 0;
+    int err = _read_data_locked(priv, part, info, offset, buf, len, &read);
+    if (err < 0) {
         mutex_unlock(&priv->lock);
-        return 0;
+        return err;
     }
-
-    size_t to_read = len;
-    if (to_read > size - offset) {
-        to_read = (size_t)(size - offset);
-    }
-
-    u8 *out = buf;
-    u32 block_size = priv->block_size;
-    u8 *bounce = NULL;
-
-    size_t remaining = to_read;
-    u64 cursor = offset;
-
-    while (remaining) {
-        u32 block_index = (u32)(cursor / block_size);
-        size_t block_off = (size_t)(cursor % block_size);
-        u32 block = _block_from_node(priv, part, info, block_index);
-
-        size_t available = block_size - block_off;
-        size_t chunk = remaining < available ? remaining : available;
-
-        if (block_off == 0 && chunk == block_size) {
-            if (!block) {
-                memset(out, 0, block_size);
-            } else if (!_read_block(priv, part, block, out)) {
-                mutex_unlock(&priv->lock);
-                return -EIO;
-            }
-        } else {
-            if (!bounce) {
-                bounce = malloc(block_size);
-                if (!bounce) {
-                    mutex_unlock(&priv->lock);
-                    return -ENOMEM;
-                }
-            }
-
-            if (!block) {
-                memset(bounce, 0, block_size);
-            } else if (!_read_block(priv, part, block, bounce)) {
-                free(bounce);
-                mutex_unlock(&priv->lock);
-                return -EIO;
-            }
-
-            memcpy(out, bounce + block_off, chunk);
-        }
-
-        out += chunk;
-        remaining -= chunk;
-        cursor += chunk;
-    }
-
-    free(bounce);
 
     u32 now = _now(priv);
     if (_should_update_atime(&info->inode, now)) {
@@ -1647,7 +1668,7 @@ static ssize_t _read_file(vfs_node_t *node, void *buf, size_t offset, size_t len
     }
 
     mutex_unlock(&priv->lock);
-    return (ssize_t)(to_read - remaining);
+    return (ssize_t)read;
 }
 
 static bool _read_inode_bytes_locked(
@@ -1671,32 +1692,19 @@ static bool _read_inode_bytes_locked(
         return true;
     }
 
-    u32 block_size = priv->block_size;
-    u8 *bounce = malloc(block_size);
-    if (!bounce) {
+    ext2_node_info_t tmp = {
+        .inode = *inode,
+    };
+
+    size_t copied = 0;
+    int err = _read_data_locked(priv, part, &tmp, 0, out, (size_t)size, &copied);
+    _drop_indirect(&tmp);
+
+    if (err < 0 || copied != size) {
         return false;
     }
 
-    size_t copied = 0;
-    while (copied < size) {
-        u32 block_index = (u32)(copied / block_size);
-        u32 block = _block_for_index(priv, part, inode, block_index);
-        if (!block || !_read_block(priv, part, block, bounce)) {
-            free(bounce);
-            return false;
-        }
-
-        size_t chunk = block_size;
-        if (chunk > size - copied) {
-            chunk = (size_t)(size - copied);
-        }
-
-        memcpy(out + copied, bounce, chunk);
-        copied += chunk;
-    }
-
     out[size] = '\0';
-    free(bounce);
     return true;
 }
 
@@ -1716,68 +1724,7 @@ static bool _write_inode_bytes_locked(
         return _write_inode(priv, part, info->inode_num, &info->inode);
     }
 
-    u32 block_size = priv->block_size;
-    u8 *bounce = malloc(block_size);
-    if (!bounce) {
-        return false;
-    }
-
-    const u8 *in = data;
-    size_t remaining = len;
-    u64 cursor = 0;
-    bool inode_changed = false;
-
-    while (remaining) {
-        u32 block_index = (u32)(cursor / block_size);
-        size_t block_off = (size_t)(cursor % block_size);
-
-        u32 block = 0;
-        bool changed = false;
-
-        if (!_ensure_block(priv, part, info, block_index, &block, &changed)) {
-            free(bounce);
-            return false;
-        }
-
-        inode_changed |= changed;
-
-        size_t available = block_size - block_off;
-        size_t chunk = remaining < available ? remaining : available;
-
-        if (block_off || chunk < block_size) {
-            if (!_read_block(priv, part, block, bounce)) {
-                free(bounce);
-                return false;
-            }
-        } else {
-            memset(bounce, 0, block_size);
-        }
-
-        memcpy(bounce + block_off, in, chunk);
-
-        if (!_write_block(priv, part, block, bounce)) {
-            free(bounce);
-            return false;
-        }
-
-        in += chunk;
-        remaining -= chunk;
-        cursor += chunk;
-    }
-
-    free(bounce);
-
-    if (cursor > ext2_file_size(&info->inode)) {
-        _set_file_size(&info->inode, cursor);
-        inode_changed = true;
-    }
-
-    u32 now = _now(priv);
-    info->inode.last_access_time = now;
-    info->inode.last_modification_time = now;
-    inode_changed = true;
-
-    return !inode_changed || _write_inode(priv, part, info->inode_num, &info->inode);
+    return _write_data_locked(priv, part, info, 0, data, len) == 0;
 }
 
 static ssize_t _write_file(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
@@ -1815,80 +1762,14 @@ static ssize_t _write_file(vfs_node_t *node, void *buf, size_t offset, size_t le
         return 0;
     }
 
-    u32 block_size = priv->block_size;
-    u8 *bounce = malloc(block_size);
-
-    if (!bounce) {
+    int err = _write_data_locked(priv, part, info, offset, buf, len);
+    if (err < 0) {
         mutex_unlock(&priv->lock);
-        return -ENOMEM;
-    }
-
-    u8 *in = buf;
-    size_t remaining = len;
-    u64 cursor = offset;
-    bool inode_changed = false;
-
-    while (remaining) {
-        u32 block_index = (u32)(cursor / block_size);
-        size_t block_off = (size_t)(cursor % block_size);
-
-        u32 block = 0;
-        bool changed = false;
-
-        if (!_ensure_block(priv, part, info, block_index, &block, &changed)) {
-            free(bounce);
-            mutex_unlock(&priv->lock);
-            return -ENOSPC;
-        }
-
-        inode_changed |= changed;
-
-        size_t available = block_size - block_off;
-        size_t chunk = remaining < available ? remaining : available;
-
-        if (block_off || chunk < block_size) {
-            if (!_read_block(priv, part, block, bounce)) {
-                free(bounce);
-                mutex_unlock(&priv->lock);
-                return -EIO;
-            }
-        } else {
-            memset(bounce, 0, block_size);
-        }
-
-        memcpy(bounce + block_off, in, chunk);
-
-        if (!_write_block(priv, part, block, bounce)) {
-            free(bounce);
-            mutex_unlock(&priv->lock);
-            return -EIO;
-        }
-
-        in += chunk;
-        remaining -= chunk;
-        cursor += chunk;
-    }
-
-    free(bounce);
-
-    if (cursor > ext2_file_size(&info->inode)) {
-        _set_file_size(&info->inode, cursor);
-        inode_changed = true;
+        return err;
     }
 
     u32 now = _now(priv);
-
-    info->inode.last_access_time = now;
-    info->inode.last_modification_time = now;
-    inode_changed = true;
-
-    if (inode_changed && !_write_inode(priv, part, info->inode_num, &info->inode)) {
-        mutex_unlock(&priv->lock);
-        return -EIO;
-    }
-
     _touch_super(priv, part, now);
-
     _sync_vnode(node, &info->inode);
 
     mutex_unlock(&priv->lock);
@@ -2593,6 +2474,16 @@ static bool _assign_interface(vfs_node_t *node, u32 vfs_type) {
     return _assign_ext2_interface(node, vfs_type);
 }
 
+static void _free_private(ext2_private_t *priv) {
+    if (!priv) {
+        return;
+    }
+
+    free(priv->cache_data);
+    free(priv->groups);
+    free(priv);
+}
+
 static bool _build_dir(fs_instance_t *instance, vfs_node_t *parent, const ext2_inode_t *inode) {
     if (!instance || !parent || !inode) {
         return false;
@@ -2737,12 +2628,12 @@ static fs_instance_t *_probe(disk_partition_t *part) {
     mutex_init(&priv->lock);
 
     if (!_ext2_read(part, &priv->superblock, 1024, sizeof(ext2_superblock_t))) {
-        free(priv);
+        _free_private(priv);
         return NULL;
     }
 
     if (priv->superblock.signature != EXT2_SIGNATURE) {
-        free(priv);
+        _free_private(priv);
         return NULL;
     }
 
@@ -2768,7 +2659,7 @@ static fs_instance_t *_probe(disk_partition_t *part) {
     priv->groups = malloc(priv->gdt_size);
 
     if (!priv->groups) {
-        free(priv);
+        _free_private(priv);
         return NULL;
     }
 
@@ -2787,17 +2678,13 @@ static fs_instance_t *_probe(disk_partition_t *part) {
     priv->gdt_offset = (size_t)(priv->superblock.superblock_offset + 1) * priv->block_size;
 
     if (!_ext2_read(part, priv->groups, priv->gdt_offset, priv->gdt_size)) {
-        free(priv->cache_data);
-        free(priv->groups);
-        free(priv);
+        _free_private(priv);
         return NULL;
     }
 
     fs_instance_t *instance = calloc(1, sizeof(fs_instance_t));
     if (!instance) {
-        free(priv->cache_data);
-        free(priv->groups);
-        free(priv);
+        _free_private(priv);
         return NULL;
     }
 
@@ -2856,6 +2743,18 @@ static bool _build_tree(fs_instance_t *instance) {
     return true;
 }
 
+static bool _node_write_meta(fs_instance_t *instance, vfs_node_t *node) {
+    ext2_private_t *priv = instance->private;
+    ext2_node_info_t *info = node->private;
+
+    bool wrote_inode = _write_inode(priv, instance->partition, info->inode_num, &info->inode);
+    if (!wrote_inode) {
+        return false;
+    }
+
+    return _touch_super(priv, instance->partition, _now(priv));
+}
+
 static bool _node_chmod(fs_instance_t *instance, vfs_node_t *node, mode_t mode) {
     if (!instance || !instance->private || !instance->partition || !node || !node->private) {
         return false;
@@ -2864,18 +2763,10 @@ static bool _node_chmod(fs_instance_t *instance, vfs_node_t *node, mode_t mode) 
     ext2_private_t *priv = instance->private;
     ext2_node_info_t *info = node->private;
     mutex_lock(&priv->lock);
-    u32 now = _now(priv);
 
     info->inode.type = (info->inode.type & EXT2_IT_MASK) | (mode & EXT2_IP_MASK);
 
-    bool wrote_inode = _write_inode(priv, instance->partition, info->inode_num, &info->inode);
-
-    if (!wrote_inode) {
-        mutex_unlock(&priv->lock);
-        return false;
-    }
-
-    if (!_touch_super(priv, instance->partition, now)) {
+    if (!_node_write_meta(instance, node)) {
         mutex_unlock(&priv->lock);
         return false;
     }
@@ -2893,19 +2784,11 @@ static bool _node_chown(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gi
     ext2_private_t *priv = instance->private;
     ext2_node_info_t *info = node->private;
     mutex_lock(&priv->lock);
-    u32 now = _now(priv);
 
     info->inode.uid = (u16)uid;
     info->inode.gid = (u16)gid;
 
-    bool wrote_inode = _write_inode(priv, instance->partition, info->inode_num, &info->inode);
-
-    if (!wrote_inode) {
-        mutex_unlock(&priv->lock);
-        return false;
-    }
-
-    if (!_touch_super(priv, instance->partition, now)) {
+    if (!_node_write_meta(instance, node)) {
         mutex_unlock(&priv->lock);
         return false;
     }
