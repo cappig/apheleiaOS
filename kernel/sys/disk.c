@@ -104,8 +104,6 @@ static const char *_disk_name_prefix(size_t type) {
         return "fd";
     case DISK_OPTICAL:
         return "cd";
-    case DISK_USB:
-        return "usb";
     default:
         return "disk";
     }
@@ -281,8 +279,6 @@ static bool boot_hint_matches_disk(const disk_dev_t *dev) {
     }
 
     switch (disk_state.boot_hint.transport) {
-    case DISK_BOOT_TRANSPORT_USB:
-        return dev->type == DISK_USB;
     case DISK_BOOT_TRANSPORT_ATAPI:
         return dev->type == DISK_OPTICAL;
     case DISK_BOOT_TRANSPORT_ATA:
@@ -294,8 +290,6 @@ static bool boot_hint_matches_disk(const disk_dev_t *dev) {
     }
 
     switch (disk_state.boot_hint.media) {
-    case DISK_BOOT_MEDIA_USB:
-        return dev->type == DISK_USB;
     case DISK_BOOT_MEDIA_OPTICAL:
         return dev->type == DISK_OPTICAL;
     case DISK_BOOT_MEDIA_DISK:

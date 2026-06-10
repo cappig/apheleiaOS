@@ -220,16 +220,8 @@ bool bios_boot_root_hint(boot_root_hint_t *out) {
 
     out->valid = 1;
 
-    bool removable = (bios_disk.flags & (1U << 2)) != 0;
-
-    if (removable) {
-        out->media = BOOT_MEDIA_USB;
-        out->transport = BOOT_TRANSPORT_USB;
-    } else {
-        out->media = BOOT_MEDIA_DISK;
-        out->transport = BOOT_TRANSPORT_ATA;
-    }
-
+    out->media = BOOT_MEDIA_DISK;
+    out->transport = BOOT_TRANSPORT_ATA;
     out->part_style = BOOT_PARTSTYLE_MBR;
     out->part_index = (u8)(bios_disk.root_part + 1);
     out->bios_drive = (u8)(bios_disk.drive & 0xffU);

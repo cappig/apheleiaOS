@@ -57,9 +57,8 @@ typedef struct PACKED {
 typedef enum PACKED {
     BOOT_MEDIA_UNKNOWN = 0,
     BOOT_MEDIA_DISK = 1,
-    BOOT_MEDIA_USB = 2,
-    BOOT_MEDIA_OPTICAL = 3,
-    BOOT_MEDIA_NETWORK = 4,
+    BOOT_MEDIA_OPTICAL = 2,
+    BOOT_MEDIA_NETWORK = 3,
 } boot_media_t;
 
 typedef enum PACKED {
@@ -67,8 +66,7 @@ typedef enum PACKED {
     BOOT_TRANSPORT_ATA = 1,
     BOOT_TRANSPORT_AHCI = 2,
     BOOT_TRANSPORT_ATAPI = 3,
-    BOOT_TRANSPORT_USB = 4,
-    BOOT_TRANSPORT_NVME = 5,
+    BOOT_TRANSPORT_NVME = 4,
 } boot_transport_t;
 
 typedef enum PACKED {

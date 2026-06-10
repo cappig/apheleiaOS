@@ -24,7 +24,6 @@
 #include <sys/panic.h>
 #include <sys/pci.h>
 #include <sys/tty.h>
-#include <sys/usb.h>
 #include <x86/apic.h>
 #include <x86/asm.h>
 #include <x86/boot.h>
@@ -1211,15 +1210,7 @@ void arch_storage_init(void) {
     _set_boot_disk_hint();
     set_boot_root_uuid();
 
-    if (!usb_core_init()) {
-        log_warn("USB core setup failed");
-    }
-
     driver_load_stage(DRIVER_STAGE_STORAGE);
-
-    if (!usb_wait_for_boot_enumeration(1500)) {
-        log_warn("USB boot scan timed out before rootfs mount");
-    }
 
     if (x86_boot.rootfs_paddr && x86_boot.rootfs_size && !_register_boot_rootfs()) {
         log_warn("failed to register boot rootfs fallback");

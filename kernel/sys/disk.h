@@ -19,15 +19,13 @@ enum disk_dev_type {
     DISK_HARD,
     DISK_FLOPPY,
     DISK_OPTICAL,
-    DISK_USB,
 };
 
 typedef enum {
     DISK_BOOT_MEDIA_UNKNOWN = 0,
     DISK_BOOT_MEDIA_DISK = 1,
-    DISK_BOOT_MEDIA_USB = 2,
-    DISK_BOOT_MEDIA_OPTICAL = 3,
-    DISK_BOOT_MEDIA_NETWORK = 4,
+    DISK_BOOT_MEDIA_OPTICAL = 2,
+    DISK_BOOT_MEDIA_NETWORK = 3,
 } disk_boot_media_t;
 
 typedef enum {
@@ -35,8 +33,7 @@ typedef enum {
     DISK_BOOT_TRANSPORT_ATA = 1,
     DISK_BOOT_TRANSPORT_AHCI = 2,
     DISK_BOOT_TRANSPORT_ATAPI = 3,
-    DISK_BOOT_TRANSPORT_USB = 4,
-    DISK_BOOT_TRANSPORT_NVME = 5,
+    DISK_BOOT_TRANSPORT_NVME = 4,
 } disk_boot_transport_t;
 
 typedef struct {
