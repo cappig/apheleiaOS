@@ -160,7 +160,7 @@ bool vec_reserve_more(vector_t *vec, size_t additional) {
 
 
 void *vec_at(vector_t *vec, size_t index) {
-    if (!vec || index >= vec->capacity) {
+    if (!vec || index >= vec->size) {
         return NULL;
     }
 
@@ -180,35 +180,38 @@ void *vec_at_ptr(vector_t *vec, size_t index) {
     return *slot;
 }
 
-bool vec_get(vector_t *vec, size_t index, void *ret) {
-    void *ptr = vec_at(vec, index);
+bool vec_get(vector_t *vec, size_t index, void *out) {
+    void *slot = vec_at(vec, index);
 
-    if (!ptr) {
+    if (!slot || !out) {
         return false;
     }
 
-    memcpy(ret, ptr, vec->elem_size);
+    memcpy(out, slot, vec->elem_size);
 
     return true;
 }
 
 void *vec_set(vector_t *vec, size_t index, void *data) {
-    if (!vec || !data || index >= vec->capacity) {
+    if (!vec || !data || index >= vec->size) {
         return NULL;
     }
 
-    void *ptr = (u8 *)vec->data + index * vec->elem_size;
-    memcpy(ptr, data, vec->elem_size);
+    void *slot = (u8 *)vec->data + index * vec->elem_size;
+    memcpy(slot, data, vec->elem_size);
 
-    return ptr;
+    return slot;
 }
 
 
 bool vec_clear(vector_t *vec) {
-    void *ptr = vec->data;
+    if (!vec) {
+        return false;
+    }
+
     size_t len = vec->size * vec->elem_size;
 
-    memset(ptr, 0, len);
+    memset(vec->data, 0, len);
 
     vec->size = 0;
 
@@ -217,7 +220,7 @@ bool vec_clear(vector_t *vec) {
 
 
 bool vec_insert(vector_t *vec, size_t index, void *data) {
-    if (!vec || !data) {
+    if (!vec || !data || index == SIZE_MAX) {
         return false;
     }
 
@@ -227,9 +230,10 @@ bool vec_insert(vector_t *vec, size_t index, void *data) {
         }
     }
 
+    void *slot = (u8 *)vec->data + index * vec->elem_size;
+    memcpy(slot, data, vec->elem_size);
     vec->size = max(vec->size, index + 1);
-
-    return vec_set(vec, index, data);
+    return true;
 }
 
 
@@ -251,16 +255,19 @@ bool vec_swap(vector_t *vec, size_t i, size_t j) {
 
 
 bool vec_push(vector_t *vec, void *data) {
-    if (vec->size == vec->capacity) {
+    if (!vec || !data || vec->size == SIZE_MAX) {
+        return false;
+    }
+
+    if (vec->size >= vec->capacity) {
         if (!vec_reserve(vec, vec->size + 1)) {
             return false;
         }
     }
 
-    vec_set(vec, vec->size, data);
-
+    void *slot = (u8 *)vec->data + vec->size * vec->elem_size;
+    memcpy(slot, data, vec->elem_size);
     vec->size++;
-
     return true;
 }
 
@@ -280,40 +287,41 @@ bool vec_push_array(vector_t *vec, void *array, size_t len) {
 }
 
 
-bool vec_pop(vector_t *vec, void *ret) {
-    if (!vec->size) {
+bool vec_pop(vector_t *vec, void *out) {
+    if (!vec || !vec->size) {
         return false;
     }
 
-    vec->size--;
-
-    if (ret) {
-        vec_get(vec, vec->size, ret);
+    if (out) {
+        vec_get(vec, vec->size - 1, out);
     }
+
+    vec->size--;
+    memset((u8 *)vec->data + vec->size * vec->elem_size, 0, vec->elem_size);
 
     return true;
 }
 
-size_t vec_pop_array(vector_t *vec, void *ret, size_t len) {
+size_t vec_pop_array(vector_t *vec, void *out, size_t len) {
     if (!vec || !vec->size || !len) {
         return 0;
     }
 
-    u8 *pos = ret;
+    u8 *cursor = out;
     size_t i = 0;
 
-    while ((i < len) && vec_pop(vec, pos)) {
+    while ((i < len) && vec_pop(vec, cursor)) {
         i++;
 
-        if (pos) {
-            pos += vec->elem_size;
+        if (cursor) {
+            cursor += vec->elem_size;
         }
     }
 
     return i;
 }
 
-bool vec_remove_at(vector_t *vec, size_t index, void *ret) {
+bool vec_remove_at(vector_t *vec, size_t index, void *out) {
     if (!vec || index >= vec->size) {
         return false;
     }
@@ -321,8 +329,8 @@ bool vec_remove_at(vector_t *vec, size_t index, void *ret) {
     u8 *base = (u8 *)vec->data;
     u8 *slot = base + (index * vec->elem_size);
 
-    if (ret) {
-        memcpy(ret, slot, vec->elem_size);
+    if (out) {
+        memcpy(out, slot, vec->elem_size);
     }
 
     if (index + 1 < vec->size) {

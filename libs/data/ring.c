@@ -117,21 +117,21 @@ ring_buffer_t *ring_buffer_create(size_t size) {
         return NULL;
     }
 
-    ring_buffer_t *ret = calloc(1, sizeof(ring_buffer_t));
+    ring_buffer_t *ring = calloc(1, sizeof(ring_buffer_t));
 
-    if (!ret) {
+    if (!ring) {
         return NULL;
     }
 
-    ret->size = size;
-    ret->buffer = malloc(size);
+    ring->size = size;
+    ring->buffer = malloc(size);
 
-    if (!ret->buffer) {
-        free(ret);
+    if (!ring->buffer) {
+        free(ring);
         return NULL;
     }
 
-    return ret;
+    return ring;
 }
 
 void ring_buffer_destroy(ring_buffer_t *ring) {
@@ -195,14 +195,43 @@ void ring_buffer_push_array(ring_buffer_t *ring, u8 *data, size_t len) {
     }
 }
 
+void ring_buffer_push_record(ring_buffer_t *ring, const void *data, size_t len) {
+    if (!ring || !data || !len || ring->size < 2) {
+        return;
+    }
 
-bool ring_buffer_pop(ring_buffer_t *ring, u8 *ret) {
+    size_t capacity = ring_capacity(ring);
+    if (len > capacity) {
+        return;
+    }
+
+    size_t mask = ring_mask(ring);
+    while (ring_free(ring) < len) {
+        size_t used = ring_used(ring);
+        size_t drop = len;
+
+        if (drop > used) {
+            drop = used;
+        }
+
+        ring->tail_index = (ring->tail_index + drop) & mask;
+    }
+
+    const u8 *bytes = data;
+    for (size_t i = 0; i < len; i++) {
+        ring->buffer[ring->head_index] = bytes[i];
+        ring->head_index = (ring->head_index + 1) & mask;
+    }
+}
+
+
+bool ring_buffer_pop(ring_buffer_t *ring, u8 *out) {
     if (ring_buffer_is_empty(ring)) {
         return false;
     }
 
-    if (ret) {
-        *ret = ring->buffer[ring->tail_index];
+    if (out) {
+        *out = ring->buffer[ring->tail_index];
     }
 
     ring->tail_index = (ring->tail_index + 1) & ring_mask(ring);
@@ -210,19 +239,19 @@ bool ring_buffer_pop(ring_buffer_t *ring, u8 *ret) {
     return true;
 }
 
-size_t ring_buffer_pop_array(ring_buffer_t *ring, u8 *ret, size_t len) {
+size_t ring_buffer_pop_array(ring_buffer_t *ring, u8 *out, size_t len) {
     if (ring_buffer_is_empty(ring)) {
         return 0;
     }
 
-    u8 *pos = ret;
+    u8 *cursor = out;
     size_t i = 0;
 
-    while ((i < len) && ring_buffer_pop(ring, pos)) {
+    while ((i < len) && ring_buffer_pop(ring, cursor)) {
         i++;
 
-        if (pos) {
-            pos++;
+        if (cursor) {
+            cursor++;
         }
     }
 

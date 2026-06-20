@@ -44,12 +44,12 @@ u64 hashmap_hash_str(const char *text) {
     return hashmap_hash_bytes(text, strlen(text));
 }
 
-static u64 _hashmap_str_hash_default(const char *text, void *private_data) {
+static u64 _str_hash_default(const char *text, void *private_data) {
     (void)private_data;
     return hashmap_hash_str(text);
 }
 
-static bool _hashmap_str_cmp_default(const char *left, const char *right, void *private_data) {
+static bool _str_cmp_default(const char *left, const char *right, void *private_data) {
     (void)private_data;
     return left && right && !strcmp(left, right);
 }
@@ -125,7 +125,7 @@ static bool _hashmap_insert_raw(hashmap_t *map, u64 key, u64 value) {
     return false;
 }
 
-static bool _hashmap_update_existing(hashmap_t *map, u64 key, u64 value) {
+static bool _hashmap_update(hashmap_t *map, u64 key, u64 value) {
     if (!map || !map->entries || !map->capacity) {
         return false;
     }
@@ -170,10 +170,10 @@ static bool _hashmap_rehash(hashmap_t *map, size_t new_capacity) {
         return false;
     }
 
-    hashmap_t tmp = *map;
-    tmp.entries = new_entries;
-    tmp.capacity = new_capacity;
-    tmp.size = 0;
+    hashmap_t grown = *map;
+    grown.entries = new_entries;
+    grown.capacity = new_capacity;
+    grown.size = 0;
 
     for (size_t i = 0; i < map->capacity; i++) {
         const hashmap_entry_t *entry = &map->entries[i];
@@ -181,16 +181,16 @@ static bool _hashmap_rehash(hashmap_t *map, size_t new_capacity) {
             continue;
         }
 
-        if (!_hashmap_insert_raw(&tmp, entry->key, entry->value)) {
+        if (!_hashmap_insert_raw(&grown, entry->key, entry->value)) {
             free(new_entries);
             return false;
         }
     }
 
     free(map->entries);
-    map->entries = tmp.entries;
-    map->capacity = tmp.capacity;
-    map->size = tmp.size;
+    map->entries = grown.entries;
+    map->capacity = grown.capacity;
+    map->size = grown.size;
 
     return true;
 }
@@ -273,7 +273,7 @@ bool hashmap_set(hashmap_t *map, u64 key, u64 value) {
         }
     }
 
-    if (_hashmap_update_existing(map, key, value)) {
+    if (_hashmap_update(map, key, value)) {
         return true;
     }
 
@@ -361,7 +361,7 @@ bool hashmap_remove(hashmap_t *map, u64 key) {
     }
 }
 
-static hashmap_str_entry_t *_hashmap_str_bucket_head(const hashmap_str_t *map, u64 hash) {
+static hashmap_str_entry_t *str_bucket_head(const hashmap_str_t *map, u64 hash) {
     if (!map || !map->index) {
         return NULL;
     }
@@ -374,7 +374,7 @@ static hashmap_str_entry_t *_hashmap_str_bucket_head(const hashmap_str_t *map, u
     return (hashmap_str_entry_t *)(uintptr_t)encoded;
 }
 
-static bool _hashmap_str_bucket_store(hashmap_str_t *map, u64 hash, hashmap_str_entry_t *head) {
+static bool str_bucket_store(hashmap_str_t *map, u64 hash, hashmap_str_entry_t *head) {
     if (!map || !map->index) {
         return false;
     }
@@ -403,8 +403,8 @@ hashmap_str_t *hashmap_str_create_with(hashmap_str_hash_fn hash_fn, hashmap_str_
         return NULL;
     }
 
-    map->hash_fn = hash_fn ? hash_fn : _hashmap_str_hash_default;
-    map->cmp_fn = cmp_fn ? cmp_fn : _hashmap_str_cmp_default;
+    map->hash_fn = hash_fn ? hash_fn : _str_hash_default;
+    map->cmp_fn = cmp_fn ? cmp_fn : _str_cmp_default;
     map->private_data = private_data;
     return map;
 }
@@ -453,7 +453,7 @@ bool hashmap_str_set(hashmap_str_t *map, const char *key, u64 value) {
     }
 
     u64 hash = map->hash_fn(key, map->private_data);
-    hashmap_str_entry_t *head = _hashmap_str_bucket_head(map, hash);
+    hashmap_str_entry_t *head = str_bucket_head(map, hash);
 
     for (hashmap_str_entry_t *node = head; node; node = node->next) {
         if (map->cmp_fn(node->key, key, map->private_data)) {
@@ -471,7 +471,7 @@ bool hashmap_str_set(hashmap_str_t *map, const char *key, u64 value) {
     node->value = value;
     node->next = head;
 
-    if (!_hashmap_str_bucket_store(map, hash, node)) {
+    if (!str_bucket_store(map, hash, node)) {
         free(node);
         return false;
     }
@@ -486,7 +486,7 @@ bool hashmap_str_get(const hashmap_str_t *map, const char *key, u64 *value_out) 
     }
 
     u64 hash = map->hash_fn(key, map->private_data);
-    hashmap_str_entry_t *node = _hashmap_str_bucket_head(map, hash);
+    hashmap_str_entry_t *node = str_bucket_head(map, hash);
 
     while (node) {
         if (map->cmp_fn(node->key, key, map->private_data)) {
@@ -507,7 +507,7 @@ bool hashmap_str_remove(hashmap_str_t *map, const char *key) {
     }
 
     u64 hash = map->hash_fn(key, map->private_data);
-    hashmap_str_entry_t *head = _hashmap_str_bucket_head(map, hash);
+    hashmap_str_entry_t *head = str_bucket_head(map, hash);
 
     hashmap_str_entry_t *prev = NULL;
     hashmap_str_entry_t *node = head;
@@ -515,7 +515,7 @@ bool hashmap_str_remove(hashmap_str_t *map, const char *key) {
     while (node) {
         if (map->cmp_fn(node->key, key, map->private_data)) {
             hashmap_str_entry_t *next = node->next;
-            if (!prev && !_hashmap_str_bucket_store(map, hash, next)) {
+            if (!prev && !str_bucket_store(map, hash, next)) {
                 return false;
             }
             if (prev) {

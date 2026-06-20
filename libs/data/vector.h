@@ -30,7 +30,7 @@ bool vec_reserve_more(vector_t *vec, size_t additional);
 
 void *vec_at(vector_t *vec, size_t index);
 void *vec_at_ptr(vector_t *vec, size_t index);
-bool vec_get(vector_t *vec, size_t index, void *ret);
+bool vec_get(vector_t *vec, size_t index, void *out);
 void *vec_set(vector_t *vec, size_t index, void *data);
 
 bool vec_clear(vector_t *vec);
@@ -42,6 +42,6 @@ bool vec_swap(vector_t *vec, size_t i, size_t j);
 bool vec_push(vector_t *vec, void *data);
 bool vec_push_array(vector_t *vec, void *array, size_t len);
 
-bool vec_pop(vector_t *vec, void *ret);
-size_t vec_pop_array(vector_t *vec, void *ret, size_t len);
-bool vec_remove_at(vector_t *vec, size_t index, void *ret);
+bool vec_pop(vector_t *vec, void *out);
+size_t vec_pop_array(vector_t *vec, void *out, size_t len);
+bool vec_remove_at(vector_t *vec, size_t index, void *out);

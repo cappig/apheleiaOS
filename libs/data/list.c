@@ -1,7 +1,6 @@
 #include "list.h"
 
 #include <stdlib.h>
-#include <string.h>
 
 #if defined(DEBUG) || defined(LIST_VALIDATE)
 #define LIST_VALIDATE_NODES 1
@@ -113,6 +112,30 @@ bool list_append(linked_list_t *list, list_node_t *node) {
     return true;
 }
 
+static bool links_valid(const linked_list_t *list, const list_node_t *node) {
+    if (node->owner != list) {
+        return false;
+    }
+
+    if (node->prev && node->prev->next != node) {
+        return false;
+    }
+
+    if (node->next && node->next->prev != node) {
+        return false;
+    }
+
+    if (node != list->head && !node->prev) {
+        return false;
+    }
+
+    if (node != list->tail && !node->next) {
+        return false;
+    }
+
+    return true;
+}
+
 bool list_remove(linked_list_t *list, list_node_t *node) {
     if (!node || !list || !list->length) {
         return false;
@@ -120,11 +143,8 @@ bool list_remove(linked_list_t *list, list_node_t *node) {
 
     list_node_t *prev = node->prev;
     list_node_t *next = node->next;
-    bool linked_consistent =
-        (node->owner == list && (!prev || prev->next == node) && (!next || next->prev == node) &&
-         (node == list->head || prev) && (node == list->tail || next));
 
-    if (!linked_consistent) {
+    if (!links_valid(list, node)) {
         prev = NULL;
         next = list->head;
         size_t limit = list->length ? list->length : 1;
@@ -170,26 +190,61 @@ bool list_remove(linked_list_t *list, list_node_t *node) {
 
 
 bool list_swap(list_node_t *left, list_node_t *right) {
-    if (!left || !right) {
+    if (!left || !right || left == right) {
         return false;
     }
 
-    if (left->prev) {
-        left->prev->next = right;
+    if (!left->owner || left->owner != right->owner) {
+        return false;
     }
-    if (right->prev) {
-        right->prev->next = left;
+
+    linked_list_t *list = left->owner;
+
+    list_node_t *lp = left->prev;
+    list_node_t *ln = left->next;
+    list_node_t *rp = right->prev;
+    list_node_t *rn = right->next;
+
+    if (ln == right) {
+        left->prev = right;
+        left->next = rn;
+        right->prev = lp;
+        right->next = left;
+    } else if (rn == left) {
+        right->prev = left;
+        right->next = ln;
+        left->prev = rp;
+        left->next = right;
+    } else {
+        left->prev = rp;
+        left->next = rn;
+        right->prev = lp;
+        right->next = ln;
+    }
+
+    if (left->prev) {
+        left->prev->next = left;
+    } else {
+        list->head = left;
     }
 
     if (left->next) {
-        left->next->prev = right;
-    }
-    if (right->next) {
-        right->next->prev = left;
+        left->next->prev = left;
+    } else {
+        list->tail = left;
     }
 
-    memswap(&left->prev, &right->prev, sizeof(list_node_t *));
-    memswap(&left->next, &right->next, sizeof(list_node_t *));
+    if (right->prev) {
+        right->prev->next = right;
+    } else {
+        list->head = right;
+    }
+
+    if (right->next) {
+        right->next->prev = right;
+    } else {
+        list->tail = right;
+    }
 
     return true;
 }

@@ -38,9 +38,10 @@ void ring_buffer_clear(ring_buffer_t *ring);
 
 void ring_buffer_push(ring_buffer_t *ring, u8 data);
 void ring_buffer_push_array(ring_buffer_t *ring, u8 *data, size_t len);
+void ring_buffer_push_record(ring_buffer_t *ring, const void *data, size_t len);
 
-bool ring_buffer_pop(ring_buffer_t *ring, u8 *ret);
-size_t ring_buffer_pop_array(ring_buffer_t *ring, u8 *ret, size_t len);
+bool ring_buffer_pop(ring_buffer_t *ring, u8 *out);
+size_t ring_buffer_pop_array(ring_buffer_t *ring, u8 *out, size_t len);
 
 // generic typed ring queue backed by a heap-allocated circular buffer
 typedef struct ring_queue {

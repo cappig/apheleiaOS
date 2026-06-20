@@ -100,8 +100,14 @@ void tree_prune(tree_node_t *parent) {
 
 
 bool tree_insert_child(tree_node_t *parent, tree_node_t *child) {
-    if (!parent || !child) {
+    if (!parent || !child || child->parent) {
         return false;
+    }
+
+    for (tree_node_t *node = parent; node; node = node->parent) {
+        if (node == child) {
+            return false;
+        }
     }
 
     if (!parent->children) {
@@ -138,7 +144,10 @@ bool tree_remove_child(tree_node_t *parent, tree_node_t *child) {
 
     bool removed = list_remove(list, lnode);
 
-    list_destroy_node(lnode);
+    if (removed) {
+        child->parent = NULL;
+        list_destroy_node(lnode);
+    }
 
     return removed;
 }
@@ -151,10 +160,10 @@ static tree_node_t *_findc(tree_node_t *root, tree_comp_fn comp, void *private) 
             return child;
         }
 
-        tree_node_t *res = _findc(child, comp, private);
+        tree_node_t *found = _findc(child, comp, private);
 
-        if (res) {
-            return res;
+        if (found) {
+            return found;
         }
     }
 

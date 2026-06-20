@@ -54,16 +54,16 @@ static void _log_puts(char *buf, size_t *pos, const char *s) {
 }
 
 static void _log_put_dec(char *buf, size_t *pos, unsigned int value) {
-    char tmp[10];
+    char digits[10];
     size_t len = 0;
 
     do {
-        tmp[len++] = (char)('0' + (value % 10U));
+        digits[len++] = (char)('0' + (value % 10U));
         value /= 10U;
-    } while (value != 0 && len < sizeof(tmp));
+    } while (value != 0 && len < sizeof(digits));
 
     while (len) {
-        _log_putc(buf, pos, tmp[--len]);
+        _log_putc(buf, pos, digits[--len]);
     }
 }
 

@@ -18,14 +18,18 @@ bool bitmap_alloc_init(bitmap_allocator_t *alloc, void *chunk_start, size_t chun
     }
 
     size_t word_count = DIV_ROUND_UP(block_count, BITMAP_WORD_SIZE);
-    size_t bitmap_bytes = DIV_ROUND_UP(block_count, CHAR_BIT);
+    if (word_count > SIZE_MAX / sizeof(bitmap_word_t)) {
+        return false;
+    }
+
+    size_t bitmap_bytes = word_count * sizeof(bitmap_word_t);
     size_t bitmap_blocks = DIV_ROUND_UP(bitmap_bytes, block_size);
 
     if (!bitmap_blocks || bitmap_blocks >= block_count) {
         return false;
     }
 
-    alloc->chuck_start = chunk_start;
+    alloc->chunk_start = chunk_start;
     alloc->chunk_size = chunk_size;
     alloc->block_size = block_size;
     alloc->block_count = block_count;
@@ -34,7 +38,6 @@ bool bitmap_alloc_init(bitmap_allocator_t *alloc, void *chunk_start, size_t chun
     // place the bitmap at the start of the chunk
     alloc->bitmap = chunk_start;
 
-    // mark the whole bitmap as free
     memset(alloc->bitmap, 0, bitmap_bytes);
     alloc->free_blocks = alloc->block_count - bitmap_blocks;
     alloc->usable_blocks = alloc->free_blocks;
@@ -99,7 +102,11 @@ static bool _first_fit(bitmap_allocator_t *alloc, size_t blocks, size_t *out_blo
         return true;
     }
 
-    return start && first_fit_in_range(alloc, blocks, 0, start, out_block);
+    if (start && first_fit_in_range(alloc, blocks, 0, start, out_block)) {
+        return true;
+    }
+
+    return first_fit_in_range(alloc, blocks, 0, alloc->block_count, out_block);
 }
 
 static bool _last_fit(bitmap_allocator_t *alloc, size_t blocks, size_t *out_block) {
@@ -169,7 +176,7 @@ void *bitmap_alloc_reserve(bitmap_allocator_t *alloc, size_t blocks) {
     return bitmap_alloc_to_ptr(alloc, first_block);
 }
 
-void *bitmap_alloc_reserve_high(bitmap_allocator_t *alloc, size_t blocks) {
+void *bitmap_alloc_high(bitmap_allocator_t *alloc, size_t blocks) {
     if (!alloc || !blocks || blocks > alloc->free_blocks) {
         return NULL;
     }
@@ -187,20 +194,21 @@ void *bitmap_alloc_reserve_high(bitmap_allocator_t *alloc, size_t blocks) {
 }
 
 bool bitmap_alloc_free(bitmap_allocator_t *alloc, void *ptr, size_t blocks) {
-    bool bad_alloc = !alloc || !ptr || !blocks || !alloc->block_size || !alloc->block_count || !alloc->chunk_size;
+    bool invalid_args = !alloc || !ptr || !blocks;
+    bool invalid_alloc = alloc && (!alloc->block_size || !alloc->block_count || !alloc->chunk_size);
 
-    if (bad_alloc) {
+    if (invalid_args || invalid_alloc) {
         return false;
     }
 
-    uintptr_t start = (uintptr_t)alloc->chuck_start;
+    uintptr_t start = (uintptr_t)alloc->chunk_start;
     uintptr_t addr = (uintptr_t)ptr;
     uintptr_t end = start + alloc->chunk_size;
 
-    bool outside_chunk = end <= start || addr < start || addr >= end;
-    bool bad_layout = alloc->chunk_size / alloc->block_size < alloc->block_count;
+    bool out_of_range = end <= start || addr < start || addr >= end;
+    bool invalid_layout = alloc->chunk_size / alloc->block_size < alloc->block_count;
 
-    if (outside_chunk || bad_layout) {
+    if (out_of_range || invalid_layout) {
         return false;
     }
 
@@ -213,7 +221,7 @@ bool bitmap_alloc_free(bitmap_allocator_t *alloc, void *ptr, size_t blocks) {
         return false;
     }
 
-    // catch double-free before we clear anything. The heap trusts this check
+    // catch double-free before clearing because the heap trusts this check
     for (size_t i = 0; i < blocks; i++) {
         if (!bitmap_get(alloc->bitmap, first_block + i)) {
             return false;
