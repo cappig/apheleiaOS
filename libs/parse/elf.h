@@ -278,7 +278,7 @@ elf_symbol_t *elf_locate_symbol(elf_symbol_t *symtab, size_t symtab_size, char *
 
 bool elf_view_init(elf_view_t *view, const void *blob, size_t blob_size);
 bool elf_view_read_section(const elf_view_t *view, size_t idx, elf_section_view_t *out);
-bool elf_view_section_data_ok(const elf_view_t *view, const elf_section_view_t *section);
+bool elf_section_data_ok(const elf_view_t *view, const elf_section_view_t *section);
 bool elf_view_find_section(const elf_view_t *view, const char *name, elf_section_view_t *out_section);
 bool elf_view_read_symbol(const elf_view_t *view, const u8 *entry, size_t ent_size, elf_symbol_view_t *out);
-size_t elf_view_min_symbol_size(const elf_view_t *view);
+size_t elf_min_symbol_size(const elf_view_t *view);

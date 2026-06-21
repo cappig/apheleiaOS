@@ -12,7 +12,7 @@ static bool elf_range_valid(size_t size, u64 offset, u64 length) {
     return offset <= limit && length <= limit - offset;
 }
 
-static bool elf_table_range_valid(size_t size, u64 offset, u64 count, u64 entry_size) {
+static bool table_range_valid(size_t size, u64 offset, u64 count, u64 entry_size) {
     if (!size) {
         return true;
     }
@@ -35,7 +35,7 @@ static bool elf_walk_32(const u8 *blob, size_t size, elf_segment_cb cb, void *ct
         return false;
     }
 
-    if (!elf_table_range_valid(size, eh->phoff, eh->ph_num, eh->phent_size)) {
+    if (!table_range_valid(size, eh->phoff, eh->ph_num, eh->phent_size)) {
         return false;
     }
 
@@ -97,7 +97,7 @@ static bool elf_walk_64(const u8 *blob, size_t size, elf_segment_cb cb, void *ct
         return false;
     }
 
-    if (!elf_table_range_valid(size, eh->phoff, eh->ph_num, eh->phent_size)) {
+    if (!table_range_valid(size, eh->phoff, eh->ph_num, eh->phent_size)) {
         return false;
     }
 

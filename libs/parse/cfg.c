@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <string.h>
 
-// this parser is not that strict. It looks for a string, then any
-// number of spaces or equals signs and than another string
+// this parser is intentionally loose: a key, optional space or equals,
+// then a value
 void parse_cfg(char *text, const cfg_entry_t *table, void *data) {
     char *tok_pos = NULL;
     char *pos = strtok_r(text, "\n", &tok_pos);

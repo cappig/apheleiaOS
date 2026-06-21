@@ -33,7 +33,7 @@ static void read_fs(boot_ext2_t *fs, void *dest, size_t offset, size_t bytes) {
     }
 }
 
-bool boot_ext2_init(boot_ext2_t *fs, boot_ext2_read_fn_t read, void *ctx, size_t size_limit) {
+bool boot_ext2_init(boot_ext2_t *fs, boot_read_fn_t read, void *ctx, size_t size_limit) {
     if (!fs || !read) {
         return false;
     }
@@ -53,10 +53,18 @@ bool boot_ext2_init(boot_ext2_t *fs, boot_ext2_read_fn_t read, void *ctx, size_t
         panic("filesystem has errors");
     }
 
+    if (!ext2_features_supported(&fs->superblock)) {
+        panic("unsupported rootfs features");
+    }
+
     u64 block_size = ext2_block_size(&fs->superblock);
     u64 blocks = fs->superblock.block_count;
+    u32 inode_size = ext2_inode_size(&fs->superblock);
+    u32 groups = ext2_group_count(&fs->superblock);
 
-    if (!block_size || blocks > (u64)SIZE_MAX / block_size) {
+    bool bad_geometry = !block_size || !groups || inode_size < 128;
+    bool too_large = block_size && blocks > (u64)SIZE_MAX / block_size;
+    if (bad_geometry || too_large) {
         panic("invalid rootfs size");
     }
 
@@ -126,7 +134,7 @@ static void flatten_blocks(boot_ext2_t *fs, u32 *blocks, u32 block_num, size_t i
     }
 
     memset(indirect_blocks, 0, block_size);
-    read_fs(fs, indirect_blocks, block_num * block_size, block_size);
+    read_fs(fs, indirect_blocks, (size_t)block_num * block_size, block_size);
 
     for (u32 i = 0; i < entries_per_block && *n < max; i++) {
         flatten_blocks(fs, blocks, indirect_blocks[i], indirection - 1, n, max);
@@ -137,17 +145,44 @@ static void flatten_blocks(boot_ext2_t *fs, u32 *blocks, u32 block_num, size_t i
 
 static void get_inode(boot_ext2_t *fs, u32 num, ext2_inode_t *inode) {
     u32 block_size = ext2_block_size(&fs->superblock);
+
+    if (!num || !fs->superblock.inodes_in_group) {
+        panic("invalid inode number");
+    }
+
     u32 group = (num - 1) / fs->superblock.inodes_in_group;
     u32 index = (num - 1) % fs->superblock.inodes_in_group;
 
-    size_t gdt_offset = block_size * (fs->superblock.superblock_offset + 1);
-    size_t group_offset = gdt_offset + group * sizeof(ext2_group_descriptor_t);
+    if (group >= ext2_group_count(&fs->superblock)) {
+        panic("inode group out of range");
+    }
+
+    if (fs->superblock.superblock_offset + 1 > SIZE_MAX / block_size) {
+        panic("group table offset overflow");
+    }
+
+    size_t gdt_offset = (size_t)block_size * (fs->superblock.superblock_offset + 1);
+
+    if ((size_t)group > (SIZE_MAX - gdt_offset) / sizeof(ext2_group_descriptor_t)) {
+        panic("group descriptor offset overflow");
+    }
+
+    size_t group_offset = gdt_offset + (size_t)group * sizeof(ext2_group_descriptor_t);
 
     ext2_group_descriptor_t gd;
     read_fs(fs, &gd, group_offset, sizeof(ext2_group_descriptor_t));
 
     u32 inode_size = ext2_inode_size(&fs->superblock);
-    size_t inode_offset = (gd.inode_table_offset * block_size) + (index * inode_size);
+
+    if (gd.inode_table_offset > SIZE_MAX / block_size || (size_t)index > SIZE_MAX / inode_size) {
+        panic("inode table offset overflow");
+    }
+
+    size_t inode_offset = (size_t)gd.inode_table_offset * block_size + (size_t)index * inode_size;
+
+    if (inode_offset < (size_t)gd.inode_table_offset * block_size) {
+        panic("inode table offset overflow");
+    }
 
     read_fs(fs, inode, inode_offset, sizeof(ext2_inode_t));
 }
@@ -217,7 +252,7 @@ static void *read_inode(boot_ext2_t *fs, const ext2_inode_t *inode) {
             panic("inode block offset overflow");
         }
 
-        size_t block_offset = blocks[i] * block_size;
+        size_t block_offset = (size_t)blocks[i] * block_size;
         void *out = (u8 *)buffer + (i * block_size);
 
         if (!blocks[i]) {
@@ -260,11 +295,22 @@ static u32 find_file(boot_ext2_t *fs, const char *path) {
         while (offset < dir_size) {
             ext2_directory_t *dir = (ext2_directory_t *)((u8 *)inode_buffer + offset);
 
-            if (!dir->inode || !dir->size) {
+            if (!dir->size) {
                 break;
             }
 
-            if (name_len == dir->name_size && !memcmp(dir->name, current, name_len)) {
+            if (dir->size < sizeof(ext2_directory_t) || dir->size > dir_size - offset) {
+                break;
+            }
+
+            if (!dir->inode) {
+                offset += dir->size;
+                continue;
+            }
+
+            bool name_fits = dir->name_size <= dir->size - sizeof(ext2_directory_t);
+            bool name_match = name_fits && name_len == dir->name_size && !memcmp(dir->name, current, name_len);
+            if (name_match) {
                 current_inode = dir->inode;
                 found = true;
                 break;

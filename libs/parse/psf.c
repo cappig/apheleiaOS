@@ -53,7 +53,25 @@ bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out) {
             return false;
         }
 
+        size_t row_bytes = ((size_t)psf2->width + 7U) / 8U;
+        if (row_bytes > (u32)-1 || psf2->height > (size_t)-1 / row_bytes) {
+            return false;
+        }
+
+        size_t min_glyph_bytes = row_bytes * psf2->height;
+        if (psf2->glyph_bytes < min_glyph_bytes) {
+            return false;
+        }
+
+        if (psf2->glyph_count > (size_t)-1 / psf2->glyph_bytes) {
+            return false;
+        }
+
         size_t glyphs_size = (size_t)psf2->glyph_count * (size_t)psf2->glyph_bytes;
+
+        if (psf2->header_size > (size_t)-1 - glyphs_size) {
+            return false;
+        }
 
         size_t need = (size_t)psf2->header_size + glyphs_size;
 
@@ -66,7 +84,7 @@ bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out) {
         out->height = psf2->height;
         out->glyph_count = psf2->glyph_count;
         out->glyph_size = psf2->glyph_bytes;
-        out->row_bytes = (psf2->width + 7U) / 8U;
+        out->row_bytes = (u32)row_bytes;
         out->glyphs = bytes + psf2->header_size;
 
         if (psf2->flags & PSF2_MODE_UNICODE) {
@@ -109,7 +127,7 @@ bool psf_parse_blob(const void *data, size_t size, psf_blob_t *out) {
     return true;
 }
 
-bool psf_iter_unicode_mappings(const psf_blob_t *blob, psf_unicode_map_iter_t iter, void *ctx) {
+bool psf_each_unicode(const psf_blob_t *blob, psf_map_iter_t iter, void *ctx) {
     if (!blob || !iter) {
         return false;
     }
@@ -140,7 +158,10 @@ bool psf_iter_unicode_mappings(const psf_blob_t *blob, psf_unicode_map_iter_t it
                     continue;
                 }
 
-                if (!sequence && codepoint != 0xfffeU && codepoint != 0xffffU && !iter(ctx, codepoint, glyph)) {
+                bool reserved = codepoint == 0xfffeU || codepoint == 0xffffU;
+                bool skip = sequence || reserved;
+
+                if (!skip && !iter(ctx, codepoint, glyph)) {
                     return false;
                 }
 

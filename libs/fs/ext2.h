@@ -112,18 +112,29 @@ enum ext2_write_features {
     EXT2_WF_DIR_BTREE = (1 << 2),
 };
 
+static inline bool ext2_features_supported(const ext2_superblock_t *sb) {
+    if (!sb) {
+        return false;
+    }
+
+    const u32 required = EXT2_RF_DIR_HAS_TYPE;
+
+    return !sb->optional_features && !(sb->required_features & ~required) && !sb->write_features;
+}
+
 typedef struct PACKED {
     u32 usage_bitmap_offset;
     u32 inode_bitmap_offset;
 
     u32 inode_table_offset;
 
-    u32 unallocated_block_count;
-    u32 unallocated_inode_count;
+    u16 unallocated_block_count;
+    u16 unallocated_inode_count;
 
-    u32 directory_count;
+    u16 directory_count;
+    u16 _padding0;
 
-    u8 _padding0[14];
+    u8 _padding1[12];
 } ext2_group_descriptor_t;
 
 typedef struct PACKED {
@@ -190,7 +201,7 @@ enum ext2_inode_permission {
     EXT2_IP_STICKY = 0x200,
 
     EXT2_IP_SET_GID = 0x400,
-    EXT2_IP_SET_UID = 0x400,
+    EXT2_IP_SET_UID = 0x800,
 };
 
 enum ext2_inode_flags {
@@ -228,19 +239,40 @@ enum ext2_directory_type {
 };
 
 static inline u32 ext2_block_size(const ext2_superblock_t *sb) {
+    if (!sb || sb->block_size_shift > 2) {
+        return 0;
+    }
+
     return 1024 << sb->block_size_shift;
 }
 
 static inline u32 ext2_fragment_size(const ext2_superblock_t *sb) {
+    if (!sb || sb->fragment_size_shift > 2) {
+        return 0;
+    }
+
     return 1024 << sb->fragment_size_shift;
 }
 
 static inline u32 ext2_inode_size(const ext2_superblock_t *sb) {
+    if (!sb) {
+        return 0;
+    }
+
     return sb->version_major >= 1 ? sb->inode_size : 128;
 }
 
 static inline u32 ext2_group_count(const ext2_superblock_t *sb) {
-    u32 blocks = DIV_ROUND_UP(sb->block_count, sb->blocks_in_group);
+    if (!sb || !sb->blocks_in_group || !sb->inodes_in_group) {
+        return 0;
+    }
+
+    if (sb->superblock_offset >= sb->block_count) {
+        return 0;
+    }
+
+    u32 data_blocks = sb->block_count - sb->superblock_offset;
+    u32 blocks = DIV_ROUND_UP(data_blocks, sb->blocks_in_group);
     u32 inodes = DIV_ROUND_UP(sb->inode_count, sb->inodes_in_group);
 
     return max(blocks, inodes);

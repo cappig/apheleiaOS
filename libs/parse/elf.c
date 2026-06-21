@@ -116,7 +116,12 @@ static bool _elf_ident_ok(const u8 ident[16]) {
         return false;
     }
 
-    if (ident[EI_MAG0] != 0x7f || ident[EI_MAG1] != 'E' || ident[EI_MAG2] != 'L' || ident[EI_MAG3] != 'F') {
+    bool mag0 = ident[EI_MAG0] == 0x7f;
+    bool mag1 = ident[EI_MAG1] == 'E';
+    bool mag2 = ident[EI_MAG2] == 'L';
+    bool mag3 = ident[EI_MAG3] == 'F';
+
+    if (!mag0 || !mag1 || !mag2 || !mag3) {
         return false;
     }
 
@@ -338,7 +343,10 @@ bool elf_view_read_section(const elf_view_t *view, size_t idx, elf_section_view_
     }
 
     const elf64_shdr_t *raw = (const elf64_shdr_t *)(view->blob + shoff);
-    if (raw->offset > (u64)(size_t)-1 || raw->size > (u64)(size_t)-1 || raw->entsize > (u64)(size_t)-1) {
+    bool offset_fits = raw->offset <= (u64)(size_t)-1;
+    bool size_fits = raw->size <= (u64)(size_t)-1;
+    bool entry_fits = raw->entsize <= (u64)(size_t)-1;
+    if (!offset_fits || !size_fits || !entry_fits) {
         return false;
     }
 
@@ -356,7 +364,7 @@ bool elf_view_read_section(const elf_view_t *view, size_t idx, elf_section_view_
     return true;
 }
 
-bool elf_view_section_data_ok(const elf_view_t *view, const elf_section_view_t *section) {
+bool elf_section_data_ok(const elf_view_t *view, const elf_section_view_t *section) {
     if (!view || !section) {
         return false;
     }
@@ -375,7 +383,8 @@ _find_section_index(const elf_view_t *view, const char *name, size_t *out_idx, e
     }
 
     elf_section_view_t shstr = { 0 };
-    if (!elf_view_read_section(view, view->shstrndx, &shstr) || !elf_view_section_data_ok(view, &shstr)) {
+    bool shstr_ok = elf_view_read_section(view, view->shstrndx, &shstr) && elf_section_data_ok(view, &shstr);
+    if (!shstr_ok) {
         return false;
     }
 
@@ -483,7 +492,7 @@ bool elf_view_read_symbol(const elf_view_t *view, const u8 *entry, size_t ent_si
     return true;
 }
 
-size_t elf_view_min_symbol_size(const elf_view_t *view) {
+size_t elf_min_symbol_size(const elf_view_t *view) {
     if (!view) {
         return 0;
     }

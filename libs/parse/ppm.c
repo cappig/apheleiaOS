@@ -10,7 +10,7 @@ typedef struct {
     size_t pos;
 } ppm_reader_t;
 
-static void _skip_ws_and_comments(ppm_reader_t *reader) {
+static void skip_ws_comments(ppm_reader_t *reader) {
     if (!reader) {
         return;
     }
@@ -38,7 +38,7 @@ static bool _parse_u32(ppm_reader_t *reader, u32 *out) {
         return false;
     }
 
-    _skip_ws_and_comments(reader);
+    skip_ws_comments(reader);
     if (reader->pos >= reader->size) {
         return false;
     }
@@ -81,7 +81,7 @@ bool ppm_parse_p6_blob(const void *data, size_t size, ppm_p6_blob_t *out) {
         .pos = 0,
     };
 
-    _skip_ws_and_comments(&reader);
+    skip_ws_comments(&reader);
     if (reader.pos + 2 > reader.size) {
         return false;
     }
@@ -99,7 +99,9 @@ bool ppm_parse_p6_blob(const void *data, size_t size, ppm_p6_blob_t *out) {
     u32 height = 0;
     u32 maxval = 0;
 
-    if (!_parse_u32(&reader, &width) || !_parse_u32(&reader, &height) || !_parse_u32(&reader, &maxval)) {
+    bool parsed_size = _parse_u32(&reader, &width) && _parse_u32(&reader, &height);
+    bool parsed_header = parsed_size && _parse_u32(&reader, &maxval);
+    if (!parsed_header) {
         return false;
     }
 
@@ -111,7 +113,7 @@ bool ppm_parse_p6_blob(const void *data, size_t size, ppm_p6_blob_t *out) {
         return false;
     }
 
-    _skip_ws_and_comments(&reader);
+    skip_ws_comments(&reader);
     if (reader.pos >= reader.size) {
         return false;
     }

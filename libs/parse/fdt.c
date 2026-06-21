@@ -45,12 +45,25 @@ typedef struct {
     bool enabled;
     bool memory;
     bool chosen;
+    const u8 *reg_data;
+    u32 reg_len;
+    const u8 *irq_data;
+    u32 irq_len;
+    const u8 *irq_ext_data;
+    u32 irq_ext_len;
+    u32 phandle;
+    u32 irq_cells;
+    u64 hartid;
+    bool cpu;
+    bool hartid_valid;
+    bool interrupt_controller;
 } fdt_node_state_t;
 
 enum {
     FDT_STACK_DEPTH = 16,
     FDT_DEFAULT_ADDR_CELLS = 2,
     FDT_DEFAULT_SIZE_CELLS = 1,
+    FDT_MAX_IRQ_PROVIDERS = 64,
 };
 
 static inline u32 fdt_be32(const void *ptr) {
@@ -116,18 +129,18 @@ static bool prop_has_string(const void *data, u32 len, const char *needle) {
         return false;
     }
 
-    const char *cur = data;
-    const char *end = cur + len;
+    const char *cursor = data;
+    const char *end = cursor + len;
     size_t needle_len = strlen(needle);
 
-    while (cur < end && *cur) {
-        size_t item_len = fdt_strnlen(cur, (size_t)(end - cur));
+    while (cursor < end && *cursor) {
+        size_t item_len = fdt_strnlen(cursor, (size_t)(end - cursor));
 
-        if (item_len == needle_len && !memcmp(cur, needle, item_len)) {
+        if (item_len == needle_len && !memcmp(cursor, needle, item_len)) {
             return true;
         }
 
-        cur += item_len + 1;
+        cursor += item_len + 1;
     }
 
     return false;
@@ -242,21 +255,32 @@ static bool fdt_read_token(const fdt_view_t *view, const u8 **cursor, u32 *token
 }
 
 static void fdt_enter_node(fdt_node_state_t *stack, int depth, const char *name) {
+    fdt_node_state_t node = { 0 };
+
     if (depth == 0) {
-        stack[depth].addr_cells = FDT_DEFAULT_ADDR_CELLS;
-        stack[depth].size_cells = FDT_DEFAULT_SIZE_CELLS;
-        stack[depth].enabled = true;
+        node.addr_cells = FDT_DEFAULT_ADDR_CELLS;
+        node.size_cells = FDT_DEFAULT_SIZE_CELLS;
+        node.enabled = true;
     } else {
-        stack[depth].addr_cells = stack[depth - 1].child_addr_cells;
-        stack[depth].size_cells = stack[depth - 1].child_size_cells;
-        stack[depth].enabled = stack[depth - 1].enabled;
+        fdt_node_state_t *parent = &stack[depth - 1];
+        node.addr_cells = parent->child_addr_cells;
+        node.size_cells = parent->child_size_cells;
+        node.enabled = parent->enabled;
+        node.hartid = parent->hartid;
+        node.hartid_valid = parent->hartid_valid;
+
+        if (parent->cpu && parent->reg_data && parent->addr_cells && parent->addr_cells <= 2 &&
+            parent->reg_len >= parent->addr_cells * sizeof(u32)) {
+            node.hartid = read_cells(parent->reg_data, parent->addr_cells);
+            node.hartid_valid = true;
+        }
     }
 
-    stack[depth].child_addr_cells = stack[depth].addr_cells;
-    stack[depth].child_size_cells = stack[depth].size_cells;
-    stack[depth].compatible = false;
-    stack[depth].memory = fdt_name_is_memory(name);
-    stack[depth].chosen = depth == 1 && !strcmp(name, "chosen");
+    node.child_addr_cells = node.addr_cells;
+    node.child_size_cells = node.size_cells;
+    node.memory = fdt_name_is_memory(name);
+    node.chosen = depth == 1 && !strcmp(name, "chosen");
+    stack[depth] = node;
 }
 
 static bool fdt_push_node(fdt_node_state_t *stack, int *depth, const char *name) {
@@ -279,6 +303,16 @@ static bool fdt_leave_node(int *depth) {
     return true;
 }
 
+static bool fdt_begin_node(const fdt_view_t *fdt, const u8 **cursor, fdt_node_state_t *stack, int *depth) {
+    const char *name = NULL;
+
+    if (!fdt_read_name(cursor, fdt->dt_end, &name)) {
+        return false;
+    }
+
+    return fdt_push_node(stack, depth, name);
+}
+
 static bool fdt_note_bus_prop(fdt_node_state_t *node, const fdt_prop_t *prop) {
     if (!strcmp(prop->name, "#address-cells")) {
         return prop_u32(prop, &node->child_addr_cells);
@@ -294,6 +328,48 @@ static bool fdt_note_bus_prop(fdt_node_state_t *node, const fdt_prop_t *prop) {
         }
 
         return true;
+    }
+
+    if (!strcmp(prop->name, "device_type") && prop_has_string(prop->data, prop->len, "cpu")) {
+        node->cpu = true;
+        return true;
+    }
+
+    if (!strcmp(prop->name, "reg")) {
+        node->reg_data = prop->data;
+        node->reg_len = prop->len;
+    }
+
+    return true;
+}
+
+static bool fdt_node_prop(
+    const fdt_view_t *fdt,
+    const u8 **cursor,
+    fdt_node_state_t *stack,
+    int depth,
+    fdt_prop_t *prop,
+    fdt_node_state_t **node_out
+) {
+    if (!fdt_read_prop(fdt, cursor, prop)) {
+        return false;
+    }
+
+    if (node_out) {
+        *node_out = NULL;
+    }
+
+    if (depth < 0) {
+        return true;
+    }
+
+    fdt_node_state_t *node = &stack[depth];
+    if (!fdt_note_bus_prop(node, prop)) {
+        return false;
+    }
+
+    if (node_out) {
+        *node_out = node;
     }
 
     return true;
@@ -327,6 +403,121 @@ static bool initrd_cell_count(u32 len, u32 root_addr_cells, u32 *out_cells) {
     }
 
     return false;
+}
+
+static bool append_node_regs(const fdt_node_state_t *node, fdt_reg_t *out, size_t max_regs, size_t *found) {
+    if (!node->compatible || !node->enabled || !node->reg_data) {
+        return true;
+    }
+
+    fdt_prop_t reg_prop = {
+        .name = "reg",
+        .data = node->reg_data,
+        .len = node->reg_len,
+    };
+
+    u32 entry_size = 0;
+    if (!reg_layout(&reg_prop, node->addr_cells, node->size_cells, &entry_size)) {
+        return false;
+    }
+
+    const u8 *cursor = reg_prop.data;
+    u32 entries = reg_prop.len / entry_size;
+
+    for (u32 i = 0; i < entries; i++) {
+        if (*found < max_regs) {
+            out[*found].addr = read_cells(cursor, node->addr_cells);
+            out[*found].size = read_cells(cursor + node->addr_cells * sizeof(u32), node->size_cells);
+        }
+
+        (*found)++;
+        cursor += entry_size;
+    }
+
+    return true;
+}
+
+static bool append_memory_regs(const fdt_node_state_t *node, fdt_reg_t *best) {
+    if (!node->memory || !node->enabled || !node->reg_data) {
+        return true;
+    }
+
+    fdt_prop_t reg_prop = {
+        .name = "reg",
+        .data = node->reg_data,
+        .len = node->reg_len,
+    };
+
+    u32 entry_size = 0;
+    if (!reg_layout(&reg_prop, node->addr_cells, node->size_cells, &entry_size)) {
+        return false;
+    }
+
+    const u8 *cursor = reg_prop.data;
+    for (u32 off = 0; off < reg_prop.len; off += entry_size) {
+        fdt_reg_t reg = {
+            .addr = read_cells(cursor, node->addr_cells),
+            .size = read_cells(cursor + node->addr_cells * sizeof(u32), node->size_cells),
+        };
+
+        if (reg.size > best->size) {
+            *best = reg;
+        }
+
+        cursor += entry_size;
+    }
+
+    return true;
+}
+
+static bool append_node_irqs(const fdt_node_state_t *node, u32 *out, size_t max_irqs, size_t *found) {
+    if (!node->compatible || !node->enabled || !node->irq_data) {
+        return true;
+    }
+
+    if ((node->irq_len % sizeof(u32)) != 0) {
+        return false;
+    }
+
+    const u8 *cursor = node->irq_data;
+    u32 entries = node->irq_len / sizeof(u32);
+
+    for (u32 i = 0; i < entries; i++) {
+        if (*found < max_irqs) {
+            out[*found] = fdt_be32(cursor);
+        }
+
+        (*found)++;
+        cursor += sizeof(u32);
+    }
+
+    return true;
+}
+
+static bool
+note_initrd_prop(const fdt_prop_t *prop, u32 root_addr_cells, u64 *start, u64 *end, bool *have_start, bool *have_end) {
+    if (!strcmp(prop->name, "linux,initrd-start")) {
+        u32 cells = 0;
+        if (!initrd_cell_count(prop->len, root_addr_cells, &cells)) {
+            return false;
+        }
+
+        *start = read_cells(prop->data, cells);
+        *have_start = true;
+        return true;
+    }
+
+    if (!strcmp(prop->name, "linux,initrd-end")) {
+        u32 cells = 0;
+        if (!initrd_cell_count(prop->len, root_addr_cells, &cells)) {
+            return false;
+        }
+
+        *end = read_cells(prop->data, cells);
+        *have_end = true;
+    }
+
+    return true;
 }
 
 bool fdt_valid(const void *dtb) {
@@ -403,9 +594,7 @@ bool fdt_has_compatible(const void *dtb, const char *compatible) {
     while (fdt_read_token(&fdt, &p, &token)) {
 
         if (token == FDT_BEGIN_NODE) {
-            const char *name = NULL;
-
-            if (!fdt_read_name(&p, fdt.dt_end, &name) || !fdt_push_node(stack, &depth, name)) {
+            if (!fdt_begin_node(&fdt, &p, stack, &depth)) {
                 return false;
             }
 
@@ -498,6 +687,15 @@ bool fdt_find_memory_reg(const void *dtb, fdt_reg_t *out) {
         }
 
         if (token == FDT_END_NODE) {
+            if (depth < 0) {
+                return false;
+            }
+
+            fdt_node_state_t *node = &stack[depth];
+            if (!append_memory_regs(node, out)) {
+                return false;
+            }
+
             if (!fdt_leave_node(&depth)) {
                 return false;
             }
@@ -529,31 +727,9 @@ bool fdt_find_memory_reg(const void *dtb, fdt_reg_t *out) {
                 continue;
             }
 
-            if (strcmp(prop.name, "reg")) {
-                continue;
-            }
-
-            if (!node->memory || !node->enabled) {
-                continue;
-            }
-
-            u32 entry_size = 0;
-            if (!reg_layout(&prop, node->addr_cells, node->size_cells, &entry_size)) {
-                return false;
-            }
-
-            const u8 *cur = prop.data;
-            for (u32 off = 0; off < prop.len; off += entry_size) {
-                fdt_reg_t reg = {
-                    .addr = read_cells(cur, node->addr_cells),
-                    .size = read_cells(cur + node->addr_cells * sizeof(u32), node->size_cells),
-                };
-
-                if (reg.size > out->size) {
-                    *out = reg;
-                }
-
-                cur += entry_size;
+            if (!strcmp(prop.name, "reg")) {
+                node->reg_data = prop.data;
+                node->reg_len = prop.len;
             }
 
             continue;
@@ -570,16 +746,14 @@ bool fdt_find_memory_reg(const void *dtb, fdt_reg_t *out) {
         return false;
     }
 
+    if (depth != -1) {
+        return false;
+    }
+
     return out->size != 0;
 }
 
-bool fdt_find_compatible_regs(
-    const void *dtb,
-    const char *compatible,
-    fdt_reg_t *out,
-    size_t max_regs,
-    size_t *out_count
-) {
+bool fdt_find_regs(const void *dtb, const char *compatible, fdt_reg_t *out, size_t max_regs, size_t *out_count) {
     if (out_count) {
         *out_count = 0;
     }
@@ -613,6 +787,15 @@ bool fdt_find_compatible_regs(
         }
 
         if (token == FDT_END_NODE) {
+            if (depth < 0) {
+                return false;
+            }
+
+            fdt_node_state_t *node = &stack[depth];
+            if (!append_node_regs(node, out, max_regs, &found)) {
+                return false;
+            }
+
             if (!fdt_leave_node(&depth)) {
                 return false;
             }
@@ -622,19 +805,14 @@ bool fdt_find_compatible_regs(
 
         if (token == FDT_PROP) {
             fdt_prop_t prop;
+            fdt_node_state_t *node = NULL;
 
-            if (!fdt_read_prop(&fdt, &p, &prop)) {
+            if (!fdt_node_prop(&fdt, &p, stack, depth, &prop, &node)) {
                 return false;
             }
 
-            if (depth < 0) {
+            if (!node) {
                 continue;
-            }
-
-            fdt_node_state_t *node = &stack[depth];
-
-            if (!fdt_note_bus_prop(node, &prop)) {
-                return false;
             }
 
             if (!strcmp(prop.name, "compatible")) {
@@ -644,30 +822,9 @@ bool fdt_find_compatible_regs(
                 continue;
             }
 
-            if (strcmp(prop.name, "reg")) {
-                continue;
-            }
-
-            if (!node->compatible || !node->enabled) {
-                continue;
-            }
-
-            u32 entry_size = 0;
-            if (!reg_layout(&prop, node->addr_cells, node->size_cells, &entry_size)) {
-                return false;
-            }
-
-            const u8 *cur = prop.data;
-            u32 entries = prop.len / entry_size;
-
-            for (u32 i = 0; i < entries; i++) {
-                if (found < max_regs) {
-                    out[found].addr = read_cells(cur, node->addr_cells);
-                    out[found].size = read_cells(cur + node->addr_cells * sizeof(u32), node->size_cells);
-                }
-
-                found++;
-                cur += entry_size;
+            if (!strcmp(prop.name, "reg")) {
+                node->reg_data = prop.data;
+                node->reg_len = prop.len;
             }
 
             continue;
@@ -695,21 +852,21 @@ bool fdt_find_compatible_regs(
     return found > 0;
 }
 
-bool fdt_find_compatible_reg(const void *dtb, const char *compatible, fdt_reg_t *out) {
+bool fdt_find_reg(const void *dtb, const char *compatible, fdt_reg_t *out) {
     size_t count = 0;
 
     if (!out) {
         return false;
     }
 
-    if (!fdt_find_compatible_regs(dtb, compatible, out, 1, &count)) {
+    if (!fdt_find_regs(dtb, compatible, out, 1, &count)) {
         return false;
     }
 
     return count > 0;
 }
 
-bool fdt_find_compatible_irqs(const void *dtb, const char *compatible, u32 *out, size_t max_irqs, size_t *out_count) {
+bool fdt_find_irqs(const void *dtb, const char *compatible, u32 *out, size_t max_irqs, size_t *out_count) {
     if (out_count) {
         *out_count = 0;
     }
@@ -733,9 +890,7 @@ bool fdt_find_compatible_irqs(const void *dtb, const char *compatible, u32 *out,
     while (fdt_read_token(&fdt, &p, &token)) {
 
         if (token == FDT_BEGIN_NODE) {
-            const char *name = NULL;
-
-            if (!fdt_read_name(&p, fdt.dt_end, &name) || !fdt_push_node(stack, &depth, name)) {
+            if (!fdt_begin_node(&fdt, &p, stack, &depth)) {
                 return false;
             }
 
@@ -743,6 +898,15 @@ bool fdt_find_compatible_irqs(const void *dtb, const char *compatible, u32 *out,
         }
 
         if (token == FDT_END_NODE) {
+            if (depth < 0) {
+                return false;
+            }
+
+            fdt_node_state_t *node = &stack[depth];
+            if (!append_node_irqs(node, out, max_irqs, &found)) {
+                return false;
+            }
+
             if (!fdt_leave_node(&depth)) {
                 return false;
             }
@@ -752,19 +916,14 @@ bool fdt_find_compatible_irqs(const void *dtb, const char *compatible, u32 *out,
 
         if (token == FDT_PROP) {
             fdt_prop_t prop;
+            fdt_node_state_t *node = NULL;
 
-            if (!fdt_read_prop(&fdt, &p, &prop)) {
+            if (!fdt_node_prop(&fdt, &p, stack, depth, &prop, &node)) {
                 return false;
             }
 
-            if (depth < 0) {
+            if (!node) {
                 continue;
-            }
-
-            fdt_node_state_t *node = &stack[depth];
-
-            if (!fdt_note_bus_prop(node, &prop)) {
-                return false;
             }
 
             if (!strcmp(prop.name, "compatible")) {
@@ -774,28 +933,9 @@ bool fdt_find_compatible_irqs(const void *dtb, const char *compatible, u32 *out,
                 continue;
             }
 
-            if (strcmp(prop.name, "interrupts")) {
-                continue;
-            }
-
-            if (!node->compatible || !node->enabled) {
-                continue;
-            }
-
-            if ((prop.len % sizeof(u32)) != 0) {
-                return false;
-            }
-
-            const u8 *cur = prop.data;
-            u32 entries = prop.len / sizeof(u32);
-
-            for (u32 i = 0; i < entries; i++) {
-                if (found < max_irqs) {
-                    out[found] = fdt_be32(cur);
-                }
-
-                found++;
-                cur += sizeof(u32);
+            if (!strcmp(prop.name, "interrupts")) {
+                node->irq_data = prop.data;
+                node->irq_len = prop.len;
             }
 
             continue;
@@ -823,21 +963,216 @@ bool fdt_find_compatible_irqs(const void *dtb, const char *compatible, u32 *out,
     return found > 0;
 }
 
-bool fdt_find_compatible_irq(const void *dtb, const char *compatible, u32 *out) {
+bool fdt_find_irq(const void *dtb, const char *compatible, u32 *out) {
     size_t count = 0;
 
     if (!out) {
         return false;
     }
 
-    if (!fdt_find_compatible_irqs(dtb, compatible, out, 1, &count)) {
+    if (!fdt_find_irqs(dtb, compatible, out, 1, &count)) {
         return false;
     }
 
     return count > 0;
 }
 
-bool fdt_find_compatible_u32(const void *dtb, const char *compatible, const char *property, u32 *out) {
+typedef struct {
+    u32 phandle;
+    u32 irq_cells;
+    u64 hartid;
+    bool hartid_valid;
+} fdt_irq_provider_t;
+
+static const fdt_irq_provider_t *find_irq_provider(const fdt_irq_provider_t *providers, size_t count, u32 phandle) {
+    for (size_t i = 0; i < count; i++) {
+        if (providers[i].phandle == phandle) {
+            return &providers[i];
+        }
+    }
+
+    return NULL;
+}
+
+bool fdt_find_irq_contexts(
+    const void *dtb,
+    const char *compatible,
+    fdt_irq_context_t *out,
+    size_t max_contexts,
+    size_t *out_count
+) {
+    if (out_count) {
+        *out_count = 0;
+    }
+
+    if (!compatible || (!out && max_contexts)) {
+        return false;
+    }
+
+    fdt_view_t fdt;
+    if (!fdt_view_init(dtb, &fdt)) {
+        return false;
+    }
+
+    fdt_node_state_t stack[FDT_STACK_DEPTH];
+    fdt_irq_provider_t providers[FDT_MAX_IRQ_PROVIDERS];
+    size_t provider_count = 0;
+    const u8 *ext_data = NULL;
+    u32 ext_len = 0;
+    int depth = -1;
+
+    const u8 *p = fdt.dt_struct;
+    u32 token = 0;
+
+    while (fdt_read_token(&fdt, &p, &token)) {
+        if (token == FDT_BEGIN_NODE) {
+            if (!fdt_begin_node(&fdt, &p, stack, &depth)) {
+                return false;
+            }
+
+            continue;
+        }
+
+        if (token == FDT_END_NODE) {
+            if (depth < 0) {
+                return false;
+            }
+
+            fdt_node_state_t *node = &stack[depth];
+
+            if (node->enabled && node->interrupt_controller && node->phandle && node->irq_cells && node->hartid_valid) {
+                if (provider_count >= FDT_MAX_IRQ_PROVIDERS) {
+                    return false;
+                }
+
+                providers[provider_count++] = (fdt_irq_provider_t){
+                    .phandle = node->phandle,
+                    .irq_cells = node->irq_cells,
+                    .hartid = node->hartid,
+                    .hartid_valid = node->hartid_valid,
+                };
+            }
+
+            if (!ext_data && node->enabled && node->compatible && node->irq_ext_data) {
+                ext_data = node->irq_ext_data;
+                ext_len = node->irq_ext_len;
+            }
+
+            if (!fdt_leave_node(&depth)) {
+                return false;
+            }
+
+            continue;
+        }
+
+        if (token == FDT_PROP) {
+            fdt_prop_t prop;
+            fdt_node_state_t *node = NULL;
+
+            if (!fdt_node_prop(&fdt, &p, stack, depth, &prop, &node)) {
+                return false;
+            }
+
+            if (!node) {
+                continue;
+            }
+
+            if (!strcmp(prop.name, "compatible")) {
+                if (prop_has_string(prop.data, prop.len, compatible)) {
+                    node->compatible = true;
+                }
+                continue;
+            }
+
+            if (!strcmp(prop.name, "phandle") || !strcmp(prop.name, "linux,phandle")) {
+                u32 phandle = 0;
+                if (!prop_u32(&prop, &phandle)) {
+                    return false;
+                }
+
+                if (!node->phandle) {
+                    node->phandle = phandle;
+                } else if (node->phandle != phandle) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if (!strcmp(prop.name, "#interrupt-cells")) {
+                if (!prop_u32(&prop, &node->irq_cells)) {
+                    return false;
+                }
+                continue;
+            }
+
+            if (!strcmp(prop.name, "interrupt-controller")) {
+                node->interrupt_controller = true;
+                continue;
+            }
+
+            if (!strcmp(prop.name, "interrupts-extended")) {
+                node->irq_ext_data = prop.data;
+                node->irq_ext_len = prop.len;
+            }
+
+            continue;
+        }
+
+        if (token == FDT_NOP) {
+            continue;
+        }
+
+        if (token == FDT_END) {
+            break;
+        }
+
+        return false;
+    }
+
+    if (depth != -1 || !ext_data || !ext_len || (ext_len % sizeof(u32)) != 0) {
+        return false;
+    }
+
+    size_t found = 0;
+    size_t offset = 0;
+    u32 context = 0;
+
+    while (offset < ext_len) {
+        u32 phandle = fdt_be32(ext_data + offset);
+        offset += sizeof(u32);
+
+        const fdt_irq_provider_t *provider = find_irq_provider(providers, provider_count, phandle);
+        if (!provider || !provider->irq_cells || provider->irq_cells > (ext_len - offset) / sizeof(u32)) {
+            return false;
+        }
+
+        u32 irq = fdt_be32(ext_data + offset);
+        offset += provider->irq_cells * sizeof(u32);
+
+        if (provider->hartid_valid) {
+            if (found < max_contexts) {
+                out[found] = (fdt_irq_context_t){
+                    .hartid = provider->hartid,
+                    .context = context,
+                    .irq = irq,
+                };
+            }
+
+            found++;
+        }
+
+        context++;
+    }
+
+    if (out_count) {
+        *out_count = found > max_contexts ? max_contexts : found;
+    }
+
+    return found > 0;
+}
+
+bool fdt_find_u32(const void *dtb, const char *compatible, const char *property, u32 *out) {
     if (!compatible || !property || !out) {
         return false;
     }
@@ -860,9 +1195,7 @@ bool fdt_find_compatible_u32(const void *dtb, const char *compatible, const char
     while (fdt_read_token(&fdt, &p, &token)) {
 
         if (token == FDT_BEGIN_NODE) {
-            const char *name = NULL;
-
-            if (!fdt_read_name(&p, fdt.dt_end, &name) || !fdt_push_node(stack, &depth, name)) {
+            if (!fdt_begin_node(&fdt, &p, stack, &depth)) {
                 return false;
             }
 
@@ -888,19 +1221,14 @@ bool fdt_find_compatible_u32(const void *dtb, const char *compatible, const char
 
         if (token == FDT_PROP) {
             fdt_prop_t prop;
+            fdt_node_state_t *node = NULL;
 
-            if (!fdt_read_prop(&fdt, &p, &prop)) {
+            if (!fdt_node_prop(&fdt, &p, stack, depth, &prop, &node)) {
                 return false;
             }
 
-            if (depth < 0) {
+            if (!node) {
                 continue;
-            }
-
-            fdt_node_state_t *node = &stack[depth];
-
-            if (!fdt_note_bus_prop(node, &prop)) {
-                return false;
             }
 
             if (!strcmp(prop.name, "compatible")) {
@@ -1012,28 +1340,8 @@ bool fdt_find_initrd(const void *dtb, fdt_reg_t *out) {
                 continue;
             }
 
-            if (!strcmp(prop.name, "linux,initrd-start")) {
-                u32 cells = 0;
-
-                if (!initrd_cell_count(prop.len, root_addr_cells, &cells)) {
-                    return false;
-                }
-
-                initrd_start = read_cells(prop.data, cells);
-                have_start = true;
-                continue;
-            }
-
-            if (!strcmp(prop.name, "linux,initrd-end")) {
-                u32 cells = 0;
-
-                if (!initrd_cell_count(prop.len, root_addr_cells, &cells)) {
-                    return false;
-                }
-
-                initrd_end = read_cells(prop.data, cells);
-                have_end = true;
-                continue;
+            if (!note_initrd_prop(&prop, root_addr_cells, &initrd_start, &initrd_end, &have_start, &have_end)) {
+                return false;
             }
 
             continue;
@@ -1050,7 +1358,11 @@ bool fdt_find_initrd(const void *dtb, fdt_reg_t *out) {
         return false;
     }
 
-    if (depth != -1 || !have_start || !have_end || initrd_end <= initrd_start) {
+    bool invalid_depth = depth != -1;
+    bool missing_bounds = !have_start || !have_end;
+    bool invalid_range = initrd_end <= initrd_start;
+
+    if (invalid_depth || missing_bounds || invalid_range) {
         return false;
     }
 
@@ -1059,7 +1371,7 @@ bool fdt_find_initrd(const void *dtb, fdt_reg_t *out) {
     return true;
 }
 
-bool fdt_find_timebase_frequency(const void *dtb, u64 *out) {
+bool fdt_find_timebase(const void *dtb, u64 *out) {
     if (!out) {
         return false;
     }

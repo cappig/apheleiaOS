@@ -25,7 +25,7 @@ void arch_smp_init(void);
 void *arch_phys_map(u64 paddr, size_t size, u32 flags);
 void arch_phys_unmap(void *vaddr, size_t size);
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size);
-bool arch_phys_map_can_persist(void);
+bool arch_keeps_phys_map(void);
 
 void arch_dump_stack_trace(void);
 void arch_dump_registers(const arch_int_state_t *state);
