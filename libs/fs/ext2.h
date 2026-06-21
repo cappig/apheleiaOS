@@ -115,15 +115,14 @@ enum ext2_write_features {
 typedef struct PACKED {
     u32 usage_bitmap_offset;
     u32 inode_bitmap_offset;
-
     u32 inode_table_offset;
 
-    u32 unallocated_block_count;
-    u32 unallocated_inode_count;
+    u16 unallocated_block_count;
+    u16 unallocated_inode_count;
+    u16 directory_count;
 
-    u32 directory_count;
-
-    u8 _padding0[14];
+    u16 _padding0;
+    u8 _padding1[12];
 } ext2_group_descriptor_t;
 
 typedef struct PACKED {

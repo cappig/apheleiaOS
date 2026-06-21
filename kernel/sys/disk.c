@@ -1053,7 +1053,13 @@ static bool _mount_partition_as_root(vfs_node_t *root, disk_partition_t *part) {
         return false;
     }
 
-    if (vfs_mount(instance, root) < 0) {
+    int rc = vfs_mount(instance, root);
+    if (rc < 0) {
+        log_warn(
+            "mount %s at / failed: %d",
+            part->name ? part->name : "rootfs",
+            rc
+        );
         return false;
     }
 

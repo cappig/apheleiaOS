@@ -804,7 +804,20 @@ static ssize_t _boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, siz
         return -EINVAL;
     }
 
-    memcpy(dest, (void *)(uintptr_t)(ram->paddr + offset), bytes);
+    void *src = arch_phys_map(ram->paddr + offset, bytes, 0);
+    if (!src) {
+        log_warn(
+            "boot rootfs read map failed paddr=%#llx offset=%zu bytes=%zu size=%zu",
+            (unsigned long long)(ram->paddr + offset),
+            offset,
+            bytes,
+            ram->size
+        );
+        return -EIO;
+    }
+
+    memcpy(dest, src, bytes);
+    arch_phys_unmap(src, bytes);
     return (ssize_t)bytes;
 }
 
@@ -814,7 +827,20 @@ static ssize_t _boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, siz
         return -EINVAL;
     }
 
-    memcpy((void *)(uintptr_t)(ram->paddr + offset), src, bytes);
+    void *dest = arch_phys_map(ram->paddr + offset, bytes, 0);
+    if (!dest) {
+        log_warn(
+            "boot rootfs write map failed paddr=%#llx offset=%zu bytes=%zu size=%zu",
+            (unsigned long long)(ram->paddr + offset),
+            offset,
+            bytes,
+            ram->size
+        );
+        return -EIO;
+    }
+
+    memcpy(dest, src, bytes);
+    arch_phys_unmap(dest, bytes);
     return (ssize_t)bytes;
 }
 

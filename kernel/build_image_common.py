@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Sequence
 
 SECTOR_SIZE = 512
+EXT2_REQUIRED_FEATURE_DIR_HAS_TYPE = 1 << 1
 
 
 class BuildError(RuntimeError):
@@ -387,12 +388,13 @@ def build_ext2_image(
     block_count = div_round_up(target_bytes, block_size)
 
     max_blocks_one_group = block_size * 8
-    if block_count > max_blocks_one_group:
-        block_count = max_blocks_one_group
-
     min_blocks = data_start_block + 64
     if block_count < min_blocks:
         block_count = min_blocks
+    block_count = align_up(block_count, 8)
+
+    if block_count > max_blocks_one_group:
+        block_count = max_blocks_one_group
 
     class Alloc:
         def __init__(self, total_blocks: int):
@@ -517,12 +519,16 @@ def build_ext2_image(
             if b >= total_blocks:
                 continue
             block_bitmap[b // 8] |= 1 << (b % 8)
+        for b in range(total_blocks, block_size * 8):
+            block_bitmap[b // 8] |= 1 << (b % 8)
 
         inode_bitmap = bytearray(block_size)
         for ino in used_inodes:
             idx = ino - 1
             if idx >= inode_count:
                 continue
+            inode_bitmap[idx // 8] |= 1 << (idx % 8)
+        for idx in range(inode_count, block_size * 8):
             inode_bitmap[idx // 8] |= 1 << (idx % 8)
 
         alloc.image[
@@ -537,13 +543,13 @@ def build_ext2_image(
         dir_count = sum(1 for n in inode_map.values() if n.is_dir)
 
         # Group descriptor
-        gd = bytearray(38)
+        gd = bytearray(32)
         struct.pack_into("<I", gd, 0, block_bitmap_block)
         struct.pack_into("<I", gd, 4, inode_bitmap_block)
         struct.pack_into("<I", gd, 8, inode_table_block)
-        struct.pack_into("<I", gd, 12, free_blocks)
-        struct.pack_into("<I", gd, 16, free_inodes)
-        struct.pack_into("<I", gd, 20, dir_count)
+        struct.pack_into("<H", gd, 12, free_blocks)
+        struct.pack_into("<H", gd, 14, free_inodes)
+        struct.pack_into("<H", gd, 16, dir_count)
         gdt_off = gdt_block * block_size
         alloc.image[gdt_off : gdt_off + len(gd)] = gd
 
@@ -582,7 +588,7 @@ def build_ext2_image(
         struct.pack_into("<H", sb, 88, inode_size)
         struct.pack_into("<H", sb, 90, 0)
         struct.pack_into("<I", sb, 92, 0)
-        struct.pack_into("<I", sb, 96, 0)
+        struct.pack_into("<I", sb, 96, EXT2_REQUIRED_FEATURE_DIR_HAS_TYPE)
         struct.pack_into("<I", sb, 100, 0)
         sb[104:120] = uuid.uuid4().bytes
         sb[120:136] = b"APHELEIA".ljust(16, b"\x00")

@@ -73,6 +73,17 @@ static bool _ext2_read(disk_partition_t *part, void *dest, size_t offset, size_t
     }
 
     ssize_t read = part->disk->interface->read(part->disk, dest, part->offset + offset, bytes);
+    if (read != (ssize_t)bytes) {
+        log_warn(
+            "ext2 read failed disk=%s offset=%lu bytes=%lu ret=%ld part_offset=%lu part_size=%lu",
+            part->disk->name ? part->disk->name : "disk",
+            (unsigned long)offset,
+            (unsigned long)bytes,
+            (long)read,
+            (unsigned long)part->offset,
+            (unsigned long)part->size
+        );
+    }
 
     return read == (ssize_t)bytes;
 }
@@ -87,6 +98,17 @@ static bool _ext2_write(disk_partition_t *part, const void *src, size_t offset, 
     }
 
     ssize_t written = part->disk->interface->write(part->disk, (void *)src, part->offset + offset, bytes);
+    if (written != (ssize_t)bytes) {
+        log_warn(
+            "ext2 write failed disk=%s offset=%lu bytes=%lu ret=%ld part_offset=%lu part_size=%lu",
+            part->disk->name ? part->disk->name : "disk",
+            (unsigned long)offset,
+            (unsigned long)bytes,
+            (long)written,
+            (unsigned long)part->offset,
+            (unsigned long)part->size
+        );
+    }
 
     return written == (ssize_t)bytes;
 }
@@ -195,63 +217,6 @@ static bool _write_block(ext2_private_t *priv, disk_partition_t *part, u32 block
     return true;
 }
 
-static bool
-_inode_bytes_io(ext2_private_t *priv, disk_partition_t *part, void *buf, size_t offset, size_t len, bool write) {
-    if (!priv || !part || !buf) {
-        return false;
-    }
-
-    u8 *block = malloc(priv->block_size);
-    if (!block) {
-        return false;
-    }
-
-    size_t copied = 0;
-    bool ok = true;
-
-    while (copied < len) {
-        size_t pos = offset + copied;
-        u32 block_num = (u32)(pos / priv->block_size);
-        size_t block_off = pos % priv->block_size;
-        size_t available = priv->block_size - block_off;
-        size_t chunk = len - copied;
-
-        if (chunk > available) {
-            chunk = available;
-        }
-
-        if (!_read_block(priv, part, block_num, block)) {
-            ok = false;
-            break;
-        }
-
-        if (write) {
-            memcpy(block + block_off, (const u8 *)buf + copied, chunk);
-            ok = _write_block(priv, part, block_num, block);
-        } else {
-            memcpy((u8 *)buf + copied, block + block_off, chunk);
-        }
-
-        if (!ok) {
-            break;
-        }
-
-        copied += chunk;
-    }
-
-    free(block);
-    return ok;
-}
-
-static bool _read_inode_bytes(ext2_private_t *priv, disk_partition_t *part, void *out, size_t offset, size_t len) {
-    return _inode_bytes_io(priv, part, out, offset, len, false);
-}
-
-static bool
-_write_inode_bytes(ext2_private_t *priv, disk_partition_t *part, const void *in, size_t offset, size_t len) {
-    return _inode_bytes_io(priv, part, (void *)in, offset, len, true);
-}
-
 static bool _read_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num, ext2_inode_t *inode) {
     if (!priv || !part || !inode || !inode_num) {
         return false;
@@ -277,7 +242,7 @@ static bool _read_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_
         read_size = sizeof(ext2_inode_t);
     }
 
-    return _read_inode_bytes(priv, part, inode, inode_offset, read_size);
+    return _ext2_read(part, inode, inode_offset, read_size);
 }
 
 static bool _write_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode_num, const ext2_inode_t *inode) {
@@ -303,7 +268,7 @@ static bool _write_inode(ext2_private_t *priv, disk_partition_t *part, u32 inode
         write_size = sizeof(ext2_inode_t);
     }
 
-    return _write_inode_bytes(priv, part, inode, inode_offset, write_size);
+    return _ext2_write(part, inode, inode_offset, write_size);
 }
 
 static void _drop_indirect(ext2_node_info_t *info) {
@@ -2663,23 +2628,28 @@ static fs_instance_t *_probe(disk_partition_t *part) {
         return NULL;
     }
 
-    size_t cache_bytes = (size_t)EXT2_BLOCK_CACHE_SIZE * priv->block_size;
-    if (priv->block_size && cache_bytes / priv->block_size == EXT2_BLOCK_CACHE_SIZE) {
-        priv->cache_data = malloc(cache_bytes);
-    }
-
-    if (priv->cache_data) {
-        memset(priv->cache_data, 0, cache_bytes);
-        for (size_t i = 0; i < EXT2_BLOCK_CACHE_SIZE; i++) {
-            priv->cache[i].data = priv->cache_data + i * priv->block_size;
-        }
-    }
-
     priv->gdt_offset = (size_t)(priv->superblock.superblock_offset + 1) * priv->block_size;
 
     if (!_ext2_read(part, priv->groups, priv->gdt_offset, priv->gdt_size)) {
         _free_private(priv);
         return NULL;
+    }
+
+    if (priv->group_count) {
+        ext2_group_descriptor_t *gd = &priv->groups[0];
+        log_debug(
+            "ext2 geometry block=%lu blocks=%lu inodes=%lu inode_size=%lu groups=%lu req=%#lx itable=%lu free=%lu/%lu dirs=%lu",
+            (unsigned long)priv->block_size,
+            (unsigned long)priv->superblock.block_count,
+            (unsigned long)priv->superblock.inode_count,
+            (unsigned long)priv->inode_size,
+            (unsigned long)priv->group_count,
+            (unsigned long)priv->superblock.required_features,
+            (unsigned long)gd->inode_table_offset,
+            (unsigned long)gd->unallocated_block_count,
+            (unsigned long)gd->unallocated_inode_count,
+            (unsigned long)gd->directory_count
+        );
     }
 
     fs_instance_t *instance = calloc(1, sizeof(fs_instance_t));
@@ -2702,6 +2672,7 @@ static fs_instance_t *_probe(disk_partition_t *part) {
 
 static bool _build_tree(fs_instance_t *instance) {
     if (!instance || !instance->private || !instance->partition) {
+        log_warn("ext2 tree build called with incomplete instance");
         return false;
     }
 
@@ -2710,17 +2681,34 @@ static bool _build_tree(fs_instance_t *instance) {
     ext2_inode_t root_inode;
 
     if (!_read_inode(priv, instance->partition, EXT2_ROOT_INODE, &root_inode)) {
+        log_warn(
+            "ext2 root inode read failed block=%lu inode_size=%lu groups=%lu gdt=%lu",
+            (unsigned long)priv->block_size,
+            (unsigned long)priv->inode_size,
+            (unsigned long)priv->group_count,
+            (unsigned long)priv->gdt_offset
+        );
         mutex_unlock(&priv->lock);
         return false;
     }
 
+    log_debug(
+        "ext2 root inode type=%#lx size=%llu links=%lu block0=%lu",
+        (unsigned long)root_inode.type,
+        (unsigned long long)ext2_file_size(&root_inode),
+        (unsigned long)root_inode.hard_link_count,
+        (unsigned long)root_inode.direct_block_ptr[0]
+    );
+
     vfs_node_t *root = vfs_create_node(NULL, VFS_DIR);
     if (!root) {
+        log_warn("ext2 root vnode allocation failed");
         mutex_unlock(&priv->lock);
         return false;
     }
 
     if (!_init_vnode(root, instance, EXT2_ROOT_INODE, &root_inode)) {
+        log_warn("ext2 root vnode init failed");
         vfs_destroy_node(root);
         mutex_unlock(&priv->lock);
         return false;
@@ -2734,6 +2722,7 @@ static bool _build_tree(fs_instance_t *instance) {
     }
 
     if (!_assign_interface(root, VFS_DIR)) {
+        log_warn("ext2 root interface assignment failed");
         vfs_destroy_node(root);
         mutex_unlock(&priv->lock);
         return false;

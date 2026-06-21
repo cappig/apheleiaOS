@@ -1922,29 +1922,35 @@ int vfs_mount(fs_instance_t *instance, vfs_node_t *mount) {
     assert(vfs);
 
     if (!instance || !mount) {
+        log_warn("vfs mount failed: invalid instance or mount");
         return -EINVAL;
     }
 
     if (mount->type != VFS_DIR) {
+        log_warn("vfs mount failed: mount point type=%lu", (unsigned long)mount->type);
         return -ENOTDIR;
     }
 
     if (!instance->has_tree) {
         if (!instance->filesystem) {
+            log_warn("vfs mount failed: instance has no filesystem");
             return -EINVAL;
         }
 
         fs_interface_t *interface = instance->filesystem->fs_interface;
 
         if (!interface || !interface->build_tree) {
+            log_warn("vfs mount failed: filesystem %s cannot build tree", instance->filesystem->name);
             return -ENOTSUP;
         }
 
         if (!interface->build_tree(instance)) {
+            log_warn("vfs mount failed: filesystem %s tree build failed", instance->filesystem->name);
             return -EIO;
         }
 
         if (!instance->has_tree || !instance->subtree_root) {
+            log_warn("vfs mount failed: filesystem %s produced no root", instance->filesystem->name);
             return -EIO;
         }
     }
@@ -1953,6 +1959,7 @@ int vfs_mount(fs_instance_t *instance, vfs_node_t *mount) {
     mutex_lock(&vfs->lock);
     vfs_node_t *target = instance->subtree_root->data;
     if (!target || _mount_cycle(mount, target)) {
+        log_warn("vfs mount failed: invalid target or mount cycle");
         mutex_unlock(&vfs->lock);
         return -ELOOP;
     }
