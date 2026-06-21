@@ -54,7 +54,7 @@ jobs:
             riscv_frisc: "true"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build image
         run: |
@@ -65,19 +65,9 @@ jobs:
             IMAGE_FORMAT=${{ matrix.image_format }} \
             RISCV_FRISC=${{ matrix.riscv_frisc }}
 
-      - name: Collect artifact
-        shell: bash
-        run: |
-          set -euo pipefail
-          out="ci-artifacts/${{ matrix.artifact }}"
-          rm -rf "$out"
-          mkdir -p "$out"
-          cp bin/apheleia_*_${{ matrix.arch }}.${{ matrix.image_format }} "$out/"
-          (cd "$out" && sha256sum * > SHA256SUMS)
-
       - name: Upload image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
-          path: ci-artifacts/${{ matrix.artifact }}
+          path: bin/apheleia_*_${{ matrix.arch }}.${{ matrix.image_format }}
           if-no-files-found: error

@@ -9,8 +9,6 @@ It aims to be as minimalistic and simple as possible while still providing basic
 
 The current tree supports `x86_64`, `x86_32`, `riscv_64`, and `riscv_32` builds, x86 BIOS boot, RISC-V emulator and [FRISC](https://github.com/friscv) FPGA images, and a small windowed userland.
 
-[![Images](https://github.com/cappig/apheleiaOS/actions/workflows/images.yml/badge.svg)](https://github.com/cappig/apheleiaOS/actions/workflows/images.yml)
-
 ![Apheleia OS text interface](aos-text.png)
 
 ![Apheleia OS window manager](aos.png)
@@ -78,8 +76,6 @@ CI builds and uploads all supported images on every push, pull request, and manu
 - `apheleia-riscv_64-img`
 - `apheleia-riscv_32-img`
 - `apheleia-riscv_32-frisc-img`
-
-Each artifact includes a `SHA256SUMS` file.
 
 ### License
 
