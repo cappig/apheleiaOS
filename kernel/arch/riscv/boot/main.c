@@ -521,6 +521,20 @@ static uintptr_t find_stride(const void *dtb) {
     return RISCV_UART_STRIDE;
 }
 
+static uintptr_t find_io_width(const void *dtb) {
+    if (!dtb || !fdt_valid(dtb)) {
+        return 1;
+    }
+
+    u32 width = 0;
+    if (fdt_find_compatible_u32(dtb, "ns16550a", "reg-io-width", &width) &&
+        (width == 1 || width == 2 || width == 4 || width == 8)) {
+        return width;
+    }
+
+    return 1;
+}
+
 static fdt_reg_t find_memory(const void *dtb) {
     fdt_reg_t reg = {
         .addr = RISCV_KERNEL_BASE,
@@ -842,8 +856,10 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
 
     uintptr_t uart = find_uart(boot_dtb);
     uintptr_t stride = find_stride(boot_dtb);
+    uintptr_t io_width = find_io_width(boot_dtb);
 
     serial_set_reg_stride(stride);
+    serial_set_reg_io_width(io_width);
     tty_set_uart_base(uart);
 
     log_init(log_sink);
@@ -865,13 +881,14 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         (unsigned long)layout.memory_end
     );
     log_info(
-        "layout image=%#lx rootfs=%#lx stack=%#lx scratch=%#lx uart=%#lx stride=%lu",
+        "layout image=%#lx rootfs=%#lx stack=%#lx scratch=%#lx uart=%#lx stride=%lu io_width=%lu",
         (unsigned long)layout.image_base,
         (unsigned long)(uintptr_t)layout.embedded_rootfs,
         (unsigned long)(uintptr_t)&__stack_top,
         (unsigned long)layout.scratch_base,
         (unsigned long)uart,
-        (unsigned long)stride
+        (unsigned long)stride,
+        (unsigned long)io_width
     );
     if (layout.header) {
         log_debug(

@@ -19,6 +19,7 @@
 
 typedef struct {
     uintptr_t stride;
+    uintptr_t io_width;
 #ifdef _KERNEL
     spinlock_t tx_lock;
 #endif
@@ -26,6 +27,7 @@ typedef struct {
 
 static serial_state_t serial = {
     .stride = RISCV_UART_STRIDE,
+    .io_width = 1,
 #ifdef _KERNEL
     .tx_lock = SPINLOCK_INIT,
 #endif
@@ -36,11 +38,37 @@ static inline uintptr_t _uart_reg(uintptr_t base, uintptr_t reg) {
 }
 
 static inline u8 _uart_read(uintptr_t base, uintptr_t reg) {
-    return *(volatile u8 *)_uart_reg(base, reg);
+    uintptr_t addr = _uart_reg(base, reg);
+
+    switch (serial.io_width) {
+    case 2:
+        return (u8)*(volatile u16 *)addr;
+    case 4:
+        return (u8)*(volatile u32 *)addr;
+    case 8:
+        return (u8)*(volatile u64 *)addr;
+    default:
+        return *(volatile u8 *)addr;
+    }
 }
 
 static inline void _uart_write(uintptr_t base, uintptr_t reg, u8 val) {
-    *(volatile u8 *)_uart_reg(base, reg) = val;
+    uintptr_t addr = _uart_reg(base, reg);
+
+    switch (serial.io_width) {
+    case 2:
+        *(volatile u16 *)addr = val;
+        break;
+    case 4:
+        *(volatile u32 *)addr = val;
+        break;
+    case 8:
+        *(volatile u64 *)addr = val;
+        break;
+    default:
+        *(volatile u8 *)addr = val;
+        break;
+    }
 }
 
 static inline bool _uart_has_data(uintptr_t base) {
@@ -57,6 +85,18 @@ void serial_set_reg_stride(uintptr_t stride) {
 
 uintptr_t serial_reg_stride(void) {
     return serial.stride;
+}
+
+void serial_set_reg_io_width(uintptr_t width) {
+    if (width != 1 && width != 2 && width != 4 && width != 8) {
+        width = 1;
+    }
+
+    serial.io_width = width;
+}
+
+uintptr_t serial_reg_io_width(void) {
+    return serial.io_width;
 }
 
 static void _send_serial_unlocked(uintptr_t base, char c) {

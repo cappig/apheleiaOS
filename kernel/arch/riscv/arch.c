@@ -222,6 +222,23 @@ static void _append_bootloader_log(const boot_info_t *info) {
     spin_unlock_irqrestore(&klog.lock, irq_flags);
 }
 
+static void _replay_bootloader_log_serial(const boot_info_t *info) {
+    if (!info || !info->boot_log_paddr || !info->boot_log_len || !uart_console_base()) {
+        return;
+    }
+
+    size_t len = info->boot_log_len;
+    if (info->boot_log_cap && len > info->boot_log_cap) {
+        len = info->boot_log_cap;
+    }
+
+    if (!len) {
+        return;
+    }
+
+    send_serial_buf(uart_console_base(), (const char *)(uintptr_t)info->boot_log_paddr, len);
+}
+
 static void _log_write_early(const char *s, size_t len) {
     if (!s || !len) {
         return;
@@ -937,6 +954,20 @@ static uintptr_t _uart_stride_from_dtb(const void *dtb) {
     return RISCV_UART_STRIDE;
 }
 
+static uintptr_t _uart_io_width_from_dtb(const void *dtb) {
+    if (!dtb || !fdt_valid(dtb)) {
+        return 1;
+    }
+
+    u32 width = 0;
+    if (fdt_find_compatible_u32(dtb, "ns16550a", "reg-io-width", &width) &&
+        (width == 1 || width == 2 || width == 4 || width == 8)) {
+        return width;
+    }
+
+    return 1;
+}
+
 const kernel_args_t *arch_init(void *boot_info_ptr) {
     boot_info_t *info = boot_info_ptr;
     if (!info) {
@@ -965,7 +996,9 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     boot.rootfs_size = info->boot_rootfs_size <= (u64)(size_t)-1 ? (size_t)info->boot_rootfs_size : 0;
 
     serial_set_reg_stride(_uart_stride_from_dtb(boot.dtb));
+    serial_set_reg_io_width(_uart_io_width_from_dtb(boot.dtb));
     uart_console_set_base(uart_phys);
+    _replay_bootloader_log_serial(info);
     log_init(_log_puts);
     log_set_lvl(info->args.debug == DEBUG_NONE ? LOG_INFO : LOG_DEBUG);
 
@@ -996,10 +1029,11 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     log_debug(
-        "UART phys=%#lx irq=%u stride=%lu",
+        "UART phys=%#lx irq=%u stride=%lu io_width=%lu",
         (unsigned long)uart_phys,
         (unsigned int)uart_irq,
-        (unsigned long)serial_reg_stride()
+        (unsigned long)serial_reg_stride(),
+        (unsigned long)serial_reg_io_width()
     );
 
     mmio.count = 0;
