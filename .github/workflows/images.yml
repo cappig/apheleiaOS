@@ -1,0 +1,83 @@
+name: images
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: apheleia-x86_64-img
+            arch: x86_64
+            image_format: img
+            toolchain: gnu
+            riscv_frisc: "false"
+          - artifact: apheleia-x86_32-img
+            arch: x86_32
+            image_format: img
+            toolchain: gnu
+            riscv_frisc: "false"
+          - artifact: apheleia-x86_64-iso
+            arch: x86_64
+            image_format: iso
+            toolchain: gnu
+            riscv_frisc: "false"
+          - artifact: apheleia-x86_32-iso
+            arch: x86_32
+            image_format: iso
+            toolchain: gnu
+            riscv_frisc: "false"
+          - artifact: apheleia-riscv_64-img
+            arch: riscv_64
+            image_format: img
+            toolchain: gnu
+            riscv_frisc: "false"
+          - artifact: apheleia-riscv_32-img
+            arch: riscv_32
+            image_format: img
+            toolchain: gnu
+            riscv_frisc: "false"
+          - artifact: apheleia-riscv_32-frisc-img
+            arch: riscv_32
+            image_format: img
+            toolchain: gnu
+            riscv_frisc: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          make clean
+          make docker_build \
+            ARCH=${{ matrix.arch }} \
+            TOOLCHAIN=${{ matrix.toolchain }} \
+            IMAGE_FORMAT=${{ matrix.image_format }} \
+            RISCV_FRISC=${{ matrix.riscv_frisc }}
+
+      - name: Collect artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="ci-artifacts/${{ matrix.artifact }}"
+          rm -rf "$out"
+          mkdir -p "$out"
+          cp bin/apheleia_*_${{ matrix.arch }}.${{ matrix.image_format }} "$out/"
+          (cd "$out" && sha256sum * > SHA256SUMS)
+
+      - name: Upload image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ci-artifacts/${{ matrix.artifact }}
+          if-no-files-found: error
