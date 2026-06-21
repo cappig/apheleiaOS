@@ -7,6 +7,10 @@ pick_tool = $(shell utils/pick_tool.sh $(1))
 gcc_tool  = $(shell utils/gcc_tool.sh "$(strip $(1))" $(2) $(3))
 riscv_gcc = $(shell utils/pick_riscv_gcc.sh $(1) $(2) $(3))
 
+TOOLCHAIN_FREE_GOALS := clean docker_image docker_build
+TARGET_TOOL_GOALS := $(filter-out $(TOOLCHAIN_FREE_GOALS),$(MAKECMDGOALS))
+VALIDATE_TARGET_TOOLS := $(if $(MAKECMDGOALS),$(if $(TARGET_TOOL_GOALS),true,false),true)
+
 GNU_CC_CANDIDATES_x86_64   := x86_64-elf-gcc x86_64-linux-gnu-gcc gcc
 GNU_CC_CANDIDATES_x86_32   := i686-elf-gcc i386-elf-gcc i686-linux-gnu-gcc i386-linux-gnu-gcc gcc
 GNU_CC_CANDIDATES_riscv_64 := riscv64-unknown-elf-gcc riscv-none-elf-gcc riscv64-elf-gcc
@@ -121,6 +125,7 @@ else
 $(error Unsupported TOOLCHAIN '$(TOOLCHAIN)')
 endif
 
+ifeq ($(VALIDATE_TARGET_TOOLS),true)
 ifeq ($(strip $(CC)),)
 $(error Missing compiler for ARCH '$(ARCH)' and TOOLCHAIN '$(TOOLCHAIN)')
 endif
@@ -136,10 +141,11 @@ endif
 ifeq ($(strip $(ST)),)
 $(error Missing strip for ARCH '$(ARCH)' and TOOLCHAIN '$(TOOLCHAIN)')
 endif
+endif
 
 endif
 
-tool_version = $(shell { $(1) --version 2>/dev/null || $(1) -v 2>/dev/null || true; } | sed -n '1,3p' | tr '\n' ' ')
+tool_version = $(if $(strip $(1)),$(shell { $(1) --version 2>/dev/null || $(1) -v 2>/dev/null || true; } | sed -n '1,3p' | tr '\n' ' '))
 
 TOOLCHAIN_CONFIG := \
 	CC_VERSION="$(call tool_version,$(CC))" \
@@ -270,14 +276,14 @@ CC_BASE := \
 # returns the runtime helper archive for the given CFLAGS, or empty if missing
 # some Clang packages print a compiler-rt path they do not ship, so RISC-V
 # builds also try the bare-metal GCC toolchain when it is installed
-LIBGCC = $(shell \
+LIBGCC = $(if $(strip $(CC)),$(shell \
 	lib=$$($(CC) $(CC_BASE) $(1) -print-libgcc-file-name 2>/dev/null); \
 	if [ -f "$$lib" ]; then echo "$$lib"; exit 0; fi; \
 	for cc in $(LIBGCC_FALLBACK_CC); do \
 		if ! command -v "$$cc" >/dev/null 2>&1; then continue; fi; \
 		lib=$$($$cc $(CC_BASE) $(1) -print-libgcc-file-name 2>/dev/null); \
 		if [ -f "$$lib" ]; then echo "$$lib"; exit 0; fi; \
-	done)
+	done))
 
 ifneq ($(ARCH),)
 include kernel/arch/$(ARCH_TREE)/build/build.mk
