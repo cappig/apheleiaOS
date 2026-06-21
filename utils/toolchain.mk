@@ -139,6 +139,16 @@ endif
 
 endif
 
+tool_version = $(shell { $(1) --version 2>/dev/null || $(1) -v 2>/dev/null || true; } | sed -n '1,3p' | tr '\n' ' ')
+
+TOOLCHAIN_CONFIG := \
+	CC_VERSION="$(call tool_version,$(CC))" \
+	AS_VERSION="$(call tool_version,$(AS))" \
+	AR_VERSION="$(call tool_version,$(AR))" \
+	LD_VERSION="$(call tool_version,$(LD))" \
+	OC_VERSION="$(call tool_version,$(OC))" \
+	ST_VERSION="$(call tool_version,$(ST))"
+
 define log
 	@printf "%-3s  %s\n" "$(strip $(1))" "$(strip $(2))"
 endef
@@ -242,6 +252,9 @@ CC_BASE_TRACE :=
 ifeq ($(TRACEABLE_KERNEL), true)
 CC_BASE_TRACE := -g -fno-omit-frame-pointer
 endif
+
+BUILD_DATE       ?= $(shell date -u +%Y-%m-%d)
+GIT_COMMIT_SHORT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 CC_BASE := \
 	$(CC_BASE) \
