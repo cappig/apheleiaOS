@@ -151,14 +151,20 @@ static uintmax_t _get_var_number(int size, va_list *vlist) {
 
     default:
     case SIZE_INT:
-    case SIZE_SHORT:
-    case SIZE_CHAR:
         return va_arg(*vlist, unsigned int);
 
+    case SIZE_SHORT:
+        return (uintmax_t)(unsigned short)va_arg(*vlist, unsigned int);
+    case SIZE_CHAR:
+        return (uintmax_t)(unsigned char)va_arg(*vlist, unsigned int);
+
     case -SIZE_INT:
-    case -SIZE_SHORT:
-    case -SIZE_CHAR:
         return (uintmax_t)va_arg(*vlist, int);
+
+    case -SIZE_SHORT:
+        return (uintmax_t)(intmax_t)(short)va_arg(*vlist, int);
+    case -SIZE_CHAR:
+        return (uintmax_t)(intmax_t)(signed char)va_arg(*vlist, int);
 
     case SIZE_SIZE:
     case -SIZE_SIZE:
@@ -179,43 +185,50 @@ static uintmax_t _get_var_number(int size, va_list *vlist) {
     }
 }
 
-static void _buf_putc(char *buffer, size_t *written, size_t max_size, char value) {
-    if (!written) {
+typedef struct {
+    char *buf;
+    size_t cap;
+    size_t *written;
+} fmt_out_t;
+
+typedef struct {
+    int flags;
+    int width;
+    int precision;
+    int size;
+    int base;
+    bool uppercase;
+} fmt_spec_t;
+
+static void _buf_putc(fmt_out_t *out, char value) {
+    if (!out || !out->written) {
         return;
     }
 
-    size_t pos = *written;
-    if (buffer && max_size && pos + 1 < max_size) {
-        buffer[pos] = value;
+    size_t pos = *out->written;
+    if (out->buf && out->cap && pos + 1 < out->cap) {
+        out->buf[pos] = value;
     }
 
-    *written = pos + 1;
+    *out->written = pos + 1;
 }
 
-static void _string_to_buffer(
-    char *buffer,
-    size_t max_size,
-    size_t *written,
-    char *string,
-    int flags,
-    int precision,
-    int *padding
-) {
-    if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO)) {
+static void _string_to_buffer(fmt_out_t *out, char *string, const fmt_spec_t *spec, int *padding) {
+    if (!(spec->flags & FLAGS_MINUS) && !(spec->flags & FLAGS_ZERO)) {
         while ((*padding)-- > 0) {
-            _buf_putc(buffer, written, max_size, ' ');
+            _buf_putc(out, ' ');
         }
     }
 
-    size_t len = (precision < 0) ? SIZE_MAX : (size_t)precision;
+    size_t len = (spec->precision < 0) ? SIZE_MAX : (size_t)spec->precision;
 
     for (size_t i = 0; i < len && *string; i++) {
-        _buf_putc(buffer, written, max_size, *string++);
+        _buf_putc(out, *string++);
     }
 
-    if ((flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO)) {
+    if ((spec->flags & FLAGS_MINUS) && !(spec->flags & FLAGS_ZERO)) {
         while ((*padding)-- > 0) {
-            _buf_putc(buffer, written, max_size, ' ');
+            _buf_putc(out, ' ');
         }
     }
 }
@@ -243,21 +256,21 @@ static int _padding_for_width(int width, size_t len) {
     return (int)((size_t)width - len);
 }
 
-static int _num_prefix_len(uintmax_t number, int flags, int base, int size) {
+static int _num_prefix_len(uintmax_t number, const fmt_spec_t *spec) {
     int len = 0;
 
-    if (size < 0 && (intmax_t)number < 0) {
+    if (spec->size < 0 && (intmax_t)number < 0) {
         len++;
-    } else if (flags & (FLAGS_PLUS | FLAGS_SPACE)) {
+    } else if (spec->flags & (FLAGS_PLUS | FLAGS_SPACE)) {
         len++;
     }
 
-    if (flags & FLAGS_HASH) {
-        if (base == 2 && number != 0) {
+    if (spec->flags & FLAGS_HASH) {
+        if (spec->base == 2 && number != 0) {
             len += 2;
-        } else if (base == 16 && (number != 0 || size == SIZE_PTR)) {
+        } else if (spec->base == 16 && (number != 0 || spec->size == SIZE_PTR)) {
             len += 2;
-        } else if (base == 8) {
+        } else if (spec->base == 8) {
             len++;
         }
     }
@@ -275,40 +288,31 @@ static uintmax_t _signed_abs(uintmax_t number) {
     return (uintmax_t)(-(value + 1)) + 1;
 }
 
-static void _append_num_prefix(
-    char *buffer,
-    size_t max_size,
-    size_t *written,
-    uintmax_t number,
-    int flags,
-    int base,
-    int size,
-    bool uppercase
-) {
+static void _append_num_prefix(fmt_out_t *out, uintmax_t number, const fmt_spec_t *spec) {
     char sign = 0;
-    if (size < 0 && (intmax_t)number < 0) {
+    if (spec->size < 0 && (intmax_t)number < 0) {
         sign = '-';
-    } else if (flags & FLAGS_PLUS) {
+    } else if (spec->flags & FLAGS_PLUS) {
         sign = '+';
-    } else if (flags & FLAGS_SPACE) {
+    } else if (spec->flags & FLAGS_SPACE) {
         sign = ' ';
     }
 
     if (sign) {
-        _buf_putc(buffer, written, max_size, sign);
+        _buf_putc(out, sign);
     }
 
     const char *prefix = "";
-    if (base == 2 && number != 0) {
+    if (spec->base == 2 && number != 0) {
         prefix = "0b";
-    } else if (base == 8) {
+    } else if (spec->base == 8) {
         prefix = "0";
-    } else if (base == 16 && (number != 0 || size == SIZE_PTR)) {
-        prefix = uppercase ? "0X" : "0x";
+    } else if (spec->base == 16 && (number != 0 || spec->size == SIZE_PTR)) {
+        prefix = spec->uppercase ? "0X" : "0x";
     }
 
-    while (*prefix && (flags & FLAGS_HASH)) {
-        _buf_putc(buffer, written, max_size, *prefix++);
+    while (*prefix && (spec->flags & FLAGS_HASH)) {
+        _buf_putc(out, *prefix++);
     }
 }
 
@@ -355,6 +359,105 @@ static int _get_base(char type) {
     }
 }
 
+static void _format_text(fmt_out_t *out, fmt_spec_t spec, va_list *args) {
+    char char_holder[2] = { 0 };
+    char *string;
+    spec.flags &= ~FLAGS_ZERO;
+
+    if (spec.base == BASE_STRING) {
+        string = va_arg(*args, char *);
+
+        if (!string) {
+            string = "(null)";
+        }
+    } else {
+        char_holder[0] = (char)va_arg(*args, int);
+        string = char_holder;
+    }
+
+    if (spec.base == BASE_CHAR) {
+        int padding = _padding_for_width(spec.width, 1);
+
+        if (!(spec.flags & FLAGS_MINUS)) {
+            while (padding-- > 0) {
+                _buf_putc(out, ' ');
+            }
+        }
+
+        _buf_putc(out, char_holder[0]);
+
+        if (spec.flags & FLAGS_MINUS) {
+            while (padding-- > 0) {
+                _buf_putc(out, ' ');
+            }
+        }
+
+        return;
+    }
+
+    size_t len = _bounded_strlen(string, spec.precision);
+    int padding = _padding_for_width(spec.width, len);
+    _string_to_buffer(out, string, &spec, &padding);
+}
+
+static void _format_number(fmt_out_t *out, fmt_spec_t spec, va_list *args) {
+    uintmax_t number = _get_var_number(spec.size, args);
+    bool negative = (spec.size < 0 && (intmax_t)number < 0);
+
+    if (spec.precision >= 0) {
+        spec.flags &= ~FLAGS_ZERO;
+    }
+
+    char num_buffer[66] = { 0 };
+    uintmax_t absval = negative ? _signed_abs(number) : number;
+
+    int len = (int)ulltoa((unsigned long long)absval, num_buffer, spec.base);
+    if (spec.precision == 0 && absval == 0) {
+        num_buffer[0] = '\0';
+        len = 0;
+    }
+
+    int prefix_len = _num_prefix_len(number, &spec);
+    int zeroes = 0;
+    if (spec.precision > len) {
+        zeroes = spec.precision - len;
+    }
+
+    size_t field_len = (size_t)len + (size_t)prefix_len + (size_t)zeroes;
+
+    // width includes the sign and 0x prefix, not just the digits
+    int padding = _padding_for_width(spec.width, field_len);
+    int width_padding = padding;
+
+    if (!(spec.flags & FLAGS_MINUS) && !(spec.flags & FLAGS_ZERO)) {
+        while (padding-- > 0) {
+            _buf_putc(out, ' ');
+        }
+    }
+
+    _append_num_prefix(out, number, &spec);
+
+    if (!(spec.flags & FLAGS_MINUS) && (spec.flags & FLAGS_ZERO)) {
+        while (padding-- > 0) {
+            _buf_putc(out, '0');
+        }
+    }
+
+    while (zeroes-- > 0) {
+        _buf_putc(out, '0');
+    }
+
+    if (spec.uppercase) {
+        for (int j = 0; j < len; j++) {
+            num_buffer[j] = (char)toupper((unsigned char)num_buffer[j]);
+        }
+    }
+
+    int tail_padding = (spec.flags & FLAGS_MINUS) ? width_padding : 0;
+    spec.precision = -1;
+    _string_to_buffer(out, num_buffer, &spec, &tail_padding);
+}
+
 int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict format, va_list vlist) {
     if (!format) {
         return 0;
@@ -364,134 +467,70 @@ int vsnprintf(char *restrict buffer, size_t max_size, const char *restrict forma
     va_copy(args, vlist);
 
     size_t written = 0;
+    fmt_out_t out = {
+        .buf = buffer,
+        .cap = max_size,
+        .written = &written,
+    };
 
     for (size_t i = 0; format[i]; i++) {
         if (format[i] != '%') {
-            _buf_putc(buffer, &written, max_size, format[i]);
+            _buf_putc(&out, format[i]);
             continue;
         }
 
         i++;
         if (!format[i]) {
-            _buf_putc(buffer, &written, max_size, '%');
+            _buf_putc(&out, '%');
             break;
         }
 
-        int flags = _get_flags(format, &i);
-        int width = _get_width(format, &i, &args);
-        int precision = _get_precision(format, &i, &args);
-        int size = _get_size(format, &i);
+        fmt_spec_t spec = {
+            .flags = _get_flags(format, &i),
+            .width = _get_width(format, &i, &args),
+            .precision = _get_precision(format, &i, &args),
+            .size = _get_size(format, &i),
+        };
 
         if (!format[i]) {
             break;
         }
 
-        int base = _get_base(format[i]);
-        bool uppercase = (format[i] == 'X');
+        spec.base = _get_base(format[i]);
+        spec.uppercase = format[i] == 'X';
 
-        if (base == BASE_UNKNOWN) {
-            _buf_putc(buffer, &written, max_size, format[i]);
+        if (spec.base == BASE_UNKNOWN) {
+            _buf_putc(&out, format[i]);
             continue;
         }
 
-        if (width < 0) {
-            flags |= FLAGS_MINUS;
-            width = -width;
+        if (spec.width < 0) {
+            spec.flags |= FLAGS_MINUS;
+            spec.width = -spec.width;
         }
-        if (flags & FLAGS_MINUS) {
-            flags &= ~FLAGS_ZERO;
-        }
-
-        if (precision < 0) {
-            precision = -1;
+        if (spec.flags & FLAGS_MINUS) {
+            spec.flags &= ~FLAGS_ZERO;
         }
 
-        if (base == BASE_SDEC) {
-            size = -size;
-            base = -base;
+        if (spec.precision < 0) {
+            spec.precision = -1;
         }
 
-        if (base == BASE_PTR) {
-            size = SIZE_PTR;
-            base = -base;
-            flags |= FLAGS_HASH;
+        if (spec.base == BASE_SDEC) {
+            spec.size = -spec.size;
+            spec.base = -spec.base;
         }
 
-        if (base < 0) {
-            char char_holder[2] = { 0 };
-            char *string;
-            flags &= ~FLAGS_ZERO;
+        if (spec.base == BASE_PTR) {
+            spec.size = SIZE_PTR;
+            spec.base = -spec.base;
+            spec.flags |= FLAGS_HASH;
+        }
 
-            if (base == BASE_STRING) {
-                string = va_arg(args, char *);
-
-                if (!string) {
-                    string = "(null)";
-                }
-            } else {
-                char_holder[0] = (char)va_arg(args, int);
-                string = char_holder;
-            }
-
-            size_t len = _bounded_strlen(string, precision);
-            int padding = _padding_for_width(width, len);
-
-            _string_to_buffer(buffer, max_size, &written, string, flags, precision, &padding);
+        if (spec.base < 0) {
+            _format_text(&out, spec, &args);
         } else {
-            uintmax_t number = _get_var_number(size, &args);
-            bool negative = (size < 0 && (intmax_t)number < 0);
-
-            if (precision >= 0) {
-                flags &= ~FLAGS_ZERO;
-            }
-
-            char num_buffer[66] = { 0 };
-            uintmax_t absval = negative ? _signed_abs(number) : number;
-
-            int len = (int)ulltoa((unsigned long long)absval, num_buffer, base);
-            if (precision == 0 && absval == 0) {
-                num_buffer[0] = '\0';
-                len = 0;
-            }
-
-            int prefix_len = _num_prefix_len(number, flags, base, size);
-            int zeroes = 0;
-            if (precision > len) {
-                zeroes = precision - len;
-            }
-
-            size_t field_len = (size_t)len + (size_t)prefix_len + (size_t)zeroes;
-
-            // width includes the sign and 0x prefix, not just the digits
-            int padding = _padding_for_width(width, field_len);
-            int width_padding = padding;
-
-            if (!(flags & FLAGS_MINUS) && !(flags & FLAGS_ZERO)) {
-                while (padding-- > 0) {
-                    _buf_putc(buffer, &written, max_size, ' ');
-                }
-            }
-
-            _append_num_prefix(buffer, max_size, &written, number, flags, base, size, uppercase);
-
-            if (!(flags & FLAGS_MINUS) && (flags & FLAGS_ZERO)) {
-                while (padding-- > 0) {
-                    _buf_putc(buffer, &written, max_size, '0');
-                }
-            }
-
-            while (zeroes-- > 0) {
-                _buf_putc(buffer, &written, max_size, '0');
-            }
-
-            if (uppercase) {
-                for (int j = 0; j < len; j++) {
-                    num_buffer[j] = (char)toupper((unsigned char)num_buffer[j]);
-                }
-            }
-
-            int tail_padding = (flags & FLAGS_MINUS) ? width_padding : 0;
-            _string_to_buffer(buffer, max_size, &written, num_buffer, flags, -1, &tail_padding);
+            _format_number(&out, spec, &args);
         }
     }
 

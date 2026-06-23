@@ -292,6 +292,55 @@ struct tm *localtime(const time_t *timer) {
     return gmtime(timer);
 }
 
+static bool append_strftime_spec(char *str, size_t max, size_t *pos, char spec, const struct tm *tm) {
+    switch (spec) {
+    case '%':
+        return append_char(str, max, pos, '%');
+    case 'a':
+        return append_str(str, max, pos, weekday_name(tm->tm_wday));
+    case 'b':
+        return append_str(str, max, pos, month_name(tm->tm_mon));
+    case 'c':
+        return append_ctime_layout(str, max, pos, tm);
+    case 'd':
+        return append_number(str, max, pos, tm->tm_mday, 2, '0');
+    case 'e':
+        return append_number(str, max, pos, tm->tm_mday, 2, ' ');
+    case 'F':
+        return append_ymd(str, max, pos, tm);
+    case 'H':
+        return append_number(str, max, pos, tm->tm_hour, 2, '0');
+    case 'j':
+        return append_number(str, max, pos, tm->tm_yday + 1, 3, '0');
+    case 'M':
+        return append_number(str, max, pos, tm->tm_min, 2, '0');
+    case 'm':
+        return append_number(str, max, pos, tm->tm_mon + 1, 2, '0');
+    case 'R':
+        return append_hm(str, max, pos, tm);
+    case 'S':
+        return append_number(str, max, pos, tm->tm_sec, 2, '0');
+    case 's': {
+        struct tm copy = *tm;
+        return append_number(str, max, pos, (long long)mktime(&copy), 1, '0');
+    }
+    case 'T':
+        return append_hms(str, max, pos, tm);
+    case 'u': {
+        int iso_wday = tm->tm_wday == 0 ? 7 : tm->tm_wday;
+        return append_number(str, max, pos, iso_wday, 1, '0');
+    }
+    case 'w':
+        return append_number(str, max, pos, tm->tm_wday, 1, '0');
+    case 'Y':
+        return append_number(str, max, pos, tm->tm_year + 1900, 4, '0');
+    case 'y':
+        return append_number(str, max, pos, (tm->tm_year + 1900) % 100, 2, '0');
+    default:
+        return append_char(str, max, pos, '%') && append_char(str, max, pos, spec);
+    }
+}
+
 size_t strftime(char *str, size_t max, const char *format, const struct tm *tm) {
     if (!str || !max || !format || !tm) {
         return 0;
@@ -315,114 +364,8 @@ size_t strftime(char *str, size_t max, const char *format, const struct tm *tm) 
             return 0;
         }
 
-        switch (*format) {
-        case '%':
-            if (!append_char(str, max, &pos, '%')) {
-                return 0;
-            }
-            break;
-        case 'a':
-            if (!append_str(str, max, &pos, weekday_name(tm->tm_wday))) {
-                return 0;
-            }
-            break;
-        case 'b':
-            if (!append_str(str, max, &pos, month_name(tm->tm_mon))) {
-                return 0;
-            }
-            break;
-        case 'c':
-            if (!append_ctime_layout(str, max, &pos, tm)) {
-                return 0;
-            }
-            break;
-        case 'd':
-            if (!append_number(str, max, &pos, tm->tm_mday, 2, '0')) {
-                return 0;
-            }
-            break;
-        case 'e':
-            if (!append_number(str, max, &pos, tm->tm_mday, 2, ' ')) {
-                return 0;
-            }
-            break;
-        case 'F':
-            if (!append_ymd(str, max, &pos, tm)) {
-                return 0;
-            }
-            break;
-        case 'H':
-            if (!append_number(str, max, &pos, tm->tm_hour, 2, '0')) {
-                return 0;
-            }
-            break;
-        case 'j':
-            if (!append_number(str, max, &pos, tm->tm_yday + 1, 3, '0')) {
-                return 0;
-            }
-            break;
-        case 'M':
-            if (!append_number(str, max, &pos, tm->tm_min, 2, '0')) {
-                return 0;
-            }
-            break;
-        case 'm':
-            if (!append_number(str, max, &pos, tm->tm_mon + 1, 2, '0')) {
-                return 0;
-            }
-            break;
-        case 'R':
-            if (!append_hm(str, max, &pos, tm)) {
-                return 0;
-            }
-            break;
-        case 'S':
-            if (!append_number(str, max, &pos, tm->tm_sec, 2, '0')) {
-                return 0;
-            }
-            break;
-        case 's': {
-            struct tm copy = *tm;
-            if (!append_number(str, max, &pos, (long long)mktime(&copy), 1, '0')) {
-                return 0;
-            }
-            break;
-        }
-        case 'T':
-            if (!append_hms(str, max, &pos, tm)) {
-                return 0;
-            }
-            break;
-        case 'u': {
-            int iso_wday = tm->tm_wday == 0 ? 7 : tm->tm_wday;
-            if (!append_number(str, max, &pos, iso_wday, 1, '0')) {
-                return 0;
-            }
-            break;
-        }
-        case 'w':
-            if (!append_number(str, max, &pos, tm->tm_wday, 1, '0')) {
-                return 0;
-            }
-            break;
-        case 'Y':
-            if (!append_number(str, max, &pos, tm->tm_year + 1900, 4, '0')) {
-                return 0;
-            }
-            break;
-        case 'y':
-            if (!append_number(str, max, &pos, (tm->tm_year + 1900) % 100, 2, '0')) {
-                return 0;
-            }
-            break;
-        default:
-            if (!append_char(str, max, &pos, '%')) {
-                return 0;
-            }
-            if (!append_char(str, max, &pos, *format)) {
-                return 0;
-            }
-            break;
+        if (!append_strftime_spec(str, max, &pos, *format, tm)) {
+            return 0;
         }
 
         format++;

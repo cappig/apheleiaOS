@@ -1,5 +1,6 @@
 #include "string.h"
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -170,17 +171,17 @@ char *strrchr(const char *str, int ch) {
         return NULL;
     }
 
-    const char *ptr = (char)ch == '\0' ? str + strlen(str) : NULL;
+    const char *match = (char)ch == '\0' ? str + strlen(str) : NULL;
 
     while (*str) {
         if (*str == (char)ch) {
-            ptr = str;
+            match = str;
         }
 
         str++;
     }
 
-    return (char *)ptr;
+    return (char *)match;
 }
 
 char *index(const char *str, int ch) {
@@ -379,13 +380,23 @@ char *strndup(const char *str, size_t size) {
         return NULL;
     }
 
-    char *dest = malloc(size + 1);
+    size_t len = 0;
+    while (len < size && str[len]) {
+        len++;
+    }
+
+    if (len == SIZE_MAX) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    char *dest = malloc(len + 1);
     if (!dest) {
         return NULL;
     }
 
-    strncpy(dest, str, size);
-    dest[size] = '\0';
+    memcpy(dest, str, len);
+    dest[len] = '\0';
     return dest;
 }
 

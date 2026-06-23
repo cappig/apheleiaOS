@@ -11,33 +11,48 @@ typedef struct fd_set {
     unsigned long fds_bits[(FD_SETSIZE + (8 * sizeof(unsigned long)) - 1) / (8 * sizeof(unsigned long))];
 } fd_set;
 
-#define __FD_WORD(fd) ((fd) / (int)(8 * sizeof(unsigned long)))
-#define __FD_MASK(fd) (1UL << ((fd) % (int)(8 * sizeof(unsigned long))))
+static inline int fdset_ok(int fd) {
+    return fd >= 0 && fd < FD_SETSIZE;
+}
 
-#define FD_ZERO(set)                                                                                  \
-    do {                                                                                              \
-        fd_set *__fdset = (set);                                                                      \
-        for (size_t __i = 0; __i < sizeof(__fdset->fds_bits) / sizeof(__fdset->fds_bits[0]); __i++) { \
-            __fdset->fds_bits[__i] = 0;                                                               \
-        }                                                                                             \
-    } while (0)
+static inline size_t fdset_word(int fd) {
+    return (size_t)fd / (8 * sizeof(unsigned long));
+}
 
-#define FD_SET(fd, set)                                      \
-    do {                                                     \
-        if ((fd) >= 0 && (fd) < FD_SETSIZE) {                \
-            (set)->fds_bits[__FD_WORD(fd)] |= __FD_MASK(fd); \
-        }                                                    \
-    } while (0)
+static inline unsigned long fdset_mask(int fd) {
+    return 1UL << ((size_t)fd % (8 * sizeof(unsigned long)));
+}
 
-#define FD_CLR(fd, set)                                       \
-    do {                                                      \
-        if ((fd) >= 0 && (fd) < FD_SETSIZE) {                 \
-            (set)->fds_bits[__FD_WORD(fd)] &= ~__FD_MASK(fd); \
-        }                                                     \
-    } while (0)
+static inline void fdset_zero(fd_set *set) {
+    for (size_t i = 0; i < sizeof(set->fds_bits) / sizeof(set->fds_bits[0]); i++) {
+        set->fds_bits[i] = 0;
+    }
+}
 
-#define FD_ISSET(fd, set) \
-    (((fd) >= 0 && (fd) < FD_SETSIZE) ? (((set)->fds_bits[__FD_WORD(fd)] & __FD_MASK(fd)) != 0) : 0)
+static inline void fdset_add(int fd, fd_set *set) {
+    if (fdset_ok(fd)) {
+        set->fds_bits[fdset_word(fd)] |= fdset_mask(fd);
+    }
+}
+
+static inline void fdset_del(int fd, fd_set *set) {
+    if (fdset_ok(fd)) {
+        set->fds_bits[fdset_word(fd)] &= ~fdset_mask(fd);
+    }
+}
+
+static inline int fdset_has(int fd, const fd_set *set) {
+    if (!fdset_ok(fd)) {
+        return 0;
+    }
+
+    return (set->fds_bits[fdset_word(fd)] & fdset_mask(fd)) != 0;
+}
+
+#define FD_ZERO(set)      fdset_zero(set)
+#define FD_SET(fd, set)   fdset_add((fd), (set))
+#define FD_CLR(fd, set)   fdset_del((fd), (set))
+#define FD_ISSET(fd, set) fdset_has((fd), (set))
 
 #ifndef _KERNEL
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);

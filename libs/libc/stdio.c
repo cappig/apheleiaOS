@@ -12,20 +12,20 @@ int snprintf(char *restrict buffer, size_t max_size, const char *restrict format
     va_list arguments;
     va_start(arguments, format);
 
-    int ret = vsnprintf(buffer, max_size, format, arguments);
+    int length = vsnprintf(buffer, max_size, format, arguments);
 
     va_end(arguments);
-    return ret;
+    return length;
 }
 
 int sprintf(char *restrict buffer, const char *restrict format, ...) {
     va_list arguments;
     va_start(arguments, format);
 
-    int ret = vsnprintf(buffer, (size_t)-1, format, arguments);
+    int length = vsnprintf(buffer, (size_t)-1, format, arguments);
 
     va_end(arguments);
-    return ret;
+    return length;
 }
 
 
@@ -37,18 +37,18 @@ int snscanf(const char *restrict str, size_t max, const char *restrict format, .
     va_list arguments;
     va_start(arguments, format);
 
-    int ret = vsnscanf(str, max, format, arguments);
+    int count = vsnscanf(str, max, format, arguments);
 
     va_end(arguments);
-    return ret;
+    return count;
 }
 
 int sscanf(const char *restrict str, const char *restrict format, ...) {
     va_list arguments;
     va_start(arguments, format);
 
-    int ret = vsnscanf(str, (size_t)-1, format, arguments);
+    int count = vsnscanf(str, (size_t)-1, format, arguments);
 
     va_end(arguments);
-    return ret;
+    return count;
 }

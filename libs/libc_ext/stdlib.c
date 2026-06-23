@@ -72,12 +72,12 @@ size_t itoa(int value, char *buf, int base) {
 
 
 lldiv_t ulldiv(unsigned long long num, unsigned long den) {
-    lldiv_t ret = { 0 };
+    lldiv_t result = { 0 };
 
-    ret.rem = num % den;
-    ret.quot = num / den;
+    result.rem = num % den;
+    result.quot = num / den;
 
-    return ret;
+    return result;
 }
 
 int bcdtoi(int bcd) {

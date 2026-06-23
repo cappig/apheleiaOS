@@ -30,6 +30,15 @@ static int _digit_value(char ch) {
     return -1;
 }
 
+static bool _has_hex_prefix(const char *s) {
+    if (s[0] != '0' || (s[1] != 'x' && s[1] != 'X')) {
+        return false;
+    }
+
+    int digit = _digit_value(s[2]);
+    return digit >= 0 && digit < 16;
+}
+
 static int _normalize_base(const char **cursor, int base) {
     if (!cursor || !*cursor) {
         return -1;
@@ -43,7 +52,7 @@ static int _normalize_base(const char **cursor, int base) {
 
     if (!base) {
         if (s[0] == '0') {
-            if ((s[1] == 'x' || s[1] == 'X') && _digit_value(s[2]) >= 0 && _digit_value(s[2]) < 16) {
+            if (_has_hex_prefix(s)) {
                 *cursor = s + 2;
                 return 16;
             }
@@ -54,8 +63,7 @@ static int _normalize_base(const char **cursor, int base) {
         return 10;
     }
 
-    if (base == 16 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && _digit_value(s[2]) >= 0 &&
-        _digit_value(s[2]) < 16) {
+    if (base == 16 && _has_hex_prefix(s)) {
         *cursor = s + 2;
     }
 
@@ -171,7 +179,10 @@ long long strtoll(char const *restrict str, char **restrict endptr, int base) {
         return 0;
     }
 
-    unsigned long long limit = negative ? (unsigned long long)LLONG_MAX + 1ULL : (unsigned long long)LLONG_MAX;
+    unsigned long long limit = (unsigned long long)LLONG_MAX;
+    if (negative) {
+        limit++;
+    }
 
     if (overflow || magnitude > limit) {
         errno = ERANGE;
@@ -354,12 +365,13 @@ void *calloc(size_t num, size_t size) {
         return NULL;
 
     size_t total = size * num;
-    void *ret = malloc(total);
+    void *memory = malloc(total);
 
-    if (ret)
-        memset(ret, 0, total);
+    if (memory) {
+        memset(memory, 0, total);
+    }
 
-    return ret;
+    return memory;
 }
 
 void free(void *ptr) {

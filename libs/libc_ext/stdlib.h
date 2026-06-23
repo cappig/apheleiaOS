@@ -19,12 +19,19 @@
         __a < __b ? __a : __b;     \
     })
 
-#define clamp(num, min, max)                         \
-    ({                                               \
-        const typeof(num) __x = (num);               \
-        const typeof(min) __l = (min);               \
-        const typeof(max) __h = (max);               \
-        (__x > __h) ? __h : (__x < __l ? __l : __x); \
+#define clamp(num, min, max)           \
+    ({                                 \
+        const typeof(num) __x = (num); \
+        const typeof(min) __l = (min); \
+        const typeof(max) __h = (max); \
+        typeof(num) __result = __x;    \
+        if (__result > __h) {          \
+            __result = __h;            \
+        }                              \
+        if (__result < __l) {          \
+            __result = __l;            \
+        }                              \
+        __result;                      \
     })
 
 

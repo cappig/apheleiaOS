@@ -8,10 +8,10 @@ void memswap(void *a, void *b, size_t len) {
     char *b_byte = b;
 
     for (size_t i = 0; i < len; i++) {
-        char temp = a_byte[i];
+        char byte = a_byte[i];
 
         a_byte[i] = b_byte[i];
-        b_byte[i] = temp;
+        b_byte[i] = byte;
     }
 }
 
@@ -26,9 +26,9 @@ char *strrev(char *str) {
     }
 
     for (size_t i = 0; i < len / 2; i++) {
-        char temp = str[len - 1 - i];
+        char ch = str[len - 1 - i];
         str[len - 1 - i] = str[i];
-        str[i] = temp;
+        str[i] = ch;
     }
 
     return str;

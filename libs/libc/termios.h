@@ -170,7 +170,7 @@ enum termios_flush_queue {
 
 // some sane defaults for termios to use
 #ifndef NO_LIBC_EXTENTIONS
-static inline termios_t *__termios_default_init(termios_t *tos) {
+static inline termios_t *termios_init_default(termios_t *tos) {
     if (!tos)
         return tos;
 
