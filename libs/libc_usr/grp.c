@@ -55,13 +55,13 @@ static int parse_group_line(const char *line, struct group *grp, char *buf, size
     char *dst = buf;
     size_t left = buflen;
 
-    int rc = copy_field(&dst, &left, &grp->gr_name, gr_name);
+    int status = copy_field(&dst, &left, &grp->gr_name, gr_name);
 
-    if (!rc) {
-        rc = copy_field(&dst, &left, &grp->gr_passwd, gr_passwd);
+    if (!status) {
+        status = copy_field(&dst, &left, &grp->gr_passwd, gr_passwd);
     }
 
-    return rc;
+    return status;
 }
 
 int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen, struct group **result) {
@@ -87,21 +87,21 @@ int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen, struct gr
         size_t line_len = next ? (size_t)(next - line) : strlen(line);
 
         if (line_len) {
-            char tmp[256];
-            if (line_len >= sizeof(tmp)) {
+            char line_copy[256];
+            if (line_len >= sizeof(line_copy)) {
                 return ERANGE;
             }
 
-            memcpy(tmp, line, line_len);
-            tmp[line_len] = '\0';
+            memcpy(line_copy, line, line_len);
+            line_copy[line_len] = '\0';
 
             struct group parsed = { 0 };
-            int rc = parse_group_line(tmp, &parsed, buf, buflen);
-            if (rc && rc != EINVAL) {
-                return rc;
+            int status = parse_group_line(line_copy, &parsed, buf, buflen);
+            if (status && status != EINVAL) {
+                return status;
             }
 
-            if (!rc && parsed.gr_gid == gid) {
+            if (!status && parsed.gr_gid == gid) {
                 *grp = parsed;
                 *result = grp;
                 return 0;
@@ -124,10 +124,10 @@ struct group *getgrgid(gid_t gid) {
 
     struct group *result = NULL;
 
-    int rc = getgrgid_r(gid, &grp, buf, sizeof(buf), &result);
+    int status = getgrgid_r(gid, &grp, buf, sizeof(buf), &result);
 
-    if (rc || !result) {
-        errno = rc ? rc : ENOENT;
+    if (status || !result) {
+        errno = status ? status : ENOENT;
         return NULL;
     }
 

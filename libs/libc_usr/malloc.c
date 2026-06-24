@@ -24,6 +24,10 @@ typedef struct block {
 
 static block_t *free_list = NULL;
 
+static int _blocks_touch(const block_t *left, const block_t *right) {
+    return left && right && (const char *)left + HEADER_SIZE + left->size == (const char *)right;
+}
+
 static int _align_size(size_t n, size_t align, size_t *out) {
     if (!out || !align) {
         errno = EINVAL;
@@ -145,7 +149,7 @@ void *malloc(size_t size) {
         curr = curr->next;
     }
 
-    // no suitable block — grow the heap
+    // no suitable block, grow the heap
     block_t *block = _grow_heap(size);
     if (!block) {
         return NULL;
@@ -166,12 +170,12 @@ void *calloc(size_t num, size_t size) {
         return NULL;
     }
 
-    void *ptr = malloc(total);
-    if (ptr) {
-        memset(ptr, 0, total);
+    void *memory = malloc(total);
+    if (memory) {
+        memset(memory, 0, total);
     }
 
-    return ptr;
+    return memory;
 }
 
 void free(void *ptr) {
@@ -189,8 +193,9 @@ void free(void *ptr) {
 
     block->free = 1;
 
-    // coalesce with next block if it is also free
-    if (block->next && block->next->free) {
+    // The free list contains multiple mmap arenas, so list neighbours are not
+    // necessarily adjacent in memory.
+    if (block->next && block->next->free && _blocks_touch(block, block->next)) {
         block->size += HEADER_SIZE + block->next->size;
         block->next = block->next->next;
     }

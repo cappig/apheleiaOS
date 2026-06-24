@@ -73,34 +73,36 @@ static int parse_passwd_line(const char *line, struct passwd *pwd, char *buf, si
     char *dst = buf;
     size_t left = buflen;
 
-    int rc = copy_field(&dst, &left, &pwd->pw_name, pw_name);
+    int status = copy_field(&dst, &left, &pwd->pw_name, pw_name);
 
-    if (!rc) {
-        rc = copy_field(&dst, &left, &pwd->pw_passwd, pw_passwd);
+    if (!status) {
+        status = copy_field(&dst, &left, &pwd->pw_passwd, pw_passwd);
     }
-    if (!rc) {
-        rc = copy_field(&dst, &left, &pwd->pw_gecos, pw_gecos);
+    if (!status) {
+        status = copy_field(&dst, &left, &pwd->pw_gecos, pw_gecos);
     }
-    if (!rc) {
-        rc = copy_field(&dst, &left, &pwd->pw_dir, pw_dir);
+    if (!status) {
+        status = copy_field(&dst, &left, &pwd->pw_dir, pw_dir);
     }
-    if (!rc) {
-        rc = copy_field(&dst, &left, &pwd->pw_shell, pw_shell);
+    if (!status) {
+        status = copy_field(&dst, &left, &pwd->pw_shell, pw_shell);
     }
 
-    return rc;
+    return status;
 }
 
-static int find_passwd(
-    const char *match_name,
-    uid_t match_uid,
-    bool by_name,
-    struct passwd *pwd,
-    char *buf,
-    size_t buflen,
-    struct passwd **result
-) {
-    if (!pwd || !buf || !buflen || !result) {
+typedef struct {
+    const char *name;
+    uid_t uid;
+    bool by_name;
+    struct passwd *pwd;
+    char *buf;
+    size_t buflen;
+    struct passwd **result;
+} passwd_lookup_t;
+
+static int find_passwd(const passwd_lookup_t *lookup) {
+    if (!lookup || !lookup->pwd || !lookup->buf || !lookup->buflen || !lookup->result) {
         return EINVAL;
     }
 
@@ -122,30 +124,30 @@ static int find_passwd(
         size_t line_len = next ? (size_t)(next - line) : strlen(line);
 
         if (line_len) {
-            char tmp[256];
-            if (line_len >= sizeof(tmp)) {
+            char line_copy[256];
+            if (line_len >= sizeof(line_copy)) {
                 return ERANGE;
             }
 
-            memcpy(tmp, line, line_len);
-            tmp[line_len] = '\0';
+            memcpy(line_copy, line, line_len);
+            line_copy[line_len] = '\0';
 
             struct passwd parsed = { 0 };
-            int rc = parse_passwd_line(tmp, &parsed, buf, buflen);
-            if (rc && rc != EINVAL) {
-                return rc;
+            int status = parse_passwd_line(line_copy, &parsed, lookup->buf, lookup->buflen);
+            if (status && status != EINVAL) {
+                return status;
             }
 
-            if (!rc) {
-                if (by_name) {
-                    if (match_name && !strcmp(parsed.pw_name, match_name)) {
-                        *pwd = parsed;
-                        *result = pwd;
+            if (!status) {
+                if (lookup->by_name) {
+                    if (lookup->name && !strcmp(parsed.pw_name, lookup->name)) {
+                        *lookup->pwd = parsed;
+                        *lookup->result = lookup->pwd;
                         return 0;
                     }
-                } else if (parsed.pw_uid == match_uid) {
-                    *pwd = parsed;
-                    *result = pwd;
+                } else if (parsed.pw_uid == lookup->uid) {
+                    *lookup->pwd = parsed;
+                    *lookup->result = lookup->pwd;
                     return 0;
                 }
             }
@@ -157,7 +159,7 @@ static int find_passwd(
         line = next + 1;
     }
 
-    *result = NULL;
+    *lookup->result = NULL;
     return 0;
 }
 
@@ -166,7 +168,16 @@ int getpwnam_r(const char *name, struct passwd *pwd, char *buf, size_t buflen, s
         return EINVAL;
     }
 
-    return find_passwd(name, 0, true, pwd, buf, buflen, result);
+    passwd_lookup_t lookup = {
+        .name = name,
+        .by_name = true,
+        .pwd = pwd,
+        .buf = buf,
+        .buflen = buflen,
+        .result = result,
+    };
+
+    return find_passwd(&lookup);
 }
 
 int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen, struct passwd **result) {
@@ -174,7 +185,15 @@ int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen, struct p
         return EINVAL;
     }
 
-    return find_passwd(NULL, uid, false, pwd, buf, buflen, result);
+    passwd_lookup_t lookup = {
+        .uid = uid,
+        .pwd = pwd,
+        .buf = buf,
+        .buflen = buflen,
+        .result = result,
+    };
+
+    return find_passwd(&lookup);
 }
 
 struct passwd *getpwnam(const char *name) {
@@ -183,10 +202,10 @@ struct passwd *getpwnam(const char *name) {
 
     struct passwd *result = NULL;
 
-    int rc = getpwnam_r(name, &pwd, buf, sizeof(buf), &result);
+    int status = getpwnam_r(name, &pwd, buf, sizeof(buf), &result);
 
-    if (rc || !result) {
-        errno = rc ? rc : ENOENT;
+    if (status || !result) {
+        errno = status ? status : ENOENT;
         return NULL;
     }
 
@@ -199,10 +218,10 @@ struct passwd *getpwuid(uid_t uid) {
 
     struct passwd *result = NULL;
 
-    int rc = getpwuid_r(uid, &pwd, buf, sizeof(buf), &result);
+    int status = getpwuid_r(uid, &pwd, buf, sizeof(buf), &result);
 
-    if (rc || !result) {
-        errno = rc ? rc : ENOENT;
+    if (status || !result) {
+        errno = status ? status : ENOENT;
         return NULL;
     }
 

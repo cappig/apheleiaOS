@@ -268,7 +268,7 @@ static int ensure_read_buf(FILE *stream) {
     return ensure_buf(stream, BUFSIZ);
 }
 
-static int stream_write_all_locked(FILE *stream, const char *buf, size_t len) {
+static int write_all_locked(FILE *stream, const char *buf, size_t len) {
     if (!stream || stream->fd < 0 || !(stream->flags & FILE_FLAG_WRITE)) {
         errno = EBADF;
         if (stream) {
@@ -328,10 +328,10 @@ static int stream_write_all_locked(FILE *stream, const char *buf, size_t len) {
 
 static int stream_write_all(FILE *stream, const char *buf, size_t len) {
     stream_lock(stream);
-    int ret = stream_write_all_locked(stream, buf, len);
+    int status = write_all_locked(stream, buf, len);
     stream_unlock(stream);
 
-    return ret;
+    return status;
 }
 
 static int mode_to_flags(const char *mode, int *open_flags, int *stream_flags) {
@@ -530,37 +530,37 @@ int remove(const char *path) {
 
 int fflush(FILE *stream) {
     if (!stream) {
-        int ret = 0;
+        int status = 0;
 
         stream_lock(stdout);
-        int stdout_ret = flush_write_buf(stdout);
+        int stdout_status = flush_write_buf(stdout);
         stream_unlock(stdout);
 
-        if (stdout_ret < 0) {
-            ret = EOF;
+        if (stdout_status < 0) {
+            status = EOF;
         }
 
         stream_lock(stderr);
-        int stderr_ret = flush_write_buf(stderr);
+        int stderr_status = flush_write_buf(stderr);
         stream_unlock(stderr);
 
-        if (stderr_ret < 0) {
-            ret = EOF;
+        if (stderr_status < 0) {
+            status = EOF;
         }
 
         stream_list_lock();
         for (FILE *current = open_streams; current; current = current->next) {
             stream_lock(current);
-            int stream_ret = flush_write_buf(current);
+            int stream_status = flush_write_buf(current);
             stream_unlock(current);
 
-            if (stream_ret < 0) {
-                ret = EOF;
+            if (stream_status < 0) {
+                status = EOF;
             }
         }
         stream_list_unlock();
 
-        return ret;
+        return status;
     }
 
     if (stream->fd < 0) {
@@ -570,10 +570,10 @@ int fflush(FILE *stream) {
     }
 
     stream_lock(stream);
-    int ret = flush_write_buf(stream);
+    int status = flush_write_buf(stream);
     stream_unlock(stream);
 
-    return ret < 0 ? EOF : 0;
+    return status < 0 ? EOF : 0;
 }
 
 int fclose(FILE *stream) {
@@ -582,8 +582,8 @@ int fclose(FILE *stream) {
         return EOF;
     }
 
-    int flush_ret = fflush(stream);
-    int ret = close(stream->fd);
+    int flush_status = fflush(stream);
+    int close_status = close(stream->fd);
     stream->fd = -1;
 
     unregister_stream(stream);
@@ -597,7 +597,7 @@ int fclose(FILE *stream) {
         free(stream);
     }
 
-    return flush_ret < 0 || ret < 0 ? EOF : 0;
+    return flush_status < 0 || close_status < 0 ? EOF : 0;
 }
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
@@ -634,7 +634,10 @@ size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     }
 
     while (got < want) {
-        if (stream->buf_mode != _IONBF && (stream->flags & FILE_FLAG_RBUF) && stream->buf_pos < stream->buf_len) {
+        bool have_buffered = stream->buf_mode != _IONBF && (stream->flags & FILE_FLAG_RBUF);
+        have_buffered = have_buffered && stream->buf_pos < stream->buf_len;
+
+        if (have_buffered) {
             size_t have = stream->buf_len - stream->buf_pos;
             size_t chunk = want - got;
 
@@ -987,32 +990,32 @@ int vfprintf(FILE *stream, const char *restrict format, va_list vlist) {
         }
     }
 
-    int ret = needed;
+    int length = needed;
     if (stream_write_all(stream, buf, bytes) < 0) {
-        ret = -1;
+        length = -1;
     }
 
     if (buf != stack_buf) {
         free(buf);
     }
 
-    return ret;
+    return length;
 }
 
 int fprintf(FILE *restrict stream, const char *restrict format, ...) {
     va_list args;
     va_start(args, format);
-    int ret = vfprintf(stream, format, args);
+    int length = vfprintf(stream, format, args);
     va_end(args);
-    return ret;
+    return length;
 }
 
 int printf(const char *restrict format, ...) {
     va_list args;
     va_start(args, format);
-    int ret = vfprintf(stdout, format, args);
+    int length = vfprintf(stdout, format, args);
     va_end(args);
-    return ret;
+    return length;
 }
 
 int getchar(void) {

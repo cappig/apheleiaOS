@@ -19,10 +19,10 @@ static int syscall_sleep(const struct timespec *req, struct timespec *rem) {
 }
 
 static int syscall_time(struct timespec *realtime, struct timespec *monotonic) {
-    long ret = (long)syscall2(SYS_TIME, (uintptr_t)realtime, (uintptr_t)monotonic);
+    long result = (long)syscall2(SYS_TIME, (uintptr_t)realtime, (uintptr_t)monotonic);
 
-    if (ret < 0) {
-        errno = (int)-ret;
+    if (result < 0) {
+        errno = (int)-result;
         return -1;
     }
 

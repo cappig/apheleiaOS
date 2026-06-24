@@ -8,6 +8,93 @@ static long double _ld_abs(long double value) {
     return value < 0.0L ? -value : value;
 }
 
+static int read_sign(const char **cursor) {
+    int sign = 1;
+
+    if (**cursor == '+' || **cursor == '-') {
+        if (**cursor == '-') {
+            sign = -1;
+        }
+        (*cursor)++;
+    }
+
+    return sign;
+}
+
+static bool read_mantissa(const char **cursor, long double *value) {
+    bool has_digits = false;
+
+    while (isdigit((unsigned char)**cursor)) {
+        has_digits = true;
+        *value = *value * 10.0L + (long double)(**cursor - '0');
+        (*cursor)++;
+    }
+
+    if (**cursor != '.') {
+        return has_digits;
+    }
+
+    long double scale = 0.1L;
+    (*cursor)++;
+
+    while (isdigit((unsigned char)**cursor)) {
+        has_digits = true;
+        *value += (long double)(**cursor - '0') * scale;
+        scale *= 0.1L;
+        (*cursor)++;
+    }
+
+    return has_digits;
+}
+
+static int read_exponent(const char **cursor) {
+    const char *mark = *cursor;
+    if (**cursor != 'e' && **cursor != 'E') {
+        return 0;
+    }
+
+    (*cursor)++;
+    int sign = read_sign(cursor);
+    int value = 0;
+
+    const char *start = *cursor;
+    while (isdigit((unsigned char)**cursor)) {
+        if (value < 1000000) {
+            value = value * 10 + (**cursor - '0');
+        }
+        (*cursor)++;
+    }
+
+    if (*cursor == start) {
+        *cursor = mark;
+        return 0;
+    }
+
+    return sign * value;
+}
+
+static long double scale_value(long double value, int exponent, bool *overflow, bool *underflow) {
+    if (exponent > 0) {
+        for (int i = 0; i < exponent; i++) {
+            if (value > LDBL_MAX / 10.0L) {
+                *overflow = true;
+                return LDBL_MAX;
+            }
+
+            value *= 10.0L;
+        }
+    } else if (exponent < 0) {
+        for (int i = exponent; i < 0; i++) {
+            value /= 10.0L;
+            if (value != 0.0L && _ld_abs(value) < LDBL_MIN) {
+                *underflow = true;
+            }
+        }
+    }
+
+    return value;
+}
+
 long double strtold(char const *restrict str, char **restrict endptr) {
     if (!str) {
         errno = EINVAL;
@@ -22,93 +109,21 @@ long double strtold(char const *restrict str, char **restrict endptr) {
         cursor++;
     }
 
-    int sign = 1;
-    if (*cursor == '+' || *cursor == '-') {
-        if (*cursor == '-') {
-            sign = -1;
-        }
-        cursor++;
-    }
+    int sign = read_sign(&cursor);
 
     long double value = 0.0L;
-    bool has_digits = false;
-
-    while (isdigit((unsigned char)*cursor)) {
-        has_digits = true;
-        value = value * 10.0L + (long double)(*cursor - '0');
-        cursor++;
-    }
-
-    if (*cursor == '.') {
-        long double scale = 0.1L;
-        cursor++;
-
-        while (isdigit((unsigned char)*cursor)) {
-            has_digits = true;
-            value += (long double)(*cursor - '0') * scale;
-            scale *= 0.1L;
-            cursor++;
-        }
-    }
-
-    if (!has_digits) {
+    if (!read_mantissa(&cursor, &value)) {
         if (endptr) {
             *endptr = (char *)str;
         }
         return 0.0L;
     }
 
-    int exp_sign = 1;
-    int exp_value = 0;
-
-    const char *exp_mark = cursor;
-    if (*cursor == 'e' || *cursor == 'E') {
-        cursor++;
-
-        if (*cursor == '+' || *cursor == '-') {
-            if (*cursor == '-') {
-                exp_sign = -1;
-            }
-            cursor++;
-        }
-
-        const char *exp_start = cursor;
-        while (isdigit((unsigned char)*cursor)) {
-            if (exp_value < 1000000) {
-                exp_value = exp_value * 10 + (*cursor - '0');
-            }
-            cursor++;
-        }
-
-        if (cursor == exp_start) {
-            cursor = exp_mark;
-            exp_value = 0;
-            exp_sign = 1;
-        }
-    }
-
-    int exponent = exp_sign * exp_value;
+    int exponent = read_exponent(&cursor);
     bool overflow = false;
     bool underflow = false;
 
-    if (exponent > 0) {
-        for (int i = 0; i < exponent; i++) {
-            if (value > LDBL_MAX / 10.0L) {
-                value = LDBL_MAX;
-                overflow = true;
-                break;
-            }
-
-            value *= 10.0L;
-        }
-    } else if (exponent < 0) {
-        for (int i = exponent; i < 0; i++) {
-            value /= 10.0L;
-            if (value != 0.0L && _ld_abs(value) < LDBL_MIN) {
-                underflow = true;
-            }
-        }
-    }
+    value = scale_value(value, exponent, &overflow, &underflow);
 
     if (overflow || underflow) {
         errno = ERANGE;

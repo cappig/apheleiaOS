@@ -66,19 +66,19 @@ struct dirent *readdir(DIR *dirp) {
     }
 
     if (dirp->pos >= dirp->count) {
-        ssize_t ret = _getdents_raw(dirp->fd, dirp->entries, sizeof(dirp->entries));
+        ssize_t bytes = _getdents_raw(dirp->fd, dirp->entries, sizeof(dirp->entries));
 
-        if (ret <= 0) {
+        if (bytes <= 0) {
             return NULL;
         }
 
-        if ((size_t)ret % sizeof(dirp->entries[0])) {
+        if ((size_t)bytes % sizeof(dirp->entries[0])) {
             errno = EIO;
             return NULL;
         }
 
         dirp->pos = 0;
-        dirp->count = (size_t)ret / sizeof(dirp->entries[0]);
+        dirp->count = (size_t)bytes / sizeof(dirp->entries[0]);
     }
 
     return &dirp->entries[dirp->pos++];
@@ -90,9 +90,9 @@ int closedir(DIR *dirp) {
         return -1;
     }
 
-    int ret = close(dirp->fd);
+    int status = close(dirp->fd);
     free(dirp);
-    return ret;
+    return status;
 }
 
 void rewinddir(DIR *dirp) {

@@ -14,12 +14,12 @@ void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset) {
         .offset = offset,
     };
 
-    long ret = syscall1(SYS_MMAP, (uintptr_t)&args);
-    if (ret < 0) {
-        errno = (int)-ret;
+    long result = syscall1(SYS_MMAP, (uintptr_t)&args);
+    if (result < 0) {
+        errno = (int)-result;
         return MAP_FAILED;
     }
-    return (void *)ret;
+    return (void *)result;
 }
 
 int mprotect(void *addr, size_t len, int prot) {

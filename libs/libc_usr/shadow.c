@@ -53,13 +53,13 @@ static int parse_shadow_line(const char *line, struct spwd *spbuf, char *buf, si
     char *dst = buf;
     size_t left = buflen;
 
-    int rc = copy_field(&dst, &left, &spbuf->sp_namp, name);
+    int status = copy_field(&dst, &left, &spbuf->sp_namp, name);
 
-    if (!rc) {
-        rc = copy_field(&dst, &left, &spbuf->sp_pwdp, pwd);
+    if (!status) {
+        status = copy_field(&dst, &left, &spbuf->sp_pwdp, pwd);
     }
 
-    return rc;
+    return status;
 }
 
 int getspnam_r(const char *name, struct spwd *spbuf, char *buf, size_t buflen, struct spwd **result) {
@@ -85,22 +85,22 @@ int getspnam_r(const char *name, struct spwd *spbuf, char *buf, size_t buflen, s
         size_t line_len = next ? (size_t)(next - line) : strlen(line);
 
         if (line_len) {
-            char tmp[256];
-            if (line_len >= sizeof(tmp)) {
+            char line_copy[256];
+            if (line_len >= sizeof(line_copy)) {
                 return ERANGE;
             }
 
-            memcpy(tmp, line, line_len);
-            tmp[line_len] = '\0';
+            memcpy(line_copy, line, line_len);
+            line_copy[line_len] = '\0';
 
             struct spwd parsed = { 0 };
-            int rc = parse_shadow_line(tmp, &parsed, buf, buflen);
+            int status = parse_shadow_line(line_copy, &parsed, buf, buflen);
 
-            if (rc && rc != EINVAL) {
-                return rc;
+            if (status && status != EINVAL) {
+                return status;
             }
 
-            if (!rc && !strcmp(parsed.sp_namp, name)) {
+            if (!status && !strcmp(parsed.sp_namp, name)) {
                 *spbuf = parsed;
                 *result = spbuf;
                 return 0;
@@ -123,10 +123,10 @@ struct spwd *getspnam(const char *name) {
     static char buf[256];
     struct spwd *result = NULL;
 
-    int rc = getspnam_r(name, &sp, buf, sizeof(buf), &result);
+    int status = getspnam_r(name, &sp, buf, sizeof(buf), &result);
 
-    if (rc || !result) {
-        errno = rc ? rc : ENOENT;
+    if (status || !result) {
+        errno = status ? status : ENOENT;
         return NULL;
     }
 

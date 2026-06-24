@@ -83,10 +83,10 @@ sighandler_t signal(int signum, sighandler_t handler) {
         return SIG_ERR;
     }
 
-    long ret = syscall3(SYS_SIGNAL, (uintptr_t)signum, (uintptr_t)handler, (uintptr_t)signal_trampoline);
+    long result = syscall3(SYS_SIGNAL, (uintptr_t)signum, (uintptr_t)handler, (uintptr_t)signal_trampoline);
 
-    if (ret < 0) {
-        errno = (int)-ret;
+    if (result < 0) {
+        errno = (int)-result;
         return SIG_ERR;
     }
 
@@ -95,7 +95,7 @@ sighandler_t signal(int signum, sighandler_t handler) {
     signal_actions[signum].sa_mask = 0;
     signal_actions[signum].sa_restorer = NULL;
 
-    return (sighandler_t)ret;
+    return (sighandler_t)result;
 }
 
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact) {
@@ -183,21 +183,21 @@ static int _write_sigmask(sigset_t mask) {
 
     size_t written = 0;
     while (written < (size_t)text_len) {
-        ssize_t rc = write(fd, text + written, (size_t)text_len - written);
-        if (rc < 0) {
+        ssize_t bytes = write(fd, text + written, (size_t)text_len - written);
+        if (bytes < 0) {
             int saved_errno = errno;
             close(fd);
             errno = saved_errno;
             return -1;
         }
 
-        if (rc == 0) {
+        if (bytes == 0) {
             close(fd);
             errno = EIO;
             return -1;
         }
 
-        written += (size_t)rc;
+        written += (size_t)bytes;
     }
 
     return close(fd);
@@ -258,10 +258,10 @@ int sigpending(sigset_t *set) {
 }
 
 int kill(pid_t pid, int signum) {
-    long ret = syscall2(SYS_KILL, (uintptr_t)pid, (uintptr_t)signum);
+    long result = syscall2(SYS_KILL, (uintptr_t)pid, (uintptr_t)signum);
 
-    if (ret < 0) {
-        errno = (int)-ret;
+    if (result < 0) {
+        errno = (int)-result;
         return -1;
     }
 
