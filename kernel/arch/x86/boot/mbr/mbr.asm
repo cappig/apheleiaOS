@@ -63,8 +63,8 @@ found_part:
     mov [save_lba], eax
     mov [save_cnt], ecx
 
-    mov word [dest_seg], 0x0000
-    mov word [dest_off], 0x7c00
+    mov word [dest_seg], 0x07c0
+    mov word [dest_off], 0x0000
     mov word [chunk_max], 66
 
 .read_chunk:
@@ -100,13 +100,14 @@ found_part:
     jc read_error
 
     xor ebx, ebx
-    mov bx, cx
+    mov bx, [dap + 2]
     add dword [save_lba], ebx
     sub dword [save_cnt], ebx
 
-    add word [dest_seg], 0x1000
-    mov word [dest_off], 0x0000
-    mov word [chunk_max], 128
+    mov ax, bx
+    shl ax, 5
+    add word [dest_seg], ax
+    mov word [chunk_max], 64
     jmp .read_chunk
 
 .load_done:

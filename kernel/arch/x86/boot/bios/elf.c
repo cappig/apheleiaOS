@@ -111,10 +111,14 @@ static elf_header_t *read_kernel(bool want_64, bool *is_64, size_t *size_out) {
 }
 
 void load_kernel(boot_info_t *info) {
-    bool want_64 = has_long_mode();
     bool is_64 = false;
     size_t kernel_size = 0;
-    elf_header_t *kernel = read_kernel(want_64, &is_64, &kernel_size);
+    bool can_load_64 = has_long_mode();
+    elf_header_t *kernel = read_kernel(can_load_64, &is_64, &kernel_size);
+
+    if (!kernel && can_load_64) {
+        kernel = read_kernel(false, &is_64, &kernel_size);
+    }
 
     if (!kernel) {
         panic("no suitable kernel image found");
