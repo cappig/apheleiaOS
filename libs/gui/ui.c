@@ -73,7 +73,7 @@ static void close_fd(int *fd) {
     *fd = -1;
 }
 
-static void window_sync_framebuffer(window_t *window) {
+static void sync_framebuffer(window_t *window) {
     if (!window) {
         return;
     }
@@ -85,7 +85,7 @@ static void window_sync_framebuffer(window_t *window) {
     window->framebuffer.pixel_count = window->pixels_count;
 }
 
-static u64 _input_timestamp_ms(void) {
+static u64 input_time_ms(void) {
     time_t now = time(NULL);
     if (now <= 0) {
         return 0;
@@ -94,7 +94,7 @@ static u64 _input_timestamp_ms(void) {
     return (u64)now * 1000ULL;
 }
 
-static void _update_key_modifiers(ui_t *ui, const key_event *event) {
+static void update_mods(ui_t *ui, const key_event *event) {
     if (!ui || !event) {
         return;
     }
@@ -136,12 +136,12 @@ static void _update_key_modifiers(ui_t *ui, const key_event *event) {
     }
 }
 
-static void _translate_key_event(ui_t *ui, const key_event *raw, input_event_t *out, u64 timestamp_ms) {
+static void translate_key(ui_t *ui, const key_event *raw, input_event_t *out, u64 timestamp_ms) {
     if (!ui || !raw || !out) {
         return;
     }
 
-    _update_key_modifiers(ui, raw);
+    update_mods(ui, raw);
 
     memset(out, 0, sizeof(*out));
     out->timestamp_ms = timestamp_ms;
@@ -152,8 +152,7 @@ static void _translate_key_event(ui_t *ui, const key_event *raw, input_event_t *
     out->modifiers = ui->key_modifiers;
 }
 
-static size_t
-_translate_mouse_event(ui_t *ui, const mouse_event *raw, input_event_t *out, size_t out_cap, u64 timestamp_ms) {
+static size_t _mouse_events(ui_t *ui, const mouse_event *raw, input_event_t *out, size_t out_cap, u64 timestamp_ms) {
     if (!ui || !raw || !out || !out_cap) {
         return 0;
     }
@@ -248,12 +247,12 @@ _queue_or_store(ui_t *ui, input_event_t *events, size_t count, size_t *produced,
     (void)_pending_push(ui, event);
 }
 
-static int _read_keyboard_event(ui_t *ui, input_event_t *events, size_t *produced, u64 timestamp_ms) {
+static int read_key_event(ui_t *ui, input_event_t *events, size_t *produced, u64 timestamp_ms) {
     key_event raw = { 0 };
     ssize_t n = read(ui->keyboard_fd, &raw, sizeof(raw));
 
     if (n == (ssize_t)sizeof(raw)) {
-        _translate_key_event(ui, &raw, &events[(*produced)++], timestamp_ms);
+        translate_key(ui, &raw, &events[(*produced)++], timestamp_ms);
         ui->input_round_robin = true;
         return 1;
     }
@@ -269,7 +268,7 @@ static int _read_keyboard_event(ui_t *ui, input_event_t *events, size_t *produce
     return 0;
 }
 
-static int _read_mouse_events(ui_t *ui, input_event_t *events, size_t count, size_t *produced, u64 timestamp_ms) {
+static int read_mouse_events(ui_t *ui, input_event_t *events, size_t count, size_t *produced, u64 timestamp_ms) {
     mouse_event raw = { 0 };
     ssize_t n = read(ui->mouse_fd, &raw, sizeof(raw));
 
@@ -286,13 +285,7 @@ static int _read_mouse_events(ui_t *ui, input_event_t *events, size_t count, siz
     }
 
     input_event_t converted[3];
-    size_t event_count = _translate_mouse_event(
-        ui,
-        &raw,
-        converted,
-        sizeof(converted) / sizeof(converted[0]),
-        timestamp_ms
-    );
+    size_t event_count = _mouse_events(ui, &raw, converted, sizeof(converted) / sizeof(converted[0]), timestamp_ms);
 
     if (!event_count) {
         return 0;
@@ -321,7 +314,7 @@ static int ui_simple(ui_t *ui, unsigned long request, u32 id, i32 x, i32 y, u32 
     return ioctl(ui->ctl_fd, request, &cmd);
 }
 
-static void window_reset_runtime(window_t *window) {
+static void reset_runtime(window_t *window) {
     if (!window) {
         return;
     }
@@ -331,10 +324,10 @@ static void window_reset_runtime(window_t *window) {
     window->pixels = NULL;
     window->pixels_count = 0;
     window->pixels_capacity = 0;
-    window_sync_framebuffer(window);
+    sync_framebuffer(window);
 }
 
-static void window_unmap_pixels(window_t *window) {
+static void unmap_pixels(window_t *window) {
     if (!window || !window->pixels || !window->pixels_capacity) {
         return;
     }
@@ -344,7 +337,7 @@ static void window_unmap_pixels(window_t *window) {
     window->pixels = NULL;
     window->pixels_count = 0;
     window->pixels_capacity = 0;
-    window_sync_framebuffer(window);
+    sync_framebuffer(window);
 }
 
 static void window_reset(window_t *window, ui_t *ui) {
@@ -352,15 +345,15 @@ static void window_reset(window_t *window, ui_t *ui) {
         return;
     }
 
-    window_unmap_pixels(window);
-    window_reset_runtime(window);
+    unmap_pixels(window);
+    reset_runtime(window);
 
     window->ui = ui;
     window->id = 0;
     window->width = 0;
     window->height = 0;
     window->stride = 0;
-    window_sync_framebuffer(window);
+    sync_framebuffer(window);
 }
 
 static int window_open_fds(window_t *window) {
@@ -462,7 +455,7 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
         return (ssize_t)(produced * sizeof(*events));
     }
 
-    u64 batch_timestamp_ms = _input_timestamp_ms();
+    u64 batch_timestamp_ms = input_time_ms();
 
     for (;;) {
         if (produced >= count) {
@@ -473,12 +466,15 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
         int result = 0;
 
         for (int pass = 0; pass < 2; pass++) {
-            bool read_keyboard = (pass == 0) ? keyboard_first : !keyboard_first;
+            bool read_keyboard = keyboard_first;
+            if (pass == 1) {
+                read_keyboard = !keyboard_first;
+            }
 
             if (read_keyboard) {
-                result = _read_keyboard_event(ui, events, &produced, batch_timestamp_ms);
+                result = read_key_event(ui, events, &produced, batch_timestamp_ms);
             } else {
-                result = _read_mouse_events(ui, events, count, &produced, batch_timestamp_ms);
+                result = read_mouse_events(ui, events, count, &produced, batch_timestamp_ms);
             }
 
             if (result > 0) {
@@ -486,7 +482,11 @@ ssize_t ui_input(ui_t *ui, input_event_t *events, size_t count) {
             }
 
             if (result < 0) {
-                return produced ? (ssize_t)(produced * sizeof(*events)) : -1;
+                if (produced) {
+                    return (ssize_t)(produced * sizeof(*events));
+                }
+
+                return -1;
             }
         }
 
@@ -621,7 +621,7 @@ static int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const
     window->width = cmd.width;
     window->height = cmd.height;
     window->stride = cmd.stride;
-    window_sync_framebuffer(window);
+    sync_framebuffer(window);
 
     if (!window_open_fds(window)) {
         return 0;
@@ -642,8 +642,15 @@ static int window_from_env(ui_t *ui, window_t *window) {
 
     window_reset(window, ui);
 
-    if (!parse_env_u32("WS_ID", &window->id) || !parse_env_u32("WS_WIDTH", &window->width) ||
-        !parse_env_u32("WS_HEIGHT", &window->height)) {
+    if (!parse_env_u32("WS_ID", &window->id)) {
+        return -1;
+    }
+
+    if (!parse_env_u32("WS_WIDTH", &window->width)) {
+        return -1;
+    }
+
+    if (!parse_env_u32("WS_HEIGHT", &window->height)) {
         return -1;
     }
 
@@ -655,7 +662,7 @@ static int window_from_env(ui_t *ui, window_t *window) {
         window->stride = window->width * 4;
     }
 
-    window_sync_framebuffer(window);
+    sync_framebuffer(window);
 
     return window_open_fds(window);
 }
@@ -666,9 +673,9 @@ static int window_free(window_t *window) {
         return -1;
     }
 
-    int ret = ui_simple(window->ui, WSIOCFREE, window->id, 0, 0, 0);
+    int status = ui_simple(window->ui, WSIOCFREE, window->id, 0, 0, 0);
     window_close(window);
-    return ret;
+    return status;
 }
 
 int window_set_title(window_t *window, const char *title) {
@@ -692,8 +699,8 @@ void window_close(window_t *window) {
         return;
     }
 
-    window_unmap_pixels(window);
-    window_reset_runtime(window);
+    unmap_pixels(window);
+    reset_runtime(window);
 }
 
 static ssize_t window_blit(window_t *window, const void *pixels, size_t len, size_t offset) {
@@ -712,7 +719,7 @@ int window_init(window_t *window, u32 width, u32 height, const char *title) {
     }
 
     memset(window, 0, sizeof(*window));
-    window_reset_runtime(window);
+    reset_runtime(window);
 
     if (ui_open(&window->ui_local, 0)) {
         if (errno == ENOENT) {
@@ -751,7 +758,7 @@ int window_init(window_t *window, u32 width, u32 height, const char *title) {
 
     ui_close(window->ui);
     memset(window, 0, sizeof(*window));
-    window_reset_runtime(window);
+    reset_runtime(window);
 
     errno = saved;
     return -1;
@@ -770,7 +777,7 @@ void window_deinit(window_t *window) {
     }
 
     memset(window, 0, sizeof(*window));
-    window_reset_runtime(window);
+    reset_runtime(window);
 }
 
 framebuffer_t *window_buffer(window_t *window) {
@@ -792,7 +799,7 @@ framebuffer_t *window_buffer(window_t *window) {
 
     if (window->pixels && window->pixels_capacity >= pixels) {
         window->pixels_count = pixels;
-        window_sync_framebuffer(window);
+        sync_framebuffer(window);
         return &window->framebuffer;
     }
 
@@ -818,7 +825,7 @@ framebuffer_t *window_buffer(window_t *window) {
     window->pixels = grown;
     window->pixels_count = pixels;
     window->pixels_capacity = capacity;
-    window_sync_framebuffer(window);
+    sync_framebuffer(window);
 
     return &window->framebuffer;
 }
@@ -862,7 +869,7 @@ static int window_flush_row(window_t *window, const u8 *row, size_t bytes, off_t
     return 0;
 }
 
-static void _window_resize_preserve(pixel_t *pixels, u32 old_width, u32 old_height, u32 new_width, u32 new_height) {
+static void resize_preserve(pixel_t *pixels, u32 old_width, u32 old_height, u32 new_width, u32 new_height) {
     if (!pixels || !old_width || !old_height || !new_width || !new_height) {
         return;
     }
@@ -907,8 +914,13 @@ static void _window_resize_preserve(pixel_t *pixels, u32 old_width, u32 old_heig
     }
 }
 
-static void _window_apply_resize_default(window_t *window, const ws_input_event_t *event) {
-    if (!window || !event || event->type != INPUT_EVENT_WINDOW_RESIZE || !event->width || !event->height) {
+static void resize_default(window_t *window, const ws_input_event_t *event) {
+    if (!window || !event) {
+        return;
+    }
+
+    bool resize_event = event->type == INPUT_EVENT_WINDOW_RESIZE;
+    if (!resize_event || !event->width || !event->height) {
         return;
     }
 
@@ -916,7 +928,9 @@ static void _window_apply_resize_default(window_t *window, const ws_input_event_
     u32 new_height = event->height;
     u32 new_stride = event->stride ? event->stride : event->width * sizeof(pixel_t);
 
-    if (window->width == new_width && window->height == new_height && window->stride == new_stride) {
+    bool same_size = window->width == new_width && window->height == new_height;
+    bool same_stride = window->stride == new_stride;
+    if (same_size && same_stride) {
         return;
     }
 
@@ -924,7 +938,9 @@ static void _window_apply_resize_default(window_t *window, const ws_input_event_
     u32 old_height = window->height;
     u32 old_stride = window->stride;
 
-    bool had_pixels = window->pixels && window->pixels_count && old_width && old_height;
+    bool had_size = old_width && old_height;
+    bool had_buffer = window->pixels && window->pixels_count;
+    bool had_pixels = had_buffer && had_size;
 
     window->width = new_width;
     window->height = new_height;
@@ -935,17 +951,17 @@ static void _window_apply_resize_default(window_t *window, const ws_input_event_
         window->width = old_width;
         window->height = old_height;
         window->stride = old_stride;
-        window_sync_framebuffer(window);
+        sync_framebuffer(window);
         return;
     }
 
     if (had_pixels) {
-        _window_resize_preserve(fb->pixels, old_width, old_height, new_width, new_height);
+        resize_preserve(fb->pixels, old_width, old_height, new_width, new_height);
     } else if (window->pixels_count) {
         memset(fb->pixels, 0, window->pixels_count * sizeof(pixel_t));
     }
 
-    window_sync_framebuffer(window);
+    sync_framebuffer(window);
 }
 
 int window_flush(window_t *window) {
@@ -996,7 +1012,7 @@ int window_flush(window_t *window) {
             size_t count = (size_t)m / sizeof(ws_input_event_t);
             for (size_t i = 0; i < count; i++) {
                 if (event_batch[i].type == INPUT_EVENT_WINDOW_RESIZE) {
-                    _window_apply_resize_default(window, &event_batch[i]);
+                    resize_default(window, &event_batch[i]);
                 }
             }
 
@@ -1034,7 +1050,7 @@ ssize_t window_events(window_t *window, ws_input_event_t *events, size_t count) 
     size_t event_count = (size_t)n / sizeof(*events);
     for (size_t i = 0; i < event_count; i++) {
         if (events[i].type == INPUT_EVENT_WINDOW_RESIZE) {
-            _window_apply_resize_default(window, &events[i]);
+            resize_default(window, &events[i]);
         }
     }
 
@@ -1062,7 +1078,9 @@ int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height) {
         clip_h = window->height - y;
     }
 
-    if (x == 0 && clip_w == window->width && window->stride == window->width * sizeof(pixel_t)) {
+    bool full_width = x == 0 && clip_w == window->width;
+    bool packed_rows = window->stride == window->width * sizeof(pixel_t);
+    if (full_width && packed_rows) {
         const u8 *src = (const u8 *)(window->pixels + (size_t)y * window->width);
 
         size_t total = (size_t)clip_h * (size_t)window->width * sizeof(pixel_t);

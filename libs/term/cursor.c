@@ -1,6 +1,6 @@
 #include "cursor.h"
 
-static size_t term_cursor_clamp_axis(size_t value, size_t limit) {
+static size_t clamp_axis(size_t value, size_t limit) {
     if (!limit) {
         return 0;
     }
@@ -100,55 +100,42 @@ void term_cursor_save(
     }
 }
 
-bool term_cursor_restore(
-    size_t *cursor_x,
-    size_t *cursor_y,
-    size_t cols,
-    size_t rows,
-    const size_t *saved_x,
-    const size_t *saved_y,
-    const bool *saved_valid
-) {
-    if (!cursor_x || !cursor_y || !cols || !rows || !saved_x || !saved_y || (saved_valid && !*saved_valid)) {
+bool term_cursor_restore(term_cursor_t *cursor, const term_saved_cursor_t *saved) {
+    bool have_saved_pos = saved && saved->x && saved->y;
+    bool saved_ok = !saved || !saved->valid || *saved->valid;
+
+    if (!cursor || !cursor->x || !cursor->y || !cursor->cols || !cursor->rows || !have_saved_pos || !saved_ok) {
         return false;
     }
 
-    *cursor_x = term_cursor_clamp_axis(*saved_x, cols);
-    *cursor_y = term_cursor_clamp_axis(*saved_y, rows);
+    *cursor->x = clamp_axis(*saved->x, cursor->cols);
+    *cursor->y = clamp_axis(*saved->y, cursor->rows);
     return true;
 }
 
-void term_cursor_clamp(
-    size_t *cursor_x,
-    size_t *cursor_y,
-    size_t *saved_x,
-    size_t *saved_y,
-    bool *saved_valid,
-    size_t cols,
-    size_t rows
-) {
-    if (!cursor_x || !cursor_y || !saved_x || !saved_y) {
+void term_cursor_clamp(term_cursor_t *cursor, term_saved_cursor_t *saved) {
+    if (!cursor || !cursor->x || !cursor->y || !saved || !saved->x || !saved->y) {
         return;
     }
 
-    if (!cols || !rows) {
-        *cursor_x = 0;
-        *cursor_y = 0;
-        *saved_x = 0;
-        *saved_y = 0;
+    if (!cursor->cols || !cursor->rows) {
+        *cursor->x = 0;
+        *cursor->y = 0;
+        *saved->x = 0;
+        *saved->y = 0;
 
-        if (saved_valid) {
-            *saved_valid = false;
+        if (saved->valid) {
+            *saved->valid = false;
         }
 
         return;
     }
 
-    *cursor_x = term_cursor_clamp_axis(*cursor_x, cols);
-    *cursor_y = term_cursor_clamp_axis(*cursor_y, rows);
+    *cursor->x = clamp_axis(*cursor->x, cursor->cols);
+    *cursor->y = clamp_axis(*cursor->y, cursor->rows);
 
-    if (!saved_valid || *saved_valid) {
-        *saved_x = term_cursor_clamp_axis(*saved_x, cols);
-        *saved_y = term_cursor_clamp_axis(*saved_y, rows);
+    if (!saved->valid || *saved->valid) {
+        *saved->x = clamp_axis(*saved->x, cursor->cols);
+        *saved->y = clamp_axis(*saved->y, cursor->rows);
     }
 }

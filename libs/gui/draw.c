@@ -23,13 +23,13 @@
 typedef struct {
     u32 codepoint;
     u32 glyph;
-} draw_font_map_entry_t;
+} glyph_map_t;
 
 typedef struct {
     u8 buf[FONT_BUF_SIZE];
     psf_font_t psf;
 
-    draw_font_map_entry_t *map;
+    glyph_map_t *map;
     size_t map_count;
     size_t map_cap;
 
@@ -75,6 +75,14 @@ static i64 edge(draw_point_t a, draw_point_t b, i32 px, i32 py) {
     return (i64)(px - a.x) * (i64)(b.y - a.y) - (i64)(py - a.y) * (i64)(b.x - a.x);
 }
 
+static bool font_ready(void) {
+    bool has_glyphs = font_cache.psf.glyphs != NULL;
+    bool has_size = font_cache.psf.width && font_cache.psf.height;
+    bool has_rows = font_cache.psf.row_bytes != 0;
+
+    return has_glyphs && has_size && has_rows;
+}
+
 static size_t _stride_pixels(const framebuffer_t *fb) {
     if (!fb || !fb->width) {
         return 0;
@@ -99,7 +107,7 @@ static bool _glyph_pixel_on(const u8 *glyph, u32 row_bytes, u32 x, u32 y) {
     return (bits & mask) != 0;
 }
 
-static void _clear_font_map(void) {
+static void clear_font_map(void) {
     if (!font_cache.map) {
         return;
     }
@@ -110,9 +118,9 @@ static void _clear_font_map(void) {
     font_cache.map_cap = 0;
 }
 
-static void _reset_draw_font_state(void) {
+static void reset_font(void) {
     memset(&font_cache.psf, 0, sizeof(font_cache.psf));
-    _clear_font_map();
+    clear_font_map();
     font_cache.cell_src_x = 0;
     font_cache.cell_width = 8U;
     font_cache.cell_height = 16U;
@@ -120,7 +128,7 @@ static void _reset_draw_font_state(void) {
     font_cache.loaded = false;
 }
 
-static bool _reserve_font_map(size_t needed) {
+static bool reserve_map(size_t needed) {
     if (font_cache.map_cap >= needed) {
         return true;
     }
@@ -143,11 +151,11 @@ static bool _reserve_font_map(size_t needed) {
         new_cap *= 2;
     }
 
-    if (new_cap > (size_t)-1 / sizeof(draw_font_map_entry_t)) {
+    if (new_cap > (size_t)-1 / sizeof(glyph_map_t)) {
         return false;
     }
 
-    draw_font_map_entry_t *next = malloc(new_cap * sizeof(*next));
+    glyph_map_t *next = malloc(new_cap * sizeof(*next));
     if (!next) {
         return false;
     }
@@ -162,26 +170,26 @@ static bool _reserve_font_map(size_t needed) {
     return true;
 }
 
-static bool _push_font_map(u32 codepoint, u32 glyph) {
-    if (!_reserve_font_map(font_cache.map_count + 1)) {
+static bool push_map(u32 codepoint, u32 glyph) {
+    if (!reserve_map(font_cache.map_count + 1)) {
         return false;
     }
 
-    font_cache.map[font_cache.map_count++] = (draw_font_map_entry_t){
+    font_cache.map[font_cache.map_count++] = (glyph_map_t){
         .codepoint = codepoint,
         .glyph = glyph,
     };
     return true;
 }
 
-static bool _push_font_map_iter(void *ctx, u32 codepoint, u32 glyph) {
+static bool push_map_iter(void *ctx, u32 codepoint, u32 glyph) {
     (void)ctx;
-    return _push_font_map(codepoint, glyph);
+    return push_map(codepoint, glyph);
 }
 
-static void _sort_font_map(void) {
+static void sort_map(void) {
     for (size_t i = 1; i < font_cache.map_count; i++) {
-        draw_font_map_entry_t current = font_cache.map[i];
+        glyph_map_t current = font_cache.map[i];
         size_t j = i;
 
         while (j > 0 && font_cache.map[j - 1].codepoint > current.codepoint) {
@@ -193,7 +201,7 @@ static void _sort_font_map(void) {
     }
 }
 
-static bool _find_mapped_glyph(u32 codepoint, u32 *glyph_out) {
+static bool find_glyph(u32 codepoint, u32 *glyph_out) {
     if (!glyph_out || !font_cache.map || !font_cache.map_count) {
         return false;
     }
@@ -203,7 +211,7 @@ static bool _find_mapped_glyph(u32 codepoint, u32 *glyph_out) {
 
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
-        const draw_font_map_entry_t *entry = &font_cache.map[mid];
+        const glyph_map_t *entry = &font_cache.map[mid];
 
         if (entry->codepoint == codepoint) {
             *glyph_out = entry->glyph;
@@ -220,10 +228,10 @@ static bool _find_mapped_glyph(u32 codepoint, u32 *glyph_out) {
     return false;
 }
 
-static u32 _glyph_index_for(u32 codepoint) {
+static u32 glyph_index(u32 codepoint) {
     u32 glyph = 0;
 
-    if (_find_mapped_glyph(codepoint, &glyph)) {
+    if (find_glyph(codepoint, &glyph)) {
         if (glyph < font_cache.psf.glyph_count) {
             return glyph;
         }
@@ -233,7 +241,7 @@ static u32 _glyph_index_for(u32 codepoint) {
         return codepoint;
     }
 
-    if (_find_mapped_glyph((u32)'?', &glyph)) {
+    if (find_glyph((u32)'?', &glyph)) {
         if (glyph < font_cache.psf.glyph_count) {
             return glyph;
         }
@@ -246,7 +254,7 @@ static u32 _glyph_index_for(u32 codepoint) {
     return 0;
 }
 
-static bool _glyph_bounds_for_index(u32 glyph_idx, u32 *left_out, u32 *right_out) {
+static bool glyph_bounds(u32 glyph_idx, u32 *left_out, u32 *right_out) {
     if (glyph_idx >= font_cache.psf.glyph_count || !left_out || !right_out) {
         return false;
     }
@@ -284,12 +292,12 @@ static bool _glyph_bounds_for_index(u32 glyph_idx, u32 *left_out, u32 *right_out
     return true;
 }
 
-static void _derive_font_metrics(void) {
+static void derive_metrics(void) {
     font_cache.cell_src_x = 0;
     font_cache.cell_width = font_cache.psf.width ? font_cache.psf.width : 8U;
     font_cache.cell_height = font_cache.psf.height ? font_cache.psf.height : 16U;
 
-    if (!font_cache.psf.glyphs || !font_cache.psf.width || !font_cache.psf.height || !font_cache.psf.row_bytes) {
+    if (!font_ready()) {
         return;
     }
 
@@ -301,16 +309,16 @@ static void _derive_font_metrics(void) {
     for (u32 cp = 32; cp < 127; cp++) {
         u32 glyph = 0;
         if (font_cache.map_count) {
-            if (!_find_mapped_glyph(cp, &glyph)) {
+            if (!find_glyph(cp, &glyph)) {
                 continue;
             }
         } else {
-            glyph = _glyph_index_for(cp);
+            glyph = glyph_index(cp);
         }
 
         u32 left = 0;
         u32 right = 0;
-        if (!_glyph_bounds_for_index(glyph, &left, &right)) {
+        if (!glyph_bounds(glyph, &left, &right)) {
             continue;
         }
 
@@ -337,7 +345,7 @@ static void _derive_font_metrics(void) {
     }
 
     if (advance < max_advance) {
-        u32 padded = advance + TERM_GLYPH_CELL_GAP_PX;
+        u32 padded = advance + TERM_CELL_GAP_PX;
         if (padded < advance || padded > max_advance) {
             padded = max_advance;
         }
@@ -348,7 +356,7 @@ static void _derive_font_metrics(void) {
     font_cache.cell_width = advance;
 }
 
-static void _resolve_draw_font_path(void) {
+static void resolve_font_path(void) {
     if (font_cache.path_ready) {
         return;
     }
@@ -395,31 +403,31 @@ static void _resolve_draw_font_path(void) {
     memcpy(font_cache.path, start, len + 1);
 }
 
-static bool _load_draw_font(void) {
+static bool load_font(void) {
     if (font_cache.load_attempted) {
         return font_cache.loaded;
     }
 
-    _resolve_draw_font_path();
+    resolve_font_path();
     font_cache.load_attempted = true;
-    _clear_font_map();
+    clear_font_map();
 
     if (psf_load_file(font_cache.path, font_cache.buf, sizeof(font_cache.buf), &font_cache.psf)) {
-        if (!psf_iter_unicode_mappings(&font_cache.psf, _push_font_map_iter, NULL)) {
+        if (!psf_each_unicode(&font_cache.psf, push_map_iter, NULL)) {
             memset(&font_cache.psf, 0, sizeof(font_cache.psf));
-            _clear_font_map();
+            clear_font_map();
             font_cache.loaded = false;
             return false;
         }
 
-        _sort_font_map();
-        _derive_font_metrics();
+        sort_map();
+        derive_metrics();
         font_cache.loaded = true;
         return true;
     }
 
     memset(&font_cache.psf, 0, sizeof(font_cache.psf));
-    _clear_font_map();
+    clear_font_map();
     font_cache.cell_src_x = 0;
     font_cache.cell_width = 8U;
     font_cache.cell_height = 16U;
@@ -444,12 +452,12 @@ bool draw_set_font_path(const char *path) {
 
     memcpy(font_cache.path, path, len + 1);
     font_cache.path_ready = true;
-    _reset_draw_font_state();
+    reset_font();
     return true;
 }
 
 const char *draw_get_font_path(void) {
-    _resolve_draw_font_path();
+    resolve_font_path();
     if (!font_cache.path[0]) {
         return DEFAULT_FONT_PATH;
     }
@@ -457,7 +465,7 @@ const char *draw_get_font_path(void) {
 }
 
 u32 draw_font_width(void) {
-    if (_load_draw_font() && font_cache.cell_width) {
+    if (load_font() && font_cache.cell_width) {
         return font_cache.cell_width;
     }
 
@@ -465,7 +473,7 @@ u32 draw_font_width(void) {
 }
 
 u32 draw_font_height(void) {
-    if (_load_draw_font() && font_cache.cell_height) {
+    if (load_font() && font_cache.cell_height) {
         return font_cache.cell_height;
     }
 
@@ -490,9 +498,9 @@ static inline void _draw_hspan(framebuffer_t *fb, size_t stride_pixels, i32 x0, 
     }
 
     if (x0 > x1) {
-        i32 tmp = x0;
+        i32 swap = x0;
         x0 = x1;
-        x1 = tmp;
+        x1 = swap;
     }
 
     if (x1 < 0 || x0 >= (i32)fb->width) {
@@ -551,9 +559,11 @@ void draw_rect(framebuffer_t *fb, i32 x, i32 y, u32 width, u32 height, pixel_t c
     size_t span = (size_t)(x1 - x0);
     size_t span_bytes = span * sizeof(pixel_t);
 
-    // check if all 4 bytes are the same — memset is fastest for this case
+    // memset can fill rows when every color byte is equal
     u8 b0 = (u8)color;
-    bool byte_fill = (b0 == (u8)(color >> 8)) && (b0 == (u8)(color >> 16)) && (b0 == (u8)(color >> 24));
+    bool same_low_bytes = b0 == (u8)(color >> 8);
+    bool same_high_bytes = b0 == (u8)(color >> 16) && b0 == (u8)(color >> 24);
+    bool byte_fill = same_low_bytes && same_high_bytes;
 
     if (byte_fill) {
         for (i32 row = y0; row < y1; row++) {
@@ -702,11 +712,11 @@ void draw_text(framebuffer_t *fb, i32 x, i32 y, const char *text, pixel_t color)
         return;
     }
 
-    if (!_load_draw_font()) {
+    if (!load_font()) {
         return;
     }
 
-    if (!font_cache.psf.glyphs || !font_cache.psf.width || !font_cache.psf.height || !font_cache.psf.row_bytes) {
+    if (!font_ready()) {
         return;
     }
 
@@ -725,7 +735,7 @@ void draw_text(framebuffer_t *fb, i32 x, i32 y, const char *text, pixel_t color)
             continue;
         }
 
-        u32 idx = _glyph_index_for((u8)(*p));
+        u32 idx = glyph_index((u8)(*p));
         if (idx >= font_cache.psf.glyph_count) {
             idx = 0;
         }
@@ -804,7 +814,10 @@ void draw_triangle(framebuffer_t *fb, draw_point_t p0, draw_point_t p1, draw_poi
             i64 w1 = edge(p1, p2, x, y);
             i64 w2 = edge(p2, p0, x, y);
 
-            if (!((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))) {
+            bool inside_pos = w0 >= 0 && w1 >= 0 && w2 >= 0;
+            bool inside_neg = w0 <= 0 && w1 <= 0 && w2 <= 0;
+
+            if (!inside_pos && !inside_neg) {
                 continue;
             }
 

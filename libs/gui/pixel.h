@@ -3,6 +3,16 @@
 #include <base/types.h>
 #include <stdbool.h>
 
+typedef struct {
+    u8 bytes_per_pixel;
+    u8 red_shift;
+    u8 green_shift;
+    u8 blue_shift;
+    u8 red_size;
+    u8 green_size;
+    u8 blue_size;
+} pixel_format_t;
+
 static inline u32 pixel_channel_mask(u8 bits) {
     if (!bits)
         return 0;
@@ -24,79 +34,71 @@ static inline u32 pixel_scale_u8(u8 value, u8 bits) {
     return ((u32)value * max + 127U) / 255U;
 }
 
-static inline void pixel_fill_rgb_defaults(
-    u8 bytes_per_pixel,
-    u8 *red_shift,
-    u8 *green_shift,
-    u8 *blue_shift,
-    u8 *red_size,
-    u8 *green_size,
-    u8 *blue_size
-) {
-    if (!red_shift || !green_shift || !blue_shift || !red_size || !green_size || !blue_size)
+static inline void pixel_fill_rgb_defaults(pixel_format_t *fmt) {
+    if (!fmt)
         return;
 
-    if (*red_size && *green_size && *blue_size)
+    bool already_set = fmt->red_size && fmt->green_size && fmt->blue_size;
+    if (already_set)
         return;
 
-    switch (bytes_per_pixel) {
+    switch (fmt->bytes_per_pixel) {
     case 2:
-        *red_shift = 11;
-        *green_shift = 5;
-        *blue_shift = 0;
-        *red_size = 5;
-        *green_size = 6;
-        *blue_size = 5;
+        fmt->red_shift = 11;
+        fmt->green_shift = 5;
+        fmt->blue_shift = 0;
+        fmt->red_size = 5;
+        fmt->green_size = 6;
+        fmt->blue_size = 5;
         break;
     case 3:
     case 4:
     default:
-        *red_shift = 16;
-        *green_shift = 8;
-        *blue_shift = 0;
-        *red_size = 8;
-        *green_size = 8;
-        *blue_size = 8;
+        fmt->red_shift = 16;
+        fmt->green_shift = 8;
+        fmt->blue_shift = 0;
+        fmt->red_size = 8;
+        fmt->green_size = 8;
+        fmt->blue_size = 8;
         break;
     }
 }
 
-static inline bool pixel_is_fast_bgrx8888(
-    u8 bytes_per_pixel,
-    u8 red_shift,
-    u8 green_shift,
-    u8 blue_shift,
-    u8 red_size,
-    u8 green_size,
-    u8 blue_size
-) {
-    return (
-        bytes_per_pixel == 4 && red_shift == 16 && green_shift == 8 && blue_shift == 0 && red_size == 8 &&
-        green_size == 8 && blue_size == 8
-    );
+static inline bool pixel_is_fast_bgrx8888(const pixel_format_t *fmt) {
+    if (!fmt || fmt->bytes_per_pixel != 4) {
+        return false;
+    }
+
+    bool shifts_match = fmt->red_shift == 16 && fmt->green_shift == 8 && fmt->blue_shift == 0;
+    bool sizes_match = fmt->red_size == 8 && fmt->green_size == 8 && fmt->blue_size == 8;
+
+    return shifts_match && sizes_match;
 }
 
-static inline u32
-pixel_pack_rgb888(u32 color, u8 red_shift, u8 green_shift, u8 blue_shift, u8 red_size, u8 green_size, u8 blue_size) {
+static inline u32 pixel_pack_rgb888(u32 color, const pixel_format_t *fmt) {
+    if (!fmt) {
+        return 0;
+    }
+
     u8 r8 = (u8)((color >> 16) & 0xffU);
     u8 g8 = (u8)((color >> 8) & 0xffU);
     u8 b8 = (u8)(color & 0xffU);
 
     u32 out = 0;
 
-    if (red_size && red_shift < 32) {
-        u32 r = pixel_scale_u8(r8, red_size) & pixel_channel_mask(red_size);
-        out |= (r << red_shift);
+    if (fmt->red_size && fmt->red_shift < 32) {
+        u32 r = pixel_scale_u8(r8, fmt->red_size) & pixel_channel_mask(fmt->red_size);
+        out |= (r << fmt->red_shift);
     }
 
-    if (green_size && green_shift < 32) {
-        u32 g = pixel_scale_u8(g8, green_size) & pixel_channel_mask(green_size);
-        out |= (g << green_shift);
+    if (fmt->green_size && fmt->green_shift < 32) {
+        u32 g = pixel_scale_u8(g8, fmt->green_size) & pixel_channel_mask(fmt->green_size);
+        out |= (g << fmt->green_shift);
     }
 
-    if (blue_size && blue_shift < 32) {
-        u32 b = pixel_scale_u8(b8, blue_size) & pixel_channel_mask(blue_size);
-        out |= (b << blue_shift);
+    if (fmt->blue_size && fmt->blue_shift < 32) {
+        u32 b = pixel_scale_u8(b8, fmt->blue_size) & pixel_channel_mask(fmt->blue_size);
+        out |= (b << fmt->blue_shift);
     }
 
     return out;

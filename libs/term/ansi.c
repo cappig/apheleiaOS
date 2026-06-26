@@ -9,7 +9,7 @@ static const u32 ansi_rgb[16] = {
     0x808080, 0xff0000, 0x00ff00, 0xffff00, 0x0000ff, 0xff00ff, 0x00ffff, 0xffffff,
 };
 
-static void ansi_color_set_render_fg_idx(ansi_color_state_t *state, u8 idx) {
+static void ansi_set_fg_idx(ansi_color_state_t *state, u8 idx) {
     if (!state) {
         return;
     }
@@ -22,7 +22,7 @@ static void ansi_color_set_render_fg_idx(ansi_color_state_t *state, u8 idx) {
     state->fg_idx = (u8)(idx & 0x0f);
 }
 
-static void ansi_color_set_render_bg_idx(ansi_color_state_t *state, u8 idx) {
+static void ansi_set_bg_idx(ansi_color_state_t *state, u8 idx) {
     if (!state) {
         return;
     }
@@ -35,7 +35,7 @@ static void ansi_color_set_render_bg_idx(ansi_color_state_t *state, u8 idx) {
     state->bg_idx = (u8)(idx & 0x0f);
 }
 
-static u8 ansi_color_logical_fg_base(const ansi_color_state_t *state) {
+static u8 ansi_fg_base(const ansi_color_state_t *state) {
     if (!state) {
         return 0x7;
     }
@@ -69,7 +69,7 @@ static void ansi_color_set_fg(ansi_color_state_t *state, u8 base, bool force_bri
         idx = (u8)(idx + 8);
     }
 
-    ansi_color_set_render_fg_idx(state, idx);
+    ansi_set_fg_idx(state, idx);
 }
 
 static void ansi_color_set_bg(ansi_color_state_t *state, u8 base, bool bright) {
@@ -82,7 +82,7 @@ static void ansi_color_set_bg(ansi_color_state_t *state, u8 base, bool bright) {
         idx = (u8)(idx + 8);
     }
 
-    ansi_color_set_render_bg_idx(state, idx);
+    ansi_set_bg_idx(state, idx);
 }
 
 void ansi_color_apply_sgr(ansi_color_state_t *state, int code) {
@@ -97,21 +97,21 @@ void ansi_color_apply_sgr(ansi_color_state_t *state, int code) {
 
     if (code == 1) {
         state->bright = true;
-        ansi_color_set_fg(state, ansi_color_logical_fg_base(state), true);
+        ansi_color_set_fg(state, ansi_fg_base(state), true);
         return;
     }
 
     if (code == 2 || code == 22) {
         state->bright = false;
-        ansi_color_set_fg(state, ansi_color_logical_fg_base(state), false);
+        ansi_color_set_fg(state, ansi_fg_base(state), false);
         return;
     }
 
     if (code == 7) {
         if (!state->reverse) {
-            u8 tmp = state->fg_idx;
+            u8 fg = state->fg_idx;
             state->fg_idx = state->bg_idx;
-            state->bg_idx = tmp;
+            state->bg_idx = fg;
             state->reverse = true;
         }
         return;
@@ -119,9 +119,9 @@ void ansi_color_apply_sgr(ansi_color_state_t *state, int code) {
 
     if (code == 27) {
         if (state->reverse) {
-            u8 tmp = state->fg_idx;
+            u8 fg = state->fg_idx;
             state->fg_idx = state->bg_idx;
-            state->bg_idx = tmp;
+            state->bg_idx = fg;
             state->reverse = false;
         }
         return;
@@ -157,7 +157,7 @@ void ansi_color_apply_sgr(ansi_color_state_t *state, int code) {
     }
 }
 
-static void ansi_color_apply_sgr_list(ansi_color_state_t *state, const int *params, size_t count) {
+static void ansi_apply_sgr_list(ansi_color_state_t *state, const int *params, size_t count) {
     if (!state) {
         return;
     }
@@ -309,6 +309,86 @@ static void ansi_csi_cursor_hide(ansi_csi_state_t *state) {
     }
 }
 
+static bool ansi_csi_has_cursor(const ansi_csi_state_t *state) {
+    return state && state->cursor_x && state->cursor_y;
+}
+
+static void ansi_csi_move(ansi_csi_state_t *state, const int *params, size_t count, int row_dir, int col_dir) {
+    if (!ansi_csi_has_cursor(state)) {
+        return;
+    }
+
+    int move = ansi_csi_param_min(params, count, 0, 1, 1);
+
+    term_cursor_move(state->cursor_x, state->cursor_y, state->cols, state->rows, move * row_dir, move * col_dir);
+    ansi_csi_cursor_show(state);
+}
+
+static void ansi_csi_set_col(ansi_csi_state_t *state, const int *params, size_t count) {
+    if (!state || !state->cursor_x) {
+        return;
+    }
+
+    int col = ansi_csi_param_min(params, count, 0, 1, 1);
+
+    term_cursor_set_col(state->cursor_x, state->cols, col);
+    ansi_csi_cursor_show(state);
+}
+
+static void ansi_csi_set_pos(ansi_csi_state_t *state, const int *params, size_t count) {
+    if (!ansi_csi_has_cursor(state)) {
+        return;
+    }
+
+    int row = ansi_csi_param_min(params, count, 0, 1, 1);
+    int col = ansi_csi_param_min(params, count, 1, 1, 1);
+
+    term_cursor_set_pos(state->cursor_x, state->cursor_y, state->cols, state->rows, row, col);
+    ansi_csi_cursor_show(state);
+}
+
+static void ansi_csi_save(ansi_csi_state_t *state) {
+    if (ansi_csi_has_cursor(state) && state->saved_x && state->saved_y) {
+        term_cursor_save(state->cursor_x, state->cursor_y, state->saved_x, state->saved_y, state->saved_valid);
+    }
+}
+
+static void ansi_csi_restore(ansi_csi_state_t *state) {
+    if (!ansi_csi_has_cursor(state) || !state->saved_x || !state->saved_y) {
+        return;
+    }
+
+    term_cursor_t cursor = {
+        .x = state->cursor_x,
+        .y = state->cursor_y,
+        .cols = state->cols,
+        .rows = state->rows,
+    };
+    term_saved_cursor_t saved = {
+        .x = state->saved_x,
+        .y = state->saved_y,
+        .valid = state->saved_valid,
+    };
+
+    bool restored = term_cursor_restore(&cursor, &saved);
+
+    if (restored) {
+        ansi_csi_cursor_show(state);
+    }
+}
+
+static void ansi_csi_cursor_visible(ansi_csi_state_t *state, bool visible) {
+    if (state->cursor_visible) {
+        *state->cursor_visible = visible;
+    }
+
+    if (visible) {
+        ansi_csi_cursor_show(state);
+    } else {
+        ansi_csi_cursor_hide(state);
+    }
+}
+
 void ansi_csi_dispatch_state(char op, const int *params, size_t count, bool private_mode, ansi_csi_state_t *state) {
     if (!state) {
         return;
@@ -316,48 +396,23 @@ void ansi_csi_dispatch_state(char op, const int *params, size_t count, bool priv
 
     switch (op) {
     case 'A':
-        if (state->cursor_x && state->cursor_y) {
-            int move = ansi_csi_param_min(params, count, 0, 1, 1);
-            term_cursor_move(state->cursor_x, state->cursor_y, state->cols, state->rows, -move, 0);
-            ansi_csi_cursor_show(state);
-        }
+        ansi_csi_move(state, params, count, -1, 0);
         break;
     case 'B':
-        if (state->cursor_x && state->cursor_y) {
-            int move = ansi_csi_param_min(params, count, 0, 1, 1);
-            term_cursor_move(state->cursor_x, state->cursor_y, state->cols, state->rows, move, 0);
-            ansi_csi_cursor_show(state);
-        }
+        ansi_csi_move(state, params, count, 1, 0);
         break;
     case 'C':
-        if (state->cursor_x && state->cursor_y) {
-            int move = ansi_csi_param_min(params, count, 0, 1, 1);
-            term_cursor_move(state->cursor_x, state->cursor_y, state->cols, state->rows, 0, move);
-            ansi_csi_cursor_show(state);
-        }
+        ansi_csi_move(state, params, count, 0, 1);
         break;
     case 'D':
-        if (state->cursor_x && state->cursor_y) {
-            int move = ansi_csi_param_min(params, count, 0, 1, 1);
-            term_cursor_move(state->cursor_x, state->cursor_y, state->cols, state->rows, 0, -move);
-            ansi_csi_cursor_show(state);
-        }
+        ansi_csi_move(state, params, count, 0, -1);
         break;
     case 'G':
-        if (state->cursor_x) {
-            int col = ansi_csi_param_min(params, count, 0, 1, 1);
-            term_cursor_set_col(state->cursor_x, state->cols, col);
-            ansi_csi_cursor_show(state);
-        }
+        ansi_csi_set_col(state, params, count);
         break;
     case 'H':
     case 'f':
-        if (state->cursor_x && state->cursor_y) {
-            int row = ansi_csi_param_min(params, count, 0, 1, 1);
-            int col = ansi_csi_param_min(params, count, 1, 1, 1);
-            term_cursor_set_pos(state->cursor_x, state->cursor_y, state->cols, state->rows, row, col);
-            ansi_csi_cursor_show(state);
-        }
+        ansi_csi_set_pos(state, params, count);
         break;
     case 'J':
         if (state->clear_screen) {
@@ -370,44 +425,23 @@ void ansi_csi_dispatch_state(char op, const int *params, size_t count, bool priv
         }
         break;
     case 's':
-        if (state->cursor_x && state->cursor_y && state->saved_x && state->saved_y) {
-            term_cursor_save(state->cursor_x, state->cursor_y, state->saved_x, state->saved_y, state->saved_valid);
-        }
+        ansi_csi_save(state);
         break;
     case 'u':
-        if (state->cursor_x && state->cursor_y && state->saved_x && state->saved_y &&
-            term_cursor_restore(
-                state->cursor_x,
-                state->cursor_y,
-                state->cols,
-                state->rows,
-                state->saved_x,
-                state->saved_y,
-                state->saved_valid
-            )) {
-            ansi_csi_cursor_show(state);
-        }
+        ansi_csi_restore(state);
         break;
     case 'h':
         if (private_mode && ansi_param(params, count, 0, 0) == 25) {
-            if (state->cursor_visible) {
-                *state->cursor_visible = true;
-            }
-
-            ansi_csi_cursor_show(state);
+            ansi_csi_cursor_visible(state, true);
         }
         break;
     case 'l':
         if (private_mode && ansi_param(params, count, 0, 0) == 25) {
-            if (state->cursor_visible) {
-                *state->cursor_visible = false;
-            }
-
-            ansi_csi_cursor_hide(state);
+            ansi_csi_cursor_visible(state, false);
         }
         break;
     case 'm':
-        ansi_color_apply_sgr_list(state->color, params, count);
+        ansi_apply_sgr_list(state->color, params, count);
         break;
     default:
         break;

@@ -1,5 +1,6 @@
 #include "fsutil.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -28,23 +29,28 @@ const char *fs_path_basename(const char *path) {
     return slash ? slash + 1 : path;
 }
 
-void fs_join_path(char *out, size_t out_len, const char *left, const char *right) {
+bool fs_join_path(char *out, size_t out_len, const char *left, const char *right) {
     if (!out || !out_len) {
-        return;
+        errno = EINVAL;
+        return false;
     }
 
+    int written = 0;
     if (!left || !left[0]) {
-        snprintf(out, out_len, "%s", right ? right : "");
-        return;
-    }
-
-    size_t len = strlen(left);
-
-    if (len > 0 && left[len - 1] == '/') {
-        snprintf(out, out_len, "%s%s", left, right ? right : "");
+        written = snprintf(out, out_len, "%s", right ? right : "");
+    } else if (left[strlen(left) - 1] == '/') {
+        written = snprintf(out, out_len, "%s%s", left, right ? right : "");
     } else {
-        snprintf(out, out_len, "%s/%s", left, right ? right : "");
+        written = snprintf(out, out_len, "%s/%s", left, right ? right : "");
     }
+
+    if (written < 0 || (size_t)written >= out_len) {
+        out[0] = '\0';
+        errno = ENAMETOOLONG;
+        return false;
+    }
+
+    return true;
 }
 
 static char fs_mode_type(mode_t mode) {

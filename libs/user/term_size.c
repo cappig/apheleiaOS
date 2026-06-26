@@ -41,12 +41,12 @@ static bool read_byte_default(int fd, char *out, int timeout_ms, void *ctx) {
         };
 
         for (;;) {
-            int rc = poll(&pfd, 1, timeout_ms);
-            if (rc < 0 && errno == EINTR) {
+            int ready = poll(&pfd, 1, timeout_ms);
+            if (ready < 0 && errno == EINTR) {
                 continue;
             }
 
-            if (rc <= 0 || !(pfd.revents & POLLIN)) {
+            if (ready <= 0 || !(pfd.revents & POLLIN)) {
                 return false;
             }
 
