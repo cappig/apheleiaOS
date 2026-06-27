@@ -3,6 +3,9 @@
 #include <base/attributes.h>
 #include <base/types.h>
 
+#define RISCV_TRAP_SCRATCH_WORDS 4
+#define RISCV_TRAP_SCRATCH_SIZE  (RISCV_TRAP_SCRATCH_WORDS * sizeof(uintptr_t))
+
 typedef struct PACKED {
     uintptr_t ra;
     uintptr_t gp;
@@ -47,7 +50,10 @@ typedef struct PACKED {
 typedef struct PACKED {
     riscv_gpr_state_t g_regs;
     riscv_sreg_state_t s_regs;
+    uintptr_t reserved;
 } arch_int_state_t;
+
+_Static_assert(sizeof(arch_int_state_t) % 16 == 0, "RISC-V trap frame must preserve stack alignment");
 
 void trap_init(void);
 void trap_handle(arch_int_state_t *state);

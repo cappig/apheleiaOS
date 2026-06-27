@@ -10,6 +10,21 @@
 
 static boot_info_t direct_boot_info = { 0 };
 
+static bool boot_info_ptr_plausible(uintptr_t addr) {
+    if (!addr || (addr & (sizeof(uintptr_t) - 1U)) != 0) {
+        return false;
+    }
+
+    uintptr_t window_start = (uintptr_t)RISCV_KERNEL_BASE;
+    uintptr_t window_end = window_start + 256ULL * MIB;
+
+    if (window_end <= window_start || addr < window_start) {
+        return false;
+    }
+
+    return addr <= window_end - sizeof(boot_info_t);
+}
+
 static const void *sanitize_dtb_ptr(const void *dtb) {
     uintptr_t addr = (uintptr_t)dtb;
 
@@ -41,7 +56,7 @@ static uintptr_t detect_uart_base(const void *dtb) {
 
     fdt_reg_t reg = { 0 };
     for (size_t i = 0; i < sizeof(compat_list) / sizeof(compat_list[0]); i++) {
-        if (fdt_find_compatible_reg(dtb, compat_list[i], &reg) && reg.addr) {
+        if (fdt_find_reg(dtb, compat_list[i], &reg) && reg.addr) {
             return (uintptr_t)reg.addr;
         }
     }
@@ -124,7 +139,7 @@ static NORETURN void park_secondary_hart(uintptr_t uart_base, uintptr_t hartid) 
     halt();
 }
 
-static boot_info_t *direct_boot_info_build(uintptr_t hartid, const void *dtb) {
+static boot_info_t *build_direct_info(uintptr_t hartid, const void *dtb) {
     dtb = sanitize_dtb_ptr(dtb);
     fdt_reg_t memory_reg = detect_memory(dtb);
     fdt_reg_t initrd_reg = detect_initrd(dtb);
@@ -153,16 +168,26 @@ NORETURN void _kern_entry(uintptr_t arg0, uintptr_t arg1) {
     uintptr_t hartid = 0;
     uintptr_t uart_base = SERIAL_UART0;
 
-    if (boot_info_valid((const boot_info_t *)arg0)) {
+    if (boot_info_ptr_plausible(arg0) && boot_info_valid((const boot_info_t *)arg0)) {
         info = (boot_info_t *)arg0;
         hartid = (uintptr_t)info->hartid;
-        dtb = info->dtb_paddr ? (const void *)(uintptr_t)info->dtb_paddr : NULL;
-        uart_base = info->uart_paddr ? (uintptr_t)info->uart_paddr : SERIAL_UART0;
+
+        if (info->dtb_paddr) {
+            dtb = (const void *)(uintptr_t)info->dtb_paddr;
+        }
+
+        if (info->uart_paddr) {
+            uart_base = (uintptr_t)info->uart_paddr;
+        }
     } else {
         hartid = arg0;
-        dtb = arg1 ? (const void *)arg1 : NULL;
+
+        if (arg1) {
+            dtb = (const void *)arg1;
+        }
+
         uart_base = detect_uart_base(dtb);
-        info = direct_boot_info_build(hartid, dtb);
+        info = build_direct_info(hartid, dtb);
     }
 
     if (!boot_hart_matches(hartid, dtb)) {

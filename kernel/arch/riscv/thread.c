@@ -27,7 +27,7 @@ void arch_state_set_return(arch_int_state_t *state, arch_word_t value) {
     state->g_regs.a0 = value;
 }
 
-void arch_state_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top) {
+void arch_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top) {
     if (!state) {
         return;
     }
@@ -42,8 +42,15 @@ uintptr_t arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point)
         return 0;
     }
 
-    uintptr_t sp = (uintptr_t)thread->stack + thread->stack_size;
-    sp = ALIGN_DOWN(sp, 16);
+    uintptr_t stack_top = (uintptr_t)thread->stack + thread->stack_size;
+    stack_top = ALIGN_DOWN(stack_top, 16);
+
+    if (stack_top <= (uintptr_t)thread->stack + RISCV_TRAP_SCRATCH_SIZE + 16) {
+        return 0;
+    }
+
+    uintptr_t run_sp = ALIGN_DOWN(stack_top - RISCV_TRAP_SCRATCH_SIZE, 16);
+    uintptr_t sp = run_sp;
     sp -= sizeof(arch_int_state_t);
 
     arch_int_state_t *state = (arch_int_state_t *)sp;
@@ -53,7 +60,7 @@ uintptr_t arch_build_kernel_stack(sched_thread_t *thread, uintptr_t entry_point)
     state->s_regs.sepc = entry_point;
     state->s_regs.sstatus = SSTATUS_SPP | SSTATUS_SPIE | SSTATUS_SUM;
 
-    state->s_regs.sp = (arch_word_t)ALIGN_DOWN((uintptr_t)thread->stack + thread->stack_size, 16);
+    state->s_regs.sp = (arch_word_t)run_sp;
 
     return sp;
 }
@@ -83,8 +90,13 @@ bool arch_kernel_stack_valid(const struct sched_thread *thread) {
 
     uintptr_t base = (uintptr_t)thread->stack;
     uintptr_t end = base + thread->stack_size;
+    size_t needed = sizeof(arch_int_state_t) + RISCV_TRAP_SCRATCH_SIZE + 16;
 
-    return end > base && (size_t)(end - base) >= sizeof(arch_int_state_t);
+    if (end <= base) {
+        return false;
+    }
+
+    return (size_t)(end - base) >= needed;
 }
 
 arch_word_t arch_state_ip(const arch_int_state_t *state) {

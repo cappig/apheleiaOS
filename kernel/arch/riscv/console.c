@@ -121,9 +121,11 @@ static void _sync_cursor(size_t col, size_t row) {
     }
 
     bool same = riscv_console.col == col && riscv_console.row == row;
-    bool wrapped_next = riscv_console.wrap_pending && col == 0 &&
-                        ((riscv_console.row + 1 < ROWS && row == riscv_console.row + 1) ||
-                         (riscv_console.row + 1 >= ROWS && row == ROWS - 1));
+    bool next_row = riscv_console.row + 1 < ROWS && row == riscv_console.row + 1;
+    bool last_row = riscv_console.row + 1 >= ROWS && row == ROWS - 1;
+    bool wrapped_row = next_row || last_row;
+    bool wrapped_col = col == 0;
+    bool wrapped_next = riscv_console.wrap_pending && wrapped_col && wrapped_row;
 
     if (same || wrapped_next) {
         return;
@@ -222,31 +224,31 @@ static u16 _cell(u32 codepoint, u8 fg, u8 bg) {
     return ((u16)attr << 8) | ch;
 }
 
-static void _text_put(u8 *fb, size_t cols, size_t col, size_t row, u32 codepoint, u8 fg, u8 bg) {
-    if (!fb || !cols || col >= cols || row >= ROWS) {
+static void _text_put(const console_text_cell_t *cell) {
+    if (!cell || !cell->fb || !cell->cols || cell->col >= cell->cols || cell->row >= ROWS) {
         return;
     }
 
-    u16 *text = (u16 *)fb;
-    text[row * cols + col] = _cell(codepoint, fg, bg);
+    u16 *text = (u16 *)cell->fb;
+    text[cell->row * cell->cols + cell->col] = _cell(cell->codepoint, cell->fg, cell->bg);
 
-    char ch = (codepoint > 0xff) ? '?' : (char)codepoint;
+    char ch = (cell->codepoint > 0xff) ? '?' : (char)cell->codepoint;
     if (!ch) {
         ch = ' ';
     }
 
-    _sync_cursor(col, row);
+    _sync_cursor(cell->col, cell->row);
     _put(ch);
 }
 
-static void _text_clear(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
-    if (!fb) {
+static void _text_clear(const console_text_region_t *region) {
+    if (!region || !region->fb) {
         return;
     }
 
-    u16 *text = (u16 *)fb;
-    u16 blank = _cell(' ', fg, bg);
-    size_t count = cols * rows;
+    u16 *text = (u16 *)region->fb;
+    u16 blank = _cell(' ', region->fg, region->bg);
+    size_t count = region->cols * region->rows;
 
     for (size_t i = 0; i < count; i++) {
         text[i] = blank;
@@ -258,20 +260,21 @@ static void _text_clear(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
     riscv_console.wrap_pending = false;
 }
 
-static void _text_scroll_up(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
-    if (!fb || !cols || !rows) {
+static void _text_scroll_up(const console_text_region_t *region) {
+    if (!region || !region->fb || !region->cols || !region->rows) {
         return;
     }
 
-    u16 *text = (u16 *)fb;
-    u16 blank = _cell(' ', fg, bg);
+    u16 *text = (u16 *)region->fb;
+    u16 blank = _cell(' ', region->fg, region->bg);
+    size_t last = region->rows - 1;
 
-    memmove(text, text + cols, (rows - 1) * cols * sizeof(*text));
-    for (size_t col = 0; col < cols; col++) {
-        text[(rows - 1) * cols + col] = blank;
+    memmove(text, text + region->cols, last * region->cols * sizeof(*text));
+    for (size_t col = 0; col < region->cols; col++) {
+        text[last * region->cols + col] = blank;
     }
 
-    _sync_cursor(0, rows - 1);
+    _sync_cursor(0, last);
     _put('\r');
     _put('\n');
 }
@@ -280,7 +283,7 @@ static const console_backend_ops_t uart_console_ops = {
     .probe = _probe,
     .fb_map = _fb_map,
     .fb_unmap = _fb_unmap,
-    .set_output_suppressed = _set_suppressed,
+    .suppress_output = _set_suppressed,
     .stream_write = _stream_write,
     .text_cursor_set = _cursor_set,
     .text_put = _text_put,
@@ -302,5 +305,5 @@ void uart_console_mute(bool muted) {
 
 void uart_console_init(uintptr_t base) {
     uart_console_set_base(base);
-    console_backend_register(&uart_console_ops);
+    console_set_backend(&uart_console_ops);
 }

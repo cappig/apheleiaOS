@@ -16,7 +16,7 @@ NORETURN void arch_context_switch(uintptr_t stack_ptr);
 arch_word_t arch_user_stack_top(void);
 bool arch_is_64bit(void);
 void arch_state_set_return(arch_int_state_t *state, arch_word_t value);
-void arch_state_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top);
+void arch_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top);
 
 arch_word_t arch_state_ip(const arch_int_state_t *state);
 arch_word_t arch_state_sp(const arch_int_state_t *state);

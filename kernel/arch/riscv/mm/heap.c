@@ -149,7 +149,7 @@ static heap_arena_t *_find_arena_by_ptr(const void *ptr) {
             continue;
         }
 
-        uintptr_t start = (uintptr_t)arena->alloc.chuck_start;
+        uintptr_t start = (uintptr_t)arena->alloc.chunk_start;
         uintptr_t end = start + arena->alloc.chunk_size;
         if (end <= start) {
             continue;
@@ -226,9 +226,9 @@ static void *_kmalloc(size_t size) {
     header->magic = KERNEL_HEAP_MAGIC;
     header->size = blocks;
 
-    void *ret = (u8 *)space + sizeof(*header);
+    void *memory = (u8 *)space + sizeof(*header);
     spin_unlock_irqrestore(&heap.lock, irq_flags);
-    return ret;
+    return memory;
 }
 
 static void _kfree(void *ptr) {
@@ -262,7 +262,7 @@ static void _kfree(void *ptr) {
         panic("RISC-V heap block count overflow");
     }
 
-    uintptr_t arena_start = (uintptr_t)arena->alloc.chuck_start;
+    uintptr_t arena_start = (uintptr_t)arena->alloc.chunk_start;
     uintptr_t arena_end = arena_start + arena->alloc.chunk_size;
     uintptr_t free_end = (uintptr_t)header + blocks * KERNEL_HEAP_BLOCK_SIZE;
     if (arena_end <= arena_start) {

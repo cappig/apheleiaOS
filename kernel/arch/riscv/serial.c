@@ -39,8 +39,8 @@ static inline u8 _uart_read(uintptr_t base, uintptr_t reg) {
     return *(volatile u8 *)_uart_reg(base, reg);
 }
 
-static inline void _uart_write(uintptr_t base, uintptr_t reg, u8 val) {
-    *(volatile u8 *)_uart_reg(base, reg) = val;
+static inline void _uart_write(uintptr_t base, uintptr_t reg, u8 value) {
+    *(volatile u8 *)_uart_reg(base, reg) = value;
 }
 
 static inline bool _uart_has_data(uintptr_t base) {
@@ -59,7 +59,7 @@ uintptr_t serial_reg_stride(void) {
     return serial.stride;
 }
 
-static void _send_serial_unlocked(uintptr_t base, char c) {
+static void _send_unlocked(uintptr_t base, char c) {
     if (c == '\n') {
         while ((_uart_read(base, UART_LSR) & UART_LSR_TX_IDLE) == 0) {}
         _uart_write(base, UART_THR, '\r');
@@ -78,7 +78,7 @@ void send_serial(uintptr_t base, char c) {
     unsigned long flags = spin_lock_irqsave(&serial.tx_lock);
 #endif
 
-    _send_serial_unlocked(base, c);
+    _send_unlocked(base, c);
 
 #ifdef _KERNEL
     spin_unlock_irqrestore(&serial.tx_lock, flags);
@@ -149,7 +149,7 @@ void send_serial_buf(uintptr_t base, const char *s, size_t len) {
 #endif
 
         for (size_t i = 0; i < chunk; i++) {
-            _send_serial_unlocked(base, s[off + i]);
+            _send_unlocked(base, s[off + i]);
         }
 
 #ifdef _KERNEL

@@ -35,15 +35,15 @@
 #include <sys/tty.h>
 #include <sys/tty_input.h>
 
-#define LOG_BOOT_HISTORY_CAP    (128 * 1024)
-#define BOOT_ROOTFS_SECTOR_SIZE 512
-#define BOOT_STACK_SIZE         (64 * KIB)
-#define DEFAULT_TIMEBASE_HZ     10000000ULL
-#define UART_WINDOW_SIZE        PAGE_4KIB
-#define MMIO_MAX_REGIONS        24
-#define UART_DEFAULT_IRQ        10
-#define STACKTRACE_MAX          32U
-#define PLATFORM_NAME_MAX       64U
+#define LOG_BOOT_HISTORY_CAP (128 * 1024)
+#define ROOTFS_SECTOR_SIZE   512
+#define BOOT_STACK_SIZE      (64 * KIB)
+#define DEFAULT_TIMEBASE_HZ  10000000ULL
+#define UART_WINDOW_SIZE     PAGE_4KIB
+#define MMIO_MAX_REGIONS     24
+#define UART_DEFAULT_IRQ     10
+#define STACKTRACE_MAX       32U
+#define PLATFORM_NAME_MAX    64U
 
 #define IRQ_SOFT     1
 #define IRQ_TIMER    5
@@ -58,19 +58,17 @@
 #define EXC_LOAD_PAGE  13
 #define EXC_STORE_PAGE 15
 
-#define PLIC_MAX_IRQS         128U
-#define PLIC_PRIORITY_BASE    0x000000U
-#define PLIC_PRIORITY_STRIDE  4U
-#define PLIC_ENABLE_BASE      0x002000U
-#define PLIC_ENABLE_STRIDE    0x000080U
-#define PLIC_ENABLE_WORD_BITS 32U
-#define PLIC_CONTEXT_BASE     0x200000U
-#define PLIC_CONTEXT_STRIDE   0x001000U
-#define PLIC_THRESHOLD_OFFSET 0x0U
-#define PLIC_CLAIM_OFFSET     0x4U
-
-// s-mode PLIC context index: each hart has two contexts (M and S), S is the odd one
-#define PLIC_SMODE_CTX(hartid) ((hartid) * 2U + 1U)
+#define PLIC_MAX_IRQS        128U
+#define PLIC_PRIORITY_BASE   0x000000U
+#define PLIC_PRIORITY_STRIDE 4U
+#define PLIC_ENABLE_BASE     0x002000U
+#define PLIC_ENABLE_STRIDE   0x000080U
+#define PLIC_WORD_BITS       32U
+#define PLIC_CONTEXT_BASE    0x200000U
+#define PLIC_CONTEXT_STRIDE  0x001000U
+#define PLIC_THRESHOLD       0x0U
+#define PLIC_CLAIM_OFFSET    0x4U
+#define PLIC_MAX_CONTEXTS    (MAX_CORES * 2U)
 
 #define REG_FMT "%#lx"
 
@@ -78,6 +76,12 @@ typedef struct {
     u64 paddr;
     size_t size;
 } boot_rootfs_t;
+
+typedef struct {
+    uintptr_t reserved_end;
+    uintptr_t early_limit;
+    uintptr_t pmm_limit;
+} boot_limits_t;
 
 typedef struct {
     u64 paddr;
@@ -94,7 +98,7 @@ typedef struct {
 
 typedef struct stack_frame {
     struct stack_frame *next;
-    uintptr_t ret;
+    uintptr_t return_addr;
 } stack_frame_t;
 
 static struct {
@@ -139,6 +143,8 @@ static struct {
 static struct {
     uintptr_t virt;
     bool ready;
+    fdt_irq_context_t contexts[PLIC_MAX_CONTEXTS];
+    size_t context_count;
     irq_slot_t table[PLIC_MAX_IRQS];
 } plic;
 
@@ -201,7 +207,7 @@ static void _replay_boot_log(void) {
     console_write_screen(TTY_CONSOLE, klog.history, klog.history_len);
 }
 
-static void _append_bootloader_log(const boot_info_t *info) {
+static void _append_boot_log(const boot_info_t *info) {
     if (!info || !info->boot_log_paddr || !info->boot_log_len) {
         return;
     }
@@ -273,7 +279,7 @@ static void _log_puts(const char *s) {
     }
 }
 
-static void _configure_log_sinks(const boot_info_t *info) {
+static void _setup_logs(const boot_info_t *info) {
     logsink_reset();
     klog.mirror = false;
 
@@ -371,9 +377,52 @@ static void _log_user_trap_once(u32 *counter, u32 limit, const char *label, arch
     );
 }
 
-static inline uintptr_t _plic_context_base(size_t cpu_id) {
-    uintptr_t ctx = PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
-    return plic.virt + PLIC_CONTEXT_BASE + ctx * PLIC_CONTEXT_STRIDE;
+static bool _plic_context(size_t cpu_id, u32 *out) {
+    if (!out) {
+        return false;
+    }
+
+    u64 hartid = _cpu_hartid(cpu_id);
+
+    for (size_t i = 0; i < plic.context_count; i++) {
+        const fdt_irq_context_t *context = &plic.contexts[i];
+
+        if (context->hartid == hartid && context->irq == IRQ_EXTERNAL) {
+            *out = context->context;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool _plic_map_span(u64 reg_size, size_t *out) {
+    if (!out || reg_size > (u64)(size_t)-1) {
+        return false;
+    }
+
+    u64 span = PLIC_PRIORITY_BASE + (u64)PLIC_MAX_IRQS * PLIC_PRIORITY_STRIDE;
+
+    for (size_t i = 0; i < plic.context_count; i++) {
+        u64 ctx = plic.contexts[i].context;
+        u64 context_end = PLIC_CONTEXT_BASE + ctx * PLIC_CONTEXT_STRIDE + PLIC_CLAIM_OFFSET + sizeof(u32);
+        u64 enable_end = PLIC_ENABLE_BASE + ctx * PLIC_ENABLE_STRIDE + (PLIC_MAX_IRQS / PLIC_WORD_BITS) * sizeof(u32);
+
+        if (context_end > span) {
+            span = context_end;
+        }
+
+        if (enable_end > span) {
+            span = enable_end;
+        }
+    }
+
+    if (span > reg_size || span > (u64)(size_t)-1) {
+        return false;
+    }
+
+    *out = (size_t)span;
+    return true;
 }
 
 static inline volatile u32 *_plic_priority_reg(u32 irq) {
@@ -383,17 +432,28 @@ static inline volatile u32 *_plic_priority_reg(u32 irq) {
 }
 
 static inline volatile u32 *_plic_enable_reg(size_t cpu_id, u32 irq) {
-    uintptr_t ctx = PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
+    u32 ctx = 0;
+    if (!_plic_context(cpu_id, &ctx)) {
+        return NULL;
+    }
+
     uintptr_t enable_base = plic.virt + PLIC_ENABLE_BASE + ctx * PLIC_ENABLE_STRIDE;
-    return (volatile u32 *)(enable_base + (irq / PLIC_ENABLE_WORD_BITS) * sizeof(u32));
+    return (volatile u32 *)(enable_base + (irq / PLIC_WORD_BITS) * sizeof(u32));
 }
 
 static inline volatile u32 *_plic_threshold_reg(size_t cpu_id) {
-    return (volatile u32 *)(_plic_context_base(cpu_id) + PLIC_THRESHOLD_OFFSET);
+    u32 ctx = 0;
+    if (!_plic_context(cpu_id, &ctx)) {
+        return NULL;
+    }
+
+    uintptr_t base = plic.virt + PLIC_CONTEXT_BASE + ctx * PLIC_CONTEXT_STRIDE;
+    return (volatile u32 *)(base + PLIC_THRESHOLD);
 }
 
 static inline volatile u32 *_plic_claim_reg(size_t cpu_id) {
-    return (volatile u32 *)(_plic_context_base(cpu_id) + PLIC_CLAIM_OFFSET);
+    volatile u32 *threshold = _plic_threshold_reg(cpu_id);
+    return threshold ? threshold + PLIC_CLAIM_OFFSET / sizeof(u32) : NULL;
 }
 
 static void _plic_set_irq(size_t cpu_id, u32 irq, bool enable) {
@@ -404,7 +464,11 @@ static void _plic_set_irq(size_t cpu_id, u32 irq, bool enable) {
     *_plic_priority_reg(irq) = enable ? 1U : 0U;
 
     volatile u32 *enable_reg = _plic_enable_reg(cpu_id, irq);
-    u32 mask = 1U << (irq % PLIC_ENABLE_WORD_BITS);
+    if (!enable_reg) {
+        return;
+    }
+
+    u32 mask = 1U << (irq % PLIC_WORD_BITS);
     u32 value = *enable_reg;
 
     if (enable) {
@@ -450,7 +514,7 @@ static bool irq_register(u32 irq, irq_handler_t handler, void *ctx) {
     return true;
 }
 
-static void _plic_sync_irqs_for_cpu(size_t cpu_id) {
+static void _plic_sync_cpu(size_t cpu_id) {
     if (!plic.ready) {
         return;
     }
@@ -467,16 +531,26 @@ static void _plic_init_context(size_t cpu_id) {
         return;
     }
 
-    uintptr_t ctx = PLIC_SMODE_CTX(_cpu_hartid(cpu_id));
+    u32 ctx = 0;
+    if (!_plic_context(cpu_id, &ctx)) {
+        log_warn("no supervisor PLIC context for hart %llu", (unsigned long long)_cpu_hartid(cpu_id));
+        return;
+    }
+
     uintptr_t enable_base = plic.virt + PLIC_ENABLE_BASE + ctx * PLIC_ENABLE_STRIDE;
 
-    for (size_t i = 0; i < PLIC_MAX_IRQS / PLIC_ENABLE_WORD_BITS; i++) {
+    for (size_t i = 0; i < PLIC_MAX_IRQS / PLIC_WORD_BITS; i++) {
         *(volatile u32 *)(enable_base + i * sizeof(u32)) = 0;
     }
 
-    *_plic_threshold_reg(cpu_id) = 0;
+    volatile u32 *threshold = _plic_threshold_reg(cpu_id);
+    if (!threshold) {
+        return;
+    }
 
-    _plic_sync_irqs_for_cpu(cpu_id);
+    *threshold = 0;
+
+    _plic_sync_cpu(cpu_id);
 }
 
 static void _serial_drain_input(void) {
@@ -496,80 +570,136 @@ static void _uart_irq_handler(u32 irq, void *ctx) {
     _serial_drain_input();
 }
 
-static void _plic_init(u32 uart_irq) {
+static uintptr_t _register_mmio(u64 paddr, size_t size);
+
+static bool _plic_prepare(void) {
     if (!boot.dtb) {
         log_debug("PLIC setup skipped: no DTB");
+        return false;
+    }
+
+    if (plic.virt) {
+        return true;
+    }
+
+    static const char *const plic_compat[] = {
+        "sifive,plic-1.0.0",
+        "riscv,plic0",
+    };
+
+    fdt_reg_t reg = { 0 };
+    const char *compatible = NULL;
+
+    for (size_t i = 0; i < ARRAY_LEN(plic_compat); i++) {
+        log_debug("probing PLIC compatible '%s'", plic_compat[i]);
+
+        if (fdt_find_reg(boot.dtb, plic_compat[i], &reg) && reg.addr && reg.size) {
+            compatible = plic_compat[i];
+            break;
+        }
+    }
+
+    if (!compatible) {
+        log_debug("no PLIC node in DTB");
+        return false;
+    }
+
+    log_debug(
+        "found PLIC '%s' at %#llx size=%#llx",
+        compatible,
+        (unsigned long long)reg.addr,
+        (unsigned long long)reg.size
+    );
+
+    if (!fdt_find_irq_contexts(boot.dtb, compatible, plic.contexts, ARRAY_LEN(plic.contexts), &plic.context_count)) {
+        log_warn("PLIC has no valid interrupts-extended contexts");
+        return false;
+    }
+
+    u32 boot_context = 0;
+    if (!_plic_context(_current_cpu_id(), &boot_context)) {
+        log_warn("PLIC has no supervisor context for boot hart %llu", (unsigned long long)_cpu_hartid(0));
+        return false;
+    }
+
+    size_t span = 0;
+    if (!_plic_map_span(reg.size, &span)) {
+        log_warn("PLIC contexts lie outside its MMIO range");
+        plic.context_count = 0;
+        return false;
+    }
+
+    if (reg.addr > (u64)(uintptr_t)-1) {
+        log_warn("PLIC address is outside the architecture range");
+        plic.context_count = 0;
+        return false;
+    }
+
+    uintptr_t phys = (uintptr_t)reg.addr;
+    plic.virt = _register_mmio(phys, span);
+    if (!plic.virt) {
+        log_warn("failed to register PLIC phys=%#lx span=%zu", (unsigned long)phys, span);
+        return false;
+    }
+
+    log_debug("registered PLIC phys=%#lx virt=%#lx span=%zu", (unsigned long)phys, (unsigned long)plic.virt, span);
+    return true;
+}
+
+static void _plic_init(u32 uart_irq) {
+    if (!plic.virt) {
         return;
     }
 
-    if (!plic.ready) {
-        static const char *const plic_compat[] = {
-            "sifive,plic-1.0.0",
-            "riscv,plic0",
-        };
-
-        fdt_reg_t reg = { 0 };
-        bool found = false;
-
-        for (size_t i = 0; i < sizeof(plic_compat) / sizeof(plic_compat[0]); i++) {
-            log_debug("probing PLIC compatible '%s'", plic_compat[i]);
-
-            if (fdt_find_compatible_reg(boot.dtb, plic_compat[i], &reg) && reg.addr && reg.size) {
-                log_debug(
-                    "found PLIC '%s' at %#llx size=%#llx",
-                    plic_compat[i],
-                    (unsigned long long)reg.addr,
-                    (unsigned long long)reg.size
-                );
-                found = true;
-                break;
-            }
-        }
-
-        if (!found) {
-            log_debug("no PLIC node in DTB");
-            return;
-        }
-
-        uintptr_t phys = (uintptr_t)reg.addr;
-        size_t span = (size_t)reg.size;
-
-        plic.virt = (uintptr_t)arch_phys_map(phys, span, PHYS_MAP_MMIO);
-        if (!plic.virt) {
-            log_warn("failed to map PLIC phys=%#lx span=%zu", (unsigned long)phys, span);
-            return;
-        }
-
-        plic.ready = true;
-
-        log_debug("mapped PLIC phys=%#lx virt=%#lx span=%zu", (unsigned long)phys, (unsigned long)plic.virt, span);
-
-        if (uart_irq) {
-            log_debug("registering UART IRQ %u", (unsigned int)uart_irq);
-            if (irq_register(uart_irq, _uart_irq_handler, NULL)) {
-                serial_set_rx_interrupt(uart_console_base(), true);
-                log_debug("UART RX interrupt enabled");
-            } else {
-                log_warn("failed to register UART IRQ %u", (unsigned int)uart_irq);
-            }
-        } else {
-            log_debug("UART polling mode");
-        }
-    }
+    bool first_init = !plic.ready;
+    plic.ready = true;
 
     size_t cpu_id = _current_cpu_id();
-    log_debug("PLIC context ready cpu=%zu hart=%llu", cpu_id, (unsigned long long)_cpu_hartid(cpu_id));
+    u32 context = 0;
+    if (!_plic_context(cpu_id, &context)) {
+        log_warn("PLIC context missing cpu=%zu hart=%llu", cpu_id, (unsigned long long)_cpu_hartid(cpu_id));
+        return;
+    }
+
+    log_debug(
+        "PLIC context ready cpu=%zu hart=%llu context=%u",
+        cpu_id,
+        (unsigned long long)_cpu_hartid(cpu_id),
+        (unsigned int)context
+    );
 
     _plic_init_context(cpu_id);
+
+    if (!first_init) {
+        return;
+    }
+
+    if (!uart_irq) {
+        log_debug("UART polling mode");
+        return;
+    }
+
+    log_debug("registering UART IRQ %u", (unsigned int)uart_irq);
+    if (irq_register(uart_irq, _uart_irq_handler, NULL)) {
+        serial_set_rx_interrupt(uart_console_base(), true);
+        log_debug("UART RX interrupt enabled");
+    } else {
+        log_warn("failed to register UART IRQ %u", (unsigned int)uart_irq);
+    }
 }
 
-static bool _plic_handle_external(void) {
+static bool _plic_handle(void) {
     if (!plic.ready) {
         return false;
     }
 
     size_t cpu_id = _current_cpu_id();
-    u32 irq = *_plic_claim_reg(cpu_id);
+    volatile u32 *claim = _plic_claim_reg(cpu_id);
+    if (!claim) {
+        return false;
+    }
+
+    u32 irq = *claim;
 
     if (!irq) {
         return false;
@@ -585,7 +715,7 @@ static bool _plic_handle_external(void) {
         }
     }
 
-    *_plic_claim_reg(cpu_id) = irq;
+    *claim = irq;
 
     return true;
 }
@@ -641,12 +771,12 @@ static void _early_map_range(page_t *root, u64 vaddr, u64 paddr, u64 size, u64 f
     u64 base = ALIGN_DOWN(paddr, PAGE_4KIB);
     u64 end = ALIGN(paddr + size, PAGE_4KIB);
 
-    for (u64 cur = base; cur < end; cur += PAGE_4KIB) {
-        _early_map_page(root, vaddr + (cur - base), cur, flags);
+    for (u64 addr = base; addr < end; addr += PAGE_4KIB) {
+        _early_map_page(root, vaddr + (addr - base), addr, flags);
     }
 }
 
-static uintptr_t _mmio_register_region(u64 paddr, size_t size) {
+static uintptr_t _register_mmio(u64 paddr, size_t size) {
     if (!paddr || !size) {
         return 0;
     }
@@ -735,7 +865,7 @@ static void _defer_timer_rearm(void) {
     cpu.timer_rearm_pending[_current_cpu_id()] = true;
 }
 
-void riscv_trap_return_prepare(arch_int_state_t *frame) {
+void riscv_prepare_sret(arch_int_state_t *frame) {
     (void)frame;
 
     size_t cpu_id = _current_cpu_id();
@@ -757,8 +887,8 @@ static bool _handle_user_signal(int signum, arch_int_state_t *frame) {
         return false;
     }
 
-    sched_signal_send_thread(thread, signum);
-    sched_signal_deliver_current(frame);
+    sched_signal_send(thread, signum);
+    sched_signal_deliver(frame);
 
     return true;
 }
@@ -787,11 +917,16 @@ static void _handle_page_fault(arch_int_state_t *frame, uintptr_t cause) {
 
     panic_prepare();
 
+    unsigned long sepc = 0;
+    if (frame) {
+        sepc = (unsigned long)frame->s_regs.sepc;
+    }
+
     log_fatal(
         "page fault cause=" REG_FMT " addr=" REG_FMT " sepc=" REG_FMT,
         (unsigned long)cause,
         (unsigned long)addr,
-        frame ? (unsigned long)frame->s_regs.sepc : 0UL
+        sepc
     );
 
     panic_dump_state(frame);
@@ -818,12 +953,12 @@ static ssize_t _boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, siz
     return (ssize_t)bytes;
 }
 
-static disk_interface_t boot_rootfs_interface = {
+static disk_interface_t rootfs_if = {
     .read = _boot_rootfs_read,
     .write = _boot_rootfs_write,
 };
 
-static void _register_boot_rootfs(void) {
+static void _register_rootfs(void) {
     if (!boot.rootfs_paddr || !boot.rootfs_size) {
         return;
     }
@@ -843,9 +978,9 @@ static void _register_boot_rootfs(void) {
 
     disk->name = strdup("ram0");
     disk->type = DISK_VIRTUAL;
-    disk->sector_size = BOOT_ROOTFS_SECTOR_SIZE;
-    disk->sector_count = DIV_ROUND_UP(rootfs->size, (size_t)BOOT_ROOTFS_SECTOR_SIZE);
-    disk->interface = &boot_rootfs_interface;
+    disk->sector_size = ROOTFS_SECTOR_SIZE;
+    disk->sector_count = DIV_ROUND_UP(rootfs->size, (size_t)ROOTFS_SECTOR_SIZE);
+    disk->interface = &rootfs_if;
     disk->private = rootfs;
 
     if (!disk->name || !disk->sector_count || !disk_register(disk)) {
@@ -878,6 +1013,16 @@ static void _relocate_boot_dtb(boot_info_t *info, uintptr_t *reserved_end) {
     uintptr_t dst = ALIGN(*reserved_end, PAGE_4KIB);
     uintptr_t next = ALIGN(dst + dtb_size, PAGE_4KIB);
 
+    if (boot.rootfs_paddr && boot.rootfs_size) {
+        uintptr_t rootfs_start = (uintptr_t)boot.rootfs_paddr;
+        uintptr_t rootfs_end = (uintptr_t)(boot.rootfs_paddr + boot.rootfs_size);
+
+        if (rootfs_end > rootfs_start && dst < rootfs_end && next > rootfs_start) {
+            dst = ALIGN(rootfs_end, PAGE_4KIB);
+            next = ALIGN(dst + dtb_size, PAGE_4KIB);
+        }
+    }
+
     uintptr_t mem_end = (uintptr_t)(boot.mem_paddr + boot.mem_size);
     if (next <= dst || next > mem_end) {
         panic("boot DTB relocation exceeds RAM");
@@ -898,47 +1043,124 @@ static void _relocate_boot_dtb(boot_info_t *info, uintptr_t *reserved_end) {
     *reserved_end = next;
 }
 
-static uintptr_t _uart_stride_from_dtb(const void *dtb) {
+static uintptr_t _uart_stride(const void *dtb) {
     if (!dtb || !fdt_valid(dtb)) {
         return RISCV_UART_STRIDE;
     }
 
     u32 shift = 0;
-    if (fdt_find_compatible_u32(dtb, "ns16550a", "reg-shift", &shift) && shift <= 3U) {
+    if (fdt_find_u32(dtb, "ns16550a", "reg-shift", &shift) && shift <= 3U) {
         return (uintptr_t)1 << shift;
     }
 
     return RISCV_UART_STRIDE;
 }
 
-const kernel_args_t *arch_init(void *boot_info_ptr) {
-    boot_info_t *info = boot_info_ptr;
-    if (!info) {
-        panic("boot info missing");
+static void _init_platform(void) {
+    timer.timebase_hz = DEFAULT_TIMEBASE_HZ;
+    timer.cpu_hz = DEFAULT_TIMEBASE_HZ;
+    timer.arm_fail_logged = false;
+    strncpy(timer.platform_name, "riscv", sizeof(timer.platform_name) - 1);
+    timer.platform_name[sizeof(timer.platform_name) - 1] = '\0';
+
+    if (boot.dtb) {
+        u64 timebase = 0;
+        if (fdt_find_timebase(boot.dtb, &timebase) && timebase) {
+            timer.timebase_hz = timebase;
+        }
+
+        u32 cpu_hz = 0;
+        if (fdt_find_u32(boot.dtb, "riscv", "clock-frequency", &cpu_hz) && cpu_hz) {
+            timer.cpu_hz = cpu_hz;
+        }
+
+        if (!fdt_find_model(boot.dtb, timer.platform_name, sizeof(timer.platform_name))) {
+            strncpy(timer.platform_name, "riscv", sizeof(timer.platform_name) - 1);
+            timer.platform_name[sizeof(timer.platform_name) - 1] = '\0';
+        }
     }
 
+    log_info(
+        "platform model=%s cpu=%llu Hz timebase=%llu Hz",
+        timer.platform_name,
+        (unsigned long long)timer.cpu_hz,
+        (unsigned long long)timer.timebase_hz
+    );
+}
+
+static boot_limits_t _boot_limits(uintptr_t reserved_end) {
+    uintptr_t mem_end = (uintptr_t)(boot.mem_paddr + boot.mem_size);
+    boot_limits_t limits = {
+        .reserved_end = reserved_end,
+        .early_limit = mem_end,
+        .pmm_limit = mem_end,
+    };
+
+    if (!boot.rootfs_paddr || !boot.rootfs_size) {
+        return limits;
+    }
+
+    uintptr_t rootfs_start = (uintptr_t)boot.rootfs_paddr;
+    uintptr_t rootfs_end = (uintptr_t)(boot.rootfs_paddr + boot.rootfs_size);
+
+    bool invalid = rootfs_end <= rootfs_start;
+    invalid = invalid || rootfs_start < (uintptr_t)boot.mem_paddr;
+    invalid = invalid || rootfs_end > mem_end;
+
+    if (invalid) {
+        panic("boot rootfs range exceeds RAM");
+    }
+
+    if (rootfs_end > limits.reserved_end) {
+        if (rootfs_start >= limits.reserved_end) {
+            limits.early_limit = rootfs_start;
+            limits.pmm_limit = rootfs_start;
+        } else {
+            limits.reserved_end = rootfs_end;
+        }
+    }
+
+    log_debug(
+        "rootfs paddr=%#llx size=%zu end=%#lx",
+        (unsigned long long)boot.rootfs_paddr,
+        boot.rootfs_size,
+        (unsigned long)rootfs_end
+    );
+
+    return limits;
+}
+
+static uintptr_t _load_boot_state(boot_info_t *info) {
     memcpy(&boot.args, &info->args, sizeof(boot.args));
-    _configure_log_sinks(info);
-    _append_bootloader_log(info);
-
-    uintptr_t uart_phys = 0;
-    if (info->uart_paddr) {
-        uart_phys = (uintptr_t)info->uart_paddr;
-    } else if (!(info->dtb_paddr && fdt_valid((const void *)(uintptr_t)info->dtb_paddr))) {
-        uart_phys = SERIAL_UART0;
-    }
+    _setup_logs(info);
+    _append_boot_log(info);
 
     memset(cpu.hartid, 0xff, sizeof(cpu.hartid));
     cpu.hartid[0] = info->hartid;
     cpu.late_init[0] = true;
 
-    boot.dtb = info->dtb_paddr ? (const void *)(uintptr_t)info->dtb_paddr : NULL;
+    if (info->dtb_paddr) {
+        boot.dtb = (const void *)(uintptr_t)info->dtb_paddr;
+    }
+
     boot.mem_paddr = info->memory_paddr ? info->memory_paddr : RISCV_KERNEL_BASE;
-    boot.mem_size = info->memory_size ? info->memory_size : (256ULL * MIB);
+    boot.mem_size = info->memory_size ? info->memory_size : 256ULL * MIB;
     boot.rootfs_paddr = info->boot_rootfs_paddr;
     boot.rootfs_size = info->boot_rootfs_size <= (u64)(size_t)-1 ? (size_t)info->boot_rootfs_size : 0;
 
-    serial_set_reg_stride(_uart_stride_from_dtb(boot.dtb));
+    if (info->uart_paddr) {
+        return (uintptr_t)info->uart_paddr;
+    }
+
+    if (!boot.dtb || !fdt_valid(boot.dtb)) {
+        return SERIAL_UART0;
+    }
+
+    return 0;
+}
+
+static u32 _init_uart(const boot_info_t *info, uintptr_t uart_phys) {
+    serial_set_reg_stride(_uart_stride(boot.dtb));
     uart_console_set_base(uart_phys);
     log_init(_log_puts);
     log_set_lvl(info->args.debug == DEBUG_NONE ? LOG_INFO : LOG_DEBUG);
@@ -962,7 +1184,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     u32 uart_irq = 0;
     if (boot.dtb) {
-        (void)fdt_find_compatible_irq(boot.dtb, "ns16550a", &uart_irq);
+        (void)fdt_find_irq(boot.dtb, "ns16550a", &uart_irq);
     }
 
     if (!uart_irq && uart_phys == SERIAL_UART0) {
@@ -981,7 +1203,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     mmio.uart_virt = 0;
 
     if (uart_phys) {
-        mmio.uart_virt = _mmio_register_region(uart_phys, UART_WINDOW_SIZE);
+        mmio.uart_virt = _register_mmio(uart_phys, UART_WINDOW_SIZE);
         if (!mmio.uart_virt) {
             panic("failed to register UART MMIO window");
         }
@@ -995,6 +1217,10 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         log_info("boot rootfs at %#llx (%zu KiB)", (unsigned long long)boot.rootfs_paddr, boot.rootfs_size / 1024);
     }
 
+    return uart_irq;
+}
+
+static uintptr_t _init_boot_cpu(boot_info_t *info) {
     cpu_init_boot();
     arch_cpu_set_local(&cores_local[0]);
 
@@ -1033,80 +1259,16 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
         log_debug("no DTB to relocate");
     }
 
-    timer.timebase_hz = DEFAULT_TIMEBASE_HZ;
-    timer.cpu_hz = DEFAULT_TIMEBASE_HZ;
-    timer.platform_name[0] = '\0';
-    timer.arm_fail_logged = false;
+    return reserved_end;
+}
 
-    if (boot.dtb) {
-        u64 parsed_hz = 0;
-        if (fdt_find_timebase_frequency(boot.dtb, &parsed_hz) && parsed_hz) {
-            timer.timebase_hz = parsed_hz;
-        }
-
-        u32 cpu_hz = 0;
-        bool have_cpu_hz = fdt_find_compatible_u32(boot.dtb, "riscv", "clock-frequency", &cpu_hz);
-
-        if (have_cpu_hz && cpu_hz) {
-            timer.cpu_hz = cpu_hz;
-        }
-
-        if (!fdt_find_model(boot.dtb, timer.platform_name, sizeof(timer.platform_name))) {
-            strncpy(timer.platform_name, "riscv", sizeof(timer.platform_name) - 1);
-            timer.platform_name[sizeof(timer.platform_name) - 1] = '\0';
-        }
-    } else {
-        strncpy(timer.platform_name, "riscv", sizeof(timer.platform_name) - 1);
-        timer.platform_name[sizeof(timer.platform_name) - 1] = '\0';
-    }
-
-    log_info(
-        "platform model=%s cpu=%llu Hz timebase=%llu Hz",
-        timer.platform_name,
-        (unsigned long long)timer.cpu_hz,
-        (unsigned long long)timer.timebase_hz
-    );
-
-    uintptr_t mem_end = (uintptr_t)(boot.mem_paddr + boot.mem_size);
-    uintptr_t early_limit = mem_end;
-    uintptr_t pmm_limit = mem_end;
-
-    if (boot.rootfs_paddr && boot.rootfs_size) {
-        uintptr_t rootfs_start = (uintptr_t)boot.rootfs_paddr;
-        uintptr_t rootfs_end = (uintptr_t)(boot.rootfs_paddr + boot.rootfs_size);
-
-        bool rootfs_bad = rootfs_end <= rootfs_start;
-        rootfs_bad = rootfs_bad || rootfs_start < (uintptr_t)boot.mem_paddr;
-        rootfs_bad = rootfs_bad || rootfs_end > mem_end;
-
-        if (rootfs_bad) {
-            panic("boot rootfs range exceeds RAM");
-        }
-
-        if (rootfs_end > reserved_end) {
-            if (rootfs_start >= reserved_end) {
-                // keep the early allocator below high initrd-style rootfs blobs
-                early_limit = rootfs_start;
-                pmm_limit = rootfs_start;
-            } else {
-                // rootfs overlaps the reserved area; advance cursor past it
-                reserved_end = rootfs_end;
-            }
-        }
-
-        log_debug(
-            "rootfs paddr=%#llx size=%zu end=%#lx",
-            (unsigned long long)boot.rootfs_paddr,
-            boot.rootfs_size,
-            (unsigned long)rootfs_end
-        );
-    }
-
-    mmio.early_cursor = ALIGN(reserved_end, PAGE_4KIB);
-    mmio.early_limit = ALIGN_DOWN(early_limit, PAGE_4KIB);
+static void _init_memory(boot_limits_t limits, u32 uart_irq) {
+    mmio.early_cursor = ALIGN(limits.reserved_end, PAGE_4KIB);
+    mmio.early_limit = ALIGN_DOWN(limits.early_limit, PAGE_4KIB);
     if (mmio.early_cursor >= mmio.early_limit) {
         panic("RISC-V early allocator exhausted");
     }
+
     log_debug(
         "early allocator cursor=%#lx limit=%#lx available=%zu KiB",
         (unsigned long)mmio.early_cursor,
@@ -1120,6 +1282,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     _early_map_range(mmio.root, boot.mem_paddr, boot.mem_paddr, boot.mem_size, PT_WRITE | PT_GLOBAL);
     log_debug("identity map %#llx+%#llx", (unsigned long long)boot.mem_paddr, (unsigned long long)boot.mem_size);
 
+    (void)_plic_prepare();
     _mmio_map_regions(mmio.root);
     log_debug("mapped %zu MMIO regions", mmio.count);
 
@@ -1135,11 +1298,11 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     _plic_init(uart_irq);
 
-    if (pmm_limit <= boot.mem_paddr) {
+    if (limits.pmm_limit <= boot.mem_paddr) {
         panic("RISC-V PMM has no allocatable RAM");
     }
 
-    u64 pmm_size = (u64)(pmm_limit - (uintptr_t)boot.mem_paddr);
+    u64 pmm_size = (u64)(limits.pmm_limit - (uintptr_t)boot.mem_paddr);
     pmm_init(boot.mem_paddr, pmm_size, mmio.early_cursor);
     log_debug(
         "physical memory ready base=%#llx size=%#llx",
@@ -1151,7 +1314,6 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     log_debug("heap ready");
 
     arch_init_alloc();
-
     pmm_ref_init();
 
     if (!pmm_ref_ready()) {
@@ -1159,15 +1321,18 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     }
 
     log_debug("physical memory refcount table ready");
+}
 
+static void _init_console(boot_info_t *info) {
     framebuffer_set_info(NULL);
     uart_console_init(mmio.uart_virt);
     console_init(info);
 
     klog.console_ready = true;
 
-    size_t text_cols = 0, text_rows = 0;
-    if (console_get_size(&text_cols, &text_rows) && text_cols && text_rows) {
+    size_t cols = 0;
+    size_t rows = 0;
+    if (console_get_size(&cols, &rows) && cols && rows) {
         uart_console_mute(true);
         arch_log_replay_console();
         uart_console_mute(false);
@@ -1178,6 +1343,23 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     } else {
         driver_load_stage(DRIVER_STAGE_ARCH_EARLY);
     }
+}
+
+const kernel_args_t *arch_init(void *boot_info_ptr) {
+    boot_info_t *info = boot_info_ptr;
+    if (!info) {
+        panic("boot info missing");
+    }
+
+    uintptr_t uart_phys = _load_boot_state(info);
+    u32 uart_irq = _init_uart(info, uart_phys);
+    uintptr_t reserved_end = _init_boot_cpu(info);
+
+    _init_platform();
+
+    boot_limits_t limits = _boot_limits(reserved_end);
+    _init_memory(limits, uart_irq);
+    _init_console(info);
 
     riscv_write_scounteren(RISCV_COUNTEREN_CY | RISCV_COUNTEREN_TM | RISCV_COUNTEREN_IR);
 
@@ -1192,7 +1374,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
 void arch_storage_init(void) {
     driver_load_stage(DRIVER_STAGE_STORAGE);
-    _register_boot_rootfs();
+    _register_rootfs();
 }
 
 void arch_late_init(void) {
@@ -1231,7 +1413,7 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     }
 
     if ((flags & PHYS_MAP_MMIO) && size) {
-        vaddr = _mmio_register_region(paddr, size);
+        vaddr = _register_mmio(paddr, size);
 
         if (vaddr && mmio.root && mmio.count) {
             mmio_region_t *region = &mmio.regions[mmio.count - 1];
@@ -1269,7 +1451,7 @@ bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
     return true;
 }
 
-bool arch_phys_map_can_persist(void) {
+bool arch_keeps_phys_map(void) {
     return true;
 }
 
@@ -1336,8 +1518,8 @@ void arch_dump_stack_trace(void) {
             break;
         }
 
-        uintptr_t ret = frame->ret;
-        log_info("<" REG_FMT ">", (unsigned long)ret);
+        uintptr_t return_addr = frame->return_addr;
+        log_info("<" REG_FMT ">", (unsigned long)return_addr);
 
         stack_frame_t *next = frame->next;
         if (!next || next <= frame) {
@@ -1379,8 +1561,8 @@ void arch_cpu_set_local(void *ptr) {
 }
 
 void *arch_cpu_get_local(void) {
-    uintptr_t ptr = riscv_read_tp();
-    return (void *)(ptr ? ptr : cpu_local_ptr);
+    uintptr_t local = riscv_read_tp();
+    return (void *)(local ? local : cpu_local_ptr);
 }
 
 bool arch_current_cpu_id(size_t *out) {
@@ -1389,12 +1571,12 @@ bool arch_current_cpu_id(size_t *out) {
     }
 
     cpu_core_t *core = (cpu_core_t *)arch_cpu_get_local();
-    uintptr_t ptr = (uintptr_t)core;
+    uintptr_t addr = (uintptr_t)core;
     uintptr_t first = (uintptr_t)&cores_local[0];
     uintptr_t last = (uintptr_t)&cores_local[MAX_CORES];
 
-    if (ptr >= first && ptr < last) {
-        size_t id = (ptr - first) / sizeof(cpu_core_t);
+    if (addr >= first && addr < last) {
+        size_t id = (addr - first) / sizeof(cpu_core_t);
 
         if (id < MAX_CORES && cores_local[id].valid) {
             *out = id;
@@ -1632,7 +1814,7 @@ void trap_handle(arch_int_state_t *frame) {
             sched_tick(frame);
             return;
         case IRQ_EXTERNAL:
-            _plic_handle_external();
+            _plic_handle();
             return;
         default:
             return;
@@ -1646,7 +1828,19 @@ void trap_handle(arch_int_state_t *frame) {
             sched_resched_softirq(frame);
             return;
         }
-        break;
+
+        if (arch_signal_is_user(frame)) {
+            frame->s_regs.sepc += 4;
+            if (_handle_user_signal(SIGTRAP, frame)) {
+                return;
+            }
+        }
+
+        panic_prepare();
+        log_fatal("unexpected breakpoint at " REG_FMT, (unsigned long)frame->s_regs.sepc);
+        panic_dump_state(frame);
+        panic_halt();
+        return;
     case EXC_U_ECALL:
         sched_capture_context(frame);
         frame->s_regs.sepc += 4;

@@ -41,14 +41,14 @@ void *boot_alloc_aligned(size_t size, size_t align, bool zero) {
         return NULL;
     }
 
-    void *ptr = (void *)cursor;
+    void *memory = (void *)cursor;
     boot_heap.cursor = cursor + size;
 
     if (zero) {
-        memset(ptr, 0, size);
+        memset(memory, 0, size);
     }
 
-    return ptr;
+    return memory;
 }
 
 void *malloc(size_t size) {

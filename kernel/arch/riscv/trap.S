@@ -50,12 +50,13 @@
 #define SCAUSE_OFFSET  (33 * REGBYTES)
 #define STVAL_OFFSET   (34 * REGBYTES)
 
-#define FRAME_WORDS 35
+#define FRAME_WORDS 36
 #define FRAME_SIZE  (FRAME_WORDS * REGBYTES)
 
-#define SCRATCH_T1  (-2 * REGBYTES)
-#define SCRATCH_T2  (-3 * REGBYTES)
-#define USER_FRAME_BIAS (FRAME_SIZE + (3 * REGBYTES))
+#define SCRATCH_WORDS 4
+#define SCRATCH_T1    (-2 * REGBYTES)
+#define SCRATCH_T2    (-3 * REGBYTES)
+#define USER_FRAME_BIAS (FRAME_SIZE + (SCRATCH_WORDS * REGBYTES))
 
 .globl trap_entry
 .balign 4
@@ -160,7 +161,7 @@ arch_context_switch:
 
 3:
     mv a0, sp
-    call riscv_trap_return_prepare
+    call riscv_prepare_sret
     mv t6, sp
 
     LOAD t0, SEPC_OFFSET(t6)

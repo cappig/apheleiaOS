@@ -73,8 +73,8 @@ typedef struct {
 typedef struct {
     uintptr_t image_base;
     const riscv_image_header_t *header;
-    const u8 *embedded_rootfs;
-    size_t embedded_rootfs_size;
+    const u8 *rootfs;
+    size_t rootfs_size;
     uintptr_t heap_start;
     uintptr_t memory_end;
     uintptr_t scratch_base;
@@ -289,12 +289,12 @@ static layout_t make_layout(fdt_reg_t memory, const riscv_image_header_t *header
 
     if (layout.header) {
         if (layout.header->rootfs_offset && layout.header->rootfs_size) {
-            layout.embedded_rootfs = image_ptr(
+            layout.rootfs = image_ptr(
                 layout.image_base,
                 layout.header->rootfs_offset,
                 "embedded rootfs address overflow"
             );
-            layout.embedded_rootfs_size = (size_t)layout.header->rootfs_size;
+            layout.rootfs_size = (size_t)layout.header->rootfs_size;
         }
     }
 
@@ -306,6 +306,18 @@ static layout_t make_layout(fdt_reg_t memory, const riscv_image_header_t *header
     }
 
     return layout;
+}
+
+static bool is_spike_dtb(const void *dtb) {
+    if (!dtb) {
+        return true;
+    }
+
+    if (fdt_has_compatible(dtb, "ucbbar,spike-bare-dev")) {
+        return true;
+    }
+
+    return fdt_has_compatible(dtb, "ucbbar,spike-bare");
 }
 
 static bool find_mtimer(
@@ -335,7 +347,7 @@ static bool find_mtimer(
     u64 hz = DEFAULT_TIMEBASE_HZ;
     if (dtb) {
         u64 dtb_hz = 0;
-        if (fdt_find_timebase_frequency(dtb, &dtb_hz) && dtb_hz) {
+        if (fdt_find_timebase(dtb, &dtb_hz) && dtb_hz) {
             hz = dtb_hz;
         }
     }
@@ -343,7 +355,7 @@ static bool find_mtimer(
     fdt_reg_t reg = { 0 };
     bool aclint = false;
 
-    if (dtb && fdt_find_compatible_reg(dtb, "riscv,aclint-mtimer", &reg)) {
+    if (dtb && fdt_find_reg(dtb, "riscv,aclint-mtimer", &reg)) {
         u64 cmp_end = (u64)(hartid + 1U) * 8ULL + 8ULL;
         aclint = reg.addr != 0 && reg.size >= cmp_end;
     }
@@ -371,10 +383,10 @@ static bool find_mtimer(
     bool clint = false;
 
     if (dtb) {
-        clint = fdt_find_compatible_reg(dtb, "sifive,clint0", &reg);
+        clint = fdt_find_reg(dtb, "sifive,clint0", &reg);
 
         if (!clint || !reg.addr) {
-            clint = fdt_find_compatible_reg(dtb, "riscv,clint0", &reg);
+            clint = fdt_find_reg(dtb, "riscv,clint0", &reg);
         }
 
         clint = clint && reg.addr != 0;
@@ -400,13 +412,7 @@ static bool find_mtimer(
         return true;
     }
 
-    bool spike = !dtb;
-    if (dtb) {
-        spike = fdt_has_compatible(dtb, "ucbbar,spike-bare-dev");
-        spike = spike || fdt_has_compatible(dtb, "ucbbar,spike-bare");
-    }
-
-    if (spike) {
+    if (is_spike_dtb(dtb)) {
         if (time_out) {
             *time_out = (uintptr_t)(CLINT_BASE + MTIME_OFFSET);
         }
@@ -480,12 +486,10 @@ static NORETURN void enter_supervisor(uintptr_t entry, boot_info_t *info) {
     riscv_write_mstatus(mstatus);
     riscv_write_mepc(entry);
 
-    asm volatile("mv a0, %0\n"
-                 "mv a1, %1\n"
-                 "mret\n"
-                 :
-                 : "r"(info), "r"((uintptr_t)info->hartid)
-                 : "memory");
+    register uintptr_t arg0 asm("a0") = (uintptr_t)info;
+    register uintptr_t arg1 asm("a1") = (uintptr_t)hartid;
+
+    asm volatile("mret" : : "r"(arg0), "r"(arg1) : "memory");
 
     __builtin_unreachable();
 }
@@ -494,11 +498,11 @@ static uintptr_t find_uart(const void *dtb) {
     fdt_reg_t reg = { 0 };
 
     if (dtb && fdt_valid(dtb)) {
-        if (fdt_find_compatible_reg(dtb, "ns16550a", &reg) && reg.addr) {
+        if (fdt_find_reg(dtb, "ns16550a", &reg) && reg.addr) {
             return (uintptr_t)reg.addr;
         }
 
-        if (fdt_has_compatible(dtb, "ucbbar,spike-bare-dev") || fdt_has_compatible(dtb, "ucbbar,spike-bare")) {
+        if (is_spike_dtb(dtb)) {
             return SERIAL_UART0;
         }
 
@@ -514,7 +518,7 @@ static uintptr_t find_stride(const void *dtb) {
     }
 
     u32 shift = 0;
-    if (fdt_find_compatible_u32(dtb, "ns16550a", "reg-shift", &shift) && shift <= 3U) {
+    if (fdt_find_u32(dtb, "ns16550a", "reg-shift", &shift) && shift <= 3U) {
         return (uintptr_t)1 << shift;
     }
 
@@ -826,88 +830,85 @@ static const char *setup_timer(const void *dtb, uintptr_t hartid) {
     return kind;
 }
 
-NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
-    boot_ext2_t rootfs = { 0 };
+typedef struct {
+    const void *entry_dtb;
+    const void *flat_dtb;
+    const void *dtb;
+    const riscv_image_header_t *header;
+    size_t dtb_size;
+    fdt_reg_t memory;
+    layout_t layout;
+    uintptr_t uart;
+    uintptr_t stride;
+} boot_setup_t;
 
-    const void *entry_dtb = valid_dtb(dtb);
-    const riscv_image_header_t *header = image_header();
-    const void *flat_dtb = image_dtb((uintptr_t)&__image_start, header);
-    const void *boot_dtb = pick_dtb(entry_dtb, flat_dtb);
+static boot_setup_t make_setup(const void *dtb) {
+    boot_setup_t setup = { 0 };
 
-    bool entry_dtb_valid = entry_dtb != NULL;
-    size_t dtb_size = dtb_len(boot_dtb);
+    setup.entry_dtb = valid_dtb(dtb);
+    setup.header = image_header();
+    setup.flat_dtb = image_dtb((uintptr_t)&__image_start, setup.header);
+    setup.dtb = pick_dtb(setup.entry_dtb, setup.flat_dtb);
+    setup.dtb_size = dtb_len(setup.dtb);
+    setup.memory = find_memory(setup.dtb);
+    setup.layout = make_layout(setup.memory, setup.header);
+    setup.uart = find_uart(setup.dtb);
+    setup.stride = find_stride(setup.dtb);
 
-    fdt_reg_t memory = find_memory(boot_dtb);
-    layout_t layout = make_layout(memory, header);
+    return setup;
+}
 
-    uintptr_t uart = find_uart(boot_dtb);
-    uintptr_t stride = find_stride(boot_dtb);
+static void setup_serial(const boot_setup_t *setup) {
+    serial_set_reg_stride(setup->stride);
+    tty_set_uart_base(setup->uart);
+}
 
-    serial_set_reg_stride(stride);
-    tty_set_uart_base(uart);
-
-    log_init(log_sink);
-    log_set_lvl(LOG_DEBUG);
-    log_set_options(log_opts());
+static void log_setup(uintptr_t hartid, const void *raw_dtb, const boot_setup_t *setup) {
+    bool entry_dtb_valid = setup->entry_dtb != NULL;
 
     log_info(
         "boot stub hart=%lu dtb=%#lx entry_valid=%s source=%s size=%zu",
         (unsigned long)hartid,
-        (unsigned long)(uintptr_t)dtb,
+        (unsigned long)(uintptr_t)raw_dtb,
         yesno(entry_dtb_valid),
-        dtb_source(boot_dtb, entry_dtb, flat_dtb),
-        dtb_size
+        dtb_source(setup->dtb, setup->entry_dtb, setup->flat_dtb),
+        setup->dtb_size
     );
     log_debug(
         "memory base=%#llx size=%#llx end=%#lx",
-        (unsigned long long)memory.addr,
-        (unsigned long long)memory.size,
-        (unsigned long)layout.memory_end
+        (unsigned long long)setup->memory.addr,
+        (unsigned long long)setup->memory.size,
+        (unsigned long)setup->layout.memory_end
     );
     log_info(
         "layout image=%#lx rootfs=%#lx stack=%#lx scratch=%#lx uart=%#lx stride=%lu",
-        (unsigned long)layout.image_base,
-        (unsigned long)(uintptr_t)layout.embedded_rootfs,
+        (unsigned long)setup->layout.image_base,
+        (unsigned long)(uintptr_t)setup->layout.rootfs,
         (unsigned long)(uintptr_t)&__stack_top,
-        (unsigned long)layout.scratch_base,
-        (unsigned long)uart,
-        (unsigned long)stride
+        (unsigned long)setup->layout.scratch_base,
+        (unsigned long)setup->uart,
+        (unsigned long)setup->stride
     );
-    if (layout.header) {
+
+    if (setup->layout.header) {
         log_debug(
             "image header dtb=%#llx+%llu rootfs=%#llx+%llu",
-            (unsigned long long)layout.header->dtb_offset,
-            (unsigned long long)layout.header->dtb_size,
-            (unsigned long long)layout.header->rootfs_offset,
-            (unsigned long long)layout.header->rootfs_size
+            (unsigned long long)setup->layout.header->dtb_offset,
+            (unsigned long long)setup->layout.header->dtb_size,
+            (unsigned long long)setup->layout.header->rootfs_offset,
+            (unsigned long long)setup->layout.header->rootfs_size
         );
     }
+}
 
-    rootfs_src_t rootfs_src = pick_rootfs(
-        boot_dtb,
-        layout.embedded_rootfs,
-        layout.embedded_rootfs_size,
-        memory,
-        layout.memory_end
-    );
-
-    log_hart(hartid, boot_dtb);
-
-    if (is_secondary(hartid, boot_dtb)) {
-        log_debug("parking secondary hart %lu", (unsigned long)hartid);
-        halt();
-    }
-
-    const char *timer_kind = setup_timer(boot_dtb, hartid);
-    log_timer(timer_kind);
-
+static range_t make_heap_range(const rootfs_src_t *rootfs, const layout_t *layout) {
     range_t heap = {
-        .start = ALIGN(layout.heap_start, BOOT_PAGE_SIZE),
-        .end = ALIGN_DOWN(layout.memory_end, BOOT_PAGE_SIZE),
+        .start = ALIGN(layout->heap_start, BOOT_PAGE_SIZE),
+        .end = ALIGN_DOWN(layout->memory_end, BOOT_PAGE_SIZE),
     };
 
-    if (rootfs_src.from_initrd) {
-        reserve("initrd", (uintptr_t)rootfs_src.image, rootfs_src.limit, &heap);
+    if (rootfs->from_initrd) {
+        reserve("initrd", (uintptr_t)rootfs->image, rootfs->limit, &heap);
     }
 
     if (heap.start >= heap.end) {
@@ -921,38 +922,76 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         (unsigned long)((heap.end - heap.start) / 1024UL)
     );
 
-    boot_heap_init(heap.start, heap.end);
+    return heap;
+}
 
-    mount_rootfs(&rootfs, rootfs_src.image, rootfs_src.limit, rootfs_src.from_initrd);
-
+static void *read_kernel(boot_ext2_t *rootfs, size_t *kernel_size) {
     const char *path = kernel_file();
-    size_t kernel_size = 0;
 
     log_debug("reading kernel %s", path);
 
-    void *kernel_blob = boot_ext2_read_file(&rootfs, path, &kernel_size);
+    void *kernel_blob = boot_ext2_read_file(rootfs, path, kernel_size);
     if (!kernel_blob) {
         panic("no kernel image found");
     }
 
-    log_debug("loaded kernel at %#lx size=%zu KiB", (unsigned long)(uintptr_t)kernel_blob, kernel_size / 1024);
+    log_debug("loaded kernel at %#lx size=%zu KiB", (unsigned long)(uintptr_t)kernel_blob, *kernel_size / 1024);
+    return kernel_blob;
+}
 
+NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
+    boot_ext2_t rootfs = { 0 };
+
+    boot_setup_t setup = make_setup(dtb);
+    setup_serial(&setup);
+
+    log_init(log_sink);
+    log_set_lvl(LOG_DEBUG);
+    log_set_options(log_opts());
+
+    log_setup(hartid, dtb, &setup);
+
+    rootfs_src_t rootfs_src = pick_rootfs(
+        setup.dtb,
+        setup.layout.rootfs,
+        setup.layout.rootfs_size,
+        setup.memory,
+        setup.layout.memory_end
+    );
+
+    log_hart(hartid, setup.dtb);
+
+    if (is_secondary(hartid, setup.dtb)) {
+        log_debug("parking secondary hart %lu", (unsigned long)hartid);
+        halt();
+    }
+
+    const char *timer_kind = setup_timer(setup.dtb, hartid);
+    log_timer(timer_kind);
+
+    range_t heap = make_heap_range(&rootfs_src, &setup.layout);
+    boot_heap_init(heap.start, heap.end);
+
+    mount_rootfs(&rootfs, rootfs_src.image, rootfs_src.limit, rootfs_src.from_initrd);
+
+    size_t kernel_size = 0;
+    void *kernel_blob = read_kernel(&rootfs, &kernel_size);
     uintptr_t elf_entry = 0;
 
     if (!load_elf(kernel_blob, kernel_size, &elf_entry)) {
         panic("failed to load kernel ELF");
     }
 
-    void *dtb_copy = copy_dtb(boot_dtb, dtb_size);
+    void *dtb_copy = copy_dtb(setup.dtb, setup.dtb_size);
 
     boot_desc_t desc = {
         .hartid = hartid,
         .dtb = dtb_copy,
-        .dtb_size = dtb_size,
+        .dtb_size = setup.dtb_size,
         .rootfs_image = rootfs_src.image,
         .rootfs_size = rootfs.size,
-        .memory = memory,
-        .uart = uart,
+        .memory = setup.memory,
+        .uart = setup.uart,
     };
 
     boot_info_t *info = make_info(&desc);

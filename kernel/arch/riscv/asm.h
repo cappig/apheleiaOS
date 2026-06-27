@@ -217,7 +217,7 @@ static inline bool riscv_mtimer_arm(u64 delta) {
     return (long)a0 == 0;
 }
 
-// rv32 returns the machine timer as two words, matching the arm path ABI
+// rv32 returns the machine timer as two words, matching the ARM path ABI
 static inline bool riscv_mtimer_read(u64 *value) {
     if (!value) {
         return false;
@@ -258,6 +258,6 @@ static inline void riscv_write_satp(uintptr_t root, u64 mode) {
     u32 value = (u32)((mode << 31) | ((u32)root >> 12));
     asm volatile("csrw satp, %0" : : "r"(value) : "memory");
 #endif
-    // SATP switches are visible only after the address translation fence
+    // satp switches are visible only after the address translation fence
     sfence_vma();
 }

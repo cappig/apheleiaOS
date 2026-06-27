@@ -6,9 +6,8 @@
 #error "atomic32.c is only meant for rv32 builds"
 #endif
 
-// rv32 currently runs single-hart only. Mask interrupts around 64-bit
-// read-modify-write sequences so compiler-emitted __atomic_*_8 calls can link
-// and behave consistently without dragging in libatomic
+// rv32 currently runs single-hart only, so masking interrupts is enough for
+// compiler-emitted 64-bit atomic routines without dragging in libatomic
 
 u64 __atomic_load_8(const volatile void *ptr, int memorder) {
     (void)memorder;
