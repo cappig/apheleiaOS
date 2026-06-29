@@ -82,13 +82,13 @@ void *mmap_alloc(size_t size, int type, size_t alignment) {
         panic("attempted to allocate zero bytes");
     }
 
-    void *ret = mmap_alloc_inner(e820_mmap, size, type, alignment, (size_t)-1);
+    void *memory = mmap_alloc_inner(e820_mmap, size, type, alignment, (size_t)-1);
 
-    if (!ret) {
+    if (!memory) {
         panic("out of memory");
     }
 
-    return ret;
+    return memory;
 }
 
 void *mmap_alloc_top(size_t size, int type, size_t alignment, u64 top) {
@@ -96,13 +96,13 @@ void *mmap_alloc_top(size_t size, int type, size_t alignment, u64 top) {
         panic("attempted to allocate zero bytes");
     }
 
-    void *ret = mmap_alloc_inner(e820_mmap, size, type, alignment, top);
+    void *memory = mmap_alloc_inner(e820_mmap, size, type, alignment, top);
 
-    if (!ret) {
+    if (!memory) {
         panic("out of memory");
     }
 
-    return ret;
+    return memory;
 }
 
 void *mmap_try_alloc_top(size_t size, int type, size_t alignment, u64 top) {

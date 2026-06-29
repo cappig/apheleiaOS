@@ -14,7 +14,7 @@
 #include "x86/regs.h"
 #include "x86/vga.h"
 
-#define VESA_LINEAR_FRAMEBUFFER (1 << 14)
+#define VESA_LINEAR_MODE (1 << 14)
 
 static bool fetch_vbe(vesa_info_t *buffer) {
     if (!buffer) {
@@ -82,7 +82,7 @@ static void edid_res(u8 *edid_data, edid_info_t *edid_info) {
 static bool set_mode(u16 mode_index) {
     regs32_t r = { 0 };
     r.ax = 0x4f02;
-    r.bx = mode_index | VESA_LINEAR_FRAMEBUFFER;
+    r.bx = mode_index | VESA_LINEAR_MODE;
 
     bios_call(0x10, &r, &r);
 
@@ -176,6 +176,27 @@ static void text_video(video_info_t *video) {
     video->blue_size = 0;
 }
 
+u64 video_fb_size(const video_info_t *video) {
+    if (!video || video->mode != VIDEO_GRAPHICS) {
+        return 0;
+    }
+
+    if (!video->framebuffer || !video->height) {
+        return 0;
+    }
+
+    u64 pitch = video->bytes_per_line;
+    if (!pitch) {
+        pitch = (u64)video->width * video->bytes_per_pixel;
+    }
+
+    if (!pitch || pitch > UINT64_MAX / video->height) {
+        return 0;
+    }
+
+    return pitch * video->height;
+}
+
 void init_graphics(boot_info_t *info) {
     if (!info) {
         return;
@@ -191,13 +212,28 @@ void init_graphics(boot_info_t *info) {
         return;
     }
 
-    edid_data_t edid_data = { 0 };
+    video->width = args->vesa_width;
+    video->height = args->vesa_height;
 
+    edid_data_t edid_data = { 0 };
     if (!fetch_edid(&edid_data)) {
         edid_res((u8 *)&edid_data, &info->edid);
 
-        video->width = min(args->vesa_width, edid->monitor_width);
-        video->height = min(args->vesa_height, edid->monitor_height);
+        if (edid->monitor_width) {
+            if (video->width) {
+                video->width = min(video->width, edid->monitor_width);
+            } else {
+                video->width = edid->monitor_width;
+            }
+        }
+
+        if (edid->monitor_height) {
+            if (video->height) {
+                video->height = min(video->height, edid->monitor_height);
+            } else {
+                video->height = edid->monitor_height;
+            }
+        }
 
         log_debug("detected monitor %ux%u", (unsigned int)video->width, (unsigned int)video->height);
     }

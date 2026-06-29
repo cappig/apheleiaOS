@@ -80,12 +80,12 @@ int printf(const char *fmt, ...) {
 
     va_list args;
     va_start(args, fmt);
-    int ret = vsnprintf(buf, sizeof(buf), fmt, args);
+    int length = vsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
 
     puts(buf);
 
-    return ret;
+    return length;
 }
 
 NORETURN void panic(const char *msg) {

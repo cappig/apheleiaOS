@@ -76,17 +76,10 @@ NORETURN void _load_entry(u16 boot_disk) {
     log_debug("setting up video");
     init_graphics(&info);
 
-    if (info.video.mode == VIDEO_GRAPHICS && info.video.framebuffer) {
-        u64 pitch = info.video.bytes_per_line;
-        if (!pitch) {
-            pitch = (u64)info.video.width * info.video.bytes_per_pixel;
-        }
-
-        u64 fb_size = pitch * info.video.height;
-        if (fb_size) {
-            mmap_add_entry(&info.memory_map, info.video.framebuffer, fb_size, E820_RESERVED);
-            clean_mmap(&info.memory_map);
-        }
+    u64 fb_size = video_fb_size(&info.video);
+    if (fb_size) {
+        mmap_add_entry(&info.memory_map, info.video.framebuffer, fb_size, E820_RESERVED);
+        clean_mmap(&info.memory_map);
     }
 
     log_info("entering kernel");

@@ -111,7 +111,8 @@ void map_region_64(size_t size, u64 vaddr, u64 paddr, u64 flags, bool is_kernel)
     while (remaining) {
         size_t page_size = PAGE_4KIB;
 
-        if (remaining >= PAGE_2MIB && (vaddr & (PAGE_2MIB - 1)) == 0 && (paddr & (PAGE_2MIB - 1)) == 0) {
+        bool aligned_2m = (vaddr & (PAGE_2MIB - 1)) == 0 && (paddr & (PAGE_2MIB - 1)) == 0;
+        if (remaining >= PAGE_2MIB && aligned_2m) {
             page_size = PAGE_2MIB;
         }
 
@@ -136,7 +137,7 @@ void setup_paging_64(void) {
 
     paging64.nx = has_nx();
 
-    // NX is optional on older machines, so the bootloader enables it only if CPUID says so
+    // NX is optional on older machines, so enable it only if CPUID says so
     if (paging64.nx) {
         u64 efer = read_msr(EFER_MSR);
         write_msr(EFER_MSR, efer | EFER_NX);
@@ -195,13 +196,13 @@ static bool load_segment_64(const elf_segment_t *seg, void *ctx_ptr) {
     return true;
 }
 
-u64 load_elf_sections_64(void *elf_file) {
+u64 load_elf_sections_64(void *elf_file, size_t elf_size) {
     struct elf_load_ctx64 ctx = {
         .elf = elf_file,
     };
     elf_info_t info = { 0 };
 
-    if (!elf_foreach_segment(elf_file, 0, load_segment_64, &ctx, &info)) {
+    if (!elf_foreach_segment(elf_file, elf_size, load_segment_64, &ctx, &info)) {
         return 0;
     }
 

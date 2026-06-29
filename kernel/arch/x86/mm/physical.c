@@ -128,38 +128,43 @@ static void *pmm_alloc_frames(size_t count, bool high) {
     assert(count);
     unsigned long irq_flags = spin_lock_irqsave(&pmm.lock);
 
-    void *ret = high ? bitmap_alloc_reserve_high(&pmm.frames, count) : bitmap_alloc_reserve(&pmm.frames, count);
+    void *frames = NULL;
+    if (high) {
+        frames = bitmap_alloc_high(&pmm.frames, count);
+    } else {
+        frames = bitmap_alloc_reserve(&pmm.frames, count);
+    }
 
 #ifdef MMU_DEBUG
-    if (ret) {
-        log_debug("PMM alloc frames=%zu paddr=%#" PRIx64, count, (u64)(uintptr_t)ret);
+    if (frames) {
+        log_debug("PMM alloc frames=%zu paddr=%#" PRIx64, count, (u64)(uintptr_t)frames);
     }
 #endif
 
-    if (ret) {
-        _pmm_ref_set_range(ret, count, 1);
+    if (frames) {
+        _pmm_ref_set_range(frames, count, 1);
     }
 
     spin_unlock_irqrestore(&pmm.lock, irq_flags);
-    return ret;
+    return frames;
 }
 
 void *alloc_frames(size_t count) {
-    void *ret = pmm_alloc_frames(count, false);
-    if (UNLIKELY(!ret)) {
+    void *frames = pmm_alloc_frames(count, false);
+    if (UNLIKELY(!frames)) {
         panic("Out of physical memory!");
     }
 
-    return ret;
+    return frames;
 }
 
 void *alloc_frames_high(size_t count) {
-    void *ret = pmm_alloc_frames(count, true);
-    if (UNLIKELY(!ret)) {
+    void *frames = pmm_alloc_frames(count, true);
+    if (UNLIKELY(!frames)) {
         panic("Out of physical memory!");
     }
 
-    return ret;
+    return frames;
 }
 
 void *alloc_frames_user(size_t count) {

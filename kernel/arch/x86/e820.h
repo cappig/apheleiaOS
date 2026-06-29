@@ -14,8 +14,8 @@ typedef enum {
     E820_CORRUPTED = 5,
 
     // custom types used internally by the kernel
-    E820_ALLOC = 100, // temporary allocation
-    E820_PAGE_TABLE = 101, // temporary page tables set up by the bootloader
+    E820_ALLOC = 100, // boot allocation
+    E820_PAGE_TABLE = 101, // bootloader page tables
     E820_KERNEL = 102, // kernel ELF segments and kernel page tables
 } e820_type_t;
 

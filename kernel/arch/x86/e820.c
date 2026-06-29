@@ -19,6 +19,10 @@ static inline u64 _region_top(u64 base, u64 size) {
     return base + size;
 }
 
+static bool _mergeable_type(u32 type) {
+    return type < E820_ALLOC;
+}
+
 void mmap_remove_entry(e820_map_t *map, size_t index) {
     map->count--;
 
@@ -55,7 +59,6 @@ static int _comp_mmap(const void *a, const void *b) {
     return 0;
 }
 
-// should be called every time the map is altered
 void clean_mmap(e820_map_t *map) {
     if (map->count > E820_MAX) {
         map->count = E820_MAX;
@@ -63,46 +66,80 @@ void clean_mmap(e820_map_t *map) {
 
     e820_entry_t *entries = (e820_entry_t *)&map->entries;
 
-    qsort(entries, map->count, sizeof(e820_entry_t), _comp_mmap);
+    bool changed = true;
+    while (changed) {
+        changed = false;
 
-    for (size_t i = 0; i < map->count; i++) {
-        if (!entries[i].size) {
-            mmap_remove_entry(map, i--);
-        }
-
-        if (i + 1 >= map->count) {
-            continue;
-        }
-
-        u64 top = _region_top(entries[i].address, entries[i].size);
-
-        // not touching or overlapping, skip
-        if (top < entries[i + 1].address) {
-            continue;
-        }
-
-        if (entries[i].type == entries[i + 1].type) {
-            // don't merge allocations so that we can free individual blocks
-            if (entries[i].type == E820_ALLOC) {
+        for (size_t i = 0; i < map->count;) {
+            if (!entries[i].size) {
+                mmap_remove_entry(map, i);
+                changed = true;
                 continue;
             }
 
-            entries[i + 1].address = entries[i].address;
-            entries[i].size = 0;
-            mmap_remove_entry(map, i--);
-        } else {
-            u64 overlap = top - entries[i + 1].address;
+            i++;
+        }
 
-            if (!overlap) {
+        qsort(entries, map->count, sizeof(e820_entry_t), _comp_mmap);
+
+        for (size_t i = 0; i + 1 < map->count; i++) {
+            e820_entry_t *left = &entries[i];
+            e820_entry_t *right = &entries[i + 1];
+
+            u64 left_top = _region_top(left->address, left->size);
+            u64 right_top = _region_top(right->address, right->size);
+
+            if (left_top < right->address) {
                 continue;
             }
 
-            if (entries[i].type > entries[i + 1].type) {
-                entries[i + 1].address += overlap;
-                entries[i + 1].size -= overlap;
+            bool touching = left_top == right->address;
+            if (touching && left->type != right->type) {
+                continue;
+            }
+
+            if (left->type == right->type && _mergeable_type(left->type)) {
+                u64 merged_top = max(left_top, right_top);
+                left->size = merged_top - left->address;
+                mmap_remove_entry(map, i + 1);
+                changed = true;
+                break;
+            }
+
+            if (touching) {
+                continue;
+            }
+
+            if (left->type > right->type) {
+                if (right_top <= left_top) {
+                    mmap_remove_entry(map, i + 1);
+                } else {
+                    right->address = left_top;
+                    right->size = right_top - left_top;
+                }
+
+                changed = true;
+                break;
+            }
+
+            u64 left_base = left->address;
+            u64 right_base = right->address;
+
+            if (right_base > left_base) {
+                left->size = right_base - left_base;
+
+                if (right_top < left_top) {
+                    (void)mmap_add_entry(map, right_top, left_top - right_top, left->type);
+                }
+            } else if (right_top < left_top) {
+                left->address = right_top;
+                left->size = left_top - right_top;
             } else {
-                entries[i].size -= overlap;
+                mmap_remove_entry(map, i);
             }
+
+            changed = true;
+            break;
         }
     }
 }
@@ -158,17 +195,33 @@ void *mmap_alloc_inner(e820_map_t *mmap, size_t bytes, u32 type, u32 alignment, 
             continue;
         }
 
-        // shrink current entry
         u64 old_addr = entries[i].address;
         u64 old_size = entries[i].size;
-        u64 size = entry_top - base;
-        entries[i].address += size;
-        entries[i].size -= size;
+        u32 old_type = entries[i].type;
+        u32 old_acpi = entries[i].acpi;
+        size_t old_count = mmap->count;
+        u64 old_top = _region_top(old_addr, old_size);
+        u64 alloc_top = base + bytes;
 
-        // create new entry with memory taken from the current one
+        entries[i] = (e820_entry_t){ 0 };
+
+        if (base > old_addr) {
+            entries[i] = (e820_entry_t){ old_addr, base - old_addr, old_type, old_acpi };
+        } else if (old_top > alloc_top) {
+            entries[i] = (e820_entry_t){ alloc_top, old_top - alloc_top, old_type, old_acpi };
+        }
+
+        if (base > old_addr && old_top > alloc_top) {
+            if (!mmap_add_entry(mmap, alloc_top, old_top - alloc_top, old_type)) {
+                entries[i] = (e820_entry_t){ old_addr, old_size, old_type, old_acpi };
+                mmap->count = old_count;
+                return NULL;
+            }
+        }
+
         if (!mmap_add_entry(mmap, base, (u64)bytes, type)) {
-            entries[i].address = old_addr;
-            entries[i].size = old_size;
+            entries[i] = (e820_entry_t){ old_addr, old_size, old_type, old_acpi };
+            mmap->count = old_count;
             return NULL;
         }
 
@@ -185,7 +238,8 @@ bool mmap_free_inner(e820_map_t *mmap, void *ptr) {
         e820_entry_t *current = &mmap->entries[i];
 
         if (current->address == (u64)(uintptr_t)ptr) {
-            mmap_remove_entry(mmap, i);
+            current->type = E820_AVAILABLE;
+            current->acpi = 0;
             clean_mmap(mmap);
 
             return 0;
@@ -208,7 +262,7 @@ char *mem_map_type_string(e820_type_t type) {
     case E820_CORRUPTED:
         return "BAD RAM!";
     case E820_ALLOC:
-        return "temporary allocation";
+        return "boot allocation";
     case E820_PAGE_TABLE:
         return "page tables";
     case E820_KERNEL:
@@ -218,59 +272,149 @@ char *mem_map_type_string(e820_type_t type) {
     }
 }
 
+typedef struct {
+    u64 base;
+    u64 top;
+} e820_span_t;
+
+static bool _clip_to_boot_range(const e820_entry_t *entry, e820_span_t *out) {
+    u64 base = entry->address;
+    u64 top = _region_top(entry->address, entry->size);
+
+    // we only map the low 4 GiB in the current setup
+    if (base >= PROTECTED_MODE_TOP) {
+        return false;
+    }
+
+    if (top > PROTECTED_MODE_TOP) {
+        top = PROTECTED_MODE_TOP;
+    }
+
+    if (top <= base) {
+        return false;
+    }
+
+    *out = (e820_span_t){ .base = base, .top = top };
+    return true;
+}
+
+static bool _managed_span(e820_map_t *mmap, size_t block_size, e820_span_t *out) {
+    u64 base = (u64)-1;
+    u64 top = 0;
+
+    for (size_t i = 0; i < mmap->count; i++) {
+        e820_entry_t *entry = &mmap->entries[i];
+
+        if (entry->type != E820_AVAILABLE) {
+            continue;
+        }
+
+        e820_span_t span = { 0 };
+        if (!_clip_to_boot_range(entry, &span)) {
+            continue;
+        }
+
+        if (base > span.base) {
+            base = span.base;
+        }
+
+        if (top < span.top) {
+            top = span.top;
+        }
+    }
+
+    if (base == (u64)-1 || top <= base) {
+        return false;
+    }
+
+    if (base < MIB) {
+        base = MIB;
+    }
+
+    base = ALIGN(base, block_size);
+    top = ALIGN_DOWN(top, block_size);
+    if (top <= base) {
+        return false;
+    }
+
+    *out = (e820_span_t){ .base = base, .top = top };
+    return true;
+}
+
+static void *_reserve_bitmap(e820_map_t *mmap, size_t block_size, size_t bitmap_size) {
+    return mmap_alloc_inner(mmap, bitmap_size, E820_ALLOC, (u32)block_size, PROTECTED_MODE_TOP);
+}
+
+static void _mark_bitmap_blocks(bitmap_allocator_t *alloc, e820_map_t *mmap, e820_span_t mem, size_t block_size) {
+    for (size_t i = 0; i < mmap->count; i++) {
+        e820_entry_t *entry = &mmap->entries[i];
+
+        e820_span_t span = { 0 };
+        if (!_clip_to_boot_range(entry, &span)) {
+            continue;
+        }
+
+        if (span.top <= mem.base || span.base >= mem.top) {
+            continue;
+        }
+
+        if (span.base < mem.base) {
+            span.base = mem.base;
+        }
+
+        if (span.top > mem.top) {
+            span.top = mem.top;
+        }
+
+        if (entry->type == E820_AVAILABLE) {
+            span.base = ALIGN(span.base, block_size);
+            span.top = ALIGN_DOWN(span.top, block_size);
+        } else {
+            span.base = ALIGN_DOWN(span.base, block_size);
+            span.top = ALIGN(span.top, block_size);
+
+            if (span.base < mem.base) {
+                span.base = mem.base;
+            }
+
+            if (span.top > mem.top) {
+                span.top = mem.top;
+            }
+        }
+
+        if (span.top <= span.base) {
+            continue;
+        }
+
+        size_t blocks = (size_t)((span.top - span.base) / block_size);
+        if (!blocks) {
+            continue;
+        }
+
+        size_t start_block = bitmap_alloc_to_block(alloc, (void *)(uintptr_t)span.base);
+
+        if (entry->type == E820_AVAILABLE) {
+            alloc->free_blocks += blocks;
+            alloc->usable_blocks += blocks;
+            bitmap_clear_region(alloc->bitmap, start_block, blocks);
+        } else {
+            bitmap_set_region(alloc->bitmap, start_block, blocks);
+        }
+    }
+}
+
 bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t block_size) {
     if (mmap->count > E820_MAX) {
         mmap->count = E820_MAX;
     }
 
-    u64 mem_base = (u64)-1;
-    u64 mem_top = 0;
-    u64 max_addr = PROTECTED_MODE_TOP;
-
-    for (size_t i = 0; i < mmap->count; i++) {
-        e820_entry_t *current = &mmap->entries[i];
-
-        if (current->type != E820_AVAILABLE) {
-            continue;
-        }
-
-        u64 top = _region_top(current->address, current->size);
-        u64 base = current->address;
-
-        // we only map the low 4 GiB in the current setup
-        if (base >= max_addr) {
-            continue;
-        }
-
-        if (top > max_addr) {
-            top = max_addr;
-        }
-
-        if (mem_base > base) {
-            mem_base = base;
-        }
-
-        if (mem_top < top) {
-            mem_top = top;
-        }
-    }
-
-    if (mem_base == (u64)-1 || mem_top <= mem_base) {
+    e820_span_t mem = { 0 };
+    if (!_managed_span(mmap, block_size, &mem)) {
         return false;
     }
 
-    if (mem_base < MIB) {
-        mem_base = MIB;
-    }
-
-    if (mem_top <= mem_base) {
-        return false;
-    }
-
-    mem_base = ALIGN(mem_base, block_size);
-    u64 mem_size = mem_top - mem_base;
-
-    alloc->chuck_start = (void *)(uintptr_t)mem_base;
+    u64 mem_size = mem.top - mem.base;
+    alloc->chunk_start = (void *)(uintptr_t)mem.base;
     alloc->chunk_size = (size_t)mem_size;
 
     alloc->block_size = block_size;
@@ -284,47 +428,7 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t 
         return false;
     }
 
-    // find some space for the bitmap (low to avoid clobbering high allocations)
-    void *bitmap_addr = NULL;
-
-    for (size_t i = 0; i < mmap->count; i++) {
-        e820_entry_t *current = &mmap->entries[i];
-
-        if (current->type != E820_AVAILABLE) {
-            continue;
-        }
-
-        u64 base = current->address;
-        u64 top = _region_top(current->address, current->size);
-
-        if (base < MIB) {
-            base = MIB;
-        }
-
-        if (base >= max_addr) {
-            continue;
-        }
-
-        if (top > max_addr) {
-            top = max_addr;
-        }
-
-        u64 aligned = ALIGN(base, block_size);
-
-        if (aligned + bitmap_size > top) {
-            continue;
-        }
-
-        bitmap_addr = (void *)(uintptr_t)aligned;
-
-        u64 used_end = aligned + bitmap_size;
-        current->address = used_end;
-        current->size = top - used_end;
-
-        (void)mmap_add_entry(mmap, aligned, bitmap_size, E820_ALLOC);
-        clean_mmap(mmap);
-        break;
-    }
+    void *bitmap_addr = _reserve_bitmap(mmap, block_size, bitmap_size);
 
     if (!bitmap_addr) {
         return false;
@@ -343,47 +447,6 @@ bool bitmap_alloc_init_mmap(bitmap_allocator_t *alloc, e820_map_t *mmap, size_t 
     alloc->free_blocks = 0;
     alloc->usable_blocks = 0;
 
-    for (size_t i = 0; i < mmap->count; i++) {
-        e820_entry_t *current = &mmap->entries[i];
-
-        u64 top = _region_top(current->address, current->size);
-        u64 base = current->address;
-
-        if (base >= max_addr) {
-            continue;
-        }
-
-        if (top > max_addr) {
-            top = max_addr;
-        }
-
-        if (top <= mem_base || base >= mem_top) {
-            continue;
-        }
-
-        if (base < mem_base) {
-            base = mem_base;
-        }
-
-        if (top > mem_top) {
-            top = mem_top;
-        }
-
-        size_t blocks = (size_t)((top - base) / block_size);
-        if (!blocks) {
-            continue;
-        }
-
-        size_t start_block = bitmap_alloc_to_block(alloc, (void *)(uintptr_t)base);
-
-        if (current->type == E820_AVAILABLE) {
-            alloc->free_blocks += blocks;
-            alloc->usable_blocks += blocks;
-            bitmap_clear_region(alloc->bitmap, start_block, blocks);
-        } else {
-            bitmap_set_region(alloc->bitmap, start_block, blocks);
-        }
-    }
-
+    _mark_bitmap_blocks(alloc, mmap, mem, block_size);
     return true;
 }

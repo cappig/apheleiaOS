@@ -39,7 +39,37 @@ static phys_window_state_t window = {
     .lock = SPINLOCK_INIT,
 };
 
-static size_t _window_cpu_id(void) {
+static struct {
+    u64 base;
+    u64 top;
+} linear_wc;
+
+void x86_phys_set_wc(u64 paddr, size_t size) {
+    linear_wc.base = 0;
+    linear_wc.top = 0;
+
+    if (!paddr || !size || paddr >= PROTECTED_MODE_TOP || size > UINT64_MAX - paddr) {
+        return;
+    }
+
+    u64 top = paddr + size;
+    if (top > PROTECTED_MODE_TOP) {
+        top = PROTECTED_MODE_TOP;
+    }
+
+    linear_wc.base = ALIGN_DOWN(paddr, PAGE_2MIB);
+    linear_wc.top = ALIGN(top, PAGE_2MIB);
+
+    if (linear_wc.top > PROTECTED_MODE_TOP) {
+        linear_wc.top = PROTECTED_MODE_TOP;
+    }
+}
+
+static bool _linear_wc_covers(u64 base, u64 top) {
+    return linear_wc.top > linear_wc.base && base >= linear_wc.base && top <= linear_wc.top;
+}
+
+static size_t _cpu_id(void) {
     cpu_core_t *core = cpu_current();
 
     if (!core || core->id >= MAX_CORES) {
@@ -49,9 +79,9 @@ static size_t _window_cpu_id(void) {
     return core->id;
 }
 
-static void _window_lock_acquire(void) {
+static void _lock_window(void) {
     unsigned long irq_flags = arch_irq_save();
-    size_t cpu_id = _window_cpu_id();
+    size_t cpu_id = _cpu_id();
 
     if (window.lock_depth[cpu_id]) {
         window.lock_depth[cpu_id]++;
@@ -64,8 +94,8 @@ static void _window_lock_acquire(void) {
     window.irq_flags[cpu_id] = irq_flags;
 }
 
-static void _window_lock_release(void) {
-    size_t cpu_id = _window_cpu_id();
+static void _unlock_window(void) {
+    size_t cpu_id = _cpu_id();
 
     if (!window.lock_depth[cpu_id]) {
         return;
@@ -79,7 +109,7 @@ static void _window_lock_release(void) {
     }
 }
 
-static u64 _map_flags_to_pt_flags(u32 flags) {
+static u64 _pt_flags(u32 flags) {
     u64 pt_flags = PT_WRITE;
 
     if (flags & PHYS_MAP_WC) {
@@ -124,13 +154,19 @@ static void _restore_window(window_map_t prev) {
 }
 
 void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
-    if (!size) {
+    if (!size || (u64)size > UINT64_MAX - paddr) {
         return NULL;
     }
 
     u64 end = paddr + size;
     if (!(flags & (PHYS_MAP_UC | PHYS_MAP_MMIO)) && end >= paddr && end <= PROTECTED_MODE_TOP) {
-        return (void *)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
+        if (!(flags & PHYS_MAP_WC) || _linear_wc_covers(paddr, end)) {
+            return (void *)(uintptr_t)(paddr + LINEAR_MAP_OFFSET_64);
+        }
+    }
+
+    if (end > UINT64_MAX - (PAGE_4KIB - 1)) {
+        return NULL;
     }
 
     u64 start = ALIGN_DOWN(paddr, PAGE_4KIB);
@@ -143,7 +179,7 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
         panic("phys window map too large");
     }
 
-    _window_lock_acquire();
+    _lock_window();
 
     if (window.pages_mapped) {
         if (window.stack_depth >= PHYS_WINDOW_STACK_MAX) {
@@ -162,7 +198,7 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     window.pages_mapped = pages;
     window.paddr_base = start;
 
-    u64 pt_flags = _map_flags_to_pt_flags(flags);
+    u64 pt_flags = _pt_flags(flags);
 
     window.flags = pt_flags;
 
@@ -198,13 +234,13 @@ void arch_phys_unmap(void *vaddr, size_t size) {
     window.flags = PT_WRITE;
 
     if (!window.stack_depth) {
-        _window_lock_release();
+        _unlock_window();
         return;
     }
 
     window_map_t prev = window.stack[--window.stack_depth];
     _restore_window(prev);
-    _window_lock_release();
+    _unlock_window();
 }
 
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {
@@ -271,7 +307,12 @@ static phys_window_state_t window = {
     .lock = SPINLOCK_INIT,
 };
 
-static size_t _window_cpu_id(void) {
+void x86_phys_set_wc(u64 paddr, size_t size) {
+    (void)paddr;
+    (void)size;
+}
+
+static size_t _cpu_id(void) {
     cpu_core_t *core = cpu_current();
 
     if (!core || core->id >= MAX_CORES) {
@@ -281,9 +322,9 @@ static size_t _window_cpu_id(void) {
     return core->id;
 }
 
-static void _window_lock_acquire(void) {
+static void _lock_window(void) {
     unsigned long irq_flags = arch_irq_save();
-    size_t cpu_id = _window_cpu_id();
+    size_t cpu_id = _cpu_id();
 
     if (window.lock_depth[cpu_id]) {
         window.lock_depth[cpu_id]++;
@@ -296,8 +337,8 @@ static void _window_lock_acquire(void) {
     window.irq_flags[cpu_id] = irq_flags;
 }
 
-static void _window_lock_release(void) {
-    size_t cpu_id = _window_cpu_id();
+static void _unlock_window(void) {
+    size_t cpu_id = _cpu_id();
 
     if (!window.lock_depth[cpu_id]) {
         return;
@@ -311,7 +352,7 @@ static void _window_lock_release(void) {
     }
 }
 
-static u64 _map_flags_to_pt_flags(u32 flags) {
+static u64 _pt_flags(u32 flags) {
     u64 pt_flags = PT_WRITE;
 
     if (flags & PHYS_MAP_WC) {
@@ -376,18 +417,23 @@ static void _clear_window_range(size_t pages) {
 }
 
 void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
-    if (!size)
+    if (!size || (u64)size > UINT64_MAX - paddr)
         return NULL;
 
     u64 start = ALIGN_DOWN(paddr, PAGE_4KIB);
-    u64 end = ALIGN(paddr + size, PAGE_4KIB);
+    u64 raw_end = paddr + size;
+
+    if (raw_end > UINT64_MAX - (PAGE_4KIB - 1))
+        return NULL;
+
+    u64 end = ALIGN(raw_end, PAGE_4KIB);
     size_t pages = (size_t)((end - start) / PAGE_4KIB);
     size_t window_pages = PHYS_WINDOW_SIZE_32 / PAGE_4KIB;
 
     if (pages > window_pages)
         panic("phys window map too large");
 
-    _window_lock_acquire();
+    _lock_window();
 
     // single sliding window, new mappings invalidate any previous one
     if (window.pages_mapped) {
@@ -406,7 +452,7 @@ void *arch_phys_map(u64 paddr, size_t size, u32 flags) {
     window.pages_mapped = pages;
     window.paddr_base = start;
 
-    u64 pt_flags = _map_flags_to_pt_flags(flags);
+    u64 pt_flags = _pt_flags(flags);
     window.flags = pt_flags;
 
     u32 vaddr = PHYS_WINDOW_BASE_32;
@@ -430,7 +476,7 @@ void arch_phys_unmap(void *vaddr, size_t size) {
     window.flags = PT_WRITE;
 
     if (!window.stack_depth) {
-        _window_lock_release();
+        _unlock_window();
         return;
     }
 
@@ -445,7 +491,7 @@ void arch_phys_unmap(void *vaddr, size_t size) {
         _map_window_page(map_base + (u32)(i * PAGE_4KIB), prev.paddr_base + i * PAGE_4KIB, prev.flags);
     }
 
-    _window_lock_release();
+    _unlock_window();
 }
 
 bool arch_phys_copy(u64 dst_paddr, u64 src_paddr, size_t size) {

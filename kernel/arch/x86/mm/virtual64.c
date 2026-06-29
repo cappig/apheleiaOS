@@ -108,33 +108,51 @@ void identity_map(page_t *lvl4_paddr, u64 from, u64 to, u64 map_offset, u64 flag
 }
 
 size_t get_page(page_t *lvl4_paddr, u64 vaddr, page_t **entry) {
-    size_t lvl4_index = GET_LVL4_INDEX(vaddr);
-    page_t *lvl4 = (page_t *)((uintptr_t)lvl4_paddr + LINEAR_MAP_OFFSET_64);
+    if (!entry) {
+        return 0;
+    }
 
     *entry = NULL;
 
-    if (!lvl4) {
+    if (!lvl4_paddr) {
+        return 0;
+    }
+
+    size_t lvl4_index = GET_LVL4_INDEX(vaddr);
+    page_t *lvl4 = (page_t *)((uintptr_t)lvl4_paddr + LINEAR_MAP_OFFSET_64);
+    page_t lvl4e = lvl4[lvl4_index];
+    if (!(lvl4e & PT_PRESENT) || (lvl4e & PT_HUGE)) {
         return 0;
     }
 
     size_t lvl3_index = GET_LVL3_INDEX(vaddr);
-    page_t *lvl3 = page_get_vaddr(&lvl4[lvl4_index]);
+    page_t *lvl3 = page_get_vaddr(&lvl4e);
+    page_t lvl3e = lvl3[lvl3_index];
 
-    if (lvl3[lvl3_index] & PT_HUGE && lvl3[lvl3_index] & PT_PRESENT) {
+    if (!(lvl3e & PT_PRESENT)) {
+        return 0;
+    }
+
+    if (lvl3e & PT_HUGE) {
         *entry = &lvl3[lvl3_index];
         return PAGE_1GIB;
     }
 
     size_t lvl2_index = GET_LVL2_INDEX(vaddr);
-    page_t *lvl2 = page_get_vaddr(&lvl3[lvl3_index]);
+    page_t *lvl2 = page_get_vaddr(&lvl3e);
+    page_t lvl2e = lvl2[lvl2_index];
 
-    if (lvl2[lvl2_index] & PT_HUGE && lvl2[lvl2_index] & PT_PRESENT) {
+    if (!(lvl2e & PT_PRESENT)) {
+        return 0;
+    }
+
+    if (lvl2e & PT_HUGE) {
         *entry = &lvl2[lvl2_index];
         return PAGE_2MIB;
     }
 
     size_t lvl1_index = GET_LVL1_INDEX(vaddr);
-    page_t *lvl1 = page_get_vaddr(&lvl2[lvl2_index]);
+    page_t *lvl1 = page_get_vaddr(&lvl2e);
 
     if (lvl1[lvl1_index] & PT_PRESENT) {
         *entry = &lvl1[lvl1_index];

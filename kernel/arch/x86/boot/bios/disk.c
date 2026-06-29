@@ -259,6 +259,6 @@ bool stage_rootfs_image(u64 *paddr, u64 *size) {
     return true;
 }
 
-void *read_rootfs(const char *path) {
-    return boot_ext2_read_file(&bios_disk.fs, path, NULL);
+void *read_rootfs(const char *path, size_t *out_size) {
+    return boot_ext2_read_file(&bios_disk.fs, path, out_size);
 }

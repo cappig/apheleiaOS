@@ -30,8 +30,8 @@ typedef struct PACKED {
 } vesa_info_t;
 
 typedef struct PACKED {
-    u8 position;
     u8 mask;
+    u8 position;
 } vesa_color_t;
 
 typedef struct PACKED {
@@ -113,3 +113,4 @@ typedef struct PACKED {
 } edid_data_t;
 
 void init_graphics(boot_info_t *info);
+u64 video_fb_size(const video_info_t *video);

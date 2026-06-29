@@ -2,6 +2,7 @@
 
 #include <lib/boot.h>
 #include <log/log.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,36 +34,50 @@ static void handle_video(char *value, void *data) {
     }
 }
 
-static void handle_vesa_width(char *value, void *data) {
-    kernel_args_t *args = data;
-
-    i32 width = atoll(value);
-    if (width < 0) {
-        return;
+static bool parse_u16(const char *text, u16 *out) {
+    if (!text || !*text || !out) {
+        return false;
     }
 
-    args->vesa_width = width;
+    char *end = NULL;
+    long value = strtol(text, &end, 10);
+
+    if (!end || *end || value < 0 || value > UINT16_MAX) {
+        return false;
+    }
+
+    *out = (u16)value;
+    return true;
+}
+
+static void handle_vesa_width(char *value, void *data) {
+    kernel_args_t *args = data;
+    u16 parsed = 0;
+    if (parse_u16(value, &parsed)) {
+        args->vesa_width = parsed;
+    }
 }
 
 static void handle_vesa_height(char *value, void *data) {
     kernel_args_t *args = data;
-
-    i32 height = atoll(value);
-    if (height < 0) {
-        return;
+    u16 parsed = 0;
+    if (parse_u16(value, &parsed)) {
+        args->vesa_height = parsed;
     }
-
-    args->vesa_height = height;
 }
 
 static void handle_vesa_bpp(char *value, void *data) {
     kernel_args_t *args = data;
-    args->vesa_bpp = atol(value);
+    u16 parsed = 0;
+    if (parse_u16(value, &parsed)) {
+        args->vesa_bpp = parsed;
+    }
 }
 
 static void handle_console(char *value, void *data) {
     kernel_args_t *args = data;
-    strncpy(args->console, value, 128);
+    strncpy(args->console, value, sizeof(args->console) - 1);
+    args->console[sizeof(args->console) - 1] = '\0';
 }
 
 static void handle_font(char *value, void *data) {
@@ -131,7 +146,7 @@ void parse_config(kernel_args_t *args) {
     strncpy(args->font, BOOT_DEFAULT_FONT, sizeof(args->font) - 1);
     args->font[sizeof(args->font) - 1] = '\0';
 
-    void *config = read_rootfs("/boot/loader.conf");
+    void *config = read_rootfs("/boot/loader.conf", NULL);
 
     if (!config) {
         log_warn("/boot/loader.conf not found, using defaults");

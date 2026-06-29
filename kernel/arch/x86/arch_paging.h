@@ -1,6 +1,6 @@
 #pragma once
 
-// x86 paging types, constants, and helpers
+// x86 paging definitions shared by boot and kernel code
 // selects between 32-bit PAE and 64-bit long mode paging
 
 #if defined(__x86_64__)

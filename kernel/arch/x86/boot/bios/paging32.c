@@ -183,13 +183,13 @@ static bool load_segment_32(const elf_segment_t *seg, void *ctx_ptr) {
     return true;
 }
 
-u32 load_elf_sections_32(void *elf_file) {
+u32 load_elf_sections_32(void *elf_file, size_t elf_size) {
     struct elf_load_ctx32 ctx = {
         .elf = elf_file,
     };
 
     elf_info_t info = { 0 };
-    if (!elf_foreach_segment(elf_file, 0, load_segment_32, &ctx, &info)) {
+    if (!elf_foreach_segment(elf_file, elf_size, load_segment_32, &ctx, &info)) {
         return 0;
     }
 

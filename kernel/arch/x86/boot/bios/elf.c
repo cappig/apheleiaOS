@@ -17,6 +17,7 @@
 #include "paging32.h"
 #include "paging64.h"
 #include "tty.h"
+#include "vesa.h"
 
 #define BOOT_PAGE_WRITE    (1 << 1)
 #define BOOT_PAGE_PAT_HUGE (1ULL << 12)
@@ -69,11 +70,13 @@ static void commit_log(boot_info_t *info) {
     info->boot_log_cap = (u32)cap;
 }
 
-static elf_header_t *read_kernel(bool want_64, bool *is_64) {
+static elf_header_t *read_kernel(bool want_64, bool *is_64, size_t *size_out) {
     const char *path = boot_kernel_path(want_64);
-    elf_header_t *kernel = read_rootfs(path);
+    size_t kernel_size = 0;
+    elf_header_t *kernel = read_rootfs(path, &kernel_size);
 
-    if (!kernel) {
+    if (!kernel || kernel_size < sizeof(elf32_header_t)) {
+        free(kernel);
         return NULL;
     }
 
@@ -92,6 +95,7 @@ static elf_header_t *read_kernel(bool want_64, bool *is_64) {
         }
 
         *is_64 = true;
+        *size_out = kernel_size;
         return kernel;
     }
 
@@ -102,13 +106,15 @@ static elf_header_t *read_kernel(bool want_64, bool *is_64) {
     }
 
     *is_64 = false;
+    *size_out = kernel_size;
     return kernel;
 }
 
 void load_kernel(boot_info_t *info) {
     bool want_64 = has_long_mode();
     bool is_64 = false;
-    elf_header_t *kernel = read_kernel(want_64, &is_64);
+    size_t kernel_size = 0;
+    elf_header_t *kernel = read_kernel(want_64, &is_64, &kernel_size);
 
     if (!kernel) {
         panic("no suitable kernel image found");
@@ -119,7 +125,10 @@ void load_kernel(boot_info_t *info) {
 
         setup_paging_32();
 
-        u32 entry = load_elf_sections_32(kernel);
+        u32 entry = load_elf_sections_32(kernel, kernel_size);
+        if (!entry) {
+            panic("failed to load x86_32 kernel ELF");
+        }
 
         u64 mem_top = map_top(&info->memory_map);
         u32 phys_top = (u32)mem_top;
@@ -128,12 +137,14 @@ void load_kernel(boot_info_t *info) {
             phys_top = 0xffffffffU;
         }
 
+        u32 stack_cap = min(phys_top, (u32)LINEAR_MAP_OFFSET_32);
+
         identity_map_32(phys_top, 0, false);
 
         init_paging_32();
         tty_disable_bios_output();
 
-        u32 stack_paddr = (u32)(uintptr_t)mmap_alloc_top(KERNEL_STACK_SIZE, E820_KERNEL, (size_t)(4 * KIB), phys_top);
+        u32 stack_paddr = (u32)(uintptr_t)mmap_alloc_top(KERNEL_STACK_SIZE, E820_KERNEL, (size_t)(4 * KIB), stack_cap);
         u32 stack = stack_paddr + KERNEL_STACK_SIZE;
 
         u32 boot_info = (u32)(uintptr_t)info;
@@ -147,32 +158,29 @@ void load_kernel(boot_info_t *info) {
 
         setup_paging_64();
 
-        u64 entry = load_elf_sections_64(kernel);
+        u64 entry = load_elf_sections_64(kernel, kernel_size);
+        if (!entry) {
+            panic("failed to load x86_64 kernel ELF");
+        }
 
         identity_map_64(PROTECTED_MODE_TOP, 0, false);
         identity_map_64(PROTECTED_MODE_TOP, LINEAR_MAP_OFFSET_64, true);
 
-        if (info->video.mode == VIDEO_GRAPHICS && info->video.framebuffer) {
-            u64 pitch = info->video.bytes_per_line;
-            if (!pitch) {
-                pitch = (u64)info->video.width * info->video.bytes_per_pixel;
+        u64 fb_size = video_fb_size(&info->video);
+        if (fb_size && info->video.framebuffer < PROTECTED_MODE_TOP &&
+            fb_size <= PROTECTED_MODE_TOP - info->video.framebuffer) {
+            u64 flags = BOOT_PAGE_WRITE | BOOT_PAGE_PAT_HUGE;
+
+            u64 fb_base = ALIGN_DOWN(info->video.framebuffer, 2 * MIB);
+            u64 fb_end = ALIGN(info->video.framebuffer + fb_size, 2 * MIB);
+            u64 map_end = fb_end;
+            if (map_end > PROTECTED_MODE_TOP) {
+                map_end = PROTECTED_MODE_TOP;
             }
 
-            u64 fb_size = pitch * info->video.height;
-            if (fb_size) {
-                u64 flags = BOOT_PAGE_WRITE | BOOT_PAGE_PAT_HUGE;
-
-                u64 fb_base = ALIGN_DOWN(info->video.framebuffer, 2 * MIB);
-                u64 fb_end = ALIGN(info->video.framebuffer + fb_size, 2 * MIB);
-                u64 map_end = fb_end;
-                if (map_end > PROTECTED_MODE_TOP) {
-                    map_end = PROTECTED_MODE_TOP;
-                }
-
-                for (u64 a = fb_base; a < map_end; a += 2 * MIB) {
-                    map_page_64(2 * MIB, a, a, flags, false);
-                    map_page_64(2 * MIB, a + LINEAR_MAP_OFFSET_64, a, flags, true);
-                }
+            for (u64 a = fb_base; a < map_end; a += 2 * MIB) {
+                map_page_64(2 * MIB, a, a, flags, false);
+                map_page_64(2 * MIB, a + LINEAR_MAP_OFFSET_64, a, flags, true);
             }
         }
 

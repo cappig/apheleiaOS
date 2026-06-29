@@ -7,6 +7,7 @@ section .mbr
 global _start
 _start:
     cli
+    cld
 
     xor ax, ax
     mov ds, ax
@@ -55,22 +56,34 @@ next_part:
 found_part:
     mov eax, [si + 8]           ; start lba
     mov ecx, [si + 12]          ; number of sectors
+    test ecx, ecx
+    jz no_partition
 
     ; load in 64K-safe chunks to avoid DMA boundary crossings
     mov [save_lba], eax
-    mov [save_cnt], cx
+    mov [save_cnt], ecx
 
     mov word [dest_seg], 0x0000
     mov word [dest_off], 0x7c00
     mov word [chunk_max], 66
 
 .read_chunk:
-    mov cx, [save_cnt]
+    cmp word [dest_seg], 0x9000
+    jae read_error
+
+    mov eax, [save_cnt]
+    test eax, eax
+    jz .load_done
+
+    xor ebx, ebx
     mov bx, [chunk_max]
-    cmp cx, bx
-    jbe .cnt_ok
-    mov cx, bx
+    cmp eax, ebx
+    ja .cnt_ok
+    mov cx, ax
+    jmp .count_ready
 .cnt_ok:
+    mov cx, bx
+.count_ready:
     mov si, dap
     mov [si + 2], cx
     mov ax, [dest_off]
@@ -86,13 +99,10 @@ found_part:
     int 0x13
     jc read_error
 
-    add word [save_lba], cx
-    jnc .no_carry
-    inc word [save_lba + 2]
-
-.no_carry:
-    sub word [save_cnt], cx
-    jz .load_done
+    xor ebx, ebx
+    mov bx, cx
+    add dword [save_lba], ebx
+    sub dword [save_cnt], ebx
 
     add word [dest_seg], 0x1000
     mov word [dest_off], 0x0000
@@ -141,7 +151,7 @@ dap:
     dw 0                        ; segment
     dq 0                        ; lba
 
-save_cnt:  dw 0
+save_cnt:  dd 0
 save_lba:  dd 0
 boot_drive: db 0
 dest_seg:  dw 0

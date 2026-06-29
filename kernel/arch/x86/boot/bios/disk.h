@@ -29,5 +29,5 @@ int read_disk(void *dest, size_t offset, size_t bytes);
 void disk_init(u16 disk);
 bool bios_boot_root_hint(boot_root_hint_t *out);
 
-void *read_rootfs(const char *path);
+void *read_rootfs(const char *path, size_t *out_size);
 bool stage_rootfs_image(u64 *paddr, u64 *size);
