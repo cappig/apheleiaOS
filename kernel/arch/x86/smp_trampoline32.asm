@@ -89,10 +89,12 @@ tramp32_flat32:
     mov esp, dword [ebx + OFF(smp_trampoline32_stack)]
     and esp, 0xfffffff0
 
+    ; Keep the stack 16-byte aligned at the C call boundary.
+    sub esp, 12
     push dword [ebx + OFF(smp_trampoline32_arg)]
     mov eax, dword [ebx + OFF(smp_trampoline32_entry)]
     call eax
-    add esp, 4
+    add esp, 16
 
 tramp32_halt:
     cli

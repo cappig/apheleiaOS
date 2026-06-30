@@ -612,7 +612,6 @@ bool apic_init(void) {
             }
         }
 
-        log_info("local APIC enabled (id=%u)", (unsigned int)id);
         return true;
     }
 
