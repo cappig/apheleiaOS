@@ -47,6 +47,10 @@ extern isr_handler
 isr_common_stub:
     swapgs_if_necessary
 
+    ; User code may enter with DF set, but the SysV ABI requires it clear in C.
+    ; RFLAGS on the interrupt frame preserves the user value for iretq.
+    cld
+
     push    rax
     push    rbx
     push    rcx
@@ -63,8 +67,13 @@ isr_common_stub:
     push    r14
     push    r15
 
+    ; Interrupts can arrive at any stack alignment. Keep the saved frame at its
+    ; original address while aligning the stack for the C ABI call.
     mov     rdi, rsp
+    mov     rbx, rsp
+    and     rsp, -16
     call    isr_handler
+    mov     rsp, rbx
 
     pop     r15
     pop     r14

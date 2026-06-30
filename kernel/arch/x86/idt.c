@@ -20,7 +20,6 @@ typedef struct {
 
 static idt_state_t idt = { 0 };
 
-#if defined(__i386__)
 static bool _pic_irq_in_service(u8 irq) {
     if (irq < 8) {
         outb(PIC1_COMMAND, 0x0b);
@@ -30,9 +29,8 @@ static bool _pic_irq_in_service(u8 irq) {
     outb(PIC2_COMMAND, 0x0b);
     return (inb(PIC2_COMMAND) & (1u << (irq - 8))) != 0;
 }
-#endif
 
-static void _default_int_handler(int_state_t *state) {
+static void default_handler(int_state_t *state) {
     if (state) {
         u32 int_num = state->int_num;
 
@@ -41,23 +39,23 @@ static void _default_int_handler(int_state_t *state) {
             return;
         }
 
-#if defined(__i386__)
         if (int_num >= 0x08 && int_num < 0x10) {
             u8 irq = (u8)(int_num - 0x08);
-            if (!irq_using_ioapic() && _pic_irq_in_service(irq))
+            if (!irq_using_ioapic() && _pic_irq_in_service(irq)) {
                 irq_ack(irq);
+            }
 
             return;
         }
 
         if (int_num >= 0x70 && int_num < 0x78) {
             u8 irq = (u8)(int_num - 0x70 + 8);
-            if (!irq_using_ioapic() && _pic_irq_in_service(irq))
+            if (!irq_using_ioapic() && _pic_irq_in_service(irq)) {
                 irq_ack(irq);
+            }
 
             return;
         }
-#endif
     }
 
     disable_interrupts();
@@ -77,7 +75,7 @@ void reset_int_handler(size_t int_num) {
         return;
     }
 
-    idt.handlers[int_num] = _default_int_handler;
+    idt.handlers[int_num] = default_handler;
 }
 
 void configure_int(size_t int_num, u16 selector, u8 ist, u8 attribs) {
@@ -128,7 +126,7 @@ void idt_init(void) {
 #endif
 
     for (size_t i = 0; i < ISR_COUNT; i++) {
-        set_int_handler(i, _default_int_handler);
+        set_int_handler(i, default_handler);
     }
 
     idt_load();

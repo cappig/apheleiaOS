@@ -34,7 +34,7 @@ void arch_state_set_return(arch_int_state_t *state, arch_word_t value) {
 #endif
 }
 
-void arch_state_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top) {
+void arch_set_user_entry(arch_int_state_t *state, arch_word_t entry, arch_word_t stack_top) {
     if (!state) {
         return;
     }

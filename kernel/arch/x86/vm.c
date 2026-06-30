@@ -42,7 +42,7 @@ arch_vm_space_t *arch_vm_kernel(void) {
 }
 
 #if defined(__x86_64__)
-static page_t *_clone_kernel_root_64(page_t *kernel_root) {
+static page_t *_clone_root64(page_t *kernel_root) {
     page_t *root = alloc_frames(1);
 
     void *root_map = _phys_map(root);
@@ -66,7 +66,7 @@ static page_t *_clone_kernel_root_64(page_t *kernel_root) {
     return root;
 }
 #else
-static void _clone_kernel_pt_32(page_t *dest_pd, page_t *src_pd) {
+static void _clone_pt32(page_t *dest_pd, page_t *src_pd) {
     for (size_t i = 0; i < 512; i++) {
         page_t pde = src_pd[i];
 
@@ -91,7 +91,7 @@ static void _clone_kernel_pt_32(page_t *dest_pd, page_t *src_pd) {
     }
 }
 
-static page_t *_clone_kernel_root_32(page_t *kernel_root) {
+static page_t *_clone_root32(page_t *kernel_root) {
     page_t *root = alloc_frames(1);
     memset(root, 0, PAGE_4KIB);
     const size_t kernel_pdpt_index = GET_LVL3_INDEX(LINEAR_MAP_OFFSET_32);
@@ -114,7 +114,7 @@ static page_t *_clone_kernel_root_32(page_t *kernel_root) {
         page_t *src_pd = (page_t *)(uintptr_t)page_get_paddr(&entry);
         page_t *dest_pd = alloc_frames(1);
 
-        _clone_kernel_pt_32(dest_pd, src_pd);
+        _clone_pt32(dest_pd, src_pd);
 
         root[i] = 0;
         page_set_paddr(&root[i], (page_t)(uintptr_t)dest_pd);
@@ -134,9 +134,9 @@ arch_vm_space_t *arch_vm_create_user(void) {
     page_t *kernel_root = arch_vm_kernel()->root;
 
 #if defined(__x86_64__)
-    space->root = _clone_kernel_root_64(kernel_root);
+    space->root = _clone_root64(kernel_root);
 #else
-    space->root = _clone_kernel_root_32(kernel_root);
+    space->root = _clone_root32(kernel_root);
 #endif
 
     if (!space->root) {

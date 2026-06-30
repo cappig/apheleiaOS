@@ -40,7 +40,7 @@ bool arch_signal_is_user(const arch_int_state_t *state) {
     return (state->s_regs.cs & 0x3) == 3;
 }
 
-bool arch_signal_setup_user_stack(sched_thread_t *thread, arch_int_state_t *state, sighandler_t handler, int signum) {
+bool arch_setup_signal_stack(sched_thread_t *thread, arch_int_state_t *state, sighandler_t handler, int signum) {
     if (!thread || !state || !handler) {
         return false;
     }
@@ -55,9 +55,9 @@ bool arch_signal_setup_user_stack(sched_thread_t *thread, arch_int_state_t *stat
     rsp -= 128;
     rsp -= sizeof(u64);
 
-    u64 ret = (u64)thread->signal_trampoline;
+    u64 trampoline = (u64)thread->signal_trampoline;
 
-    if (!_write_user(thread, (uintptr_t)rsp, &ret, sizeof(ret))) {
+    if (!_write_user(thread, (uintptr_t)rsp, &trampoline, sizeof(trampoline))) {
         return false;
     }
 
@@ -70,10 +70,10 @@ bool arch_signal_setup_user_stack(sched_thread_t *thread, arch_int_state_t *stat
         return false;
 
     esp -= 2 * sizeof(u32);
-    u32 ret = (u32)thread->signal_trampoline;
+    u32 trampoline = (u32)thread->signal_trampoline;
     u32 sig = (u32)signum;
 
-    if (!_write_user(thread, (uintptr_t)esp, &ret, sizeof(ret)))
+    if (!_write_user(thread, (uintptr_t)esp, &trampoline, sizeof(trampoline)))
         return false;
 
     if (!_write_user(thread, (uintptr_t)(esp + sizeof(u32)), &sig, sizeof(sig)))

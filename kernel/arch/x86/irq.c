@@ -21,7 +21,7 @@ typedef struct {
 
 static irq_state_t irq_state = { 0 };
 
-static inline void _align_core_tick_floor(size_t cpu_id) {
+static inline void _align_tick_floor(size_t cpu_id) {
     if (cpu_id >= MAX_CORES) {
         return;
     }
@@ -75,7 +75,7 @@ static void _route_irqs(bool to_apic) {
     outb(0x23, next);
 }
 
-static void _register_pic_vector(size_t irq, int_handler_t handler) {
+static void _pic_register(size_t irq, int_handler_t handler) {
 #if defined(__i386__)
     if (irq < 8)
         set_int_handler(0x08 + irq, handler);
@@ -87,7 +87,7 @@ static void _register_pic_vector(size_t irq, int_handler_t handler) {
 #endif
 }
 
-static void _unregister_pic_vector(size_t irq) {
+static void _pic_unregister(size_t irq) {
 #if defined(__i386__)
     if (irq < 8) {
         reset_int_handler(0x08 + irq);
@@ -121,16 +121,14 @@ static void _com1_handler(UNUSED int_state_t *state) {
             break;
         }
 
-        if (ch) {
-            serial_push_rx(0, ch);
-        }
+        serial_push_rx(0, ch);
     }
 }
 
 static void _spurious_handler(UNUSED int_state_t *state) {
 }
 
-static void _soft_resched_handler(int_state_t *state) {
+static void _resched_handler(int_state_t *state) {
     sched_resched_softirq(state);
 }
 
@@ -153,7 +151,7 @@ static void _init_timer_source(bool apic_ok) {
 bool irq_init(void) {
     bool apic_ok = apic_init();
 
-    set_int_handler(SMP_SOFT_RESCHED_VECTOR, _soft_resched_handler);
+    set_int_handler(SMP_SOFT_RESCHED_VECTOR, _resched_handler);
 
     if (apic_ok) {
         set_int_handler(INT_SPURIOUS, _spurious_handler);
@@ -183,7 +181,7 @@ bool irq_init(void) {
 void irq_init_ap(void) {
     cpu_core_t *core = cpu_current();
     size_t cpu_id = (core && core->id < MAX_CORES) ? core->id : 0;
-    _align_core_tick_floor(cpu_id);
+    _align_tick_floor(cpu_id);
 
     if (!apic_timer_init_local()) {
         return;
@@ -200,7 +198,7 @@ void irq_register(size_t irq, int_handler_t handler) {
     }
 
     set_int_handler(vec, handler);
-    _register_pic_vector(irq, handler);
+    _pic_register(irq, handler);
 
     if (irq_state.ioapic) {
         if (irq != IRQ_SYSTEM_TIMER || !irq_state.apic_timer) {
@@ -230,7 +228,7 @@ void irq_unregister(size_t irq) {
     }
 
     reset_int_handler(vec);
-    _unregister_pic_vector(irq);
+    _pic_unregister(irq);
 }
 
 void irq_ack(size_t irq) {

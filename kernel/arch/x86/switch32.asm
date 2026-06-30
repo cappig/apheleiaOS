@@ -2,7 +2,7 @@ bits 32
 section .text
 
 global arch_context_switch
-extern arch_context_switch_bad_frame
+extern arch_bad_switch_frame
 extern __kernel_end
 arch_context_switch:
     mov eax, [esp + 4]
@@ -20,7 +20,7 @@ arch_context_switch:
     push ecx
     push edx
     push eax
-    call arch_context_switch_bad_frame
+    call arch_bad_switch_frame
 
 .restore_segments:
 

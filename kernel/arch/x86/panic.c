@@ -41,7 +41,7 @@ static inline u16 _read_gs(void) {
     return value;
 }
 
-static inline u64 _read_stack_ptr_live(void) {
+static inline u64 _read_sp(void) {
     u64 value = 0;
     __asm__ volatile("mov %%rsp, %0" : "=r"(value));
     return value;
@@ -118,7 +118,7 @@ static inline u16 _read_gs(void) {
     return value;
 }
 
-static inline u32 _read_stack_ptr_live(void) {
+static inline u32 _read_sp(void) {
     u32 value = 0;
     __asm__ volatile("mov %%esp, %0" : "=r"(value));
     return value;
@@ -165,7 +165,7 @@ static bool _frame_is_user(const arch_int_state_t *state) {
     return state && ((state->s_regs.cs & 0x3) == 3);
 }
 
-static void _dump_regs_from_state(const arch_int_state_t *state) {
+static void _dump_regs(const arch_int_state_t *state) {
     if (!state) {
         return;
     }
@@ -173,7 +173,7 @@ static void _dump_regs_from_state(const arch_int_state_t *state) {
     bool user_frame = _frame_is_user(state);
 
 #if defined(__x86_64__)
-    u64 stack_ptr = user_frame ? state->s_regs.rsp : _read_stack_ptr_live();
+    u64 stack_ptr = user_frame ? state->s_regs.rsp : _read_sp();
     u64 stack_seg = user_frame ? state->s_regs.ss : (u64)_read_ss();
 
     log_fatal("register dump");
@@ -213,7 +213,7 @@ static void _dump_regs_from_state(const arch_int_state_t *state) {
         state->g_regs.r15
     );
 #else
-    u32 stack_ptr = user_frame ? state->s_regs.esp : _read_stack_ptr_live();
+    u32 stack_ptr = user_frame ? state->s_regs.esp : _read_sp();
     u32 stack_seg = user_frame ? state->s_regs.ss : (u32)_read_ss();
 
     log_fatal("register dump");
@@ -439,7 +439,7 @@ void arch_dump_registers(const arch_int_state_t *state) {
     _capture_segs_ctrl(&sc);
 
     if (state) {
-        _dump_regs_from_state(state);
+        _dump_regs(state);
         _log_segs_ctrl(&sc);
         return;
     }

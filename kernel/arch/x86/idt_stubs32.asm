@@ -52,10 +52,14 @@ isr_stub_table:
 %endrep
 
 extern isr_handler
-extern arch_context_switch_bad_frame
+extern arch_bad_switch_frame
 extern __kernel_end
 
 isr_common_stub:
+    ; User code may enter with DF set. The iret frame preserves that value, but
+    ; kernel C code must always run with the ABI-required forward direction.
+    cld
+
     sub esp, 16
     mov word [esp + 12], ds
     mov word [esp + 8], es
@@ -77,10 +81,15 @@ isr_common_stub:
     push edi
     push ebp
 
+    ; Interrupts can arrive at any alignment. EBX is already saved in the
+    ; frame and is callee-saved by the i386 ABI, so use it to restore ESP.
     mov eax, esp
+    mov ebx, esp
+    and esp, -16
+    sub esp, 12
     push eax
     call isr_handler
-    add esp, 4
+    mov esp, ebx
 
     mov eax, esp
     cmp dword [esp + 56], 0x8
@@ -95,7 +104,7 @@ isr_common_stub:
     push ecx
     push edx
     push eax
-    call arch_context_switch_bad_frame
+    call arch_bad_switch_frame
 .resume_frame:
 
     mov ax, [esp + 40]

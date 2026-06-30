@@ -298,7 +298,7 @@ static ioapic_info_t *_ioapic_for_gsi(u32 gsi, u32 *index) {
     return NULL;
 }
 
-static u64 _ioapic_flags_to_entry(u16 flags) {
+static u64 _ioapic_entry(u16 flags) {
     u64 entry = 0;
 
     u16 polarity = flags & MADT_ISO_POLARITY_MASK;
@@ -338,7 +338,7 @@ static u32 _read_id(void) {
     return (id >> LAPIC_ID_SHIFT) & LAPIC_ID_MASK;
 }
 
-static bool _lapic_list_contains(const u32 *ids, size_t count, u32 id) {
+static bool _has_lapic(const u32 *ids, size_t count, u32 id) {
     for (size_t i = 0; i < count; i++) {
         if (ids[i] == id) {
             return true;
@@ -361,7 +361,7 @@ static void _madt_add_lapic_id(u32 *ids, size_t *count, u32 id, u32 flags) {
         return;
     }
 
-    if (_lapic_list_contains(ids, *count, id)) {
+    if (_has_lapic(ids, *count, id)) {
         return;
     }
 
@@ -472,6 +472,11 @@ static void _parse_madt(void) {
         return;
     }
 
+    if (madt->header.length < sizeof(*madt)) {
+        log_warn("MADT is shorter than its fixed header");
+        return;
+    }
+
     apic.madt_lapic_override = madt->local_apic_addr;
     apic.ioapic_count = 0;
     memset(apic.ioapic_overrides, 0, sizeof(apic.ioapic_overrides));
@@ -483,12 +488,14 @@ static void _parse_madt(void) {
     u32 found_ids[MAX_CORES] = { 0 };
     size_t found_cores = 0;
     size_t offset = 0;
+
     size_t limit = madt->header.length - sizeof(madt_t);
 
     while (offset + sizeof(madt_entry_t) <= limit) {
         madt_entry_t *entry = (madt_entry_t *)(madt->entries + offset);
 
-        if (!entry->length) {
+        if (entry->length < sizeof(*entry) || entry->length > limit - offset) {
+            log_warn("invalid MADT entry at offset %zu", offset);
             break;
         }
 
@@ -787,7 +794,7 @@ bool ioapic_route_irq(u8 irq, u8 vector, u32 dest_apic) {
 
     u64 entry = vector;
     entry |= (u64)(dest_apic & IOAPIC_DEST_ID_MASK) << IOAPIC_DEST_ID_SHIFT;
-    entry |= _ioapic_flags_to_entry(flags);
+    entry |= _ioapic_entry(flags);
     entry &= ~IOAPIC_ENTRY_MASK;
 
     u8 reg = (u8)(IOAPIC_REDTBL_BASE + index * IOAPIC_REDTBL_STEP);

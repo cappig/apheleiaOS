@@ -32,6 +32,7 @@
 #include <x86/idt.h>
 #include <x86/irq.h>
 #include <x86/mm/heap.h>
+#include <x86/mm/phys_window.h>
 #include <x86/mm/physical.h>
 #include <x86/pic.h>
 #include <x86/rtc.h>
@@ -39,12 +40,12 @@
 #include <x86/smp.h>
 #include <x86/tsc.h>
 
-#define LOG_BOOT_HISTORY_CAP     (256 * 1024)
-#define BOOT_ROOTFS_SECTOR_SIZE  512
-#define CPUID_FEATURES           0x00000001
-#define CPUID_FEAT_EDX_FXSR      (1U << 24)
-#define CPUID_FEAT_EDX_SSE       (1U << 25)
-#define WALLCLOCK_RTC_RESYNC_SEC 60ULL
+#define LOG_BOOT_HISTORY_CAP (256 * 1024)
+#define ROOTFS_SECTOR_SIZE   512
+#define CPUID_FEATURES       0x00000001
+#define CPUID_FEAT_EDX_FXSR  (1U << 24)
+#define CPUID_FEAT_EDX_SSE   (1U << 25)
+#define RTC_RESYNC_SEC       60ULL
 
 typedef struct {
     bool console_ready;
@@ -59,7 +60,7 @@ typedef struct {
     size_t rootfs_size;
     bool rootfs_registered;
     boot_root_hint_t root_hint;
-    volatile u32 wallclock_sync_inflight;
+    volatile u32 clock_syncing;
 } x86_boot_state_t;
 
 typedef struct {
@@ -82,16 +83,16 @@ static volatile u64 wallclock_base_ticks ALIGNED(8) = 0;
 static volatile u64 rtc_sync_ticks ALIGNED(8) = 0;
 
 #if defined(__x86_64__)
-static bool _cpu_ptr_is_core_local(const cpu_core_t *core) {
-    uintptr_t ptr = (uintptr_t)core;
+static bool _core_local(const cpu_core_t *core) {
+    uintptr_t addr = (uintptr_t)core;
     uintptr_t first = (uintptr_t)&cores_local[0];
     uintptr_t last = (uintptr_t)(cores_local + MAX_CORES);
 
-    if (ptr < first || ptr >= last) {
+    if (addr < first || addr >= last) {
         return false;
     }
 
-    return ((ptr - first) % sizeof(cpu_core_t)) == 0;
+    return ((addr - first) % sizeof(cpu_core_t)) == 0;
 }
 #endif
 
@@ -148,7 +149,7 @@ static const char *_boot_log_ptr(u64 paddr) {
 #endif
 }
 
-static void _append_bootloader_log(const boot_info_t *info) {
+static void _append_boot_log(const boot_info_t *info) {
     if (!info || !info->boot_log_paddr || !info->boot_log_len) {
         return;
     }
@@ -172,7 +173,7 @@ static void _append_bootloader_log(const boot_info_t *info) {
     spin_unlock_irqrestore(&x86_log.lock, flags);
 }
 
-static bool _e820_range_reserved(const e820_map_t *map, u64 start, size_t size) {
+static bool _e820_reserved(const e820_map_t *map, u64 start, size_t size) {
     if (!map || !start || !size || start >= PROTECTED_MODE_TOP) {
         return false;
     }
@@ -572,7 +573,7 @@ static void _route_irqs_to_pic(void) {
     outb(0x23, (u8)(imcr & ~0x01));
 }
 
-static void _configure_log_sinks(const boot_info_t *info) {
+static void _setup_logs(const boot_info_t *info) {
     if (!info) {
         return;
     }
@@ -634,8 +635,8 @@ static bool _handle_user_signal(int signum, int_state_t *state) {
         return false;
     }
 
-    sched_signal_send_thread(thread, signum);
-    sched_signal_deliver_current(state);
+    sched_signal_send(thread, signum);
+    sched_signal_deliver(state);
 
     return true;
 }
@@ -662,7 +663,8 @@ static void _page_fault_handler(int_state_t *state) {
         sched_thread_t *thread = sched_current();
 
         bool is_user_addr = _is_user_fault_addr(addr, user);
-        bool can_cow = thread && thread->user_thread && is_user_addr;
+        bool user_thread = thread && thread->user_thread;
+        bool can_cow = user_thread && is_user_addr;
 
         bool cow_handled = false;
         if (can_cow) {
@@ -787,7 +789,7 @@ static void _gp_fault_handler(int_state_t *state) {
     halt();
 }
 
-static void _double_fault_handler(int_state_t *state) {
+static void _double_fault(int_state_t *state) {
     panic_prepare();
 
     log_fatal("double fault (unrecoverable)");
@@ -797,7 +799,28 @@ static void _double_fault_handler(int_state_t *state) {
     halt();
 }
 
-static void _invalid_opcode_handler(int_state_t *state) {
+static const arch_int_state_t *_kernel_frame(const sched_thread_t *thread) {
+    if (!thread || !thread->context || !arch_kernel_stack_valid(thread)) {
+        return NULL;
+    }
+
+    uintptr_t stack_base = (uintptr_t)thread->stack;
+    uintptr_t stack_end = stack_base + thread->stack_size;
+    uintptr_t frame = thread->context;
+
+    if (stack_end < stack_base || frame < stack_base || frame >= stack_end) {
+        return NULL;
+    }
+
+    size_t need = offsetof(arch_int_state_t, s_regs) + (3U * sizeof(arch_word_t));
+    if ((size_t)(stack_end - frame) < need) {
+        return NULL;
+    }
+
+    return (const arch_int_state_t *)(uintptr_t)frame;
+}
+
+static void _invalid_opcode(int_state_t *state) {
 #if defined(__x86_64__)
     if (_handle_user_signal(SIGILL, state)) {
         return;
@@ -811,33 +834,19 @@ static void _invalid_opcode_handler(int_state_t *state) {
 
     sched_thread_t *current = sched_current();
     if (current) {
-#if defined(__x86_64__)
+        const arch_int_state_t *ctx = _kernel_frame(current);
         u64 ctx_ip = 0;
         u64 ctx_cs = 0;
-        uintptr_t stack_base = (uintptr_t)current->stack;
-        uintptr_t stack_end = stack_base + current->stack_size;
-        uintptr_t ctx_ptr = current->context;
-        size_t kernel_frame_need = offsetof(arch_int_state_t, s_regs) + (3U * sizeof(arch_word_t));
-        if (current->context && arch_kernel_stack_valid(current) && stack_end >= stack_base && ctx_ptr >= stack_base &&
-            ctx_ptr < stack_end && (size_t)(stack_end - ctx_ptr) >= kernel_frame_need) {
-            const arch_int_state_t *ctx = (const arch_int_state_t *)(uintptr_t)current->context;
+
+        if (ctx) {
+#if defined(__x86_64__)
             ctx_ip = ctx->s_regs.rip;
             ctx_cs = ctx->s_regs.cs;
-        }
 #else
-        u64 ctx_ip = 0;
-        u64 ctx_cs = 0;
-        uintptr_t stack_base = (uintptr_t)current->stack;
-        uintptr_t stack_end = stack_base + current->stack_size;
-        uintptr_t ctx_ptr = current->context;
-        size_t kernel_frame_need = offsetof(arch_int_state_t, s_regs) + (3U * sizeof(arch_word_t));
-        if (current->context && arch_kernel_stack_valid(current) && stack_end >= stack_base && ctx_ptr >= stack_base &&
-            ctx_ptr < stack_end && (size_t)(stack_end - ctx_ptr) >= kernel_frame_need) {
-            const arch_int_state_t *ctx = (const arch_int_state_t *)(uintptr_t)current->context;
             ctx_ip = ctx->s_regs.eip;
             ctx_cs = ctx->s_regs.cs;
-        }
 #endif
+        }
 
         log_fatal(
             "current thread pid=%d name=%s context=%#" PRIx64 " stack=%#" PRIx64 " stack_size=%zu cpu=%d state=%d"
@@ -881,7 +890,7 @@ static void _invalid_opcode_handler(int_state_t *state) {
     halt();
 }
 
-static void _publish_framebuffer(const boot_info_t *info) {
+static void _publish_fb(const boot_info_t *info) {
     framebuffer_info_t fb = { 0 };
 
     if (!info || info->video.mode != VIDEO_GRAPHICS || !info->video.framebuffer) {
@@ -985,7 +994,7 @@ static ssize_t _boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, siz
     return (ssize_t)bytes;
 }
 
-static bool _register_boot_rootfs(void) {
+static bool _register_rootfs(void) {
     if (!x86_boot.rootfs_paddr || !x86_boot.rootfs_size || x86_boot.rootfs_registered) {
         return false;
     }
@@ -1009,8 +1018,8 @@ static bool _register_boot_rootfs(void) {
 
     disk->name = strdup("ram0");
     disk->type = DISK_VIRTUAL;
-    disk->sector_size = BOOT_ROOTFS_SECTOR_SIZE;
-    disk->sector_count = DIV_ROUND_UP(rootfs->size, (size_t)BOOT_ROOTFS_SECTOR_SIZE);
+    disk->sector_size = ROOTFS_SECTOR_SIZE;
+    disk->sector_count = DIV_ROUND_UP(rootfs->size, (size_t)ROOTFS_SECTOR_SIZE);
     disk->interface = &interface;
     disk->private = rootfs;
 
@@ -1092,7 +1101,7 @@ const kernel_args_t *arch_init(void *boot_info) {
 
     memcpy(&x86_boot.args, &info->args, sizeof(x86_boot.args));
     smp_set_boot_info(info);
-    _append_bootloader_log(info);
+    _append_boot_log(info);
 
     x86_boot.rootfs_paddr = info->boot_rootfs_paddr;
     x86_boot.rootfs_size = 0;
@@ -1108,14 +1117,14 @@ const kernel_args_t *arch_init(void *boot_info) {
     bool rootfs_reserved = false;
 
     if (staged_rootfs) {
-        rootfs_reserved = _e820_range_reserved(&info->memory_map, x86_boot.rootfs_paddr, x86_boot.rootfs_size);
+        rootfs_reserved = _e820_reserved(&info->memory_map, x86_boot.rootfs_paddr, x86_boot.rootfs_size);
     }
 
     if (staged_rootfs && !rootfs_reserved) {
         panic("staged rootfs memory is allocatable");
     }
 
-    _configure_log_sinks(info);
+    _setup_logs(info);
     log_init(_log_puts);
 
     _select_log_level(info);
@@ -1140,14 +1149,26 @@ const kernel_args_t *arch_init(void *boot_info) {
     _fpu_hw_enable();
 
     pat_init();
+#if defined(__x86_64__)
+    size_t fb_pitch = info->video.bytes_per_line;
+    if (!fb_pitch && info->video.bytes_per_pixel && info->video.width <= SIZE_MAX / info->video.bytes_per_pixel) {
+        fb_pitch = (size_t)info->video.width * info->video.bytes_per_pixel;
+    }
+
+    if (info->video.mode == VIDEO_GRAPHICS && fb_pitch && info->video.height &&
+        fb_pitch <= SIZE_MAX / (size_t)info->video.height) {
+        size_t fb_size = fb_pitch * (size_t)info->video.height;
+        x86_phys_set_wc(info->video.framebuffer, fb_size);
+    }
+#endif
     pic_init();
 
     idt_init();
 
     set_int_handler(INT_PAGE_FAULT, _page_fault_handler);
     set_int_handler(INT_GENERAL_PROTECTION_FAULT, _gp_fault_handler);
-    set_int_handler(INT_INVALID_OPCODE, _invalid_opcode_handler);
-    set_int_handler(INT_DOUBLE_FAULT, _double_fault_handler);
+    set_int_handler(INT_INVALID_OPCODE, _invalid_opcode);
+    set_int_handler(INT_DOUBLE_FAULT, _double_fault);
 #if defined(__x86_64__)
     configure_int(INT_DOUBLE_FAULT, GDT_KERNEL_CODE, 1, IDT_INT);
 #endif
@@ -1160,12 +1181,12 @@ const kernel_args_t *arch_init(void *boot_info) {
         panic("PMM refcount table unavailable, COW fork is required");
     }
 
-    x86_console_backend_init();
+    x86_console_init();
     console_init(info);
     x86_log.console_ready = true;
 
     _replay_boot_log();
-    _publish_framebuffer(info);
+    _publish_fb(info);
 
     acpi_init(info->acpi_root_ptr);
     tsc_init();
@@ -1212,7 +1233,7 @@ void arch_storage_init(void) {
 
     driver_load_stage(DRIVER_STAGE_STORAGE);
 
-    if (x86_boot.rootfs_paddr && x86_boot.rootfs_size && !_register_boot_rootfs()) {
+    if (x86_boot.rootfs_paddr && x86_boot.rootfs_size && !_register_rootfs()) {
         log_warn("failed to register boot rootfs fallback");
     }
 }
@@ -1220,7 +1241,7 @@ void arch_storage_init(void) {
 void arch_late_init(void) {
 }
 
-bool arch_phys_map_can_persist(void) {
+bool arch_keeps_phys_map(void) {
 #if defined(__x86_64__)
     return true;
 #else
@@ -1252,14 +1273,14 @@ void *arch_cpu_get_local(void) {
     u64 gs_base = read_msr(GS_BASE);
     cpu_core_t *core = (cpu_core_t *)(uintptr_t)gs_base;
 
-    if (_cpu_ptr_is_core_local(core)) {
+    if (_core_local(core)) {
         return core;
     }
 
     u64 kernel_gs_base = read_msr(KERNEL_GS_BASE);
     core = (cpu_core_t *)(uintptr_t)kernel_gs_base;
 
-    if (_cpu_ptr_is_core_local(core)) {
+    if (_core_local(core)) {
         return core;
     }
 
@@ -1313,7 +1334,7 @@ bool arch_current_cpu_id(size_t *out) {
 
 #if defined(__x86_64__)
     cpu_core_t *local_core = (cpu_core_t *)arch_cpu_get_local();
-    if (_cpu_ptr_is_core_local(local_core) && local_core->valid && local_core->id < MAX_CORES) {
+    if (_core_local(local_core) && local_core->valid && local_core->id < MAX_CORES) {
         *out = local_core->id;
         return true;
     }
@@ -1418,7 +1439,7 @@ static void _wallclock_set_base(u64 seconds, u64 ticks) {
     __atomic_store_n(&rtc_sync_ticks, ticks, __ATOMIC_RELEASE);
 }
 
-static void _wallclock_try_rtc_sync(u64 now_ticks, bool force) {
+static void _try_rtc_sync(u64 now_ticks, bool force) {
     u64 hz = irq_timer_hz();
     if (!hz) {
         return;
@@ -1427,15 +1448,19 @@ static void _wallclock_try_rtc_sync(u64 now_ticks, bool force) {
     u64 base_seconds = __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
     u64 base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
     u64 last_sync = __atomic_load_n(&rtc_sync_ticks, __ATOMIC_ACQUIRE);
-    u64 sync_interval = hz * WALLCLOCK_RTC_RESYNC_SEC;
+    u64 sync_interval = hz * RTC_RESYNC_SEC;
 
-    if (!force && base_seconds && last_sync && now_ticks >= last_sync && (now_ticks - last_sync) < sync_interval) {
+    bool have_sync = base_seconds && last_sync;
+    bool sync_in_past = have_sync && now_ticks >= last_sync;
+    bool recently_synced = sync_in_past && (now_ticks - last_sync) < sync_interval;
+
+    if (!force && recently_synced) {
         return;
     }
 
     u32 expected = 0;
     if (!__atomic_compare_exchange_n(
-            &x86_boot.wallclock_sync_inflight,
+            &x86_boot.clock_syncing,
             &expected,
             1,
             false,
@@ -1465,7 +1490,7 @@ static void _wallclock_try_rtc_sync(u64 now_ticks, bool force) {
         _wallclock_set_base(now_ticks / hz, now_ticks);
     }
 
-    __atomic_store_n(&x86_boot.wallclock_sync_inflight, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&x86_boot.clock_syncing, 0, __ATOMIC_RELEASE);
 }
 
 static u64 _seconds_from_ticks(u64 now_ticks, u64 hz) {
@@ -1477,7 +1502,7 @@ static u64 _seconds_from_ticks(u64 now_ticks, u64 hz) {
     u64 base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
 
     if (!base_seconds) {
-        _wallclock_try_rtc_sync(now_ticks, true);
+        _try_rtc_sync(now_ticks, true);
         base_seconds = __atomic_load_n(&wallclock_base_seconds, __ATOMIC_ACQUIRE);
         base_ticks = __atomic_load_n(&wallclock_base_ticks, __ATOMIC_ACQUIRE);
     }
@@ -1521,7 +1546,7 @@ u64 arch_realtime_ns(void) {
 
 void arch_wallclock_maintain(void) {
     u64 now_ticks = arch_timer_ticks();
-    _wallclock_try_rtc_sync(now_ticks, false);
+    _try_rtc_sync(now_ticks, false);
 }
 
 const char *arch_name(void) {
@@ -1564,8 +1589,18 @@ void arch_set_kernel_stack(uintptr_t sp) {
 }
 
 #if defined(__i386__)
-NORETURN void arch_context_switch_bad_frame(uintptr_t ctx, u32 eip, u32 cs) {
+NORETURN void arch_bad_switch_frame(uintptr_t ctx, u32 eip, u32 cs) {
     sched_thread_t *current = sched_is_running() ? sched_current() : NULL;
+    unsigned long current_ctx = 0;
+    unsigned long stack = 0;
+    size_t stack_size = 0;
+
+    if (current) {
+        current_ctx = (unsigned long)current->context;
+        stack = (unsigned long)(uintptr_t)current->stack;
+        stack_size = current->stack_size;
+    }
+
     panic(
         "bad i386 kernel return frame ctx=%#lx eip=%#x cs=%#x"
         " current=%#lx pid=%d name=%s current_ctx=%#lx stack=%#lx stack_size=%zu",
@@ -1575,9 +1610,9 @@ NORETURN void arch_context_switch_bad_frame(uintptr_t ctx, u32 eip, u32 cs) {
         (unsigned long)(uintptr_t)current,
         current ? current->pid : 0,
         current ? current->name : "none",
-        current ? (unsigned long)current->context : 0UL,
-        current ? (unsigned long)(uintptr_t)current->stack : 0UL,
-        current ? current->stack_size : 0U
+        current_ctx,
+        stack,
+        stack_size
     );
     __builtin_unreachable();
 }

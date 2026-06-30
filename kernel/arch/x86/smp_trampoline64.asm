@@ -23,29 +23,29 @@ smp_trampoline64_start:
     xor eax, eax
     mov ax, cs
     shl eax, 4
-    mov dword [OFF(smp_trampoline64_base)], eax
+    mov dword [OFF(tramp64_base)], eax
 
     mov edx, eax
-    mov bx, OFF(smp_trampoline64_gdt) + 8
-    call smp_trampoline64_patch_desc
+    mov bx, OFF(tramp64_gdt) + 8
+    call tramp64_patch_desc
 
     mov edx, eax
-    mov bx, OFF(smp_trampoline64_gdt) + 16
-    call smp_trampoline64_patch_desc
+    mov bx, OFF(tramp64_gdt) + 16
+    call tramp64_patch_desc
 
     mov edx, eax
-    add edx, OFF(smp_trampoline64_gdt)
-    mov dword [OFF(smp_trampoline64_gdt_desc) + 2], edx
+    add edx, OFF(tramp64_gdt)
+    mov dword [OFF(tramp64_gdt_desc) + 2], edx
 
-    lgdt [OFF(smp_trampoline64_gdt_desc)]
+    lgdt [OFF(tramp64_gdt_desc)]
 
     mov eax, cr0
     or eax, 1
     mov cr0, eax
 
-    jmp 0x08:OFF(smp_trampoline64_pm32)
+    jmp 0x08:OFF(tramp64_pm32)
 
-smp_trampoline64_patch_desc:
+tramp64_patch_desc:
     mov word [bx + 2], dx
     shr edx, 16
     mov byte [bx + 4], dl
@@ -53,7 +53,7 @@ smp_trampoline64_patch_desc:
     ret
 
 bits 32
-smp_trampoline64_pm32:
+tramp64_pm32:
     mov ax, 0x10
     mov ds, ax
     mov es, ax
@@ -61,7 +61,7 @@ smp_trampoline64_pm32:
     mov fs, ax
     mov gs, ax
 
-    mov ebx, dword [OFF(smp_trampoline64_base)]
+    mov ebx, dword [OFF(tramp64_base)]
 
     mov eax, cr4
     or eax, (1 << 5)
@@ -79,13 +79,13 @@ smp_trampoline64_pm32:
     or eax, 0x80000001
     mov cr0, eax
 
-    lea eax, [ebx + OFF(smp_trampoline64_lm64)]
+    lea eax, [ebx + OFF(tramp64_lm64)]
     push dword 0x18
     push eax
     retf
 
 bits 64
-smp_trampoline64_lm64:
+tramp64_lm64:
     mov ax, 0x20
     mov ds, ax
     mov es, ax
@@ -101,20 +101,20 @@ smp_trampoline64_lm64:
     mov rax, qword [rbx + OFF(smp_trampoline64_entry)]
     jmp rax
 
-smp_trampoline64_halt:
+tramp64_halt:
     cli
     hlt
-    jmp smp_trampoline64_halt
+    jmp tramp64_halt
 
 align 8
-smp_trampoline64_gdt_desc:
-    dw smp_trampoline64_gdt_end - smp_trampoline64_gdt - 1
+tramp64_gdt_desc:
+    dw tramp64_gdt_end - tramp64_gdt - 1
     dd 0
 
-smp_trampoline64_gdt:
+tramp64_gdt:
     dq 0x0000000000000000
 
-    ; 0x08: temporary 32-bit code segment, base patched at runtime
+    ; 0x08: boot trampoline 32-bit code segment, base patched at runtime
     dw 0xffff
     dw 0x0000
     db 0x00
@@ -122,7 +122,7 @@ smp_trampoline64_gdt:
     db 0xcf
     db 0x00
 
-    ; 0x10: temporary 32-bit data segment, base patched at runtime
+    ; 0x10: boot trampoline 32-bit data segment, base patched at runtime
     dw 0xffff
     dw 0x0000
     db 0x00
@@ -145,10 +145,10 @@ smp_trampoline64_gdt:
     db 0x92
     db 0xcf
     db 0x00
-smp_trampoline64_gdt_end:
+tramp64_gdt_end:
 
 align 8
-smp_trampoline64_base:
+tramp64_base:
     dd 0
 smp_trampoline64_cr3:
     dd 0

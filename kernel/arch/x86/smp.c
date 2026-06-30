@@ -69,7 +69,7 @@ static uintptr_t _read_stack_ptr(void) {
     return sp;
 }
 
-static inline u64 _tsc_timeout_deadline(size_t timeout_ms) {
+static inline u64 timeout_deadline(size_t timeout_ms) {
     u64 khz = tsc_khz();
     if (!khz) {
         return 0;
@@ -160,7 +160,7 @@ NORETURN static void _smp_ap_entry(void *arg) {
         smp.shootdown_enabled = true;
     }
 
-    scheduler_start_secondary();
+    scheduler_start_cpu();
     enable_interrupts();
     cpu_halt();
 }
@@ -225,7 +225,7 @@ static bool _wait_ap_ready(size_t core_id, size_t timeout_ms) {
         return false;
     }
 
-    u64 deadline = _tsc_timeout_deadline(timeout_ms);
+    u64 deadline = timeout_deadline(timeout_ms);
     size_t fallback = 4000000 * timeout_ms;
 
     while (__atomic_load_n(&smp.ap_ready[core_id], __ATOMIC_ACQUIRE) == 0) {
@@ -277,7 +277,7 @@ static void _tlb_ipi_handler(UNUSED int_state_t *state) {
     lapic_end_int();
 }
 
-static void _resched_ipi_handler(UNUSED int_state_t *state) {
+static void resched_ipi(UNUSED int_state_t *state) {
     lapic_end_int();
     sched_resched_softirq((arch_int_state_t *)state);
 }
@@ -297,7 +297,7 @@ void smp_init(void) {
 
     smp.started = true;
     set_int_handler(SMP_IPI_TLB_VECTOR, _tlb_ipi_handler);
-    set_int_handler(SMP_IPI_RESCHED_VECTOR, _resched_ipi_handler);
+    set_int_handler(SMP_IPI_RESCHED_VECTOR, resched_ipi);
 
     if (core_count <= 1) {
         log_info("online cores: 1/1");
@@ -393,6 +393,89 @@ bool smp_send_resched(size_t core_id) {
     return lapic_send_fixed(target->lapic_id, SMP_IPI_RESCHED_VECTOR);
 }
 
+static bool same_user_vm(size_t core_id, arch_vm_space_t *vm) {
+    sched_thread_t *remote = sched_current_core(core_id);
+    arch_vm_space_t *remote_vm = remote ? remote->vm_space : NULL;
+
+    return vm && remote_vm == vm;
+}
+
+static u64 tlb_targets(cpu_core_t *self, uintptr_t addr) {
+    arch_word_t user_top = arch_user_stack_top();
+    bool user_addr = user_top && addr < (uintptr_t)user_top;
+
+    sched_thread_t *self_thread = sched_current();
+    arch_vm_space_t *self_vm = self_thread ? self_thread->vm_space : NULL;
+
+    u64 targets = 0;
+
+    for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
+        cpu_core_t *core = &cores_local[i];
+
+        if (!core->valid || !core->online || i == self->id) {
+            continue;
+        }
+
+        if (user_addr && !same_user_vm(i, self_vm)) {
+            continue;
+        }
+
+        targets |= 1ULL << i;
+    }
+
+    return targets;
+}
+
+static void send_tlb_ipis(u64 targets) {
+    for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
+        if (!(targets & (1ULL << i))) {
+            continue;
+        }
+
+        cpu_core_t *core = &cores_local[i];
+        if (!lapic_send_fixed(core->lapic_id, SMP_IPI_TLB_VECTOR)) {
+            panic("failed to send TLB shootdown IPI");
+        }
+    }
+}
+
+static void panic_tlb_timeout(cpu_core_t *self) {
+    u64 acks = __atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE);
+    u64 pending = __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE);
+
+    panic(
+        "TLB shootdown timeout (self=%zu targets=%#" PRIx64 " acks=%#" PRIx64 " online=%zu)",
+        self->id,
+        pending,
+        acks,
+        smp_online_count()
+    );
+}
+
+static void wait_tlb_acks(cpu_core_t *self, u64 targets) {
+    u64 deadline = timeout_deadline(TLB_TIMEOUT_MS);
+    size_t fallback = (size_t)(4000000ULL * TLB_TIMEOUT_MS);
+
+    while (true) {
+        u64 acked = __atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE);
+        u64 active = __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE);
+
+        if ((acked & active) == targets) {
+            return;
+        }
+
+        if (deadline && _tsc_timed_out(deadline)) {
+            panic_tlb_timeout(self);
+        }
+
+        if (!deadline && !fallback--) {
+            panic_tlb_timeout(self);
+        }
+
+        arch_cpu_relax();
+    }
+}
+
 void smp_tlb_shootdown(uintptr_t addr) {
     if (!sched_is_running()) {
         return;
@@ -407,39 +490,18 @@ void smp_tlb_shootdown(uintptr_t addr) {
         return;
     }
 
-    arch_word_t user_top = arch_user_stack_top();
-    bool user_addr = user_top && addr < (uintptr_t)user_top;
-    sched_thread_t *self_thread = sched_current();
-    arch_vm_space_t *self_vm = self_thread ? self_thread->vm_space : NULL;
-
+    // Keep interrupts enabled while waiting for the serializer. Otherwise two
+    // CPUs can deadlock when one waits for this CPU's IPI acknowledgement while
+    // this CPU spins on the lock with interrupts disabled.
+    sched_preempt_disable();
+    spin_lock(&smp.tlb_lock);
     unsigned long irq_flags = arch_irq_save();
 
-    spin_lock(&smp.tlb_lock);
-
-    u64 targets = 0;
-
-    for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
-        cpu_core_t *core = &cores_local[i];
-
-        if (!core->valid || !core->online || i == self->id) {
-            continue;
-        }
-
-        if (user_addr) {
-            sched_thread_t *remote = sched_current_core(i);
-            arch_vm_space_t *remote_vm = remote ? remote->vm_space : NULL;
-
-            if (!self_vm || remote_vm != self_vm) {
-                continue;
-            }
-        }
-
-        targets |= 1ULL << i;
-    }
-
+    u64 targets = tlb_targets(self, addr);
     if (!targets) {
         spin_unlock(&smp.tlb_lock);
         arch_irq_restore(irq_flags);
+        sched_preempt_enable();
         return;
     }
 
@@ -447,50 +509,8 @@ void smp_tlb_shootdown(uintptr_t addr) {
     __atomic_store_n(&smp.tlb_targets, targets, __ATOMIC_RELEASE);
     __atomic_store_n(&smp.tlb_acks, 0, __ATOMIC_RELEASE);
 
-    for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
-        if (!(targets & (1ULL << i))) {
-            continue;
-        }
-
-        cpu_core_t *core = &cores_local[i];
-        if (!lapic_send_fixed(core->lapic_id, SMP_IPI_TLB_VECTOR)) {
-            panic("failed to send TLB shootdown IPI");
-        }
-    }
-
-    u64 deadline = _tsc_timeout_deadline(TLB_TIMEOUT_MS);
-    size_t fallback = (size_t)(4000000ULL * TLB_TIMEOUT_MS);
-
-    while ((__atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE) & __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE)) !=
-           targets) {
-        if (deadline && _tsc_timed_out(deadline)) {
-            u64 acks = __atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE);
-            u64 pending = __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE);
-
-            panic(
-                "TLB shootdown timeout (self=%zu targets=%#" PRIx64 " acks=%#" PRIx64 " online=%zu)",
-                self->id,
-                pending,
-                acks,
-                smp_online_count()
-            );
-        }
-
-        if (!deadline && !fallback--) {
-            u64 acks = __atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE);
-            u64 pending = __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE);
-
-            panic(
-                "TLB shootdown timeout (self=%zu targets=%#" PRIx64 " acks=%#" PRIx64 " online=%zu)",
-                self->id,
-                pending,
-                acks,
-                smp_online_count()
-            );
-        }
-
-        arch_cpu_relax();
-    }
+    send_tlb_ipis(targets);
+    wait_tlb_acks(self, targets);
 
     __atomic_store_n(&smp.tlb_acks, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&smp.tlb_targets, 0, __ATOMIC_RELEASE);
@@ -498,4 +518,5 @@ void smp_tlb_shootdown(uintptr_t addr) {
 
     spin_unlock(&smp.tlb_lock);
     arch_irq_restore(irq_flags);
+    sched_preempt_enable();
 }

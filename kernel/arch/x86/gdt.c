@@ -190,6 +190,7 @@ void tss_init(uintptr_t kernel_stack_top) {
     log_debug("TSS init core=%zu", core_id);
 
     memset(tss, 0, sizeof(*tss));
+    tss->iopb = sizeof(tss_entry_t);
 
     u64 tss_addr = (u64)(uintptr_t)tss;
 
