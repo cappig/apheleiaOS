@@ -45,33 +45,33 @@ enum ps2_control_bits {
 };
 
 enum ps2_commands {
-    PS2_COM_READ_CONFIG = 0x20,
-    PS2_COM_WRITE_CONFIG = 0x60,
+    PS2_CMD_READ_CONFIG = 0x20,
+    PS2_CMD_WRITE_CONFIG = 0x60,
 
-    PS2_COM_DISABLE_PORT2 = 0xa7,
-    PS2_COM_ENABLE_PORT2 = 0xa8,
-    PS2_COM_TEST_PORT2 = 0xa9,
+    PS2_CMD_DISABLE_PORT2 = 0xa7,
+    PS2_CMD_ENABLE_PORT2 = 0xa8,
+    PS2_CMD_TEST_PORT2 = 0xa9,
 
-    PS2_COM_TEST_CONTROLLER = 0xaa,
+    PS2_CMD_TEST_CONTROLLER = 0xaa,
 
-    PS2_COM_TEST_PORT1 = 0xab,
-    PS2_COM_DISABLE_PORT1 = 0xad,
-    PS2_COM_ENABLE_PORT1 = 0xae,
+    PS2_CMD_TEST_PORT1 = 0xab,
+    PS2_CMD_DISABLE_PORT1 = 0xad,
+    PS2_CMD_ENABLE_PORT1 = 0xae,
 };
 
 enum ps2_kbd_commands {
-    PS2_KBD_COM_SET_CODESET = 0xf0,
-    PS2_KBD_COM_ENABLE_SCAN = 0xf4,
+    PS2_KBD_CMD_SET_CODESET = 0xf0,
+    PS2_KBD_CMD_ENABLE_SCAN = 0xf4,
 };
 
 enum ps2_mouse_commands {
-    PS2_MOUSE_COM_GET_DEVICE_ID = 0xf2,
-    PS2_MOUSE_COM_SET_SAMPLE_RATE = 0xf3,
-    PS2_MOUSE_COM_DEFAULT = 0xf6,
-    PS2_MOUSE_COM_ENABLE_DATA = 0xf4,
+    PS2_MOUSE_CMD_GET_DEVICE_ID = 0xf2,
+    PS2_MOUSE_CMD_SET_SAMPLE_RATE = 0xf3,
+    PS2_MOUSE_CMD_DEFAULT = 0xf6,
+    PS2_MOUSE_CMD_ENABLE_DATA = 0xf4,
 };
 
-#define PS2_MOUSE_ID_SCROLL_WHEEL 0x03
+#define PS2_MOUSE_WHEEL_ID 0x03
 
 enum ps2_mouse_flags {
     PS2_MOUSE_LEFT = 1 << 0,
@@ -324,47 +324,55 @@ static bool _mouse_command_data(u8 cmd, u8 data) {
     return _expect_ack();
 }
 
-static bool _mouse_get_device_id(u8 *id) {
+static bool get_mouse_id(u8 *id) {
     if (!id) {
         return false;
     }
 
-    if (!_mouse_command(PS2_MOUSE_COM_GET_DEVICE_ID)) {
+    if (!_mouse_command(PS2_MOUSE_CMD_GET_DEVICE_ID)) {
         return false;
     }
 
     return _read_data(id);
 }
 
-static bool _mouse_set_sample_rate(u8 rate) {
-    return _mouse_command_data(PS2_MOUSE_COM_SET_SAMPLE_RATE, rate);
+static bool set_mouse_rate(u8 rate) {
+    return _mouse_command_data(PS2_MOUSE_CMD_SET_SAMPLE_RATE, rate);
 }
 
 static bool _mouse_enable_wheel(void) {
-    if (!_mouse_set_sample_rate(200) || !_mouse_set_sample_rate(100) || !_mouse_set_sample_rate(80)) {
+    if (!set_mouse_rate(200)) {
+        return false;
+    }
+
+    if (!set_mouse_rate(100)) {
+        return false;
+    }
+
+    if (!set_mouse_rate(80)) {
         return false;
     }
 
     u8 id = 0;
-    if (!_mouse_get_device_id(&id)) {
+    if (!get_mouse_id(&id)) {
         return false;
     }
 
-    return id == PS2_MOUSE_ID_SCROLL_WHEEL;
+    return id == PS2_MOUSE_WHEEL_ID;
 }
 
 static bool _controller_init(void) {
-    if (!_write_cmd(PS2_COM_DISABLE_PORT1)) {
+    if (!_write_cmd(PS2_CMD_DISABLE_PORT1)) {
         return false;
     }
 
-    if (!_write_cmd(PS2_COM_DISABLE_PORT2)) {
+    if (!_write_cmd(PS2_CMD_DISABLE_PORT2)) {
         return false;
     }
 
     _flush_output();
 
-    if (!_write_cmd(PS2_COM_READ_CONFIG)) {
+    if (!_write_cmd(PS2_CMD_READ_CONFIG)) {
         return false;
     }
 
@@ -376,7 +384,7 @@ static bool _controller_init(void) {
     config &= ~(PS2_CON_PORT1_IRQ | PS2_CON_PORT2_IRQ);
     config |= PS2_CON_PORT1_TRANSLATE;
 
-    if (!_write_cmd(PS2_COM_WRITE_CONFIG)) {
+    if (!_write_cmd(PS2_CMD_WRITE_CONFIG)) {
         return false;
     }
 
@@ -384,7 +392,7 @@ static bool _controller_init(void) {
         return false;
     }
 
-    if (_write_cmd(PS2_COM_TEST_CONTROLLER)) {
+    if (_write_cmd(PS2_CMD_TEST_CONTROLLER)) {
         u8 resp = 0;
 
         if (!_read_data(&resp) || resp != PS2_SELFTEST_OK) {
@@ -392,7 +400,7 @@ static bool _controller_init(void) {
         }
     }
 
-    if (_write_cmd(PS2_COM_TEST_PORT1)) {
+    if (_write_cmd(PS2_CMD_TEST_PORT1)) {
         u8 resp = 0;
 
         if (_read_data(&resp)) {
@@ -400,7 +408,7 @@ static bool _controller_init(void) {
         }
     }
 
-    if (_write_cmd(PS2_COM_TEST_PORT2)) {
+    if (_write_cmd(PS2_CMD_TEST_PORT2)) {
         u8 resp = 0;
 
         if (_read_data(&resp)) {
@@ -409,11 +417,11 @@ static bool _controller_init(void) {
     }
 
     if (ps2.has_port1) {
-        _write_cmd(PS2_COM_ENABLE_PORT1);
+        _write_cmd(PS2_CMD_ENABLE_PORT1);
     }
 
     if (ps2.has_port2) {
-        _write_cmd(PS2_COM_ENABLE_PORT2);
+        _write_cmd(PS2_CMD_ENABLE_PORT2);
     }
 
     if (ps2.has_port1) {
@@ -430,7 +438,7 @@ static bool _controller_init(void) {
         config |= PS2_CON_PORT2_CLOCK;
     }
 
-    if (!_write_cmd(PS2_COM_WRITE_CONFIG)) {
+    if (!_write_cmd(PS2_CMD_WRITE_CONFIG)) {
         return false;
     }
 
@@ -557,9 +565,9 @@ static bool ps2_init(void) {
     }
 
     if (ps2.has_port1) {
-        _kbd_command(PS2_KBD_COM_SET_CODESET);
+        _kbd_command(PS2_KBD_CMD_SET_CODESET);
         _kbd_command(2);
-        _kbd_command(PS2_KBD_COM_ENABLE_SCAN);
+        _kbd_command(PS2_KBD_CMD_ENABLE_SCAN);
 
         irq_register(IRQ_PS2_KEYBOARD, _kbd_irq);
 
@@ -567,9 +575,9 @@ static bool ps2_init(void) {
     }
 
     if (ps2.has_port2) {
-        _mouse_command(PS2_MOUSE_COM_DEFAULT);
+        _mouse_command(PS2_MOUSE_CMD_DEFAULT);
         ps2.mouse_packet_size = _mouse_enable_wheel() ? 4 : 3;
-        _mouse_command(PS2_MOUSE_COM_ENABLE_DATA);
+        _mouse_command(PS2_MOUSE_CMD_ENABLE_DATA);
 
         irq_register(IRQ_PS2_MOUSE, _mouse_irq);
 
@@ -580,15 +588,15 @@ static bool ps2_init(void) {
     return true;
 }
 
-static void _controller_shutdown(void) {
-    (void)_write_cmd(PS2_COM_DISABLE_PORT1);
-    (void)_write_cmd(PS2_COM_DISABLE_PORT2);
+static void shutdown_controller(void) {
+    (void)_write_cmd(PS2_CMD_DISABLE_PORT1);
+    (void)_write_cmd(PS2_CMD_DISABLE_PORT2);
 
-    if (_write_cmd(PS2_COM_READ_CONFIG)) {
+    if (_write_cmd(PS2_CMD_READ_CONFIG)) {
         u8 config = 0;
         if (_read_data(&config)) {
             config &= ~(PS2_CON_PORT1_IRQ | PS2_CON_PORT2_IRQ | PS2_CON_PORT1_TRANSLATE);
-            (void)_write_cmd(PS2_COM_WRITE_CONFIG);
+            (void)_write_cmd(PS2_CMD_WRITE_CONFIG);
             (void)_write_data(config);
         }
     }
@@ -618,7 +626,7 @@ driver_err_t ps2_driver_unload(void) {
 
     irq_unregister(IRQ_PS2_KEYBOARD);
     irq_unregister(IRQ_PS2_MOUSE);
-    _controller_shutdown();
+    shutdown_controller();
 
     ps2.has_port1 = false;
     ps2.has_port2 = false;

@@ -8,15 +8,12 @@
 #include <limits.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
-#include <sched/signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/disk.h>
 #include <sys/pci.h>
 #include <sys/time.h>
-#include <x86/apic.h>
 #include <x86/asm.h>
-#include <x86/irq.h>
 #include <x86/mm/physical.h>
 #if defined(__x86_64__)
 #include <x86/paging64.h>
@@ -27,19 +24,16 @@
 // osdevwiki provides extensive documentation on AHCI
 // https://wiki.osdev.org/AHCI
 
-#define AHCI_MSI_VECTOR 0x40
-
 typedef struct {
     ahci_device_t *primary;
     disk_dev_t *disk;
-    u8 irq_line;
-    bool warned_irq_fallback;
     bool loaded;
 } ahci_driver_state_t;
 
-static ahci_driver_state_t ahci_driver = {
-    .irq_line = 0xff,
-};
+static ahci_driver_state_t ahci_driver;
+
+static bool ahci_port_stop(ahci_hba_port_t *port);
+static void ahci_disable_dma(const ahci_device_t *dev);
 
 const driver_desc_t ahci_driver_desc = {
     .name = "ahci",
@@ -69,10 +63,6 @@ static bool ahci_zero_phys(u64 paddr, size_t size) {
     return true;
 }
 
-static bool ahci_irq_line_supported(u8 irq_line) {
-    return irq_line <= IRQ_SECONDARY_ATA;
-}
-
 static inline u32 ahci_port_ack(ahci_hba_port_t *port) {
     if (!port) {
         return 0;
@@ -83,86 +73,28 @@ static inline u32 ahci_port_ack(ahci_hba_port_t *port) {
     return is;
 }
 
-static void ahci_primary_irq(UNUSED int_state_t *s) {
-    ahci_device_t *dev = ahci_driver.primary;
-    u8 irq_line = ahci_driver.irq_line;
-
-    if (dev && dev->irq_enabled) {
-        unsigned long flags = arch_irq_save();
-        dev->irq_seq++;
-        arch_irq_restore(flags);
-
-        if (dev->irq_wait.list) {
-            sched_wake_all(&dev->irq_wait);
-        }
-    }
-
-    if (dev && dev->msi_enabled) {
-        lapic_end_int();
-    } else if (irq_line <= IRQ_SECONDARY_ATA) {
-        irq_ack(irq_line);
-    }
-}
-
-static u64 ahci_irq_snapshot(ahci_device_t *dev) {
+static bool ahci_wait_port_ready(ahci_device_t *dev, u64 timeout_ticks) {
     if (!dev) {
-        return 0;
-    }
-
-    unsigned long flags = arch_irq_save();
-    u64 seq = dev->irq_seq;
-    arch_irq_restore(flags);
-    return seq;
-}
-
-static bool ahci_wait_irq_event(ahci_device_t *dev, u64 *seq) {
-    if (!dev || !seq || !dev->irq_enabled) {
-        return false;
-    }
-
-    u64 start = arch_timer_ticks();
-    u64 timeout = ms_to_ticks(AHCI_IRQ_TIMEOUT_MS);
-
-    for (;;) {
-        unsigned long flags = arch_irq_save();
-
-        u64 now = dev->irq_seq;
-        if (now != *seq) {
-            *seq = now;
-            arch_irq_restore(flags);
-            return true;
-        }
-
-        arch_irq_restore(flags);
-
-        if ((arch_timer_ticks() - start) >= timeout) {
-            return false;
-        }
-
-        if (sched_is_running() && sched_current()) {
-            sched_thread_t *current = sched_current();
-
-            if (current && sched_signal_has_pending(current)) {
-                return false;
-            }
-
-            sched_yield();
-            continue;
-        }
-
-        arch_cpu_relax();
-    }
-}
-
-static bool ahci_wait_port_ready(ahci_hba_port_t *port, u64 timeout_ticks) {
-    if (!port) {
         return false;
     }
 
     u64 start = arch_timer_ticks();
     size_t spins = 0;
 
-    while (port->tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ)) {
+    for (;;) {
+        void *mmio = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+        if (!mmio) {
+            return false;
+        }
+
+        ahci_hba_mem_t *hba = mmio;
+        u32 tfd = hba->ports[dev->port_index].tfd;
+        arch_phys_unmap(mmio, AHCI_MMIO_SIZE);
+
+        if (!(tfd & (ATA_DEV_BUSY | ATA_DEV_DRQ))) {
+            return true;
+        }
+
         if ((arch_timer_ticks() - start) >= timeout_ticks) {
             return false;
         }
@@ -173,8 +105,6 @@ static bool ahci_wait_port_ready(ahci_hba_port_t *port, u64 timeout_ticks) {
 
         arch_cpu_relax();
     }
-
-    return true;
 }
 
 static bool ahci_disk_size(const ahci_device_t *dev, size_t *size_out) {
@@ -190,24 +120,35 @@ static bool ahci_disk_size(const ahci_device_t *dev, size_t *size_out) {
     return true;
 }
 
-static bool ahci_wait_cmd_poll(ahci_device_t *dev, ahci_hba_port_t *port, u32 slot_mask) {
-    if (!dev || !port) {
+static bool ahci_wait_cmd(ahci_device_t *dev, u32 slot_mask) {
+    if (!dev) {
         return false;
     }
 
     u64 start = arch_timer_ticks();
-    u64 timeout = ms_to_ticks(AHCI_IRQ_TIMEOUT_MS);
+    u64 timeout = ms_to_ticks(AHCI_CMD_TIMEOUT_MS);
     size_t spins = 0;
 
     for (;;) {
-        u32 pending = port->is;
-        if (pending & AHCI_PxIS_TFES) {
+        void *mmio = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+        if (!mmio) {
             return false;
         }
 
-        if (!(port->ci & slot_mask)) {
-            return true;
+        ahci_hba_mem_t *hba = mmio;
+        ahci_hba_port_t *port = &hba->ports[dev->port_index];
+        u32 pending = port->is;
+        bool complete = !(port->ci & slot_mask);
+        bool failed = (pending & AHCI_PxIS_TFES) != 0;
+
+        if (complete || failed) {
+            u32 status = ahci_port_ack(port);
+            hba->is = 1U << dev->port_index;
+            arch_phys_unmap(mmio, AHCI_MMIO_SIZE);
+            return complete && !(status & AHCI_PxIS_TFES);
         }
+
+        arch_phys_unmap(mmio, AHCI_MMIO_SIZE);
 
         if ((arch_timer_ticks() - start) >= timeout) {
             return false;
@@ -215,6 +156,11 @@ static bool ahci_wait_cmd_poll(ahci_device_t *dev, ahci_hba_port_t *port, u32 sl
 
         if (++spins > 1000000) {
             return false;
+        }
+
+        if (sched_is_running() && sched_current()) {
+            sched_yield();
+            continue;
         }
 
         arch_cpu_relax();
@@ -231,11 +177,7 @@ static void ahci_destroy_device(ahci_device_t *dev) {
     }
 
     if (dev->io_wait.list) {
-        sched_wait_queue_destroy(&dev->io_wait);
-    }
-
-    if (dev->irq_wait.list) {
-        sched_wait_queue_destroy(&dev->irq_wait);
+        sched_waitq_destroy(&dev->io_wait);
     }
 
     if (dev->dma_paddr) {
@@ -257,6 +199,31 @@ static void ahci_destroy_device(ahci_device_t *dev) {
     free(dev);
 }
 
+static bool ahci_hba_reset(ahci_hba_mem_t *hba) {
+    if (!hba) {
+        return false;
+    }
+
+    hba->ghc |= AHCI_HBA_HR;
+
+    u64 start = arch_timer_ticks();
+    u64 timeout = ms_to_ticks(AHCI_RESET_TIMEOUT_MS);
+
+    for (size_t spins = 0; spins < 10000000; spins++) {
+        if (!(hba->ghc & AHCI_HBA_HR)) {
+            return true;
+        }
+
+        if (timeout && (arch_timer_ticks() - start) >= timeout) {
+            break;
+        }
+
+        arch_cpu_relax();
+    }
+
+    return false;
+}
+
 static void ahci_stop_controller(ahci_device_t *dev) {
     if (!dev) {
         return;
@@ -271,13 +238,29 @@ static void ahci_stop_controller(ahci_device_t *dev) {
     ahci_hba_port_t *port = &hba->ports[dev->port_index];
 
     port->ie = 0;
-    u32 cmd = port->cmd;
-    cmd &= ~(AHCI_PxCMD_ST | AHCI_PxCMD_FRE);
-    port->cmd = cmd;
+    bool stopped = ahci_port_stop(port);
+    if (!stopped) {
+        stopped = ahci_hba_reset(hba);
+    }
+
     port->is = 0xffffffffU;
     hba->ghc &= ~AHCI_HBA_IE;
 
     arch_phys_unmap(mmio, AHCI_MMIO_SIZE);
+
+    if (!stopped) {
+        log_error("AHCI controller did not stop cleanly");
+    }
+}
+
+static void ahci_discard_device(ahci_device_t *dev) {
+    if (!dev) {
+        return;
+    }
+
+    ahci_stop_controller(dev);
+    ahci_disable_dma(dev);
+    ahci_destroy_device(dev);
 }
 
 static void ahci_lock(ahci_device_t *dev) {
@@ -298,7 +281,7 @@ static void ahci_lock(ahci_device_t *dev) {
         spin_unlock_irqrestore(&dev->io_lock, flags);
 
         if (sched_is_running() && sched_current() && dev->io_wait.list) {
-            (void)sched_block_if_unchanged(&dev->io_wait, wait_seq);
+            (void)sched_wait_for_change(&dev->io_wait, wait_seq);
             continue;
         }
 
@@ -326,10 +309,23 @@ static bool ahci_port_stop(ahci_hba_port_t *port) {
     }
 
     port->cmd &= ~AHCI_PxCMD_ST;
+
+    for (size_t i = 0; i < 1000000; i++) {
+        if (!(port->cmd & AHCI_PxCMD_CR)) {
+            break;
+        }
+
+        cpu_pause();
+    }
+
+    if (port->cmd & AHCI_PxCMD_CR) {
+        return false;
+    }
+
     port->cmd &= ~AHCI_PxCMD_FRE;
 
     for (size_t i = 0; i < 1000000; i++) {
-        if (!(port->cmd & (AHCI_PxCMD_CR | AHCI_PxCMD_FR))) {
+        if (!(port->cmd & AHCI_PxCMD_FR)) {
             return true;
         }
 
@@ -364,7 +360,7 @@ static bool ahci_port_start(ahci_hba_port_t *port) {
     return true;
 }
 
-static void ahci_request_bios_handoff(ahci_hba_mem_t *hba) {
+static void bios_handoff(ahci_hba_mem_t *hba) {
     if (!hba) {
         return;
     }
@@ -376,7 +372,7 @@ static void ahci_request_bios_handoff(ahci_hba_mem_t *hba) {
     hba->bohc |= AHCI_BOHC_OOS;
 
     u64 start = arch_timer_ticks();
-    u64 timeout = ms_to_ticks(AHCI_IRQ_TIMEOUT_MS);
+    u64 timeout = ms_to_ticks(AHCI_CMD_TIMEOUT_MS);
 
     while ((hba->bohc & AHCI_BOHC_BOS) && (arch_timer_ticks() - start) < timeout) {
         arch_cpu_relax();
@@ -400,10 +396,26 @@ static bool ahci_port_present(ahci_hba_port_t *port) {
     return sig == AHCI_SIG_ATA || sig == 0;
 }
 
-static bool ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, bool write, size_t bytes) {
-    if (!dev || !sectors || !bytes) {
+typedef struct {
+    ahci_device_t *dev;
+    u8 command;
+    u64 lba;
+    u16 sectors;
+    bool write;
+    size_t bytes;
+} ahci_cmd_t;
+
+static bool ahci_cmd_valid(const ahci_cmd_t *cmd) {
+    if (!cmd || !cmd->dev) {
         return false;
     }
+
+    return !cmd->bytes || cmd->sectors;
+}
+
+static bool ahci_build_header(const ahci_cmd_t *cmd) {
+    ahci_device_t *dev = cmd->dev;
+    bool data_cmd = cmd->bytes != 0;
 
     void *cl_map = arch_phys_map(dev->clb_paddr, PAGE_4KIB, 0);
     if (!cl_map) {
@@ -417,15 +429,44 @@ static bool ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, 
     const u8 fis_dword_count = (u8)(sizeof(ahci_fis_reg_h2d_t) / sizeof(u32));
     hdr->flags = fis_dword_count & AHCI_CMDH_CFL_MASK;
 
-    if (write) {
+    if (cmd->write) {
         hdr->flags |= AHCI_CMDH_W;
     }
 
-    hdr->prdtl = AHCI_PRDTL;
+    hdr->prdtl = data_cmd ? AHCI_PRDTL : 0;
     hdr->ctba = lo32(dev->ct_paddr);
     hdr->ctbau = hi32(dev->ct_paddr);
 
     arch_phys_unmap(cl_map, PAGE_4KIB);
+    return true;
+}
+
+static void ahci_fill_fis(const ahci_cmd_t *cmd, ahci_fis_reg_h2d_t *fis) {
+    memset(fis, 0, sizeof(*fis));
+
+    fis->fis_type = FIS_TYPE_REG_H2D;
+    fis->pmport_c = AHCI_FIS_H2D_C;
+    fis->command = cmd->command;
+    fis->device = (cmd->command == ATA_CMD_IDENTIFY) ? 0 : (1U << 6);
+
+    fis->lba0 = (u8)(cmd->lba & 0xff);
+    fis->lba1 = (u8)((cmd->lba >> 8) & 0xff);
+    fis->lba2 = (u8)((cmd->lba >> 16) & 0xff);
+    fis->lba3 = (u8)((cmd->lba >> 24) & 0xff);
+    fis->lba4 = (u8)((cmd->lba >> 32) & 0xff);
+    fis->lba5 = (u8)((cmd->lba >> 40) & 0xff);
+
+    if (cmd->command == ATA_CMD_IDENTIFY) {
+        fis->countl = 1;
+        fis->counth = 0;
+    } else {
+        fis->countl = (u8)(cmd->sectors & 0xff);
+        fis->counth = (u8)((cmd->sectors >> 8) & 0xff);
+    }
+}
+
+static bool ahci_build_table(const ahci_cmd_t *cmd) {
+    ahci_device_t *dev = cmd->dev;
 
     void *ct_map = arch_phys_map(dev->ct_paddr, PAGE_4KIB, 0);
     if (!ct_map) {
@@ -435,119 +476,79 @@ static bool ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, 
     ahci_cmd_tbl_t *tbl = ct_map;
     memset(tbl, 0, PAGE_4KIB);
 
-    tbl->prdt_entry[0].dba = lo32(dev->dma_paddr);
-    tbl->prdt_entry[0].dbau = hi32(dev->dma_paddr);
-    tbl->prdt_entry[0].dbc_i = ((u32)(bytes - 1) & AHCI_PRDT_DBC_MASK) | AHCI_PRDT_I;
+    if (cmd->bytes) {
+        tbl->prdt_entry[0].dba = lo32(dev->dma_paddr);
+        tbl->prdt_entry[0].dbau = hi32(dev->dma_paddr);
+        tbl->prdt_entry[0].dbc_i = (u32)(cmd->bytes - 1) & AHCI_PRDT_DBC_MASK;
+    }
 
     ahci_fis_reg_h2d_t *fis = (ahci_fis_reg_h2d_t *)tbl->cfis;
-    memset(fis, 0, sizeof(*fis));
-
-    fis->fis_type = FIS_TYPE_REG_H2D;
-    fis->pmport_c = AHCI_FIS_H2D_C;
-    fis->command = command;
-    fis->device = (command == ATA_CMD_IDENTIFY) ? 0 : (1U << 6);
-
-    fis->lba0 = (u8)(lba & 0xff);
-    fis->lba1 = (u8)((lba >> 8) & 0xff);
-    fis->lba2 = (u8)((lba >> 16) & 0xff);
-    fis->lba3 = (u8)((lba >> 24) & 0xff);
-    fis->lba4 = (u8)((lba >> 32) & 0xff);
-    fis->lba5 = (u8)((lba >> 40) & 0xff);
-
-    if (command == ATA_CMD_IDENTIFY) {
-        fis->countl = 1;
-        fis->counth = 0;
-    } else {
-        fis->countl = (u8)(sectors & 0xff);
-        fis->counth = (u8)((sectors >> 8) & 0xff);
-    }
+    ahci_fill_fis(cmd, fis);
 
     arch_phys_unmap(ct_map, PAGE_4KIB);
+    return true;
+}
 
-    void *mmio_map = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+static bool ahci_issue_cmd(const ahci_cmd_t *cmd) {
+    ahci_device_t *dev = cmd->dev;
 
-    if (!mmio_map) {
+    if (!ahci_wait_port_ready(dev, ms_to_ticks(AHCI_CMD_TIMEOUT_MS))) {
         return false;
     }
 
-    ahci_hba_mem_t *hba = mmio_map;
+    void *mmio = arch_phys_map(dev->abar_paddr, AHCI_MMIO_SIZE, PHYS_MAP_MMIO);
+    if (!mmio) {
+        return false;
+    }
+
+    ahci_hba_mem_t *hba = mmio;
     ahci_hba_port_t *port = &hba->ports[dev->port_index];
-
-    if (!ahci_wait_port_ready(port, ms_to_ticks(AHCI_IRQ_TIMEOUT_MS))) {
-        arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
-        return false;
-    }
 
     const u32 slot_mask = (1U << AHCI_CMD_SLOT);
     const u32 port_mask = (1U << dev->port_index);
 
     if (port->ci & slot_mask) {
         log_warn("AHCI slot %u still busy before issue (ci=%#x)", AHCI_CMD_SLOT, (unsigned int)port->ci);
-        arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
+        arch_phys_unmap(mmio, AHCI_MMIO_SIZE);
         return false;
     }
-
-    u64 irq_seq = ahci_irq_snapshot(dev);
 
     hba->is = port_mask;
     port->is = 0xffffffffU;
     port->ci = slot_mask;
+    arch_phys_unmap(mmio, AHCI_MMIO_SIZE);
 
-    bool ok = false;
-    bool need_poll_fallback = false;
-
-    for (;;) {
-        u32 pending = port->is;
-        if (pending & AHCI_PxIS_TFES) {
-            break;
-        }
-
-        if (!(port->ci & slot_mask)) {
-            ok = true;
-            break;
-        }
-
-        if (!ahci_wait_irq_event(dev, &irq_seq)) {
-            need_poll_fallback = true;
-            break;
-        }
+    bool complete = ahci_wait_cmd(dev, slot_mask);
+    if (!complete) {
+        log_debug("AHCI command %#x failed on port %u", (unsigned int)cmd->command, (unsigned int)dev->port_index);
     }
 
-    if (need_poll_fallback) {
-        if (!ahci_driver.warned_irq_fallback) {
-            log_warn("IRQ timeout on port %u, falling back to completion polling", (unsigned int)dev->port_index);
-            ahci_driver.warned_irq_fallback = true;
-        }
+    return complete;
+}
 
-        ok = ahci_wait_cmd_poll(dev, port, slot_mask);
+static bool ahci_exec_cmd(ahci_device_t *dev, u8 command, u64 lba, u16 sectors, bool write, size_t bytes) {
+    ahci_cmd_t cmd = {
+        .dev = dev,
+        .command = command,
+        .lba = lba,
+        .sectors = sectors,
+        .write = write,
+        .bytes = bytes,
+    };
+
+    if (!ahci_cmd_valid(&cmd)) {
+        return false;
     }
 
-    u32 complete_is = ahci_port_ack(port);
-
-    hba->is = port_mask;
-
-    if (complete_is & AHCI_PxIS_TFES) {
-        ok = false;
+    if (!ahci_build_header(&cmd) || !ahci_build_table(&cmd)) {
+        return false;
     }
 
-    if (!ok) {
-        log_debug(
-            "cmd=%#x port=%u tfd=%#x is=%#x ci=%#x sact=%#x "
-            "serr=%#x cmdreg=%#x ssts=%#x",
-            (unsigned int)command,
-            (unsigned int)dev->port_index,
-            (unsigned int)port->tfd,
-            (unsigned int)complete_is,
-            (unsigned int)port->ci,
-            (unsigned int)port->sact,
-            (unsigned int)port->serr,
-            (unsigned int)port->cmd,
-            (unsigned int)port->ssts
-        );
-    }
+    return ahci_issue_cmd(&cmd);
+}
 
-    arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
-    return ok;
+static bool ahci_flush(ahci_device_t *dev) {
+    return ahci_exec_cmd(dev, ATA_CMD_FLUSH_EXT, 0, 0, false, 0);
 }
 
 static bool ahci_identify(ahci_device_t *dev, u16 *identify) {
@@ -613,11 +614,11 @@ static ssize_t ahci_read(disk_dev_t *disk, void *dest, size_t offset, size_t byt
     ahci_device_t *dev = disk->private;
     ahci_lock(dev);
 
-    ssize_t ret = -1;
+    ssize_t result = -1;
     size_t disk_size = 0;
 
     if (!ahci_disk_size(dev, &disk_size)) {
-        ret = -EOVERFLOW;
+        result = -EOVERFLOW;
         goto done;
     }
 
@@ -683,14 +684,14 @@ static ssize_t ahci_read(disk_dev_t *disk, void *dest, size_t offset, size_t byt
         memcpy(out, bounce, remaining);
     }
 
-    ret = (ssize_t)bytes;
+    result = (ssize_t)bytes;
     goto done;
 
 done_empty:
-    ret = 0;
+    result = 0;
 done:
     ahci_unlock(dev);
-    return ret;
+    return result;
 }
 
 static ssize_t ahci_write(disk_dev_t *disk, void *src, size_t offset, size_t bytes) {
@@ -701,11 +702,11 @@ static ssize_t ahci_write(disk_dev_t *disk, void *src, size_t offset, size_t byt
     ahci_device_t *dev = disk->private;
     ahci_lock(dev);
 
-    ssize_t ret = -1;
+    ssize_t result = -1;
     size_t disk_size = 0;
 
     if (!ahci_disk_size(dev, &disk_size)) {
-        ret = -EOVERFLOW;
+        result = -EOVERFLOW;
         goto done;
     }
 
@@ -775,14 +776,19 @@ static ssize_t ahci_write(disk_dev_t *disk, void *src, size_t offset, size_t byt
         sector_off = 0;
     }
 
-    ret = (ssize_t)bytes;
+    if (!ahci_flush(dev)) {
+        result = -EIO;
+        goto done;
+    }
+
+    result = (ssize_t)bytes;
     goto done;
 
 done_empty:
-    ret = 0;
+    result = 0;
 done:
     ahci_unlock(dev);
-    return ret;
+    return result;
 }
 
 static bool ahci_setup_port(ahci_device_t *dev) {
@@ -799,8 +805,12 @@ static bool ahci_setup_port(ahci_device_t *dev) {
         return false;
     }
 
-    if (!ahci_zero_phys(dev->clb_paddr, PAGE_4KIB) || !ahci_zero_phys(dev->fb_paddr, PAGE_4KIB) ||
-        !ahci_zero_phys(dev->ct_paddr, PAGE_4KIB) || !ahci_zero_phys(dev->dma_paddr, AHCI_DMA_SIZE_BYTES)) {
+    bool list_zeroed = ahci_zero_phys(dev->clb_paddr, PAGE_4KIB);
+    bool fis_zeroed = ahci_zero_phys(dev->fb_paddr, PAGE_4KIB);
+    bool table_zeroed = ahci_zero_phys(dev->ct_paddr, PAGE_4KIB);
+    bool dma_zeroed = ahci_zero_phys(dev->dma_paddr, AHCI_DMA_SIZE_BYTES);
+
+    if (!list_zeroed || !fis_zeroed || !table_zeroed || !dma_zeroed) {
         return false;
     }
 
@@ -811,13 +821,10 @@ static bool ahci_setup_port(ahci_device_t *dev) {
     }
 
     ahci_hba_mem_t *hba = mmio_map;
-    ahci_request_bios_handoff(hba);
+    bios_handoff(hba);
 
     hba->ghc |= AHCI_HBA_AE;
-
-    if (dev->irq_enabled) {
-        hba->ghc |= AHCI_HBA_IE;
-    }
+    hba->ghc &= ~AHCI_HBA_IE;
 
     ahci_hba_port_t *port = &hba->ports[dev->port_index];
 
@@ -835,7 +842,7 @@ static bool ahci_setup_port(ahci_device_t *dev) {
     port->fbu = hi32(dev->fb_paddr);
     port->serr = 0xffffffffU;
     port->is = 0xffffffffU;
-    port->ie = dev->irq_enabled ? 0xffffffffU : 0;
+    port->ie = 0;
 
     if (!ahci_port_start(port)) {
         arch_phys_unmap(mmio_map, AHCI_MMIO_SIZE);
@@ -866,9 +873,7 @@ static bool ahci_find_controller(ahci_device_t *dev) {
             cursor = node;
 
             u32 bar5_lo = pci_read_config(node->bus, node->slot, node->func, PCI_CFG_BAR5, 4);
-            u8 int_line = (u8)pci_read_config(node->bus, node->slot, node->func, PCI_CFG_INT_LINE, 1);
-
-            log_debug("PCI command=%#x status=%#x int_line=%u", node->header.command, node->header.status, int_line);
+            log_debug("PCI command=%#x status=%#x", node->header.command, node->header.status);
 
             if (!bar5_lo || bar5_lo == 0xffffffffU || (bar5_lo & 1U)) {
                 continue;
@@ -887,7 +892,6 @@ static bool ahci_find_controller(ahci_device_t *dev) {
             }
 
             dev->abar_paddr = abar;
-            dev->irq_line = int_line;
             dev->bus = node->bus;
             dev->slot = node->slot;
             dev->func = node->func;
@@ -904,8 +908,9 @@ static bool ahci_find_controller(ahci_device_t *dev) {
                 continue;
             }
 
-            ahci_request_bios_handoff(hba);
+            bios_handoff(hba);
             hba->ghc |= AHCI_HBA_AE;
+            hba->ghc &= ~AHCI_HBA_IE;
 
             u32 pi = hba->pi;
 
@@ -956,14 +961,43 @@ static bool ahci_find_controller(ahci_device_t *dev) {
     return false;
 }
 
+static void ahci_disable_irqs(const ahci_device_t *dev) {
+    if (!dev) {
+        return;
+    }
+
+    (void)pci_disable_msi(dev->bus, dev->slot, dev->func);
+
+    u16 msix = pci_find_capability(dev->bus, dev->slot, dev->func, PCI_CAP_MSIX);
+    if (msix) {
+        u16 control = (u16)pci_read_config(dev->bus, dev->slot, dev->func, msix + 2, 2);
+        control &= (u16) ~(1U << 15);
+        control |= (u16)(1U << 14);
+        pci_write_config(dev->bus, dev->slot, dev->func, msix + 2, control, 2);
+    }
+
+    u16 command = (u16)pci_read_config(dev->bus, dev->slot, dev->func, PCI_CFG_COMMAND, 2);
+    command |= PCI_COMMAND_INT_DIS;
+    pci_write_config(dev->bus, dev->slot, dev->func, PCI_CFG_COMMAND, command, 2);
+}
+
+static void ahci_disable_dma(const ahci_device_t *dev) {
+    if (!dev) {
+        return;
+    }
+
+    u16 command = (u16)pci_read_config(dev->bus, dev->slot, dev->func, PCI_CFG_COMMAND, 2);
+    command &= (u16)~PCI_COMMAND_BUS_MASTER;
+    pci_write_config(dev->bus, dev->slot, dev->func, PCI_CFG_COMMAND, command, 2);
+}
+
 static bool ahci_disk_init(void) {
     ahci_device_t *dev = calloc(1, sizeof(ahci_device_t));
     if (!dev) {
         return false;
     }
 
-    sched_wait_queue_init(&dev->io_wait);
-    sched_wait_queue_init(&dev->irq_wait);
+    sched_waitq_init(&dev->io_wait);
     spinlock_init(&dev->io_lock);
     dev->sector_size = AHCI_SECTOR_SIZE;
 
@@ -972,31 +1006,16 @@ static bool ahci_disk_init(void) {
         return false;
     }
 
-    pci_enable_bus_mastering(dev->bus, dev->slot, dev->func);
+    ahci_driver.primary = dev;
 
-    // try MSI first, fall back to legacy INTx
-    bool msi_enabled = pci_enable_msi(dev->bus, dev->slot, dev->func, AHCI_MSI_VECTOR, lapic_id());
-
-    if (msi_enabled) {
-        ahci_driver.primary = dev;
-        dev->irq_enabled = true;
-        dev->msi_enabled = true;
-
-        set_int_handler(AHCI_MSI_VECTOR, ahci_primary_irq);
-        log_debug("AHCI using MSI vector %#x", AHCI_MSI_VECTOR);
-    } else if (!ahci_irq_line_supported(dev->irq_line)) {
-        log_warn("IRQ line %u out of range, falling back to polling", (unsigned int)dev->irq_line);
-        dev->irq_enabled = false;
-    } else {
-        ahci_driver.primary = dev;
-        ahci_driver.irq_line = dev->irq_line;
-        dev->irq_enabled = true;
-        irq_register(dev->irq_line, ahci_primary_irq);
-    }
+    // The physical MMIO window is transient, so this driver deliberately uses
+    // polling and leaves both PCI and HBA interrupt delivery disabled.
+    ahci_disable_irqs(dev);
+    pci_enable_bus_master(dev->bus, dev->slot, dev->func);
 
     if (!ahci_setup_port(dev)) {
         log_error("AHCI failed to setup port %u", (unsigned int)dev->port_index);
-        ahci_destroy_device(dev);
+        ahci_discard_device(dev);
         return false;
     }
 
@@ -1004,23 +1023,28 @@ static bool ahci_disk_init(void) {
 
     if (!ahci_identify(dev, identify)) {
         log_error("AHCI identify failed on port %u", (unsigned int)dev->port_index);
-        ahci_destroy_device(dev);
+        ahci_discard_device(dev);
         return false;
     }
 
-    u64 sector_count = 0;
-    if (identify[83] & (1U << 10)) {
-        sector_count = (u64)identify[100] | ((u64)identify[101] << 16) | ((u64)identify[102] << 32) |
-                       ((u64)identify[103] << 48);
+    if ((identify[83] & (1U << 10)) == 0) {
+        log_warn("AHCI disk does not support LBA48");
+        ahci_discard_device(dev);
+        return false;
     }
 
-    if (!sector_count) {
-        sector_count = (u64)identify[60] | ((u64)identify[61] << 16);
-    }
+    u64 sector_count = (u64)identify[100] | ((u64)identify[101] << 16) | ((u64)identify[102] << 32) |
+                       ((u64)identify[103] << 48);
 
     if (!sector_count) {
         log_error("AHCI identify reported zero sectors");
-        ahci_destroy_device(dev);
+        ahci_discard_device(dev);
+        return false;
+    }
+
+    if (sector_count > (u64)(SIZE_MAX / AHCI_SECTOR_SIZE)) {
+        log_error("AHCI disk is too large for this build");
+        ahci_discard_device(dev);
         return false;
     }
 
@@ -1033,7 +1057,7 @@ static bool ahci_disk_init(void) {
 
     disk_dev_t *disk = calloc(1, sizeof(disk_dev_t));
     if (!disk) {
-        ahci_destroy_device(dev);
+        ahci_discard_device(dev);
         return false;
     }
 
@@ -1047,7 +1071,7 @@ static bool ahci_disk_init(void) {
     if (!disk->name || !disk_register(disk)) {
         free(disk->name);
         free(disk);
-        ahci_destroy_device(dev);
+        ahci_discard_device(dev);
         return false;
     }
 
@@ -1057,9 +1081,8 @@ static bool ahci_disk_init(void) {
     size_t disk_mib = ahci_disk_size(dev, &disk_size) ? disk_size / MIB : 0;
 
     log_info(
-        "AHCI initialized port %u irq=%u (%zu sectors, %zu MiB)",
+        "AHCI initialized port %u in polling mode (%zu sectors, %zu MiB)",
         (unsigned)dev->port_index,
-        (unsigned)dev->irq_line,
         dev->sector_count,
         disk_mib
     );
@@ -1103,13 +1126,7 @@ driver_err_t ahci_driver_unload(void) {
 
     if (dev) {
         ahci_stop_controller(dev);
-    }
-
-    if (dev && dev->msi_enabled) {
-        (void)pci_disable_msi(dev->bus, dev->slot, dev->func);
-        reset_int_handler(AHCI_MSI_VECTOR);
-    } else if (dev && dev->irq_enabled && ahci_irq_line_supported(dev->irq_line)) {
-        irq_unregister(dev->irq_line);
+        ahci_disable_dma(dev);
     }
 
     if (ahci_driver.disk) {
@@ -1123,8 +1140,6 @@ driver_err_t ahci_driver_unload(void) {
     }
 
     ahci_driver.primary = NULL;
-    ahci_driver.irq_line = 0xff;
-    ahci_driver.warned_irq_fallback = false;
     ahci_driver.loaded = false;
 
     return DRIVER_OK;

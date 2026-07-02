@@ -23,6 +23,7 @@
 
 #define AHCI_PxIS_TFES (1U << 30)
 
+#define AHCI_HBA_HR   (1U << 0)
 #define AHCI_HBA_IE   (1U << 1)
 #define AHCI_HBA_AE   (1U << 31)
 #define AHCI_CAP2_BOH (1U << 0)
@@ -40,6 +41,7 @@
 #define ATA_CMD_IDENTIFY      0xec
 #define ATA_CMD_READ_DMA_EXT  0x25
 #define ATA_CMD_WRITE_DMA_EXT 0x35
+#define ATA_CMD_FLUSH_EXT     0xea
 
 #define ATA_DEV_BUSY 0x80
 #define ATA_DEV_DRQ  0x08
@@ -51,13 +53,13 @@
 #define AHCI_CMDH_CFL_MASK 0x1fU
 #define AHCI_CMDH_W        (1U << 6)
 #define AHCI_PRDT_DBC_MASK 0x003fffffU
-#define AHCI_PRDT_I        (1U << 31)
 
-#define AHCI_DMA_PAGES      16
-#define AHCI_PAGE_SIZE      4096U
-#define AHCI_DMA_SIZE_BYTES (AHCI_DMA_PAGES * AHCI_PAGE_SIZE)
-#define AHCI_MAX_SECTORS    (AHCI_DMA_SIZE_BYTES / AHCI_SECTOR_SIZE)
-#define AHCI_IRQ_TIMEOUT_MS 100
+#define AHCI_DMA_PAGES        16
+#define AHCI_PAGE_SIZE        4096U
+#define AHCI_DMA_SIZE_BYTES   (AHCI_DMA_PAGES * AHCI_PAGE_SIZE)
+#define AHCI_MAX_SECTORS      (AHCI_DMA_SIZE_BYTES / AHCI_SECTOR_SIZE)
+#define AHCI_CMD_TIMEOUT_MS   100
+#define AHCI_RESET_TIMEOUT_MS 1000
 
 typedef volatile struct {
     u32 clb;
@@ -163,26 +165,13 @@ typedef struct {
     u8 slot;
     u8 func;
 
-    u8 irq_line;
-    bool irq_enabled;
-    bool msi_enabled;
-    volatile u64 irq_seq;
-
     size_t sector_size;
     size_t sector_count;
 
     volatile bool io_busy;
     spinlock_t io_lock;
     sched_wait_queue_t io_wait;
-    sched_wait_queue_t irq_wait;
 } ahci_device_t;
-
-typedef ahci_hba_port_t hba_port_t;
-typedef ahci_hba_mem_t hba_mem_t;
-typedef ahci_cmd_header_t hba_cmd_header_t;
-typedef ahci_prdt_entry_t hba_prdt_entry_t;
-typedef ahci_fis_reg_h2d_t fis_reg_h2d_t;
-typedef ahci_cmd_tbl_t hba_cmd_tbl_t;
 
 driver_err_t ahci_driver_load(void);
 driver_err_t ahci_driver_unload(void);

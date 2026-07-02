@@ -107,11 +107,11 @@ static ssize_t _read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32
         }
 
         sched_thread_t *current = sched_current();
-        if (current && sched_signal_has_pending(current)) {
+        if (current && sched_signal_pending(current)) {
             return -EINTR;
         }
 
-        (void)sched_block_if_unchanged(&serial->rx_wait, wait_seq);
+        (void)sched_wait_for_change(&serial->rx_wait, wait_seq);
     }
 }
 
@@ -183,7 +183,7 @@ static ssize_t _ioctl(vfs_node_t *node, u64 request, void *args) {
     return serial_tty_ioctl(&serial->tty, request, args);
 }
 
-static bool _serial_register_devfs(vfs_node_t *dev_dir) {
+static bool register_devfs(vfs_node_t *dev_dir) {
     if (!dev_dir) {
         return false;
     }
@@ -206,7 +206,7 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
         if (!serial_driver.devices[i].rx_wait_ready) {
             spinlock_init(&serial_driver.devices[i].rx_lock);
             spinlock_init(&serial_driver.devices[i].tx_lock);
-            sched_wait_queue_init(&serial_driver.devices[i].rx_wait);
+            sched_waitq_init(&serial_driver.devices[i].rx_wait);
             sched_waitq_set_poll(&serial_driver.devices[i].rx_wait, true);
             serial_driver.devices[i].rx_wait_ready = true;
         }
@@ -228,7 +228,7 @@ static bool _serial_register_devfs(vfs_node_t *dev_dir) {
 }
 
 void serial_push_rx(size_t index, char ch) {
-    if (!ch || index >= sizeof(serial_driver.devices) / sizeof(serial_driver.devices[0])) {
+    if (index >= sizeof(serial_driver.devices) / sizeof(serial_driver.devices[0])) {
         return;
     }
 
@@ -272,7 +272,7 @@ driver_err_t serial_driver_load(void) {
         return DRIVER_OK;
     }
 
-    if (!devfs_register_device("serial", _serial_register_devfs)) {
+    if (!devfs_register_device("serial", register_devfs)) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
