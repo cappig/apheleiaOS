@@ -8,23 +8,16 @@
 
 #include "scheduler.h"
 
-static void sched_fd_reset(sched_fd_t *fd) {
+static void fd_reset(sched_fd_t *fd) {
     if (!fd) {
         return;
     }
 
-    fd->kind = SCHED_FD_NONE;
-    fd->node = NULL;
-    fd->pipe = NULL;
-    fd->offset = 0;
-    fd->pty_index = -1;
-    fd->pty_master = false;
-    fd->tty_index = TTY_NONE;
-    fd->flags = 0;
+    fd->file = NULL;
     fd->fd_flags = 0;
 }
 
-static void sched_pipe_try_destroy(sched_pipe_t *pipe) {
+static void pipe_try_destroy(sched_pipe_t *pipe) {
     if (!pipe) {
         return;
     }
@@ -43,11 +36,11 @@ static void sched_pipe_try_destroy(sched_pipe_t *pipe) {
     }
 
     if (pipe->read_wait_owned && pipe->read_wait_queue) {
-        sched_wait_queue_destroy(pipe->read_wait_queue);
+        sched_waitq_destroy(pipe->read_wait_queue);
     }
 
     if (pipe->write_wait_owned && pipe->write_wait_queue) {
-        sched_wait_queue_destroy(pipe->write_wait_queue);
+        sched_waitq_destroy(pipe->write_wait_queue);
     }
 
     free(pipe->read_wait_queue);
@@ -66,33 +59,33 @@ sched_pipe_t *sched_pipe_create(size_t capacity) {
         return NULL;
     }
 
-    u8 *data = calloc(capacity, sizeof(u8));
+    u8 *buffer = calloc(capacity, sizeof(u8));
 
     pipe->read_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
     pipe->write_wait_queue = calloc(1, sizeof(sched_wait_queue_t));
 
-    if (!data || !pipe->read_wait_queue || !pipe->write_wait_queue) {
-        free(data);
+    if (!buffer || !pipe->read_wait_queue || !pipe->write_wait_queue) {
+        free(buffer);
         free(pipe->read_wait_queue);
         free(pipe->write_wait_queue);
         free(pipe);
         return NULL;
     }
 
-    ring_io_init(&pipe->ring, data, capacity);
+    ring_io_init(&pipe->ring, buffer, capacity);
     spinlock_init(&pipe->lock);
     pipe->wake_refs = 0;
     pipe->read_wait_owned = true;
     pipe->write_wait_owned = true;
-    sched_wait_queue_init(pipe->read_wait_queue);
-    sched_wait_queue_init(pipe->write_wait_queue);
+    sched_waitq_init(pipe->read_wait_queue);
+    sched_waitq_init(pipe->write_wait_queue);
     sched_waitq_set_poll(pipe->read_wait_queue, true);
     sched_waitq_set_poll(pipe->write_wait_queue, true);
 
     return pipe;
 }
 
-void sched_pipe_acquire_reader(sched_pipe_t *pipe) {
+void sched_pipe_get_reader(sched_pipe_t *pipe) {
     if (!pipe) {
         return;
     }
@@ -102,7 +95,7 @@ void sched_pipe_acquire_reader(sched_pipe_t *pipe) {
     spin_unlock_irqrestore(&pipe->lock, flags);
 }
 
-void sched_pipe_acquire_writer(sched_pipe_t *pipe) {
+void sched_pipe_get_writer(sched_pipe_t *pipe) {
     if (!pipe) {
         return;
     }
@@ -112,7 +105,7 @@ void sched_pipe_acquire_writer(sched_pipe_t *pipe) {
     spin_unlock_irqrestore(&pipe->lock, flags);
 }
 
-bool sched_pipe_operation_begin(sched_pipe_t *pipe) {
+bool sched_pipe_begin(sched_pipe_t *pipe) {
     if (!pipe) {
         return false;
     }
@@ -130,7 +123,7 @@ bool sched_pipe_operation_begin(sched_pipe_t *pipe) {
     return true;
 }
 
-void sched_pipe_operation_end(sched_pipe_t *pipe) {
+void sched_pipe_end(sched_pipe_t *pipe) {
     if (!pipe) {
         return;
     }
@@ -143,7 +136,7 @@ void sched_pipe_operation_end(sched_pipe_t *pipe) {
 
     spin_unlock_irqrestore(&pipe->lock, flags);
 
-    sched_pipe_try_destroy(pipe);
+    pipe_try_destroy(pipe);
 }
 
 static void _pipe_release(sched_pipe_t *pipe, bool is_reader) {
@@ -184,61 +177,162 @@ static void _pipe_release(sched_pipe_t *pipe, bool is_reader) {
 
     spin_unlock_irqrestore(&pipe->lock, flags);
 
-    sched_pipe_try_destroy(pipe);
+    pipe_try_destroy(pipe);
 }
 
-void sched_pipe_release_reader(sched_pipe_t *pipe) {
+void sched_pipe_put_reader(sched_pipe_t *pipe) {
     _pipe_release(pipe, true);
 }
 
-void sched_pipe_release_writer(sched_pipe_t *pipe) {
+void sched_pipe_put_writer(sched_pipe_t *pipe) {
     _pipe_release(pipe, false);
 }
 
-static void sched_fd_retain(const sched_fd_t *fd) {
-    if (!fd) {
+static bool file_spec_valid(const sched_fd_spec_t *spec) {
+    if (!spec) {
+        return false;
+    }
+
+    if (spec->kind == SCHED_FD_VFS) {
+        return spec->node != NULL;
+    }
+
+    if (spec->kind == SCHED_FD_PIPE_READ || spec->kind == SCHED_FD_PIPE_WRITE) {
+        return spec->pipe != NULL;
+    }
+
+    return false;
+}
+
+static void file_hold_resources(sched_file_t *file) {
+    if (!file) {
         return;
     }
 
-    if (fd->kind == SCHED_FD_VFS && fd->node) {
-        vfs_node_open(fd->node);
+    if (file->kind == SCHED_FD_VFS) {
+        vfs_node_open(file->node);
     }
 
-    if (fd->pty_index >= 0) {
-        pty_hold((size_t)fd->pty_index);
+    if (file->pty_index >= 0) {
+        pty_hold((size_t)file->pty_index, file->pty_master);
     }
 
-    if (fd->kind == SCHED_FD_PIPE_READ) {
-        sched_pipe_acquire_reader(fd->pipe);
-    } else if (fd->kind == SCHED_FD_PIPE_WRITE) {
-        sched_pipe_acquire_writer(fd->pipe);
+    if (file->kind == SCHED_FD_PIPE_READ) {
+        sched_pipe_get_reader(file->pipe);
+    } else if (file->kind == SCHED_FD_PIPE_WRITE) {
+        sched_pipe_get_writer(file->pipe);
     }
 }
 
-static void sched_fd_release_value(sched_fd_t *fd) {
+static sched_file_t *file_create(const sched_fd_spec_t *spec) {
+    if (!file_spec_valid(spec)) {
+        return NULL;
+    }
+
+    sched_file_t *file = calloc(1, sizeof(*file));
+    if (!file) {
+        return NULL;
+    }
+
+    mutex_init(&file->offset_lock);
+    file->refs = 1;
+    file->kind = spec->kind;
+    file->node = spec->node;
+    file->pipe = spec->pipe;
+    file->offset = spec->offset;
+    file->pty_index = spec->pty_index;
+    file->pty_master = spec->pty_master;
+    file->tty_index = spec->tty_index;
+    file->flags = spec->flags;
+
+    file_hold_resources(file);
+    return file;
+}
+
+static void file_get(sched_file_t *file) {
+    if (!file) {
+        return;
+    }
+
+    __atomic_fetch_add(&file->refs, 1, __ATOMIC_RELAXED);
+}
+
+static void file_put(sched_file_t *file) {
+    if (!file) {
+        return;
+    }
+
+    if (__atomic_fetch_sub(&file->refs, 1, __ATOMIC_ACQ_REL) != 1) {
+        return;
+    }
+
+    if (file->kind == SCHED_FD_VFS) {
+        vfs_node_close(file->node);
+    }
+
+    if (file->pty_index >= 0) {
+        pty_put((size_t)file->pty_index, file->pty_master);
+    }
+
+    if (file->kind == SCHED_FD_PIPE_READ) {
+        sched_pipe_put_reader(file->pipe);
+    } else if (file->kind == SCHED_FD_PIPE_WRITE) {
+        sched_pipe_put_writer(file->pipe);
+    }
+
+    mutex_destroy(&file->offset_lock);
+    free(file);
+}
+
+static void fd_retain(const sched_fd_t *fd) {
+    if (fd) {
+        file_get(fd->file);
+    }
+}
+
+static void fd_release_value(sched_fd_t *fd) {
     if (!fd) {
         return;
     }
 
-    if (fd->kind == SCHED_FD_VFS && fd->node) {
-        vfs_node_close(fd->node);
+    file_put(fd->file);
+    fd_reset(fd);
+}
+
+int sched_fd_open(sched_thread_t *thread, const sched_fd_spec_t *spec, int min_fd) {
+    if (!thread || !file_spec_valid(spec)) {
+        return -EINVAL;
     }
 
-    if (fd->pty_index >= 0) {
-        pty_put((size_t)fd->pty_index);
+    int start = min_fd < 0 ? 0 : min_fd;
+    if (start >= SCHED_FD_MAX) {
+        return -EMFILE;
     }
 
-    if (fd->kind == SCHED_FD_PIPE_READ) {
-        sched_pipe_release_reader(fd->pipe);
-    } else if (fd->kind == SCHED_FD_PIPE_WRITE) {
-        sched_pipe_release_writer(fd->pipe);
+    int slot = start;
+    while (slot < SCHED_FD_MAX && thread->fd_used[slot]) {
+        slot++;
     }
 
-    sched_fd_reset(fd);
+    if (slot >= SCHED_FD_MAX) {
+        return -EMFILE;
+    }
+
+    sched_file_t *file = file_create(spec);
+    if (!file) {
+        return -ENOMEM;
+    }
+
+    thread->fd_used[slot] = true;
+    thread->fds[slot] = (sched_fd_t){
+        .file = file,
+        .fd_flags = spec->fd_flags,
+    };
+    return slot;
 }
 
 int sched_fd_alloc(sched_thread_t *thread, const sched_fd_t *fd, int min_fd) {
-    if (!thread || !fd || fd->kind == SCHED_FD_NONE) {
+    if (!thread || !fd || !fd->file) {
         return -EINVAL;
     }
 
@@ -255,7 +349,7 @@ int sched_fd_alloc(sched_thread_t *thread, const sched_fd_t *fd, int min_fd) {
 
         thread->fd_used[slot] = true;
         thread->fds[slot] = *fd;
-        sched_fd_retain(&thread->fds[slot]);
+        fd_retain(&thread->fds[slot]);
 
         return slot;
     }
@@ -269,12 +363,13 @@ int sched_fd_close(sched_thread_t *thread, int fd) {
     }
 
     sched_fd_t old = thread->fds[fd];
+    bool was_vfs = old.file && old.file->kind == SCHED_FD_VFS;
     thread->fd_used[fd] = false;
 
-    sched_fd_reset(&thread->fds[fd]);
-    sched_fd_release_value(&old);
+    fd_reset(&thread->fds[fd]);
+    fd_release_value(&old);
 
-    if (old.kind == SCHED_FD_VFS) {
+    if (was_vfs) {
         procfs_sweep_dead();
     }
 
@@ -282,7 +377,7 @@ int sched_fd_close(sched_thread_t *thread, int fd) {
 }
 
 int sched_fd_install(sched_thread_t *thread, int target_fd, const sched_fd_t *fd) {
-    if (!thread || !fd || fd->kind == SCHED_FD_NONE) {
+    if (!thread || !fd || !fd->file) {
         return -EINVAL;
     }
 
@@ -290,14 +385,15 @@ int sched_fd_install(sched_thread_t *thread, int target_fd, const sched_fd_t *fd
         return -EBADF;
     }
 
+    sched_fd_t copy = *fd;
+    fd_retain(&copy);
+
     if (thread->fd_used[target_fd]) {
         sched_fd_close(thread, target_fd);
     }
 
     thread->fd_used[target_fd] = true;
-    thread->fds[target_fd] = *fd;
-
-    sched_fd_retain(&thread->fds[target_fd]);
+    thread->fds[target_fd] = copy;
 
     return target_fd;
 }
@@ -316,6 +412,7 @@ int sched_fd_dup(sched_thread_t *thread, int oldfd, int newfd) {
     }
 
     sched_fd_t source = thread->fds[oldfd];
+    source.fd_flags &= ~SCHED_FD_FLAG_CLOEXEC;
     return sched_fd_install(thread, newfd, &source);
 }
 
@@ -331,7 +428,7 @@ bool sched_fd_clone_table(sched_thread_t *dst, const sched_thread_t *src) {
 
         dst->fd_used[fd] = true;
         dst->fds[fd] = src->fds[fd];
-        sched_fd_retain(&dst->fds[fd]);
+        fd_retain(&dst->fds[fd]);
     }
 
     return true;

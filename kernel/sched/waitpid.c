@@ -4,7 +4,7 @@ pid_t sched_wait(pid_t pid, int *status) {
     return sched_waitpid(pid, status, 0);
 }
 
-static bool waitpid_target_matches(const sched_thread_t *parent, const sched_thread_t *child, pid_t pid) {
+static bool waitpid_matches(const sched_thread_t *parent, const sched_thread_t *child, pid_t pid) {
     if (!parent || !child || !child->user_thread) {
         return false;
     }
@@ -33,7 +33,7 @@ static sched_thread_t *waitpid_find_zombie(const sched_thread_t *self, pid_t pid
     ll_foreach(node, sched_state.procs.zombie_list) {
         sched_thread_t *thread = node->data;
 
-        if (waitpid_target_matches(self, thread, pid)) {
+        if (waitpid_matches(self, thread, pid)) {
             return thread;
         }
     }
@@ -45,7 +45,7 @@ static sched_thread_t *waitpid_find_stopped(const sched_thread_t *self, pid_t pi
     ll_foreach(node, sched_state.procs.all_list) {
         sched_thread_t *thread = node->data;
 
-        if (!waitpid_target_matches(self, thread, pid)) {
+        if (!waitpid_matches(self, thread, pid)) {
             continue;
         }
 
@@ -67,7 +67,7 @@ static bool waitpid_has_child(const sched_thread_t *self, pid_t pid) {
     ll_foreach(node, sched_state.procs.all_list) {
         sched_thread_t *thread = node->data;
 
-        if (waitpid_target_matches(self, thread, pid)) {
+        if (waitpid_matches(self, thread, pid)) {
             return true;
         }
     }
@@ -114,7 +114,7 @@ static u64 waitpid_sum_ticks(u64 own_ticks, u64 child_ticks) {
     return total_ticks;
 }
 
-static void waitpid_charge_child_time(sched_thread_t *parent, const sched_thread_t *child) {
+static void _charge_child_time(sched_thread_t *parent, const sched_thread_t *child) {
     if (!parent || !child) {
         return;
     }
@@ -133,6 +133,73 @@ static void waitpid_charge_child_time(sched_thread_t *parent, const sched_thread
     waitpid_add_ticks(&parent->child_sys_ticks, waitpid_sum_ticks(own_sys, child_sys));
 }
 
+typedef struct {
+    sched_thread_t *zombie;
+    sched_thread_t *stopped;
+    sched_thread_t *active_zombie;
+    bool has_child;
+} waitpid_scan_t;
+
+static waitpid_scan_t waitpid_scan(sched_thread_t *self, pid_t pid, int options) {
+    waitpid_scan_t scan = { 0 };
+
+    scan.zombie = waitpid_find_zombie(self, pid);
+    if (scan.zombie && thread_is_owned(scan.zombie)) {
+        scan.active_zombie = scan.zombie;
+        scan.zombie = NULL;
+    }
+
+    if (scan.zombie) {
+        scan.has_child = true;
+        return scan;
+    }
+
+    if (options & WUNTRACED) {
+        scan.stopped = waitpid_find_stopped(self, pid, &scan.has_child);
+    } else {
+        scan.has_child = waitpid_has_child(self, pid);
+    }
+
+    return scan;
+}
+
+static pid_t reap_zombie(sched_thread_t *self, sched_thread_t *zombie, int *status, unsigned long flags) {
+    if (status) {
+        *status = waitpid_status(zombie);
+    }
+
+    _charge_child_time(self, zombie);
+
+    list_remove(sched_state.procs.zombie_list, &zombie->zombie_node);
+    zombie->in_zombie_list = false;
+
+    sched_lock_restore(flags);
+
+    pid_t child_pid = zombie->pid;
+    thread_cleanup(zombie);
+    thread_put(zombie);
+
+    return child_pid;
+}
+
+static pid_t report_stopped(sched_thread_t *thread, int *status, unsigned long flags) {
+    thread->stop_reported = true;
+
+    if (status) {
+        *status = 0x7f | ((thread->stop_signal & 0xff) << 8);
+    }
+
+    sched_lock_restore(flags);
+    return thread->pid;
+}
+
+static void wait_for_zombie_owner(sched_thread_t *thread) {
+    while (thread_is_owned(thread)) {
+        force_resched();
+        sched_spin_wait();
+    }
+}
+
 pid_t sched_waitpid(pid_t pid, int *status, int options) {
     sched_thread_t *self = sched_local_current();
 
@@ -145,11 +212,6 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
     }
 
     for (;;) {
-        sched_thread_t *found = NULL;
-        sched_thread_t *stopped = NULL;
-        sched_thread_t *active_zombie = NULL;
-        bool has_matching_child = false;
-
         unsigned long flags = sched_lock_save();
 
         if (!sched_state.procs.zombie_list || !sched_state.procs.all_list) {
@@ -157,67 +219,28 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
             return -ECHILD;
         }
 
-        found = waitpid_find_zombie(self, pid);
-
-        if (found && thread_is_owned(found)) {
-            active_zombie = found;
-            found = NULL;
+        waitpid_scan_t scan = waitpid_scan(self, pid, options);
+        if (scan.zombie) {
+            return reap_zombie(self, scan.zombie, status, flags);
         }
 
-        if (found) {
-            if (status) {
-                *status = waitpid_status(found);
-            }
-
-            waitpid_charge_child_time(self, found);
-
-            list_remove(sched_state.procs.zombie_list, &found->zombie_node);
-            found->in_zombie_list = false;
-
-            sched_lock_restore(flags);
-
-            pid_t ret = found->pid;
-            thread_cleanup(found);
-            thread_put(found);
-
-            return ret;
+        if (scan.stopped) {
+            return report_stopped(scan.stopped, status, flags);
         }
 
-        if (options & WUNTRACED) {
-            stopped = waitpid_find_stopped(self, pid, &has_matching_child);
-
-            if (stopped) {
-                stopped->stop_reported = true;
-
-                if (status) {
-                    *status = 0x7f | ((stopped->stop_signal & 0xff) << 8);
-                }
-
-                sched_lock_restore(flags);
-                return stopped->pid;
-            }
-        } else {
-            has_matching_child = waitpid_has_child(self, pid);
-        }
-
-        if (!has_matching_child) {
+        if (!scan.has_child) {
             sched_lock_restore(flags);
             return -ECHILD;
         }
 
-        if (active_zombie) {
+        if (scan.active_zombie) {
             if (options & WNOHANG) {
                 sched_lock_restore(flags);
                 return 0;
             }
 
             sched_lock_restore(flags);
-
-            while (thread_is_owned(active_zombie)) {
-                force_resched();
-                sched_spin_wait();
-            }
-
+            wait_for_zombie_owner(scan.active_zombie);
             continue;
         }
 
@@ -240,7 +263,7 @@ pid_t sched_waitpid(pid_t pid, int *status, int options) {
             continue;
         }
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(&self->wait_queue, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
+        sched_wait_result_t wait_result = sched_wait_on(&self->wait_queue, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
 
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;

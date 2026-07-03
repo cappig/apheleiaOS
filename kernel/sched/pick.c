@@ -25,16 +25,16 @@ static bool ready_to_run(sched_thread_t *thread) {
         return false;
     }
 
-    bool bad_context = thread_ctx_ok(thread) && !ctx_valid(thread);
-    if (bad_context) {
+    bool invalid_context = thread_ctx_ok(thread) && !ctx_valid(thread);
+    if (invalid_context) {
         make_zombie(thread, -EFAULT);
         return false;
     }
 
     if (thread_get_state(thread) != THREAD_READY) {
-        bool lost_running_thread = thread_get_state(thread) == THREAD_RUNNING && !thread_is_owned(thread);
+        bool orphaned_running = thread_get_state(thread) == THREAD_RUNNING && !thread_is_owned(thread);
 
-        if (lost_running_thread) {
+        if (orphaned_running) {
             sched_repair_thread(thread, true);
         }
 
@@ -67,14 +67,15 @@ static sched_thread_t *pick_local(size_t cpu_id) {
 
 static sched_thread_t *rescue_stranded(size_t cpu_id) {
     // affinity changes can strand runnable threads on queues they can no longer run on
-    sched_thread_t *stranded = rq_pop_disallowed_from_cpu(cpu_id, cpu_id);
+    sched_thread_t *stranded = rq_take_unfit(cpu_id, cpu_id);
     if (!stranded) {
         return NULL;
     }
 
     size_t target_cpu = pick_cpu(stranded, cpu_id);
-    bool can_move = target_cpu < MAX_CORES && target_cpu != cpu_id && sched_cpu_allowed(stranded, target_cpu) &&
-                    cores_local[target_cpu].online;
+    bool target_ok = target_cpu < MAX_CORES && target_cpu != cpu_id;
+    bool target_online = target_ok && cores_local[target_cpu].online;
+    bool can_move = target_online && sched_cpu_allowed(stranded, target_cpu);
 
     if (!can_move) {
         rq_enqueue_cpu(stranded, cpu_id);
@@ -125,7 +126,7 @@ static sched_thread_t *steal_idle_work(size_t cpu_id) {
 
     // keep one stolen thread local and enqueue the rest behind it for fairness
     for (size_t i = 0; i < SCHED_IDLE_STEAL_BATCH; i++) {
-        sched_thread_t *victim = rq_pop_worst_allowed_from_cpu(cpu, cpu_id);
+        sched_thread_t *victim = rq_take_worst(cpu, cpu_id);
 
         if (!victim) {
             break;
@@ -186,10 +187,12 @@ sched_thread_t *pick_init_thread(void) {
 
         for (u32 j = 0; (size_t)j < rq->nr_running; j++) {
             sched_thread_t *thread = rq->heap[j];
-            bool not_init =
-                (!thread || thread->pid != 1 || thread_get_state(thread) != THREAD_READY || !thread->context);
 
-            if (not_init) {
+            if (!thread || thread->pid != 1) {
+                continue;
+            }
+
+            if (thread_get_state(thread) != THREAD_READY || !thread->context) {
                 continue;
             }
 

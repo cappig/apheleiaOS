@@ -207,7 +207,7 @@ int sched_getgroups(gid_t *groups, size_t max_groups, size_t *group_count_out) {
 int sched_set_affinity(pid_t pid, u64 mask) {
     sched_thread_t *self = sched_local_current();
     sched_thread_t *target = NULL;
-    bool target_has_ref = false;
+    bool held_ref = false;
 
     u64 online = sched_online_cpu_mask();
     mask &= online;
@@ -220,7 +220,7 @@ int sched_set_affinity(pid_t pid, u64 mask) {
         target = self;
     } else if (pid > 0) {
         target = sched_find_thread(pid);
-        target_has_ref = true;
+        held_ref = true;
     } else {
         return -EINVAL;
     }
@@ -230,7 +230,7 @@ int sched_set_affinity(pid_t pid, u64 mask) {
     }
 
     if (self && self->uid != 0 && self->uid != target->uid) {
-        if (target_has_ref) {
+        if (held_ref) {
             thread_put(target);
         }
 
@@ -247,34 +247,16 @@ int sched_set_affinity(pid_t pid, u64 mask) {
         enqueue_thread(target);
     }
 
-    bool request_local_resched = false;
-    size_t request_remote_resched_cpu = MAX_CORES;
+    size_t resched_cpu = MAX_CORES;
 
     if (target->state == THREAD_RUNNING && !sched_cpu_allowed(target, target->last_cpu)) {
-        size_t cpu = target->last_cpu;
-
-        if (cpu < MAX_CORES) {
-            if (cpu == sched_cpu_id()) {
-                request_local_resched = true;
-            } else {
-                request_remote_resched_cpu = cpu;
-            }
-        }
+        resched_cpu = target->last_cpu;
     }
 
     sched_lock_restore(flags);
+    sched_kick_cpu(resched_cpu);
 
-    if (request_local_resched) {
-        sched_request_resched_local();
-    } else {
-        bool woke_remote = (request_remote_resched_cpu < MAX_CORES && wake_cpu(request_remote_resched_cpu));
-
-        if (woke_remote) {
-            __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
-        }
-    }
-
-    if (target_has_ref) {
+    if (held_ref) {
         thread_put(target);
     }
 
@@ -288,13 +270,13 @@ int sched_get_affinity(pid_t pid, u64 *mask_out) {
 
     sched_thread_t *self = sched_local_current();
     sched_thread_t *target = NULL;
-    bool target_has_ref = false;
+    bool held_ref = false;
 
     if (pid == 0) {
         target = self;
     } else if (pid > 0) {
         target = sched_find_thread(pid);
-        target_has_ref = true;
+        held_ref = true;
     } else {
         return -EINVAL;
     }
@@ -304,7 +286,7 @@ int sched_get_affinity(pid_t pid, u64 *mask_out) {
     }
 
     if (self && self->uid != 0 && self->uid != target->uid) {
-        if (target_has_ref) {
+        if (held_ref) {
             thread_put(target);
         }
 
@@ -322,7 +304,7 @@ int sched_get_affinity(pid_t pid, u64 *mask_out) {
 
     *mask_out = mask;
 
-    if (target_has_ref) {
+    if (held_ref) {
         thread_put(target);
     }
 
@@ -506,7 +488,7 @@ bool sched_process_is_child(pid_t child_pid, pid_t parent_pid) {
     return is_child;
 }
 
-bool sched_pid_is_group_leader(pid_t pid) {
+bool sched_is_group_leader(pid_t pid) {
     if (pid <= 0) {
         return false;
     }

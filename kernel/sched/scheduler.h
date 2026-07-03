@@ -41,7 +41,7 @@ typedef struct sched_pipe {
     bool write_wait_owned;
 } sched_pipe_t;
 
-typedef struct sched_fd {
+typedef struct sched_fd_spec {
     sched_fd_kind_t kind;
     vfs_node_t *node;
     sched_pipe_t *pipe;
@@ -50,6 +50,24 @@ typedef struct sched_fd {
     bool pty_master;
     int tty_index;
     u32 flags;
+    u32 fd_flags;
+} sched_fd_spec_t;
+
+typedef struct sched_file {
+    mutex_t offset_lock;
+    volatile u32 refs;
+    sched_fd_kind_t kind;
+    vfs_node_t *node;
+    sched_pipe_t *pipe;
+    size_t offset;
+    int pty_index;
+    bool pty_master;
+    int tty_index;
+    u32 flags;
+} sched_file_t;
+
+typedef struct sched_fd {
+    sched_file_t *file;
     u32 fd_flags;
 } sched_fd_t;
 
@@ -151,8 +169,8 @@ typedef struct sched_thread {
 
     volatile u32 refcount;
     u32 lifecycle_flags;
-    list_node_t deferred_node;
-    bool in_deferred_list;
+    list_node_t reap_node;
+    bool in_reap_list;
 
     sched_fd_t fds[SCHED_FD_MAX];
     bool fd_used[SCHED_FD_MAX];
@@ -199,7 +217,7 @@ typedef struct {
     u64 sched_runqueue_max;
     u64 sched_balance_runs;
     u64 wait_timeout_count;
-} sched_metrics_snapshot_t;
+} sched_stats_t;
 
 enum {
     SCHED_DEFER_QUEUED = 1U << 0,
@@ -233,7 +251,7 @@ typedef struct {
 void scheduler_init(void);
 void scheduler_init_core(void);
 void scheduler_start(void);
-void scheduler_start_secondary(void);
+void scheduler_start_cpu(void);
 
 bool sched_is_running(void);
 
@@ -267,10 +285,10 @@ pid_t sched_getpgid(pid_t pid);
 int sched_setpgid(pid_t pid, pid_t pgid);
 pid_t sched_setsid(void);
 bool sched_process_is_child(pid_t child_pid, pid_t parent_pid);
-bool sched_pid_is_group_leader(pid_t pid);
+bool sched_is_group_leader(pid_t pid);
 bool sched_pgrp_exists(pid_t pgid);
 bool sched_pgrp_in_session(pid_t pgid, pid_t sid);
-sched_thread_t *sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg);
+sched_thread_t *sched_spawn_kernel(const char *name, thread_entry_t entry, void *arg);
 sched_thread_t *sched_create_user_thread(const char *name);
 pid_t sched_fork(arch_int_state_t *state);
 pid_t sched_wait(pid_t pid, int *status);
@@ -288,17 +306,17 @@ bool sched_add_user_region(sched_thread_t *thread, uintptr_t vaddr, uintptr_t pa
 void sched_clear_user_regions(sched_thread_t *thread);
 void sched_user_mem_add(sched_thread_t *thread, size_t pages);
 void sched_user_mem_sub(sched_thread_t *thread, size_t pages);
-void sched_user_mem_set_kib(sched_thread_t *thread, u64 kib);
+void sched_set_user_mem(sched_thread_t *thread, u64 kib);
 u64 sched_user_mem_kib(const sched_thread_t *thread);
 
-void sched_wait_queue_init(sched_wait_queue_t *queue);
-void sched_wait_queue_destroy(sched_wait_queue_t *queue);
+void sched_waitq_init(sched_wait_queue_t *queue);
+void sched_waitq_destroy(sched_wait_queue_t *queue);
 void sched_waitq_set_poll(sched_wait_queue_t *queue, bool enabled);
 
 u32 sched_wait_seq(sched_wait_queue_t *queue);
 sched_wait_result_t
-sched_wait_on_queue(sched_wait_queue_t *queue, u32 observed_seq, u64 deadline_tick, sched_wait_flags_t flags);
-bool sched_block_if_unchanged(sched_wait_queue_t *queue, u32 observed_seq);
+sched_wait_on(sched_wait_queue_t *queue, u32 observed_seq, u64 deadline_tick, sched_wait_flags_t flags);
+bool sched_wait_for_change(sched_wait_queue_t *queue, u32 observed_seq);
 void sched_block(sched_wait_queue_t *queue);
 void sched_wake_one(sched_wait_queue_t *queue);
 void sched_wake_all(sched_wait_queue_t *queue);
@@ -322,20 +340,21 @@ void sched_capture_context(arch_int_state_t *state);
 void sched_ipi_resched(void);
 void sched_resched_softirq(arch_int_state_t *state);
 void force_resched(void);
-void sched_request_resched_local(void);
+void sched_resched_local(void);
 bool wait_running(sched_thread_t *self);
 void sched_exit(void) NORETURN;
 bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out);
-void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out);
-void sched_cpu_usage_snapshot_core(size_t core_id, u64 *busy_ticks_out, u64 *total_ticks_out);
-void sched_metrics_snapshot(sched_metrics_snapshot_t *out);
-void sched_metrics_record_syscall(void);
+void sched_cpu_usage(u64 *busy_ticks_out, u64 *total_ticks_out);
+void sched_cpu_usage_core(size_t core_id, u64 *busy_ticks_out, u64 *total_ticks_out);
+void sched_stats(sched_stats_t *out);
+void sched_record_syscall(void);
 int sched_signal_send_pgrp(pid_t pgid, int signum);
 int sched_signal_pgrp_as(pid_t pgid, int signum, const sched_thread_t *sender);
 
 bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write);
 bool sched_proc_cwd(pid_t pid, char *out, size_t out_len);
 
+int sched_fd_open(sched_thread_t *thread, const sched_fd_spec_t *spec, int min_fd);
 int sched_fd_alloc(sched_thread_t *thread, const sched_fd_t *fd, int min_fd);
 int sched_fd_install(sched_thread_t *thread, int target_fd, const sched_fd_t *fd);
 int sched_fd_close(sched_thread_t *thread, int fd);
@@ -346,9 +365,9 @@ void sched_fd_close_cloexec(sched_thread_t *thread);
 bool sched_fd_refs_node(const vfs_node_t *node);
 
 sched_pipe_t *sched_pipe_create(size_t capacity);
-void sched_pipe_acquire_reader(sched_pipe_t *pipe);
-void sched_pipe_acquire_writer(sched_pipe_t *pipe);
-void sched_pipe_release_reader(sched_pipe_t *pipe);
-void sched_pipe_release_writer(sched_pipe_t *pipe);
-bool sched_pipe_operation_begin(sched_pipe_t *pipe);
-void sched_pipe_operation_end(sched_pipe_t *pipe);
+void sched_pipe_get_reader(sched_pipe_t *pipe);
+void sched_pipe_get_writer(sched_pipe_t *pipe);
+void sched_pipe_put_reader(sched_pipe_t *pipe);
+void sched_pipe_put_writer(sched_pipe_t *pipe);
+bool sched_pipe_begin(sched_pipe_t *pipe);
+void sched_pipe_end(sched_pipe_t *pipe);

@@ -23,7 +23,7 @@ static uintptr_t build_user_stack(sched_thread_t *thread, uintptr_t entry, uintp
     memset(frame, 0, sizeof(*frame));
 
     arch_word_t user_sp = (arch_word_t)ALIGN_DOWN(user_stack_top, 16);
-    arch_state_set_user_entry(frame, (arch_word_t)entry, user_sp);
+    arch_set_user_entry(frame, (arch_word_t)entry, user_sp);
 
     return sp;
 }
@@ -73,7 +73,7 @@ bool wake_cpu(size_t cpu_id) {
         return false;
     }
 
-    if (!sched_mark_need_resched_cpu(cpu_id)) {
+    if (!sched_mark_resched_cpu(cpu_id)) {
         return false;
     }
 
@@ -92,7 +92,7 @@ bool wake_cpu(size_t cpu_id) {
     return true;
 }
 
-static size_t sched_wake_cpu_count(void) {
+static size_t wake_cpu_count(void) {
     size_t ncpu = core_count;
 
     if (ncpu > MAX_CORES) {
@@ -108,7 +108,7 @@ static size_t sched_wake_cpu_count(void) {
     return ncpu;
 }
 
-static u64 sched_wake_allowed_mask(const sched_thread_t *thread, u64 online) {
+static u64 wake_mask(const sched_thread_t *thread, u64 online) {
     u64 allowed = thread ? thread->allowed_cpu_mask : 0;
 
     if (!allowed) {
@@ -143,8 +143,10 @@ static size_t pick_idle_cpu(u64 idle_mask, size_t base_cpu, size_t ncpu) {
         }
 
         size_t distance = sched_cpu_distance(base_cpu, cpu, ncpu);
-        bool better = best_cpu >= MAX_CORES || distance < best_distance ||
-                      (distance == best_distance && cpu < best_cpu);
+        bool no_best = best_cpu >= MAX_CORES;
+        bool closer = distance < best_distance;
+        bool tie_break = distance == best_distance && cpu < best_cpu;
+        bool better = no_best || closer || tie_break;
 
         if (better) {
             best_cpu = cpu;
@@ -181,10 +183,10 @@ static bool wake_can_prefer(const sched_thread_t *thread, size_t ncpu, u64 allow
     return allowed & (1ULL << thread->last_cpu);
 }
 
-static size_t sched_pick_target_cpu(const sched_thread_t *thread) {
-    size_t ncpu = sched_wake_cpu_count();
+static size_t pick_target_cpu(const sched_thread_t *thread) {
+    size_t ncpu = wake_cpu_count();
     u64 online = sched_online_cpu_mask();
-    u64 allowed = sched_wake_allowed_mask(thread, online);
+    u64 allowed = wake_mask(thread, online);
 
     size_t min_load = (size_t)-1;
     bool found = false;
@@ -261,7 +263,7 @@ void enqueue_ipi(sched_thread_t *thread, bool allow_remote_ipi) {
         return;
     }
 
-    size_t target_cpu = sched_pick_target_cpu(thread);
+    size_t target_cpu = pick_target_cpu(thread);
     size_t prev_cpu = thread->last_cpu;
 
     if (thread->on_rq && prev_cpu != target_cpu) {
@@ -280,10 +282,10 @@ void enqueue_ipi(sched_thread_t *thread, bool allow_remote_ipi) {
         if (allow_remote_ipi && wake_cpu(target_cpu)) {
             __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
         } else {
-            sched_set_need_resched_cpu(target_cpu, true);
+            sched_set_resched_cpu(target_cpu, true);
         }
     } else {
-        sched_request_resched_local();
+        sched_resched_local();
     }
 }
 
@@ -394,8 +396,8 @@ sched_thread_t *create_thread(
 
     spinlock_init(&thread->vm_lock);
 
-    sched_wait_queue_init(&thread->wait_queue);
-    sched_signal_init_thread(thread);
+    sched_waitq_init(&thread->wait_queue);
+    sched_signal_init(thread);
 
     arch_fpu_init(thread->fpu_state);
     thread->fpu_initialized = true;
@@ -442,7 +444,7 @@ sched_thread_t *sched_find_thread(pid_t pid) {
     return thread;
 }
 
-sched_thread_t *sched_create_kernel_thread(const char *name, thread_entry_t entry, void *arg) {
+sched_thread_t *sched_spawn_kernel(const char *name, thread_entry_t entry, void *arg) {
     return create_thread(name, entry, arg, true, false, SCHED_PID_KERNEL);
 }
 
@@ -474,6 +476,132 @@ static void copy_fork_state(sched_thread_t *child, sched_thread_t *parent) {
     }
 }
 
+static bool region_bytes(const sched_user_region_t *region, size_t *size_out) {
+    size_t pages = region->pages;
+    bool size_overflows = pages > (uintptr_t)-1 / PAGE_4KIB;
+    size_t size = pages * PAGE_4KIB;
+    bool end_overflows = !size_overflows && region->vaddr > (uintptr_t)-1 - size;
+
+    if (size_overflows || end_overflows) {
+        return false;
+    }
+
+    *size_out = size;
+    return true;
+}
+
+static void unmap_child_region(void *root, uintptr_t vaddr, size_t pages) {
+    for (size_t i = 0; i < pages; i++) {
+        uintptr_t page = vaddr + i * PAGE_4KIB;
+
+        unmap_page((page_t *)root, page);
+        arch_tlb_flush(page);
+    }
+}
+
+static int fork_copy_region(sched_thread_t *child, const sched_user_region_t *region, void *root) {
+    size_t size = 0;
+    if (!region_bytes(region, &size)) {
+        return -ENOMEM;
+    }
+
+    uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(region->pages);
+    if (!new_paddr) {
+        return -ENOMEM;
+    }
+
+    arch_map_region(root, region->pages, region->vaddr, new_paddr, region->flags);
+
+    if (!sched_add_user_region(child, region->vaddr, new_paddr, region->pages, region->flags)) {
+        unmap_child_region(root, region->vaddr, region->pages);
+        arch_free_frames((void *)new_paddr, region->pages);
+        return -ENOMEM;
+    }
+
+    void *dst = arch_phys_map(new_paddr, size, 0);
+    if (!dst) {
+        return -ENOMEM;
+    }
+
+    memcpy(dst, (void *)region->vaddr, size);
+    arch_phys_unmap(dst, size);
+    return 0;
+}
+
+static int fork_cow_region(
+    sched_thread_t *parent,
+    sched_thread_t *child,
+    sched_user_region_t *region,
+    void *root,
+    bool *flush_parent_tlb
+) {
+    u64 flags = region->flags;
+    bool writable = (flags & PT_WRITE) != 0;
+
+    if (writable) {
+        flags |= SCHED_REGION_COW;
+    }
+
+    region->flags = flags;
+
+    u64 map_flags = writable ? (flags & ~PT_WRITE) : flags;
+
+    arch_map_region(root, region->pages, region->vaddr, region->paddr, map_flags);
+    if (!sched_add_user_region(child, region->vaddr, region->paddr, region->pages, flags)) {
+        return -ENOMEM;
+    }
+
+    pmm_ref_hold((void *)(uintptr_t)region->paddr, region->pages);
+
+    if (writable && sched_mark_cow(parent, region)) {
+        *flush_parent_tlb = true;
+    }
+
+    return 0;
+}
+
+static int fork_user_space(sched_thread_t *parent, sched_thread_t *child, bool *flush_parent_tlb) {
+    void *root = arch_vm_root(child->vm_space);
+    if (!root) {
+        return -ENOMEM;
+    }
+
+    bool cow_enabled = pmm_ref_ready();
+
+    for (sched_user_region_t *region = parent->regions; region; region = region->next) {
+        int status = cow_enabled ? fork_cow_region(parent, child, region, root, flush_parent_tlb)
+                                 : fork_copy_region(child, region, root);
+        if (status < 0) {
+            return status;
+        }
+    }
+
+    return 0;
+}
+
+static int fork_clone_vm(sched_thread_t *parent, sched_thread_t *child) {
+    bool flush_parent_tlb = false;
+    unsigned long flags = spin_lock_irqsave(&parent->vm_lock);
+
+    int status = fork_user_space(parent, child, &flush_parent_tlb);
+
+    if (status == 0 && flush_parent_tlb) {
+        arch_vm_switch(parent->vm_space);
+    }
+
+    spin_unlock_irqrestore(&parent->vm_lock, flags);
+    return status;
+}
+
+static void fork_make_runnable(sched_thread_t *child, arch_int_state_t *state) {
+    child->context = build_fork_stack(child, state);
+    child->vruntime_ns = 0;
+
+    unsigned long flags = sched_lock_save();
+    enqueue_thread(child);
+    sched_lock_restore(flags);
+}
+
 pid_t sched_fork(arch_int_state_t *state) {
     sched_thread_t *parent = sched_local_current();
 
@@ -493,114 +621,11 @@ pid_t sched_fork(arch_int_state_t *state) {
         return _fork_fail("failed to clone file descriptor table", ENOMEM);
     }
 
-    bool cow_enabled = pmm_ref_ready();
-
-    bool parent_tlb_needs_flush = false;
-    unsigned long vm_flags = spin_lock_irqsave(&parent->vm_lock);
-
-    sched_user_region_t *region = parent->regions;
-
-    while (region) {
-        size_t pages = region->pages;
-        void *root = arch_vm_root(child->vm_space);
-
-        if (!root) {
-            spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
-            sched_discard_thread(child);
-            return _fork_fail("child VM space missing root page table", ENOMEM);
-        }
-
-        if (!cow_enabled) {
-            bool region_overflows =
-                (pages > (uintptr_t)-1 / PAGE_4KIB || region->vaddr > (uintptr_t)-1 - (pages * PAGE_4KIB));
-
-            if (region_overflows) {
-                spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
-                sched_discard_thread(child);
-                return _fork_fail("copied user region is out of range", ENOMEM);
-            }
-
-            size_t size = pages * PAGE_4KIB;
-            uintptr_t new_paddr = (uintptr_t)arch_alloc_frames_user(pages);
-            if (!new_paddr) {
-                spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
-                sched_discard_thread(child);
-                return _fork_fail("failed to allocate copied user pages", ENOMEM);
-            }
-
-            arch_map_region(root, pages, region->vaddr, new_paddr, region->flags);
-            if (!sched_add_user_region(child, region->vaddr, new_paddr, pages, region->flags)) {
-                for (size_t i = 0; i < pages; i++) {
-                    uintptr_t vaddr = region->vaddr + i * PAGE_4KIB;
-                    unmap_page((page_t *)root, vaddr);
-                    arch_tlb_flush(vaddr);
-                }
-
-                arch_free_frames((void *)new_paddr, pages);
-                spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
-                sched_discard_thread(child);
-                return _fork_fail("failed to record copied user region", ENOMEM);
-            }
-
-            void *dst = arch_phys_map(new_paddr, size, 0);
-            if (!dst) {
-                spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
-                sched_discard_thread(child);
-                return _fork_fail("failed to map copied user pages", ENOMEM);
-            }
-
-            memcpy(dst, (void *)region->vaddr, size);
-            arch_phys_unmap(dst, size);
-
-            region = region->next;
-            continue;
-        }
-
-        u64 region_flags = region->flags;
-        bool writable = (region_flags & PT_WRITE) != 0;
-
-        if (writable) {
-            region_flags |= SCHED_REGION_COW;
-        }
-
-        region->flags = region_flags;
-
-        u64 map_flags = region_flags;
-        if (writable) {
-            map_flags &= ~PT_WRITE;
-        }
-
-        arch_map_region(root, pages, region->vaddr, region->paddr, map_flags);
-        if (!sched_add_user_region(child, region->vaddr, region->paddr, pages, region_flags)) {
-            spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
-            sched_discard_thread(child);
-            return _fork_fail("failed to record COW user region", ENOMEM);
-        }
-
-        pmm_ref_hold((void *)(uintptr_t)region->paddr, pages);
-
-        if (writable) {
-            if (sched_user_region_mark_cow(parent, region)) {
-                parent_tlb_needs_flush = true;
-            }
-        }
-
-        region = region->next;
+    if (fork_clone_vm(parent, child) < 0) {
+        sched_discard_thread(child);
+        return _fork_fail("failed to clone user address space", ENOMEM);
     }
 
-    if (parent_tlb_needs_flush) {
-        arch_vm_switch(parent->vm_space);
-    }
-
-    spin_unlock_irqrestore(&parent->vm_lock, vm_flags);
-
-    child->context = build_fork_stack(child, state);
-
-    // let freshly forked children compete at current rq baseline instead of
-    // inheriting a potentially stale/high vruntime from interactive parents
-    child->vruntime_ns = 0;
-
-    enqueue_thread(child);
-
+    fork_make_runnable(child, state);
     return child->pid;
 }

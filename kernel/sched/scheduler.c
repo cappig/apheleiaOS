@@ -23,14 +23,14 @@ void scheduler_init(void) {
     sched_state.procs.all_list = list_create();
     assert(sched_state.procs.all_list);
 
-    sched_state.procs.deferred_destroy_list = list_create();
-    assert(sched_state.procs.deferred_destroy_list);
+    sched_state.procs.reap_list = list_create();
+    assert(sched_state.procs.reap_list);
 
     sched_state.procs.pid_index = hashmap_create();
 
-    sched_wait_queue_init(&sched_state.wait.poll_wait_queue);
-    sched_wait_queue_init(&sched_state.wait.exit_event_wait);
-    sched_wait_queue_init(&sched_state.wait.sleep_wait_queue);
+    sched_waitq_init(&sched_state.wait.poll_wait_queue);
+    sched_waitq_init(&sched_state.wait.exit_event_wait);
+    sched_waitq_init(&sched_state.wait.sleep_wait_queue);
 
     spinlock_init(&sched_state.wait.exit_events.lock);
     sched_state.wait.exit_events.ring = ring_queue_create(sizeof(pid_t), SCHED_EXIT_EVENT_CAP);
@@ -42,7 +42,7 @@ void scheduler_init(void) {
     sched_state.procs.next_kernel_pid = -1;
     scheduler_init_core();
     sched_running_set(false);
-    sched_secondary_released_set(false);
+    sched_set_aps_released(false);
 }
 
 void scheduler_init_core(void) {
@@ -54,7 +54,7 @@ void scheduler_init_core(void) {
         return;
     }
 
-    sched_cpu_state_t *local = sched_local();
+    sched_cpu_t *local = sched_local();
     local->handoff_ready = NULL;
     local->preempt_depth = 0;
     local->sched_lock_depth = 0;
@@ -62,7 +62,7 @@ void scheduler_init_core(void) {
     local->slice_ns = 0;
     local->need_resched = false;
     local->force_resched = false;
-    local->resched_irq_pending = false;
+    local->resched_irq = false;
     local->local_ticks = 0;
 
     sched_thread_t *idle = create_thread("idle", idle_entry, NULL, false, false, SCHED_PID_IDLE);
@@ -78,13 +78,13 @@ void scheduler_init_core(void) {
 
     sched_local_set_idle(idle);
     sched_local_set_current(idle);
-    sched_local_set_slice_ns(0);
-    sched_local_set_need_resched(false);
+    sched_set_slice_ns(0);
+    sched_set_resched(false);
     __atomic_store_n(&local->force_resched, false, __ATOMIC_RELEASE);
-    __atomic_store_n(&local->resched_irq_pending, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&local->resched_irq, false, __ATOMIC_RELEASE);
 }
 
-static void widen_default_affinity(void) {
+static void widen_affinity(void) {
     if (!sched_state.procs.all_list) {
         return;
     }
@@ -110,6 +110,14 @@ static void widen_default_affinity(void) {
     sched_lock_restore(flags);
 }
 
+static bool invalid_thread_context(const sched_thread_t *thread) {
+    if (!thread_ctx_ok(thread)) {
+        return false;
+    }
+
+    return !thread->context || !ctx_valid(thread);
+}
+
 void scheduler_start(void) {
     unsigned long irq_flags = arch_irq_save();
 
@@ -118,12 +126,12 @@ void scheduler_start(void) {
     log_info("scheduler starting");
 
     sched_running_set(true);
-    sched_secondary_released_set(false);
-    widen_default_affinity();
-    sched_local_set_slice_ns(0);
-    sched_local_set_need_resched(false);
+    sched_set_aps_released(false);
+    widen_affinity();
+    sched_set_slice_ns(0);
+    sched_set_resched(false);
     __atomic_store_n(&sched_local()->force_resched, false, __ATOMIC_RELEASE);
-    __atomic_store_n(&sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&sched_local()->resched_irq, false, __ATOMIC_RELEASE);
 
     unsigned long flags = sched_lock_save();
 
@@ -136,20 +144,19 @@ void scheduler_start(void) {
 
     if (!current || !next || next == current) {
         sched_lock_restore(flags);
-        sched_secondary_released_set(true);
+        sched_set_aps_released(true);
         arch_irq_restore(irq_flags);
         return;
     }
 
-    bool bad_next = thread_ctx_ok(next) && (!next->context || !ctx_valid(next));
-    if (bad_next) {
+    if (invalid_thread_context(next)) {
         sched_lock_restore(flags);
         panic("scheduler selected invalid thread context on BSP");
     }
 
     thread_unclaim(current);
     next->exec_start_ns = next->sum_exec_ns;
-    sched_local_set_slice_ns(0);
+    sched_set_slice_ns(0);
     sched_local_set_current(next);
     thread_claim(next, sched_cpu_id());
 
@@ -170,12 +177,12 @@ void scheduler_start(void) {
     }
 
     __atomic_fetch_add(&sched_state.metrics.switch_count, 1, __ATOMIC_RELAXED);
-    sched_secondary_released_set(true);
+    sched_set_aps_released(true);
     arch_context_switch(next->context);
     arch_irq_restore(irq_flags);
 }
 
-void scheduler_start_secondary(void) {
+void scheduler_start_cpu(void) {
     unsigned long irq_flags = arch_irq_save();
 
     scheduler_init_core();
@@ -185,7 +192,7 @@ void scheduler_start_secondary(void) {
         return;
     }
 
-    while (!sched_secondary_released_get()) {
+    while (!sched_aps_released()) {
         if (!sched_running_get()) {
             arch_irq_restore(irq_flags);
             return;
@@ -194,11 +201,11 @@ void scheduler_start_secondary(void) {
         arch_cpu_relax();
     }
 
-    sched_local_set_slice_ns(0);
-    sched_local_set_need_resched(false);
+    sched_set_slice_ns(0);
+    sched_set_resched(false);
     __atomic_store_n(&sched_local()->force_resched, false, __ATOMIC_RELEASE);
-    __atomic_store_n(&sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE);
-    widen_default_affinity();
+    __atomic_store_n(&sched_local()->resched_irq, false, __ATOMIC_RELEASE);
+    widen_affinity();
 
     unsigned long flags = sched_lock_save();
 
@@ -211,15 +218,14 @@ void scheduler_start_secondary(void) {
         return;
     }
 
-    bool bad_next = thread_ctx_ok(next) && (!next->context || !ctx_valid(next));
-    if (bad_next) {
+    if (invalid_thread_context(next)) {
         sched_lock_restore(flags);
         panic("scheduler selected invalid thread context on AP");
     }
 
     thread_unclaim(current);
     next->exec_start_ns = next->sum_exec_ns;
-    sched_local_set_slice_ns(0);
+    sched_set_slice_ns(0);
     sched_local_set_current(next);
     thread_claim(next, sched_cpu_id());
 

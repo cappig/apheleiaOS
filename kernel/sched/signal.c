@@ -40,7 +40,7 @@ static sighandler_t signal_get_handler(sched_thread_t *thread, int signum) {
     return handler;
 }
 
-static void signal_mark_pending(sched_thread_t *thread, int signum) {
+static void mark_pending(sched_thread_t *thread, int signum) {
     if (!thread || !signal_valid(signum)) {
         return;
     }
@@ -49,7 +49,7 @@ static void signal_mark_pending(sched_thread_t *thread, int signum) {
     __atomic_fetch_or(&thread->signal_pending, mask, __ATOMIC_ACQ_REL);
 }
 
-static void signal_clear_pending(sched_thread_t *thread, int signum) {
+static void clear_pending(sched_thread_t *thread, int signum) {
     if (!thread || !signal_valid(signum)) {
         return;
     }
@@ -58,7 +58,7 @@ static void signal_clear_pending(sched_thread_t *thread, int signum) {
     __atomic_fetch_and(&thread->signal_pending, ~mask, __ATOMIC_ACQ_REL);
 }
 
-static int signal_next_pending(sched_thread_t *thread) {
+static int next_pending(sched_thread_t *thread) {
     if (!thread) {
         return 0;
     }
@@ -79,7 +79,7 @@ static int signal_next_pending(sched_thread_t *thread) {
     return 0;
 }
 
-void sched_signal_init_thread(sched_thread_t *thread) {
+void sched_signal_init(sched_thread_t *thread) {
     if (!thread) {
         return;
     }
@@ -93,11 +93,11 @@ void sched_signal_init_thread(sched_thread_t *thread) {
     thread->signal_trampoline = 0;
 }
 
-void sched_signal_reset_thread(sched_thread_t *thread) {
-    sched_signal_init_thread(thread);
+void sched_signal_reset(sched_thread_t *thread) {
+    sched_signal_init(thread);
 }
 
-void sched_signal_exec_thread(sched_thread_t *thread) {
+void sched_signal_exec(sched_thread_t *thread) {
     if (!thread) {
         return;
     }
@@ -113,7 +113,7 @@ void sched_signal_exec_thread(sched_thread_t *thread) {
     __atomic_store_n(&thread->signal_saved_valid, 0, __ATOMIC_RELEASE);
 }
 
-sighandler_t sched_signal_set_handler(sched_thread_t *thread, int signum, sighandler_t handler, uintptr_t trampoline) {
+sighandler_t sched_signal_set(sched_thread_t *thread, int signum, sighandler_t handler, uintptr_t trampoline) {
     if (!thread || !signal_valid(signum)) {
         return SIG_ERR;
     }
@@ -138,7 +138,7 @@ sighandler_t sched_signal_set_handler(sched_thread_t *thread, int signum, sighan
     return prev;
 }
 
-int sched_signal_send_thread(sched_thread_t *thread, int signum) {
+int sched_signal_send(sched_thread_t *thread, int signum) {
     if (!thread || !signal_valid(signum)) {
         return -1;
     }
@@ -153,6 +153,11 @@ int sched_signal_send_thread(sched_thread_t *thread, int signum) {
         sched_continue_thread(thread);
     }
 
+    // A stopped process cannot return to user mode to act on SIGKILL.
+    if (signum == SIGKILL) {
+        sched_continue_thread(thread);
+    }
+
     if (signal_is_continue(signum) && handler == SIG_DFL) {
         return 1;
     }
@@ -162,7 +167,7 @@ int sched_signal_send_thread(sched_thread_t *thread, int signum) {
         return 1;
     }
 
-    signal_mark_pending(thread, signum);
+    mark_pending(thread, signum);
     sched_unblock_thread(thread);
 
     return 1;
@@ -174,13 +179,13 @@ int sched_signal_send_pid(pid_t pid, int signum) {
         return -1;
     }
 
-    int rc = sched_signal_send_thread(thread, signum);
+    int status = sched_signal_send(thread, signum);
     thread_put(thread);
 
-    return rc;
+    return status;
 }
 
-void sched_signal_deliver_current(arch_int_state_t *state) {
+void sched_signal_deliver(arch_int_state_t *state) {
     sched_thread_t *thread = sched_current();
     if (!thread || !thread->user_thread || !state) {
         return;
@@ -194,7 +199,7 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
         return;
     }
 
-    int signum = signal_next_pending(thread);
+    int signum = next_pending(thread);
     if (!signum) {
         return;
     }
@@ -202,24 +207,24 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
     sighandler_t handler = signal_get_handler(thread, signum);
 
     if (handler == SIG_IGN) {
-        signal_clear_pending(thread, signum);
+        clear_pending(thread, signum);
         return;
     }
 
     if (handler == SIG_DFL && signal_is_stop(signum)) {
-        signal_clear_pending(thread, signum);
+        clear_pending(thread, signum);
         sched_stop_thread(thread, signum);
         return;
     }
 
     if (handler == SIG_DFL && signal_is_continue(signum)) {
-        signal_clear_pending(thread, signum);
+        clear_pending(thread, signum);
         sched_continue_thread(thread);
         return;
     }
 
     if (handler == SIG_DFL || !thread->signal_trampoline) {
-        signal_clear_pending(thread, signum);
+        clear_pending(thread, signum);
         thread->exit_code = 0;
         thread->exit_signal = signum;
         sched_exit();
@@ -229,24 +234,26 @@ void sched_signal_deliver_current(arch_int_state_t *state) {
     __atomic_store_n(&thread->current_signal, (u32)signum, __ATOMIC_RELEASE);
     __atomic_store_n(&thread->signal_saved_valid, 1, __ATOMIC_RELEASE);
 
-    if (!arch_signal_setup_user_stack(thread, state, handler, signum)) {
+    if (!arch_setup_signal_stack(thread, state, handler, signum)) {
         __atomic_store_n(&thread->signal_saved_valid, 0, __ATOMIC_RELEASE);
         __atomic_store_n(&thread->current_signal, 0, __ATOMIC_RELEASE);
 
-        signal_clear_pending(thread, signum);
+        clear_pending(thread, signum);
 
         thread->exit_code = 0;
         thread->exit_signal = signum;
         sched_exit();
     }
 
-    signal_clear_pending(thread, signum);
+    clear_pending(thread, signum);
 }
 
 bool sched_signal_sigreturn(sched_thread_t *thread, arch_int_state_t *state) {
-    bool no_saved_signal = (!thread || !state || !__atomic_load_n(&thread->signal_saved_valid, __ATOMIC_ACQUIRE));
+    if (!thread || !state) {
+        return false;
+    }
 
-    if (no_saved_signal) {
+    if (!__atomic_load_n(&thread->signal_saved_valid, __ATOMIC_ACQUIRE)) {
         return false;
     }
 
@@ -258,7 +265,7 @@ bool sched_signal_sigreturn(sched_thread_t *thread, arch_int_state_t *state) {
     return true;
 }
 
-bool sched_signal_has_pending(sched_thread_t *thread) {
+bool sched_signal_pending(sched_thread_t *thread) {
     if (!thread) {
         return false;
     }

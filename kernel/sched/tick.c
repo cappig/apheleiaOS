@@ -1,6 +1,6 @@
 #include "internal.h"
 
-static bool sched_eval_policy(sched_thread_t *thread, size_t cpu_id) {
+static bool should_preempt(sched_thread_t *thread, size_t cpu_id) {
     size_t rq_depth = sched_rq_depth(cpu_id);
 
     if (thread == sched_local_idle() && thread_get_state(thread) != THREAD_RUNNING) {
@@ -27,7 +27,7 @@ static bool sched_eval_policy(sched_thread_t *thread, size_t cpu_id) {
         return rq_depth && slice_done;
     }
 
-    return slice_done || sched_has_better_runnable(thread, cpu_id);
+    return slice_done || sched_has_better(thread, cpu_id);
 }
 
 static bool tick_charges(sched_thread_t *thread) {
@@ -52,7 +52,7 @@ static void charge_thread_tick(sched_thread_t *thread, const arch_int_state_t *s
     }
 }
 
-static bool bad_switch_target(sched_thread_t *next, sched_thread_t *current) {
+static bool invalid_switch_target(sched_thread_t *next, sched_thread_t *current) {
     if (!next || next == current || !thread_ctx_ok(next)) {
         return false;
     }
@@ -60,12 +60,12 @@ static bool bad_switch_target(sched_thread_t *next, sched_thread_t *current) {
     return !next->context || !ctx_valid(next);
 }
 
-static bool need_irq_switch(sched_thread_t *thread, size_t cpu_id, bool force_resched, bool evaluate_policy) {
-    if (force_resched || sched_local_need_resched()) {
+static bool need_irq_switch(sched_thread_t *thread, size_t cpu_id, bool force_resched, bool check_policy) {
+    if (force_resched || sched_need_resched()) {
         return true;
     }
 
-    return evaluate_policy && sched_eval_policy(thread, cpu_id);
+    return check_policy && should_preempt(thread, cpu_id);
 }
 
 static void keep_force(bool force_resched) {
@@ -89,11 +89,10 @@ static void retire_bad(sched_thread_t *thread) {
     exit_event_push(thread->pid);
 }
 
-static sched_thread_t *
-pick_switch_to(sched_thread_t *current, bool preempted_running, size_t cpu_id, unsigned long flags) {
+static sched_thread_t *pick_switch_to(sched_thread_t *current, bool preempted, size_t cpu_id, unsigned long flags) {
     sched_thread_t *next = NULL;
 
-    if (preempted_running) {
+    if (preempted) {
         next = dequeue_thread();
         if (!next) {
             thread_claim(current, cpu_id);
@@ -104,7 +103,7 @@ pick_switch_to(sched_thread_t *current, bool preempted_running, size_t cpu_id, u
         next = pick_next_thread();
     }
 
-    while (bad_switch_target(next, current)) {
+    while (invalid_switch_target(next, current)) {
         retire_bad(next);
         next = pick_next_thread();
     }
@@ -118,9 +117,11 @@ pick_switch_to(sched_thread_t *current, bool preempted_running, size_t cpu_id, u
     return next;
 }
 
-static void stage_preempted(sched_thread_t *thread, size_t cpu_id) {
-    // do not enqueue this thread before we switch away. Another CPU could
-    // otherwise pick it up while it is still running here
+static void stage_switch_away(sched_thread_t *thread, size_t cpu_id) {
+    if (!thread) {
+        return;
+    }
+
     sched_thread_t *pending = sched_local()->handoff_ready;
 
     if (pending && pending != thread) {
@@ -128,21 +129,14 @@ static void stage_preempted(sched_thread_t *thread, size_t cpu_id) {
         sched_publish_handoff(pending, cpu_id);
     }
 
+    thread_set_cpu(thread, (int)cpu_id);
     sched_local()->handoff_ready = thread;
 }
 
-static void switch_to_thread(
-    sched_thread_t *old,
-    sched_thread_t *next,
-    size_t cpu_id,
-    unsigned long flags,
-    bool preempted_running
-) {
-    if (preempted_running) {
-        stage_preempted(old, cpu_id);
-    } else {
-        thread_unclaim(old);
-    }
+static void
+switch_to_thread(sched_thread_t *old, sched_thread_t *next, size_t cpu_id, unsigned long flags, bool preempted) {
+    (void)preempted;
+    stage_switch_away(old, cpu_id);
 
     sched_local_set_current(next);
     thread_claim(next, cpu_id);
@@ -168,35 +162,35 @@ static void switch_to_thread(
     arch_context_switch(next->context);
 }
 
-static void irq_reschedule(arch_int_state_t *state, bool evaluate_policy) {
+static void irq_reschedule(arch_int_state_t *state, bool check_policy) {
     sched_thread_t *thread = sched_local_current();
     if (!state || !thread) {
         return;
     }
 
     sched_capture_context(state);
-    __atomic_store_n(&sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE);
+    __atomic_store_n(&sched_local()->resched_irq, false, __ATOMIC_RELEASE);
 
     bool force_resched = __atomic_exchange_n(&sched_local()->force_resched, false, __ATOMIC_ACQ_REL);
 
-    if (sched_preempt_disabled()) {
+    if (sched_preempt_off()) {
         return;
     }
 
     if (sched_local()->sched_lock_depth > 0) {
-        sched_local_set_need_resched(true);
+        sched_set_resched(true);
         keep_force(force_resched);
         return;
     }
 
     size_t cpu_id = sched_cpu_id();
-    if (!need_irq_switch(thread, cpu_id, force_resched, evaluate_policy)) {
+    if (!need_irq_switch(thread, cpu_id, force_resched, check_policy)) {
         return;
     }
 
     unsigned long flags = 0;
     if (!sched_lock_try_save(&flags)) {
-        sched_local_set_need_resched(true);
+        sched_set_resched(true);
         keep_force(force_resched);
         return;
     }
@@ -204,14 +198,14 @@ static void irq_reschedule(arch_int_state_t *state, bool evaluate_policy) {
     sched_flush_handoff(cpu_id);
     wake_sleepers(arch_timer_ticks());
 
-    if (!need_irq_switch(thread, cpu_id, force_resched, evaluate_policy)) {
+    if (!need_irq_switch(thread, cpu_id, force_resched, check_policy)) {
         sched_lock_restore(flags);
         return;
     }
 
-    sched_local_set_need_resched(false);
-    __atomic_store_n(&sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE);
-    sched_local_set_slice_ns(0);
+    sched_set_resched(false);
+    __atomic_store_n(&sched_local()->resched_irq, false, __ATOMIC_RELEASE);
+    sched_set_slice_ns(0);
 
     if (tick_charges(thread)) {
         thread->sum_exec_ns += 1;
@@ -219,14 +213,14 @@ static void irq_reschedule(arch_int_state_t *state, bool evaluate_policy) {
         thread->exec_start_ns = thread->sum_exec_ns;
     }
 
-    bool preempted_running = tick_charges(thread);
-    sched_thread_t *next = pick_switch_to(thread, preempted_running, cpu_id, flags);
+    bool preempted = tick_charges(thread);
+    sched_thread_t *next = pick_switch_to(thread, preempted, cpu_id, flags);
 
     if (!next) {
         return;
     }
 
-    switch_to_thread(thread, next, cpu_id, flags, preempted_running);
+    switch_to_thread(thread, next, cpu_id, flags, preempted);
 }
 
 void sched_capture_context(arch_int_state_t *state) {
@@ -250,7 +244,7 @@ void sched_capture_context(arch_int_state_t *state) {
         thread_set_cpu(current, (int)cpu_id);
     }
 
-    if (!ctx_candidate_valid(current, state)) {
+    if (!ctx_state_valid(current, state)) {
         return;
     }
 
@@ -273,7 +267,7 @@ void sched_tick(arch_int_state_t *state) {
             sched_flush_handoff(cpu_id);
             sched_lock_restore(flush_flags);
         } else {
-            sched_local_set_need_resched(true);
+            sched_set_resched(true);
         }
     }
 
@@ -309,14 +303,14 @@ void sched_tick(arch_int_state_t *state) {
             thread->sum_exec_ns += tick_ns;
             thread->vruntime_ns += tick_ns;
             thread->exec_start_ns = thread->sum_exec_ns;
-            sched_local_add_slice_ns(tick_ns);
+            sched_add_slice_ns(tick_ns);
         }
     }
 
     sched_capture_context(state);
-    sched_signal_deliver_current(state);
+    sched_signal_deliver(state);
 
-    sched_local_inc_local_ticks();
+    sched_count_local_tick();
     u64 local_ticks = sched_local_ticks();
 
     if (local_ticks % SCHED_REBALANCE_TICKS == (cpu_id % SCHED_REBALANCE_TICKS)) {
@@ -336,47 +330,50 @@ void force_resched(void) {
         return;
     }
 
-    sched_cpu_state_t *local = sched_local();
+    sched_cpu_t *local = sched_local();
     __atomic_store_n(&local->force_resched, true, __ATOMIC_RELEASE);
     __atomic_store_n(&local->need_resched, true, __ATOMIC_RELEASE);
 
-    if (sched_preempt_disabled() || local->sched_lock_depth || !arch_irq_enabled()) {
+    if (sched_preempt_off() || local->sched_lock_depth || !arch_irq_enabled()) {
         return;
     }
 
-    if (__atomic_load_n(&local->resched_irq_pending, __ATOMIC_ACQUIRE)) {
+    if (__atomic_load_n(&local->resched_irq, __ATOMIC_ACQUIRE)) {
         return;
     }
 
-    __atomic_store_n(&local->resched_irq_pending, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&local->resched_irq, true, __ATOMIC_RELEASE);
     arch_resched_self();
 }
 
-void sched_request_resched_local(void) {
+void sched_resched_local(void) {
     if (!sched_running_get()) {
         return;
     }
 
-    sched_cpu_state_t *local = sched_local();
+    sched_cpu_t *local = sched_local();
     __atomic_store_n(&local->need_resched, true, __ATOMIC_RELEASE);
 
-    if (sched_preempt_disabled() || local->sched_lock_depth || !arch_irq_enabled()) {
+    if (sched_preempt_off() || local->sched_lock_depth || !arch_irq_enabled()) {
         return;
     }
 
     sched_thread_t *current = sched_local_current();
-    bool current_can_run = current && current != sched_local_idle() &&
-                           __atomic_load_n(&current->state, __ATOMIC_ACQUIRE) == THREAD_RUNNING;
+    bool idle = current == sched_local_idle();
+    bool running = false;
+    if (current) {
+        running = __atomic_load_n(&current->state, __ATOMIC_ACQUIRE) == THREAD_RUNNING;
+    }
 
-    if (current_can_run) {
+    if (running && !idle) {
         return;
     }
 
-    if (__atomic_load_n(&local->resched_irq_pending, __ATOMIC_ACQUIRE)) {
+    if (__atomic_load_n(&local->resched_irq, __ATOMIC_ACQUIRE)) {
         return;
     }
 
-    __atomic_store_n(&local->resched_irq_pending, true, __ATOMIC_RELEASE);
+    __atomic_store_n(&local->resched_irq, true, __ATOMIC_RELEASE);
     arch_resched_self();
 }
 
@@ -389,7 +386,7 @@ void sched_yield(void) {
         sched_reap();
     }
 
-    sched_local_set_slice_ns(sched_target_slice_ns(sched_cpu_id()));
+    sched_set_slice_ns(sched_target_slice_ns(sched_cpu_id()));
     force_resched();
 }
 
@@ -398,7 +395,7 @@ void sched_ipi_resched(void) {
         return;
     }
 
-    sched_local_set_need_resched(true);
+    sched_set_resched(true);
 }
 
 void sched_resched_softirq(arch_int_state_t *state) {
@@ -426,7 +423,7 @@ void sched_sleep(u64 ticks) {
     sched_wait_deadline(arch_timer_ticks() + ticks, 0);
 }
 
-static void sched_reparent_children(sched_thread_t *parent) {
+static void reparent_children(sched_thread_t *parent) {
     if (!parent || !sched_state.procs.all_list) {
         return;
     }
@@ -469,7 +466,7 @@ static void sched_reparent_children(sched_thread_t *parent) {
 
     if (reaper && notify_reaper) {
         sched_wake_one(&reaper->wait_queue);
-        sched_signal_send_thread(reaper, SIGCHLD);
+        sched_signal_send(reaper, SIGCHLD);
     }
 }
 
@@ -488,9 +485,9 @@ void sched_exit(void) {
         exited_pid = self->pid;
         wq_dequeue(self);
         sleep_heap_remove(self);
-        sched_reparent_children(self);
-        thread_unclaim(self);
+        reparent_children(self);
         thread_set_state(self, THREAD_ZOMBIE);
+        stage_switch_away(self, sched_cpu_id());
 
         if (self != sched_local_idle() && !self->in_zombie_list) {
             self->zombie_node.data = self;
@@ -503,17 +500,17 @@ void sched_exit(void) {
 
             if (parent) {
                 sched_wake_one(&parent->wait_queue);
-                sched_signal_send_thread(parent, SIGCHLD);
+                sched_signal_send(parent, SIGCHLD);
             }
         }
     }
 
     sched_thread_t *next = pick_next_thread();
     if (next) {
-        sched_local_set_need_resched(false);
+        sched_set_resched(false);
         __atomic_store_n(&sched_local()->force_resched, false, __ATOMIC_RELEASE);
-        __atomic_store_n(&sched_local()->resched_irq_pending, false, __ATOMIC_RELEASE);
-        sched_local_set_slice_ns(0);
+        __atomic_store_n(&sched_local()->resched_irq, false, __ATOMIC_RELEASE);
+        sched_set_slice_ns(0);
         next->exec_start_ns = next->sum_exec_ns;
 
         if (thread_ctx_ok(next) && (!next->context || !ctx_valid(next))) {
@@ -550,16 +547,16 @@ void sched_exit(void) {
 }
 
 void sched_preempt_disable(void) {
-    sched_local_inc_preempt_depth();
+    sched_preempt_inc();
 }
 
 void sched_preempt_enable(void) {
-    sched_local_dec_preempt_depth();
-    if (!sched_local_preempt_disabled() && sched_local_need_resched()) {
-        sched_request_resched_local();
+    sched_preempt_dec();
+    if (!sched_preempt_off() && sched_need_resched()) {
+        sched_resched_local();
     }
 }
 
 bool sched_preempt_disabled(void) {
-    return sched_local_preempt_disabled();
+    return sched_preempt_off();
 }

@@ -1,6 +1,6 @@
 #include "internal.h"
 
-static void wait_queue_free_container(linked_list_t *list) {
+static void waitq_free_list(linked_list_t *list) {
     if (!list) {
         return;
     }
@@ -139,7 +139,7 @@ static void wake_queue_all(sched_wait_queue_t *queue) {
     }
 }
 
-static bool sched_queue_has_waiters(const sched_wait_queue_t *queue) {
+static bool waitq_has_waiters(const sched_wait_queue_t *queue) {
     if (!queue || !queue->list) {
         return false;
     }
@@ -147,7 +147,123 @@ static bool sched_queue_has_waiters(const sched_wait_queue_t *queue) {
     return __atomic_load_n(&queue->waiter_count, __ATOMIC_ACQUIRE) != 0;
 }
 
-void sched_wait_queue_init(sched_wait_queue_t *queue) {
+static bool poll_wait_linked(const sched_wait_queue_t *queue) {
+    if (queue == &sched_state.wait.poll_wait_queue) {
+        return false;
+    }
+
+    return queue->poll_link && sched_state.wait.poll_wait_queue.list;
+}
+
+static bool wait_can_block(void) {
+    sched_cpu_t *local = sched_local();
+
+    bool preempt_off = sched_preempt_off();
+    bool lock_held = lock_spin_held();
+    bool sched_locked = local->sched_lock_depth != 0;
+
+    return !preempt_off && !lock_held && !sched_locked;
+}
+
+static void wait_node_clear(sched_thread_t *thread) {
+    thread->wait_node.next = NULL;
+    thread->wait_node.prev = NULL;
+    thread->wait_node.owner = NULL;
+    thread->in_wait_queue = false;
+    thread->blocked_on = NULL;
+}
+
+static void wait_restore_running(sched_thread_t *thread) {
+    wait_node_clear(thread);
+    thread->wait_flags = 0;
+    thread->wait_deadline_tick = 0;
+    thread->wake_tick = 0;
+    thread_set_state(thread, THREAD_RUNNING);
+}
+
+static bool wait_append_locked(sched_wait_queue_t *queue, sched_thread_t *thread) {
+    bool appended = list_append(queue->list, &thread->wait_node);
+
+    if (!appended) {
+        if (list_remove(queue->list, &thread->wait_node) && queue->waiter_count) {
+            queue->waiter_count--;
+        }
+
+        appended = list_append(queue->list, &thread->wait_node);
+    }
+
+    if (!appended) {
+        wait_restore_running(thread);
+        return false;
+    }
+
+    queue->waiter_count++;
+    thread->in_wait_queue = true;
+    thread->blocked_on = queue;
+
+    return true;
+}
+
+static bool wait_arm_deadline_locked(sched_wait_queue_t *queue, sched_thread_t *thread, u64 deadline_tick) {
+    if (!deadline_tick) {
+        return true;
+    }
+
+    thread->wake_tick = deadline_tick;
+
+    if (sleep_heap_insert(thread)) {
+        return true;
+    }
+
+    if (list_remove(queue->list, &thread->wait_node) && queue->waiter_count) {
+        queue->waiter_count--;
+    }
+
+    wait_restore_running(thread);
+    return false;
+}
+
+static bool
+wait_attach_locked(sched_wait_queue_t *queue, sched_thread_t *thread, u64 deadline_tick, sched_wait_flags_t flags) {
+    u8 cookie = (u8)(thread->wait_cookie + 1U);
+    if (!cookie) {
+        cookie = 1U;
+    }
+
+    thread->wait_cookie = cookie;
+    thread->wait_flags = flags;
+    thread->wait_deadline_tick = deadline_tick;
+    thread->wait_result = (u8)SCHED_WAIT_ABORTED;
+    thread->wait_node.data = thread;
+
+    thread_set_state(thread, THREAD_SLEEPING);
+
+    if (!wait_append_locked(queue, thread)) {
+        return false;
+    }
+
+    return wait_arm_deadline_locked(queue, thread, deadline_tick);
+}
+
+static sched_wait_result_t wait_result(sched_thread_t *thread, u64 deadline_tick, sched_wait_flags_t flags) {
+    sched_wait_result_t result = (sched_wait_result_t)__atomic_load_n(&thread->wait_result, __ATOMIC_ACQUIRE);
+
+    if (result != SCHED_WAIT_ABORTED) {
+        return result;
+    }
+
+    if ((flags & SCHED_WAIT_INTERRUPTIBLE) && sched_signal_pending(thread)) {
+        return SCHED_WAIT_INTR;
+    }
+
+    if (deadline_tick && arch_timer_ticks() >= deadline_tick) {
+        return SCHED_WAIT_TIMEOUT;
+    }
+
+    return result;
+}
+
+void sched_waitq_init(sched_wait_queue_t *queue) {
     if (!queue) {
         return;
     }
@@ -170,7 +286,7 @@ void sched_waitq_set_poll(sched_wait_queue_t *queue, bool enabled) {
     queue->poll_link = enabled;
 }
 
-void sched_wait_queue_destroy(sched_wait_queue_t *queue) {
+void sched_waitq_destroy(sched_wait_queue_t *queue) {
     if (!queue) {
         return;
     }
@@ -180,7 +296,7 @@ void sched_wait_queue_destroy(sched_wait_queue_t *queue) {
     if (queue->list) {
         __atomic_add_fetch(&queue->wake_seq, 1, __ATOMIC_RELEASE);
         wake_queue_all(queue);
-        wait_queue_free_container(queue->list);
+        waitq_free_list(queue->list);
         queue->list = NULL;
     }
 
@@ -200,7 +316,7 @@ u32 sched_wait_seq(sched_wait_queue_t *queue) {
 }
 
 sched_wait_result_t
-sched_wait_on_queue(sched_wait_queue_t *queue, u32 observed_seq, u64 deadline_tick, sched_wait_flags_t flags) {
+sched_wait_on(sched_wait_queue_t *queue, u32 observed_seq, u64 deadline_tick, sched_wait_flags_t flags) {
     sched_thread_t *self = sched_local_current();
     sched_reconcile_lock();
 
@@ -208,32 +324,31 @@ sched_wait_on_queue(sched_wait_queue_t *queue, u32 observed_seq, u64 deadline_ti
         return SCHED_WAIT_ABORTED;
     }
 
-    if ((flags & SCHED_WAIT_INTERRUPTIBLE) && sched_signal_has_pending(self)) {
+    if ((flags & SCHED_WAIT_INTERRUPTIBLE) && sched_signal_pending(self)) {
         return SCHED_WAIT_INTR;
     }
 
-    sched_cpu_state_t *local = sched_local();
-    bool cannot_block = (sched_preempt_disabled() || lock_spin_held_on_cpu() || local->sched_lock_depth);
-
-    if (cannot_block) {
+    if (!wait_can_block()) {
         return SCHED_WAIT_ABORTED;
     }
 
-    unsigned long sched_flags = sched_lock_save();
+    unsigned long lock_flags = sched_lock_save();
     if (!queue->list) {
-        sched_lock_restore(sched_flags);
+        sched_lock_restore(lock_flags);
         return SCHED_WAIT_ABORTED;
     }
 
-    if ((flags & SCHED_WAIT_INTERRUPTIBLE) && sched_signal_has_pending(self)) {
-        sched_lock_restore(sched_flags);
+    if ((flags & SCHED_WAIT_INTERRUPTIBLE) && sched_signal_pending(self)) {
+        sched_lock_restore(lock_flags);
         return SCHED_WAIT_INTR;
     }
 
-    bool not_current = (thread_get_state(self) != THREAD_RUNNING || self != sched_local_current());
+    thread_state_t state = thread_get_state(self);
+    bool running = state == THREAD_RUNNING;
+    bool current = self == sched_local_current();
 
-    if (not_current) {
-        sched_lock_restore(sched_flags);
+    if (!running || !current) {
+        sched_lock_restore(lock_flags);
         return SCHED_WAIT_ABORTED;
     }
 
@@ -247,68 +362,14 @@ sched_wait_on_queue(sched_wait_queue_t *queue, u32 observed_seq, u64 deadline_ti
     sleep_heap_remove(self);
     self->wake_tick = 0;
 
-    bool unchanged =
-        (thread_get_state(self) != THREAD_ZOMBIE &&
-         __atomic_load_n(&queue->wake_seq, __ATOMIC_ACQUIRE) == observed_seq);
+    u32 wake_seq = __atomic_load_n(&queue->wake_seq, __ATOMIC_ACQUIRE);
+    bool unchanged = thread_get_state(self) != THREAD_ZOMBIE && wake_seq == observed_seq;
 
     if (unchanged) {
-        u8 next_cookie = (u8)(self->wait_cookie + 1U);
-        if (!next_cookie) {
-            next_cookie = 1U;
-        }
-
-        self->wait_cookie = next_cookie;
-        self->wait_flags = flags;
-        self->wait_deadline_tick = deadline_tick;
-        self->wait_result = (u8)SCHED_WAIT_ABORTED;
-        thread_set_state(self, THREAD_SLEEPING);
-        self->wait_node.data = self;
-
-        bool appended = list_append(queue->list, &self->wait_node);
-
-        if (!appended) {
-            if (list_remove(queue->list, &self->wait_node) && queue->waiter_count) {
-                queue->waiter_count--;
-            }
-            appended = list_append(queue->list, &self->wait_node);
-        }
-
-        if (!appended) {
-            self->wait_node.next = NULL;
-            self->wait_node.prev = NULL;
-            self->wait_node.owner = NULL;
-            self->wait_flags = 0;
-            self->wait_deadline_tick = 0;
-            thread_set_state(self, THREAD_RUNNING);
-            unchanged = false;
-        } else {
-            queue->waiter_count++;
-            self->in_wait_queue = true;
-            self->blocked_on = queue;
-        }
-
-        if (unchanged && deadline_tick) {
-            self->wake_tick = deadline_tick;
-
-            if (!sleep_heap_insert(self)) {
-                if (list_remove(queue->list, &self->wait_node) && queue->waiter_count) {
-                    queue->waiter_count--;
-                }
-
-                self->wait_node.next = NULL;
-                self->wait_node.prev = NULL;
-                self->wait_node.owner = NULL;
-                self->in_wait_queue = false;
-                self->blocked_on = NULL;
-                thread_set_state(self, THREAD_RUNNING);
-                self->wake_tick = 0;
-                self->wait_deadline_tick = 0;
-                self->wait_flags = 0;
-                unchanged = false;
-            }
-        }
+        unchanged = wait_attach_locked(queue, self, deadline_tick, flags);
     }
-    sched_lock_restore(sched_flags);
+
+    sched_lock_restore(lock_flags);
 
     if (!unchanged) {
         return SCHED_WAIT_ABORTED;
@@ -319,15 +380,7 @@ sched_wait_on_queue(sched_wait_queue_t *queue, u32 observed_seq, u64 deadline_ti
         return SCHED_WAIT_ABORTED;
     }
 
-    sched_wait_result_t result = (sched_wait_result_t)__atomic_load_n(&self->wait_result, __ATOMIC_ACQUIRE);
-
-    if (result == SCHED_WAIT_ABORTED) {
-        if ((flags & SCHED_WAIT_INTERRUPTIBLE) && sched_signal_has_pending(self)) {
-            result = SCHED_WAIT_INTR;
-        } else if (deadline_tick && arch_timer_ticks() >= deadline_tick) {
-            result = SCHED_WAIT_TIMEOUT;
-        }
-    }
+    sched_wait_result_t result = wait_result(self, deadline_tick, flags);
 
     self->wait_deadline_tick = 0;
     self->wait_flags = 0;
@@ -336,13 +389,13 @@ sched_wait_on_queue(sched_wait_queue_t *queue, u32 observed_seq, u64 deadline_ti
     return result;
 }
 
-bool sched_block_if_unchanged(sched_wait_queue_t *queue, u32 observed_seq) {
-    return sched_wait_on_queue(queue, observed_seq, 0, 0) == SCHED_WAIT_WOKEN;
+bool sched_wait_for_change(sched_wait_queue_t *queue, u32 observed_seq) {
+    return sched_wait_on(queue, observed_seq, 0, 0) == SCHED_WAIT_WOKEN;
 }
 
 void sched_block(sched_wait_queue_t *queue) {
     u32 seq = sched_wait_seq(queue);
-    sched_block_if_unchanged(queue, seq);
+    sched_wait_for_change(queue, seq);
 }
 
 void exit_event_push(pid_t pid) {
@@ -376,11 +429,11 @@ bool sched_exit_event_pop(pid_t *pid_out) {
     unsigned long flags = spin_lock_irqsave(&sched_state.wait.exit_events.lock);
 
     ring_queue_t *r = sched_state.wait.exit_events.ring;
-    bool ok = r && ring_queue_pop(r, pid_out);
+    bool popped = r && ring_queue_pop(r, pid_out);
 
     spin_unlock_irqrestore(&sched_state.wait.exit_events.lock, flags);
 
-    return ok;
+    return popped;
 }
 
 u32 sched_exit_event_seq(void) {
@@ -388,8 +441,8 @@ u32 sched_exit_event_seq(void) {
 }
 
 bool sched_exit_wait_change(u32 observed_seq) {
-    sched_wait_result_t
-        result = sched_wait_on_queue(&sched_state.wait.exit_event_wait, observed_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
+    sched_wait_queue_t *queue = &sched_state.wait.exit_event_wait;
+    sched_wait_result_t result = sched_wait_on(queue, observed_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
 
     return result == SCHED_WAIT_WOKEN;
 }
@@ -399,7 +452,7 @@ u32 sched_poll_wait_seq(void) {
 }
 
 bool sched_poll_wait_change(u32 observed_seq) {
-    sched_wait_result_t result = sched_wait_on_queue(
+    sched_wait_result_t result = sched_wait_on(
         &sched_state.wait.poll_wait_queue,
         observed_seq,
         0,
@@ -410,7 +463,7 @@ bool sched_poll_wait_change(u32 observed_seq) {
 }
 
 bool sched_poll_wait_until(u32 observed_seq, u64 deadline_tick) {
-    sched_wait_result_t result = sched_wait_on_queue(
+    sched_wait_result_t result = sched_wait_on(
         &sched_state.wait.poll_wait_queue,
         observed_seq,
         deadline_tick,
@@ -431,7 +484,7 @@ void sched_poll_wait(void) {
 
 sched_wait_result_t sched_wait_deadline(u64 deadline_tick, sched_wait_flags_t flags) {
     u32 observed_seq = sched_wait_seq(&sched_state.wait.sleep_wait_queue);
-    return sched_wait_on_queue(&sched_state.wait.sleep_wait_queue, observed_seq, deadline_tick, flags);
+    return sched_wait_on(&sched_state.wait.sleep_wait_queue, observed_seq, deadline_tick, flags);
 }
 
 void sched_wake_one_locked(sched_wait_queue_t *queue) {
@@ -441,14 +494,12 @@ void sched_wake_one_locked(sched_wait_queue_t *queue) {
 
     __atomic_add_fetch(&queue->wake_seq, 1, __ATOMIC_RELEASE);
 
-    bool wake_queue = sched_queue_has_waiters(queue);
+    bool wake_queue = waitq_has_waiters(queue);
     bool wake_pollers = false;
-    bool wake_poll_waiters =
-        (queue != &sched_state.wait.poll_wait_queue && queue->poll_link && sched_state.wait.poll_wait_queue.list);
 
-    if (wake_poll_waiters) {
+    if (poll_wait_linked(queue)) {
         __atomic_add_fetch(&sched_state.wait.poll_wait_queue.wake_seq, 1, __ATOMIC_RELEASE);
-        wake_pollers = sched_queue_has_waiters(&sched_state.wait.poll_wait_queue);
+        wake_pollers = waitq_has_waiters(&sched_state.wait.poll_wait_queue);
     }
 
     if (!wake_queue && !wake_pollers) {
@@ -481,14 +532,12 @@ void sched_wake_all(sched_wait_queue_t *queue) {
 
     __atomic_add_fetch(&queue->wake_seq, 1, __ATOMIC_RELEASE);
 
-    bool wake_queue = sched_queue_has_waiters(queue);
+    bool wake_queue = waitq_has_waiters(queue);
     bool wake_pollers = false;
-    bool wake_poll_waiters =
-        (queue != &sched_state.wait.poll_wait_queue && queue->poll_link && sched_state.wait.poll_wait_queue.list);
 
-    if (wake_poll_waiters) {
+    if (poll_wait_linked(queue)) {
         __atomic_add_fetch(&sched_state.wait.poll_wait_queue.wake_seq, 1, __ATOMIC_RELEASE);
-        wake_pollers = sched_queue_has_waiters(&sched_state.wait.poll_wait_queue);
+        wake_pollers = waitq_has_waiters(&sched_state.wait.poll_wait_queue);
     }
 
     if (!wake_queue && !wake_pollers) {

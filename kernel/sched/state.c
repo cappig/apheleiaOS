@@ -14,7 +14,7 @@ sched_state_t sched_state = {
 };
 
 bool sched_reconcile_lock(void) {
-    sched_cpu_state_t *local = sched_local();
+    sched_cpu_t *local = sched_local();
     if (!local->sched_lock_depth) {
         return false;
     }
@@ -33,7 +33,7 @@ unsigned long sched_lock_save(void) {
     unsigned long flags = arch_irq_save();
     const unsigned long initial_flags = flags;
 
-    sched_cpu_state_t *local = sched_local();
+    sched_cpu_t *local = sched_local();
 
     sched_reconcile_lock();
 
@@ -67,7 +67,7 @@ bool sched_lock_try_save(unsigned long *flags_out) {
 
     unsigned long flags = arch_irq_save();
 
-    sched_cpu_state_t *local = sched_local();
+    sched_cpu_t *local = sched_local();
     sched_reconcile_lock();
 
     if (local->sched_lock_depth) {
@@ -89,7 +89,7 @@ bool sched_lock_try_save(unsigned long *flags_out) {
 }
 
 void sched_lock_restore(unsigned long flags) {
-    sched_cpu_state_t *local = sched_local();
+    sched_cpu_t *local = sched_local();
 
     if (local->sched_lock_depth > 1) {
         local->sched_lock_depth--;
@@ -129,11 +129,23 @@ static bool sleep_heap_less(size_t left, size_t right) {
     return a->pid < b->pid;
 }
 
+static bool sleep_heap_contains(sched_thread_t *thread) {
+    if (!thread || !thread->sleep_queued) {
+        return false;
+    }
+
+    if (thread->sleep_index >= sched_state.wait.sleep.count) {
+        return false;
+    }
+
+    return sched_state.wait.sleep.heap[thread->sleep_index] == thread;
+}
+
 static void sleep_heap_swap(size_t left, size_t right) {
-    sched_thread_t *tmp = sched_state.wait.sleep.heap[left];
+    sched_thread_t *saved = sched_state.wait.sleep.heap[left];
 
     sched_state.wait.sleep.heap[left] = sched_state.wait.sleep.heap[right];
-    sched_state.wait.sleep.heap[right] = tmp;
+    sched_state.wait.sleep.heap[right] = saved;
 
     if (sched_state.wait.sleep.heap[left]) {
         sched_state.wait.sleep.heap[left]->sleep_index = left;
@@ -180,7 +192,7 @@ static void sleep_heap_sift_down(size_t index) {
     }
 }
 
-static ssize_t sleep_heap_find_thread(const sched_thread_t *thread) {
+static ssize_t sleep_heap_find(const sched_thread_t *thread) {
     if (!thread) {
         return -1;
     }
@@ -200,14 +212,10 @@ bool sleep_heap_insert(sched_thread_t *thread) {
     }
 
     if (thread->sleep_queued) {
-        bool queued_here =
-            (thread->sleep_index < sched_state.wait.sleep.count &&
-             sched_state.wait.sleep.heap[thread->sleep_index] == thread);
-
-        if (queued_here) {
+        if (sleep_heap_contains(thread)) {
             sleep_heap_remove_at(thread->sleep_index);
         } else {
-            ssize_t found = sleep_heap_find_thread(thread);
+            ssize_t found = sleep_heap_find(thread);
 
             if (found >= 0) {
                 sleep_heap_remove_at((size_t)found);
@@ -218,7 +226,7 @@ bool sleep_heap_insert(sched_thread_t *thread) {
         thread->sleep_index = 0;
     }
 
-    ssize_t found = sleep_heap_find_thread(thread);
+    ssize_t found = sleep_heap_find(thread);
     if (found >= 0) {
         sleep_heap_remove_at((size_t)found);
     }
@@ -270,16 +278,12 @@ void sleep_heap_remove(sched_thread_t *thread) {
         return;
     }
 
-    bool queued_here =
-        (thread->sleep_queued && thread->sleep_index < sched_state.wait.sleep.count &&
-         sched_state.wait.sleep.heap[thread->sleep_index] == thread);
-
-    if (queued_here) {
+    if (sleep_heap_contains(thread)) {
         sleep_heap_remove_at(thread->sleep_index);
         return;
     }
 
-    ssize_t found = sleep_heap_find_thread(thread);
+    ssize_t found = sleep_heap_find(thread);
     if (found >= 0) {
         thread->sleep_queued = true;
         thread->sleep_index = (size_t)found;

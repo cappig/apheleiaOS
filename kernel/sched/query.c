@@ -1,5 +1,13 @@
 #include "internal.h"
 
+static u64 ticks_to_ms(u64 ticks, u64 hz) {
+    if (!hz) {
+        return 0;
+    }
+
+    return (ticks * 1000ULL) / hz;
+}
+
 bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
     if (!out || pid < 0 || !sched_state.procs.all_list) {
         return false;
@@ -13,13 +21,13 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
 
     if (!thread) {
         ll_foreach(node, sched_state.procs.all_list) {
-            sched_thread_t *candidate = node->data;
+            sched_thread_t *item = node->data;
 
-            if (!candidate || candidate->pid != pid) {
+            if (!item || item->pid != pid) {
                 continue;
             }
 
-            thread = candidate;
+            thread = item;
             pid_set(thread);
 
             break;
@@ -55,13 +63,13 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         u64 child_user_ticks = __atomic_load_n(&thread->child_user_ticks, __ATOMIC_RELAXED);
         u64 child_sys_ticks = __atomic_load_n(&thread->child_sys_ticks, __ATOMIC_RELAXED);
 
-        out->cpu_time_ms = hz ? ((cpu_ticks * 1000ULL) / hz) : 0;
-        out->user_time_ms = hz ? ((user_ticks * 1000ULL) / hz) : 0;
-        out->sys_time_ms = hz ? ((sys_ticks * 1000ULL) / hz) : 0;
+        out->cpu_time_ms = ticks_to_ms(cpu_ticks, hz);
+        out->user_time_ms = ticks_to_ms(user_ticks, hz);
+        out->sys_time_ms = ticks_to_ms(sys_ticks, hz);
 
-        out->child_cpu_time_ms = hz ? ((child_cpu_ticks * 1000ULL) / hz) : 0;
-        out->child_user_time_ms = hz ? ((child_user_ticks * 1000ULL) / hz) : 0;
-        out->child_sys_time_ms = hz ? ((child_sys_ticks * 1000ULL) / hz) : 0;
+        out->child_cpu_time_ms = ticks_to_ms(child_cpu_ticks, hz);
+        out->child_user_time_ms = ticks_to_ms(child_user_ticks, hz);
+        out->child_sys_time_ms = ticks_to_ms(child_sys_ticks, hz);
         out->vm_kib = sched_user_mem_kib(thread);
 
         memset(out->name, 0, sizeof(out->name));
@@ -75,7 +83,7 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
     return found;
 }
 
-void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out) {
+void sched_cpu_usage(u64 *busy_ticks_out, u64 *total_ticks_out) {
     if (busy_ticks_out) {
         *busy_ticks_out = __atomic_load_n(&sched_state.usage.busy_ticks, __ATOMIC_RELAXED);
     }
@@ -85,7 +93,7 @@ void sched_cpu_usage_snapshot(u64 *busy_ticks_out, u64 *total_ticks_out) {
     }
 }
 
-void sched_cpu_usage_snapshot_core(size_t core_id, u64 *busy_ticks_out, u64 *total_ticks_out) {
+void sched_cpu_usage_core(size_t core_id, u64 *busy_ticks_out, u64 *total_ticks_out) {
     if (core_id >= MAX_CORES) {
         if (busy_ticks_out) {
             *busy_ticks_out = 0;
@@ -107,7 +115,7 @@ void sched_cpu_usage_snapshot_core(size_t core_id, u64 *busy_ticks_out, u64 *tot
     }
 }
 
-void sched_metrics_snapshot(sched_metrics_snapshot_t *out) {
+void sched_stats(sched_stats_t *out) {
     if (!out) {
         return;
     }
@@ -122,7 +130,7 @@ void sched_metrics_snapshot(sched_metrics_snapshot_t *out) {
     out->wait_timeout_count = __atomic_load_n(&sched_state.metrics.wait_timeout_count, __ATOMIC_RELAXED);
 }
 
-void sched_metrics_record_syscall(void) {
+void sched_record_syscall(void) {
     __atomic_fetch_add(&sched_state.metrics.syscall_count, 1, __ATOMIC_RELAXED);
 }
 
@@ -203,7 +211,7 @@ int sched_signal_send_pgrp(pid_t pgid, int signum) {
             continue;
         }
 
-        if (sched_signal_send_thread(thread, signum) >= 0) {
+        if (sched_signal_send(thread, signum) >= 0) {
             count++;
         }
     }
@@ -241,7 +249,7 @@ int sched_signal_pgrp_as(pid_t pgid, int signum, const sched_thread_t *sender) {
             continue;
         }
 
-        if (!signum || sched_signal_send_thread(thread, signum) >= 0) {
+        if (!signum || sched_signal_send(thread, signum) >= 0) {
             count++;
         }
     }

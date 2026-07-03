@@ -77,7 +77,7 @@ void sched_user_mem_sub(sched_thread_t *thread, size_t pages) {
     }
 }
 
-void sched_user_mem_set_kib(sched_thread_t *thread, u64 kib) {
+void sched_set_user_mem(sched_thread_t *thread, u64 kib) {
     if (!thread) {
         return;
     }
@@ -132,7 +132,7 @@ void sched_clear_user_regions(sched_thread_t *thread) {
     }
 
     thread->regions = NULL;
-    sched_user_mem_set_kib(thread, 0);
+    sched_set_user_mem(thread, 0);
 }
 
 static sched_user_region_t *find_user_region(sched_thread_t *thread, uintptr_t addr) {
@@ -161,7 +161,7 @@ static sched_user_region_t *find_user_region(sched_thread_t *thread, uintptr_t a
     return NULL;
 }
 
-bool sched_user_region_mark_cow(sched_thread_t *thread, sched_user_region_t *region) {
+bool sched_mark_cow(sched_thread_t *thread, sched_user_region_t *region) {
     if (!thread || !region || !region->pages) {
         return false;
     }
@@ -194,8 +194,7 @@ bool sched_user_region_mark_cow(sched_thread_t *thread, sched_user_region_t *reg
     return updated;
 }
 
-static bool
-split_region_for_page(sched_user_region_t *region, size_t page_index, uintptr_t new_page_paddr, u64 new_flags) {
+static bool split_page_region(sched_user_region_t *region, size_t page_index, uintptr_t new_page_paddr, u64 new_flags) {
     if (!region || !region->pages || page_index >= region->pages) {
         return false;
     }
@@ -342,7 +341,7 @@ bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write) 
             return false;
         }
 
-        bool split_ok = split_region_for_page(region, page_index, new_paddr, new_flags);
+        bool split_ok = split_page_region(region, page_index, new_paddr, new_flags);
 
         if (!split_ok) {
             arch_free_frames((void *)new_paddr, 1);
@@ -353,7 +352,7 @@ bool sched_handle_cow_fault(sched_thread_t *thread, uintptr_t addr, bool write) 
         arch_map_region(root, 1, page_addr, new_paddr, new_flags);
         arch_free_frames((void *)(uintptr_t)old_paddr, 1);
     } else {
-        bool split_ok = split_region_for_page(region, page_index, (uintptr_t)old_paddr, new_flags);
+        bool split_ok = split_page_region(region, page_index, (uintptr_t)old_paddr, new_flags);
 
         if (!split_ok) {
             spin_unlock_irqrestore(&thread->vm_lock, vm_flags);

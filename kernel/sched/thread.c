@@ -93,7 +93,7 @@ bool sched_fd_refs_node(const vfs_node_t *node) {
             }
 
             const sched_fd_t *slot = &thread->fds[fd];
-            if (slot->kind != SCHED_FD_VFS || slot->node != node) {
+            if (!slot->file || slot->file->kind != SCHED_FD_VFS || slot->file->node != node) {
                 continue;
             }
 
@@ -190,28 +190,28 @@ void thread_put(sched_thread_t *thread) {
         return;
     }
 
-    u32 prev = __atomic_fetch_sub(&thread->refcount, 1, __ATOMIC_ACQ_REL);
-    if (!prev) {
+    u32 old_refs = __atomic_fetch_sub(&thread->refcount, 1, __ATOMIC_ACQ_REL);
+    if (!old_refs) {
         __atomic_fetch_add(&thread->refcount, 1, __ATOMIC_RELAXED);
         return;
     }
 
-    if (prev != 1) {
+    if (old_refs != 1) {
         return;
     }
 
-    u32 prior_lifecycle = __atomic_fetch_or(&thread->lifecycle_flags, SCHED_DEFER_QUEUED, __ATOMIC_ACQ_REL);
+    u32 old_flags = __atomic_fetch_or(&thread->lifecycle_flags, SCHED_DEFER_QUEUED, __ATOMIC_ACQ_REL);
 
-    if (prior_lifecycle & SCHED_DEFER_QUEUED) {
+    if (old_flags & SCHED_DEFER_QUEUED) {
         return;
     }
 
     unsigned long flags = sched_lock_save();
 
-    if (sched_state.procs.deferred_destroy_list && !thread->in_deferred_list) {
-        thread->deferred_node.data = thread;
-        list_append(sched_state.procs.deferred_destroy_list, &thread->deferred_node);
-        thread->in_deferred_list = true;
+    if (sched_state.procs.reap_list && !thread->in_reap_list) {
+        thread->reap_node.data = thread;
+        list_append(sched_state.procs.reap_list, &thread->reap_node);
+        thread->in_reap_list = true;
     }
 
     sched_lock_restore(flags);
@@ -238,20 +238,22 @@ void thread_destroy(sched_thread_t *thread) {
         arch_vm_destroy(thread->vm_space);
     }
 
-    sched_wait_queue_destroy(&thread->wait_queue);
+    sched_waitq_destroy(&thread->wait_queue);
 
     arch_kernel_stack_free(thread);
 
     free(thread);
 }
 
-static bool thread_destroy_ready_locked(sched_thread_t *thread) {
+static bool reapable_locked(sched_thread_t *thread) {
     if (!thread) {
         return false;
     }
 
-    if (thread->in_all_list || thread->in_zombie_list || thread->in_wait_queue || thread->sleep_queued ||
-        thread->blocked_on) {
+    bool on_proc_list = thread->in_all_list || thread->in_zombie_list;
+    bool waiting = thread->in_wait_queue || thread->sleep_queued || thread->blocked_on;
+
+    if (on_proc_list || waiting) {
         return false;
     }
 
@@ -266,25 +268,25 @@ static bool thread_destroy_ready_locked(sched_thread_t *thread) {
     return !thread->on_rq && !thread->in_run_queue && thread->rq_index == UINT32_MAX;
 }
 
-void sched_reap_deferred(void) {
-    if (!sched_state.procs.deferred_destroy_list) {
+static void reap_list(void) {
+    if (!sched_state.procs.reap_list) {
         return;
     }
 
     for (;;) {
         unsigned long flags = sched_lock_save();
 
-        list_node_t *node = list_pop_front(sched_state.procs.deferred_destroy_list);
+        list_node_t *node = list_pop_front(sched_state.procs.reap_list);
         sched_thread_t *thread = node ? node->data : NULL;
 
         if (thread) {
-            thread->in_deferred_list = false;
+            thread->in_reap_list = false;
         }
 
-        if (thread && !thread_destroy_ready_locked(thread)) {
-            thread->deferred_node.data = thread;
-            list_append(sched_state.procs.deferred_destroy_list, &thread->deferred_node);
-            thread->in_deferred_list = true;
+        if (thread && !reapable_locked(thread)) {
+            thread->reap_node.data = thread;
+            list_append(sched_state.procs.reap_list, &thread->reap_node);
+            thread->in_reap_list = true;
             sched_lock_restore(flags);
             break;
         }
@@ -301,11 +303,11 @@ void sched_reap_deferred(void) {
 
 void sched_reap(void) {
     if (!sched_state.procs.zombie_list) {
-        sched_reap_deferred();
+        reap_list();
         return;
     }
 
-    sched_reap_deferred();
+    reap_list();
 
     unsigned long flags = sched_lock_save();
     list_node_t *node = sched_state.procs.zombie_list->head;

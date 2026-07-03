@@ -19,7 +19,7 @@ static bool ctx_stack_valid(const sched_thread_t *thread, size_t need_bytes) {
     return need_bytes <= available;
 }
 
-bool ctx_candidate_valid(const sched_thread_t *thread, const arch_int_state_t *state) {
+bool ctx_state_valid(const sched_thread_t *thread, const arch_int_state_t *state) {
     if (!thread || !state || !thread->stack || !thread->stack_size) {
         return false;
     }

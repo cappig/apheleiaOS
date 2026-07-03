@@ -85,9 +85,12 @@ size_t pick_cpu(const sched_thread_t *thread, size_t fallback_cpu) {
         }
 
         size_t load = sched_cpu_load(cpu);
-        bool better_cpu = (best_cpu >= MAX_CORES || load < best_load || (load == best_load && cpu == fallback_cpu));
+        bool better = best_cpu >= MAX_CORES || load < best_load;
+        if (!better && load == best_load) {
+            better = cpu == fallback_cpu;
+        }
 
-        if (better_cpu) {
+        if (better) {
             best_cpu = cpu;
             best_load = load;
         }
@@ -116,21 +119,21 @@ void sched_nudge_thread(sched_thread_t *thread) {
         return;
     }
 
-    bool current_owned = thread_on_local_cpu(thread);
-    bool handoff_owned = thread_in_handoff(thread);
+    bool local = thread_on_local_cpu(thread);
+    bool handoff = thread_in_handoff(thread);
 
-    if (!current_owned && !handoff_owned) {
+    if (!local && !handoff) {
         return;
     }
 
-    if (current_owned && thread_get_state(thread) == THREAD_SLEEPING) {
+    if (local && thread_get_state(thread) == THREAD_SLEEPING) {
         thread_set_state(thread, THREAD_RUNNING);
     }
 
     size_t owner_cpu = (size_t)running_cpu;
 
     if (owner_cpu == sched_cpu_id()) {
-        sched_request_resched_local();
+        sched_resched_local();
     } else if (wake_cpu(owner_cpu)) {
         __atomic_fetch_add(&sched_state.metrics.wake_ipi, 1, __ATOMIC_RELAXED);
     }
@@ -146,10 +149,10 @@ void sched_publish_handoff(sched_thread_t *thread, size_t owner_cpu) {
     if (thread_get_state(thread) == THREAD_RUNNING) {
         thread_set_state(thread, THREAD_READY);
     } else {
-        bool ready_sleeping =
-            (thread_get_state(thread) == THREAD_SLEEPING && !thread->in_wait_queue && !thread->sleep_queued);
+        bool asleep = thread_get_state(thread) == THREAD_SLEEPING;
+        bool detached = !thread->in_wait_queue && !thread->sleep_queued;
 
-        if (ready_sleeping) {
+        if (asleep && detached) {
             thread_set_state(thread, THREAD_READY);
         }
     }
@@ -194,7 +197,7 @@ void sched_flush_handoff(size_t cpu_id) {
         return;
     }
 
-    sched_cpu_state_t *local = &sched_state.cpus.cpu[cpu_id];
+    sched_cpu_t *local = &sched_state.cpus.cpu[cpu_id];
 
     sched_thread_t *pending = local->handoff_ready;
     if (!pending) {

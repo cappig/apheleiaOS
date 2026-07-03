@@ -15,7 +15,7 @@ u64 sched_target_slice_ns(size_t cpu_id) {
     return slice;
 }
 
-bool sched_has_better_runnable(sched_thread_t *current, size_t cpu_id) {
+bool sched_has_better(sched_thread_t *current, size_t cpu_id) {
     if (!current || cpu_id >= MAX_CORES) {
         return false;
     }
@@ -37,24 +37,26 @@ bool sched_has_better_runnable(sched_thread_t *current, size_t cpu_id) {
 }
 
 static size_t sched_push_load(size_t source_cpu, size_t target_cpu, size_t max_moves) {
-    bool bad_target = (source_cpu >= MAX_CORES || target_cpu >= MAX_CORES || source_cpu == target_cpu);
+    if (!max_moves || source_cpu >= MAX_CORES || target_cpu >= MAX_CORES) {
+        return 0;
+    }
 
-    if (bad_target || !max_moves) {
+    if (source_cpu == target_cpu) {
         return 0;
     }
 
     size_t moved = 0;
     for (size_t i = 0; i < max_moves; i++) {
-        sched_thread_t *candidate = rq_pop_worst_allowed_from_cpu(source_cpu, target_cpu);
+        sched_thread_t *thread = rq_take_worst(source_cpu, target_cpu);
 
-        if (!candidate) {
+        if (!thread) {
             break;
         }
 
-        candidate->last_cpu = target_cpu;
-        candidate->affinity_core = target_cpu;
+        thread->last_cpu = target_cpu;
+        thread->affinity_core = target_cpu;
 
-        rq_enqueue_cpu(candidate, target_cpu);
+        rq_enqueue_cpu(thread, target_cpu);
         moved++;
 
         __atomic_fetch_add(&sched_state.metrics.migrations, 1, __ATOMIC_RELAXED);
@@ -85,16 +87,18 @@ void sched_rebalance_once(size_t cpu_id) {
     __atomic_fetch_add(&sched_state.metrics.balance_runs, 1, __ATOMIC_RELAXED);
 
     for (size_t moved = 0; moved < SCHED_PUSH_BATCH; moved++) {
-        sched_thread_t *stranded = rq_pop_disallowed_from_cpu(cpu_id, cpu_id);
+        sched_thread_t *stranded = rq_take_unfit(cpu_id, cpu_id);
         if (!stranded) {
             break;
         }
 
         size_t target_cpu = pick_cpu(stranded, cpu_id);
+        if (target_cpu >= MAX_CORES || target_cpu == cpu_id) {
+            rq_enqueue_cpu(stranded, cpu_id);
+            break;
+        }
 
-        bool bad_target = (target_cpu >= MAX_CORES || target_cpu == cpu_id || !sched_cpu_allowed(stranded, target_cpu));
-
-        if (bad_target) {
+        if (!sched_cpu_allowed(stranded, target_cpu)) {
             rq_enqueue_cpu(stranded, cpu_id);
             break;
         }
