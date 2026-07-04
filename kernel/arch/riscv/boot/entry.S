@@ -6,6 +6,10 @@
 _start:
     .cfi_startproc
 
+    /* Secondary harts must not clear the shared BSS or use the boot stack. */
+    csrr t2, mhartid
+    bnez t2, 3f
+
 .option push
 .option norelax
     la gp, __global_pointer$
