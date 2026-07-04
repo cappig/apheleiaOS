@@ -203,7 +203,7 @@ static ssize_t _dev_cpu_read(vfs_node_t *node, void *buf, size_t offset, size_t 
 
     u64 busy_ticks = 0;
     u64 total_ticks = 0;
-    sched_cpu_usage_snapshot(&busy_ticks, &total_ticks);
+    sched_cpu_usage(&busy_ticks, &total_ticks);
 
     if (busy_ticks > total_ticks) {
         busy_ticks = total_ticks;
@@ -245,7 +245,7 @@ static ssize_t _dev_cpu_read(vfs_node_t *node, void *buf, size_t offset, size_t 
     for (size_t i = 0; i < ncpu; i++) {
         u64 core_busy = 0;
         u64 core_total = 0;
-        sched_cpu_usage_snapshot_core(i, &core_busy, &core_total);
+        sched_cpu_usage_core(i, &core_busy, &core_total);
         if (core_busy > core_total) {
             core_busy = core_total;
         }
@@ -365,8 +365,8 @@ static ssize_t _dev_sched_read(vfs_node_t *node, void *buf, size_t offset, size_
     (void)node;
     (void)flags;
 
-    sched_metrics_snapshot_t sched_snapshot = { 0 };
-    sched_metrics_snapshot(&sched_snapshot);
+    sched_stats_t sched_snapshot = { 0 };
+    sched_stats(&sched_snapshot);
 
     char text[SYSINFO_TEXT_MAX * 4];
     snprintf(
@@ -511,7 +511,7 @@ static vfs_node_t *_ensure_dev_dir(void) {
     return dev_dir;
 }
 
-static bool _ensure_device_registry(void) {
+static bool ensure_registry(void) {
     if (devfs.devices) {
         return true;
     }
@@ -530,7 +530,7 @@ bool devfs_register_device(const char *name, devfs_device_init_fn init_fn) {
         return false;
     }
 
-    if (!_ensure_device_registry()) {
+    if (!ensure_registry()) {
         return false;
     }
 
@@ -609,7 +609,7 @@ bool devfs_is_ready(void) {
     return devfs.ready;
 }
 
-static void _init_registered_devices(vfs_node_t *dev_dir) {
+static void init_devices(vfs_node_t *dev_dir) {
     if (!dev_dir || !devfs.devices) {
         return;
     }
@@ -629,27 +629,36 @@ static void _init_registered_devices(vfs_node_t *dev_dir) {
     }
 }
 
-static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
-    bool ok = true;
+static bool add_builtin_node(vfs_node_t *dev_dir, const char *name, mode_t mode, vfs_interface_t *interface) {
+    if (!interface) {
+        log_warn("failed to create /dev/%s", name);
+        return false;
+    }
+
+    if (!devfs_register_node(dev_dir, name, VFS_CHARDEV, mode, interface, NULL)) {
+        log_warn("failed to create /dev/%s", name);
+        return false;
+    }
+
+    return true;
+}
+
+static bool register_builtin(vfs_node_t *dev_dir) {
+    bool registered = true;
 
     vfs_interface_t *null_if = vfs_create_interface(_dev_null_read, _dev_null_write, NULL);
-
-    if (!null_if || !devfs_register_node(dev_dir, "null", VFS_CHARDEV, 0666, null_if, NULL)) {
-        log_warn("failed to create /dev/null");
-        ok = false;
+    if (!add_builtin_node(dev_dir, "null", 0666, null_if)) {
+        registered = false;
     }
 
     vfs_interface_t *zero_if = vfs_create_interface(_dev_zero_read, _dev_zero_write, NULL);
-
-    if (!zero_if || !devfs_register_node(dev_dir, "zero", VFS_CHARDEV, 0666, zero_if, NULL)) {
-        log_warn("failed to create /dev/zero");
-        ok = false;
+    if (!add_builtin_node(dev_dir, "zero", 0666, zero_if)) {
+        registered = false;
     }
 
     vfs_interface_t *os_if = vfs_create_interface(_dev_os_read, NULL, NULL);
-    if (!os_if || !devfs_register_node(dev_dir, "os", VFS_CHARDEV, 0444, os_if, NULL)) {
-        log_warn("failed to create /dev/os");
-        ok = false;
+    if (!add_builtin_node(dev_dir, "os", 0444, os_if)) {
+        registered = false;
     }
 
     vfs_interface_t *clock_if = vfs_create_interface(_dev_clock_read, NULL, NULL);
@@ -657,36 +666,31 @@ static bool _register_builtin_nodes(vfs_node_t *dev_dir) {
         clock_if->ioctl = _dev_clock_ioctl;
     }
 
-    if (!clock_if || !devfs_register_node(dev_dir, "clock", VFS_CHARDEV, 0444, clock_if, NULL)) {
-        log_warn("failed to create /dev/clock");
-        ok = false;
+    if (!add_builtin_node(dev_dir, "clock", 0444, clock_if)) {
+        registered = false;
     }
 
     vfs_interface_t *mem_if = vfs_create_interface(_dev_meminfo_read, NULL, NULL);
-    if (!mem_if || !devfs_register_node(dev_dir, "meminfo", VFS_CHARDEV, 0444, mem_if, NULL)) {
-        log_warn("failed to create /dev/meminfo");
-        ok = false;
+    if (!add_builtin_node(dev_dir, "meminfo", 0444, mem_if)) {
+        registered = false;
     }
 
     vfs_interface_t *cpu_if = vfs_create_interface(_dev_cpu_read, NULL, NULL);
-    if (!cpu_if || !devfs_register_node(dev_dir, "cpu", VFS_CHARDEV, 0444, cpu_if, NULL)) {
-        log_warn("failed to create /dev/cpu");
-        ok = false;
+    if (!add_builtin_node(dev_dir, "cpu", 0444, cpu_if)) {
+        registered = false;
     }
 
     vfs_interface_t *sched_if = vfs_create_interface(_dev_sched_read, NULL, NULL);
-    if (!sched_if || !devfs_register_node(dev_dir, "sched", VFS_CHARDEV, 0444, sched_if, NULL)) {
-        log_warn("failed to create /dev/sched");
-        ok = false;
+    if (!add_builtin_node(dev_dir, "sched", 0444, sched_if)) {
+        registered = false;
     }
 
     vfs_interface_t *syscalls_if = vfs_create_interface(_dev_syscalls_read, NULL, NULL);
-    if (!syscalls_if || !devfs_register_node(dev_dir, "syscalls", VFS_CHARDEV, 0444, syscalls_if, NULL)) {
-        log_warn("failed to create /dev/syscalls");
-        ok = false;
+    if (!add_builtin_node(dev_dir, "syscalls", 0444, syscalls_if)) {
+        registered = false;
     }
 
-    return ok;
+    return registered;
 }
 
 void devfs_init(void) {
@@ -701,9 +705,9 @@ void devfs_init(void) {
         return;
     }
 
-    _init_registered_devices(dev_dir);
+    init_devices(dev_dir);
 
-    _register_builtin_nodes(dev_dir);
+    register_builtin(dev_dir);
     devfs.ready = true;
 
     log_debug("devfs ready");

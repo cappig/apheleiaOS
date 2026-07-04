@@ -137,7 +137,7 @@ static const char *pci_class_strings[] = {
     "Unassigned (Vendor specific)",
 };
 
-enum pci_mass_storage_subclass {
+enum {
     PCI_MS_SCSI_BUS = 0x00,
     PCI_MS_IDE = 0x01,
     PCI_MS_FLOPPY = 0x02,
@@ -170,7 +170,7 @@ pci_found_t *pci_find_node(u8 class, u8 subclass, pci_found_t *from);
 
 u32 pci_read_config(u8 bus, u8 slot, u8 func, u16 offset, u8 size);
 void pci_write_config(u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size);
-void pci_enable_bus_mastering(u8 bus, u8 slot, u8 func);
+void pci_enable_bus_master(u8 bus, u8 slot, u8 func);
 
 u16 pci_find_capability(u8 bus, u8 slot, u8 func, u8 cap_id);
 bool pci_enable_msi(u8 bus, u8 slot, u8 func, u8 vector, u32 lapic_dest);

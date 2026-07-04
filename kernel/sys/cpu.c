@@ -10,20 +10,20 @@ cpu_core_t cores_local[MAX_CORES] = { 0 };
 
 static cpu_core_t *cpu_boot_local = NULL;
 
-static bool _cpu_ptr_is_core(cpu_core_t *core) {
-    uintptr_t ptr = (uintptr_t)core;
+static bool _is_local_core(cpu_core_t *core) {
+    uintptr_t addr = (uintptr_t)core;
     uintptr_t first = (uintptr_t)&cores_local[0];
     uintptr_t last = first + sizeof(cores_local);
 
-    if (ptr < first || ptr >= last) {
+    if (addr < first || addr >= last) {
         return false;
     }
 
-    return ((ptr - first) % sizeof(cpu_core_t)) == 0;
+    return ((addr - first) % sizeof(cpu_core_t)) == 0;
 }
 
 static cpu_core_t *_cpu_canonicalize(cpu_core_t *core) {
-    if (!_cpu_ptr_is_core(core)) {
+    if (!_is_local_core(core)) {
         return NULL;
     }
 

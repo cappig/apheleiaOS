@@ -3,69 +3,68 @@
 #include <base/macros.h>
 #include <string.h>
 
-static void _pop(char *out, size_t *len, size_t *seg_pos, size_t *seg_count) {
-    if (!out || !len || !seg_pos || !seg_count) {
+typedef struct {
+    char *out;
+    size_t out_len;
+    size_t len;
+    size_t *seg_pos;
+    size_t seg_count;
+    size_t seg_cap;
+} path_build_t;
+
+static void _pop(path_build_t *path) {
+    if (!path || !path->out || !path->seg_pos) {
         return;
     }
 
-    if (!*seg_count) {
-        *len = 1;
-        out[1] = '\0';
+    if (!path->seg_count) {
+        path->len = 1;
+        path->out[1] = '\0';
         return;
     }
 
-    size_t pos = seg_pos[*seg_count - 1];
+    size_t pos = path->seg_pos[path->seg_count - 1];
 
     if (pos > 1) {
-        *len = pos - 1;
+        path->len = pos - 1;
     } else {
-        *len = 1;
+        path->len = 1;
     }
 
-    out[*len] = '\0';
-    (*seg_count)--;
+    path->out[path->len] = '\0';
+    path->seg_count--;
 }
 
-static bool _push(
-    char *out,
-    size_t out_len,
-    size_t *len,
-    const char *seg,
-    size_t seg_len,
-    size_t *seg_pos,
-    size_t *seg_count,
-    size_t seg_cap
-) {
-    if (!out || !len || !seg || !seg_pos || !seg_count) {
+static bool _push(path_build_t *path, const char *seg, size_t seg_len) {
+    if (!path || !path->out || !seg || !path->seg_pos) {
         return false;
     }
 
-    if (*seg_count >= seg_cap) {
+    if (path->seg_count >= path->seg_cap) {
         return false;
     }
 
-    size_t extra = (*len > 1) ? 1 : 0;
-    if (*len + extra + seg_len >= out_len) {
+    size_t extra = (path->len > 1) ? 1 : 0;
+    if (path->len + extra + seg_len >= path->out_len) {
         return false;
     }
 
-    if (*len > 1) {
-        out[(*len)++] = '/';
+    if (path->len > 1) {
+        path->out[path->len++] = '/';
     }
 
-    seg_pos[*seg_count] = *len;
-    (*seg_count)++;
+    path->seg_pos[path->seg_count] = path->len;
+    path->seg_count++;
 
-    memcpy(out + *len, seg, seg_len);
-    *len += seg_len;
-    out[*len] = '\0';
+    memcpy(path->out + path->len, seg, seg_len);
+    path->len += seg_len;
+    path->out[path->len] = '\0';
 
     return true;
 }
 
-static bool
-_apply(const char *input, char *out, size_t out_len, size_t *seg_pos, size_t *seg_count, size_t seg_cap, size_t *len) {
-    if (!input || !out || !seg_pos || !seg_count || !len) {
+static bool _apply(path_build_t *path, const char *input) {
+    if (!path || !input) {
         return false;
     }
 
@@ -92,11 +91,11 @@ _apply(const char *input, char *out, size_t out_len, size_t *seg_pos, size_t *se
         }
 
         if (seg_len == 2 && start[0] == '.' && start[1] == '.') {
-            _pop(out, len, seg_pos, seg_count);
+            _pop(path);
             continue;
         }
 
-        bool pushed = _push(out, out_len, len, start, seg_len, seg_pos, seg_count, seg_cap);
+        bool pushed = _push(path, start, seg_len);
 
         if (!pushed) {
             return false;
@@ -112,8 +111,13 @@ bool path_resolve(const char *cwd, const char *path, char *out, size_t out_len) 
     }
 
     size_t seg_pos[PATH_MAX / 2] = { 0 };
-    size_t seg_count = 0;
-    size_t len = 1;
+    path_build_t built = {
+        .out = out,
+        .out_len = out_len,
+        .len = 1,
+        .seg_pos = seg_pos,
+        .seg_cap = ARRAY_LEN(seg_pos),
+    };
 
     out[0] = '/';
     out[1] = '\0';
@@ -121,27 +125,27 @@ bool path_resolve(const char *cwd, const char *path, char *out, size_t out_len) 
     if (path[0] != '/') {
         const char *base = (cwd && cwd[0]) ? cwd : "/";
 
-        bool applied_base = _apply(base, out, out_len, seg_pos, &seg_count, ARRAY_LEN(seg_pos), &len);
+        bool applied_base = _apply(&built, base);
 
         if (!applied_base) {
             return false;
         }
     } else {
-        seg_count = 0;
-        len = 1;
-        out[0] = '/';
-        out[1] = '\0';
+        built.seg_count = 0;
+        built.len = 1;
+        built.out[0] = '/';
+        built.out[1] = '\0';
     }
 
-    bool applied_path = _apply(path, out, out_len, seg_pos, &seg_count, ARRAY_LEN(seg_pos), &len);
+    bool applied_path = _apply(&built, path);
 
     if (!applied_path) {
         return false;
     }
 
-    if (!len) {
-        out[0] = '/';
-        out[1] = '\0';
+    if (!built.len) {
+        built.out[0] = '/';
+        built.out[1] = '\0';
     }
 
     return true;

@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <string.h>
 
-static bool _user_page_flags_ok(const sched_thread_t *thread, uintptr_t addr, bool write) {
+static bool user_page_ok(const sched_thread_t *thread, uintptr_t addr, bool write) {
     if (!thread || !thread->vm_space) {
         return false;
     }
@@ -22,7 +22,10 @@ static bool _user_page_flags_ok(const sched_thread_t *thread, uintptr_t addr, bo
     page_t *entry = NULL;
     size_t size = arch_get_page(root, addr, &entry);
     // page tables are checked after the region list so stale metadata cannot authorize access
-    if (!entry || !size || !(*entry & PT_PRESENT) || !(*entry & PT_USER)) {
+    bool present = entry && size && (*entry & PT_PRESENT);
+    bool user = entry && (*entry & PT_USER);
+
+    if (!present || !user) {
         return false;
     }
 
@@ -87,9 +90,9 @@ bool user_range_ok(const sched_thread_t *thread, const void *ptr, size_t len, bo
         uintptr_t segment_end = match_end < end ? match_end : end;
         bool require_write = write && !(match->flags & SCHED_REGION_COW);
 
-        // cow pages are fine for reads. Writes have to fault them private first
+        // cow pages are fine for reads; writes fault them private first
         for (uintptr_t page = ALIGN_DOWN(cursor, PAGE_4KIB); page < segment_end; page += PAGE_4KIB) {
-            if (!_user_page_flags_ok(thread, page, require_write)) {
+            if (!user_page_ok(thread, page, require_write)) {
                 return false;
             }
         }
@@ -113,7 +116,7 @@ bool user_write_prepare(const sched_thread_t *thread, void *ptr, size_t len) {
     uintptr_t end = (uintptr_t)ptr + len;
 
     for (uintptr_t page = start; page < end; page += PAGE_4KIB) {
-        if (_user_page_flags_ok(thread, page, true)) {
+        if (user_page_ok(thread, page, true)) {
             continue;
         }
 
@@ -121,7 +124,7 @@ bool user_write_prepare(const sched_thread_t *thread, void *ptr, size_t len) {
             return false;
         }
 
-        if (!_user_page_flags_ok(thread, page, true)) {
+        if (!user_page_ok(thread, page, true)) {
             return false;
         }
     }

@@ -11,6 +11,8 @@ typedef struct {
     bool xsdt;
 } acpi_state_t;
 
+#define RSDP_MAX_LENGTH 4096U
+
 static acpi_state_t acpi = { 0 };
 
 static bool _checksum(const void *table, size_t length) {
@@ -138,20 +140,31 @@ static void _parse_xsdt(u64 xsdt_phys) {
     }
 }
 
-static bool _rsdp_validate(rsdp_t *rsdp) {
+static bool _rsdp_validate_base(const rsdp_t *rsdp) {
     if (memcmp(rsdp->signature, "RSD PTR ", 8) != 0) {
         return false;
     }
 
-    if (!_checksum(rsdp, 20)) {
+    return _checksum(rsdp, 20);
+}
+
+static bool _rsdp_validate_extended(u64 rsdp_ptr, const rsdp_t *rsdp) {
+    if (rsdp->revision < 2) {
+        return true;
+    }
+
+    if (rsdp->length < sizeof(*rsdp) || rsdp->length > RSDP_MAX_LENGTH) {
         return false;
     }
 
-    if (rsdp->revision >= 2 && rsdp->length >= sizeof(rsdp_t)) {
-        return _checksum(rsdp, rsdp->length);
+    void *map = arch_phys_map(rsdp_ptr, rsdp->length, 0);
+    if (!map) {
+        return false;
     }
 
-    return true;
+    bool valid = _checksum(map, rsdp->length);
+    arch_phys_unmap(map, rsdp->length);
+    return valid;
 }
 
 void acpi_init(u64 rsdp_ptr) {
@@ -175,7 +188,7 @@ void acpi_init(u64 rsdp_ptr) {
     memcpy(&rsdp, rsdp_map, sizeof(rsdp_t));
     arch_phys_unmap(rsdp_map, sizeof(rsdp_t));
 
-    if (!_rsdp_validate(&rsdp)) {
+    if (!_rsdp_validate_base(&rsdp) || !_rsdp_validate_extended(rsdp_ptr, &rsdp)) {
         log_warn("invalid RSDP");
         return;
     }

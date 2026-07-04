@@ -30,6 +30,15 @@ typedef struct {
     size_t ecam_count;
 } pci_state_t;
 
+typedef struct {
+    u64 base;
+    u8 bus;
+    u8 slot;
+    u8 func;
+    u16 offset;
+    u8 size;
+} pci_cfg_io_t;
+
 static pci_state_t pci_state = { 0 };
 
 static u64 _bsf_key(u8 bus, u8 slot, u8 func) {
@@ -41,7 +50,8 @@ static void _index_device(pci_found_t *device) {
         return;
     }
 
-    if (!hashmap_set(pci_state.bsf_index, _bsf_key(device->bus, device->slot, device->func), (u64)(uintptr_t)device)) {
+    u64 key = _bsf_key(device->bus, device->slot, device->func);
+    if (!hashmap_set(pci_state.bsf_index, key, (u64)(uintptr_t)device)) {
         panic("pci registry index insert failed");
     }
 }
@@ -102,7 +112,7 @@ static void _clear_ecam_windows(void) {
     memset(pci_state.ecam, 0, sizeof(pci_state.ecam));
 }
 
-static void _register_ecam_window(u64 ecam_base, u16 segment, u8 start_bus, u8 end_bus) {
+static void register_ecam(u64 ecam_base, u16 segment, u8 start_bus, u8 end_bus) {
     if (pci_state.ecam_count >= ARRAY_LEN(pci_state.ecam)) {
         return;
     }
@@ -309,7 +319,7 @@ static void _init_express(mcfg_t *table) {
         // ecam base in MCFG entries is anchored to start_bus
         // convert to a synthetic bus-0 base so _ecam_addr() can use absolute bus
         u64 ecam_base = entry->base_addr - start_bus_off;
-        _register_ecam_window(ecam_base, entry->pci_seg_group, entry->start_bus, entry->end_bus);
+        register_ecam(ecam_base, entry->pci_seg_group, entry->start_bus, entry->end_bus);
 
         log_debug(
             "MCFG seg=%u bus=%u..%u base=%#" PRIx64,
@@ -369,9 +379,12 @@ pci_device_t *pci_find_device(u8 class, u8 subclass, pci_device_t *from) {
         pci_header_t *header = &dev->header;
 
         if (!matched_from) {
-            if (header->vendor_id == from->header.vendor_id && header->device_id == from->header.device_id &&
-                header->class == from->header.class && header->subclass == from->header.subclass &&
-                header->prog_if == from->header.prog_if) {
+            pci_header_t *base = &from->header;
+            bool same_id = header->vendor_id == base->vendor_id && header->device_id == base->device_id;
+            bool same_class = header->class == base->class && header->subclass == base->subclass;
+            bool same_prog_if = header->prog_if == base->prog_if;
+
+            if (same_id && same_class && same_prog_if) {
                 matched_from = true;
             }
 
@@ -379,8 +392,8 @@ pci_device_t *pci_find_device(u8 class, u8 subclass, pci_device_t *from) {
         }
 
         if (header->class == class && header->subclass == subclass) {
-            u8 *ret = malloc(256);
-            if (!ret) {
+            u8 *config = malloc(256);
+            if (!config) {
                 return NULL;
             }
 
@@ -390,19 +403,19 @@ pci_device_t *pci_find_device(u8 class, u8 subclass, pci_device_t *from) {
                 void *map = arch_phys_map(phys, 256, PHYS_MAP_MMIO);
 
                 if (!map) {
-                    free(ret);
+                    free(config);
                     return NULL;
                 }
 
-                memcpy(ret, map, 256);
+                memcpy(config, map, 256);
                 arch_phys_unmap(map, 256);
             } else {
                 for (size_t i = 0; i < 256; i++) {
-                    ret[i] = (u8)_read_legacy(dev->bus, dev->slot, dev->func, (u8)i, 1);
+                    config[i] = (u8)_read_legacy(dev->bus, dev->slot, dev->func, (u8)i, 1);
                 }
             }
 
-            return (pci_device_t *)ret;
+            return (pci_device_t *)config;
         }
     }
 
@@ -424,7 +437,8 @@ static pci_found_t *_find_by_bsf(u8 bus, u8 slot, u8 func) {
         if (hashmap_get(pci_state.bsf_index, _bsf_key(bus, slot, func), &encoded)) {
             pci_found_t *device = (pci_found_t *)(uintptr_t)encoded;
 
-            if (device && device->bus == bus && device->slot == slot && device->func == func) {
+            bool same_slot = device && device->bus == bus && device->slot == slot && device->func == func;
+            if (same_slot) {
                 return device;
             }
         }
@@ -445,26 +459,26 @@ static void _write_legacy(u8 bus, u8 slot, u8 func, u8 offset, u32 value, u8 siz
     pci_bus_write(bus, slot, func, offset, value, size);
 }
 
-static u32 _ecam_read(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u8 size) {
-    u64 phys = _ecam_addr(base, bus, slot, func);
+static u32 _ecam_read(const pci_cfg_io_t *io) {
+    u64 phys = _ecam_addr(io->base, io->bus, io->slot, io->func);
     void *map = arch_phys_map(phys, 4096, PHYS_MAP_MMIO);
 
     if (!map) {
         return 0xffffffffU;
     }
 
-    volatile u8 *ptr = (volatile u8 *)map + offset;
+    volatile u8 *addr = (volatile u8 *)map + io->offset;
     u32 result;
 
-    switch (size) {
+    switch (io->size) {
     case 4:
-        result = *(volatile u32 *)ptr;
+        result = *(volatile u32 *)addr;
         break;
     case 2:
-        result = *(volatile u16 *)ptr;
+        result = *(volatile u16 *)addr;
         break;
     case 1:
-        result = *(volatile u8 *)ptr;
+        result = *(volatile u8 *)addr;
         break;
     default:
         result = 0xffffffffU;
@@ -475,25 +489,25 @@ static u32 _ecam_read(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u8 size) {
     return result;
 }
 
-static void _ecam_write(u64 base, u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size) {
-    u64 phys = _ecam_addr(base, bus, slot, func);
+static void _ecam_write(const pci_cfg_io_t *io, u32 value) {
+    u64 phys = _ecam_addr(io->base, io->bus, io->slot, io->func);
     void *map = arch_phys_map(phys, 4096, PHYS_MAP_MMIO);
 
     if (!map) {
         return;
     }
 
-    volatile u8 *ptr = (volatile u8 *)map + offset;
+    volatile u8 *addr = (volatile u8 *)map + io->offset;
 
-    switch (size) {
+    switch (io->size) {
     case 4:
-        *(volatile u32 *)ptr = value;
+        *(volatile u32 *)addr = value;
         break;
     case 2:
-        *(volatile u16 *)ptr = (u16)value;
+        *(volatile u16 *)addr = (u16)value;
         break;
     case 1:
-        *(volatile u8 *)ptr = (u8)value;
+        *(volatile u8 *)addr = (u8)value;
         break;
     }
 
@@ -527,7 +541,16 @@ u32 pci_read_config(u8 bus, u8 slot, u8 func, u16 offset, u8 size) {
     pci_found_t *node = _find_by_bsf(bus, slot, func);
 
     if (node && node->base != (u64)-1) {
-        return _ecam_read(node->base, bus, slot, func, offset, size);
+        pci_cfg_io_t io = {
+            .base = node->base,
+            .bus = bus,
+            .slot = slot,
+            .func = func,
+            .offset = offset,
+            .size = size,
+        };
+
+        return _ecam_read(&io);
     }
 
     return _read_legacy(bus, slot, func, (u8)offset, size);
@@ -537,13 +560,22 @@ void pci_write_config(u8 bus, u8 slot, u8 func, u16 offset, u32 value, u8 size) 
     pci_found_t *node = _find_by_bsf(bus, slot, func);
 
     if (node && node->base != (u64)-1) {
-        _ecam_write(node->base, bus, slot, func, offset, value, size);
+        pci_cfg_io_t io = {
+            .base = node->base,
+            .bus = bus,
+            .slot = slot,
+            .func = func,
+            .offset = offset,
+            .size = size,
+        };
+
+        _ecam_write(&io, value);
     } else {
         _write_legacy(bus, slot, func, (u8)offset, value, size);
     }
 }
 
-void pci_enable_bus_mastering(u8 bus, u8 slot, u8 func) {
+void pci_enable_bus_master(u8 bus, u8 slot, u8 func) {
     u16 cmd = (u16)pci_read_config(bus, slot, func, PCI_CFG_COMMAND, 2);
     cmd |= PCI_COMMAND_BUS_MASTER | PCI_COMMAND_MEM_SPACE;
     pci_write_config(bus, slot, func, PCI_CFG_COMMAND, cmd, 2);
@@ -556,16 +588,16 @@ u16 pci_find_capability(u8 bus, u8 slot, u8 func, u8 cap_id) {
         return 0;
     }
 
-    u8 ptr = (u8)(pci_read_config(bus, slot, func, PCI_CFG_CAP_PTR, 1) & 0xfc);
+    u8 offset = (u8)(pci_read_config(bus, slot, func, PCI_CFG_CAP_PTR, 1) & 0xfc);
 
-    for (size_t i = 0; i < 48 && ptr; i++) {
-        u8 id = (u8)pci_read_config(bus, slot, func, ptr, 1);
+    for (size_t i = 0; i < 48 && offset; i++) {
+        u8 id = (u8)pci_read_config(bus, slot, func, offset, 1);
 
         if (id == cap_id) {
-            return ptr;
+            return offset;
         }
 
-        ptr = (u8)(pci_read_config(bus, slot, func, ptr + 1, 1) & 0xfc);
+        offset = (u8)(pci_read_config(bus, slot, func, offset + 1, 1) & 0xfc);
     }
 
     return 0;

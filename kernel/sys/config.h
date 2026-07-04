@@ -126,12 +126,12 @@
 #define MOUSE_DEV_BUFFER_SIZE 256
 #endif
 
-#ifndef WS_MGR_QUEUE_INIT_CAP
-#define WS_MGR_QUEUE_INIT_CAP 1024
+#ifndef WS_MGR_QUEUE_CAP
+#define WS_MGR_QUEUE_CAP 1024
 #endif
 
-#ifndef WS_EV_QUEUE_INIT_CAP
-#define WS_EV_QUEUE_INIT_CAP 256
+#ifndef WS_EVENT_QUEUE_CAP
+#define WS_EVENT_QUEUE_CAP 256
 #endif
 
 #ifndef WS_MAX_FB_BYTES
@@ -210,7 +210,7 @@
 #error "input device buffers must be non-zero"
 #endif
 
-#if WS_MGR_QUEUE_INIT_CAP < 1 || WS_EV_QUEUE_INIT_CAP < 1
+#if WS_MGR_QUEUE_CAP < 1 || WS_EVENT_QUEUE_CAP < 1
 #error "window-server queue capacities must be non-zero"
 #endif
 

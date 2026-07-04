@@ -1,6 +1,7 @@
 #include "symbols.h"
 
 #include <base/macros.h>
+#include <errno.h>
 #include <log/log.h>
 #include <parse/elf.h>
 #include <stdlib.h>
@@ -46,7 +47,7 @@ static bool _name_is_terminated(const char *name, size_t max_len) {
     return name && memchr(name, '\0', max_len);
 }
 
-static bool _symbol_name_is_traceable(const char *name) {
+static bool traceable_name(const char *name) {
     if (!name || !*name) {
         return false;
     }
@@ -54,7 +55,7 @@ static bool _symbol_name_is_traceable(const char *name) {
     return name[0] != '$' && strncmp(name, ".L", 2) != 0;
 }
 
-static bool _symbol_is_traceable(const elf_symbol_view_t *sym, const char *name) {
+static bool traceable_symbol(const elf_symbol_view_t *sym, const char *name) {
     if (!sym) {
         return false;
     }
@@ -66,13 +67,22 @@ static bool _symbol_is_traceable(const elf_symbol_view_t *sym, const char *name)
     }
 
     if (type == STT_NOTYPE) {
-        return _symbol_name_is_traceable(name);
+        return traceable_name(name);
     }
 
     return false;
 }
 
-static bool _symbol_section_to_table(const elf_view_t *view, const elf_section_view_t *sym_sec) {
+typedef struct {
+    const elf_view_t *view;
+    const elf_section_view_t *section;
+    const char *names;
+    size_t name_size;
+    size_t ent_size;
+    size_t count;
+} symbol_scan_t;
+
+static bool symbol_scan_init(const elf_view_t *view, const elf_section_view_t *sym_sec, symbol_scan_t *scan) {
     if (!view || !sym_sec) {
         return false;
     }
@@ -81,11 +91,11 @@ static bool _symbol_section_to_table(const elf_view_t *view, const elf_section_v
         return false;
     }
 
-    if (!elf_view_section_data_ok(view, sym_sec)) {
+    if (!elf_section_data_ok(view, sym_sec)) {
         return false;
     }
 
-    size_t min_ent_size = elf_view_min_symbol_size(view);
+    size_t min_ent_size = elf_min_symbol_size(view);
     if (!min_ent_size) {
         return false;
     }
@@ -97,64 +107,96 @@ static bool _symbol_section_to_table(const elf_view_t *view, const elf_section_v
 
     elf_section_view_t str_sec = { 0 };
     if (!elf_view_read_section(view, sym_sec->link, &str_sec) || str_sec.type != SHT_STRTAB ||
-        !elf_view_section_data_ok(view, &str_sec)) {
+        !elf_section_data_ok(view, &str_sec)) {
         return false;
     }
 
-    const char *strtab = (const char *)view->blob + str_sec.offset;
-    size_t strtab_size = str_sec.size;
-    size_t sym_count = sym_sec->size / ent_size;
+    *scan = (symbol_scan_t){
+        .view = view,
+        .section = sym_sec,
+        .names = (const char *)view->blob + str_sec.offset,
+        .name_size = str_sec.size,
+        .ent_size = ent_size,
+        .count = sym_sec->size / ent_size,
+    };
+
+    return true;
+}
+
+static int
+symbol_scan_read(const symbol_scan_t *scan, size_t index, elf_symbol_view_t *sym_out, const char **name_out) {
+    size_t off = scan->section->offset + index * scan->ent_size;
+    if (!_range_ok(off, scan->ent_size, scan->view->blob_size)) {
+        return -EINVAL;
+    }
+
+    elf_symbol_view_t sym = { 0 };
+    if (!elf_view_read_symbol(scan->view, scan->view->blob + off, scan->ent_size, &sym)) {
+        return -EINVAL;
+    }
+
+    if (!sym.value || !sym.name) {
+        return 0;
+    }
+
+    if (sym.shndx == 0 || sym.shndx >= scan->view->sh_num) {
+        return 0;
+    }
+
+    elf_section_view_t sec = { 0 };
+    if (!elf_view_read_section(scan->view, sym.shndx, &sec)) {
+        return -EINVAL;
+    }
+
+    if (!(sec.flags & SHF_EXECINSTR)) {
+        return 0;
+    }
+
+    if (sym.name >= scan->name_size) {
+        return 0;
+    }
+
+    const char *name = scan->names + sym.name;
+    if (!_name_is_terminated(name, scan->name_size - sym.name)) {
+        return 0;
+    }
+
+    if (!traceable_symbol(&sym, name)) {
+        return 0;
+    }
+
+    *sym_out = sym;
+    *name_out = name;
+    return 1;
+}
+
+static void symbol_table_free(void) {
+    free(symbols.table.map);
+    symbols.table.map = NULL;
+    symbols.table.len = 0;
+}
+
+static bool symbol_section_ok(const elf_view_t *view, const elf_section_view_t *sym_sec) {
+    symbol_scan_t scan = { 0 };
+    if (!symbol_scan_init(view, sym_sec, &scan)) {
+        return false;
+    }
+
     size_t text_count = 0;
-
-    for (size_t i = 0; i < sym_count; i++) {
-        size_t off = sym_sec->offset + i * ent_size;
-        if (!_range_ok(off, ent_size, view->blob_size)) {
-            return false;
-        }
-
+    for (size_t i = 0; i < scan.count; i++) {
         elf_symbol_view_t sym = { 0 };
-        if (!elf_view_read_symbol(view, view->blob + off, ent_size, &sym)) {
+        const char *name = NULL;
+
+        int status = symbol_scan_read(&scan, i, &sym, &name);
+        if (status < 0) {
             return false;
         }
-
-        if (!sym.value || !sym.name) {
-            continue;
+        if (status > 0) {
+            text_count++;
         }
-
-        if (sym.shndx == 0 || sym.shndx >= view->sh_num) {
-            continue;
-        }
-
-        elf_section_view_t sec = { 0 };
-        if (!elf_view_read_section(view, sym.shndx, &sec)) {
-            return false;
-        }
-
-        if (!(sec.flags & SHF_EXECINSTR)) {
-            continue;
-        }
-
-        if (sym.name >= strtab_size) {
-            continue;
-        }
-
-        const char *name = strtab + sym.name;
-        if (!_name_is_terminated(name, strtab_size - sym.name)) {
-            continue;
-        }
-
-        if (!_symbol_is_traceable(&sym, name)) {
-            continue;
-        }
-
-        text_count++;
     }
 
-    if (!text_count) {
-        return false;
-    }
-
-    if (text_count > (size_t)-1 / sizeof(symbol_entry_t)) {
+    if (!text_count || text_count > (size_t)-1 / sizeof(symbol_entry_t)) {
         return false;
     }
 
@@ -165,62 +207,26 @@ static bool _symbol_section_to_table(const elf_view_t *view, const elf_section_v
 
     symbols.table.len = 0;
 
-    for (size_t i = 0; i < sym_count && symbols.table.len < text_count; i++) {
-        size_t off = sym_sec->offset + i * ent_size;
-
-        if (!_range_ok(off, ent_size, view->blob_size)) {
-            free(symbols.table.map);
-            symbols.table.map = NULL;
-            return false;
-        }
-
+    for (size_t i = 0; i < scan.count && symbols.table.len < text_count; i++) {
         elf_symbol_view_t sym = { 0 };
-        if (!elf_view_read_symbol(view, view->blob + off, ent_size, &sym)) {
-            free(symbols.table.map);
-            symbols.table.map = NULL;
+        const char *name = NULL;
+
+        int status = symbol_scan_read(&scan, i, &sym, &name);
+        if (status < 0) {
+            symbol_table_free();
             return false;
         }
-
-        if (!sym.value || !sym.name) {
-            continue;
-        }
-
-        if (sym.shndx == 0 || sym.shndx >= view->sh_num) {
-            continue;
-        }
-
-        elf_section_view_t sec = { 0 };
-        if (!elf_view_read_section(view, sym.shndx, &sec)) {
-            free(symbols.table.map);
-            symbols.table.map = NULL;
-            return false;
-        }
-
-        if (!(sec.flags & SHF_EXECINSTR)) {
-            continue;
-        }
-
-        if (sym.name >= strtab_size) {
-            continue;
-        }
-
-        char *name = symbols.blob + str_sec.offset + sym.name;
-        if (!_name_is_terminated(name, strtab_size - sym.name)) {
-            continue;
-        }
-
-        if (!_symbol_is_traceable(&sym, name)) {
+        if (!status) {
             continue;
         }
 
         symbols.table.map[symbols.table.len].addr = sym.value;
-        symbols.table.map[symbols.table.len].name = name;
+        symbols.table.map[symbols.table.len].name = (char *)name;
         symbols.table.len++;
     }
 
     if (!symbols.table.len) {
-        free(symbols.table.map);
-        symbols.table.map = NULL;
+        symbol_table_free();
         return false;
     }
 
@@ -301,7 +307,7 @@ void load_symbols(void) {
         return;
     }
 
-    if (!_symbol_section_to_table(&view, &sym_sec)) {
+    if (!symbol_section_ok(&view, &sym_sec)) {
         log_warn("failed to load symbols from %s", path);
         _clear_symbols();
         return;

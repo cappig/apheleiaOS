@@ -150,7 +150,7 @@ static inline void spin_unlock(spinlock_t *lock) {
     lock_preempt_enable();
 }
 
-static inline bool lock_spin_held_on_cpu(void) {
+static inline bool lock_spin_held(void) {
     size_t cpu_id = lock_cpu_id();
     return __atomic_load_n(&lock_spin_held_depth[cpu_id], __ATOMIC_RELAXED) != 0;
 }
@@ -167,6 +167,7 @@ static inline void spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
 }
 
 void mutex_init(mutex_t *mutex);
+void mutex_destroy(mutex_t *mutex);
 bool mutex_try_lock(mutex_t *mutex);
 void mutex_lock(mutex_t *mutex);
 void mutex_unlock(mutex_t *mutex);

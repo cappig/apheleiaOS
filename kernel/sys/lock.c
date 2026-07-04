@@ -16,6 +16,8 @@ volatile uint32_t lock_spin_held_depth[MAX_CORES] = { 0 };
 void lock_debug_trap(const char *site, const void *lock_ptr, const void *caller, size_t owner_cpu, int lock_state) {
     size_t cpu_id = lock_cpu_id();
     sched_thread_t *current = sched_is_running() ? sched_current() : NULL;
+    const char *lock_site = site ? site : "?";
+
     char buf[LOG_BUF_SIZE] = { 0 };
     int len = snprintf(
         buf,
@@ -25,7 +27,7 @@ void lock_debug_trap(const char *site, const void *lock_ptr, const void *caller,
         " current=%#" PRIx64 " pid=%d name=%s\n",
         __FILE__,
         __LINE__,
-        site ? site : "?",
+        lock_site,
         (u64)(uintptr_t)lock_ptr,
         (u64)(uintptr_t)caller,
         owner_cpu,
@@ -65,7 +67,7 @@ static sched_wait_queue_t *mutex_wait_queue_get(mutex_t *mutex, bool create) {
         return NULL;
     }
 
-    sched_wait_queue_init(queue);
+    sched_waitq_init(queue);
 
     sched_wait_queue_t *expected = NULL;
     bool installed = __atomic_compare_exchange_n(
@@ -81,7 +83,7 @@ static sched_wait_queue_t *mutex_wait_queue_get(mutex_t *mutex, bool create) {
         return queue;
     }
 
-    sched_wait_queue_destroy(queue);
+    sched_waitq_destroy(queue);
     free(queue);
     return expected;
 }
@@ -116,13 +118,29 @@ void mutex_init(mutex_t *mutex) {
 #endif
 }
 
+void mutex_destroy(mutex_t *mutex) {
+    if (!mutex) {
+        return;
+    }
+
+    unsigned long flags = spin_lock_irqsave(&mutex->lock);
+    sched_wait_queue_t *queue = mutex->wait_queue;
+    mutex->wait_queue = NULL;
+    spin_unlock_irqrestore(&mutex->lock, flags);
+
+    if (queue) {
+        sched_waitq_destroy(queue);
+        free(queue);
+    }
+}
+
 bool mutex_try_lock(mutex_t *mutex) {
     if (!mutex) {
         return false;
     }
 
     unsigned long flags = spin_lock_irqsave(&mutex->lock);
-    bool ok = false;
+    bool locked = false;
     if (!mutex->held) {
         mutex->held = 1;
 
@@ -130,10 +148,10 @@ bool mutex_try_lock(mutex_t *mutex) {
         mutex->owner_thread = sched_is_running() ? sched_current() : NULL;
 #endif
 
-        ok = true;
+        locked = true;
     }
     spin_unlock_irqrestore(&mutex->lock, flags);
-    return ok;
+    return locked;
 }
 
 void mutex_lock(mutex_t *mutex) {
@@ -154,7 +172,10 @@ void mutex_lock(mutex_t *mutex) {
             spin_unlock_irqrestore(&mutex->lock, flags);
             return;
         }
-        u32 wait_seq = queue ? __atomic_load_n(&queue->wake_seq, __ATOMIC_ACQUIRE) : 0;
+        u32 wait_seq = 0;
+        if (queue) {
+            wait_seq = __atomic_load_n(&queue->wake_seq, __ATOMIC_ACQUIRE);
+        }
         spin_unlock_irqrestore(&mutex->lock, flags);
 
         if (!sched_is_running() || !sched_current() || !arch_irq_enabled()) {
@@ -170,7 +191,7 @@ void mutex_lock(mutex_t *mutex) {
             continue;
         }
 
-        if (lock_spin_held_on_cpu()) {
+        if (lock_spin_held()) {
 #if LOCK_DEBUG
             lock_debug_trap("mutex_lock:spin-depth-held", mutex, __builtin_return_address(0), (size_t)-1, mutex->held);
 #else
@@ -180,7 +201,7 @@ void mutex_lock(mutex_t *mutex) {
         }
 
         if (!sched_preempt_disabled()) {
-            (void)sched_wait_on_queue(queue, wait_seq, 0, 0);
+            (void)sched_wait_on(queue, wait_seq, 0, 0);
         } else {
             arch_cpu_relax();
         }
@@ -192,7 +213,6 @@ void mutex_unlock(mutex_t *mutex) {
         return;
     }
 
-    sched_wait_queue_t *queue = mutex_wait_queue_get(mutex, false);
     unsigned long flags = spin_lock_irqsave(&mutex->lock);
 
 #if LOCK_DEBUG
@@ -211,6 +231,7 @@ void mutex_unlock(mutex_t *mutex) {
     }
 #endif
     mutex->held = 0;
+    sched_wait_queue_t *queue = mutex->wait_queue;
 #if LOCK_DEBUG
     mutex->owner_thread = NULL;
 #endif

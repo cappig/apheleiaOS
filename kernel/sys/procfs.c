@@ -155,6 +155,25 @@ static ssize_t _text_read(const char *text, void *buf, size_t offset, size_t len
     return (ssize_t)copy_len;
 }
 
+static bool _is_space(char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static char *_trim_text(char *text) {
+    char *start = text;
+    while (_is_space(*start)) {
+        start++;
+    }
+
+    char *end = start + strlen(start);
+    while (end > start && _is_space(end[-1])) {
+        end--;
+    }
+
+    *end = '\0';
+    return start;
+}
+
 static bool _parse_i64(const void *buf, size_t len, long long *out) {
     if (!buf || !len || !out) {
         return false;
@@ -169,18 +188,7 @@ static bool _parse_i64(const void *buf, size_t len, long long *out) {
     memcpy(text, buf, copy_len);
     text[copy_len] = '\0';
 
-    char *start = text;
-    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') {
-        start++;
-    }
-
-    char *end_trim = start + strlen(start);
-    while (end_trim > start &&
-           (end_trim[-1] == ' ' || end_trim[-1] == '\t' || end_trim[-1] == '\r' || end_trim[-1] == '\n')) {
-        end_trim--;
-    }
-
-    *end_trim = '\0';
+    char *start = _trim_text(text);
     if (!start[0]) {
         return false;
     }
@@ -209,18 +217,7 @@ static bool _parse_u64(const void *buf, size_t len, u64 *out) {
     memcpy(text, buf, copy_len);
     text[copy_len] = '\0';
 
-    char *start = text;
-    while (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n') {
-        start++;
-    }
-
-    char *end_trim = start + strlen(start);
-    while (end_trim > start &&
-           (end_trim[-1] == ' ' || end_trim[-1] == '\t' || end_trim[-1] == '\r' || end_trim[-1] == '\n')) {
-        end_trim--;
-    }
-
-    *end_trim = '\0';
+    char *start = _trim_text(text);
     if (!start[0]) {
         return false;
     }
@@ -302,7 +299,7 @@ static bool _resolve_pid(pid_t encoded_pid, pid_t *out_pid) {
     return true;
 }
 
-static bool _proc_snapshot_from_key(uintptr_t key, sched_proc_snapshot_t *snapshot, pid_t *pid_out) {
+static bool _snapshot_from_key(uintptr_t key, sched_proc_snapshot_t *snapshot, pid_t *pid_out) {
     if (!snapshot) {
         return false;
     }
@@ -346,7 +343,7 @@ static bool _parse_pid_name(const char *name, pid_t *pid_out) {
     return true;
 }
 
-static bool _procfs_contains_node(vfs_node_t *node) {
+static bool _contains_node(vfs_node_t *node) {
     if (!procfs.root || !node || !node->tree_entry) {
         return false;
     }
@@ -390,7 +387,7 @@ bool procfs_lock_dir(vfs_node_t *node, unsigned long *flags_out) {
 
     *flags_out = 0;
 
-    if (!_procfs_contains_node(node)) {
+    if (!_contains_node(node)) {
         return false;
     }
 
@@ -484,7 +481,7 @@ static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_
     }
 
     sched_proc_snapshot_t snapshot = { 0 };
-    if (!_proc_snapshot_from_key((uintptr_t)node->private, &snapshot, NULL)) {
+    if (!_snapshot_from_key((uintptr_t)node->private, &snapshot, NULL)) {
         return -ENOENT;
     }
 
@@ -568,7 +565,7 @@ static ssize_t _proc_value_read(vfs_node_t *node, void *buf, size_t offset, size
     proc_field_t field = _proc_key_field(key);
 
     sched_proc_snapshot_t snapshot = { 0 };
-    if (!_proc_snapshot_from_key(key, &snapshot, NULL)) {
+    if (!_snapshot_from_key(key, &snapshot, NULL)) {
         return -ENOENT;
     }
 
@@ -624,9 +621,9 @@ static ssize_t _proc_groups_read(vfs_node_t *node, void *buf, size_t offset, siz
     gid_t groups[SCHED_GROUP_MAX] = { 0 };
     size_t group_count = 0;
 
-    int rc = sched_getgroups_pid(pid, &primary_gid, groups, sizeof(groups) / sizeof(groups[0]), &group_count);
-    if (rc < 0) {
-        return rc;
+    int status = sched_getgroups_pid(pid, &primary_gid, groups, sizeof(groups) / sizeof(groups[0]), &group_count);
+    if (status < 0) {
+        return status;
     }
 
     char text[PROCFS_TEXT_MAX];
@@ -681,9 +678,9 @@ static ssize_t _proc_groups_write(vfs_node_t *node, void *buf, size_t offset, si
         return -EINVAL;
     }
 
-    int rc = sched_setgroups(groups, group_count);
-    if (rc < 0) {
-        return rc;
+    int status = sched_setgroups(groups, group_count);
+    if (status < 0) {
+        return status;
     }
 
     return (ssize_t)len;
@@ -702,9 +699,9 @@ static ssize_t _proc_affinity_read(vfs_node_t *node, void *buf, size_t offset, s
     }
 
     u64 mask = 0;
-    int rc = sched_get_affinity(pid, &mask);
-    if (rc < 0) {
-        return rc;
+    int status = sched_get_affinity(pid, &mask);
+    if (status < 0) {
+        return status;
     }
 
     char text[32];
@@ -712,7 +709,7 @@ static ssize_t _proc_affinity_read(vfs_node_t *node, void *buf, size_t offset, s
     return _text_read(text, buf, offset, len);
 }
 
-static ssize_t _proc_affinity_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
+static ssize_t _affinity_write(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
     (void)flags;
 
     if (!node || !buf || !len || offset != 0) {
@@ -729,9 +726,9 @@ static ssize_t _proc_affinity_write(vfs_node_t *node, void *buf, size_t offset, 
         return -EINVAL;
     }
 
-    int rc = sched_set_affinity(pid, mask);
-    if (rc < 0) {
-        return rc;
+    int status = sched_set_affinity(pid, mask);
+    if (status < 0) {
+        return status;
     }
 
     return (ssize_t)len;
@@ -759,7 +756,7 @@ static ssize_t _proc_value_write(vfs_node_t *node, void *buf, size_t offset, siz
         }
     }
 
-    int ret = -EINVAL;
+    int status = -EINVAL;
 
     switch (field) {
     case PROC_FIELD_UID:
@@ -767,37 +764,37 @@ static ssize_t _proc_value_write(vfs_node_t *node, void *buf, size_t offset, siz
             return -EPERM;
         }
 
-        ret = sched_setuid((uid_t)value);
+        status = sched_setuid((uid_t)value);
         break;
     case PROC_FIELD_GID:
         if (path_pid != 0 || value < 0) {
             return -EPERM;
         }
 
-        ret = sched_setgid((gid_t)value);
+        status = sched_setgid((gid_t)value);
         break;
     case PROC_FIELD_UMASK:
         if (path_pid != 0 || value < 0) {
             return -EPERM;
         }
 
-        ret = sched_setumask((mode_t)value & 0777);
+        status = sched_setumask((mode_t)value & 0777);
         break;
     case PROC_FIELD_PGID:
         if (value < 0) {
             return -EINVAL;
         }
 
-        ret = sched_setpgid(path_pid, (pid_t)value);
+        status = sched_setpgid(path_pid, (pid_t)value);
         break;
     case PROC_FIELD_SID:
         if (path_pid != 0) {
             return -EPERM;
         }
 
-        ret = (int)sched_setsid();
-        if (ret > 0) {
-            ret = 0;
+        status = (int)sched_setsid();
+        if (status > 0) {
+            status = 0;
         }
         break;
     case PROC_FIELD_SIGMASK: {
@@ -817,15 +814,15 @@ static ssize_t _proc_value_write(vfs_node_t *node, void *buf, size_t offset, siz
         const u32 blockable_mask = ((u32)0x7fffffffU) & (u32) ~(1u << (SIGKILL - 1)) & (u32) ~(1u << (SIGSTOP - 1));
 
         __atomic_store_n(&thread->signal_mask, ((u32)value) & blockable_mask, __ATOMIC_RELEASE);
-        ret = 0;
+        status = 0;
         break;
     }
     default:
         return -EINVAL;
     }
 
-    if (ret < 0) {
-        return ret;
+    if (status < 0) {
+        return status;
     }
 
     return (ssize_t)len;
@@ -882,7 +879,7 @@ static bool _upsert_file(vfs_node_t *parent, const char *name, mode_t mode, proc
         } else if (field == PROC_FIELD_GROUPS) {
             vfs_adopt_interface(node, vfs_create_interface(_proc_groups_read, _proc_groups_write, NULL));
         } else if (field == PROC_FIELD_AFFINITY) {
-            vfs_adopt_interface(node, vfs_create_interface(_proc_affinity_read, _proc_affinity_write, NULL));
+            vfs_adopt_interface(node, vfs_create_interface(_proc_affinity_read, _affinity_write, NULL));
         } else {
             vfs_adopt_interface(node, vfs_create_interface(_proc_value_read, _proc_value_write, NULL));
         }
@@ -903,7 +900,7 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
         return false;
     }
 
-    bool ok = true;
+    bool built = true;
     mode_t uid_mode = self ? 0666 : 0444;
     mode_t gid_mode = self ? 0666 : 0444;
     mode_t umask_mode = self ? 0666 : 0444;
@@ -913,20 +910,20 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     mode_t pgid_mode = 0666;
     mode_t affinity_mode = 0644;
 
-    ok &= _upsert_file(dir, "stat", 0444, PROC_FIELD_STAT, pid);
-    ok &= _upsert_file(dir, "cwd", 0444, PROC_FIELD_CWD, pid);
-    ok &= _upsert_file(dir, "pid", 0444, PROC_FIELD_PID, pid);
-    ok &= _upsert_file(dir, "ppid", 0444, PROC_FIELD_PPID, pid);
-    ok &= _upsert_file(dir, "uid", uid_mode, PROC_FIELD_UID, pid);
-    ok &= _upsert_file(dir, "gid", gid_mode, PROC_FIELD_GID, pid);
-    ok &= _upsert_file(dir, "umask", umask_mode, PROC_FIELD_UMASK, pid);
-    ok &= _upsert_file(dir, "pgid", pgid_mode, PROC_FIELD_PGID, pid);
-    ok &= _upsert_file(dir, "sid", sid_mode, PROC_FIELD_SID, pid);
-    ok &= _upsert_file(dir, "groups", groups_mode, PROC_FIELD_GROUPS, pid);
-    ok &= _upsert_file(dir, "sigmask", sigmask_mode, PROC_FIELD_SIGMASK, pid);
-    ok &= _upsert_file(dir, "affinity", affinity_mode, PROC_FIELD_AFFINITY, pid);
+    built &= _upsert_file(dir, "stat", 0444, PROC_FIELD_STAT, pid);
+    built &= _upsert_file(dir, "cwd", 0444, PROC_FIELD_CWD, pid);
+    built &= _upsert_file(dir, "pid", 0444, PROC_FIELD_PID, pid);
+    built &= _upsert_file(dir, "ppid", 0444, PROC_FIELD_PPID, pid);
+    built &= _upsert_file(dir, "uid", uid_mode, PROC_FIELD_UID, pid);
+    built &= _upsert_file(dir, "gid", gid_mode, PROC_FIELD_GID, pid);
+    built &= _upsert_file(dir, "umask", umask_mode, PROC_FIELD_UMASK, pid);
+    built &= _upsert_file(dir, "pgid", pgid_mode, PROC_FIELD_PGID, pid);
+    built &= _upsert_file(dir, "sid", sid_mode, PROC_FIELD_SID, pid);
+    built &= _upsert_file(dir, "groups", groups_mode, PROC_FIELD_GROUPS, pid);
+    built &= _upsert_file(dir, "sigmask", sigmask_mode, PROC_FIELD_SIGMASK, pid);
+    built &= _upsert_file(dir, "affinity", affinity_mode, PROC_FIELD_AFFINITY, pid);
 
-    return ok;
+    return built;
 }
 
 bool procfs_init(void) {
