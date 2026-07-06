@@ -5,6 +5,7 @@
 #include <data/tree.h>
 #include <data/vector.h>
 #include <sys/types.h>
+#include <time.h>
 
 
 // files and directories created by the kernel have these permissions
@@ -93,13 +94,14 @@ struct fs_interface {
 
     bool (*build_tree)(fs_instance_t *instance);
     bool (*destroy_tree)(fs_instance_t *instance);
+    void (*destroy_instance)(fs_instance_t *instance);
 
     bool (*chmod)(fs_instance_t *instance, vfs_node_t *node, mode_t mode);
     bool (*chown)(fs_instance_t *instance, vfs_node_t *node, uid_t uid, gid_t gid);
+    int (*set_times)(fs_instance_t *instance, vfs_node_t *node, time_t atime, time_t mtime, time_t ctime);
     void (*destroy_node)(fs_instance_t *instance, vfs_node_t *node);
 
     // mkdir
-    // touch
 };
 
 struct fs {
@@ -134,7 +136,7 @@ fs_t *file_system_lookup(const char *name);
 
 bool mount_rootfs(void);
 bool disk_publish_devices(void);
-bool disk_mount_partition_node(vfs_node_t *source, vfs_node_t *target, const char *fs_name);
+bool disk_mount_partition(vfs_node_t *source, vfs_node_t *target, const char *fs_name);
 bool disk_unmount_node(vfs_node_t *target, bool destroy_tree);
 
 void disk_set_root_uuid(const u8 uuid[16]);

@@ -133,6 +133,7 @@ bool vfs_validate_name(const char *name);
 
 vfs_node_t *vfs_lookup_from(vfs_node_t *from, const char *path);
 vfs_node_t *vfs_lookup(const char *path);
+vfs_node_t *vfs_lookup_hold(const char *path, bool follow_links);
 vfs_node_t *vfs_lookup_relative(const char *root, const char *path);
 vfs_node_t *vfs_open(const char *path, u32 type, bool create, mode_t mode);
 vfs_node_t *vfs_resolve_node(vfs_node_t *node);
@@ -142,6 +143,7 @@ int vfs_check_search(const char *path, uid_t uid, gid_t gid, bool allow_missing_
 int vfs_stat_node(vfs_node_t *node, stat_t *out, bool follow_links);
 int vfs_chmod(vfs_node_t *node, mode_t mode);
 int vfs_chown(vfs_node_t *node, uid_t uid, gid_t gid);
+int vfs_set_times(vfs_node_t *node, time_t atime, time_t mtime);
 int vfs_hardlink(const char *target, const char *link_path);
 int vfs_symlink(const char *target, const char *link_path);
 MUST_USE int vfs_unlink(const char *path);
@@ -150,8 +152,9 @@ int vfs_detach_child(vfs_node_t *parent, vfs_node_t *child);
 int vfs_rename(const char *old_path, const char *new_path);
 
 int vfs_insert_child(vfs_node_t *parent, vfs_node_t *child);
-int vfs_insert_child_virtual(vfs_node_t *parent, vfs_node_t *child);
+int vfs_insert_virtual(vfs_node_t *parent, vfs_node_t *child);
 vfs_node_t *vfs_create(vfs_node_t *parent, char *name, u32 type, mode_t mode);
+vfs_node_t *vfs_create_hold(vfs_node_t *parent, char *name, u32 type, mode_t mode);
 vfs_node_t *vfs_create_virtual(vfs_node_t *parent, char *name, u32 type, mode_t mode);
 
 int vfs_mount(fs_instance_t *fs, vfs_node_t *mount);
