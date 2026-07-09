@@ -218,7 +218,7 @@ static bool _map_user_region(sched_thread_t *thread, uintptr_t vaddr, uintptr_t 
     return false;
 }
 
-static sched_user_region_t *_find_user_region_page(sched_thread_t *thread, uintptr_t vaddr) {
+static sched_user_region_t *find_user_page(sched_thread_t *thread, uintptr_t vaddr) {
     if (!thread) {
         return NULL;
     }
@@ -284,7 +284,7 @@ _ensure_loaded_page(sched_thread_t *thread, exec_loaded_page_t **pages, uintptr_
             arch_map_region(root, 1, vaddr, page->paddr, merged);
             arch_tlb_flush(vaddr);
 
-            sched_user_region_t *region = _find_user_region_page(thread, vaddr);
+            sched_user_region_t *region = find_user_page(thread, vaddr);
             if (region && region->pages == 1 && region->vaddr == vaddr) {
                 region->flags = merged;
             }
@@ -340,27 +340,29 @@ static bool _read_exact(vfs_node_t *node, void *buf, size_t offset, size_t len) 
     return vfs_read(node, buf, offset, len, 0) == (ssize_t)len;
 }
 
-static bool _read_phdrs(
-    vfs_node_t *node,
-    size_t image_size,
-    u64 phoff,
-    u64 ph_num,
-    u64 phent_size,
-    size_t min_entry_size,
-    u8 **out
-) {
-    if (!out) {
+typedef struct {
+    vfs_node_t *node;
+    size_t image_size;
+    u64 phoff;
+    u64 ph_num;
+    u64 phent_size;
+    size_t min_entry_size;
+    u8 **out;
+} phdr_read_t;
+
+static bool _read_phdrs(const phdr_read_t *read) {
+    if (!read || !read->out) {
         return false;
     }
 
-    *out = NULL;
+    *read->out = NULL;
 
-    if (!_phdr_table_ok(phoff, ph_num, phent_size, image_size, min_entry_size)) {
+    if (!_phdr_table_ok(read->phoff, read->ph_num, read->phent_size, read->image_size, read->min_entry_size)) {
         return false;
     }
 
     u64 ph_bytes = 0;
-    if (!_u64_mul(ph_num, phent_size, &ph_bytes) || !ph_bytes || ph_bytes > SIZE_MAX) {
+    if (!_u64_mul(read->ph_num, read->phent_size, &ph_bytes) || !ph_bytes || ph_bytes > SIZE_MAX) {
         return false;
     }
 
@@ -369,16 +371,16 @@ static bool _read_phdrs(
         return false;
     }
 
-    if (!_read_exact(node, table, (size_t)phoff, (size_t)ph_bytes)) {
+    if (!_read_exact(read->node, table, (size_t)read->phoff, (size_t)ph_bytes)) {
         free(table);
         return false;
     }
 
-    *out = table;
+    *read->out = table;
     return true;
 }
 
-static bool _copy_segment_from_file(
+static bool copy_segment(
     vfs_node_t *node,
     size_t image_size,
     u64 offset,
@@ -390,7 +392,9 @@ static bool _copy_segment_from_file(
         return true;
     }
 
-    if (!node || offset > image_size || file_size > image_size - offset || file_size > SIZE_MAX) {
+    bool out_of_range = offset > image_size || file_size > image_size - offset;
+
+    if (!node || out_of_range || file_size > SIZE_MAX) {
         return false;
     }
 
@@ -399,7 +403,7 @@ static bool _copy_segment_from_file(
     uintptr_t cursor = vaddr;
     u8 *bounce = NULL;
 
-    if (!arch_phys_map_can_persist()) {
+    if (!arch_keeps_phys_map()) {
         bounce = malloc(PAGE_4KIB);
         if (!bounce) {
             return false;
@@ -431,16 +435,16 @@ static bool _copy_segment_from_file(
             return false;
         }
 
-        bool ok = true;
+        bool copied = true;
         if (bounce) {
             memcpy((u8 *)dst + page_off, bounce, chunk);
         } else {
-            ok = _read_exact(node, (u8 *)dst + page_off, image_off, chunk);
+            copied = _read_exact(node, (u8 *)dst + page_off, image_off, chunk);
         }
 
         arch_phys_unmap(dst, PAGE_4KIB);
 
-        if (!ok) {
+        if (!copied) {
             free(bounce);
             return false;
         }
@@ -467,20 +471,22 @@ static bool _load_segments_64(sched_thread_t *thread, const exec_file_t *file, u
     }
 
     u8 *phdrs = NULL;
-    if (!_read_phdrs(
-            file->node,
-            file->size,
-            header.phoff,
-            header.ph_num,
-            header.phent_size,
-            sizeof(elf_prog_header_t),
-            &phdrs
-        )) {
+    phdr_read_t read = {
+        .node = file->node,
+        .image_size = file->size,
+        .phoff = header.phoff,
+        .ph_num = header.ph_num,
+        .phent_size = header.phent_size,
+        .min_entry_size = sizeof(elf_prog_header_t),
+        .out = &phdrs,
+    };
+
+    if (!_read_phdrs(&read)) {
         return false;
     }
 
     exec_loaded_page_t *loaded_pages = NULL;
-    bool ok = false;
+    bool loaded = false;
 
     for (size_t i = 0; i < header.ph_num; i++) {
         const u8 *ph_ptr = phdrs + i * header.phent_size;
@@ -513,14 +519,16 @@ static bool _load_segments_64(sched_thread_t *thread, const exec_file_t *file, u
             }
         }
 
-        if (!_copy_segment_from_file(
-                file->node,
-                file->size,
-                ph->offset,
-                ph->file_size,
-                (uintptr_t)ph->vaddr,
-                loaded_pages
-            )) {
+        bool copied = copy_segment(
+            file->node,
+            file->size,
+            ph->offset,
+            ph->file_size,
+            (uintptr_t)ph->vaddr,
+            loaded_pages
+        );
+
+        if (!copied) {
             goto out;
         }
     }
@@ -533,12 +541,12 @@ static bool _load_segments_64(sched_thread_t *thread, const exec_file_t *file, u
         *entry_out = header.entry;
     }
 
-    ok = true;
+    loaded = true;
 
 out:
     free(phdrs);
     _free_loaded_pages(loaded_pages);
-    return ok;
+    return loaded;
 }
 
 static bool _load_segments_32(sched_thread_t *thread, const exec_file_t *file, u32 *entry_out) {
@@ -554,20 +562,22 @@ static bool _load_segments_32(sched_thread_t *thread, const exec_file_t *file, u
     }
 
     u8 *phdrs = NULL;
-    if (!_read_phdrs(
-            file->node,
-            file->size,
-            header.phoff,
-            header.ph_num,
-            header.phent_size,
-            sizeof(elf32_prog_header_t),
-            &phdrs
-        )) {
+    phdr_read_t read = {
+        .node = file->node,
+        .image_size = file->size,
+        .phoff = header.phoff,
+        .ph_num = header.ph_num,
+        .phent_size = header.phent_size,
+        .min_entry_size = sizeof(elf32_prog_header_t),
+        .out = &phdrs,
+    };
+
+    if (!_read_phdrs(&read)) {
         return false;
     }
 
     exec_loaded_page_t *loaded_pages = NULL;
-    bool ok = false;
+    bool loaded = false;
 
     for (size_t i = 0; i < header.ph_num; i++) {
         const u8 *ph_ptr = phdrs + i * header.phent_size;
@@ -600,14 +610,16 @@ static bool _load_segments_32(sched_thread_t *thread, const exec_file_t *file, u
             }
         }
 
-        if (!_copy_segment_from_file(
-                file->node,
-                file->size,
-                ph->offset,
-                ph->file_size,
-                (uintptr_t)ph->vaddr,
-                loaded_pages
-            )) {
+        bool copied = copy_segment(
+            file->node,
+            file->size,
+            ph->offset,
+            ph->file_size,
+            (uintptr_t)ph->vaddr,
+            loaded_pages
+        );
+
+        if (!copied) {
             goto out;
         }
     }
@@ -620,12 +632,12 @@ static bool _load_segments_32(sched_thread_t *thread, const exec_file_t *file, u
         *entry_out = header.entry;
     }
 
-    ok = true;
+    loaded = true;
 
 out:
     free(phdrs);
     _free_loaded_pages(loaded_pages);
-    return ok;
+    return loaded;
 }
 
 static bool _load_user_segments(sched_thread_t *thread, const exec_file_t *file, arch_word_t *entry_out) {
@@ -641,13 +653,13 @@ static bool _load_user_segments(sched_thread_t *thread, const exec_file_t *file,
         }
 
         u64 entry = 0;
-        bool ok = _load_segments_64(thread, file, &entry);
+        bool loaded = _load_segments_64(thread, file, &entry);
 
-        if (ok && entry_out) {
+        if (loaded && entry_out) {
             *entry_out = (arch_word_t)entry;
         }
 
-        return ok;
+        return loaded;
     }
 
     if (arch == EARCH_32) {
@@ -656,13 +668,13 @@ static bool _load_user_segments(sched_thread_t *thread, const exec_file_t *file,
         }
 
         u32 entry = 0;
-        bool ok = _load_segments_32(thread, file, &entry);
+        bool loaded = _load_segments_32(thread, file, &entry);
 
-        if (ok && entry_out) {
+        if (loaded && entry_out) {
             *entry_out = (arch_word_t)entry;
         }
 
-        return ok;
+        return loaded;
     }
 
     return false;
@@ -870,7 +882,7 @@ static int _copy_env(char *const envp[], exec_env_t *out) {
     return 0;
 }
 
-static uintptr_t _build_user_stack_args(uintptr_t stack_top, const exec_args_t *args, const exec_env_t *env) {
+static uintptr_t build_stack_args(uintptr_t stack_top, const exec_args_t *args, const exec_env_t *env) {
     uintptr_t sp = stack_top;
 
     size_t argc = args ? (size_t)args->argc : 0;
@@ -970,6 +982,7 @@ static void _close_file(exec_file_t *file) {
         return;
     }
 
+    vfs_node_release(file->node);
     file->probe_size = 0;
     file->size = 0;
     file->node = NULL;
@@ -1026,18 +1039,20 @@ static int _open_file(sched_thread_t *thread, const char *path, exec_file_t *out
         return search_err;
     }
 
-    out->node = vfs_lookup(out->resolved);
+    out->node = vfs_lookup_hold(out->resolved, true);
     if (!out->node) {
         return -ENOENT;
     }
 
     if (out->node->type != VFS_FILE) {
+        _close_file(out);
         return -EISDIR;
     }
 
     if (require_exec) {
         int access = vfs_access(out->node, thread->uid, thread->gid, X_OK);
         if (access < 0) {
+            _close_file(out);
             return access;
         }
     }
@@ -1124,7 +1139,7 @@ static bool _parse_shebang(const u8 *buffer, size_t size, exec_shebang_t *out) {
 }
 
 static int
-_build_shebang_args(const exec_args_t *orig, const exec_shebang_t *shebang, const char *script_path, exec_args_t *out) {
+_shebang_args(const exec_args_t *orig, const exec_shebang_t *shebang, const char *script_path, exec_args_t *out) {
     if (!shebang || !script_path || !out) {
         return -EINVAL;
     }
@@ -1186,7 +1201,7 @@ static const char *_basename(const char *path) {
     return slash ? slash + 1 : path;
 }
 
-static void _apply_exec_identity(sched_thread_t *thread, const vfs_node_t *node) {
+static void apply_identity(sched_thread_t *thread, const vfs_node_t *node) {
     if (!thread || !node) {
         return;
     }
@@ -1207,6 +1222,11 @@ sched_thread_t *user_spawn(const char *path) {
         return NULL;
     }
 
+    exec_file_t file = { 0 };
+    exec_args_t args = { 0 };
+    exec_env_t env = { 0 };
+    sched_thread_t *result = NULL;
+
     sched_thread_t *thread = sched_create_user_thread("init");
     if (!thread) {
         log_warn("failed to allocate user thread");
@@ -1223,12 +1243,9 @@ sched_thread_t *user_spawn(const char *path) {
     arch_vm_destroy(thread->vm_space);
     thread->vm_space = fresh;
 
-    exec_file_t file = { 0 };
-
     int err = _open_file(thread, path, &file, true);
     if (err) {
-        sched_discard_thread(thread);
-        return NULL;
+        goto out;
     }
 
     char exec_name_buf[PATH_MAX];
@@ -1236,27 +1253,18 @@ sched_thread_t *user_spawn(const char *path) {
     exec_name_buf[sizeof(exec_name_buf) - 1] = '\0';
 
     exec_shebang_t shebang = { 0 };
-    exec_args_t args = { 0 };
-    exec_env_t env = { 0 };
-
     bool is_script = _parse_shebang(file.probe, file.probe_size, &shebang);
 
     if (is_script) {
-        err = _build_shebang_args(NULL, &shebang, exec_name_buf, &args);
+        err = _shebang_args(NULL, &shebang, exec_name_buf, &args);
         if (err) {
-            _close_file(&file);
-            sched_discard_thread(thread);
-            return NULL;
+            goto out;
         }
 
         exec_file_t interp = { 0 };
         err = _open_file(thread, shebang.path, &interp, true);
         if (err) {
-            _free_args(&args);
-            _free_env(&env);
-            _close_file(&file);
-            sched_discard_thread(thread);
-            return NULL;
+            goto out;
         }
 
         _close_file(&file);
@@ -1264,60 +1272,173 @@ sched_thread_t *user_spawn(const char *path) {
     } else {
         err = _args_push(&args, path);
         if (err) {
-            _free_env(&env);
-            _close_file(&file);
-            sched_discard_thread(thread);
-            return NULL;
+            goto out;
         }
     }
 
     uintptr_t entry = 0;
     arch_word_t entry_raw = 0;
-    bool ok = _load_user_segments(thread, &file, &entry_raw);
-    if (ok) {
+    bool loaded = _load_user_segments(thread, &file, &entry_raw);
+    if (loaded) {
         entry = (uintptr_t)entry_raw;
     }
 
-    if (!ok) {
+    if (!loaded) {
         log_warn("'%s' is not a valid executable for this arch", file.resolved);
-
-        _free_args(&args);
-        _free_env(&env);
-        _close_file(&file);
-
-        sched_discard_thread(thread);
-
-        return NULL;
+        goto out;
     }
 
     uintptr_t stack_top = 0;
     if (!_map_user_stack(thread, &stack_top)) {
         log_warn("failed to map user stack");
-
-        _free_args(&args);
-        _free_env(&env);
-        _close_file(&file);
-
-        sched_discard_thread(thread);
-
-        return NULL;
+        goto out;
     }
 
-    _apply_exec_identity(thread, file.node);
+    apply_identity(thread, file.node);
 
     arch_vm_switch(thread->vm_space);
-    stack_top = _build_user_stack_args(stack_top, &args, &env);
+    stack_top = build_stack_args(stack_top, &args, &env);
     arch_vm_switch(arch_vm_kernel());
 
     thread_prepare_user(thread, entry, stack_top);
     thread->ppid = 0;
     thread_set_name(thread, _basename(exec_name_buf));
 
+    result = thread;
+    thread = NULL;
+
+out:
     _free_args(&args);
     _free_env(&env);
     _close_file(&file);
 
-    return thread;
+    if (thread) {
+        sched_discard_thread(thread);
+    }
+
+    return result;
+}
+
+typedef struct {
+    arch_vm_space_t *vm;
+    sched_user_region_t *regions;
+    uintptr_t stack_base;
+    size_t stack_size;
+    u64 mem_kib;
+} exec_image_t;
+
+static exec_image_t exec_take_image(sched_thread_t *thread, arch_vm_space_t *fresh) {
+    exec_image_t old = {
+        .vm = thread->vm_space,
+        .regions = thread->regions,
+        .stack_base = thread->user_stack_base,
+        .stack_size = thread->user_stack_size,
+        .mem_kib = sched_user_mem_kib(thread),
+    };
+
+    thread->vm_space = fresh;
+    thread->regions = NULL;
+    thread->user_stack_base = old.stack_base;
+    thread->user_stack_size = old.stack_size;
+    sched_set_user_mem(thread, 0);
+
+    return old;
+}
+
+static void exec_restore_image(sched_thread_t *thread, arch_vm_space_t *fresh, const exec_image_t *old) {
+    sched_clear_user_regions(thread);
+
+    thread->vm_space = old->vm;
+    thread->regions = old->regions;
+    thread->user_stack_base = old->stack_base;
+    thread->user_stack_size = old->stack_size;
+    sched_set_user_mem(thread, old->mem_kib);
+
+    arch_vm_destroy(fresh);
+}
+
+static void exec_drop_old_image(const exec_image_t *old) {
+    if (old->regions) {
+        _free_regions_list(old->regions);
+    }
+
+    if (old->vm && old->vm != arch_vm_kernel()) {
+        arch_vm_destroy(old->vm);
+    }
+}
+
+typedef struct {
+    exec_args_t args;
+    exec_env_t env;
+    exec_file_t file;
+    char name[PATH_MAX];
+    bool script;
+} exec_plan_t;
+
+static void exec_plan_clear(exec_plan_t *plan) {
+    if (!plan) {
+        return;
+    }
+
+    _free_args(&plan->args);
+    _free_env(&plan->env);
+    _close_file(&plan->file);
+}
+
+static int
+exec_plan_load(sched_thread_t *thread, const char *path, char *const argv[], char *const envp[], exec_plan_t *plan) {
+    int err = _copy_args(argv, &plan->args);
+    if (err) {
+        return err;
+    }
+
+    err = _copy_env(envp, &plan->env);
+    if (err) {
+        return err;
+    }
+
+    if (!_exec_bytes_ok(plan->args.bytes, plan->env.bytes)) {
+        return -E2BIG;
+    }
+
+    err = _open_file(thread, path, &plan->file, true);
+    if (err) {
+        return err;
+    }
+
+    strncpy(plan->name, plan->file.resolved, sizeof(plan->name) - 1);
+    plan->name[sizeof(plan->name) - 1] = '\0';
+
+    exec_shebang_t shebang = { 0 };
+    plan->script = _parse_shebang(plan->file.probe, plan->file.probe_size, &shebang);
+    if (!plan->script) {
+        return 0;
+    }
+
+    exec_args_t script_args = { 0 };
+    err = _shebang_args(&plan->args, &shebang, plan->name, &script_args);
+    if (err) {
+        return err;
+    }
+
+    if (!_exec_bytes_ok(script_args.bytes, plan->env.bytes)) {
+        _free_args(&script_args);
+        return -E2BIG;
+    }
+
+    _free_args(&plan->args);
+    plan->args = script_args;
+
+    exec_file_t interp = { 0 };
+    err = _open_file(thread, shebang.path, &interp, true);
+    if (err) {
+        return err;
+    }
+
+    _close_file(&plan->file);
+    plan->file = interp;
+
+    return 0;
 }
 
 int user_exec(
@@ -1331,183 +1452,79 @@ int user_exec(
         return -EINVAL;
     }
 
-    exec_args_t args = { 0 };
-    exec_env_t env = { 0 };
-
-    int err = 0;
-
-    err = _copy_args(argv, &args);
+    exec_plan_t plan = { 0 };
+    int err = exec_plan_load(thread, path, argv, envp, &plan);
     if (err) {
-        return err;
+        goto out;
     }
 
-    err = _copy_env(envp, &env);
-    if (err) {
-        _free_args(&args);
-        return err;
-    }
-
-    if (!_exec_bytes_ok(args.bytes, env.bytes)) {
-        _free_args(&args);
-        _free_env(&env);
-        return -E2BIG;
-    }
-
-    exec_file_t file = { 0 };
-    err = _open_file(thread, path, &file, true);
-    if (err) {
-        _free_args(&args);
-        _free_env(&env);
-        return err;
-    }
-
-    char exec_name_buf[PATH_MAX];
-    strncpy(exec_name_buf, file.resolved, sizeof(exec_name_buf) - 1);
-    exec_name_buf[sizeof(exec_name_buf) - 1] = '\0';
-
-    exec_shebang_t shebang = { 0 };
-    exec_args_t script_args = { 0 };
-
-    bool is_script = _parse_shebang(file.probe, file.probe_size, &shebang);
-
-    if (is_script) {
-        err = _build_shebang_args(&args, &shebang, exec_name_buf, &script_args);
-        if (err) {
-            _free_args(&args);
-            _free_env(&env);
-            _close_file(&file);
-            return err;
-        }
-
-        if (!_exec_bytes_ok(script_args.bytes, env.bytes)) {
-            _free_args(&args);
-            _free_args(&script_args);
-            _free_env(&env);
-            _close_file(&file);
-            return -E2BIG;
-        }
-
-        _free_args(&args);
-        args = script_args;
-
-        exec_file_t interp = { 0 };
-        err = _open_file(thread, shebang.path, &interp, true);
-        if (err) {
-            _free_args(&args);
-            _free_env(&env);
-            _close_file(&file);
-            return err;
-        }
-
-        _close_file(&file);
-        file = interp;
-    }
-
-    arch_vm_space_t *old_vm = thread->vm_space;
     arch_vm_space_t *fresh = arch_vm_create_user();
     if (!fresh) {
-        _free_args(&args);
-        _free_env(&env);
-        _close_file(&file);
-        return -ENOMEM;
+        err = -ENOMEM;
+        goto out;
     }
 
     sched_preempt_disable();
 
-    sched_user_region_t *old_regions = thread->regions;
-    uintptr_t old_stack_base = thread->user_stack_base;
-    size_t old_stack_size = thread->user_stack_size;
-    u64 old_user_mem_kib = sched_user_mem_kib(thread);
-
-    thread->vm_space = fresh;
-    thread->regions = NULL;
-    thread->user_stack_base = old_stack_base;
-    thread->user_stack_size = old_stack_size;
-    sched_user_mem_set_kib(thread, 0);
+    exec_image_t old = exec_take_image(thread, fresh);
 
     uintptr_t entry_point = 0;
     arch_word_t entry_raw = 0;
 
-    bool ok = _load_user_segments(thread, &file, &entry_raw);
-    if (ok) {
+    bool loaded = _load_user_segments(thread, &plan.file, &entry_raw);
+    if (loaded) {
         entry_point = (uintptr_t)entry_raw;
     }
 
-    if (!ok) {
-        log_warn("'%s' is not a valid executable for this arch", file.resolved);
-        sched_clear_user_regions(thread);
-
-        thread->regions = old_regions;
-        thread->vm_space = old_vm;
-        sched_user_mem_set_kib(thread, old_user_mem_kib);
-
-        arch_vm_destroy(fresh);
-
-        _free_args(&args);
-        _free_env(&env);
-        _close_file(&file);
-
+    if (!loaded) {
+        log_warn("'%s' is not a valid executable for this arch", plan.file.resolved);
+        exec_restore_image(thread, fresh, &old);
         sched_preempt_enable();
-        return -ENOEXEC;
+        err = -ENOEXEC;
+        goto out;
     }
 
     uintptr_t stack_top = 0;
     if (!_map_user_stack(thread, &stack_top)) {
-        _free_regions_list(thread->regions);
-
-        thread->regions = old_regions;
-        thread->vm_space = old_vm;
-        sched_user_mem_set_kib(thread, old_user_mem_kib);
-
-        arch_vm_destroy(fresh);
-
-        _free_args(&args);
-        _free_env(&env);
-        _close_file(&file);
-
+        exec_restore_image(thread, fresh, &old);
         sched_preempt_enable();
-        return -ENOMEM;
+        err = -ENOMEM;
+        goto out;
     }
 
     // the current thread's VM, stack, and trap frame switch as one image
-    _apply_exec_identity(thread, file.node);
+    apply_identity(thread, plan.file.node);
 
     arch_vm_switch(thread->vm_space);
-    stack_top = _build_user_stack_args(stack_top, &args, &env);
-    sched_signal_exec_thread(thread);
+    stack_top = build_stack_args(stack_top, &plan.args, &plan.env);
+    sched_signal_exec(thread);
     sched_fd_close_cloexec(thread);
 
-    if (old_regions) {
-        _free_regions_list(old_regions);
-    }
-
-    if (old_vm && old_vm != arch_vm_kernel()) {
-        arch_vm_destroy(old_vm);
-    }
+    exec_drop_old_image(&old);
 
     if (state) {
         memset(state, 0, sizeof(*state));
-        arch_state_set_user_entry(state, entry_point, stack_top);
+        arch_set_user_entry(state, entry_point, stack_top);
         arch_state_set_return(state, 0);
         thread->context = (uintptr_t)state;
     } else {
         thread_prepare_user(thread, entry_point, stack_top);
     }
 
-    const char *thread_name = exec_name_buf;
+    const char *thread_name = plan.name;
 
-    if (!is_script && args.argv[0]) {
-        thread_name = args.argv[0];
-    } else if (!is_script) {
+    if (!plan.script && plan.args.argv[0]) {
+        thread_name = plan.args.argv[0];
+    } else if (!plan.script) {
         thread_name = path;
     }
 
     thread_set_name(thread, _basename(thread_name));
 
-    _free_args(&args);
-    _free_env(&env);
-    _close_file(&file);
-
     sched_preempt_enable();
-    return 0;
+
+out:
+    exec_plan_clear(&plan);
+
+    return err;
 }
