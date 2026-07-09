@@ -98,7 +98,15 @@ static bool _open_flags_valid(int flags) {
     return (flags & ~known) == 0;
 }
 
-static void syscall_count(u64 number, u64 ret) {
+typedef struct {
+    bool ptmx;
+    size_t slot;
+    int tty;
+    int pty;
+    bool master;
+} open_dev_t;
+
+static void syscall_count(u64 number, u64 result) {
     if (number >= APHELEIA_SYSCALL_COUNT) {
         __atomic_fetch_add(&syscall_stats.unknown_count, 1, __ATOMIC_RELAXED);
         return;
@@ -108,7 +116,7 @@ static void syscall_count(u64 number, u64 ret) {
 
     __atomic_fetch_add(&counter->calls, 1, __ATOMIC_RELAXED);
 
-    if ((i64)ret < 0) {
+    if ((i64)result < 0) {
         __atomic_fetch_add(&counter->errors, 1, __ATOMIC_RELAXED);
     }
 }
@@ -136,9 +144,9 @@ size_t syscall_stats_snapshot(syscall_stat_t *stats, size_t max_stats, u64 *unkn
     return APHELEIA_SYSCALL_COUNT;
 }
 
-static int _open_fail(bool ptmx_open, size_t ptmx_index, int error) {
-    if (ptmx_open) {
-        pty_unreserve(ptmx_index);
+static int _open_fail(open_dev_t *dev, int error) {
+    if (dev && dev->ptmx) {
+        pty_unreserve(dev->slot);
     }
 
     return error;
@@ -205,6 +213,38 @@ static int _pty_from_dev(const char *dev_name) {
     }
 
     return -1;
+}
+
+static int _open_dev_prepare(const char *path, open_dev_t *dev) {
+    *dev = (open_dev_t){
+        .ptmx = false,
+        .slot = 0,
+        .tty = TTY_NONE,
+        .pty = -1,
+        .master = false,
+    };
+
+    if (strncmp(path, "/dev/", 5)) {
+        return 0;
+    }
+
+    const char *name = path + 5;
+
+    // ptmx is allocated at open time so idle PTYs do not clutter /dev
+    if (!strcmp(name, "ptmx")) {
+        if (!pty_reserve(&dev->slot)) {
+            return -EAGAIN;
+        }
+
+        dev->ptmx = true;
+        dev->pty = (int)dev->slot;
+        dev->master = true;
+        return 0;
+    }
+
+    dev->tty = _tty_from_dev(name);
+    dev->pty = _pty_from_dev(name);
+    return 0;
 }
 
 static bool _fd_pty_handle(const sched_fd_t *entry, pty_handle_t *out) {
@@ -493,9 +533,9 @@ static int _copyout_stat(const sched_thread_t *thread, stat_t *user_st, vfs_node
     }
 
     stat_t local = { 0 };
-    int ret = vfs_stat_node(node, &local, follow_links);
-    if (ret < 0) {
-        return ret;
+    int status = vfs_stat_node(node, &local, follow_links);
+    if (status < 0) {
+        return status;
     }
 
     uid_t owner_uid = 0;
@@ -508,6 +548,18 @@ static int _copyout_stat(const sched_thread_t *thread, stat_t *user_st, vfs_node
     return user_copy_to(thread, user_st, &local, sizeof(local)) ? 0 : -EFAULT;
 }
 
+static sched_wait_result_t _pipe_wait(sched_wait_queue_t *queue, u32 seq) {
+    return sched_wait_on(queue, seq, 0, SCHED_WAIT_INTERRUPTIBLE);
+}
+
+static u32 _pipe_wait_seq(sched_wait_queue_t *queue) {
+    if (!queue) {
+        return 0;
+    }
+
+    return sched_wait_seq(queue);
+}
+
 static ssize_t _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblock) {
     if (!pipe || !buf) {
         return -EINVAL;
@@ -516,7 +568,7 @@ static ssize_t _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblo
         return 0;
     }
 
-    if (!sched_pipe_operation_begin(pipe)) {
+    if (!sched_pipe_begin(pipe)) {
         return -EPIPE;
     }
 
@@ -526,7 +578,7 @@ static ssize_t _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblo
 
     for (;;) {
         bool eof = false;
-        u32 wait_seq = pipe->read_wait_queue ? sched_wait_seq(pipe->read_wait_queue) : 0;
+        u32 wait_seq = _pipe_wait_seq(pipe->read_wait_queue);
 
         unsigned long irq_flags = spin_lock_irqsave(&pipe->lock);
         if (ring_io_size(&pipe->ring)) {
@@ -557,7 +609,7 @@ static ssize_t _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblo
 
         sched_thread_t *current = sched_current();
 
-        if (current && sched_signal_has_pending(current)) {
+        if (current && sched_signal_pending(current)) {
             result = -EINTR;
             break;
         }
@@ -567,8 +619,8 @@ static ssize_t _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblo
         }
 
         if (pipe->read_wait_queue) {
-            sched_wait_result_t
-                wait_result = sched_wait_on_queue(pipe->read_wait_queue, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
+            sched_wait_result_t wait_result = _pipe_wait(pipe->read_wait_queue, wait_seq);
+
             if (wait_result == SCHED_WAIT_INTR) {
                 result = -EINTR;
                 break;
@@ -576,7 +628,7 @@ static ssize_t _pipe_read(sched_pipe_t *pipe, void *buf, size_t len, bool nonblo
         }
     }
 
-    sched_pipe_operation_end(pipe);
+    sched_pipe_end(pipe);
     return result;
 }
 
@@ -589,7 +641,7 @@ static ssize_t _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool
         return 0;
     }
 
-    if (!sched_pipe_operation_begin(pipe)) {
+    if (!sched_pipe_begin(pipe)) {
         return -EPIPE;
     }
 
@@ -599,13 +651,18 @@ static ssize_t _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool
 
     for (;;) {
         bool no_readers = false;
-        u32 wait_seq = pipe->write_wait_queue ? sched_wait_seq(pipe->write_wait_queue) : 0;
+        u32 wait_seq = _pipe_wait_seq(pipe->write_wait_queue);
 
         unsigned long irq_flags = spin_lock_irqsave(&pipe->lock);
 
         if (!pipe->readers) {
             spin_unlock_irqrestore(&pipe->lock, irq_flags);
-            result = total > 0 ? (ssize_t)total : -EPIPE;
+            if (total) {
+                result = (ssize_t)total;
+            } else {
+                result = -EPIPE;
+            }
+
             break;
         }
 
@@ -629,19 +686,34 @@ static ssize_t _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool
         }
 
         if (no_readers) {
-            result = total > 0 ? (ssize_t)total : -EPIPE;
+            if (total) {
+                result = (ssize_t)total;
+            } else {
+                result = -EPIPE;
+            }
+
             break;
         }
 
         if (nonblock) {
-            result = total > 0 ? (ssize_t)total : -EAGAIN;
+            if (total) {
+                result = (ssize_t)total;
+            } else {
+                result = -EAGAIN;
+            }
+
             break;
         }
 
         sched_thread_t *current = sched_current();
 
-        if (current && sched_signal_has_pending(current)) {
-            result = total > 0 ? (ssize_t)total : -EINTR;
+        if (current && sched_signal_pending(current)) {
+            if (total) {
+                result = (ssize_t)total;
+            } else {
+                result = -EINTR;
+            }
+
             break;
         }
 
@@ -650,16 +722,21 @@ static ssize_t _pipe_write(sched_pipe_t *pipe, const void *buf, size_t len, bool
         }
 
         if (pipe->write_wait_queue) {
-            sched_wait_result_t
-                wait_result = sched_wait_on_queue(pipe->write_wait_queue, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
+            sched_wait_result_t wait_result = _pipe_wait(pipe->write_wait_queue, wait_seq);
+
             if (wait_result == SCHED_WAIT_INTR) {
-                result = total > 0 ? (ssize_t)total : -EINTR;
+                if (total) {
+                    result = (ssize_t)total;
+                } else {
+                    result = -EINTR;
+                }
+
                 break;
             }
         }
     }
 
-    sched_pipe_operation_end(pipe);
+    sched_pipe_end(pipe);
     return result;
 }
 
@@ -958,7 +1035,31 @@ static bool _mmap_prot_valid(int prot) {
     return prot != PROT_NONE && (prot & ~known) == 0;
 }
 
-static size_t _mprotect_split_count(sched_thread_t *thread, uintptr_t base, uintptr_t end) {
+typedef struct {
+    sched_thread_t *thread;
+    void *root;
+    uintptr_t base;
+    uintptr_t end;
+    u64 flags;
+} mprotect_req_t;
+
+typedef struct {
+    uintptr_t start;
+    uintptr_t finish;
+    uintptr_t left;
+    uintptr_t right;
+    uintptr_t paddr;
+
+    size_t before_pages;
+    size_t changed_pages;
+    size_t after_pages;
+
+    u64 old_flags;
+    u64 region_flags;
+    u64 map_flags;
+} mprotect_span_t;
+
+static size_t _mprotect_splits(sched_thread_t *thread, uintptr_t base, uintptr_t end) {
     size_t count = 0;
 
     sched_user_region_t *region = thread->regions;
@@ -1036,6 +1137,187 @@ static int _alloc_region_nodes(size_t count, sched_user_region_t ***nodes_out) {
     return 0;
 }
 
+static int _mprotect_read_req(void *addr, size_t len, int prot, mprotect_req_t *req) {
+    if (!addr || !len || !req) {
+        return -EINVAL;
+    }
+
+    if (len > SIZE_MAX - (PAGE_4KIB - 1)) {
+        return -EINVAL;
+    }
+
+    if (!_mmap_prot_valid(prot)) {
+        return -EINVAL;
+    }
+
+    sched_thread_t *thread = sched_current();
+    if (!thread || !thread->vm_space) {
+        return -EINVAL;
+    }
+
+    uintptr_t base = (uintptr_t)addr;
+    if (base % PAGE_4KIB) {
+        return -EINVAL;
+    }
+
+    size_t size = ALIGN(len, PAGE_4KIB);
+    uintptr_t end = base + size;
+
+    if (end < base) {
+        return -EINVAL;
+    }
+
+    if (!_user_range_mapped(thread, base, end)) {
+        return -ENOMEM;
+    }
+
+    void *root = arch_vm_root(thread->vm_space);
+    if (!root) {
+        return -EINVAL;
+    }
+
+    *req = (mprotect_req_t){
+        .thread = thread,
+        .root = root,
+        .base = base,
+        .end = end,
+        .flags = _mmap_prot_flags(prot),
+    };
+
+    return 0;
+}
+
+static bool _mprotect_span(sched_user_region_t *region, const mprotect_req_t *req, mprotect_span_t *span) {
+    uintptr_t start = 0;
+    uintptr_t finish = 0;
+
+    if (!_region_bounds(region, &start, &finish)) {
+        return false;
+    }
+
+    uintptr_t left = req->base > start ? req->base : start;
+    uintptr_t right = req->end < finish ? req->end : finish;
+
+    if (left >= right) {
+        return false;
+    }
+
+    size_t before_pages = (left - start) / PAGE_4KIB;
+    size_t changed_pages = (right - left) / PAGE_4KIB;
+    size_t after_pages = (finish - right) / PAGE_4KIB;
+
+    u64 region_flags = req->flags;
+    u64 map_flags = req->flags;
+
+    if (region->flags & SCHED_REGION_COW) {
+        region_flags |= SCHED_REGION_COW;
+
+        if (req->flags & PT_WRITE) {
+            map_flags &= ~PT_WRITE;
+        }
+    }
+
+    *span = (mprotect_span_t){
+        .start = start,
+        .finish = finish,
+        .left = left,
+        .right = right,
+        .paddr = region->paddr + before_pages * PAGE_4KIB,
+        .before_pages = before_pages,
+        .changed_pages = changed_pages,
+        .after_pages = after_pages,
+        .old_flags = region->flags,
+        .region_flags = region_flags,
+        .map_flags = map_flags,
+    };
+
+    return true;
+}
+
+static sched_user_region_t *_mprotect_after_node(
+    sched_user_region_t **nodes,
+    size_t *node_index,
+    const mprotect_span_t *span,
+    sched_user_region_t *next
+) {
+    sched_user_region_t *after = nodes[(*node_index)++];
+
+    after->vaddr = span->right;
+    after->paddr = span->paddr + span->changed_pages * PAGE_4KIB;
+    after->pages = span->after_pages;
+    after->flags = span->old_flags;
+    after->next = next;
+
+    return after;
+}
+
+static void _mprotect_split_region(
+    sched_user_region_t *region,
+    sched_user_region_t *next,
+    sched_user_region_t **nodes,
+    size_t *node_index,
+    const mprotect_span_t *span
+) {
+    if (!span->before_pages) {
+        region->vaddr = span->left;
+        region->paddr = span->paddr;
+        region->pages = span->changed_pages;
+        region->flags = span->region_flags;
+
+        if (span->after_pages) {
+            region->next = _mprotect_after_node(nodes, node_index, span, next);
+        }
+
+        return;
+    }
+
+    sched_user_region_t *changed = nodes[(*node_index)++];
+    changed->vaddr = span->left;
+    changed->paddr = span->paddr;
+    changed->pages = span->changed_pages;
+    changed->flags = span->region_flags;
+
+    region->pages = span->before_pages;
+    region->next = changed;
+
+    if (span->after_pages) {
+        changed->next = _mprotect_after_node(nodes, node_index, span, next);
+    } else {
+        changed->next = next;
+    }
+}
+
+static void _mprotect_remap(void *root, const mprotect_span_t *span) {
+    for (size_t i = 0; i < span->changed_pages; i++) {
+        uintptr_t vaddr = span->left + i * PAGE_4KIB;
+        uintptr_t paddr = span->paddr + i * PAGE_4KIB;
+
+        unmap_page((page_t *)root, vaddr);
+        arch_map_region(root, 1, vaddr, paddr, span->map_flags);
+        arch_tlb_flush(vaddr);
+    }
+}
+
+static void _mprotect_apply(mprotect_req_t *req, sched_user_region_t **nodes) {
+    size_t node_index = 0;
+
+    sched_user_region_t *region = req->thread->regions;
+    while (region) {
+        sched_user_region_t *next = region->next;
+        mprotect_span_t span = { 0 };
+
+        if (!_mprotect_span(region, req, &span)) {
+            region = next;
+            continue;
+        }
+
+        _mprotect_split_region(region, next, nodes, &node_index, &span);
+        _mprotect_remap(req->root, &span);
+
+        region = next;
+    }
+}
+
 static bool _mmap_flags_valid(int flags) {
     int known = MAP_SHARED | MAP_PRIVATE | MAP_FIXED | MAP_ANON;
     return (flags & ~known) == 0;
@@ -1080,18 +1362,6 @@ _mmap_undo_alloc(sched_thread_t *thread, void *root, uintptr_t addr, uintptr_t p
     if (paddr) {
         arch_free_frames((void *)paddr, pages);
     }
-}
-
-static size_t _fd_vfs_io_flags(const sched_fd_t *entry) {
-    if (!entry) {
-        return 0;
-    }
-
-    if (entry->flags & O_NONBLOCK) {
-        return VFS_NONBLOCK;
-    }
-
-    return 0;
 }
 
 static bool _size_to_off(size_t value, off_t *out) {
@@ -1139,6 +1409,169 @@ static bool _off_add(off_t base, off_t delta, off_t *out) {
 
     *out = base + delta;
     return true;
+}
+
+static int _mmap_read_args(
+    sched_thread_t *thread,
+    const mmap_args_t *user_args,
+    mmap_args_t *req,
+    size_t *size_out,
+    size_t *pages_out,
+    size_t *file_offset_out,
+    int *map_type_out
+) {
+    if (!user_copy_from(thread, req, user_args, sizeof(*req))) {
+        return -EFAULT;
+    }
+
+    if (!req->len) {
+        return -EINVAL;
+    }
+
+    if (req->len > SIZE_MAX - (PAGE_4KIB - 1)) {
+        return -EINVAL;
+    }
+
+    if (req->offset < 0 || (req->offset % PAGE_4KIB) != 0) {
+        return -EINVAL;
+    }
+
+    size_t file_offset = 0;
+    if (!_off_to_size(req->offset, &file_offset)) {
+        return -EOVERFLOW;
+    }
+
+    if (!_mmap_prot_valid(req->prot) || !_mmap_flags_valid(req->flags)) {
+        return -EINVAL;
+    }
+
+    int map_type = req->flags & (MAP_SHARED | MAP_PRIVATE);
+    if (map_type != MAP_SHARED && map_type != MAP_PRIVATE) {
+        return -EINVAL;
+    }
+
+    if (map_type == MAP_SHARED) {
+        return -ENOTSUP;
+    }
+
+    if ((req->flags & MAP_ANON) && req->fd != -1) {
+        return -EINVAL;
+    }
+
+    size_t size = ALIGN(req->len, PAGE_4KIB);
+
+    *size_out = size;
+    *pages_out = size / PAGE_4KIB;
+    *file_offset_out = file_offset;
+    *map_type_out = map_type;
+
+    return 0;
+}
+
+static int _mmap_place(sched_thread_t *thread, const mmap_args_t *req, size_t size, uintptr_t *addr_out) {
+    uintptr_t addr = (uintptr_t)req->addr;
+    if (addr && (addr % PAGE_4KIB)) {
+        return -EINVAL;
+    }
+
+    bool fixed = (req->flags & MAP_FIXED) != 0;
+    if (!addr && fixed) {
+        return -EINVAL;
+    }
+
+    if (!addr) {
+        addr = _pick_mmap_base(thread, size);
+    }
+
+    if (!addr || size > (uintptr_t)-1 - addr) {
+        return -ENOMEM;
+    }
+
+    uintptr_t end = addr + size;
+    uintptr_t stack_top = thread->user_stack_base;
+
+    if (!stack_top) {
+        stack_top = (uintptr_t)arch_user_stack_top();
+    }
+
+    if (end > stack_top) {
+        return -ENOMEM;
+    }
+
+    for (sched_user_region_t *region = thread->regions; region; region = region->next) {
+        if (!_region_overlaps(region, addr, end)) {
+            continue;
+        }
+
+        if (fixed) {
+            return -ENOMEM;
+        }
+
+        addr = _pick_mmap_base(thread, size);
+        if (!addr || size > (uintptr_t)-1 - addr) {
+            return -ENOMEM;
+        }
+
+        end = addr + size;
+        break;
+    }
+
+    if (!addr || end > stack_top) {
+        return -ENOMEM;
+    }
+
+    *addr_out = addr;
+    return 0;
+}
+
+static int _mmap_file_node(sched_thread_t *thread, const mmap_args_t *req, int map_type, vfs_node_t **file_out) {
+    *file_out = NULL;
+
+    if (req->flags & MAP_ANON) {
+        return 0;
+    }
+
+    if (req->fd < 0) {
+        return -EBADF;
+    }
+
+    sched_fd_t *entry = NULL;
+    if (!_fd_lookup(thread, req->fd, &entry)) {
+        return -EBADF;
+    }
+
+    if (entry->kind != SCHED_FD_VFS || !entry->node) {
+        return -EBADF;
+    }
+
+    if (!_open_has_read(entry->flags)) {
+        return -EACCES;
+    }
+
+    int need = R_OK;
+    if (map_type == MAP_SHARED && (req->prot & PROT_WRITE)) {
+        need |= W_OK;
+    }
+
+    int access = vfs_access(entry->node, thread->uid, thread->gid, need);
+    if (access < 0) {
+        return access;
+    }
+
+    *file_out = entry->node;
+    return 0;
+}
+
+static size_t _fd_vfs_io_flags(const sched_fd_t *entry) {
+    if (!entry) {
+        return 0;
+    }
+
+    if (entry->flags & O_NONBLOCK) {
+        return VFS_NONBLOCK;
+    }
+
+    return 0;
 }
 
 static bool _fd_advance_offset(sched_fd_t *entry, size_t offset, size_t amount) {
@@ -1198,7 +1631,7 @@ static ssize_t _fd_getdents(sched_fd_t *entry, void *buf, size_t len, size_t off
     size_t written = 0;
     unsigned long procfs_irq_flags = 0;
     bool procfs_locked = procfs_lock_dir(node, &procfs_irq_flags);
-    ssize_t ret = 0;
+    ssize_t result = 0;
 
     ll_foreach(child, node->tree_entry->children) {
         if (current++ < start_index) {
@@ -1211,13 +1644,13 @@ static ssize_t _fd_getdents(sched_fd_t *entry, void *buf, size_t len, size_t off
 
         tree_node_t *tnode = child->data;
         if (!tnode) {
-            ret = -EIO;
+            result = -EIO;
             goto out;
         }
 
         vfs_node_t *vnode = tnode->data;
         if (!vnode) {
-            ret = -EIO;
+            result = -EIO;
             goto out;
         }
 
@@ -1235,16 +1668,16 @@ static ssize_t _fd_getdents(sched_fd_t *entry, void *buf, size_t len, size_t off
     size_t bytes = written * sizeof(dirent_t);
     if (bytes > 0 && advance_offset) {
         if (!_fd_advance_offset(entry, offset, bytes)) {
-            ret = -EOVERFLOW;
+            result = -EOVERFLOW;
             goto out;
         }
     }
 
-    ret = (ssize_t)bytes;
+    result = (ssize_t)bytes;
 
 out:
     procfs_unlock_dir(procfs_locked, procfs_irq_flags);
-    return ret;
+    return result;
 }
 
 static ssize_t _fd_read_vfs(
@@ -1254,10 +1687,10 @@ static ssize_t _fd_read_vfs(
     size_t len,
     size_t offset,
     bool advance_offset,
-    int bad_kind_error
+    int wrong_kind_error
 ) {
     if (!entry || entry->kind != SCHED_FD_VFS || !entry->node) {
-        return bad_kind_error;
+        return wrong_kind_error;
     }
 
     if (!_open_has_read(entry->flags)) {
@@ -1274,8 +1707,11 @@ static ssize_t _fd_read_vfs(
         return pty_read_handle(&pty_handle, buf, len, _fd_vfs_io_flags(entry));
     }
 
+    pid_t owner = thread ? thread->pid : 0;
+    u32 io_flags = _fd_vfs_io_flags(entry);
+
     ssize_t ws_result = 0;
-    if (ws_node_read(entry->node, thread ? thread->pid : 0, buf, offset, len, _fd_vfs_io_flags(entry), &ws_result)) {
+    if (ws_node_read(entry->node, owner, buf, offset, len, io_flags, &ws_result)) {
         if (ws_result == VFS_EOF) {
             return 0;
         }
@@ -1289,19 +1725,19 @@ static ssize_t _fd_read_vfs(
         return ws_result;
     }
 
-    ssize_t ret = vfs_read(entry->node, buf, offset, len, _fd_vfs_io_flags(entry));
+    ssize_t bytes = vfs_read(entry->node, buf, offset, len, io_flags);
 
-    if (ret == VFS_EOF) {
+    if (bytes == VFS_EOF) {
         return 0;
     }
 
-    if (ret > 0 && advance_offset) {
-        if (!_fd_advance_offset(entry, offset, (size_t)ret)) {
+    if (bytes > 0 && advance_offset) {
+        if (!_fd_advance_offset(entry, offset, (size_t)bytes)) {
             return -EOVERFLOW;
         }
     }
 
-    return ret;
+    return bytes;
 }
 
 static ssize_t _fd_write_vfs(
@@ -1312,10 +1748,10 @@ static ssize_t _fd_write_vfs(
     size_t offset,
     bool append_mode,
     bool advance_offset,
-    int bad_kind_error
+    int wrong_kind_error
 ) {
     if (!entry || entry->kind != SCHED_FD_VFS || !entry->node) {
-        return bad_kind_error;
+        return wrong_kind_error;
     }
 
     if (!_open_has_write(entry->flags)) {
@@ -1332,8 +1768,11 @@ static ssize_t _fd_write_vfs(
         offset = (size_t)entry->node->size;
     }
 
+    pid_t owner = thread ? thread->pid : 0;
+    u32 io_flags = _fd_vfs_io_flags(entry);
+
     ssize_t ws_result = 0;
-    if (ws_node_write(entry->node, thread ? thread->pid : 0, buf, offset, len, _fd_vfs_io_flags(entry), &ws_result)) {
+    if (ws_node_write(entry->node, owner, buf, offset, len, io_flags, &ws_result)) {
         if (ws_result > 0) {
             if (advance_offset) {
                 if (!_fd_advance_offset(entry, offset, (size_t)ws_result)) {
@@ -1346,18 +1785,18 @@ static ssize_t _fd_write_vfs(
         return ws_result;
     }
 
-    ssize_t ret = vfs_write(entry->node, (void *)buf, offset, len, _fd_vfs_io_flags(entry));
+    ssize_t bytes = vfs_write(entry->node, (void *)buf, offset, len, io_flags);
 
-    if (ret > 0) {
+    if (bytes > 0) {
         if (advance_offset) {
-            if (!_fd_advance_offset(entry, offset, (size_t)ret)) {
+            if (!_fd_advance_offset(entry, offset, (size_t)bytes)) {
                 return -EOVERFLOW;
             }
         }
         _maybe_clear_setid(thread, entry->node);
     }
 
-    return ret;
+    return bytes;
 }
 
 static ssize_t _read_fd(int fd, void *buf, size_t len, off_t offset, bool positional) {
@@ -1399,7 +1838,10 @@ static ssize_t _read_fd(int fd, void *buf, size_t len, off_t offset, bool positi
             read_offset = entry->offset;
         }
 
-        return _fd_read_vfs(thread, entry, buf, len, read_offset, !positional, positional ? -ESPIPE : -EBADF);
+        int wrong_kind_error = positional ? -ESPIPE : -EBADF;
+        bool advance_offset = !positional;
+
+        return _fd_read_vfs(thread, entry, buf, len, read_offset, advance_offset, wrong_kind_error);
     }
 
     if (!positional && fd == STDIN_FILENO) {
@@ -1501,7 +1943,8 @@ static ssize_t _write_fd(int fd, const void *buf, size_t len, off_t offset, bool
         );
     }
 
-    if (!positional && (fd == STDOUT_FILENO || fd == STDERR_FILENO || fd == STDIN_FILENO)) {
+    bool stdio_fd = fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO;
+    if (!positional && stdio_fd) {
         if (thread) {
             thread->tty_index = (int)tty_current_screen();
         }
@@ -1559,6 +2002,107 @@ static ssize_t sys_ioctl(int fd, u64 request, void *args) {
     return tty_ioctl_handle(&handle, request, args);
 }
 
+static int _open_create_file(sched_thread_t *thread, const char *path, int flags, mode_t mode, vfs_node_t **node_out) {
+    if (!node_out) {
+        return -EINVAL;
+    }
+
+    if (flags & O_DIRECTORY) {
+        return -EINVAL;
+    }
+
+    char parent_path[PATH_MAX];
+    char base[PATH_MAX];
+    vfs_node_t *parent = NULL;
+
+    int parent_err = _write_parent(thread, path, parent_path, sizeof(parent_path), base, sizeof(base), &parent);
+    if (parent_err < 0) {
+        return parent_err;
+    }
+
+    mode_t create_mode = _apply_umask(mode & 07777, thread->umask);
+    vfs_node_t *node = vfs_create(parent, base, VFS_FILE, create_mode);
+    if (!node) {
+        return -EIO;
+    }
+
+    int chown_ret = vfs_chown(node, thread->uid, thread->gid);
+    if (chown_ret < 0) {
+        return chown_ret;
+    }
+
+    *node_out = node;
+    return 0;
+}
+
+static int _open_resolve_node(vfs_node_t *node, int flags, vfs_node_t **out) {
+    if (!node || !out) {
+        return -EINVAL;
+    }
+
+    if ((flags & O_NOFOLLOW) && VFS_IS_LINK(node->type)) {
+        return -ELOOP;
+    }
+
+    if (VFS_IS_LINK(node->type)) {
+        node = vfs_resolve_node(node);
+    }
+
+    if (!node) {
+        return -EINVAL;
+    }
+
+    if ((flags & O_DIRECTORY) && node->type != VFS_DIR) {
+        return -ENOTDIR;
+    }
+
+    *out = node;
+    return 0;
+}
+
+static int _open_check_access(sched_thread_t *thread, vfs_node_t *node, int flags) {
+    int need = 0;
+
+    if (_open_has_read(flags)) {
+        need |= R_OK;
+    }
+    if (_open_has_write(flags)) {
+        need |= W_OK;
+    }
+
+    if (node->type == VFS_DIR && _open_has_write(flags)) {
+        return -EISDIR;
+    }
+
+    if (!need) {
+        return 0;
+    }
+
+    return vfs_access(node, thread->uid, thread->gid, need);
+}
+
+static int _open_truncate(sched_thread_t *thread, vfs_node_t *node, int flags) {
+    if (!(flags & O_TRUNC)) {
+        return 0;
+    }
+
+    if (node->type == VFS_DIR) {
+        return -EISDIR;
+    }
+
+    if (node->type != VFS_FILE) {
+        return 0;
+    }
+
+    ssize_t ret = vfs_truncate(node, 0);
+    if (ret < 0) {
+        return (int)ret;
+    }
+
+    _maybe_clear_setid(thread, node);
+    return 0;
+}
+
 static int sys_open(const char *path, int flags, mode_t mode) {
     if (!path) {
         return -EFAULT;
@@ -1585,116 +2129,42 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         return resolve_err;
     }
 
-    bool ptmx_open = false;
-    size_t ptmx_index = 0;
-    int fd_tty_index = TTY_NONE;
-    int fd_pty_index = -1;
-    bool fd_pty_master = false;
-
-    if (!strncmp(resolved, "/dev/", 5)) {
-        const char *dev = resolved + 5;
-
-        // ptmx is allocated at open time so idle PTYs do not clutter /dev
-        if (!strcmp(dev, "ptmx")) {
-            if (!pty_reserve(&ptmx_index)) {
-                return -EAGAIN;
-            }
-
-            ptmx_open = true;
-            fd_pty_index = (int)ptmx_index;
-            fd_pty_master = true;
-        } else {
-            fd_tty_index = _tty_from_dev(dev);
-            fd_pty_index = _pty_from_dev(dev);
-        }
+    open_dev_t dev = { 0 };
+    int dev_err = _open_dev_prepare(resolved, &dev);
+    if (dev_err < 0) {
+        return dev_err;
     }
 
     vfs_node_t *node = vfs_lookup(resolved);
     if (node) {
         if ((flags & O_EXCL) && (flags & O_CREAT)) {
-            return _open_fail(ptmx_open, ptmx_index, -EEXIST);
+            return _open_fail(&dev, -EEXIST);
         }
     } else if (flags & O_CREAT) {
-        if (flags & O_DIRECTORY) {
-            return _open_fail(ptmx_open, ptmx_index, -EINVAL);
-        }
-
-        char parent_path[PATH_MAX];
-        char base[PATH_MAX];
-        vfs_node_t *parent = NULL;
-
-        int parent_err = _write_parent(thread, resolved, parent_path, sizeof(parent_path), base, sizeof(base), &parent);
-
-        if (parent_err < 0) {
-            return _open_fail(ptmx_open, ptmx_index, parent_err);
-        }
-
-        mode_t create_mode = _apply_umask(mode & 07777, thread->umask);
-        node = vfs_create(parent, base, VFS_FILE, create_mode);
-        if (!node) {
-            return _open_fail(ptmx_open, ptmx_index, -EIO);
-        }
-
-        int chown_ret = vfs_chown(node, thread->uid, thread->gid);
-        if (chown_ret < 0) {
-            return _open_fail(ptmx_open, ptmx_index, chown_ret);
+        int create_err = _open_create_file(thread, resolved, flags, mode, &node);
+        if (create_err < 0) {
+            return _open_fail(&dev, create_err);
         }
     }
 
     if (!node) {
-        return _open_fail(ptmx_open, ptmx_index, -ENOENT);
+        return _open_fail(&dev, -ENOENT);
     }
 
     vfs_node_t *resolved_node = node;
-    if ((flags & O_NOFOLLOW) && VFS_IS_LINK(resolved_node->type)) {
-        return _open_fail(ptmx_open, ptmx_index, -ELOOP);
+    int resolve_node_err = _open_resolve_node(node, flags, &resolved_node);
+    if (resolve_node_err < 0) {
+        return _open_fail(&dev, resolve_node_err);
     }
 
-    if (VFS_IS_LINK(resolved_node->type)) {
-        resolved_node = vfs_resolve_node(resolved_node);
+    int access_err = _open_check_access(thread, resolved_node, flags);
+    if (access_err < 0) {
+        return _open_fail(&dev, access_err);
     }
 
-    if (!resolved_node) {
-        return _open_fail(ptmx_open, ptmx_index, -EINVAL);
-    }
-
-    if ((flags & O_DIRECTORY) && resolved_node->type != VFS_DIR) {
-        return _open_fail(ptmx_open, ptmx_index, -ENOTDIR);
-    }
-
-    int need = 0;
-
-    if (_open_has_read(flags)) {
-        need |= R_OK;
-    }
-    if (_open_has_write(flags)) {
-        need |= W_OK;
-    }
-
-    if (resolved_node->type == VFS_DIR && _open_has_write(flags)) {
-        return _open_fail(ptmx_open, ptmx_index, -EISDIR);
-    }
-
-    if (need) {
-        int access = vfs_access(resolved_node, thread->uid, thread->gid, need);
-        if (access < 0) {
-            return _open_fail(ptmx_open, ptmx_index, access);
-        }
-    }
-
-    if (flags & O_TRUNC) {
-        if (resolved_node->type == VFS_DIR) {
-            return _open_fail(ptmx_open, ptmx_index, -EISDIR);
-        }
-
-        if (resolved_node->type == VFS_FILE) {
-            ssize_t trunc_ret = vfs_truncate(resolved_node, 0);
-            if (trunc_ret < 0) {
-                return _open_fail(ptmx_open, ptmx_index, (int)trunc_ret);
-            }
-
-            _maybe_clear_setid(thread, resolved_node);
-        }
+    int trunc_err = _open_truncate(thread, resolved_node, flags);
+    if (trunc_err < 0) {
+        return _open_fail(&dev, trunc_err);
     }
 
     u32 fd_flags = 0;
@@ -1710,23 +2180,23 @@ static int sys_open(const char *path, int flags, mode_t mode) {
         .node = resolved_node,
         .pipe = NULL,
         .offset = 0,
-        .pty_index = fd_pty_index,
-        .pty_master = fd_pty_master,
-        .tty_index = fd_tty_index,
+        .pty_index = dev.pty,
+        .pty_master = dev.master,
+        .tty_index = dev.tty,
         .flags = runtime_flags,
         .fd_flags = fd_flags,
     };
-    int ret = sched_fd_alloc(thread, &fd, 3);
+    int new_fd = sched_fd_alloc(thread, &fd, 3);
 
-    if (ret < 0 && ptmx_open) {
-        pty_unreserve(ptmx_index);
+    if (new_fd < 0) {
+        return _open_fail(&dev, new_fd);
     }
 
-    if (ret >= 0 && fd_tty_index != TTY_NONE) {
-        thread->tty_index = fd_tty_index;
+    if (dev.tty != TTY_NONE) {
+        thread->tty_index = dev.tty;
     }
 
-    return ret;
+    return new_fd;
 }
 
 static int sys_close(int fd) {
@@ -1788,7 +2258,7 @@ static int sys_pipe(int *fds) {
 
     int read_fd = sched_fd_alloc(thread, &read_end, 3);
     if (read_fd < 0) {
-        sched_pipe_release_reader(pipe);
+        sched_pipe_put_reader(pipe);
         return read_fd;
     }
 
@@ -2041,146 +2511,26 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
     }
 
     mmap_args_t req = { 0 };
-    if (!user_copy_from(thread, &req, args, sizeof(req))) {
-        return (uintptr_t)-EFAULT;
-    }
-
-    if (!req.len) {
-        return (uintptr_t)-EINVAL;
-    }
-
-    if (req.len > SIZE_MAX - (PAGE_4KIB - 1)) {
-        return (uintptr_t)-EINVAL;
-    }
-
-    size_t size = req.len;
-    size = ALIGN(size, PAGE_4KIB);
-    size_t pages = size / PAGE_4KIB;
-
-    if (req.offset < 0) {
-        return (uintptr_t)-EINVAL;
-    }
-
-    if ((req.offset % PAGE_4KIB) != 0) {
-        return (uintptr_t)-EINVAL;
-    }
-
+    size_t size = 0;
+    size_t pages = 0;
     size_t file_offset = 0;
-    if (!_off_to_size(req.offset, &file_offset)) {
-        return (uintptr_t)-EOVERFLOW;
+    int map_type = 0;
+
+    int err = _mmap_read_args(thread, args, &req, &size, &pages, &file_offset, &map_type);
+    if (err < 0) {
+        return (uintptr_t)err;
     }
 
-    int prot = req.prot;
-    if (!_mmap_prot_valid(prot) || !_mmap_flags_valid(req.flags)) {
-        return (uintptr_t)-EINVAL;
-    }
-
-    int map_type = req.flags & (MAP_SHARED | MAP_PRIVATE);
-    if (map_type != MAP_SHARED && map_type != MAP_PRIVATE) {
-        return (uintptr_t)-EINVAL;
-    }
-
-    if (map_type == MAP_SHARED) {
-        return (uintptr_t)-ENOTSUP;
-    }
-
-    if ((req.flags & MAP_ANON) && req.fd != -1) {
-        return (uintptr_t)-EINVAL;
-    }
-
-    uintptr_t addr = (uintptr_t)req.addr;
-    if (addr && (addr % PAGE_4KIB)) {
-        return (uintptr_t)-EINVAL;
-    }
-
-    bool fixed = (req.flags & MAP_FIXED) != 0;
-    if (!addr && fixed) {
-        return (uintptr_t)-EINVAL;
-    }
-
-    if (!addr) {
-        addr = _pick_mmap_base(thread, size);
-    }
-
-    if (!addr) {
-        return (uintptr_t)-ENOMEM;
-    }
-
-    if (size > (uintptr_t)-1 - addr) {
-        return (uintptr_t)-EINVAL;
-    }
-
-    uintptr_t end = addr + size;
-
-    uintptr_t stack_top = thread->user_stack_base;
-    if (!stack_top) {
-        stack_top = (uintptr_t)arch_user_stack_top();
-    }
-
-    if (end > stack_top) {
-        return (uintptr_t)-ENOMEM;
-    }
-
-    if (fixed) {
-        for (sched_user_region_t *region = thread->regions; region; region = region->next) {
-            if (_region_overlaps(region, addr, end)) {
-                return (uintptr_t)-ENOMEM;
-            }
-        }
-    } else {
-        for (sched_user_region_t *region = thread->regions; region; region = region->next) {
-            if (!_region_overlaps(region, addr, end)) {
-                continue;
-            }
-
-            addr = _pick_mmap_base(thread, size);
-            if (!addr || size > (uintptr_t)-1 - addr) {
-                return (uintptr_t)-ENOMEM;
-            }
-
-            end = addr + size;
-            break;
-        }
-    }
-
-    if (!addr || end > stack_top) {
-        return (uintptr_t)-ENOMEM;
+    uintptr_t addr = 0;
+    err = _mmap_place(thread, &req, size, &addr);
+    if (err < 0) {
+        return (uintptr_t)err;
     }
 
     vfs_node_t *file = NULL;
-
-    if (!(req.flags & MAP_ANON)) {
-        int fd = req.fd;
-
-        if (fd < 0) {
-            return (uintptr_t)-EBADF;
-        }
-
-        sched_fd_t *entry = NULL;
-
-        if (!_fd_lookup(thread, fd, &entry)) {
-            return (uintptr_t)-EBADF;
-        }
-
-        if (entry->kind != SCHED_FD_VFS || !entry->node) {
-            return (uintptr_t)-EBADF;
-        }
-
-        file = entry->node;
-
-        if (!_open_has_read(entry->flags)) {
-            return (uintptr_t)-EACCES;
-        }
-
-        int need = R_OK;
-        if (map_type == MAP_SHARED && (prot & PROT_WRITE)) {
-            need |= W_OK;
-        }
-
-        int access = vfs_access(file, thread->uid, thread->gid, need);
-        if (access < 0) {
-            return (uintptr_t)access;
-        }
+    err = _mmap_file_node(thread, &req, map_type, &file);
+    if (err < 0) {
+        return (uintptr_t)err;
     }
 
     void *root = arch_vm_root(thread->vm_space);
@@ -2188,7 +2538,7 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
         return (uintptr_t)-ENOMEM;
     }
 
-    u64 page_flags = _mmap_prot_flags(prot);
+    u64 page_flags = _mmap_prot_flags(req.prot);
 
     uintptr_t paddr = (uintptr_t)arch_alloc_frames_user(pages);
     if (!paddr) {
@@ -2225,45 +2575,13 @@ static uintptr_t sys_mmap(const mmap_args_t *args) {
 }
 
 static int sys_mprotect(void *addr, size_t len, int prot) {
-    if (!addr || !len) {
-        return -EINVAL;
+    mprotect_req_t req = { 0 };
+    int req_err = _mprotect_read_req(addr, len, prot, &req);
+    if (req_err < 0) {
+        return req_err;
     }
 
-    if (len > SIZE_MAX - (PAGE_4KIB - 1)) {
-        return -EINVAL;
-    }
-
-    if (!_mmap_prot_valid(prot)) {
-        return -EINVAL;
-    }
-
-    sched_thread_t *thread = sched_current();
-    if (!thread || !thread->vm_space) {
-        return -EINVAL;
-    }
-
-    uintptr_t base = (uintptr_t)addr;
-    if (base % PAGE_4KIB) {
-        return -EINVAL;
-    }
-
-    size_t size = ALIGN(len, PAGE_4KIB);
-    uintptr_t end = base + size;
-
-    if (end < base) {
-        return -EINVAL;
-    }
-
-    if (!_user_range_mapped(thread, base, end)) {
-        return -ENOMEM;
-    }
-
-    void *root = arch_vm_root(thread->vm_space);
-    if (!root) {
-        return -EINVAL;
-    }
-
-    size_t split_count = _mprotect_split_count(thread, base, end);
+    size_t split_count = _mprotect_splits(req.thread, req.base, req.end);
     sched_user_region_t **nodes = NULL;
     int alloc_err = _alloc_region_nodes(split_count, &nodes);
 
@@ -2271,96 +2589,7 @@ static int sys_mprotect(void *addr, size_t len, int prot) {
         return alloc_err;
     }
 
-    u64 new_flags = _mmap_prot_flags(prot);
-    size_t node_index = 0;
-
-    sched_user_region_t *region = thread->regions;
-    while (region) {
-        sched_user_region_t *next = region->next;
-        uintptr_t start = 0;
-        uintptr_t finish = 0;
-
-        if (!_region_bounds(region, &start, &finish)) {
-            region = next;
-            continue;
-        }
-
-        uintptr_t left = base > start ? base : start;
-        uintptr_t right = end < finish ? end : finish;
-
-        if (left >= right) {
-            region = next;
-            continue;
-        }
-
-        size_t before_pages = (left - start) / PAGE_4KIB;
-        size_t changed_pages = (right - left) / PAGE_4KIB;
-        size_t after_pages = (finish - right) / PAGE_4KIB;
-        size_t changed_index = before_pages;
-
-        uintptr_t changed_paddr = region->paddr + changed_index * PAGE_4KIB;
-        u64 old_flags = region->flags;
-        u64 region_flags = new_flags;
-        u64 map_flags = new_flags;
-
-        if (old_flags & SCHED_REGION_COW) {
-            region_flags |= SCHED_REGION_COW;
-
-            if (new_flags & PT_WRITE) {
-                map_flags &= ~PT_WRITE;
-            }
-        }
-
-        if (!before_pages) {
-            region->vaddr = left;
-            region->paddr = changed_paddr;
-            region->pages = changed_pages;
-            region->flags = region_flags;
-
-            if (after_pages) {
-                sched_user_region_t *after = nodes[node_index++];
-                after->vaddr = right;
-                after->paddr = changed_paddr + changed_pages * PAGE_4KIB;
-                after->pages = after_pages;
-                after->flags = old_flags;
-                after->next = next;
-                region->next = after;
-            }
-        } else {
-            sched_user_region_t *changed = nodes[node_index++];
-            changed->vaddr = left;
-            changed->paddr = changed_paddr;
-            changed->pages = changed_pages;
-            changed->flags = region_flags;
-
-            region->pages = before_pages;
-            region->next = changed;
-
-            if (after_pages) {
-                sched_user_region_t *after = nodes[node_index++];
-                after->vaddr = right;
-                after->paddr = changed_paddr + changed_pages * PAGE_4KIB;
-                after->pages = after_pages;
-                after->flags = old_flags;
-                after->next = next;
-                changed->next = after;
-            } else {
-                changed->next = next;
-            }
-        }
-
-        for (size_t i = 0; i < changed_pages; i++) {
-            uintptr_t vaddr = left + i * PAGE_4KIB;
-            uintptr_t paddr = changed_paddr + i * PAGE_4KIB;
-
-            unmap_page((page_t *)root, vaddr);
-            arch_map_region(root, 1, vaddr, paddr, map_flags);
-            arch_tlb_flush(vaddr);
-        }
-
-        region = next;
-    }
-
+    _mprotect_apply(&req, nodes);
     free(nodes);
     return 0;
 }
@@ -2494,16 +2723,16 @@ static pid_t sys_waitpid(pid_t pid, int *status, int options) {
     }
 
     int wait_status = 0;
-    pid_t ret = sched_waitpid(pid, status ? &wait_status : NULL, options);
-    if (ret <= 0 || !status) {
-        return ret;
+    pid_t child_pid = sched_waitpid(pid, status ? &wait_status : NULL, options);
+    if (child_pid <= 0 || !status) {
+        return child_pid;
     }
 
     if (!user_copy_to(thread, status, &wait_status, sizeof(wait_status))) {
         return -EFAULT;
     }
 
-    return ret;
+    return child_pid;
 }
 
 static int _sys_stat_path(const char *path, stat_t *st, bool follow_links) {
@@ -2581,9 +2810,9 @@ static int _truncate_node(sched_thread_t *thread, vfs_node_t *node, size_t len, 
         }
     }
 
-    ssize_t ret = vfs_truncate(node, len);
-    if (ret < 0) {
-        return (int)ret;
+    ssize_t status = vfs_truncate(node, len);
+    if (status < 0) {
+        return (int)status;
     }
 
     _maybe_clear_setid(thread, node);
@@ -2944,7 +3173,7 @@ static int sys_mount(const char *source, const char *target, const char *filesys
         return -ENOTDIR;
     }
 
-    if (!disk_mount_partition_node(source_node, target_node, fs_type)) {
+    if (!disk_mount_partition(source_node, target_node, fs_type)) {
         return -ENODEV;
     }
 
@@ -3153,7 +3382,7 @@ static uintptr_t sys_signal(int signum, sighandler_t handler, uintptr_t trampoli
         return (uintptr_t)-EINVAL;
     }
 
-    sighandler_t prev = sched_signal_set_handler(thread, signum, handler, trampoline);
+    sighandler_t prev = sched_signal_set(thread, signum, handler, trampoline);
 
     if ((uintptr_t)prev == UINTPTR_MAX) {
         return (uintptr_t)-EINVAL;
@@ -3168,7 +3397,21 @@ static u64 sys_sigreturn(arch_int_state_t *state) {
         return (u64)-EINVAL;
     }
 
-    return sched_signal_sigreturn(thread, state) ? 0 : (u64)-EINVAL;
+    if (!sched_signal_sigreturn(thread, state)) {
+        return (u64)-EINVAL;
+    }
+
+    return 0;
+}
+
+static u64 _kill_pgrp(pid_t pgid, int signum, sched_thread_t *self) {
+    int status = sched_signal_pgrp_as(pgid, signum, self);
+
+    if (signum == 0 && status > 0) {
+        return 0;
+    }
+
+    return (u64)status;
 }
 
 static u64 sys_kill(pid_t pid, int signum) {
@@ -3181,9 +3424,12 @@ static u64 sys_kill(pid_t pid, int signum) {
         return (u64)-EINVAL;
     }
 
+    if (pid == INT_MIN) {
+        return (u64)-EINVAL;
+    }
+
     if (pid < 0) {
-        int ret = sched_signal_pgrp_as(-pid, signum, self);
-        return !signum && ret > 0 ? 0 : (u64)ret;
+        return _kill_pgrp(-pid, signum, self);
     }
 
     if (!pid) {
@@ -3191,8 +3437,7 @@ static u64 sys_kill(pid_t pid, int signum) {
             return (u64)-ESRCH;
         }
 
-        int ret = sched_signal_pgrp_as(self->pgid, signum, self);
-        return !signum && ret > 0 ? 0 : (u64)ret;
+        return _kill_pgrp(self->pgid, signum, self);
     }
 
     // permission check: non-root can only signal processes with the same uid
@@ -3211,9 +3456,9 @@ static u64 sys_kill(pid_t pid, int signum) {
         return 0;
     }
 
-    int ret = sched_signal_send_thread(target, signum);
+    int status = sched_signal_send(target, signum);
     thread_put(target);
-    return ret < 0 ? (u64)-ESRCH : (u64)ret;
+    return status < 0 ? (u64)-ESRCH : (u64)status;
 }
 
 static int sys_execve(const char *path, char *const argv[], char *const envp[], arch_int_state_t *state) {
@@ -3243,12 +3488,12 @@ static int sys_execve(const char *path, char *const argv[], char *const envp[], 
         return err;
     }
 
-    int ret = user_exec(thread, path_buf, argv_copy.items, env_copy.items, state);
+    int status = user_exec(thread, path_buf, argv_copy.items, env_copy.items, state);
 
     _free_exec_vec(&env_copy);
     _free_exec_vec(&argv_copy);
 
-    return ret;
+    return status;
 }
 
 static short _pipe_poll(sched_pipe_t *pipe, bool read_end, short events) {
@@ -3320,7 +3565,9 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
             }
 
             short ws_revents = 0;
-            if (ws_node_poll(entry->node, thread ? thread->pid : 0, events, (u32)vfs_flags, &ws_revents)) {
+            pid_t owner = thread ? thread->pid : 0;
+
+            if (ws_node_poll(entry->node, owner, events, (u32)vfs_flags, &ws_revents)) {
                 return ws_revents;
             }
 
@@ -3345,7 +3592,7 @@ static short _fd_poll_revents(sched_thread_t *thread, int fd, short events) {
 }
 
 static int
-_poll_store_revents(const sched_thread_t *thread, struct pollfd *user_fds, const struct pollfd *pfds, nfds_t nfds) {
+_store_revents(const sched_thread_t *thread, struct pollfd *user_fds, const struct pollfd *pfds, nfds_t nfds) {
     for (nfds_t i = 0; i < nfds; i++) {
         void *slot = NULL;
 
@@ -3362,8 +3609,8 @@ _poll_store_revents(const sched_thread_t *thread, struct pollfd *user_fds, const
 }
 
 static int
-_poll_finish(const sched_thread_t *thread, struct pollfd *user_fds, struct pollfd *pfds, nfds_t nfds, int result) {
-    int err = _poll_store_revents(thread, user_fds, pfds, nfds);
+_finish_poll(const sched_thread_t *thread, struct pollfd *user_fds, struct pollfd *pfds, nfds_t nfds, int result) {
+    int err = _store_revents(thread, user_fds, pfds, nfds);
 
     free(pfds);
     if (err < 0) {
@@ -3471,20 +3718,20 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
         int ready = _poll_scan(thread, pfds, nfds);
 
         if (ready) {
-            return _poll_finish(thread, fds, pfds, nfds, ready);
+            return _finish_poll(thread, fds, pfds, nfds, ready);
         }
 
         if (finite_timeout && !timeout_ms) {
-            return _poll_finish(thread, fds, pfds, nfds, 0);
+            return _finish_poll(thread, fds, pfds, nfds, 0);
         }
 
-        if (thread && sched_signal_has_pending(thread)) {
+        if (thread && sched_signal_pending(thread)) {
             free(pfds);
             return -EINTR;
         }
 
         if (finite_timeout && timeout_ms > 0 && arch_timer_ticks() >= deadline) {
-            return _poll_finish(thread, fds, pfds, nfds, 0);
+            return _finish_poll(thread, fds, pfds, nfds, 0);
         }
 
         if (!sched_is_running()) {
@@ -3521,6 +3768,10 @@ static int sys_poll(struct pollfd *fds, nfds_t nfds, int timeout_ms) {
     }
 }
 
+static u64 _sysret(long long value) {
+    return (u64)value;
+}
+
 static u64 _syscall_dispatch(arch_int_state_t *state) {
     u64 num = (u64)arch_syscall_num(state);
 
@@ -3540,13 +3791,13 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
     }
 
     case SYS_READ:
-        return (
-            u64
-        )sys_read((int)arch_syscall_arg1(state), (void *)arch_syscall_arg2(state), (size_t)arch_syscall_arg3(state));
+        return _sysret(
+            sys_read((int)arch_syscall_arg1(state), (void *)arch_syscall_arg2(state), (size_t)arch_syscall_arg3(state))
+        );
     case SYS_WRITE:
-        return (
-            u64
-        )sys_write((int)arch_syscall_arg1(state), (void *)arch_syscall_arg2(state), (size_t)arch_syscall_arg3(state));
+        return _sysret(
+            sys_write((int)arch_syscall_arg1(state), (void *)arch_syscall_arg2(state), (size_t)arch_syscall_arg3(state))
+        );
     case SYS_OPEN:
         return (u64)sys_open(
             (const char *)arch_syscall_arg1(state),
@@ -3560,9 +3811,9 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
     case SYS_DUP:
         return (u64)sys_dup((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state));
     case SYS_FCNTL:
-        return (
-            u64
-        )sys_fcntl((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state), (uintptr_t)arch_syscall_arg3(state));
+        return _sysret(
+            sys_fcntl((int)arch_syscall_arg1(state), (int)arch_syscall_arg2(state), (uintptr_t)arch_syscall_arg3(state))
+        );
     case SYS_PREAD:
         return (u64)sys_pread(
             (int)arch_syscall_arg1(state),
@@ -3578,9 +3829,9 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             (off_t)arch_syscall_arg4(state)
         );
     case SYS_LSEEK:
-        return (
-            u64
-        )sys_lseek((int)arch_syscall_arg1(state), (off_t)arch_syscall_arg2(state), (int)arch_syscall_arg3(state));
+        return _sysret(
+            sys_lseek((int)arch_syscall_arg1(state), (off_t)arch_syscall_arg2(state), (int)arch_syscall_arg3(state))
+        );
     case SYS_MMAP:
         return (u64)sys_mmap((const mmap_args_t *)arch_syscall_arg1(state));
     case SYS_MPROTECT:
@@ -3592,9 +3843,9 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
     case SYS_MUNMAP:
         return (u64)sys_munmap((void *)arch_syscall_arg1(state), (size_t)arch_syscall_arg2(state));
     case SYS_IOCTL:
-        return (
-            u64
-        )sys_ioctl((int)arch_syscall_arg1(state), (u64)arch_syscall_arg2(state), (void *)arch_syscall_arg3(state));
+        return _sysret(
+            sys_ioctl((int)arch_syscall_arg1(state), (u64)arch_syscall_arg2(state), (void *)arch_syscall_arg3(state))
+        );
     case SYS_CHDIR:
         return (u64)sys_chdir((const char *)arch_syscall_arg1(state));
     case SYS_MKDIR:
@@ -3657,15 +3908,18 @@ static u64 _syscall_dispatch(arch_int_state_t *state) {
             state
         );
     case SYS_WAITPID:
-        return (
-            u64
-        )sys_waitpid((pid_t)arch_syscall_arg1(state), (int *)arch_syscall_arg2(state), (int)arch_syscall_arg3(state));
+        return _sysret(
+            sys_waitpid((pid_t)arch_syscall_arg1(state), (int *)arch_syscall_arg2(state), (int)arch_syscall_arg3(state))
+        );
     case SYS_SLEEP:
-        return (
-            u64
-        )sys_sleep((const struct timespec *)arch_syscall_arg1(state), (struct timespec *)arch_syscall_arg2(state));
-    case SYS_TIME:
-        return (u64)sys_time((struct timespec *)arch_syscall_arg1(state), (struct timespec *)arch_syscall_arg2(state));
+        return _sysret(
+            sys_sleep((const struct timespec *)arch_syscall_arg1(state), (struct timespec *)arch_syscall_arg2(state))
+        );
+    case SYS_TIME: {
+        struct timespec *time_now = (struct timespec *)arch_syscall_arg1(state);
+        struct timespec *time_boot = (struct timespec *)arch_syscall_arg2(state);
+        return (u64)sys_time(time_now, time_boot);
+    }
     case SYS_MOUNT:
         return (u64)sys_mount(
             (const char *)arch_syscall_arg1(state),
@@ -3696,19 +3950,19 @@ static void _syscall_handler(arch_int_state_t *state) {
     }
 
     sched_capture_context(state);
-    sched_metrics_record_syscall();
+    sched_record_syscall();
 
     u64 num = (u64)arch_syscall_num(state);
-    u64 ret = _syscall_dispatch(state);
+    u64 result = _syscall_dispatch(state);
 
-    syscall_count(num, ret);
+    syscall_count(num, result);
 
-    if (num == SYS_SIGRETURN && !ret) {
+    if (num == SYS_SIGRETURN && !result) {
         return;
     }
 
-    arch_syscall_set_ret(state, (arch_syscall_t)ret);
-    sched_signal_deliver_current(state);
+    arch_syscall_set_ret(state, (arch_syscall_t)result);
+    sched_signal_deliver(state);
 }
 
 void syscall_init(void) {
