@@ -19,23 +19,49 @@
 #include <sys/usercopy.h>
 #include <sys/vfs.h>
 
-#define FB_MAP_CHUNK           (4 * MIB)
-#define FB_DEV_UID             0U
-#define FB_DEV_GID             44U
-#define FB_DEV_MODE            0660
-#define FB_PRESENT_CHUNK_BYTES (64U * 1024U)
+#define FB_MAP_CHUNK        (4 * MIB)
+#define FB_DEV_UID          0U
+#define FB_DEV_GID          44U
+#define FB_DEV_MODE         0660
+#define PRESENT_CHUNK_BYTES (64U * 1024U)
 
 typedef struct {
     void *present_vram;
     bool loaded;
     mutex_t present_lock;
     bool force_full_present;
-} framebuffer_driver_state_t;
+} fb_state_t;
 
-static framebuffer_driver_state_t fb_driver = {
+typedef struct {
+    u32 x;
+    u32 y;
+    u32 width;
+    u32 height;
+    u32 fb_width;
+    u32 pitch;
+    u32 bpp_bytes;
+    pixel_format_t fmt;
+    const u32 *src;
+    void *vram;
+} fb_present_t;
+
+static fb_state_t fb_driver = {
     .present_lock = MUTEX_INIT,
     .force_full_present = true,
 };
+
+static size_t _chunk_rows(size_t row_bytes) {
+    if (!row_bytes) {
+        return 1;
+    }
+
+    size_t rows = PRESENT_CHUNK_BYTES / row_bytes;
+    if (!rows) {
+        return 1;
+    }
+
+    return rows;
+}
 
 static void _fb_handoff_clear(const framebuffer_info_t *fb) {
     if (!fb || !fb->available || !fb->size) {
@@ -62,15 +88,6 @@ static void _fb_handoff_clear(const framebuffer_info_t *fb) {
     fb_driver.force_full_present = true;
     mutex_unlock(&fb_driver.present_lock);
 }
-
-const driver_desc_t framebuffer_driver_desc = {
-    .name = "framebuffer",
-    .deps = NULL,
-    .stage = DRIVER_STAGE_DEVFS,
-    .load = framebuffer_driver_load,
-    .unload = framebuffer_driver_unload,
-    .is_busy = framebuffer_driver_busy,
-};
 
 static ssize_t _dev_fb_transfer(const framebuffer_info_t *fb, void *buf, size_t offset, size_t len, bool write) {
     if (!fb || !fb->available || !buf) {
@@ -203,7 +220,54 @@ static bool _fb_frame_ok(const framebuffer_info_t *fb, const pixel_t *frame) {
     return user_range_ok(current, frame, pixels * sizeof(pixel_t), false);
 }
 
-static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_present_rect_t *req) {
+static void present_copy_fast(const fb_present_t *present) {
+    size_t row_bytes = (size_t)present->width * sizeof(u32);
+    size_t rows_budget = _chunk_rows(row_bytes);
+
+    for (u32 row = 0; row < present->height;) {
+        u32 rows = present->height - row;
+        if ((size_t)rows > rows_budget) {
+            rows = (u32)rows_budget;
+        }
+
+        for (u32 r = 0; r < rows; r++) {
+            u32 src_y = present->y + row + r;
+            const u32 *src = present->src + (size_t)src_y * present->fb_width + present->x;
+            u8 *dst = (u8 *)present->vram + (size_t)src_y * present->pitch + (size_t)present->x * present->bpp_bytes;
+
+            memcpy(dst, src, row_bytes);
+        }
+
+        row += rows;
+    }
+}
+
+static void present_copy_convert(const fb_present_t *present) {
+    size_t row_bytes = (size_t)present->width * present->bpp_bytes;
+    size_t rows_budget = _chunk_rows(row_bytes);
+
+    for (u32 row = 0; row < present->height;) {
+        u32 rows = present->height - row;
+        if ((size_t)rows > rows_budget) {
+            rows = (u32)rows_budget;
+        }
+
+        for (u32 r = 0; r < rows; r++) {
+            u32 src_y = present->y + row + r;
+            const u32 *src = present->src + (size_t)src_y * present->fb_width + present->x;
+            u8 *dst = (u8 *)present->vram + (size_t)src_y * present->pitch + (size_t)present->x * present->bpp_bytes;
+
+            for (u32 col = 0; col < present->width; col++) {
+                u32 packed = pixel_pack_rgb888(src[col], &present->fmt);
+                pixel_store_packed(dst + (size_t)col * present->bpp_bytes, (u8)present->bpp_bytes, packed);
+            }
+        }
+
+        row += rows;
+    }
+}
+
+static ssize_t present_rect(const framebuffer_info_t *fb, const fb_present_rect_t *req) {
     if (!fb || !fb->available || !req || !req->frame) {
         return -EINVAL;
     }
@@ -217,24 +281,23 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
         return 0;
     }
 
-    u32 fb_width = fb->width;
-    u32 pitch = fb->pitch;
     u32 bpp_bytes = fb->bpp / 8;
 
     if (!bpp_bytes) {
         return -EINVAL;
     }
 
-    const u32 *src = req->frame;
+    pixel_format_t fmt = {
+        .bytes_per_pixel = (u8)bpp_bytes,
+        .red_shift = fb->red_shift,
+        .green_shift = fb->green_shift,
+        .blue_shift = fb->blue_shift,
+        .red_size = fb->red_size,
+        .green_size = fb->green_size,
+        .blue_size = fb->blue_size,
+    };
+    pixel_fill_rgb_defaults(&fmt);
 
-    u8 red_shift = fb->red_shift;
-    u8 green_shift = fb->green_shift;
-    u8 blue_shift = fb->blue_shift;
-    u8 red_size = fb->red_size;
-    u8 green_size = fb->green_size;
-    u8 blue_size = fb->blue_size;
-
-    pixel_fill_rgb_defaults((u8)bpp_bytes, &red_shift, &green_shift, &blue_shift, &red_size, &green_size, &blue_size);
     mutex_lock(&fb_driver.present_lock);
 
     bool transient_map = false;
@@ -256,68 +319,25 @@ static ssize_t _dev_fb_present_rect(const framebuffer_info_t *fb, const fb_prese
         height = fb->height;
     }
 
-    bool fast_bgrx = pixel_is_fast_bgrx8888(
-        (u8)bpp_bytes,
-        red_shift,
-        green_shift,
-        blue_shift,
-        red_size,
-        green_size,
-        blue_size
-    );
+    fb_present_t present = {
+        .x = x,
+        .y = y,
+        .width = width,
+        .height = height,
+        .fb_width = fb->width,
+        .pitch = fb->pitch,
+        .bpp_bytes = bpp_bytes,
+        .fmt = fmt,
+        .src = req->frame,
+        .vram = vram,
+    };
+
+    bool fast_bgrx = pixel_is_fast_bgrx8888(&fmt);
 
     if (fast_bgrx) {
-        size_t src_row_bytes = (size_t)width * sizeof(u32);
-        size_t chunk_rows_budget = src_row_bytes ? (FB_PRESENT_CHUNK_BYTES / src_row_bytes) : 0;
-        if (!chunk_rows_budget) {
-            chunk_rows_budget = 1;
-        }
-
-        for (u32 row = 0; row < height;) {
-            u32 rows = height - row;
-            if ((size_t)rows > chunk_rows_budget) {
-                rows = (u32)chunk_rows_budget;
-            }
-
-            for (u32 r = 0; r < rows; r++) {
-                const u32 *src_row = src + (size_t)(y + row + r) * fb_width + x;
-                u8 *dst_row = (u8 *)vram + (size_t)(y + row + r) * pitch + (size_t)x * bpp_bytes;
-                memcpy(dst_row, src_row, src_row_bytes);
-            }
-            row += rows;
-        }
+        present_copy_fast(&present);
     } else {
-        size_t dst_row_bytes = (size_t)width * bpp_bytes;
-        size_t chunk_rows_budget = dst_row_bytes ? (FB_PRESENT_CHUNK_BYTES / dst_row_bytes) : 0;
-        if (!chunk_rows_budget) {
-            chunk_rows_budget = 1;
-        }
-
-        for (u32 row = 0; row < height;) {
-            u32 rows = height - row;
-            if ((size_t)rows > chunk_rows_budget) {
-                rows = (u32)chunk_rows_budget;
-            }
-
-            for (u32 r = 0; r < rows; r++) {
-                const u32 *src_row = src + (size_t)(y + row + r) * fb_width + x;
-                u8 *dst_row = (u8 *)vram + (size_t)(y + row + r) * pitch + (size_t)x * bpp_bytes;
-
-                for (u32 col = 0; col < width; col++) {
-                    u32 packed = pixel_pack_rgb888(
-                        src_row[col],
-                        red_shift,
-                        green_shift,
-                        blue_shift,
-                        red_size,
-                        green_size,
-                        blue_size
-                    );
-                    pixel_store_packed(dst_row + (size_t)col * bpp_bytes, (u8)bpp_bytes, packed);
-                }
-            }
-            row += rows;
-        }
+        present_copy_convert(&present);
     }
 
     fb_driver.force_full_present = false;
@@ -343,7 +363,7 @@ static ssize_t _dev_fb_present(const framebuffer_info_t *fb, const void *frame) 
         .height = fb ? fb->height : 0,
     };
 
-    return _dev_fb_present_rect(fb, &req);
+    return present_rect(fb, &req);
 }
 
 static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
@@ -447,14 +467,14 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
             return -EFAULT;
         }
 
-        return _dev_fb_present_rect(fb, &req);
+        return present_rect(fb, &req);
     }
     default:
         return -ENOTTY;
     }
 }
 
-static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
+static bool _register_devfs(vfs_node_t *dev_dir) {
     if (!dev_dir) {
         return false;
     }
@@ -466,7 +486,7 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
 
     fb_driver.present_vram = NULL;
     fb_driver.force_full_present = true;
-    if (arch_phys_map_can_persist()) {
+    if (arch_keeps_phys_map()) {
         fb_driver.present_vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
         if (!fb_driver.present_vram) {
             log_warn("failed to create persistent VRAM map for present path");
@@ -496,17 +516,17 @@ static bool framebuffer_register_devfs(vfs_node_t *dev_dir) {
     return true;
 }
 
-bool framebuffer_driver_busy(void) {
+static bool fb_busy(void) {
     vfs_node_t *node = vfs_lookup("/dev/fb");
     return node && sched_fd_refs_node(node);
 }
 
-driver_err_t framebuffer_driver_load(void) {
+static driver_err_t fb_load(void) {
     if (fb_driver.loaded) {
         return DRIVER_OK;
     }
 
-    if (!devfs_register_device("framebuffer", framebuffer_register_devfs)) {
+    if (!devfs_register_device("framebuffer", _register_devfs)) {
         return DRIVER_ERR_INIT_FAILED;
     }
 
@@ -514,12 +534,12 @@ driver_err_t framebuffer_driver_load(void) {
     return DRIVER_OK;
 }
 
-driver_err_t framebuffer_driver_unload(void) {
+static driver_err_t fb_unload(void) {
     if (!fb_driver.loaded) {
         return DRIVER_OK;
     }
 
-    if (framebuffer_driver_busy()) {
+    if (fb_busy()) {
         return DRIVER_ERR_BUSY;
     }
 
@@ -544,3 +564,12 @@ driver_err_t framebuffer_driver_unload(void) {
     fb_driver.loaded = false;
     return DRIVER_OK;
 }
+
+const driver_desc_t framebuffer_driver_desc = {
+    .name = "framebuffer",
+    .deps = NULL,
+    .stage = DRIVER_STAGE_DEVFS,
+    .load = fb_load,
+    .unload = fb_unload,
+    .is_busy = fb_busy,
+};

@@ -28,7 +28,7 @@ static tty_state_t tty_state = {
     .console_handle = { .kind = TTY_HANDLE_CONSOLE, .index = TTY_CONSOLE },
 };
 
-static bool _is_controlling_screen(const sched_thread_t *thread, size_t screen) {
+static bool _controls_screen(const sched_thread_t *thread, size_t screen) {
     if (!thread || !thread->user_thread) {
         return false;
     }
@@ -36,8 +36,8 @@ static bool _is_controlling_screen(const sched_thread_t *thread, size_t screen) 
     return thread->tty_index == (int)screen;
 }
 
-static bool _is_background_group(const sched_thread_t *thread, size_t screen) {
-    if (!_is_controlling_screen(thread, screen)) {
+static bool _is_bg_group(const sched_thread_t *thread, size_t screen) {
+    if (!_controls_screen(thread, screen)) {
         return false;
     }
 
@@ -49,9 +49,9 @@ static bool _is_background_group(const sched_thread_t *thread, size_t screen) {
     return thread->pgid != fg_pgrp;
 }
 
-static ssize_t _check_foreground_read(size_t screen) {
+static ssize_t _check_fg_read(size_t screen) {
     sched_thread_t *current = sched_current();
-    if (!_is_background_group(current, screen)) {
+    if (!_is_bg_group(current, screen)) {
         return 0;
     }
 
@@ -62,9 +62,9 @@ static ssize_t _check_foreground_read(size_t screen) {
     return -EINTR;
 }
 
-static ssize_t _check_foreground_write(size_t screen) {
+static ssize_t _check_fg_write(size_t screen) {
     sched_thread_t *current = sched_current();
-    if (!_is_background_group(current, screen)) {
+    if (!_is_bg_group(current, screen)) {
         return 0;
     }
 
@@ -148,7 +148,7 @@ static short _dev_tty_poll(vfs_node_t *node, short events, u32 flags) {
     return tty_poll_handle(node ? node->private : NULL, events, flags);
 }
 
-static sched_wait_queue_t *_dev_tty_wait_queue(vfs_node_t *node, short events, u32 flags) {
+static sched_wait_queue_t *tty_wait_queue(vfs_node_t *node, short events, u32 flags) {
     return tty_wait_queue_handle(node ? node->private : NULL, events, flags);
 }
 
@@ -166,7 +166,7 @@ static short _dev_console_poll(UNUSED vfs_node_t *node, short events, UNUSED u32
     return revents;
 }
 
-static sched_wait_queue_t *_dev_console_wait_queue(vfs_node_t *node, short events, u32 flags) {
+static sched_wait_queue_t *_console_wait(vfs_node_t *node, short events, u32 flags) {
     (void)node;
     (void)events;
     (void)flags;
@@ -226,7 +226,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
     tty_if->ioctl = _dev_tty_ioctl;
     tty_if->poll = _dev_tty_poll;
-    tty_if->wait_queue = _dev_tty_wait_queue;
+    tty_if->wait_queue = tty_wait_queue;
 
     vfs_interface_t *console_if = vfs_create_interface(_dev_console_read, _dev_tty_write, NULL);
 
@@ -237,15 +237,15 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
     console_if->ioctl = _dev_tty_ioctl;
     console_if->poll = _dev_console_poll;
-    console_if->wait_queue = _dev_console_wait_queue;
+    console_if->wait_queue = _console_wait;
 
-    bool ok = true;
+    bool registered = true;
 
     bool tty_registered = devfs_register_node(dev_dir, "tty", VFS_CHARDEV, 0666, tty_if, &tty_state.current_handle);
 
     if (!tty_registered) {
         log_warn("failed to create /dev/tty");
-        ok = false;
+        registered = false;
     }
 
     bool console_registered = devfs_register_node(
@@ -259,7 +259,7 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
     if (!console_registered) {
         log_warn("failed to create /dev/console");
-        ok = false;
+        registered = false;
     }
 
     char name[] = "tty0";
@@ -270,11 +270,11 @@ static bool tty_register_devfs(vfs_node_t *dev_dir) {
 
         if (!screen_registered) {
             log_warn("failed to create /dev/%s", name);
-            ok = false;
+            registered = false;
         }
     }
 
-    return ok;
+    return registered;
 }
 
 void tty_init(void) {
@@ -316,7 +316,7 @@ static ssize_t _write_screen(size_t index, const void *buf, size_t len) {
     return console_write_screen(index, buf, len);
 }
 
-static ssize_t _write_screen_processed(size_t index, const void *buf, size_t len) {
+static ssize_t _write_processed(size_t index, const void *buf, size_t len) {
     if (index >= TTY_SCREEN_COUNT || !buf) {
         return -EINVAL;
     }
@@ -384,7 +384,7 @@ ssize_t tty_write_screen_output(size_t index, const void *buf, size_t len) {
         return 0;
     }
 
-    return _write_screen_processed(index, buf, len);
+    return _write_processed(index, buf, len);
 }
 
 ssize_t tty_read_handle(const tty_handle_t *handle, void *buf, size_t len) {
@@ -397,7 +397,7 @@ ssize_t tty_read_handle(const tty_handle_t *handle, void *buf, size_t len) {
         return -ENXIO;
     }
 
-    ssize_t fg_ret = _check_foreground_read(screen);
+    ssize_t fg_ret = _check_fg_read(screen);
     if (fg_ret < 0) {
         return fg_ret;
     }
@@ -432,7 +432,7 @@ ssize_t tty_write_handle(const tty_handle_t *handle, const void *buf, size_t len
         return -ENXIO;
     }
 
-    ssize_t fg_ret = _check_foreground_write(screen);
+    ssize_t fg_ret = _check_fg_write(screen);
     if (fg_ret < 0) {
         return fg_ret;
     }
@@ -443,15 +443,15 @@ ssize_t tty_write_handle(const tty_handle_t *handle, const void *buf, size_t len
             return -ENXIO;
         }
 
-        return _write_screen_processed((size_t)tty_state.current, buf, len);
+        return _write_processed((size_t)tty_state.current, buf, len);
     case TTY_HANDLE_CONSOLE:
-        return _write_screen_processed(TTY_CONSOLE, buf, len);
+        return _write_processed(TTY_CONSOLE, buf, len);
     case TTY_HANDLE_NAMED:
         if (handle->index >= TTY_COUNT) {
             return -EINVAL;
         }
 
-        return _write_screen_processed(TTY_USER_TO_SCREEN(handle->index), buf, len);
+        return _write_processed(TTY_USER_TO_SCREEN(handle->index), buf, len);
     default:
         return -EINVAL;
     }
@@ -548,12 +548,12 @@ static int _set_pgrp(size_t screen, void *args) {
     }
 
     sched_thread_t *current = sched_current();
-    pid_t requested = 0;
-    if (!user_copy_from(current, &requested, args, sizeof(requested))) {
+    pid_t pgid = 0;
+    if (!user_copy_from(current, &pgid, args, sizeof(pgid))) {
         return -EFAULT;
     }
 
-    if (requested <= 0) {
+    if (pgid <= 0) {
         return -EINVAL;
     }
 
@@ -561,15 +561,15 @@ static int _set_pgrp(size_t screen, void *args) {
         return -EPERM;
     }
 
-    if (!_is_controlling_screen(current, screen)) {
+    if (!_controls_screen(current, screen)) {
         return -ENOTTY;
     }
 
-    if (current->sid <= 0 || !sched_pgrp_in_session(requested, current->sid)) {
+    if (current->sid <= 0 || !sched_pgrp_in_session(pgid, current->sid)) {
         return -EPERM;
     }
 
-    tty_state.pgrp[screen] = requested;
+    tty_state.pgrp[screen] = pgid;
     return 0;
 }
 

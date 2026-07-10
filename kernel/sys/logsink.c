@@ -37,7 +37,11 @@ void logsink_reset(void) {
 }
 
 void logsink_add_target(const char *path) {
-    if (!path || !path[0] || logsink.count >= LOGSINK_TARGET_MAX || _path_exists(path)) {
+    if (!path || !path[0]) {
+        return;
+    }
+
+    if (logsink.count >= LOGSINK_TARGET_MAX || _path_exists(path)) {
         return;
     }
 

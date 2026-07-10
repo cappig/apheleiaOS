@@ -63,9 +63,9 @@ typedef struct {
     u32 font_row_bytes;
     u32 font_glyph_bytes;
 
-    font_map_t *font_map_sorted;
-    u32 font_map_sorted_count;
-    const font_t *font_map_sorted_src;
+    font_map_t *sorted_map;
+    u32 sorted_map_count;
+    const font_t *sorted_map_src;
 
     bool ready;
     size_t screen_count;
@@ -88,7 +88,7 @@ typedef struct {
     bool fb_owned;
     pid_t fb_owner;
     size_t fb_owner_screen;
-    bool handoff_refresh_pending;
+    bool handoff_redraw;
     spinlock_t lock;
 } console_state_t;
 
@@ -97,6 +97,21 @@ typedef struct {
     console_screen_t *screen;
 } console_ansi_ctx_t;
 
+typedef struct {
+    size_t x;
+    size_t y;
+    size_t map_size;
+    u32 cell_w;
+    u32 cell_h;
+    u32 draw_w;
+    u32 draw_h;
+    u32 glyph_w;
+    u32 glyph_h;
+    u32 glyph_x0;
+    const u8 *glyph;
+    term_pixel_format_t fmt;
+} console_draw_t;
+
 static const console_backend_ops_t *backend_ops = NULL;
 static console_state_t console_state = {
     .lock = SPINLOCK_INIT,
@@ -104,7 +119,7 @@ static console_state_t console_state = {
 
 #define CONSOLE_TAB_WIDTH 4
 
-void console_backend_register(const console_backend_ops_t *ops) {
+void console_set_backend(const console_backend_ops_t *ops) {
     backend_ops = ops;
 }
 
@@ -124,7 +139,7 @@ static bool _stream_passthrough(size_t screen) {
     return screen == console_state.active_screen;
 }
 
-static void _screen_reset_colors(console_screen_t *screen) {
+static void reset_colors(console_screen_t *screen) {
     if (!screen) {
         return;
     }
@@ -144,7 +159,7 @@ static void _screen_reset(console_screen_t *screen) {
         return;
     }
 
-    _screen_reset_colors(screen);
+    reset_colors(screen);
 
     screen->cursor_x = 0;
     screen->cursor_y = 0;
@@ -207,7 +222,7 @@ static bool _screen_is_blank(size_t index) {
     return true;
 }
 
-static void _inherit_screen_state(size_t dst, size_t src) {
+static void inherit_state(size_t dst, size_t src) {
     console_screen_t *dst_screen = _get_screen(dst);
     console_screen_t *src_screen = _get_screen(src);
 
@@ -226,7 +241,7 @@ static void _inherit_screen_state(size_t dst, size_t src) {
     }
 }
 
-static void _clear_screen_buffer(size_t index) {
+static void clear_buffer(size_t index) {
     console_screen_t *screen = _get_screen(index);
     console_cell_t *cells = _screen_cells(index);
 
@@ -261,29 +276,29 @@ static void _update_text_cursor(size_t col, size_t row) {
     }
 }
 
-static void _free_font_map_index(void) {
-    if (!console_state.font_map_sorted) {
+static void free_font_map(void) {
+    if (!console_state.sorted_map) {
         return;
     }
 
-    free(console_state.font_map_sorted);
-    console_state.font_map_sorted = NULL;
-    console_state.font_map_sorted_count = 0;
-    console_state.font_map_sorted_src = NULL;
+    free(console_state.sorted_map);
+    console_state.sorted_map = NULL;
+    console_state.sorted_map_count = 0;
+    console_state.sorted_map_src = NULL;
 }
 
-static void _build_font_map_index(const font_t *font) {
+static void build_font_map(const font_t *font) {
     if (!font || !font->map || !font->map_count) {
-        _free_font_map_index();
+        free_font_map();
         return;
     }
 
-    if (console_state.font_map_sorted_src == font && console_state.font_map_sorted &&
-        console_state.font_map_sorted_count == font->map_count) {
+    if (console_state.sorted_map_src == font && console_state.sorted_map &&
+        console_state.sorted_map_count == font->map_count) {
         return;
     }
 
-    _free_font_map_index();
+    free_font_map();
 
     size_t map_count = font->map_count;
     if (map_count > (size_t)-1 / sizeof(font_map_t)) {
@@ -309,9 +324,9 @@ static void _build_font_map_index(const font_t *font) {
         sorted[j] = current;
     }
 
-    console_state.font_map_sorted = sorted;
-    console_state.font_map_sorted_count = font->map_count;
-    console_state.font_map_sorted_src = font;
+    console_state.sorted_map = sorted;
+    console_state.sorted_map_count = font->map_count;
+    console_state.sorted_map_src = font;
 }
 
 static bool _font_lookup_mapped(const font_t *font, u32 codepoint, u32 *glyph_out) {
@@ -319,14 +334,15 @@ static bool _font_lookup_mapped(const font_t *font, u32 codepoint, u32 *glyph_ou
         return false;
     }
 
-    if (console_state.font_map_sorted && console_state.font_map_sorted_count &&
-        console_state.font_map_sorted_src == font) {
+    bool have_sorted_map = console_state.sorted_map && console_state.sorted_map_count;
+
+    if (have_sorted_map && console_state.sorted_map_src == font) {
         u32 lo = 0;
-        u32 hi = console_state.font_map_sorted_count;
+        u32 hi = console_state.sorted_map_count;
 
         while (lo < hi) {
             u32 mid = lo + (hi - lo) / 2;
-            const font_map_t *entry = &console_state.font_map_sorted[mid];
+            const font_map_t *entry = &console_state.sorted_map[mid];
 
             if (entry->codepoint == codepoint) {
                 if (entry->glyph >= font->glyph_count) {
@@ -370,8 +386,9 @@ static void reset_font_metrics(void) {
     console_state.font_cell_height = console_state.font_height;
 }
 
-static bool _glyph_bounds_for_index(u32 glyph_idx, u32 *left_out, u32 *right_out) {
-    if (!console_state.font || glyph_idx >= console_state.font->glyph_count || !left_out || !right_out) {
+static bool glyph_bounds(u32 glyph_idx, u32 *left_out, u32 *right_out) {
+    bool glyph_ok = console_state.font && glyph_idx < console_state.font->glyph_count;
+    if (!glyph_ok || !left_out || !right_out) {
         return false;
     }
 
@@ -410,10 +427,11 @@ static bool _glyph_bounds_for_index(u32 glyph_idx, u32 *left_out, u32 *right_out
     return true;
 }
 
-static void _derive_cell_metrics(void) {
+static void derive_metrics(void) {
     reset_font_metrics();
 
-    if (!console_state.font || !console_state.font->glyphs || !console_state.font_width || !console_state.font_height) {
+    bool has_font = console_state.font && console_state.font->glyphs;
+    if (!has_font || !console_state.font_width || !console_state.font_height) {
         return;
     }
 
@@ -442,7 +460,7 @@ static void _derive_cell_metrics(void) {
 
         u32 left = 0;
         u32 right = 0;
-        if (!_glyph_bounds_for_index(glyph, &left, &right)) {
+        if (!glyph_bounds(glyph, &left, &right)) {
             continue;
         }
 
@@ -469,7 +487,7 @@ static void _derive_cell_metrics(void) {
     }
 
     if (advance < max_advance) {
-        u32 padded = advance + TERM_GLYPH_CELL_GAP_PX;
+        u32 padded = advance + TERM_CELL_GAP_PX;
         if (padded < advance || padded > max_advance) {
             padded = max_advance;
         }
@@ -492,8 +510,8 @@ static void _use_font(const font_t *font) {
     console_state.font_glyph_bytes = font_glyph_bytes(font);
 
     reset_font_metrics();
-    _build_font_map_index(font);
-    _derive_cell_metrics();
+    build_font_map(font);
+    derive_metrics();
 }
 
 static u32 _font_index(u32 codepoint) {
@@ -654,16 +672,21 @@ static void _maybe_flush_dirty(void) {
     _flush_dirty();
 }
 
+static pixel_format_t _console_pixel_format(void) {
+    return (pixel_format_t){
+        .bytes_per_pixel = console_state.bytes_per_pixel,
+        .red_shift = console_state.red_shift,
+        .green_shift = console_state.green_shift,
+        .blue_shift = console_state.blue_shift,
+        .red_size = console_state.red_size,
+        .green_size = console_state.green_size,
+        .blue_size = console_state.blue_size,
+    };
+}
+
 static void _write_pixel(u8 *dst, u32 color) {
-    u32 packed = pixel_pack_rgb888(
-        color,
-        console_state.red_shift,
-        console_state.green_shift,
-        console_state.blue_shift,
-        console_state.red_size,
-        console_state.green_size,
-        console_state.blue_size
-    );
+    pixel_format_t fmt = _console_pixel_format();
+    u32 packed = pixel_pack_rgb888(color, &fmt);
     pixel_store_packed(dst, console_state.bytes_per_pixel, packed);
 }
 
@@ -716,13 +739,15 @@ static void _clear_text(const console_screen_t *screen) {
         return;
     }
 
-    backend_ops->text_clear(
-        console_state.fb,
-        console_state.cols,
-        console_state.rows,
-        screen->color.fg_idx,
-        screen->color.bg_idx
-    );
+    console_text_region_t region = {
+        .fb = console_state.fb,
+        .cols = console_state.cols,
+        .rows = console_state.rows,
+        .fg = screen->color.fg_idx,
+        .bg = screen->color.bg_idx,
+    };
+
+    backend_ops->text_clear(&region);
 }
 
 static void _clear_fb(const console_screen_t *screen) {
@@ -738,13 +763,15 @@ static void _scroll_text(const console_screen_t *screen) {
         return;
     }
 
-    backend_ops->text_scroll_up(
-        console_state.fb,
-        console_state.cols,
-        console_state.rows,
-        screen->color.fg_idx,
-        screen->color.bg_idx
-    );
+    console_text_region_t region = {
+        .fb = console_state.fb,
+        .cols = console_state.cols,
+        .rows = console_state.rows,
+        .fg = screen->color.fg_idx,
+        .bg = screen->color.bg_idx,
+    };
+
+    backend_ops->text_scroll_up(&region);
 }
 
 static void _scroll_fb(const console_screen_t *screen) {
@@ -779,14 +806,14 @@ static void _scroll_fb(const console_screen_t *screen) {
     _maybe_flush_dirty();
 }
 
-static void _draw_char_fb(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32 bg_rgb) {
-    if (!console_state.fb_size || !console_state.font || !console_state.font_width || !console_state.font_height ||
-        !console_state.font_cell_width || !console_state.font_cell_height) {
-        return;
-    }
+static bool _draw_info(u32 codepoint, size_t col, size_t row, console_draw_t *draw) {
+    bool no_fb = !console_state.fb_size;
+    bool no_font = !console_state.font || !console_state.font_width || !console_state.font_height;
+    bool no_cell = !console_state.font_cell_width || !console_state.font_cell_height;
 
-    size_t x = col * console_state.font_cell_width;
-    size_t y = row * console_state.font_cell_height;
+    if (!draw || no_fb || no_font || no_cell) {
+        return false;
+    }
 
     u32 glyph_w = console_state.font_width;
     u32 glyph_h = console_state.font_height;
@@ -811,30 +838,24 @@ static void _draw_char_fb(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32
     }
 
     if (!draw_w || !draw_h) {
-        return;
+        return false;
     }
 
     size_t width_bytes = (size_t)cell_w * console_state.bytes_per_pixel;
-
-    size_t map_size = ((size_t)cell_h - 1) * console_state.pitch + width_bytes;
-
     u32 index = _font_index(codepoint);
-    const u8 *glyph = console_state.font->glyphs + index * console_state.font_glyph_bytes;
 
-    size_t offset = y * console_state.pitch + x * console_state.bytes_per_pixel;
-    u8 *base = NULL;
-
-    if (_has_back_buffer()) {
-        base = console_state.fb_back + offset;
-    } else {
-        base = _map_range(offset, map_size);
-
-        if (!base) {
-            return;
-        }
-    }
-
-    term_pixel_format_t fmt = {
+    draw->x = col * console_state.font_cell_width;
+    draw->y = row * console_state.font_cell_height;
+    draw->map_size = ((size_t)cell_h - 1) * console_state.pitch + width_bytes;
+    draw->cell_w = cell_w;
+    draw->cell_h = cell_h;
+    draw->draw_w = draw_w;
+    draw->draw_h = draw_h;
+    draw->glyph_w = glyph_w;
+    draw->glyph_h = glyph_h;
+    draw->glyph_x0 = glyph_x0;
+    draw->glyph = console_state.font->glyphs + index * console_state.font_glyph_bytes;
+    draw->fmt = (term_pixel_format_t){
         .bytes_per_pixel = console_state.bytes_per_pixel,
         .red_shift = console_state.red_shift,
         .green_shift = console_state.green_shift,
@@ -844,71 +865,95 @@ static void _draw_char_fb(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32
         .blue_size = console_state.blue_size,
     };
 
-    u32 bg_packed_full = pixel_pack_rgb888(
-        bg_rgb,
-        fmt.red_shift,
-        fmt.green_shift,
-        fmt.blue_shift,
-        fmt.red_size,
-        fmt.green_size,
-        fmt.blue_size
-    );
+    return true;
+}
 
-    // always clear the full terminal cell first so no stale pixels survive
-    // around cropped glyph bounds
-    for (u32 by = 0; by < cell_h; by++) {
+static u32 _pack_color(u32 rgb, const term_pixel_format_t *fmt) {
+    pixel_format_t pixel_fmt = {
+        .bytes_per_pixel = fmt->bytes_per_pixel,
+        .red_shift = fmt->red_shift,
+        .green_shift = fmt->green_shift,
+        .blue_shift = fmt->blue_shift,
+        .red_size = fmt->red_size,
+        .green_size = fmt->green_size,
+        .blue_size = fmt->blue_size,
+    };
+
+    return pixel_pack_rgb888(rgb, &pixel_fmt);
+}
+
+static void _clear_cell_pixels(u8 *base, const console_draw_t *draw, u32 bg) {
+    for (u32 by = 0; by < draw->cell_h; by++) {
         u8 *row_base = base + (size_t)by * console_state.pitch;
-        for (u32 bx = 0; bx < cell_w; bx++) {
+
+        for (u32 bx = 0; bx < draw->cell_w; bx++) {
             pixel_store_packed(
                 row_base + (size_t)bx * console_state.bytes_per_pixel,
                 console_state.bytes_per_pixel,
-                bg_packed_full
+                bg
             );
         }
     }
+}
 
-    if (glyph_x0 == 0 && draw_w == glyph_w && draw_h == glyph_h) {
-        term_glyph_blit_packed(
-            base,
-            console_state.pitch,
-            &fmt,
-            glyph,
-            glyph_w,
-            glyph_h,
-            console_state.font_row_bytes,
-            fg_rgb,
-            bg_rgb
-        );
+static void _draw_cropped_glyph(u8 *base, const console_draw_t *draw, u32 fg, u32 bg) {
+    for (u32 gy = 0; gy < draw->draw_h; gy++) {
+        u8 *row_base = base + (size_t)gy * console_state.pitch;
+
+        for (u32 gx = 0; gx < draw->draw_w; gx++) {
+            bool on = _glyph_pixel_on(draw->glyph, console_state.font_row_bytes, draw->glyph_x0 + gx, gy);
+            u8 *pixel = row_base + (size_t)gx * console_state.bytes_per_pixel;
+
+            pixel_store_packed(pixel, console_state.bytes_per_pixel, on ? fg : bg);
+        }
+    }
+}
+
+static void _draw_char_fb(u32 codepoint, size_t col, size_t row, u32 fg_rgb, u32 bg_rgb) {
+    console_draw_t draw = { 0 };
+    if (!_draw_info(codepoint, col, row, &draw)) {
+        return;
+    }
+
+    size_t offset = draw.y * console_state.pitch + draw.x * console_state.bytes_per_pixel;
+    u8 *base = NULL;
+
+    if (_has_back_buffer()) {
+        base = console_state.fb_back + offset;
     } else {
-        u32 fg_packed = pixel_pack_rgb888(
-            fg_rgb,
-            fmt.red_shift,
-            fmt.green_shift,
-            fmt.blue_shift,
-            fmt.red_size,
-            fmt.green_size,
-            fmt.blue_size
-        );
-        for (u32 gy = 0; gy < draw_h; gy++) {
-            u8 *row_base = base + (size_t)gy * console_state.pitch;
+        base = _map_range(offset, draw.map_size);
 
-            for (u32 gx = 0; gx < draw_w; gx++) {
-                bool on = _glyph_pixel_on(glyph, console_state.font_row_bytes, glyph_x0 + gx, gy);
-
-                pixel_store_packed(
-                    row_base + (size_t)gx * console_state.bytes_per_pixel,
-                    console_state.bytes_per_pixel,
-                    on ? fg_packed : bg_packed_full
-                );
-            }
+        if (!base) {
+            return;
         }
     }
 
+    u32 bg = _pack_color(bg_rgb, &draw.fmt);
+
+    // clear the full cell so cropped glyphs do not leave stale pixels
+    _clear_cell_pixels(base, &draw, bg);
+
+    if (draw.glyph_x0 == 0 && draw.draw_w == draw.glyph_w && draw.draw_h == draw.glyph_h) {
+        term_glyph_t glyph = {
+            .bits = draw.glyph,
+            .width = draw.glyph_w,
+            .height = draw.glyph_h,
+            .row_bytes = console_state.font_row_bytes,
+            .fg_rgb = fg_rgb,
+            .bg_rgb = bg_rgb,
+        };
+
+        term_glyph_blit_packed(base, console_state.pitch, &draw.fmt, &glyph);
+    } else {
+        u32 fg = _pack_color(fg_rgb, &draw.fmt);
+        _draw_cropped_glyph(base, &draw, fg, bg);
+    }
+
     if (_has_back_buffer()) {
-        _mark_dirty_rect(x, y, cell_w, cell_h);
+        _mark_dirty_rect(draw.x, draw.y, draw.cell_w, draw.cell_h);
         _maybe_flush_dirty();
     } else {
-        _unmap_range(base, map_size);
+        _unmap_range(base, draw.map_size);
     }
 }
 
@@ -917,7 +962,17 @@ static void _draw_char_text(u32 codepoint, size_t col, size_t row, u8 fg, u8 bg)
         return;
     }
 
-    backend_ops->text_put(console_state.fb, console_state.cols, col, row, codepoint, fg, bg);
+    console_text_cell_t cell = {
+        .fb = console_state.fb,
+        .cols = console_state.cols,
+        .col = col,
+        .row = row,
+        .codepoint = codepoint,
+        .fg = fg,
+        .bg = bg,
+    };
+
+    backend_ops->text_put(&cell);
 }
 
 static void _cursor_hide(void) {
@@ -1119,7 +1174,7 @@ static void _handle_csi_clear(void *opaque, int mode) {
     _cursor_show(index);
 }
 
-static void _handle_csi_clear_line(void *opaque, int mode) {
+static void clear_line_csi(void *opaque, int mode) {
     console_ansi_ctx_t *ctx = opaque;
     if (!ctx || !ctx->screen) {
         return;
@@ -1248,14 +1303,14 @@ bool console_set_active(size_t index) {
     } else if (
         console_state.mode == CONSOLE_TEXT && screen_changed && previous == TTY_CONSOLE && _screen_is_blank(index)
     ) {
-        _inherit_screen_state(index, previous);
-        console_state.handoff_refresh_pending = false;
-    } else if (screen_changed || console_state.handoff_refresh_pending) {
+        inherit_state(index, previous);
+        console_state.handoff_redraw = false;
+    } else if (screen_changed || console_state.handoff_redraw) {
         // ensure the first tty-facing activation cannot inherit stale pixels
         console_state.cursor_drawn = false;
         console_state.dirty = false;
         _redraw_screen(index);
-        console_state.handoff_refresh_pending = false;
+        console_state.handoff_redraw = false;
     }
 
     spin_unlock_irqrestore(&console_state.lock, irq_flags);
@@ -1308,6 +1363,37 @@ static size_t _next_tab_stop(size_t cursor_x) {
     return next < console_state.cols ? next : console_state.cols;
 }
 
+static void _draw_cell(u32 ch, size_t col, size_t row, u8 fg, u8 bg) {
+    if (console_state.mode == CONSOLE_TEXT) {
+        _draw_char_text(ch, col, row, fg, bg);
+        return;
+    }
+
+    if (console_state.mode == CONSOLE_FRAMEBUFFER) {
+        _draw_char_fb(ch, col, row, ansi_color_rgb(fg), ansi_color_rgb(bg));
+    }
+}
+
+static void _store_cell(size_t screen_index, size_t col, size_t row, u32 ch, u8 fg, u8 bg) {
+    console_cell_t *cells = _screen_cells(screen_index);
+    if (!cells) {
+        return;
+    }
+
+    console_cell_t *cell = &cells[row * console_state.cols + col];
+    cell->codepoint = ch;
+    cell->fg = fg;
+    cell->bg = bg;
+}
+
+static void _put_cell(size_t screen_index, size_t col, size_t row, u32 ch, u8 fg, u8 bg) {
+    _store_cell(screen_index, col, row, ch, fg, bg);
+
+    if (screen_index == console_state.active_screen) {
+        _draw_cell(ch, col, row, fg, bg);
+    }
+}
+
 static void _putc(console_screen_t *screen, size_t screen_index, u32 ch) {
     if (!screen || !console_state.ready || console_state.mode == CONSOLE_DISABLED) {
         return;
@@ -1350,27 +1436,7 @@ static void _putc(console_screen_t *screen, size_t screen_index, u32 ch) {
 
             size_t col = screen->cursor_x;
             size_t row = screen->cursor_y;
-
-            console_cell_t *cells = _screen_cells(screen_index);
-
-            if (cells) {
-                console_cell_t *cell = &cells[row * console_state.cols + col];
-                term_cell_set_blank(cell, screen->color.fg_idx, screen->color.bg_idx);
-            }
-
-            if (screen_index == console_state.active_screen) {
-                if (console_state.mode == CONSOLE_TEXT) {
-                    _draw_char_text(' ', col, row, screen->color.fg_idx, screen->color.bg_idx);
-                } else if (console_state.mode == CONSOLE_FRAMEBUFFER) {
-                    _draw_char_fb(
-                        ' ',
-                        col,
-                        row,
-                        ansi_color_rgb(screen->color.fg_idx),
-                        ansi_color_rgb(screen->color.bg_idx)
-                    );
-                }
-            }
+            _put_cell(screen_index, col, row, ' ', screen->color.fg_idx, screen->color.bg_idx);
         }
 
         _cursor_show(screen_index);
@@ -1389,29 +1455,14 @@ static void _putc(console_screen_t *screen, size_t screen_index, u32 ch) {
     size_t col = screen->cursor_x;
     size_t row = screen->cursor_y;
 
-    console_cell_t *cells = _screen_cells(screen_index);
-
-    if (cells) {
-        console_cell_t *cell = &cells[row * console_state.cols + col];
-        cell->codepoint = ch;
-        cell->fg = screen->color.fg_idx;
-        cell->bg = screen->color.bg_idx;
-    }
-
-    if (screen_index == console_state.active_screen) {
-        if (console_state.mode == CONSOLE_TEXT) {
-            _draw_char_text(ch, col, row, screen->color.fg_idx, screen->color.bg_idx);
-        } else if (console_state.mode == CONSOLE_FRAMEBUFFER) {
-            _draw_char_fb(ch, col, row, ansi_color_rgb(screen->color.fg_idx), ansi_color_rgb(screen->color.bg_idx));
-        }
-    }
+    _put_cell(screen_index, col, row, ch, screen->color.fg_idx, screen->color.bg_idx);
 
     screen->cursor_x++;
 
     _cursor_show(screen_index);
 }
 
-static void _utf8_emit_codepoint(void *opaque, u32 codepoint) {
+static void emit_codepoint(void *opaque, u32 codepoint) {
     console_ansi_ctx_t *ctx = opaque;
     if (!ctx || !ctx->screen) {
         return;
@@ -1430,7 +1481,7 @@ static void _utf8_emit_invalid(void *opaque) {
 }
 
 static const term_utf8_callbacks_t _utf8_callbacks = {
-    .on_codepoint = _utf8_emit_codepoint,
+    .on_codepoint = emit_codepoint,
     .on_invalid = _utf8_emit_invalid,
 };
 
@@ -1461,7 +1512,7 @@ static void _ansi_control(void *opaque, u8 ch) {
     _putc(ctx->screen, ctx->screen_index, ch);
 }
 
-static void _ansi_csi_cursor_show(void *opaque) {
+static void cursor_show(void *opaque) {
     console_ansi_ctx_t *ctx = opaque;
     if (!ctx || !ctx->screen) {
         return;
@@ -1470,7 +1521,7 @@ static void _ansi_csi_cursor_show(void *opaque) {
     _cursor_show(ctx->screen_index);
 }
 
-static void _ansi_csi_cursor_hide(void *opaque) {
+static void cursor_hide(void *opaque) {
     console_ansi_ctx_t *ctx = opaque;
     if (!ctx || !ctx->screen) {
         return;
@@ -1496,9 +1547,9 @@ static void _ansi_csi(void *opaque, char op, const int *params, size_t count, bo
         .rows = console_state.rows,
         .color = &ctx->screen->color,
         .clear_screen = _handle_csi_clear,
-        .clear_line = _handle_csi_clear_line,
-        .cursor_show = _ansi_csi_cursor_show,
-        .cursor_hide = _ansi_csi_cursor_hide,
+        .clear_line = clear_line_csi,
+        .cursor_show = cursor_show,
+        .cursor_hide = cursor_hide,
         .ctx = ctx,
     };
 
@@ -1512,8 +1563,12 @@ static const ansi_callbacks_t _ansi_callbacks = {
     .on_escape = NULL,
 };
 
-static void _write_screen_locked(size_t screen_index, const char *buf, size_t len) {
-    if (!buf || !len || !console_state.ready || console_state.mode == CONSOLE_DISABLED) {
+static void write_locked(size_t screen_index, const char *buf, size_t len) {
+    if (!buf || !len) {
+        return;
+    }
+
+    if (!console_state.ready || console_state.mode == CONSOLE_DISABLED) {
         return;
     }
 
@@ -1522,22 +1577,22 @@ static void _write_screen_locked(size_t screen_index, const char *buf, size_t le
         return;
     }
 
-    // until a font-backed text grid exists, ignore screen writes. Boot logs are
-    // still preserved in arch log history and replayed once the grid is ready
+    // until a font-backed text grid exists, ignore screen writes
+    // boot logs are replayed from arch log history once the grid is ready
     if (!console_state.cols || !console_state.rows) {
         return;
     }
 
-    bool post_handoff_refresh = false;
+    bool post_redraw = false;
 
-    if (screen_index == console_state.active_screen && console_state.handoff_refresh_pending &&
+    if (screen_index == console_state.active_screen && console_state.handoff_redraw &&
         !(console_state.fb_owned && screen_index == console_state.fb_owner_screen)) {
         // post-handoff first write: force a full repaint before incremental draws
         console_state.cursor_drawn = false;
         console_state.dirty = false;
         _redraw_screen(screen_index);
         // keep pending set until we also repaint once after the write batch
-        post_handoff_refresh = true;
+        post_redraw = true;
     }
 
     bool batch_cursor = (screen_index == console_state.active_screen);
@@ -1577,30 +1632,34 @@ static void _write_screen_locked(size_t screen_index, const char *buf, size_t le
         _cursor_show(screen_index);
     }
 
-    if (post_handoff_refresh) {
+    if (post_redraw) {
         // one more full repaint after the first write batch ensures no
         // incremental-path artifact survives (same effect as tty switch+back)
         console_state.cursor_drawn = false;
         console_state.dirty = false;
         _redraw_screen(screen_index);
-        console_state.handoff_refresh_pending = false;
+        console_state.handoff_redraw = false;
     }
 }
 
-static void _clamp_screen_positions(console_screen_t *screen, size_t cols, size_t rows) {
+static void clamp_positions(console_screen_t *screen, size_t cols, size_t rows) {
     if (!screen) {
         return;
     }
 
-    term_cursor_clamp(
-        &screen->cursor_x,
-        &screen->cursor_y,
-        &screen->saved_cursor_x,
-        &screen->saved_cursor_y,
-        &screen->saved_cursor_valid,
-        cols,
-        rows
-    );
+    term_cursor_t cursor = {
+        .x = &screen->cursor_x,
+        .y = &screen->cursor_y,
+        .cols = cols,
+        .rows = rows,
+    };
+    term_saved_cursor_t saved = {
+        .x = &screen->saved_cursor_x,
+        .y = &screen->saved_cursor_y,
+        .valid = &screen->saved_cursor_valid,
+    };
+
+    term_cursor_clamp(&cursor, &saved);
 }
 
 static void _preserve_screens(
@@ -1627,13 +1686,17 @@ static void _preserve_screens(
         const console_screen_t *src_screen = &old_screens[i];
 
         *dst_screen = *src_screen;
-        _clamp_screen_positions(dst_screen, new_cols, new_rows);
+        clamp_positions(dst_screen, new_cols, new_rows);
 
         if (dst_screen->utf8.pending_len > sizeof(dst_screen->utf8.pending)) {
             term_utf8_reset(&dst_screen->utf8);
         }
 
-        if (!old_cells || !console_state.cells || !copy_cols || !copy_rows || !old_stride || !new_stride) {
+        bool have_cells = old_cells && console_state.cells;
+        bool have_copy_size = copy_cols && copy_rows;
+        bool have_stride = old_stride && new_stride;
+
+        if (!have_cells || !have_copy_size || !have_stride) {
             continue;
         }
 
@@ -1707,7 +1770,7 @@ static void _init_screens(size_t active_screen) {
 
     for (size_t i = 0; i < console_state.screen_count; i++) {
         _screen_reset(&console_state.screens[i]);
-        _clear_screen_buffer(i);
+        clear_buffer(i);
     }
 }
 
@@ -1810,15 +1873,15 @@ void console_init(void *arch_boot_info) {
     console_state.blue_size = hw.blue_size;
 
     if (console_state.mode == CONSOLE_FRAMEBUFFER) {
-        pixel_fill_rgb_defaults(
-            console_state.bytes_per_pixel,
-            &console_state.red_shift,
-            &console_state.green_shift,
-            &console_state.blue_shift,
-            &console_state.red_size,
-            &console_state.green_size,
-            &console_state.blue_size
-        );
+        pixel_format_t fmt = _console_pixel_format();
+        pixel_fill_rgb_defaults(&fmt);
+
+        console_state.red_shift = fmt.red_shift;
+        console_state.green_shift = fmt.green_shift;
+        console_state.blue_shift = fmt.blue_shift;
+        console_state.red_size = fmt.red_size;
+        console_state.green_size = fmt.green_size;
+        console_state.blue_size = fmt.blue_size;
 
         if (console_state.font_width && console_state.font_height) {
             console_state.cols = console_state.width / console_state.font_cell_width;
@@ -1839,7 +1902,7 @@ void console_init(void *arch_boot_info) {
     }
 
     console_state.ready = true;
-    console_state.handoff_refresh_pending = true;
+    console_state.handoff_redraw = true;
     _init_screens(TTY_CONSOLE);
     _redraw_screen(console_state.active_screen);
 }
@@ -1870,23 +1933,23 @@ ssize_t console_write_screen(size_t screen, const void *buf, size_t len) {
     if (_stream_passthrough(screen)) {
         const console_backend_ops_t *ops = backend_ops;
 
-        if (ops->set_output_suppressed) {
-            ops->set_output_suppressed(true);
+        if (ops->suppress_output) {
+            ops->suppress_output(true);
         }
 
-        _write_screen_locked(screen, buf, len);
+        write_locked(screen, buf, len);
 
-        if (ops->set_output_suppressed) {
-            ops->set_output_suppressed(false);
+        if (ops->suppress_output) {
+            ops->suppress_output(false);
         }
 
         spin_unlock_irqrestore(&console_state.lock, flags);
 
-        ssize_t ret = ops->stream_write(buf, len);
-        return ret < 0 ? ret : (ssize_t)len;
+        ssize_t bytes = ops->stream_write(buf, len);
+        return bytes < 0 ? bytes : (ssize_t)len;
     }
 
-    _write_screen_locked(screen, buf, len);
+    write_locked(screen, buf, len);
     spin_unlock_irqrestore(&console_state.lock, flags);
 
     return (ssize_t)len;
@@ -1968,7 +2031,7 @@ int console_fb_release(pid_t pid) {
     console_state.fb_owner = 0;
     console_state.fb_owner_screen = TTY_CONSOLE;
     console_state.dirty = false;
-    console_state.handoff_refresh_pending = true;
+    console_state.handoff_redraw = true;
 
     _redraw_screen(console_state.active_screen);
 
@@ -1983,7 +2046,10 @@ ssize_t console_fb_owner_screen(void) {
 
     unsigned long irq_flags = spin_lock_irqsave(&console_state.lock);
 
-    ssize_t owner_screen = console_state.fb_owned ? (ssize_t)console_state.fb_owner_screen : TTY_NONE;
+    ssize_t owner_screen = TTY_NONE;
+    if (console_state.fb_owned) {
+        owner_screen = (ssize_t)console_state.fb_owner_screen;
+    }
 
     spin_unlock_irqrestore(&console_state.lock, irq_flags);
 

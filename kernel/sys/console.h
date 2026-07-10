@@ -28,16 +28,34 @@ typedef struct {
     u8 blue_size;
 } console_hw_desc_t;
 
+typedef struct {
+    u8 *fb;
+    size_t cols;
+    size_t col;
+    size_t row;
+    u32 codepoint;
+    u8 fg;
+    u8 bg;
+} console_text_cell_t;
+
+typedef struct {
+    u8 *fb;
+    size_t cols;
+    size_t rows;
+    u8 fg;
+    u8 bg;
+} console_text_region_t;
+
 typedef struct console_backend_ops {
     bool (*probe)(void *arch_boot_info, console_hw_desc_t *out);
     u8 *(*fb_map)(size_t offset, size_t size);
     void (*fb_unmap)(void *ptr, size_t size);
-    void (*set_output_suppressed)(bool suppressed);
+    void (*suppress_output)(bool suppressed);
     ssize_t (*stream_write)(const void *buf, size_t len);
     void (*text_cursor_set)(size_t col, size_t row);
-    void (*text_put)(u8 *fb, size_t cols, size_t col, size_t row, u32 codepoint, u8 fg, u8 bg);
-    void (*text_clear)(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg);
-    void (*text_scroll_up)(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg);
+    void (*text_put)(const console_text_cell_t *cell);
+    void (*text_clear)(const console_text_region_t *region);
+    void (*text_scroll_up)(const console_text_region_t *region);
 } console_backend_ops_t;
 
 
@@ -57,4 +75,4 @@ ssize_t console_fb_owner_screen(void);
 
 void console_panic(void);
 
-void console_backend_register(const console_backend_ops_t *ops);
+void console_set_backend(const console_backend_ops_t *ops);

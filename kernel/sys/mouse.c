@@ -83,11 +83,11 @@ static ssize_t mouse_read(vfs_node_t *node, void *buf, size_t offset, size_t len
         }
 
         sched_thread_t *current = sched_current();
-        if (current && sched_signal_has_pending(current)) {
+        if (current && sched_signal_pending(current)) {
             return -EINTR;
         }
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(&mouse_state.wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
+        sched_wait_result_t wait_result = sched_wait_on(&mouse_state.wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;
         }
@@ -131,7 +131,7 @@ void mouse_handle_event(mouse_event event) {
 
     if (mouse_state.buffer) {
         unsigned long irq_flags = spin_lock_irqsave(&mouse_state.lock);
-        ring_buffer_push_array(mouse_state.buffer, (u8 *)&event, sizeof(event));
+        ring_buffer_push_record(mouse_state.buffer, &event, sizeof(event));
         spin_unlock_irqrestore(&mouse_state.lock, irq_flags);
         sched_wake_one(&mouse_state.wait);
     }
@@ -196,7 +196,7 @@ bool mouse_init(void) {
     }
 
     if (!mouse_state.wait.list) {
-        sched_wait_queue_init(&mouse_state.wait);
+        sched_waitq_init(&mouse_state.wait);
         sched_waitq_set_poll(&mouse_state.wait, true);
     }
 

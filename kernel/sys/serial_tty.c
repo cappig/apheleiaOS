@@ -11,7 +11,7 @@ void serial_tty_init(serial_tty_t *tty) {
         return;
     }
 
-    __termios_default_init(&tty->termios);
+    termios_init_default(&tty->termios);
 
     tty->winsize.ws_col = 80;
     tty->winsize.ws_row = 25;
@@ -112,13 +112,13 @@ static int set_pgrp(serial_tty_t *tty, void *args) {
         return -EINVAL;
     }
 
-    pid_t requested = 0;
+    pid_t pgid = 0;
     sched_thread_t *current = sched_current();
-    if (!user_copy_from(current, &requested, args, sizeof(requested))) {
+    if (!user_copy_from(current, &pgid, args, sizeof(pgid))) {
         return -EFAULT;
     }
 
-    if (requested <= 0) {
+    if (pgid <= 0) {
         return -EINVAL;
     }
 
@@ -126,12 +126,12 @@ static int set_pgrp(serial_tty_t *tty, void *args) {
         return -EPERM;
     }
 
-    if (!sched_pgrp_in_session(requested, current->sid)) {
+    if (!sched_pgrp_in_session(pgid, current->sid)) {
         return -EPERM;
     }
 
     unsigned long flags = spin_lock_irqsave(&tty->lock);
-    tty->pgrp = requested;
+    tty->pgrp = pgid;
     spin_unlock_irqrestore(&tty->lock, flags);
 
     return 0;

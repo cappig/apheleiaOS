@@ -1,4 +1,5 @@
 #include <arch/arch.h>
+#include <limits.h>
 #include <string.h>
 #include <sys/console.h>
 #include <x86/asm.h>
@@ -32,6 +33,10 @@ static bool _x86_console_probe(void *arch_boot_info, console_hw_desc_t *out) {
 
         if (!pitch) {
             pitch = info->video.width * info->video.bytes_per_pixel;
+        }
+
+        if (!pitch || (size_t)pitch > SIZE_MAX / (size_t)info->video.height) {
+            return false;
         }
 
         size_t size = (size_t)pitch * (size_t)info->video.height;
@@ -143,7 +148,7 @@ static void _x86_fb_unmap(void *ptr, size_t size) {
     (void)size;
 }
 
-static void _x86_text_cursor_set(size_t col, size_t row) {
+static void _text_cursor_set(size_t col, size_t row) {
     u16 pos = (u16)(row * VGA_WIDTH + col);
 
     outb(0x3d4, 0x0f);
@@ -158,43 +163,42 @@ static u16 _x86_text_cell(u32 codepoint, u8 fg, u8 bg) {
     return ((u16)attr << 8) | ch;
 }
 
-static void _x86_text_put(u8 *fb, size_t cols, size_t col, size_t row, u32 codepoint, u8 fg, u8 bg) {
-    if (!fb) {
+static void _x86_text_put(const console_text_cell_t *cell) {
+    if (!cell || !cell->fb) {
         return;
     }
 
-    u16 *text = (u16 *)fb;
-    text[row * cols + col] = _x86_text_cell(codepoint, fg, bg);
+    u16 *text = (u16 *)cell->fb;
+    text[cell->row * cell->cols + cell->col] = _x86_text_cell(cell->codepoint, cell->fg, cell->bg);
 }
 
-static void _x86_text_clear(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
-    if (!fb) {
+static void _x86_text_clear(const console_text_region_t *region) {
+    if (!region || !region->fb) {
         return;
     }
 
-    u16 *text = (u16 *)fb;
-    u16 blank_cell = _x86_text_cell(' ', fg, bg);
-    size_t count = cols * rows;
+    u16 *text = (u16 *)region->fb;
+    u16 blank_cell = _x86_text_cell(' ', region->fg, region->bg);
+    size_t count = region->cols * region->rows;
 
     for (size_t i = 0; i < count; i++) {
         text[i] = blank_cell;
     }
 }
 
-static void _x86_text_scroll_up(u8 *fb, size_t cols, size_t rows, u8 fg, u8 bg) {
-    if (!fb || !cols || !rows) {
+static void _x86_text_scroll_up(const console_text_region_t *region) {
+    if (!region || !region->fb || !region->cols || !region->rows) {
         return;
     }
 
-    u16 *text = (u16 *)fb;
-    u16 blank_cell = _x86_text_cell(' ', fg, bg);
+    u16 *text = (u16 *)region->fb;
+    u16 blank_cell = _x86_text_cell(' ', region->fg, region->bg);
+    size_t last_row = region->rows - 1;
 
-    memmove(text, text + cols, (rows - 1) * cols * sizeof(*text));
+    memmove(text, text + region->cols, last_row * region->cols * sizeof(*text));
 
-    size_t last_row = rows - 1;
-
-    for (size_t col = 0; col < cols; col++) {
-        text[last_row * cols + col] = blank_cell;
+    for (size_t col = 0; col < region->cols; col++) {
+        text[last_row * region->cols + col] = blank_cell;
     }
 }
 
@@ -202,12 +206,12 @@ static const console_backend_ops_t x86_console_ops = {
     .probe = _x86_console_probe,
     .fb_map = _x86_fb_map,
     .fb_unmap = _x86_fb_unmap,
-    .text_cursor_set = _x86_text_cursor_set,
+    .text_cursor_set = _text_cursor_set,
     .text_put = _x86_text_put,
     .text_clear = _x86_text_clear,
     .text_scroll_up = _x86_text_scroll_up,
 };
 
-void x86_console_backend_init(void) {
-    console_backend_register(&x86_console_ops);
+void x86_console_init(void) {
+    console_set_backend(&x86_console_ops);
 }

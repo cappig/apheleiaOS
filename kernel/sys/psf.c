@@ -27,7 +27,7 @@ typedef struct {
 
 static psf_loaded_font_t current_font = { 0 };
 
-static void _discard_loaded_font(void) {
+static void discard_font(void) {
     if (current_font.blob) {
         free(current_font.blob);
     }
@@ -146,7 +146,7 @@ bool psf_load(const char *path) {
         return false;
     }
 
-    if (!psf_iter_unicode_mappings(&blob_info, _collect_font_map, &map)) {
+    if (!psf_each_unicode(&blob_info, _collect_font_map, &map)) {
         free(blob);
         if (map.items) {
             free(map.items);
@@ -162,7 +162,7 @@ bool psf_load(const char *path) {
         .first_char = 0,
     };
 
-    _discard_loaded_font();
+    discard_font();
 
     current_font.blob = blob;
     current_font.font = parsed;
@@ -186,7 +186,9 @@ bool psf_load(const char *path) {
 void psf_load_boot_font(const char *path) {
     size_t text_cols = 0;
     size_t text_rows = 0;
-    bool had_text_grid = console_get_size(&text_cols, &text_rows) && text_cols && text_rows;
+    bool got_text_grid = console_get_size(&text_cols, &text_rows);
+    bool text_grid_size = text_cols && text_rows;
+    bool had_text_grid = got_text_grid && text_grid_size;
 
     if (!path || !path[0]) {
         return;

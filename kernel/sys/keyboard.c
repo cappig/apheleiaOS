@@ -155,11 +155,11 @@ static ssize_t keyboard_read(vfs_node_t *node, void *buf, size_t offset, size_t 
         }
 
         sched_thread_t *current = sched_current();
-        if (current && sched_signal_has_pending(current)) {
+        if (current && sched_signal_pending(current)) {
             return -EINTR;
         }
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(&keyboard.wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
+        sched_wait_result_t wait_result = sched_wait_on(&keyboard.wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;
         }
@@ -204,7 +204,7 @@ void keyboard_handle_key(key_event event) {
 
     bool action = (event.type & KEY_ACTION) != 0;
     unsigned long irq_flags = spin_lock_irqsave(&keyboard.lock);
-    ring_buffer_push_array(keyboard.buffer, (u8 *)&event, sizeof(event));
+    ring_buffer_push_record(keyboard.buffer, &event, sizeof(event));
     spin_unlock_irqrestore(&keyboard.lock, irq_flags);
     sched_wake_one(&keyboard.wait);
 
@@ -258,7 +258,7 @@ void keyboard_handle_key(key_event event) {
     tty_input_push(ch);
 }
 
-static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
+static bool register_devfs(vfs_node_t *dev_dir) {
     if (!dev_dir) {
         return false;
     }
@@ -294,7 +294,7 @@ static bool keyboard_register_devfs(vfs_node_t *dev_dir) {
 }
 
 bool keyboard_init(void) {
-    if (!devfs_register_device("keyboard", keyboard_register_devfs)) {
+    if (!devfs_register_device("keyboard", register_devfs)) {
         log_warn("failed to register devfs init callback");
     }
 
@@ -315,7 +315,7 @@ bool keyboard_init(void) {
     }
 
     if (!keyboard.wait.list) {
-        sched_wait_queue_init(&keyboard.wait);
+        sched_waitq_init(&keyboard.wait);
         sched_waitq_set_poll(&keyboard.wait, true);
     }
 
