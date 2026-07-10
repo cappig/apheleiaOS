@@ -84,7 +84,7 @@ off_t lseek(int fd, off_t offset, int whence) {
     return SYSCALL_RET(off_t, syscall3(SYS_LSEEK, (uintptr_t)fd, (uintptr_t)offset, (uintptr_t)whence));
 }
 
-static int _read_proc_value_path(const char *path, long long *out) {
+static int _read_proc_value(const char *path, long long *out) {
     if (!path || !out) {
         errno = EINVAL;
         return -1;
@@ -118,7 +118,7 @@ static int _read_proc_value_path(const char *path, long long *out) {
     return 0;
 }
 
-static int _write_proc_value_path(const char *path, long long value) {
+static int _write_proc_value(const char *path, long long value) {
     if (!path) {
         errno = EINVAL;
         return -1;
@@ -157,11 +157,11 @@ static int _write_proc_value_path(const char *path, long long value) {
 
 mode_t umask(mode_t mask) {
     long long old = 0;
-    if (_read_proc_value_path("/proc/self/umask", &old) < 0) {
+    if (_read_proc_value("/proc/self/umask", &old) < 0) {
         return (mode_t)-1;
     }
 
-    if (_write_proc_value_path("/proc/self/umask", (long long)(mask & 0777)) < 0) {
+    if (_write_proc_value("/proc/self/umask", (long long)(mask & 0777)) < 0) {
         return (mode_t)-1;
     }
 
@@ -415,7 +415,8 @@ int fsync(int fd) {
         return -1;
     }
 
-    return 0;
+    errno = ENOSYS;
+    return -1;
 }
 
 int fdatasync(int fd) {
@@ -471,16 +472,16 @@ int execvp(const char *file, char *const argv[]) {
         const char *separator = strchr(segment, ':');
         size_t segment_len = separator ? (size_t)(separator - segment) : strlen(segment);
 
-        char candidate[PATH_MAX];
+        char full_path[PATH_MAX];
         int n = 0;
         if (!segment_len) {
-            n = snprintf(candidate, sizeof(candidate), "./%s", file);
+            n = snprintf(full_path, sizeof(full_path), "./%s", file);
         } else {
-            n = snprintf(candidate, sizeof(candidate), "%.*s/%s", (int)segment_len, segment, file);
+            n = snprintf(full_path, sizeof(full_path), "%.*s/%s", (int)segment_len, segment, file);
         }
 
-        if (n > 0 && (size_t)n < sizeof(candidate)) {
-            execve(candidate, argv, environ);
+        if (n > 0 && (size_t)n < sizeof(full_path)) {
+            execve(full_path, argv, environ);
             if (errno != ENOENT && errno != ENOTDIR) {
                 last_error = errno;
             }
@@ -560,16 +561,16 @@ int setpgid(pid_t pid, pid_t pgid) {
     }
 
     if (!pid) {
-        return _write_proc_value_path("/proc/self/pgid", (long long)pgid);
+        return _write_proc_value("/proc/self/pgid", (long long)pgid);
     }
 
     char path[48];
     snprintf(path, sizeof(path), "/proc/%lld/pgid", (long long)pid);
-    return _write_proc_value_path(path, (long long)pgid);
+    return _write_proc_value(path, (long long)pgid);
 }
 
 pid_t setsid(void) {
-    if (_write_proc_value_path("/proc/self/sid", 1) < 0) {
+    if (_write_proc_value("/proc/self/sid", 1) < 0) {
         return -1;
     }
 
@@ -600,11 +601,11 @@ gid_t getgid(void) {
 }
 
 int setuid(uid_t uid) {
-    return _write_proc_value_path("/proc/self/uid", (long long)uid);
+    return _write_proc_value("/proc/self/uid", (long long)uid);
 }
 
 int setgid(gid_t gid) {
-    return _write_proc_value_path("/proc/self/gid", (long long)gid);
+    return _write_proc_value("/proc/self/gid", (long long)gid);
 }
 
 int getgroups(int size, gid_t list[]) {
