@@ -16,8 +16,8 @@ void pty_init(void);
 
 bool pty_reserve(size_t *index_out);
 void pty_unreserve(size_t index);
-void pty_hold(size_t index);
-void pty_put(size_t index);
+void pty_hold(size_t index, bool master);
+void pty_put(size_t index, bool master);
 
 ssize_t pty_read_handle(const pty_handle_t *handle, void *buf, size_t len, u32 flags);
 ssize_t pty_write_handle(const pty_handle_t *handle, const void *buf, size_t len, u32 flags);

@@ -5,7 +5,6 @@
 #include <data/vector.h>
 #include <errno.h>
 #include <gui/input.h>
-#include <inttypes.h>
 #include <limits.h>
 #include <log/log.h>
 #include <sched/scheduler.h>
@@ -55,7 +54,7 @@ typedef struct {
     u32 io_refs;
     bool pending_free;
 
-    bool pending_notify_manager;
+    bool notify_mgr_pending;
     bool pending_ev_wake;
 
     bool mgr_dirty_pending;
@@ -87,12 +86,41 @@ typedef struct {
     mutex_t lock;
 } ws_state_t;
 
+typedef struct {
+    u32 x;
+    u32 y;
+    u32 width;
+    u32 height;
+} ws_rect_t;
+
+typedef struct {
+    u32 id;
+    pid_t pid;
+    void *buf;
+    size_t offset;
+    size_t len;
+    u32 flags;
+} ws_io_t;
+
+typedef struct {
+    void *buf;
+    size_t offset;
+    size_t len;
+    u32 view_height;
+    u32 view_stride;
+    bool write;
+} ws_copy_t;
+
 static ws_state_t ws_state = {
     .lock = MUTEX_INIT,
 };
 
 static inline bool _event_is_lossy(const ws_input_event_t *event) {
-    return event && (event->type == INPUT_EVENT_MOUSE_MOVE || event->type == INPUT_EVENT_MOUSE_WHEEL);
+    if (!event) {
+        return false;
+    }
+
+    return event->type == INPUT_EVENT_MOUSE_MOVE || event->type == INPUT_EVENT_MOUSE_WHEEL;
 }
 
 static u32 _rect_end(u32 start, u32 size) {
@@ -160,7 +188,7 @@ static void _window_slot_reinit(ws_window_t *window) {
     window->id = id;
     window->ev_wait.list = ev_wait_list;
     mutex_init(&window->fb_io_lock);
-    sched_wait_queue_init(&window->ev_wait);
+    sched_waitq_init(&window->ev_wait);
     sched_waitq_set_poll(&window->ev_wait, true);
 }
 
@@ -183,13 +211,13 @@ static ws_window_t *_window_slot(u32 id) {
     return (ws_window_t *)vec_at_ptr(ws_state.windows, id);
 }
 
-static void _flush_deferred_wakes(void) {
+static void flush_wakes(void) {
     vector_t *window_wakes = vec_create(sizeof(sched_wait_queue_t *));
 
     for (;;) {
         bool wake_manager = false;
-        bool have_single_window_wake = false;
-        sched_wait_queue_t *single_window_wake = NULL;
+        bool have_one_wake = false;
+        sched_wait_queue_t *one_wake = NULL;
 
         if (window_wakes) {
             vec_clear(window_wakes);
@@ -222,8 +250,8 @@ static void _flush_deferred_wakes(void) {
                 }
 
                 window->pending_ev_wake = false;
-                single_window_wake = &window->ev_wait;
-                have_single_window_wake = true;
+                one_wake = &window->ev_wait;
+                have_one_wake = true;
                 break;
             }
         }
@@ -231,7 +259,7 @@ static void _flush_deferred_wakes(void) {
         mutex_unlock(&ws_state.lock);
 
         size_t wake_count = window_wakes ? window_wakes->size : 0;
-        if (!wake_manager && !wake_count && !have_single_window_wake) {
+        if (!wake_manager && !wake_count && !have_one_wake) {
             vec_destroy(window_wakes);
             return;
         }
@@ -248,8 +276,8 @@ static void _flush_deferred_wakes(void) {
             }
         }
 
-        if (have_single_window_wake && single_window_wake) {
-            sched_wake_all(single_window_wake);
+        if (have_one_wake && one_wake) {
+            sched_wake_all(one_wake);
         }
     }
 }
@@ -300,7 +328,7 @@ static bool _windows_reserve(size_t needed) {
                 if (slot && *slot) {
                     ring_queue_destroy((*slot)->ev_queue);
                     free((*slot)->fb);
-                    sched_wait_queue_destroy(&(*slot)->ev_wait);
+                    sched_waitq_destroy(&(*slot)->ev_wait);
                     free(*slot);
                     *slot = NULL;
                 }
@@ -317,13 +345,13 @@ static bool _windows_reserve(size_t needed) {
                 if (slot && *slot) {
                     ring_queue_destroy((*slot)->ev_queue);
                     free((*slot)->fb);
-                    sched_wait_queue_destroy(&(*slot)->ev_wait);
+                    sched_waitq_destroy(&(*slot)->ev_wait);
                     free(*slot);
                     *slot = NULL;
                 }
             }
 
-            sched_wait_queue_destroy(&window->ev_wait);
+            sched_waitq_destroy(&window->ev_wait);
             free(window);
 
             vec_resize(ws_state.windows, old_count);
@@ -380,30 +408,30 @@ static bool _mgr_queue_push(const ws_event_t *event) {
     return true;
 }
 
-static void _dirty_merge(ws_window_t *window, u32 x, u32 y, u32 width, u32 height) {
-    if (!window || !width || !height) {
+static void _dirty_merge(ws_window_t *window, const ws_rect_t *rect) {
+    if (!window || !rect || !rect->width || !rect->height) {
         return;
     }
 
     // the manager only needs one dirty event; keep folding the damage into it
     if (!window->mgr_dirty_pending || !window->mgr_dirty_width || !window->mgr_dirty_height) {
         window->mgr_dirty_pending = true;
-        window->mgr_dirty_x = x;
-        window->mgr_dirty_y = y;
-        window->mgr_dirty_width = width;
-        window->mgr_dirty_height = height;
+        window->mgr_dirty_x = rect->x;
+        window->mgr_dirty_y = rect->y;
+        window->mgr_dirty_width = rect->width;
+        window->mgr_dirty_height = rect->height;
         return;
     }
 
-    u32 x0 = window->mgr_dirty_x < x ? window->mgr_dirty_x : x;
-    u32 y0 = window->mgr_dirty_y < y ? window->mgr_dirty_y : y;
+    u32 x0 = window->mgr_dirty_x < rect->x ? window->mgr_dirty_x : rect->x;
+    u32 y0 = window->mgr_dirty_y < rect->y ? window->mgr_dirty_y : rect->y;
 
     u32 dx = _rect_end(window->mgr_dirty_x, window->mgr_dirty_width);
-    u32 new_dx = _rect_end(x, width);
+    u32 new_dx = _rect_end(rect->x, rect->width);
     u32 x1 = dx > new_dx ? dx : new_dx;
 
     u32 dy = _rect_end(window->mgr_dirty_y, window->mgr_dirty_height);
-    u32 new_dy = _rect_end(y, height);
+    u32 new_dy = _rect_end(rect->y, rect->height);
     u32 y1 = dy > new_dy ? dy : new_dy;
 
     window->mgr_dirty_x = x0;
@@ -477,7 +505,7 @@ static bool _window_ev_push(ws_window_t *window, const ws_input_event_t *event) 
     return true;
 }
 
-static void _queue_manager_event(u32 type, u32 id, const ws_window_t *window) {
+static void queue_mgr_event(u32 type, u32 id, const ws_window_t *window) {
     if (!ws_state.manager_pid) {
         return;
     }
@@ -505,31 +533,31 @@ static void _queue_manager_event(u32 type, u32 id, const ws_window_t *window) {
     }
 }
 
-static void queue_dirty_event(u32 id, ws_window_t *window, u32 x, u32 y, u32 width, u32 height) {
-    if (!window || !ws_state.manager_pid || !width || !height) {
+static void queue_dirty_event(u32 id, ws_window_t *window, ws_rect_t rect) {
+    if (!window || !ws_state.manager_pid || !rect.width || !rect.height) {
         return;
     }
 
-    if (x >= window->width || y >= window->height) {
+    if (rect.x >= window->width || rect.y >= window->height) {
         return;
     }
 
-    u32 max_width = window->width - x;
-    if (width > max_width) {
-        width = max_width;
+    u32 max_width = window->width - rect.x;
+    if (rect.width > max_width) {
+        rect.width = max_width;
     }
 
-    u32 max_height = window->height - y;
-    if (height > max_height) {
-        height = max_height;
+    u32 max_height = window->height - rect.y;
+    if (rect.height > max_height) {
+        rect.height = max_height;
     }
 
-    if (!width || !height) {
+    if (!rect.width || !rect.height) {
         return;
     }
 
     bool had_pending = window->mgr_dirty_pending;
-    _dirty_merge(window, x, y, width, height);
+    _dirty_merge(window, &rect);
 
     if (had_pending) {
         return;
@@ -575,13 +603,28 @@ static void _queue_dirty_write(u32 id, ws_window_t *window, size_t offset, size_
     u32 x1 = (u32)(end_pixel % view_width);
 
     if (y0 == y1) {
-        queue_dirty_event(id, window, x0, y0, x1 - x0 + 1, 1);
+        ws_rect_t rect = {
+            .x = x0,
+            .y = y0,
+            .width = x1 - x0 + 1,
+            .height = 1,
+        };
+
+        queue_dirty_event(id, window, rect);
         return;
     }
-    queue_dirty_event(id, window, 0, y0, view_width, y1 - y0 + 1);
+
+    ws_rect_t rect = {
+        .x = 0,
+        .y = y0,
+        .width = view_width,
+        .height = y1 - y0 + 1,
+    };
+
+    queue_dirty_event(id, window, rect);
 }
 
-static void _finalize_window_free(u32 id, bool notify_manager) {
+static void finish_free(u32 id, bool notify_manager) {
     ws_window_t *window = _window_slot(id);
     if (!window) {
         return;
@@ -601,7 +644,7 @@ static void _finalize_window_free(u32 id, bool notify_manager) {
     window->pending_ev_wake = true;
 
     if (notify_manager) {
-        _queue_manager_event(WS_EVT_WINDOW_CLOSED, id, &snapshot);
+        queue_mgr_event(WS_EVT_WINDOW_CLOSED, id, &snapshot);
     }
 }
 
@@ -617,13 +660,13 @@ static void _free_window(u32 id, bool notify_manager) {
 
     if (window->io_refs) {
         window->pending_free = true;
-        window->pending_notify_manager = window->pending_notify_manager || notify_manager;
+        window->notify_mgr_pending = window->notify_mgr_pending || notify_manager;
 
         _defer_window_wake(window);
         return;
     }
 
-    _finalize_window_free(id, notify_manager);
+    finish_free(id, notify_manager);
 }
 
 static void _window_release_io(u32 id, ws_window_t *window) {
@@ -634,8 +677,8 @@ static void _window_release_io(u32 id, ws_window_t *window) {
     window->io_refs--;
 
     if (!window->io_refs && window->pending_free) {
-        bool notify_manager = window->pending_notify_manager;
-        _finalize_window_free(id, notify_manager);
+        bool notify_manager = window->notify_mgr_pending;
+        finish_free(id, notify_manager);
     }
 }
 
@@ -658,7 +701,7 @@ static void drop_manager(pid_t manager_pid) {
     _clear_focus();
 }
 
-static void _reap_exited_pid_locked(pid_t exited_pid) {
+static void reap_pid_locked(pid_t exited_pid) {
     if (exited_pid <= 0 || !ws_state.ready) {
         return;
     }
@@ -684,7 +727,7 @@ static void _reap_exited_pid_locked(pid_t exited_pid) {
     }
 }
 
-static void _cmd_fill_from_window(ws_cmd_t *cmd, u32 id) {
+static void fill_cmd(ws_cmd_t *cmd, u32 id) {
     if (!cmd) {
         return;
     }
@@ -751,31 +794,36 @@ static size_t _copy_len(size_t size, size_t offset, size_t len) {
     return copy_len;
 }
 
-static void
-_copy_store(ws_window_t *window, void *buf, size_t offset, size_t len, u32 view_height, u32 view_stride, bool write) {
-    if (!window || !window->fb || !buf || !len || !view_height || !view_stride || !window->fb_store_stride) {
+static void _copy_store(ws_window_t *window, const ws_copy_t *copy) {
+    bool have_store = window && window->fb;
+    bool have_stride = have_store && window->fb_store_stride;
+    bool have_view = copy && copy->buf && copy->len;
+    bool have_view_size = copy && copy->view_height && copy->view_stride;
+
+    if (!have_stride || !have_view || !have_view_size) {
         return;
     }
 
-    size_t view_stride_bytes = (size_t)view_stride;
+    size_t view_stride_bytes = (size_t)copy->view_stride;
     size_t store_stride = (size_t)window->fb_store_stride;
 
     if (view_stride_bytes == store_stride) {
-        if (write) {
-            memcpy(window->fb + offset, buf, len);
+        if (copy->write) {
+            memcpy(window->fb + copy->offset, copy->buf, copy->len);
         } else {
-            memcpy(buf, window->fb + offset, len);
+            memcpy(copy->buf, window->fb + copy->offset, copy->len);
         }
         return;
     }
 
     size_t done = 0;
-    size_t remaining = len;
+    size_t remaining = copy->len;
+    size_t offset = copy->offset;
 
     while (remaining > 0) {
         size_t row = offset / view_stride_bytes;
         size_t col = offset % view_stride_bytes;
-        if (row >= view_height) {
+        if (row >= copy->view_height) {
             break;
         }
 
@@ -785,10 +833,10 @@ _copy_store(ws_window_t *window, void *buf, size_t offset, size_t len, u32 view_
         }
 
         size_t store_off = row * store_stride + col;
-        if (write) {
-            memcpy(window->fb + store_off, (const u8 *)buf + done, chunk);
+        if (copy->write) {
+            memcpy(window->fb + store_off, (const u8 *)copy->buf + done, chunk);
         } else {
-            memcpy((u8 *)buf + done, window->fb + store_off, chunk);
+            memcpy((u8 *)copy->buf + done, window->fb + store_off, chunk);
         }
 
         done += chunk;
@@ -838,6 +886,185 @@ static bool _ensure_slot_nodes(u32 id) {
     return true;
 }
 
+static bool _fb_layout(u32 width, u32 height, u32 *stride_out, size_t *size_out) {
+    if (!width || !height || !stride_out || !size_out) {
+        return false;
+    }
+
+    u64 stride = (u64)width * sizeof(u32);
+    if (stride > UINT32_MAX || stride > UINT64_MAX / height) {
+        return false;
+    }
+
+    u64 size = stride * height;
+    if (size > WS_MAX_FB_BYTES || size > SIZE_MAX) {
+        return false;
+    }
+
+    *stride_out = (u32)stride;
+    *size_out = (size_t)size;
+    return true;
+}
+
+static bool _fb_capacity(size_t current, size_t needed, size_t *capacity_out) {
+    if (!needed || !capacity_out) {
+        return false;
+    }
+
+    size_t capacity = current ? current : needed;
+
+    while (capacity < needed) {
+        size_t grown = capacity * 2;
+        if (grown <= capacity) {
+            capacity = needed;
+            break;
+        }
+
+        capacity = grown;
+    }
+
+    if (capacity < needed || capacity > WS_MAX_FB_BYTES) {
+        return false;
+    }
+
+    *capacity_out = capacity;
+    return true;
+}
+
+static void _fb_copy(u8 *dst, size_t dst_stride, const ws_window_t *window) {
+    size_t src_stride = window->fb_store_stride;
+    size_t row_bytes = (size_t)window->fb_store_width * sizeof(u32);
+
+    for (u32 row = 0; row < window->fb_store_height; row++) {
+        const u8 *src = window->fb + (size_t)row * src_stride;
+        memcpy(dst + (size_t)row * dst_stride, src, row_bytes);
+    }
+}
+
+static void _fb_extend(ws_window_t *window, u32 width, u32 height, size_t stride) {
+    if (!window->fb) {
+        return;
+    }
+
+    u32 old_width = window->fb_store_width;
+    u32 old_height = window->fb_store_height;
+
+    if (old_width && old_height && width > old_width) {
+        for (u32 row = 0; row < old_height; row++) {
+            u32 *pixels = (u32 *)(window->fb + (size_t)row * stride);
+            u32 edge = pixels[old_width - 1];
+
+            for (u32 col = old_width; col < width; col++) {
+                pixels[col] = edge;
+            }
+        }
+    }
+
+    if (height <= old_height) {
+        return;
+    }
+
+    if (!old_height) {
+        memset(window->fb, 0, (size_t)height * stride);
+        return;
+    }
+
+    const u8 *last_row = window->fb + (size_t)(old_height - 1) * stride;
+
+    for (u32 row = old_height; row < height; row++) {
+        memcpy(window->fb + (size_t)row * stride, last_row, stride);
+    }
+}
+
+static u32 _free_window_id(void) {
+    u32 free_id = (u32)vec_size(ws_state.windows);
+
+    for (u32 i = 0; i < vec_size(ws_state.windows); i++) {
+        ws_window_t *slot = _window_slot(i);
+        if (!slot) {
+            break;
+        }
+
+        if (!slot->allocated) {
+            free_id = i;
+            break;
+        }
+    }
+
+    return free_id;
+}
+
+static int _reserve_window_slot(u32 id, pid_t caller_pid) {
+    if (!_windows_reserve((size_t)id + 1)) {
+        log_warn("WS allocation failed while reserving id=%u caller=%ld", (unsigned int)id, (long)caller_pid);
+        return -ENOMEM;
+    }
+
+    if (!_ensure_slot_nodes(id)) {
+        log_warn(
+            "WS allocation failed during slot node registration id=%u caller=%ld",
+            (unsigned int)id,
+            (long)caller_pid
+        );
+        return -ENOMEM;
+    }
+
+    return 0;
+}
+
+static int _alloc_window_buffers(ws_window_t *window, u32 id, pid_t caller_pid, size_t fb_size) {
+    window->fb = calloc(1, fb_size);
+    if (!window->fb) {
+        log_warn(
+            "WS allocation failed during fb allocation id=%u caller=%ld bytes=%zu",
+            (unsigned int)id,
+            (long)caller_pid,
+            fb_size
+        );
+        return -ENOMEM;
+    }
+
+    if (!window->ev_queue) {
+        window->ev_queue = ring_queue_create(sizeof(ws_input_event_t), WS_EVENT_QUEUE_CAP);
+    }
+    if (!window->ev_queue) {
+        _window_slot_reinit(window);
+        log_warn(
+            "WS allocation failed during event queue reserve id=%u caller=%ld",
+            (unsigned int)id,
+            (long)caller_pid
+        );
+        return -ENOMEM;
+    }
+
+    return 0;
+}
+
+static void
+_init_window_from_cmd(ws_window_t *window, u32 id, pid_t caller_pid, ws_cmd_t *cmd, u32 stride, size_t fb_size) {
+    window->allocated = true;
+    window->owner_pid = cmd->pid > 0 && _is_manager(caller_pid) ? cmd->pid : caller_pid;
+    window->x = cmd->x;
+    window->y = cmd->y;
+    window->width = cmd->width;
+    window->height = cmd->height;
+    window->stride = stride;
+    window->io_width = cmd->width;
+    window->io_height = cmd->height;
+    window->io_stride = stride;
+    window->fb_store_width = cmd->width;
+    window->fb_store_height = cmd->height;
+    window->fb_store_stride = stride;
+    window->fb_store_size = fb_size;
+    window->z = id;
+    window->flags = cmd->flags | WS_WINDOW_MAPPED;
+    window->fb_size = fb_size;
+    window->io_fb_size = fb_size;
+    window->fb_capacity = fb_size;
+
+    strncpy(window->title, cmd->title, sizeof(window->title) - 1);
+}
+
 static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
     if (!cmd) {
         return -EINVAL;
@@ -847,50 +1074,16 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
         return -EPIPE;
     }
 
-    if (!cmd->width || !cmd->height) {
+    u32 stride = 0;
+    size_t fb_size = 0;
+    if (!_fb_layout(cmd->width, cmd->height, &stride, &fb_size)) {
         return -EINVAL;
     }
 
-    u64 stride = (u64)cmd->width * 4ULL;
-    u64 fb_size_u64 = stride * (u64)cmd->height;
-
-    if (!stride || fb_size_u64 > WS_MAX_FB_BYTES) {
-        return -EINVAL;
-    }
-
-    u32 free_id = (u32)vec_size(ws_state.windows);
-    for (u32 i = 0; i < vec_size(ws_state.windows); i++) {
-        ws_window_t *candidate = _window_slot(i);
-        if (!candidate) {
-            break;
-        }
-
-        if (!candidate->allocated) {
-            free_id = i;
-            break;
-        }
-    }
-
-    if (!_windows_reserve((size_t)free_id + 1)) {
-        log_warn(
-            "WS allocation failed while reserving id=%u caller=%ld size=%ux%u",
-            (unsigned int)free_id,
-            (long)caller_pid,
-            (unsigned int)cmd->width,
-            (unsigned int)cmd->height
-        );
-
-        return -ENOMEM;
-    }
-
-    if (!_ensure_slot_nodes(free_id)) {
-        log_warn(
-            "WS allocation failed during slot node registration id=%u caller=%ld",
-            (unsigned int)free_id,
-            (long)caller_pid
-        );
-
-        return -ENOMEM;
+    u32 free_id = _free_window_id();
+    int status = _reserve_window_slot(free_id, caller_pid);
+    if (status < 0) {
+        return status;
     }
 
     ws_window_t *window = _window_slot(free_id);
@@ -902,57 +1095,16 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
 
     _window_slot_reinit(window);
 
-    window->fb = calloc(1, (size_t)fb_size_u64);
-    if (!window->fb) {
-        log_warn(
-            "WS allocation failed during fb allocation id=%u caller=%ld bytes=%" PRIu64,
-            (unsigned int)free_id,
-            (long)caller_pid,
-            fb_size_u64
-        );
-
-        return -ENOMEM;
+    status = _alloc_window_buffers(window, free_id, caller_pid, fb_size);
+    if (status < 0) {
+        return status;
     }
 
-    if (!window->ev_queue) {
-        window->ev_queue = ring_queue_create(sizeof(ws_input_event_t), WS_EV_QUEUE_INIT_CAP);
-    }
-    if (!window->ev_queue) {
-        _window_slot_reinit(window);
-        log_warn(
-            "WS allocation failed during event queue reserve id=%u caller=%ld",
-            (unsigned int)free_id,
-            (long)caller_pid
-        );
+    _init_window_from_cmd(window, free_id, caller_pid, cmd, stride, fb_size);
 
-        return -ENOMEM;
-    }
+    queue_mgr_event(WS_EVT_WINDOW_NEW, free_id, window);
 
-    window->allocated = true;
-    window->owner_pid = cmd->pid > 0 && _is_manager(caller_pid) ? cmd->pid : caller_pid;
-    window->x = cmd->x;
-    window->y = cmd->y;
-    window->width = cmd->width;
-    window->height = cmd->height;
-    window->stride = (u32)stride;
-    window->io_width = cmd->width;
-    window->io_height = cmd->height;
-    window->io_stride = (u32)stride;
-    window->fb_store_width = cmd->width;
-    window->fb_store_height = cmd->height;
-    window->fb_store_stride = (u32)stride;
-    window->fb_store_size = (size_t)fb_size_u64;
-    window->z = free_id;
-    window->flags = cmd->flags | WS_WINDOW_MAPPED;
-    window->fb_size = (size_t)fb_size_u64;
-    window->io_fb_size = (size_t)fb_size_u64;
-    window->fb_capacity = (size_t)fb_size_u64;
-
-    strncpy(window->title, cmd->title, sizeof(window->title) - 1);
-
-    _queue_manager_event(WS_EVT_WINDOW_NEW, free_id, window);
-
-    _cmd_fill_from_window(cmd, free_id);
+    fill_cmd(cmd, free_id);
     return 0;
 }
 
@@ -969,7 +1121,7 @@ static int _handle_free(pid_t caller_pid, ws_cmd_t *cmd) {
     u32 id = cmd->id;
     _free_window(id, true);
 
-    _cmd_fill_from_window(cmd, id);
+    fill_cmd(cmd, id);
     return 0;
 }
 
@@ -983,7 +1135,7 @@ static int _handle_query(pid_t caller_pid, ws_cmd_t *cmd) {
         return status;
     }
 
-    _cmd_fill_from_window(cmd, cmd->id);
+    fill_cmd(cmd, cmd->id);
     return 0;
 }
 
@@ -1002,16 +1154,108 @@ static int _handle_set_title(pid_t caller_pid, ws_cmd_t *cmd) {
     strncpy(title, cmd->title, sizeof(title) - 1);
 
     if (!strncmp(window->title, title, sizeof(window->title))) {
-        _cmd_fill_from_window(cmd, cmd->id);
+        fill_cmd(cmd, cmd->id);
         return 0;
     }
 
     memset(window->title, 0, sizeof(window->title));
     strncpy(window->title, title, sizeof(window->title) - 1);
 
-    _queue_manager_event(WS_EVT_WINDOW_TITLE, cmd->id, window);
-    _cmd_fill_from_window(cmd, cmd->id);
+    queue_mgr_event(WS_EVT_WINDOW_TITLE, cmd->id, window);
+    fill_cmd(cmd, cmd->id);
     return 0;
+}
+
+typedef struct {
+    u32 view_stride;
+    size_t view_size;
+    u32 store_width;
+    u32 store_height;
+    u32 store_stride;
+    size_t store_size;
+    bool need_alloc;
+    size_t capacity;
+} ws_resize_t;
+
+static int _plan_resize(const ws_window_t *window, const ws_cmd_t *cmd, ws_resize_t *plan) {
+    if (!_fb_layout(cmd->width, cmd->height, &plan->view_stride, &plan->view_size)) {
+        return -EINVAL;
+    }
+
+    plan->store_width = window->fb_store_width;
+    if (cmd->width > plan->store_width || !plan->store_width) {
+        plan->store_width = cmd->width;
+    }
+
+    plan->store_height = window->fb_store_height;
+    if (cmd->height > plan->store_height || !plan->store_height) {
+        plan->store_height = cmd->height;
+    }
+
+    if (!_fb_layout(plan->store_width, plan->store_height, &plan->store_stride, &plan->store_size)) {
+        return -EINVAL;
+    }
+
+    bool stride_changed = window->fb_store_stride != plan->store_stride;
+    plan->need_alloc = !window->fb || stride_changed || window->fb_capacity < plan->store_size;
+    return 0;
+}
+
+static int _alloc_resize_fb(const ws_window_t *window, ws_resize_t *plan, u8 **fb_out) {
+    *fb_out = NULL;
+
+    if (!plan->need_alloc) {
+        return 0;
+    }
+
+    size_t current = window->fb_capacity ? window->fb_capacity : window->fb_store_size;
+    if (!_fb_capacity(current, plan->store_size, &plan->capacity)) {
+        return -ENOMEM;
+    }
+
+    u8 *fb = calloc(1, plan->capacity);
+    if (!fb) {
+        return -ENOMEM;
+    }
+
+    if (window->fb && window->fb_store_width && window->fb_store_height && window->fb_store_stride) {
+        _fb_copy(fb, plan->store_stride, window);
+    }
+
+    *fb_out = fb;
+    return 0;
+}
+
+static int _queue_resize_event(ws_window_t *window, const ws_cmd_t *cmd, u32 stride, bool *was_empty) {
+    ws_input_event_t event = {
+        .type = INPUT_EVENT_WINDOW_RESIZE,
+        .width = cmd->width,
+        .height = cmd->height,
+        .stride = stride,
+    };
+
+    *was_empty = ring_queue_count(window->ev_queue) == 0;
+    return _window_ev_push(window, &event) ? 0 : -ENOMEM;
+}
+
+static void _commit_resize(ws_window_t *window, const ws_cmd_t *cmd, const ws_resize_t *plan, u8 *new_fb) {
+    if (new_fb) {
+        u8 *old_fb = window->fb;
+        window->fb = new_fb;
+        window->fb_capacity = plan->capacity;
+        free(old_fb);
+    }
+
+    _fb_extend(window, plan->store_width, plan->store_height, plan->store_stride);
+
+    window->fb_store_width = plan->store_width;
+    window->fb_store_height = plan->store_height;
+    window->fb_store_stride = plan->store_stride;
+    window->fb_store_size = plan->store_size;
+    window->width = cmd->width;
+    window->height = cmd->height;
+    window->stride = plan->view_stride;
+    window->fb_size = plan->view_size;
 }
 
 static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
@@ -1019,173 +1263,50 @@ static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
         return -EINVAL;
     }
 
-    if (!cmd->width || !cmd->height) {
-        return -EINVAL;
-    }
-
     if (cmd->width == window->width && cmd->height == window->height) {
-        _cmd_fill_from_window(cmd, id);
+        fill_cmd(cmd, id);
         return 0;
-    }
-
-    u64 stride_u64 = (u64)cmd->width * 4ULL;
-    u64 fb_size_u64 = stride_u64 * (u64)cmd->height;
-    if (!stride_u64 || fb_size_u64 > WS_MAX_FB_BYTES) {
-        return -EINVAL;
     }
 
     if (window->io_refs) {
         return -EAGAIN;
     }
 
-    size_t view_size = (size_t)fb_size_u64;
-
-    u32 old_store_width = window->fb_store_width;
-    u32 old_store_height = window->fb_store_height;
-    size_t old_store_stride = (size_t)window->fb_store_stride;
-    size_t old_store_size = window->fb_store_size;
-
-    u32 need_store_width = old_store_width;
-    if (cmd->width > need_store_width) {
-        need_store_width = cmd->width;
+    ws_resize_t plan = { 0 };
+    int status = _plan_resize(window, cmd, &plan);
+    if (status < 0) {
+        return status;
     }
-
-    if (!need_store_width) {
-        need_store_width = cmd->width;
-    }
-
-    u32 need_store_height = old_store_height;
-    if (cmd->height > need_store_height) {
-        need_store_height = cmd->height;
-    }
-
-    if (!need_store_height) {
-        need_store_height = cmd->height;
-    }
-
-    u64 need_store_stride_u64 = (u64)need_store_width * 4ULL;
-    u64 need_store_size_u64 = need_store_stride_u64 * (u64)need_store_height;
-    if (!need_store_stride_u64 || need_store_size_u64 > WS_MAX_FB_BYTES) {
-        return -EINVAL;
-    }
-
-    size_t need_store_stride = (size_t)need_store_stride_u64;
-    size_t need_store_size = (size_t)need_store_size_u64;
-
-    bool stride_change = old_store_stride != need_store_stride;
-    bool need_alloc = !window->fb || stride_change || window->fb_capacity < need_store_size;
 
     u8 *resized_fb = NULL;
-    size_t resized_capacity = 0;
-
-    if (need_alloc) {
-        size_t new_capacity = window->fb_capacity ? window->fb_capacity : old_store_size;
-
-        if (!new_capacity) {
-            new_capacity = need_store_size;
-        }
-
-        while (new_capacity < need_store_size) {
-            size_t grown = new_capacity * 2;
-            if (grown <= new_capacity) {
-                new_capacity = need_store_size;
-                break;
-            }
-            new_capacity = grown;
-        }
-
-        if (new_capacity < need_store_size || new_capacity > WS_MAX_FB_BYTES) {
-            return -ENOMEM;
-        }
-
-        resized_fb = calloc(1, new_capacity);
-        if (!resized_fb) {
-            return -ENOMEM;
-        }
-
-        if (window->fb && old_store_width && old_store_height && old_store_stride) {
-            size_t row_bytes = (size_t)old_store_width * sizeof(u32);
-
-            for (u32 row = 0; row < old_store_height; row++) {
-                const u8 *src = window->fb + ((size_t)row * old_store_stride);
-                u8 *dst = resized_fb + ((size_t)row * need_store_stride);
-                memcpy(dst, src, row_bytes);
-            }
-        }
-
-        resized_capacity = new_capacity;
+    status = _alloc_resize_fb(window, &plan, &resized_fb);
+    if (status < 0) {
+        return status;
     }
 
-    ws_input_event_t resize_event = { 0 };
-    resize_event.type = INPUT_EVENT_WINDOW_RESIZE;
-    resize_event.width = cmd->width;
-    resize_event.height = cmd->height;
-    resize_event.stride = (u32)stride_u64;
-
-    bool ev_was_empty = ring_queue_count(window->ev_queue) == 0;
-    if (!_window_ev_push(window, &resize_event)) {
-        if (resized_fb) {
-            free(resized_fb);
-        }
-        return -ENOMEM;
+    bool queue_was_empty = false;
+    status = _queue_resize_event(window, cmd, plan.view_stride, &queue_was_empty);
+    if (status < 0) {
+        free(resized_fb);
+        return status;
     }
 
-    if (need_alloc) {
-        u8 *old_fb = window->fb;
-        window->fb = resized_fb;
-        window->fb_capacity = resized_capacity;
-        free(old_fb);
-    }
+    _commit_resize(window, cmd, &plan, resized_fb);
 
-    if (window->fb && old_store_width && old_store_height && need_store_width > old_store_width) {
-        for (u32 row = 0; row < old_store_height; row++) {
-            u8 *row_base = window->fb + ((size_t)row * need_store_stride);
-            const u8 *edge_addr = row_base + ((size_t)(old_store_width - 1) * sizeof(u32));
-            const u32 *edge = (const u32 *)edge_addr;
+    ws_rect_t dirty = {
+        .x = 0,
+        .y = 0,
+        .width = window->width,
+        .height = window->height,
+    };
 
-            u32 fill = *edge;
+    queue_dirty_event(cmd->id, window, dirty);
 
-            u32 *dst = (u32 *)(row_base + ((size_t)old_store_width * sizeof(u32)));
-
-            for (u32 col = old_store_width; col < need_store_width; col++) {
-                *dst++ = fill;
-            }
-        }
-    }
-
-    if (window->fb && need_store_height > old_store_height) {
-        if (old_store_height > 0) {
-            const u8 *src_row = window->fb + ((size_t)(old_store_height - 1) * need_store_stride);
-
-            for (u32 row = old_store_height; row < need_store_height; row++) {
-                u8 *dst_row = window->fb + ((size_t)row * need_store_stride);
-                memcpy(dst_row, src_row, need_store_stride);
-            }
-        } else {
-            u8 *dst = window->fb + ((size_t)old_store_height * need_store_stride);
-
-            size_t grow_bytes = (size_t)(need_store_height - old_store_height) * need_store_stride;
-
-            memset(dst, 0, grow_bytes);
-        }
-    }
-
-    window->fb_store_width = need_store_width;
-    window->fb_store_height = need_store_height;
-    window->fb_store_stride = (u32)need_store_stride_u64;
-    window->fb_store_size = need_store_size;
-    window->width = cmd->width;
-    window->height = cmd->height;
-    window->stride = (u32)stride_u64;
-    window->fb_size = view_size;
-
-    queue_dirty_event(cmd->id, window, 0, 0, window->width, window->height);
-
-    if (ev_was_empty) {
+    if (queue_was_empty) {
         _defer_window_wake(window);
     }
 
-    _cmd_fill_from_window(cmd, id);
+    fill_cmd(cmd, id);
     return 0;
 }
 
@@ -1201,7 +1322,7 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
         }
 
         ws_state.manager_pid = caller_pid;
-        _cmd_fill_from_window(cmd, cmd->id);
+        fill_cmd(cmd, cmd->id);
 
         return 0;
     case WSIOCTRANSFERMGR:
@@ -1214,7 +1335,7 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
         }
 
         ws_state.manager_pid = cmd->pid;
-        _cmd_fill_from_window(cmd, cmd->id);
+        fill_cmd(cmd, cmd->id);
         return 0;
     case WSIOCRELEASEMGR:
         if (!_is_manager(caller_pid)) {
@@ -1222,7 +1343,7 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
         }
 
         drop_manager(caller_pid);
-        _cmd_fill_from_window(cmd, cmd->id);
+        fill_cmd(cmd, cmd->id);
 
         return 0;
     default:
@@ -1246,18 +1367,18 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
     case WSIOCSFOCUS:
         _clear_focus();
         window->flags |= WS_WINDOW_FOCUSED;
-        _cmd_fill_from_window(cmd, cmd->id);
+        fill_cmd(cmd, cmd->id);
         return 0;
     case WSIOCSPOS:
         window->x = cmd->x;
         window->y = cmd->y;
-        _cmd_fill_from_window(cmd, cmd->id);
+        fill_cmd(cmd, cmd->id);
         return 0;
     case WSIOCSSIZE:
         return _handle_set_size(cmd->id, window, cmd);
     case WSIOCSZ:
         window->z = cmd->flags;
-        _cmd_fill_from_window(cmd, cmd->id);
+        fill_cmd(cmd, cmd->id);
         return 0;
     case WSIOCSINPUT:
         bool ev_was_empty = ring_queue_count(window->ev_queue) == 0;
@@ -1268,12 +1389,12 @@ static int _handle_manager_op(pid_t caller_pid, u64 request, ws_cmd_t *cmd) {
         if (ev_was_empty) {
             _defer_window_wake(window);
         }
-        _cmd_fill_from_window(cmd, cmd->id);
+        fill_cmd(cmd, cmd->id);
 
         return 0;
     case WSIOCCLOSE:
         _free_window(cmd->id, true);
-        _cmd_fill_from_window(cmd, cmd->id);
+        fill_cmd(cmd, cmd->id);
 
         return 0;
     default:
@@ -1294,7 +1415,7 @@ static bool _ws_state_init(void) {
         return false;
     }
 
-    ws_state.mgr_queue = ring_queue_create(sizeof(ws_event_t), WS_MGR_QUEUE_INIT_CAP);
+    ws_state.mgr_queue = ring_queue_create(sizeof(ws_event_t), WS_MGR_QUEUE_CAP);
 
     if (!ws_state.mgr_queue) {
         vec_destroy(ws_state.windows);
@@ -1302,7 +1423,7 @@ static bool _ws_state_init(void) {
         return false;
     }
 
-    sched_wait_queue_init(&ws_state.mgr_wait);
+    sched_waitq_init(&ws_state.mgr_wait);
     sched_waitq_set_poll(&ws_state.mgr_wait, true);
 
     ws_state.ready = true;
@@ -1319,13 +1440,13 @@ static void _ws_reaper_entry(void *arg) {
 
         while (sched_exit_event_pop(&exited_pid)) {
             mutex_lock(&ws_state.lock);
-            _reap_exited_pid_locked(exited_pid);
+            reap_pid_locked(exited_pid);
             mutex_unlock(&ws_state.lock);
             handled = true;
         }
 
         if (handled) {
-            _flush_deferred_wakes();
+            flush_wakes();
             continue;
         }
 
@@ -1348,7 +1469,7 @@ static void _ws_start_reaper(void) {
         return;
     }
 
-    ws_state.reaper_thread = sched_create_kernel_thread("ws-reaper", _ws_reaper_entry, NULL);
+    ws_state.reaper_thread = sched_spawn_kernel("ws-reaper", _ws_reaper_entry, NULL);
     if (!ws_state.reaper_thread) {
         log_warn("failed to create reaper thread");
         return;
@@ -1357,7 +1478,7 @@ static void _ws_start_reaper(void) {
     sched_make_runnable(ws_state.reaper_thread);
 }
 
-static sched_wait_queue_t *_dev_wsmgr_wait_queue(vfs_node_t *node, short events, u32 flags) {
+static sched_wait_queue_t *wsmgr_wait(vfs_node_t *node, short events, u32 flags) {
     (void)node;
     (void)flags;
 
@@ -1366,6 +1487,10 @@ static sched_wait_queue_t *_dev_wsmgr_wait_queue(vfs_node_t *node, short events,
     }
 
     return &ws_state.mgr_wait;
+}
+
+static sched_wait_result_t _wait_mgr(u32 seq) {
+    return sched_wait_on(&ws_state.mgr_wait, seq, 0, SCHED_WAIT_INTERRUPTIBLE);
 }
 
 static ssize_t _dev_ws_fb_read(vfs_node_t *node, void *buf, size_t offset, size_t len, u32 flags) {
@@ -1413,7 +1538,7 @@ static short _dev_ws_ev_poll(vfs_node_t *node, short events, u32 flags) {
     return ws_ev_poll(id, events, flags);
 }
 
-static sched_wait_queue_t *_dev_ws_ev_wait_queue(vfs_node_t *node, short events, u32 flags) {
+static sched_wait_queue_t *ws_ev_wait(vfs_node_t *node, short events, u32 flags) {
     (void)flags;
 
     if ((events & POLLIN) == 0 || (events & ~POLLIN) != 0) {
@@ -1442,14 +1567,14 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
         return false;
     }
 
-    bool ok = true;
+    bool registered = true;
 
     vfs_interface_t *wsctl_if = vfs_create_interface(NULL, NULL, NULL);
     ws_state.wsctl_if = wsctl_if;
 
     if (!wsctl_if) {
         log_warn("failed to allocate /dev/wsctl interface");
-        ok = false;
+        registered = false;
     } else {
         wsctl_if->ioctl = ws_ctl_ioctl;
         wsctl_if->poll = ws_ctl_poll;
@@ -1457,11 +1582,11 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
 
         if (!wsctl_registered) {
             log_warn("failed to create /dev/wsctl");
-            ok = false;
+            registered = false;
         } else {
             vfs_node_t *wsctl_node = vfs_lookup_from(dev_dir, "wsctl");
             if (!_set_ws_owner(wsctl_node, "/dev/wsctl")) {
-                ok = false;
+                registered = false;
             }
         }
     }
@@ -1472,19 +1597,19 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
 
     if (!wsmgr_if) {
         log_warn("failed to allocate /dev/wsmgr interface");
-        ok = false;
+        registered = false;
     } else {
         wsmgr_if->poll = ws_mgr_poll;
-        wsmgr_if->wait_queue = _dev_wsmgr_wait_queue;
+        wsmgr_if->wait_queue = wsmgr_wait;
         bool wsmgr_registered = devfs_register_node(dev_dir, "wsmgr", VFS_CHARDEV, 0660, wsmgr_if, NULL);
 
         if (!wsmgr_registered) {
             log_warn("failed to create /dev/wsmgr");
-            ok = false;
+            registered = false;
         } else {
             vfs_node_t *wsmgr_node = vfs_lookup_from(dev_dir, "wsmgr");
             if (!_set_ws_owner(wsmgr_node, "/dev/wsmgr")) {
-                ok = false;
+                registered = false;
             }
         }
     }
@@ -1509,9 +1634,9 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
 
     ws_state.ws_fb_if->poll = _dev_ws_fb_poll;
     ws_state.ws_ev_if->poll = _dev_ws_ev_poll;
-    ws_state.ws_ev_if->wait_queue = _dev_ws_ev_wait_queue;
+    ws_state.ws_ev_if->wait_queue = ws_ev_wait;
 
-    return ok;
+    return registered;
 }
 
 bool ws_init(void) {
@@ -1523,12 +1648,12 @@ bool ws_init(void) {
         log_warn("failed to register devfs init callback");
     }
 
-    bool ok = _ws_state_init();
-    if (ok) {
+    bool initialized = _ws_state_init();
+    if (initialized) {
         _ws_start_reaper();
     }
 
-    return ok;
+    return initialized;
 }
 
 static ssize_t _ws_ctl_ioctl_as(pid_t caller_pid, u64 request, void *args) {
@@ -1590,7 +1715,7 @@ static ssize_t _ws_ctl_ioctl_as(pid_t caller_pid, u64 request, void *args) {
     }
 
     mutex_unlock(&ws_state.lock);
-    _flush_deferred_wakes();
+    flush_wakes();
 
     if (status >= 0 && !user_copy_to(current, args, &cmd, sizeof(cmd))) {
         return -EFAULT;
@@ -1637,12 +1762,12 @@ static ssize_t _ws_mgr_read_as(pid_t caller_pid, void *buf, size_t offset, size_
             return -EPERM;
         }
 
-        if (ring_queue_count(ws_state.mgr_queue) > 0) {
-            if (!ws_state.mgr_queue) {
-                mutex_unlock(&ws_state.lock);
-                return -EIO;
-            }
+        if (!ws_state.mgr_queue) {
+            mutex_unlock(&ws_state.lock);
+            return -EIO;
+        }
 
+        if (ring_queue_count(ws_state.mgr_queue) > 0) {
             ws_event_t event;
             if (!ring_queue_pop(ws_state.mgr_queue, &event)) {
                 mutex_unlock(&ws_state.lock);
@@ -1651,9 +1776,11 @@ static ssize_t _ws_mgr_read_as(pid_t caller_pid, void *buf, size_t offset, size_
 
             if (event.type == WS_EVT_WINDOW_DIRTY) {
                 ws_window_t *window = _window_slot(event.id);
+                bool stale_event = !window || !window->allocated || window->owner_pid != event.owner_pid;
+                bool clean_window = window && !window->mgr_dirty_pending;
+                bool empty_rect = window && (!window->mgr_dirty_width || !window->mgr_dirty_height);
 
-                if (!window || !window->allocated || window->owner_pid != event.owner_pid ||
-                    !window->mgr_dirty_pending || !window->mgr_dirty_width || !window->mgr_dirty_height) {
+                if (stale_event || clean_window || empty_rect) {
                     mutex_unlock(&ws_state.lock);
                     continue;
                 }
@@ -1681,7 +1808,7 @@ static ssize_t _ws_mgr_read_as(pid_t caller_pid, void *buf, size_t offset, size_
         }
 
         sched_thread_t *current = sched_current();
-        if (current && sched_signal_has_pending(current)) {
+        if (current && sched_signal_pending(current)) {
             mutex_unlock(&ws_state.lock);
             return -EINTR;
         }
@@ -1690,8 +1817,8 @@ static ssize_t _ws_mgr_read_as(pid_t caller_pid, void *buf, size_t offset, size_
         wait_seq = sched_wait_seq(&ws_state.mgr_wait);
         mutex_unlock(&ws_state.lock);
 
-        sched_wait_result_t
-            wait_result = sched_wait_on_queue(&ws_state.mgr_wait, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
+        sched_wait_result_t wait_result = _wait_mgr(wait_seq);
+
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;
         }
@@ -1734,32 +1861,32 @@ short ws_mgr_poll(vfs_node_t *node, short events, u32 flags) {
     return _ws_mgr_poll_as(_current_pid(), events, flags);
 }
 
-static ssize_t _ws_fb_read_as(u32 id, pid_t caller_pid, void *buf, size_t offset, size_t len, u32 flags) {
-    (void)flags;
-
-    if (!buf) {
+static ssize_t _ws_fb_read_as(const ws_io_t *io) {
+    if (!io || !io->buf) {
         return -EINVAL;
     }
 
-    if (caller_pid <= 0) {
+    (void)io->flags;
+
+    if (io->pid <= 0) {
         return -EPERM;
     }
 
     mutex_lock(&ws_state.lock);
 
     ws_window_t *window = NULL;
-    int status = _window_lookup(id, caller_pid, &window);
+    int status = _window_lookup(io->id, io->pid, &window);
     if (status) {
         mutex_unlock(&ws_state.lock);
         return status;
     }
 
-    bool is_manager = _is_manager(caller_pid);
+    bool is_manager = _is_manager(io->pid);
     u32 view_height = is_manager ? window->height : window->io_height;
     u32 view_stride = is_manager ? window->stride : window->io_stride;
     size_t view_size = is_manager ? window->fb_size : window->io_fb_size;
 
-    size_t copy_len = _copy_len(view_size, offset, len);
+    size_t copy_len = _copy_len(view_size, io->offset, io->len);
     if (!copy_len) {
         mutex_unlock(&ws_state.lock);
         return VFS_EOF;
@@ -1768,53 +1895,71 @@ static ssize_t _ws_fb_read_as(u32 id, pid_t caller_pid, void *buf, size_t offset
     window->io_refs++;
     mutex_unlock(&ws_state.lock);
 
-    _copy_store(window, buf, offset, copy_len, view_height, view_stride, false);
+    ws_copy_t copy = {
+        .buf = io->buf,
+        .offset = io->offset,
+        .len = copy_len,
+        .view_height = view_height,
+        .view_stride = view_stride,
+        .write = false,
+    };
+
+    _copy_store(window, &copy);
 
     mutex_lock(&ws_state.lock);
-    _window_release_io(id, window);
+    _window_release_io(io->id, window);
     mutex_unlock(&ws_state.lock);
-    _flush_deferred_wakes();
+    flush_wakes();
 
     return (ssize_t)copy_len;
 }
 
 ssize_t ws_fb_read(u32 id, void *buf, size_t offset, size_t len, u32 flags) {
-    return _ws_fb_read_as(id, _current_pid(), buf, offset, len, flags);
+    ws_io_t io = {
+        .id = id,
+        .pid = _current_pid(),
+        .buf = buf,
+        .offset = offset,
+        .len = len,
+        .flags = flags,
+    };
+
+    return _ws_fb_read_as(&io);
 }
 
-static ssize_t _ws_fb_write_as(u32 id, pid_t caller_pid, const void *buf, size_t offset, size_t len, u32 flags) {
-    (void)flags;
-
-    if (!buf) {
+static ssize_t _ws_fb_write_as(const ws_io_t *io) {
+    if (!io || !io->buf) {
         return -EINVAL;
     }
 
-    if (caller_pid <= 0) {
+    (void)io->flags;
+
+    if (io->pid <= 0) {
         return -EPERM;
     }
 
     mutex_lock(&ws_state.lock);
 
     ws_window_t *window = NULL;
-    int status = _window_lookup(id, caller_pid, &window);
+    int status = _window_lookup(io->id, io->pid, &window);
     if (status) {
         mutex_unlock(&ws_state.lock);
         return status;
     }
 
-    bool is_manager = _is_manager(caller_pid);
+    bool is_manager = _is_manager(io->pid);
     u32 view_width = is_manager ? window->width : window->io_width;
     u32 view_height = is_manager ? window->height : window->io_height;
     u32 view_stride = is_manager ? window->stride : window->io_stride;
     size_t view_size = is_manager ? window->fb_size : window->io_fb_size;
 
-    size_t copy_len = _copy_len(view_size, offset, len);
+    size_t copy_len = _copy_len(view_size, io->offset, io->len);
     if (!copy_len) {
         mutex_unlock(&ws_state.lock);
         return VFS_EOF;
     }
 
-    if (copy_len != len) {
+    if (copy_len != io->len) {
         mutex_unlock(&ws_state.lock);
         return -EAGAIN;
     }
@@ -1822,20 +1967,38 @@ static ssize_t _ws_fb_write_as(u32 id, pid_t caller_pid, const void *buf, size_t
     window->io_refs++;
     mutex_unlock(&ws_state.lock);
 
-    _copy_store(window, (void *)buf, offset, copy_len, view_height, view_stride, true);
+    ws_copy_t copy = {
+        .buf = io->buf,
+        .offset = io->offset,
+        .len = copy_len,
+        .view_height = view_height,
+        .view_stride = view_stride,
+        .write = true,
+    };
+
+    _copy_store(window, &copy);
 
     mutex_lock(&ws_state.lock);
-    _queue_dirty_write(id, window, offset, copy_len, view_width);
+    _queue_dirty_write(io->id, window, io->offset, copy_len, view_width);
 
-    _window_release_io(id, window);
+    _window_release_io(io->id, window);
     mutex_unlock(&ws_state.lock);
-    _flush_deferred_wakes();
+    flush_wakes();
 
     return (ssize_t)copy_len;
 }
 
 ssize_t ws_fb_write(u32 id, const void *buf, size_t offset, size_t len, u32 flags) {
-    return _ws_fb_write_as(id, _current_pid(), buf, offset, len, flags);
+    ws_io_t io = {
+        .id = id,
+        .pid = _current_pid(),
+        .buf = (void *)buf,
+        .offset = offset,
+        .len = len,
+        .flags = flags,
+    };
+
+    return _ws_fb_write_as(&io);
 }
 
 void ws_notify_screen_active(void) {
@@ -1846,7 +2009,7 @@ void ws_notify_screen_active(void) {
         return;
     }
 
-    _queue_manager_event(WS_EVT_SCREEN_ACTIVE, 0, NULL);
+    queue_mgr_event(WS_EVT_SCREEN_ACTIVE, 0, NULL);
 
     for (u32 i = 0; i < vec_size(ws_state.windows); i++) {
         ws_window_t *window = _window_slot(i);
@@ -1855,11 +2018,18 @@ void ws_notify_screen_active(void) {
             continue;
         }
 
-        queue_dirty_event(i, window, 0, 0, window->width, window->height);
+        ws_rect_t dirty = {
+            .x = 0,
+            .y = 0,
+            .width = window->width,
+            .height = window->height,
+        };
+
+        queue_dirty_event(i, window, dirty);
     }
 
     mutex_unlock(&ws_state.lock);
-    _flush_deferred_wakes();
+    flush_wakes();
 }
 
 static short _ws_window_poll_as(u32 id, pid_t caller_pid, short events, bool for_ev) {
@@ -1901,82 +2071,108 @@ short ws_fb_poll(u32 id, short events, u32 flags) {
     return _ws_window_poll_as(id, _current_pid(), events, false);
 }
 
-static ssize_t _ws_ev_read_as(u32 id, pid_t caller_pid, void *buf, size_t offset, size_t len, u32 flags) {
-    (void)offset;
+static bool _ack_resize_event(ws_window_t *window, const ws_input_event_t *event, bool enabled) {
+    if (!enabled || !window || !event || event->type != INPUT_EVENT_WINDOW_RESIZE) {
+        return true;
+    }
 
-    if (!buf) {
+    if (!event->width || !event->height) {
+        return true;
+    }
+
+    u64 auto_stride = (u64)event->width * sizeof(u32);
+    if (auto_stride > UINT32_MAX) {
+        return false;
+    }
+
+    u32 io_stride = event->stride ? event->stride : (u32)auto_stride;
+    u64 io_fb_size = 0;
+
+    if (io_stride <= UINT64_MAX / (u64)event->height) {
+        io_fb_size = (u64)io_stride * (u64)event->height;
+    }
+
+    if (!io_stride || io_fb_size > WS_MAX_FB_BYTES) {
+        return true;
+    }
+
+    window->io_width = event->width;
+    window->io_height = event->height;
+    window->io_stride = io_stride;
+    window->io_fb_size = (size_t)io_fb_size;
+    return true;
+}
+
+static ssize_t _copy_window_events(ws_window_t *window, ws_input_event_t *out, size_t max_events, bool ack_resize) {
+    size_t copied = 0;
+
+    while (copied < max_events && ring_queue_count(window->ev_queue) > 0) {
+        ws_input_event_t *slot = ring_queue_at(window->ev_queue, 0);
+        if (!slot) {
+            return -EIO;
+        }
+
+        ws_input_event_t event = *slot;
+        if (!_ack_resize_event(window, &event, ack_resize)) {
+            ring_queue_drop_head(window->ev_queue);
+            continue;
+        }
+
+        out[copied++] = event;
+        ring_queue_drop_head(window->ev_queue);
+    }
+
+    return (ssize_t)copied;
+}
+
+static ssize_t _ws_ev_read_as(const ws_io_t *io) {
+    if (!io) {
         return -EINVAL;
     }
 
-    if (len < sizeof(ws_input_event_t)) {
+    if (!io->buf) {
         return -EINVAL;
     }
 
-    size_t max_events = len / sizeof(ws_input_event_t);
+    if (io->len < sizeof(ws_input_event_t)) {
+        return -EINVAL;
+    }
+
+    size_t max_events = io->len / sizeof(ws_input_event_t);
     if (!max_events) {
         return -EINVAL;
     }
 
-    if (caller_pid <= 0) {
+    if (io->pid <= 0) {
         return -EPERM;
     }
 
     for (;;) {
-        size_t copied = 0;
-        ws_input_event_t *out_events = (ws_input_event_t *)buf;
+        ws_input_event_t *out_events = (ws_input_event_t *)io->buf;
         u32 wait_seq = 0;
 
         mutex_lock(&ws_state.lock);
 
         ws_window_t *window = NULL;
-        int status = _window_lookup(id, caller_pid, &window);
+        int status = _window_lookup(io->id, io->pid, &window);
 
         if (status) {
             mutex_unlock(&ws_state.lock);
             return status;
         }
 
-        bool apply_resize_ack = caller_pid == window->owner_pid;
-
-        while (copied < max_events && ring_queue_count(window->ev_queue) > 0) {
-            ws_input_event_t *slot = ring_queue_at(window->ev_queue, 0);
-
-            if (!slot) {
-                mutex_unlock(&ws_state.lock);
-                return -EIO;
-            }
-
-            ws_input_event_t event = *slot;
-
-            if (apply_resize_ack && event.type == INPUT_EVENT_WINDOW_RESIZE && event.width && event.height) {
-                u64 auto_stride = (u64)event.width * sizeof(u32);
-                if (auto_stride > UINT32_MAX) {
-                    ring_queue_drop_head(window->ev_queue);
-                    continue;
-                }
-
-                u32 io_stride = event.stride ? event.stride : (u32)auto_stride;
-                u64 io_fb_size_u64 = (u64)io_stride * (u64)event.height;
-
-                if (io_stride && io_fb_size_u64 <= WS_MAX_FB_BYTES) {
-                    window->io_width = event.width;
-                    window->io_height = event.height;
-                    window->io_stride = io_stride;
-                    window->io_fb_size = (size_t)io_fb_size_u64;
-                }
-            }
-
-            out_events[copied] = event;
-            ring_queue_drop_head(window->ev_queue);
-            copied++;
+        ssize_t copied = _copy_window_events(window, out_events, max_events, io->pid == window->owner_pid);
+        if (copied < 0) {
+            mutex_unlock(&ws_state.lock);
+            return copied;
         }
 
         if (copied) {
             mutex_unlock(&ws_state.lock);
-            return (ssize_t)(copied * sizeof(ws_input_event_t));
+            return (ssize_t)((size_t)copied * sizeof(ws_input_event_t));
         }
 
-        if (flags & VFS_NONBLOCK) {
+        if (io->flags & VFS_NONBLOCK) {
             mutex_unlock(&ws_state.lock);
             return -EAGAIN;
         }
@@ -1987,7 +2183,7 @@ static ssize_t _ws_ev_read_as(u32 id, pid_t caller_pid, void *buf, size_t offset
         }
 
         sched_thread_t *current = sched_current();
-        if (current && sched_signal_has_pending(current)) {
+        if (current && sched_signal_pending(current)) {
             mutex_unlock(&ws_state.lock);
             return -EINTR;
         }
@@ -1996,9 +2192,9 @@ static ssize_t _ws_ev_read_as(u32 id, pid_t caller_pid, void *buf, size_t offset
         sched_wait_queue_t *wait_queue = &window->ev_wait;
         mutex_unlock(&ws_state.lock);
 
-        sched_wait_result_t wait_result = sched_wait_on_queue(wait_queue, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
+        sched_wait_result_t wait_result = sched_wait_on(wait_queue, wait_seq, 0, SCHED_WAIT_INTERRUPTIBLE);
 
-        _flush_deferred_wakes();
+        flush_wakes();
         if (wait_result == SCHED_WAIT_INTR) {
             return -EINTR;
         }
@@ -2006,7 +2202,16 @@ static ssize_t _ws_ev_read_as(u32 id, pid_t caller_pid, void *buf, size_t offset
 }
 
 ssize_t ws_ev_read(u32 id, void *buf, size_t offset, size_t len, u32 flags) {
-    return _ws_ev_read_as(id, _current_pid(), buf, offset, len, flags);
+    ws_io_t io = {
+        .id = id,
+        .pid = _current_pid(),
+        .buf = buf,
+        .offset = offset,
+        .len = len,
+        .flags = flags,
+    };
+
+    return _ws_ev_read_as(&io);
 }
 
 short ws_ev_poll(u32 id, short events, u32 flags) {
@@ -2014,21 +2219,21 @@ short ws_ev_poll(u32 id, short events, u32 flags) {
     return _ws_window_poll_as(id, _current_pid(), events, true);
 }
 
-bool ws_node_read(
-    vfs_node_t *node,
-    pid_t caller_pid,
-    void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags,
-    ssize_t *result_out
-) {
-    if (!node || !result_out) {
+bool ws_node_read(const ws_node_io_t *node_io) {
+    if (!node_io || !node_io->node || !node_io->result) {
         return false;
     }
 
+    vfs_node_t *node = node_io->node;
+
     if (node->interface == ws_state.wsmgr_if) {
-        *result_out = _ws_mgr_read_as(caller_pid, buf, offset, len, flags);
+        *node_io->result = _ws_mgr_read_as(
+            node_io->pid,
+            (void *)node_io->buf,
+            node_io->offset,
+            node_io->len,
+            node_io->flags
+        );
         return true;
     }
 
@@ -2038,34 +2243,55 @@ bool ws_node_read(
     }
 
     if (node->interface == ws_state.ws_fb_if) {
-        *result_out = _ws_fb_read_as(id, caller_pid, buf, offset, len, flags);
+        ws_io_t io = {
+            .id = id,
+            .pid = node_io->pid,
+            .buf = (void *)node_io->buf,
+            .offset = node_io->offset,
+            .len = node_io->len,
+            .flags = node_io->flags,
+        };
+
+        *node_io->result = _ws_fb_read_as(&io);
         return true;
     }
 
     if (node->interface == ws_state.ws_ev_if) {
-        *result_out = _ws_ev_read_as(id, caller_pid, buf, offset, len, flags);
+        ws_io_t io = {
+            .id = id,
+            .pid = node_io->pid,
+            .buf = (void *)node_io->buf,
+            .offset = node_io->offset,
+            .len = node_io->len,
+            .flags = node_io->flags,
+        };
+
+        *node_io->result = _ws_ev_read_as(&io);
         return true;
     }
 
     return false;
 }
 
-bool ws_node_write(
-    vfs_node_t *node,
-    pid_t caller_pid,
-    const void *buf,
-    size_t offset,
-    size_t len,
-    u32 flags,
-    ssize_t *result_out
-) {
+bool ws_node_write(const ws_node_io_t *node_io) {
     u32 id = 0;
-    if (!node || !result_out || !_slot_priv_decode(node->private, &id)) {
+    if (!node_io || !node_io->node || !node_io->result || !_slot_priv_decode(node_io->node->private, &id)) {
         return false;
     }
 
+    vfs_node_t *node = node_io->node;
+
     if (node->interface == ws_state.ws_fb_if) {
-        *result_out = _ws_fb_write_as(id, caller_pid, buf, offset, len, flags);
+        ws_io_t io = {
+            .id = id,
+            .pid = node_io->pid,
+            .buf = (void *)node_io->buf,
+            .offset = node_io->offset,
+            .len = node_io->len,
+            .flags = node_io->flags,
+        };
+
+        *node_io->result = _ws_fb_write_as(&io);
         return true;
     }
 
