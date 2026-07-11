@@ -9,8 +9,11 @@
 #include <unistd.h>
 
 static void print_error(const char *src, const char *dst) {
+    const char *src_name = src ? src : "(null)";
+    const char *dst_name = dst ? dst : "(null)";
+
     char line[320];
-    snprintf(line, sizeof(line), "mv: %s -> %s: %d\n", src ? src : "(null)", dst ? dst : "(null)", errno);
+    snprintf(line, sizeof(line), "mv: %s -> %s: %d\n", src_name, dst_name, errno);
     io_write_str(line);
 }
 
@@ -31,22 +34,32 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int rc = 0;
+    int exit_code = 0;
     for (int i = 1; i < argc - 1; i++) {
         const char *src = argv[i];
         char target[PATH_MAX];
 
         if (dest_is_dir) {
-            fs_join_path(target, sizeof(target), dest, fs_path_basename(src));
+            if (!fs_join_path(target, sizeof(target), dest, fs_path_basename(src))) {
+                print_error(src, dest);
+                exit_code = 1;
+                continue;
+            }
         } else {
-            snprintf(target, sizeof(target), "%s", dest);
+            int written = snprintf(target, sizeof(target), "%s", dest);
+            if (written < 0 || (size_t)written >= sizeof(target)) {
+                errno = ENAMETOOLONG;
+                print_error(src, dest);
+                exit_code = 1;
+                continue;
+            }
         }
 
         if (rename(src, target) < 0) {
             print_error(src, target);
-            rc = 1;
+            exit_code = 1;
         }
     }
 
-    return rc;
+    return exit_code;
 }

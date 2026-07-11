@@ -10,15 +10,13 @@
 #include <unistd.h>
 
 static void print_error(const char *path) {
-    char line[256];
-    snprintf(line, sizeof(line), "rm: %s: %d\n", path ? path : "(null)", errno);
-    io_write_str(line);
+    fprintf(stderr, "rm: %s: %s\n", path ? path : "(null)", strerror(errno));
 }
 
 static int rm_dir_recursive(const char *path, bool force) {
     DIR *dir = opendir(path);
     if (!dir) {
-        if (force) {
+        if (force && errno == ENOENT) {
             return 0;
         }
 
@@ -26,21 +24,33 @@ static int rm_dir_recursive(const char *path, bool force) {
         return 1;
     }
 
-    int rc = 0;
+    int exit_code = 0;
     struct dirent *ent = NULL;
-    while ((ent = readdir(dir)) != NULL) {
+    int read_error = 0;
+    for (;;) {
+        errno = 0;
+        ent = readdir(dir);
+        if (!ent) {
+            read_error = errno;
+            break;
+        }
+
         if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, "..")) {
             continue;
         }
 
         char child[PATH_MAX];
-        fs_join_path(child, sizeof(child), path, ent->d_name);
+        if (!fs_join_path(child, sizeof(child), path, ent->d_name)) {
+            print_error(path);
+            exit_code = 1;
+            continue;
+        }
 
         struct stat child_st;
         if (lstat(child, &child_st) < 0) {
             if (!force || errno != ENOENT) {
                 print_error(child);
-                rc = 1;
+                exit_code = 1;
             }
 
             continue;
@@ -48,7 +58,7 @@ static int rm_dir_recursive(const char *path, bool force) {
 
         if (fs_is_dir_mode(child_st.st_mode)) {
             if (rm_dir_recursive(child, force) != 0) {
-                rc = 1;
+                exit_code = 1;
             }
 
             continue;
@@ -56,20 +66,27 @@ static int rm_dir_recursive(const char *path, bool force) {
 
         if (unlink(child) < 0 && (!force || errno != ENOENT)) {
             print_error(child);
-            rc = 1;
+            exit_code = 1;
         }
     }
 
-    closedir(dir);
-
-    if (rmdir(path) < 0) {
-        if (!force) {
-            print_error(path);
-            rc = 1;
-        }
+    if (read_error) {
+        errno = read_error;
+        print_error(path);
+        exit_code = 1;
     }
 
-    return rc;
+    if (closedir(dir) < 0) {
+        print_error(path);
+        exit_code = 1;
+    }
+
+    if (rmdir(path) < 0 && (!force || errno != ENOENT)) {
+        print_error(path);
+        exit_code = 1;
+    }
+
+    return exit_code;
 }
 
 static int rm_path(const char *path, bool recursive, bool force) {
@@ -147,12 +164,12 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int rc = 0;
+    int exit_code = 0;
     for (int i = argi; i < argc; i++) {
         if (rm_path(argv[i], recursive, force) != 0) {
-            rc = 1;
+            exit_code = 1;
         }
     }
 
-    return rc;
+    return exit_code;
 }

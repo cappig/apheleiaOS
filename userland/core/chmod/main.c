@@ -45,6 +45,14 @@ static bool is_symbolic_mode(const char *text) {
     return false;
 }
 
+static bool is_who_char(char ch) {
+    return ch == 'u' || ch == 'g' || ch == 'o' || ch == 'a';
+}
+
+static bool is_perm_char(char ch) {
+    return ch == 'r' || ch == 'w' || ch == 'x' || ch == 'X' || ch == 's' || ch == 't';
+}
+
 static mode_t who_clear_mask(unsigned who) {
     mode_t mask = 0;
 
@@ -134,7 +142,7 @@ static int apply_symbolic_mode(const char *text, mode_t start_mode, mode_t *out)
 
     while (*cursor) {
         unsigned who = 0;
-        while (*cursor == 'u' || *cursor == 'g' || *cursor == 'o' || *cursor == 'a') {
+        while (is_who_char(*cursor)) {
             if (*cursor == 'u' || *cursor == 'a') {
                 who |= 0x1;
             }
@@ -161,8 +169,7 @@ static int apply_symbolic_mode(const char *text, mode_t start_mode, mode_t *out)
         mode_t bits = 0;
         bool have_perm = false;
 
-        while (*cursor == 'r' || *cursor == 'w' || *cursor == 'x' || *cursor == 'X' || *cursor == 's' ||
-               *cursor == 't') {
+        while (is_perm_char(*cursor)) {
             bits |= perm_bits_for(who, *cursor, mode);
             have_perm = true;
             cursor++;
@@ -213,7 +220,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int rc = 0;
+    int exit_code = 0;
     for (int i = 2; i < argc; i++) {
         mode_t target_mode = mode;
         if (symbolic) {
@@ -223,13 +230,13 @@ int main(int argc, char **argv) {
                 char msg[128];
                 snprintf(msg, sizeof(msg), "chmod: %s: %s\n", argv[i], strerror(errno));
                 io_write_str(msg);
-                rc = 1;
+                exit_code = 1;
                 continue;
             }
 
             if (apply_symbolic_mode(argv[1], st.st_mode, &target_mode) != 0) {
                 io_write_str("chmod: invalid mode\n");
-                rc = 1;
+                exit_code = 1;
                 continue;
             }
         }
@@ -238,9 +245,9 @@ int main(int argc, char **argv) {
             char msg[128];
             snprintf(msg, sizeof(msg), "chmod: %s: %s\n", argv[i], strerror(errno));
             io_write_str(msg);
-            rc = 1;
+            exit_code = 1;
         }
     }
 
-    return rc;
+    return exit_code;
 }

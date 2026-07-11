@@ -92,13 +92,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int rc = 0;
+    int exit_code = 0;
     for (int i = argi; i < argc; i++) {
         if (remove_with_parents(argv[i], parents) < 0) {
             print_error(argv[i]);
-            rc = 1;
+            exit_code = 1;
         }
     }
 
-    return rc;
+    return exit_code;
 }

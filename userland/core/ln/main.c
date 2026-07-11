@@ -57,17 +57,17 @@ int main(int argc, char **argv) {
     const char *target = argv[argi];
     const char *link_path = argv[argi + 1];
 
-    int rc = symbolic ? symlink(target, link_path) : link(target, link_path);
-    if (!rc) {
+    int status = symbolic ? symlink(target, link_path) : link(target, link_path);
+    if (!status) {
         return 0;
     }
 
     if (force && errno == EEXIST) {
         if (!unlink(link_path)) {
-            rc = symbolic ? symlink(target, link_path) : link(target, link_path);
+            status = symbolic ? symlink(target, link_path) : link(target, link_path);
         }
 
-        if (!rc) {
+        if (!status) {
             return 0;
         }
     }

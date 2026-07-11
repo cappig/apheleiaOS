@@ -39,6 +39,14 @@ typedef struct {
     size_t cap;
 } ls_entries_t;
 
+typedef struct {
+    size_t name;
+    size_t links;
+    size_t user;
+    size_t group;
+    size_t size;
+} ls_widths_t;
+
 static size_t decimal_width_u64(unsigned long long value) {
     char buf[32];
     int len = snprintf(buf, sizeof(buf), "%llu", value);
@@ -174,7 +182,9 @@ static bool read_entry_stat(const char *path, ls_entry_t *entry) {
     }
 
     char full[256];
-    fs_join_path(full, sizeof(full), path, entry->name);
+    if (!fs_join_path(full, sizeof(full), path, entry->name)) {
+        return false;
+    }
 
     if (stat(full, &entry->st) < 0) {
         memset(&entry->st, 0, sizeof(entry->st));
@@ -290,6 +300,131 @@ static int print_file(const char *path, const char *name, const ls_opts_t *opts)
     return 0;
 }
 
+static bool read_entries(DIR *dir, const ls_opts_t *opts, ls_entries_t *entries) {
+    struct dirent *entry = NULL;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (!want_name(entry->d_name, opts->all, opts->almost_all)) {
+            continue;
+        }
+
+        if (!add_entry(entries, entry)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void measure_entries(const char *path, const ls_opts_t *opts, ls_entries_t *entries, ls_widths_t *widths) {
+    for (size_t i = 0; i < entries->count; i++) {
+        ls_entry_t *entry = &entries->items[i];
+
+        size_t name_len = strlen(entry->name);
+        if (name_len > widths->name) {
+            widths->name = name_len;
+        }
+
+        if (opts->color && !opts->long_format && entry_can_be_exec(entry)) {
+            read_entry_stat(path, entry);
+        }
+
+        if (!opts->long_format) {
+            continue;
+        }
+
+        char uid_buf[16];
+        char gid_buf[16];
+        read_entry_stat(path, entry);
+
+        const char *user = account_uid_name(entry->st.st_uid, uid_buf, sizeof(uid_buf));
+        const char *group = account_gid_name(entry->st.st_gid, gid_buf, sizeof(gid_buf));
+
+        widths->user = max(widths->user, strlen(user));
+        widths->group = max(widths->group, strlen(group));
+        widths->links = max(widths->links, decimal_width_u64((unsigned long long)entry->st.st_nlink));
+        widths->size = max(widths->size, size_width((unsigned long long)entry->st.st_size, opts->human_size));
+    }
+}
+
+static void print_long_entry(const ls_entry_t *entry, const ls_opts_t *opts, const ls_widths_t *widths) {
+    char uid_buf[16];
+    char gid_buf[16];
+    const char *user = account_uid_name(entry->st.st_uid, uid_buf, sizeof(uid_buf));
+    const char *group = account_gid_name(entry->st.st_gid, gid_buf, sizeof(gid_buf));
+
+    char mode[11];
+    fs_format_mode(entry->st.st_mode, mode);
+
+    char time[32];
+    fs_format_time_short(entry->st.st_mtime, time, sizeof(time));
+
+    char size[32];
+    format_size((unsigned long long)entry->st.st_size, opts->human_size, size, sizeof(size));
+
+    char line[256];
+    snprintf(
+        line,
+        sizeof(line),
+        "%s %*lu %-*s %-*s %*s %s ",
+        mode,
+        (int)widths->links,
+        (unsigned long)entry->st.st_nlink,
+        (int)widths->user,
+        user,
+        (int)widths->group,
+        group,
+        (int)widths->size,
+        size,
+        time
+    );
+
+    io_write_str(line);
+    write_entry_name(entry->name, entry, opts->color);
+    io_write_char('\n');
+}
+
+static void print_entries(const ls_entries_t *entries, const ls_opts_t *opts, const ls_widths_t *widths) {
+    size_t column_width = widths->name + 2;
+    size_t columns = 1;
+
+    if (!opts->long_format && !opts->single_column && column_width) {
+        columns = max((size_t)1, term_width() / column_width);
+    }
+
+    size_t column = 0;
+
+    for (size_t i = 0; i < entries->count; i++) {
+        const ls_entry_t *entry = &entries->items[i];
+
+        if (opts->long_format) {
+            print_long_entry(entry, opts, widths);
+            continue;
+        }
+
+        write_entry_name(entry->name, entry, opts->color);
+
+        if (opts->single_column || columns == 1) {
+            io_write_char('\n');
+            column = 0;
+            continue;
+        }
+
+        size_t name_len = strlen(entry->name);
+        size_t padding = column_width > name_len ? column_width - name_len : 1;
+        io_write_repeat(' ', padding);
+
+        if (++column >= columns) {
+            io_write_char('\n');
+            column = 0;
+        }
+    }
+
+    if (!opts->long_format && !opts->single_column && column) {
+        io_write_char('\n');
+    }
+}
+
 static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) {
     if (!path || !opts) {
         return 1;
@@ -308,156 +443,26 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
         io_write_str(":\n");
     }
 
-    size_t max_len = 0;
-    size_t width_links = 1;
-    size_t width_uname = 1;
-    size_t width_gname = 1;
-    size_t width_size = 1;
-
     ls_entries_t entries = { 0 };
-    struct dirent *ent = NULL;
-
-    while ((ent = readdir(dir)) != NULL) {
-        const char *name = ent->d_name;
-
-        if (!want_name(name, opts->all, opts->almost_all)) {
-            continue;
-        }
-
-        if (!add_entry(&entries, ent)) {
-            closedir(dir);
-            free(entries.items);
-            io_write_str("ls: out of memory\n");
-            return 1;
-        }
-    }
+    bool read_ok = read_entries(dir, opts, &entries);
 
     closedir(dir);
 
-    for (size_t i = 0; i < entries.count; i++) {
-        ls_entry_t *entry = &entries.items[i];
-        const char *name = entry->name;
-
-        size_t len = strlen(name);
-
-        if (len > max_len) {
-            max_len = len;
-        }
-
-        if (opts->color && !opts->long_format && entry_can_be_exec(entry)) {
-            read_entry_stat(path, entry);
-        }
-
-        if (opts->long_format) {
-            char uid_buf[16];
-            char gid_buf[16];
-            const char *uname = "";
-            const char *gname = "";
-
-            read_entry_stat(path, entry);
-            uname = account_uid_name(entry->st.st_uid, uid_buf, sizeof(uid_buf));
-            gname = account_gid_name(entry->st.st_gid, gid_buf, sizeof(gid_buf));
-
-            size_t uname_len = strlen(uname);
-            if (uname_len > width_uname) {
-                width_uname = uname_len;
-            }
-
-            size_t gname_len = strlen(gname);
-            if (gname_len > width_gname) {
-                width_gname = gname_len;
-            }
-
-            size_t links_len = decimal_width_u64((unsigned long long)entry->st.st_nlink);
-            if (links_len > width_links) {
-                width_links = links_len;
-            }
-
-            size_t size_len = size_width((unsigned long long)entry->st.st_size, opts->human_size);
-            if (size_len > width_size) {
-                width_size = size_len;
-            }
-        }
+    if (!read_ok) {
+        free(entries.items);
+        io_write_str("ls: out of memory\n");
+        return 1;
     }
 
-    size_t cols = 1;
-    size_t col_width = max_len + 2;
+    ls_widths_t widths = {
+        .links = 1,
+        .user = 1,
+        .group = 1,
+        .size = 1,
+    };
 
-    if (!opts->long_format && !opts->single_column && col_width) {
-        cols = term_width() / col_width;
-
-        if (!cols) {
-            cols = 1;
-        }
-    }
-
-    size_t col = 0;
-    for (size_t i = 0; i < entries.count; i++) {
-        ls_entry_t *entry = &entries.items[i];
-        const char *name = entry->name;
-
-        if (opts->long_format) {
-            char uid_buf[16];
-            char gid_buf[16];
-            const char *uname = account_uid_name(entry->st.st_uid, uid_buf, sizeof(uid_buf));
-            const char *gname = account_gid_name(entry->st.st_gid, gid_buf, sizeof(gid_buf));
-
-            char mode[11];
-            fs_format_mode(entry->st.st_mode, mode);
-
-            char timebuf[32];
-            fs_format_time_short(entry->st.st_mtime, timebuf, sizeof(timebuf));
-
-            char sizebuf[32];
-            format_size((unsigned long long)entry->st.st_size, opts->human_size, sizebuf, sizeof(sizebuf));
-
-            char line[256];
-            snprintf(
-                line,
-                sizeof(line),
-                "%s %*lu %-*s %-*s %*s %s ",
-                mode,
-                (int)width_links,
-                (unsigned long)entry->st.st_nlink,
-                (int)width_uname,
-                uname,
-                (int)width_gname,
-                gname,
-                (int)width_size,
-                sizebuf,
-                timebuf
-            );
-
-            io_write_str(line);
-            write_entry_name(name, entry, opts->color);
-            io_write_char('\n');
-            continue;
-        }
-
-        write_entry_name(name, entry, opts->color);
-
-        size_t name_len = strlen(name);
-
-        if (opts->single_column || cols == 1) {
-            io_write_char('\n');
-            col = 0;
-            continue;
-        }
-
-        size_t pad = col_width > name_len ? col_width - name_len : 1;
-        io_write_repeat(' ', pad);
-
-        col++;
-
-        if (col >= cols) {
-            io_write_char('\n');
-            col = 0;
-        }
-    }
-
-    if (!opts->long_format && !opts->single_column && col != 0) {
-        io_write_char('\n');
-    }
+    measure_entries(path, opts, &entries, &widths);
+    print_entries(&entries, opts, &widths);
 
     int status = 0;
 
@@ -479,7 +484,13 @@ static int list_dir(const char *path, const ls_opts_t *opts, bool print_header) 
             }
 
             char child[256];
-            fs_join_path(child, sizeof(child), path, name);
+            if (!fs_join_path(child, sizeof(child), path, name)) {
+                char msg[320];
+                snprintf(msg, sizeof(msg), "ls: %s/%s: %s\n", path, name, strerror(errno));
+                io_write_str(msg);
+                status = 1;
+                continue;
+            }
 
             io_write_char('\n');
             if (list_dir(child, opts, true) != 0) {

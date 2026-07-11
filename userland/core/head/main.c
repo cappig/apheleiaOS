@@ -1,9 +1,28 @@
+#include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 #define HEAD_BUF_SIZE 256
+
+static bool parse_count(const char *text, int *out) {
+    if (!text || !*text || !out) {
+        return false;
+    }
+
+    errno = 0;
+    char *end = NULL;
+    long value = strtol(text, &end, 10);
+    if (errno == ERANGE || end == text || *end || value < 0 || value > INT_MAX) {
+        return false;
+    }
+
+    *out = (int)value;
+    return true;
+}
 
 static int write_all(int fd, const char *buf, size_t len) {
     size_t off = 0;
@@ -44,10 +63,11 @@ int main(int argc, char **argv) {
     int lines = 10;
     int argi = 1;
 
-    if (argc >= 3 && !strcmp(argv[1], "-n")) {
-        lines = atoi(argv[2]);
-        if (lines <= 0) {
-            lines = 10;
+    if (argc >= 2 && !strcmp(argv[1], "-n")) {
+        if (argc < 3 || !parse_count(argv[2], &lines)) {
+            static const char error[] = "head: invalid line count\n";
+            write(STDERR_FILENO, error, sizeof(error) - 1);
+            return 1;
         }
         argi = 3;
     }
@@ -60,7 +80,8 @@ int main(int argc, char **argv) {
     for (int i = argi; i < argc; i++) {
         int fd = open(argv[i], O_RDONLY, 0);
         if (fd < 0) {
-            write(STDOUT_FILENO, "head: failed to open\n", 21);
+            static const char error[] = "head: failed to open\n";
+            write(STDERR_FILENO, error, sizeof(error) - 1);
             status = 1;
             continue;
         }

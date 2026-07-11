@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int rc = 0;
+    int exit_code = 0;
 
     for (int i = 1; i < argc; i++) {
         if (argc > 2 && i > 1) {
@@ -76,9 +76,9 @@ int main(int argc, char **argv) {
         }
 
         if (print_one(argv[i]) != 0) {
-            rc = 1;
+            exit_code = 1;
         }
     }
 
-    return rc;
+    return exit_code;
 }

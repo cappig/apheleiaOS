@@ -14,8 +14,11 @@ static void usage(void) {
 }
 
 static void print_error(const char *src, const char *dst) {
+    const char *src_name = src ? src : "(null)";
+    const char *dst_name = dst ? dst : "(null)";
+
     char line[320];
-    snprintf(line, sizeof(line), "cp: %s -> %s: %s\n", src ? src : "(null)", dst ? dst : "(null)", strerror(errno));
+    snprintf(line, sizeof(line), "cp: %s -> %s: %s\n", src_name, dst_name, strerror(errno));
     io_write_str(line);
 }
 
@@ -42,6 +45,10 @@ static int copy_fd_data(int in_fd, int out_fd) {
                 if (errno == EINTR) {
                     continue;
                 }
+                return -1;
+            }
+            if (!wrote) {
+                errno = EIO;
                 return -1;
             }
             off += (size_t)wrote;
@@ -81,13 +88,13 @@ static int copy_file(const char *src, const char *dst) {
         return -1;
     }
 
-    int rc = copy_fd_data(in_fd, out_fd);
+    int status = copy_fd_data(in_fd, out_fd);
     int saved = errno;
 
     close(out_fd);
     close(in_fd);
 
-    if (rc < 0) {
+    if (status < 0) {
         errno = saved;
         return -1;
     }
@@ -116,22 +123,32 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    int rc = 0;
+    int exit_code = 0;
     for (int i = 1; i < argc - 1; i++) {
         const char *src = argv[i];
         char target[PATH_MAX];
 
         if (dest_is_dir) {
-            fs_join_path(target, sizeof(target), dest, fs_path_basename(src));
+            if (!fs_join_path(target, sizeof(target), dest, fs_path_basename(src))) {
+                print_error(src, dest);
+                exit_code = 1;
+                continue;
+            }
         } else {
-            snprintf(target, sizeof(target), "%s", dest);
+            int written = snprintf(target, sizeof(target), "%s", dest);
+            if (written < 0 || (size_t)written >= sizeof(target)) {
+                errno = ENAMETOOLONG;
+                print_error(src, dest);
+                exit_code = 1;
+                continue;
+            }
         }
 
         if (copy_file(src, target) < 0) {
             print_error(src, target);
-            rc = 1;
+            exit_code = 1;
         }
     }
 
-    return rc;
+    return exit_code;
 }
