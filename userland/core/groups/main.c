@@ -33,7 +33,7 @@ static bool trim_token(char **text) {
     return start[0] != '\0';
 }
 
-static bool member_list_has_user(const char *members, const char *user_name) {
+static bool has_member(const char *members, const char *user_name) {
     if (!members || !user_name || !user_name[0]) {
         return false;
     }
@@ -161,7 +161,7 @@ static size_t collect_groups(const char *user_name, gid_t primary_gid, gid_t *gr
 
         bool include = ((gid_t)parsed_gid == primary_gid);
         if (!include) {
-            include = member_list_has_user(members, user_name);
+            include = has_member(members, user_name);
         }
 
         if (!include) {

@@ -1,5 +1,6 @@
 #include <crypt.h>
 #include <ctype.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <pwd.h>
 #include <shadow.h>
@@ -45,8 +46,19 @@ static int read_line(char *buf, size_t len) {
         char ch = 0;
         ssize_t count = read(STDIN_FILENO, &ch, 1);
 
-        if (count <= 0) {
+        if (count < 0 && errno == EINTR) {
             continue;
+        }
+
+        if (!count) {
+            if (pos) {
+                break;
+            }
+            return -1;
+        }
+
+        if (count < 0) {
+            return -1;
         }
 
         if (ch == '\r') {
@@ -63,6 +75,25 @@ static int read_line(char *buf, size_t len) {
         if (ch == '\n') {
             break;
         }
+    }
+
+    if (pos + 1 >= len && (!pos || buf[pos - 1] != '\n')) {
+        for (;;) {
+            char ch = 0;
+            ssize_t count = read(STDIN_FILENO, &ch, 1);
+            if (count > 0) {
+                if (ch == '\n' || ch == '\r') {
+                    break;
+                }
+                continue;
+            }
+            if (count < 0 && errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        buf[0] = '\0';
+        return -2;
     }
 
     buf[pos] = '\0';
@@ -124,7 +155,7 @@ static bool secure_streq(const char *left, const char *right) {
     return diff == 0;
 }
 
-static bool member_list_has_user(const char *members, const char *user_name) {
+static bool has_member(const char *members, const char *user_name) {
     if (!members || !user_name || !user_name[0]) {
         return false;
     }
@@ -171,7 +202,7 @@ static void append_group(gid_t gid, gid_t *groups, size_t max_groups, size_t *gr
     (*group_count)++;
 }
 
-static size_t collect_supp_groups(const char *user_name, gid_t primary_gid, gid_t *groups, size_t max_groups) {
+static size_t collect_groups(const char *user_name, gid_t primary_gid, gid_t *groups, size_t max_groups) {
     if (!groups || !max_groups) {
         return 0;
     }
@@ -253,7 +284,7 @@ static size_t collect_supp_groups(const char *user_name, gid_t primary_gid, gid_
             continue;
         }
 
-        if (!member_list_has_user(members, user_name)) {
+        if (!has_member(members, user_name)) {
             continue;
         }
 
@@ -275,8 +306,13 @@ int main(int argc, char **argv) {
         ioctl(STDIN_FILENO, TIOCSPGRP, &pid);
 
         write_str("login: ");
-        if (read_line(name, sizeof(name)) < 0) {
+        int name_status = read_line(name, sizeof(name));
+        if (name_status == -2) {
+            write_str("login: name too long\n");
             continue;
+        }
+        if (name_status < 0) {
+            return 1;
         }
 
         strip_newline(name);
@@ -292,22 +328,34 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        struct spwd *shadow = getspnam(name);
+        struct spwd *shadow = getspnam(login_name);
         if (!shadow) {
             write_str("login: authentication failed\n");
             continue;
         }
 
         write_str("password: ");
-        tty_set_echo(false);
-
-        if (read_line(pass, sizeof(pass)) < 0) {
-            tty_set_echo(true);
-            write_str("\n");
-            continue;
+        if (!tty_set_echo(false)) {
+            write_str("login: failed to configure terminal\n");
+            return 1;
         }
 
-        tty_set_echo(true);
+        int pass_status = read_line(pass, sizeof(pass));
+        if (pass_status < 0) {
+            tty_set_echo(true);
+            write_str("\n");
+            if (pass_status == -2) {
+                write_str("login: password too long\n");
+                continue;
+            }
+            return 1;
+        }
+
+        if (!tty_set_echo(true)) {
+            write_str("\nlogin: failed to restore terminal\n");
+            return 1;
+        }
+
         write_str("\n");
 
         strip_newline(pass);
@@ -320,9 +368,19 @@ int main(int argc, char **argv) {
         }
 
         gid_t groups[LOGIN_GROUP_MAX] = { 0 };
-        size_t group_count = collect_supp_groups(login_name, pwd->pw_gid, groups, sizeof(groups) / sizeof(groups[0]));
+        size_t group_count = collect_groups(login_name, pwd->pw_gid, groups, sizeof(groups) / sizeof(groups[0]));
 
-        if (setgroups(group_count, groups) < 0 || setgid(pwd->pw_gid) < 0 || setuid(pwd->pw_uid) < 0) {
+        if (setgroups(group_count, groups) < 0) {
+            write_str("login: failed to set credentials\n");
+            continue;
+        }
+
+        if (setgid(pwd->pw_gid) < 0) {
+            write_str("login: failed to set credentials\n");
+            continue;
+        }
+
+        if (setuid(pwd->pw_uid) < 0) {
             write_str("login: failed to set credentials\n");
             continue;
         }

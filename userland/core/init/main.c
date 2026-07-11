@@ -55,10 +55,14 @@ static char *skip_space(char *s) {
     return s;
 }
 
+static bool is_line_space(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+}
+
 static void trim_line(char *s) {
     size_t len = strlen(s);
 
-    while (len && (s[len - 1] == ' ' || s[len - 1] == '\t' || s[len - 1] == '\r' || s[len - 1] == '\n')) {
+    while (len && is_line_space(s[len - 1])) {
         s[--len] = '\0';
     }
 }
@@ -139,12 +143,16 @@ static bool attach_stdio(const char *path) {
         return false;
     }
 
-    if (dup2(fd, STDIN_FILENO) < 0 || dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
-        if (fd > STDERR_FILENO) {
-            close(fd);
-        }
+    if (dup2(fd, STDIN_FILENO) < 0) {
+        goto fail;
+    }
 
-        return false;
+    if (dup2(fd, STDOUT_FILENO) < 0) {
+        goto fail;
+    }
+
+    if (dup2(fd, STDERR_FILENO) < 0) {
+        goto fail;
     }
 
     if (fd > STDERR_FILENO) {
@@ -152,6 +160,13 @@ static bool attach_stdio(const char *path) {
     }
 
     return true;
+
+fail:
+    if (fd > STDERR_FILENO) {
+        close(fd);
+    }
+
+    return false;
 }
 
 static int run_script_sync(const char *path) {
@@ -199,7 +214,7 @@ static int run_script_sync(const char *path) {
     return -1;
 }
 
-static void run_optional_script_sync(const char *path) {
+static void run_optional_script(const char *path) {
     if (!path || !path[0]) {
         return;
     }
@@ -259,7 +274,7 @@ int main(int argc, char **argv) {
     }
 
     (void)run_script_sync("/etc/rc");
-    run_optional_script_sync("/etc/rc.local");
+    run_optional_script("/etc/rc.local");
 
     for (;;) {
         int status = 0;
