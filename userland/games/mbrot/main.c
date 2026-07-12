@@ -289,7 +289,7 @@ static u32 compute_render_step(u32 width, u32 height, int resolution_adjust) {
     return clamp_render_step(step);
 }
 
-static u32 progressive_next_step(u32 current_step, u32 target_step) {
+static u32 next_pass_step(u32 current_step, u32 target_step) {
     current_step = clamp_render_step(current_step);
     target_step = clamp_render_step(target_step);
 
@@ -441,7 +441,7 @@ static u32 palette_color(u32 iter, u32 max_iter) {
     return (clamp_u8_i32(r) << 16) | (clamp_u8_i32(g) << 8) | clamp_u8_i32(b);
 }
 
-static bool point_inside_main_body(double cx, double cy) {
+static bool in_main_body(double cx, double cy) {
     double x = cx - 0.25;
     double y2 = cy * cy;
     double q = x * x + y2;
@@ -459,7 +459,7 @@ static bool point_inside_main_body(double cx, double cy) {
 }
 
 static u32 iterate_mandelbrot(double cx, double cy, u32 max_iter) {
-    if (point_inside_main_body(cx, cy)) {
+    if (in_main_body(cx, cy)) {
         return max_iter;
     }
 
@@ -680,12 +680,7 @@ static bool render_fractal_pass(
     return true;
 }
 
-static bool render_current_resolution(
-    window_t *window,
-    const mandelbrot_view_t *view,
-    mbrot_fractal_t fractal,
-    int resolution_adjust
-) {
+static bool draw_view(window_t *window, const mandelbrot_view_t *view, mbrot_fractal_t fractal, int resolution_adjust) {
     if (!window) {
         return false;
     }
@@ -700,7 +695,7 @@ static bool render_current_resolution(
 }
 
 static int
-handle_event(mandelbrot_view_t *view, mbrot_fractal_t fractal, int *resolution_adjust, const ws_input_event_t *event) {
+handle_input(mandelbrot_view_t *view, mbrot_fractal_t fractal, int *resolution_adjust, const ws_input_event_t *event) {
     if (!view || !resolution_adjust || !event) {
         return MBROT_ACTION_NONE;
     }
@@ -784,17 +779,17 @@ static bool flush_or_set_pending(window_t *window, bool *present_pending) {
     return false;
 }
 
-static void advance_progressive_state(bool *progressive_pending, u32 *progressive_step, u32 progressive_target_step) {
-    if (!progressive_pending || !progressive_step) {
+static void advance_progress(bool *pending, u32 *step, u32 target_step) {
+    if (!pending || !step) {
         return;
     }
 
-    if (*progressive_step == progressive_target_step) {
-        *progressive_pending = false;
+    if (*step == target_step) {
+        *pending = false;
         return;
     }
 
-    *progressive_step = progressive_next_step(*progressive_step, progressive_target_step);
+    *step = next_pass_step(*step, target_step);
 }
 
 static size_t terminal_cols(void) {
@@ -878,6 +873,131 @@ static int render_terminal(mbrot_fractal_t fractal) {
     return 0;
 }
 
+typedef struct {
+    window_t window;
+    mandelbrot_view_t view;
+    int resolution_adjust;
+    bool present_pending;
+    bool pending_pass;
+    u32 pass_step;
+    u32 target_step;
+    mbrot_fractal_t fractal;
+} mbrot_app_t;
+
+static bool mbrot_init(mbrot_app_t *app, mbrot_fractal_t fractal) {
+    app->fractal = fractal;
+    app->target_step = 1U;
+    app->pass_step = 1U;
+    view_reset(&app->view, fractal);
+
+    if (window_init(&app->window, 760, 500, fractal_profile(fractal)->title)) {
+        printf("mbrot: use --term or -t to draw in the terminal\n");
+        return false;
+    }
+
+    printf("+/- zoom, arrows pan, ] decrease res [ increase res, r reset, q/esc quit\n");
+
+    if (!draw_view(&app->window, &app->view, app->fractal, app->resolution_adjust)) {
+        return false;
+    }
+
+    return flush_or_set_pending(&app->window, &app->present_pending);
+}
+
+static bool mbrot_run_idle(mbrot_app_t *app) {
+    if (app->pending_pass) {
+        bool rendered = render_fractal_pass(&app->window, &app->view, app->fractal, app->pass_step, app->target_step);
+        if (!rendered) {
+            return false;
+        }
+
+        if (!flush_or_set_pending(&app->window, &app->present_pending)) {
+            return false;
+        }
+        if (!app->present_pending) {
+            advance_progress(&app->pending_pass, &app->pass_step, app->target_step);
+        }
+
+        return true;
+    }
+
+    return !app->present_pending || flush_or_set_pending(&app->window, &app->present_pending);
+}
+
+static bool mbrot_handle_event(mbrot_app_t *app, const ws_input_event_t *event) {
+    int old_adjust = app->resolution_adjust;
+    int action = handle_input(&app->view, app->fractal, &app->resolution_adjust, event);
+
+    if (action == MBROT_ACTION_QUIT) {
+        return false;
+    }
+
+    if (action == MBROT_ACTION_NONE) {
+        return true;
+    }
+
+    if (action == MBROT_ACTION_REDRAW) {
+        app->pending_pass = false;
+        return draw_view(&app->window, &app->view, app->fractal, app->resolution_adjust);
+    }
+
+    framebuffer_t *fb = window_buffer(&app->window);
+    u32 width = fb ? fb->width : 0U;
+    u32 height = fb ? fb->height : 0U;
+    u32 old_step = compute_render_step(width, height, old_adjust);
+    u32 new_step = compute_render_step(width, height, app->resolution_adjust);
+
+    app->target_step = new_step;
+    app->pass_step = old_step > new_step ? old_step : new_step;
+    app->pending_pass = true;
+
+    bool rendered = render_fractal_pass(&app->window, &app->view, app->fractal, app->pass_step, app->target_step);
+    if (rendered) {
+        advance_progress(&app->pending_pass, &app->pass_step, app->target_step);
+    }
+
+    return rendered;
+}
+
+static int run_windowed(mbrot_fractal_t fractal) {
+    mbrot_app_t app = { 0 };
+    if (!mbrot_init(&app, fractal)) {
+        window_deinit(&app.window);
+        return 1;
+    }
+
+    while (true) {
+        int timeout_ms = (app.pending_pass || app.present_pending) ? 0 : -1;
+
+        ws_input_event_t event = { 0 };
+        int event_status = window_wait_event(&app.window, &event, timeout_ms);
+        if (event_status < 0) {
+            if (errno == EINTR || errno == EAGAIN) {
+                continue;
+            }
+            break;
+        }
+
+        if (event_status == 0) {
+            if (!mbrot_run_idle(&app)) {
+                break;
+            }
+            continue;
+        }
+
+        if (!mbrot_handle_event(&app, &event)) {
+            break;
+        }
+
+        if (!flush_or_set_pending(&app.window, &app.present_pending)) {
+            break;
+        }
+    }
+
+    window_deinit(&app.window);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     mbrot_options_t opts = { 0 };
     int parse_status = parse_args(argc, argv, &opts);
@@ -889,110 +1009,5 @@ int main(int argc, char **argv) {
         return render_terminal(opts.fractal);
     }
 
-    window_t window = { 0 };
-    if (window_init(&window, 760, 500, fractal_profile(opts.fractal)->title)) {
-        printf("mbrot: use --term or -t to draw in the terminal\n");
-        return 1;
-    }
-
-    printf("+/- zoom, arrows pan, ] decrease res [ increase res, r reset, q/esc quit\n");
-
-    mandelbrot_view_t view = { 0 };
-    int resolution_adjust = 0;
-    view_reset(&view, opts.fractal);
-
-    if (!render_current_resolution(&window, &view, opts.fractal, resolution_adjust)) {
-        window_deinit(&window);
-        return 1;
-    }
-    bool present_pending = false;
-    if (!flush_or_set_pending(&window, &present_pending)) {
-        window_deinit(&window);
-        return 1;
-    }
-
-    bool progressive_pending = false;
-    u32 progressive_step = 1U;
-    u32 progressive_target_step = 1U;
-
-    while (true) {
-        int timeout_ms = (progressive_pending || present_pending) ? 0 : -1;
-
-        ws_input_event_t event = { 0 };
-        int ret = window_wait_event(&window, &event, timeout_ms);
-
-        if (ret < 0) {
-            if (errno == EINTR || errno == EAGAIN) {
-                continue;
-            }
-            break;
-        }
-
-        if (ret == 0) {
-            if (progressive_pending) {
-                if (!render_fractal_pass(&window, &view, opts.fractal, progressive_step, progressive_target_step)) {
-                    break;
-                }
-
-                if (!flush_or_set_pending(&window, &present_pending)) {
-                    break;
-                }
-                if (present_pending) {
-                    continue;
-                }
-
-                advance_progressive_state(&progressive_pending, &progressive_step, progressive_target_step);
-                continue;
-            }
-
-            if (present_pending) {
-                if (!flush_or_set_pending(&window, &present_pending)) {
-                    break;
-                }
-            }
-            continue;
-        }
-
-        int prev_resolution_adjust = resolution_adjust;
-        int action = handle_event(&view, opts.fractal, &resolution_adjust, &event);
-
-        if (action == MBROT_ACTION_QUIT) {
-            break;
-        }
-
-        if (action == MBROT_ACTION_NONE) {
-            continue;
-        }
-
-        if (action == MBROT_ACTION_REDRAW) {
-            progressive_pending = false;
-            if (!render_current_resolution(&window, &view, opts.fractal, resolution_adjust)) {
-                break;
-            }
-        } else if (action == MBROT_ACTION_RESOLUTION) {
-            framebuffer_t *fb = window_buffer(&window);
-            u32 width = fb ? fb->width : 0U;
-            u32 height = fb ? fb->height : 0U;
-            u32 old_step = compute_render_step(width, height, prev_resolution_adjust);
-            u32 new_step = compute_render_step(width, height, resolution_adjust);
-            u32 start_step = old_step > new_step ? old_step : new_step;
-
-            progressive_target_step = new_step;
-            progressive_step = start_step;
-            progressive_pending = true;
-
-            if (!render_fractal_pass(&window, &view, opts.fractal, progressive_step, progressive_target_step)) {
-                break;
-            }
-
-            advance_progressive_state(&progressive_pending, &progressive_step, progressive_target_step);
-        }
-
-        if (!flush_or_set_pending(&window, &present_pending)) {
-            break;
-        }
-    }
-
-    window_deinit(&window);
-    return 0;
+    return run_windowed(opts.fractal);
 }

@@ -16,17 +16,21 @@
 
 #define DG_KEYQUEUE_SIZE 64
 
-static window_t s_window = { 0 };
-static bool s_window_ready = false;
-static bool s_window_closed = false;
-static bool s_close_key_sent = false;
+typedef struct {
+    window_t window;
+    bool window_ready;
+    bool window_closed;
+    bool close_key_sent;
 
-static unsigned short s_key_queue[DG_KEYQUEUE_SIZE];
-static size_t s_key_read = 0;
-static size_t s_key_write = 0;
+    unsigned short key_queue[DG_KEYQUEUE_SIZE];
+    size_t key_read;
+    size_t key_write;
 
-static struct timespec s_ticks_start = { 0 };
-static uint32_t s_last_ticks_ms = 0;
+    struct timespec ticks_start;
+    uint32_t last_ticks_ms;
+} doom_port_t;
+
+static doom_port_t doom = { 0 };
 
 static bool dg_has_iwad_arg(int argc, char **argv) {
     if (!argv) {
@@ -47,36 +51,66 @@ static bool dg_has_iwad_arg(int argc, char **argv) {
 }
 
 static void dg_key_push(int pressed, unsigned char key) {
-    size_t next = (s_key_write + 1) % DG_KEYQUEUE_SIZE;
+    size_t next = (doom.key_write + 1) % DG_KEYQUEUE_SIZE;
 
-    if (next == s_key_read) {
-        s_key_read = (s_key_read + 1) % DG_KEYQUEUE_SIZE;
+    if (next == doom.key_read) {
+        doom.key_read = (doom.key_read + 1) % DG_KEYQUEUE_SIZE;
     }
 
-    s_key_queue[s_key_write] = (unsigned short)(((pressed ? 1U : 0U) << 8) | key);
-    s_key_write = next;
+    doom.key_queue[doom.key_write] = (unsigned short)(((pressed ? 1U : 0U) << 8) | key);
+    doom.key_write = next;
 }
 
 static int dg_key_pop(int *pressed, unsigned char *key) {
-    if (s_key_read == s_key_write || !pressed || !key) {
+    if (doom.key_read == doom.key_write || !pressed || !key) {
         return 0;
     }
 
-    unsigned short entry = s_key_queue[s_key_read];
-    s_key_read = (s_key_read + 1) % DG_KEYQUEUE_SIZE;
+    unsigned short entry = doom.key_queue[doom.key_read];
+    doom.key_read = (doom.key_read + 1) % DG_KEYQUEUE_SIZE;
 
     *pressed = (entry >> 8) & 1U;
     *key = (unsigned char)(entry & 0xffU);
     return 1;
 }
 
-static void dg_mark_window_closed(void) {
-    s_window_closed = true;
+static void mark_window_closed(void) {
+    doom.window_closed = true;
 
-    if (!s_close_key_sent) {
+    if (!doom.close_key_sent) {
         dg_key_push(1, KEY_ESCAPE);
-        s_close_key_sent = true;
+        doom.close_key_sent = true;
     }
+}
+
+typedef struct {
+    uint32_t code;
+    unsigned char normal;
+    unsigned char shifted;
+} ascii_key_t;
+
+typedef struct {
+    uint32_t code;
+    unsigned char doom;
+} doom_key_t;
+
+static unsigned char lookup_ascii_key(uint32_t keycode, bool shifted) {
+    static const ascii_key_t keys[] = {
+        { KBD_MINUS, '-', '_' },         { KBD_EQUALS, '=', '+' },      { KBD_LEFT_BRACKET, '[', '{' },
+        { KBD_RIGHT_BRACKET, ']', '}' }, { KBD_BACKSLASH, '\\', '|' },  { KBD_SEMICOLON, ';', ':' },
+        { KBD_QUOTE, '\'', '"' },        { KBD_BACKTICK, '`', '~' },    { KBD_COMMA, ',', '<' },
+        { KBD_DOT, '.', '>' },           { KBD_SLASH, '/', '?' },       { KBD_SPACE, ' ', ' ' },
+        { KBD_KP_DIVIDE, '/', '/' },     { KBD_KP_MULTIPLY, '*', '*' }, { KBD_KP_PLUS, '+', '+' },
+        { KBD_KP_PERIOD, '.', '.' },
+    };
+
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        if (keys[i].code == keycode) {
+            return shifted ? keys[i].shifted : keys[i].normal;
+        }
+    }
+
+    return 0;
 }
 
 static unsigned char dg_ascii_key(uint32_t keycode, bool shifted) {
@@ -91,62 +125,61 @@ static unsigned char dg_ascii_key(uint32_t keycode, bool shifted) {
         return (unsigned char)(shifted ? shifted_map[idx] : normal[idx]);
     }
 
-    switch (keycode) {
-    case KBD_MINUS:
-        return (unsigned char)(shifted ? '_' : '-');
-    case KBD_EQUALS:
-        return (unsigned char)(shifted ? '+' : '=');
-    case KBD_LEFT_BRACKET:
-        return (unsigned char)(shifted ? '{' : '[');
-    case KBD_RIGHT_BRACKET:
-        return (unsigned char)(shifted ? '}' : ']');
-    case KBD_BACKSLASH:
-        return (unsigned char)(shifted ? '|' : '\\');
-    case KBD_SEMICOLON:
-        return (unsigned char)(shifted ? ':' : ';');
-    case KBD_QUOTE:
-        return (unsigned char)(shifted ? '"' : '\'');
-    case KBD_BACKTICK:
-        return (unsigned char)(shifted ? '~' : '`');
-    case KBD_COMMA:
-        return (unsigned char)(shifted ? '<' : ',');
-    case KBD_DOT:
-        return (unsigned char)(shifted ? '>' : '.');
-    case KBD_SLASH:
-        return (unsigned char)(shifted ? '?' : '/');
-    case KBD_SPACE:
-        return ' ';
-    case KBD_KP_0:
-        return '0';
-    case KBD_KP_1:
-        return '1';
-    case KBD_KP_2:
-        return '2';
-    case KBD_KP_3:
-        return '3';
-    case KBD_KP_4:
-        return '4';
-    case KBD_KP_5:
-        return '5';
-    case KBD_KP_6:
-        return '6';
-    case KBD_KP_7:
-        return '7';
-    case KBD_KP_8:
-        return '8';
-    case KBD_KP_9:
-        return '9';
-    case KBD_KP_DIVIDE:
-        return '/';
-    case KBD_KP_MULTIPLY:
-        return '*';
-    case KBD_KP_PLUS:
-        return '+';
-    case KBD_KP_PERIOD:
-        return '.';
-    default:
-        return 0;
+    if (keycode >= KBD_KP_0 && keycode <= KBD_KP_9) {
+        return (unsigned char)('0' + (keycode - KBD_KP_0));
     }
+
+    return lookup_ascii_key(keycode, shifted);
+}
+
+static unsigned char lookup_doom_key(uint32_t keycode) {
+    static const doom_key_t keys[] = {
+        { KBD_ENTER, KEY_ENTER },
+        { KBD_KP_ENTER, KEY_ENTER },
+        { KBD_ESCAPE, KEY_ESCAPE },
+        { KBD_LEFT, KEY_LEFTARROW },
+        { KBD_RIGHT, KEY_RIGHTARROW },
+        { KBD_UP, KEY_UPARROW },
+        { KBD_DOWN, KEY_DOWNARROW },
+        { KBD_LEFT_CTRL, KEY_FIRE },
+        { KBD_RIGHT_CTRL, KEY_FIRE },
+        { KBD_SPACE, KEY_USE },
+        { KBD_LEFT_SHIFT, KEY_RSHIFT },
+        { KBD_RIGHT_SHIFT, KEY_RSHIFT },
+        { KBD_LEFT_ALT, KEY_LALT },
+        { KBD_RIGHT_ALT, KEY_LALT },
+        { KBD_TAB, KEY_TAB },
+        { KBD_BACKSPACE, KEY_BACKSPACE },
+        { KBD_DELETE, KEY_DEL },
+        { KBD_INSERT, KEY_INS },
+        { KBD_HOME, KEY_HOME },
+        { KBD_END, KEY_END },
+        { KBD_PAGEUP, KEY_PGUP },
+        { KBD_PAGEDOWN, KEY_PGDN },
+        { KBD_F1, KEY_F1 },
+        { KBD_F2, KEY_F2 },
+        { KBD_F3, KEY_F3 },
+        { KBD_F4, KEY_F4 },
+        { KBD_F5, KEY_F5 },
+        { KBD_F6, KEY_F6 },
+        { KBD_F7, KEY_F7 },
+        { KBD_F8, KEY_F8 },
+        { KBD_F9, KEY_F9 },
+        { KBD_F10, KEY_F10 },
+        { KBD_F11, KEY_F11 },
+        { KBD_F12, KEY_F12 },
+        { KBD_EQUALS, KEY_EQUALS },
+        { KBD_MINUS, KEY_MINUS },
+        { KBD_KP_MINUS, KEY_MINUS },
+    };
+
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        if (keys[i].code == keycode) {
+            return keys[i].doom;
+        }
+    }
+
+    return 0;
 }
 
 static unsigned char dg_convert_key(const ws_input_event_t *event) {
@@ -154,78 +187,9 @@ static unsigned char dg_convert_key(const ws_input_event_t *event) {
         return 0;
     }
 
-    switch (event->keycode) {
-    case KBD_ENTER:
-    case KBD_KP_ENTER:
-        return KEY_ENTER;
-    case KBD_ESCAPE:
-        return KEY_ESCAPE;
-    case KBD_LEFT:
-        return KEY_LEFTARROW;
-    case KBD_RIGHT:
-        return KEY_RIGHTARROW;
-    case KBD_UP:
-        return KEY_UPARROW;
-    case KBD_DOWN:
-        return KEY_DOWNARROW;
-    case KBD_LEFT_CTRL:
-    case KBD_RIGHT_CTRL:
-        return KEY_FIRE;
-    case KBD_SPACE:
-        return KEY_USE;
-    case KBD_LEFT_SHIFT:
-    case KBD_RIGHT_SHIFT:
-        return KEY_RSHIFT;
-    case KBD_LEFT_ALT:
-    case KBD_RIGHT_ALT:
-        return KEY_LALT;
-    case KBD_TAB:
-        return KEY_TAB;
-    case KBD_BACKSPACE:
-        return KEY_BACKSPACE;
-    case KBD_DELETE:
-        return KEY_DEL;
-    case KBD_INSERT:
-        return KEY_INS;
-    case KBD_HOME:
-        return KEY_HOME;
-    case KBD_END:
-        return KEY_END;
-    case KBD_PAGEUP:
-        return KEY_PGUP;
-    case KBD_PAGEDOWN:
-        return KEY_PGDN;
-    case KBD_F1:
-        return KEY_F1;
-    case KBD_F2:
-        return KEY_F2;
-    case KBD_F3:
-        return KEY_F3;
-    case KBD_F4:
-        return KEY_F4;
-    case KBD_F5:
-        return KEY_F5;
-    case KBD_F6:
-        return KEY_F6;
-    case KBD_F7:
-        return KEY_F7;
-    case KBD_F8:
-        return KEY_F8;
-    case KBD_F9:
-        return KEY_F9;
-    case KBD_F10:
-        return KEY_F10;
-    case KBD_F11:
-        return KEY_F11;
-    case KBD_F12:
-        return KEY_F12;
-    case KBD_EQUALS:
-        return KEY_EQUALS;
-    case KBD_MINUS:
-    case KBD_KP_MINUS:
-        return KEY_MINUS;
-    default:
-        break;
+    unsigned char doom_key = lookup_doom_key(event->keycode);
+    if (doom_key) {
+        return doom_key;
     }
 
     bool shifted = (event->modifiers & INPUT_MOD_SHIFT) != 0U;
@@ -238,13 +202,13 @@ static unsigned char dg_convert_key(const ws_input_event_t *event) {
 }
 
 static void dg_pump_events(void) {
-    if (!s_window_ready || s_window_closed) {
+    if (!doom.window_ready || doom.window_closed) {
         return;
     }
 
     for (;;) {
         ws_input_event_t events[16];
-        ssize_t n = window_events(&s_window, events, 16);
+        ssize_t n = window_events(&doom.window, events, 16);
 
         if (n < 0) {
             if (errno == EAGAIN || errno == EINTR) {
@@ -252,7 +216,7 @@ static void dg_pump_events(void) {
             }
 
             if (errno == ENOENT) {
-                dg_mark_window_closed();
+                mark_window_closed();
             }
             break;
         }
@@ -288,7 +252,7 @@ static void dg_pump_events(void) {
 }
 
 static void dg_blit_frame(void) {
-    framebuffer_t *fb = window_buffer(&s_window);
+    framebuffer_t *fb = window_buffer(&doom.window);
     if (!fb || !fb->pixels) {
         return;
     }
@@ -321,52 +285,52 @@ static void dg_blit_frame(void) {
         memcpy(dst_row, src_row, (size_t)copy_w * sizeof(uint32_t));
     }
 
-    if (window_flush(&s_window) < 0) {
+    if (window_flush(&doom.window) < 0) {
         if (errno == ENOENT) {
-            dg_mark_window_closed();
+            mark_window_closed();
         }
     }
 }
 
 void DG_Init(void) {
-    memset(s_key_queue, 0, sizeof(s_key_queue));
-    s_key_read = 0;
-    s_key_write = 0;
-    s_window_closed = false;
-    s_close_key_sent = false;
+    memset(doom.key_queue, 0, sizeof(doom.key_queue));
+    doom.key_read = 0;
+    doom.key_write = 0;
+    doom.window_closed = false;
+    doom.close_key_sent = false;
 
-    if (window_init(&s_window, DOOMGENERIC_RESX, DOOMGENERIC_RESY, "doom")) {
+    if (window_init(&doom.window, DOOMGENERIC_RESX, DOOMGENERIC_RESY, "doom")) {
         fprintf(stderr, "doom: failed to create window (%d: %s)\n", errno, strerror(errno));
         exit(1);
     }
 
-    framebuffer_t *fb = window_buffer(&s_window);
+    framebuffer_t *fb = window_buffer(&doom.window);
     if (!fb || !fb->pixels) {
         fprintf(stderr, "doom: failed to acquire window framebuffer\n");
-        window_deinit(&s_window);
+        window_deinit(&doom.window);
         exit(1);
     }
 
-    s_window_ready = true;
+    doom.window_ready = true;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &s_ticks_start) < 0) {
-        s_ticks_start.tv_sec = 0;
-        s_ticks_start.tv_nsec = 0;
+    if (clock_gettime(CLOCK_MONOTONIC, &doom.ticks_start) < 0) {
+        doom.ticks_start.tv_sec = 0;
+        doom.ticks_start.tv_nsec = 0;
     }
 
-    s_last_ticks_ms = 0;
+    doom.last_ticks_ms = 0;
 }
 
 void DG_DrawFrame(void) {
     dg_pump_events();
 
-    if (s_window_closed) {
+    if (doom.window_closed) {
         _Exit(0);
     }
 
     dg_blit_frame();
 
-    if (s_window_closed) {
+    if (doom.window_closed) {
         _Exit(0);
     }
 }
@@ -382,17 +346,17 @@ void DG_SleepMs(uint32_t ms) {
 uint32_t DG_GetTicksMs(void) {
     struct timespec now = { 0 };
     if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
-        return s_last_ticks_ms;
+        return doom.last_ticks_ms;
     }
 
     uint64_t sec = 0;
     int64_t nsec = 0;
 
-    if (now.tv_sec >= s_ticks_start.tv_sec) {
-        sec = (uint64_t)(now.tv_sec - s_ticks_start.tv_sec);
+    if (now.tv_sec >= doom.ticks_start.tv_sec) {
+        sec = (uint64_t)(now.tv_sec - doom.ticks_start.tv_sec);
     }
 
-    nsec = now.tv_nsec - s_ticks_start.tv_nsec;
+    nsec = now.tv_nsec - doom.ticks_start.tv_nsec;
     if (nsec < 0) {
         if (sec > 0) {
             sec--;
@@ -403,10 +367,10 @@ uint32_t DG_GetTicksMs(void) {
     uint64_t ms = sec * 1000ULL + (uint64_t)(nsec / 1000000LL);
     uint32_t ticks_ms = (uint32_t)ms;
 
-    if (ticks_ms < s_last_ticks_ms) {
-        ticks_ms = s_last_ticks_ms;
+    if (ticks_ms < doom.last_ticks_ms) {
+        ticks_ms = doom.last_ticks_ms;
     } else {
-        s_last_ticks_ms = ticks_ms;
+        doom.last_ticks_ms = ticks_ms;
     }
 
     return ticks_ms;
@@ -415,16 +379,16 @@ uint32_t DG_GetTicksMs(void) {
 int DG_GetKey(int *pressed, unsigned char *doomKey) {
     dg_pump_events();
 
-    if (s_window_closed && !s_close_key_sent) {
+    if (doom.window_closed && !doom.close_key_sent) {
         dg_key_push(1, KEY_ESCAPE);
-        s_close_key_sent = true;
+        doom.close_key_sent = true;
     }
 
     return dg_key_pop(pressed, doomKey);
 }
 
 void DG_SetWindowTitle(const char *title) {
-    if (!s_window_ready || s_window_closed) {
+    if (!doom.window_ready || doom.window_closed) {
         return;
     }
 
@@ -432,8 +396,8 @@ void DG_SetWindowTitle(const char *title) {
         title = "doom";
     }
 
-    if (window_set_title(&s_window, title) < 0 && errno == ENOENT) {
-        dg_mark_window_closed();
+    if (window_set_title(&doom.window, title) < 0 && errno == ENOENT) {
+        mark_window_closed();
     }
 }
 
