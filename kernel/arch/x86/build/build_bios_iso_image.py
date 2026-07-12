@@ -25,6 +25,10 @@ from build_image_common import (
 )
 
 ISO_SECTOR_SIZE = 2048
+CD_BOOT_SIZE = ISO_SECTOR_SIZE
+CD_BOOT_MAGIC = b"APHELEIA_CD_BOOT"
+BIOS_LOAD_ADDRESS = 0x7C00
+BIOS_LOAD_TOP = 0x90000
 VD_PRIMARY_LBA = 16
 VD_BOOT_RECORD_LBA = 17
 VD_TERMINATOR_LBA = 18
@@ -42,6 +46,7 @@ class IsoLayout:
         boot_dir_lba: int,
         boot_dir_size: int,
         boot_catalog_lba: int,
+        cdboot_lba: int,
         bios_lba: int,
         bios_size: int,
         rootfs_lba: int,
@@ -56,6 +61,7 @@ class IsoLayout:
         self.boot_dir_lba = boot_dir_lba
         self.boot_dir_size = boot_dir_size
         self.boot_catalog_lba = boot_catalog_lba
+        self.cdboot_lba = cdboot_lba
         self.bios_lba = bios_lba
         self.bios_size = bios_size
         self.rootfs_lba = rootfs_lba
@@ -195,10 +201,7 @@ def _build_path_tables(root_lba: int, boot_lba: int) -> tuple[bytes, bytes, int]
     return l_raw, m_raw, len(l_raw)
 
 
-def _build_boot_catalog(*, bios_lba: int, bios_load_sectors_512: int) -> bytes:
-    if bios_load_sectors_512 > 0xFFFF:
-        raise BuildError("bios.bin is too large for El Torito load-size field")
-
+def _build_boot_catalog(*, cdboot_lba: int) -> bytes:
     catalog = bytearray(ISO_SECTOR_SIZE)
 
     validation = bytearray(32)
@@ -215,8 +218,8 @@ def _build_boot_catalog(*, bios_lba: int, bios_load_sectors_512: int) -> bytes:
     default_entry = bytearray(32)
     default_entry[0] = 0x88
     default_entry[1] = 0x00
-    struct.pack_into("<H", default_entry, 6, bios_load_sectors_512)
-    struct.pack_into("<I", default_entry, 8, bios_lba)
+    struct.pack_into("<H", default_entry, 6, CD_BOOT_SIZE // SECTOR_SIZE)
+    struct.pack_into("<I", default_entry, 8, cdboot_lba)
 
     catalog[0:32] = validation
     catalog[32:64] = default_entry
@@ -312,7 +315,8 @@ def _layout_iso(
     boot_dir_lba = root_dir_lba + div_round_up(root_dir_size, ISO_SECTOR_SIZE)
     boot_catalog_lba = boot_dir_lba + div_round_up(boot_dir_size, ISO_SECTOR_SIZE)
 
-    bios_lba = boot_catalog_lba + div_round_up(boot_catalog_size, ISO_SECTOR_SIZE)
+    cdboot_lba = boot_catalog_lba + div_round_up(boot_catalog_size, ISO_SECTOR_SIZE)
+    bios_lba = cdboot_lba + div_round_up(CD_BOOT_SIZE, ISO_SECTOR_SIZE)
     bios_blocks = div_round_up(bios_size, ISO_SECTOR_SIZE)
 
     rootfs_lba = bios_lba + bios_blocks
@@ -329,6 +333,7 @@ def _layout_iso(
         boot_dir_lba=boot_dir_lba,
         boot_dir_size=boot_dir_size,
         boot_catalog_lba=boot_catalog_lba,
+        cdboot_lba=cdboot_lba,
         bios_lba=bios_lba,
         bios_size=bios_size,
         rootfs_lba=rootfs_lba,
@@ -383,6 +388,13 @@ def _build_directories(layout: IsoLayout, now: int) -> tuple[bytes, bytes, bytes
         is_dir=False,
         timestamp=now,
     )
+    cdboot_rec = _iso_dir_record(
+        name=b"CDBOOT.BIN;1",
+        extent_lba=layout.cdboot_lba,
+        data_size=CD_BOOT_SIZE,
+        is_dir=False,
+        timestamp=now,
+    )
     bios_rec = _iso_dir_record(
         name=b"BIOS.BIN;1",
         extent_lba=layout.bios_lba,
@@ -398,14 +410,36 @@ def _build_directories(layout: IsoLayout, now: int) -> tuple[bytes, bytes, bytes
         timestamp=now,
     )
 
-    boot_dir = _pack_directory([boot_self, boot_parent, boot_cat, bios_rec, rootfs_rec])
+    boot_dir = _pack_directory(
+        [boot_self, boot_parent, boot_cat, cdboot_rec, bios_rec, rootfs_rec]
+    )
     return root_record, root_dir, boot_dir
+
+
+def _prepare_cdboot(cdboot_bin: Path, layout: IsoLayout) -> bytes:
+    image = bytearray(cdboot_bin.read_bytes())
+    if len(image) != CD_BOOT_SIZE:
+        raise BuildError(f"cdboot.bin must be exactly {CD_BOOT_SIZE} bytes")
+
+    metadata = image.find(CD_BOOT_MAGIC)
+    if metadata < 0 or image.find(CD_BOOT_MAGIC, metadata + 1) >= 0:
+        raise BuildError("cdboot.bin has invalid metadata")
+
+    bios_blocks = div_round_up(layout.bios_size, ISO_SECTOR_SIZE)
+    max_blocks = (BIOS_LOAD_TOP - BIOS_LOAD_ADDRESS) // ISO_SECTOR_SIZE
+    if not bios_blocks or bios_blocks > max_blocks:
+        raise BuildError("bios.bin is too large for the CD bootstrap")
+
+    values = metadata + len(CD_BOOT_MAGIC)
+    struct.pack_into("<IH", image, values, layout.bios_lba, bios_blocks)
+    return bytes(image)
 
 
 def _write_iso(
     *,
     output_iso: Path,
     mbr_bin: Path,
+    cdboot_bin: Path,
     bios_bin: Path,
     rootfs_img: Path,
 ) -> None:
@@ -429,10 +463,8 @@ def _write_iso(
     if path_table_size != layout.path_table_size:
         raise BuildError("internal ISO path table sizing mismatch")
 
-    boot_catalog = _build_boot_catalog(
-        bios_lba=layout.bios_lba,
-        bios_load_sectors_512=div_round_up(bios_size, SECTOR_SIZE),
-    )
+    boot_catalog = _build_boot_catalog(cdboot_lba=layout.cdboot_lba)
+    cdboot = _prepare_cdboot(cdboot_bin, layout)
 
     pvd = _build_pvd(
         volume_id="APHELEIAOS",
@@ -456,6 +488,7 @@ def _write_iso(
     write_at(output_iso, layout.boot_dir_lba * ISO_SECTOR_SIZE, boot_dir_blob)
     write_at(output_iso, layout.boot_catalog_lba * ISO_SECTOR_SIZE, boot_catalog)
 
+    write_at(output_iso, layout.cdboot_lba * ISO_SECTOR_SIZE, cdboot)
     write_file_to_lba(output_iso, bios_bin, layout.bios_lba, sector_size=ISO_SECTOR_SIZE)
     write_file_to_lba(output_iso, rootfs_img, layout.rootfs_lba, sector_size=ISO_SECTOR_SIZE)
 
@@ -483,6 +516,7 @@ def main() -> None:
     )
     parser.add_argument("output_iso", type=Path)
     parser.add_argument("mbr_bin", type=Path)
+    parser.add_argument("cdboot_bin", type=Path)
     parser.add_argument("bios_bin", type=Path)
     parser.add_argument("rootfs_dir", type=Path)
     args = parser.parse_args()
@@ -505,6 +539,7 @@ def main() -> None:
         _write_iso(
             output_iso=args.output_iso,
             mbr_bin=args.mbr_bin,
+            cdboot_bin=args.cdboot_bin,
             bios_bin=args.bios_bin,
             rootfs_img=ext2_img,
         )

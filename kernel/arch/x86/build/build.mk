@@ -97,6 +97,10 @@ $(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS))
 
 IMAGE_BOOT_DEPS := bin/boot/bios.bin bin/boot/mbr.bin $(KERNEL_ELF)
 
+ifeq ($(IMAGE_FORMAT),iso)
+IMAGE_BOOT_DEPS += bin/boot/cdboot.bin
+endif
+
 IMAGE_SCRIPT_DEPS := \
 	utils/stage_image.sh \
 	kernel/build_image_common.py \
@@ -116,5 +120,10 @@ bin/$(IMAGE_NAME).iso: $(IMAGE_BOOT_DEPS) $(IMAGE_SCRIPT_DEPS) $(IMAGE_ROOT_DEPS
 		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root"
 	@python3 kernel/arch/x86/build/build_bios_iso_image.py $@ \
 		bin/boot/mbr.bin \
+		bin/boot/cdboot.bin \
 		bin/boot/bios.bin \
 		$(IMAGE_STAGE_DIR)
+
+bin/boot/cdboot.bin: kernel/arch/x86/boot/cdboot/cdboot.asm
+	@mkdir -p $(@D)
+	$(call as, -fbin, $@, $<)
