@@ -14,10 +14,10 @@ typedef struct {
 } point_t;
 
 static const double k_pi = 3.14159265358979323846;
-static const int k_clock_face_label_gap = 6;
-static const int k_clock_edge_pad = 4;
-static const int k_clock_label_raise = 8;
-static const int k_clock_smooth_frame_ms = 50;
+static const int k_label_gap = 6;
+static const int k_edge_pad = 4;
+static const int k_label_raise = 8;
+static const int k_smooth_ms = 50;
 
 typedef struct {
     bool show_date;
@@ -124,27 +124,27 @@ static void draw_face_labels(framebuffer_t *fb, int width, int cx, int cy, int r
     int face_left = cx - radius;
     int face_right = cx + radius;
     int text_height = text_height_px();
-    int label_y = cy - radius - k_clock_face_label_gap - text_height - k_clock_label_raise;
+    int label_y = cy - radius - k_label_gap - text_height - k_label_raise;
     if (label_y < 2) {
         label_y = 2;
     }
 
     int date_x = face_left;
-    if (date_x < k_clock_edge_pad) {
-        date_x = k_clock_edge_pad;
+    if (date_x < k_edge_pad) {
+        date_x = k_edge_pad;
     }
 
     int year_x = face_right - year_w;
-    if (year_x + year_w > width - k_clock_edge_pad) {
-        year_x = width - k_clock_edge_pad - year_w;
+    if (year_x + year_w > width - k_edge_pad) {
+        year_x = width - k_edge_pad - year_w;
     }
-    if (year_x < k_clock_edge_pad) {
-        year_x = k_clock_edge_pad;
+    if (year_x < k_edge_pad) {
+        year_x = k_edge_pad;
     }
 
-    if (date_x + date_w + k_clock_edge_pad > year_x) {
-        date_x = k_clock_edge_pad;
-        year_x = width - k_clock_edge_pad - year_w;
+    if (date_x + date_w + k_edge_pad > year_x) {
+        date_x = k_edge_pad;
+        year_x = width - k_edge_pad - year_w;
     }
 
     draw_text(fb, date_x, label_y, date_text, DRAW_WHITE);
@@ -171,7 +171,7 @@ static int imin(int a, int b) {
     return b;
 }
 
-static int tick_milli_from_scale(double value, double scale) {
+static int tick_ms(double value, double scale) {
     if (scale <= 0.0) {
         return 0;
     }
@@ -181,26 +181,26 @@ static int tick_milli_from_scale(double value, double scale) {
         wrapped += scale;
     }
 
-    int tick_milli = (int)((wrapped * 60000.0) / scale);
-    if (tick_milli < 0) {
+    int ms = (int)((wrapped * 60000.0) / scale);
+    if (ms < 0) {
         return 0;
     }
-    if (tick_milli >= 60000) {
+    if (ms >= 60000) {
         return 59999;
     }
 
-    return tick_milli;
+    return ms;
 }
 
-static double angle_from_tick_milli(int tick_milli) {
-    double tick = (double)tick_milli / 1000.0;
+static double angle_from_tick(int ms) {
+    double tick = (double)ms / 1000.0;
     return ((2.0 * k_pi * tick) / 60.0) - (k_pi / 2.0);
 }
 
-static point_t polar_point_tick(int cx, int cy, int radius, int tick_milli) {
+static point_t polar_point_tick(int cx, int cy, int radius, int ms) {
     point_t out = { 0 };
 
-    double angle = angle_from_tick_milli(tick_milli);
+    double angle = angle_from_tick(ms);
 
     double fx = (double)cx + cos(angle) * (double)radius;
     double fy = (double)cy + sin(angle) * (double)radius;
@@ -230,9 +230,9 @@ static void draw_ticks(framebuffer_t *fb, int cx, int cy, int radius) {
             inner -= clamp_i32(radius / 20, 4, 10);
         }
 
-        int tick_milli = i * 1000;
-        point_t p0 = polar_point_tick(cx, cy, inner, tick_milli);
-        point_t p1 = polar_point_tick(cx, cy, radius, tick_milli);
+        int ms = i * 1000;
+        point_t p0 = polar_point_tick(cx, cy, inner, ms);
+        point_t p1 = polar_point_tick(cx, cy, radius, ms);
         draw_line(fb, p0.x, p0.y, p1.x, p1.y, DRAW_WHITE);
     }
 }
@@ -259,8 +259,8 @@ static void draw_hour_numbers(framebuffer_t *fb, int cx, int cy, int radius) {
     }
 }
 
-static void draw_hand(framebuffer_t *fb, int cx, int cy, int radius, int tick_milli, pixel_t color) {
-    point_t p = polar_point_tick(cx, cy, radius, tick_milli);
+static void draw_hand(framebuffer_t *fb, int cx, int cy, int radius, int ms, pixel_t color) {
+    point_t p = polar_point_tick(cx, cy, radius, ms);
     draw_line(fb, cx, cy, p.x, p.y, color);
 }
 
@@ -288,10 +288,10 @@ static bool draw_clock(window_t *window, const struct tm *tm_now, const clock_op
     int height = (int)fb->height;
     int cx = width / 2;
     bool show_date = !opts || opts->show_date;
-    int clock_top = k_clock_edge_pad;
+    int clock_top = k_edge_pad;
 
     if (show_date) {
-        clock_top += text_height_px() + k_clock_face_label_gap + k_clock_edge_pad;
+        clock_top += text_height_px() + k_label_gap + k_edge_pad;
     }
 
     int available_h = height - clock_top;
@@ -330,19 +330,19 @@ static bool draw_clock(window_t *window, const struct tm *tm_now, const clock_op
     double minute_pos = (double)tm_now->tm_min + (second_pos / 60.0);
     double hour_pos = (double)(tm_now->tm_hour % 12) + (minute_pos / 60.0);
 
-    int second_tick_milli = tick_milli_from_scale(second_pos, 60.0);
-    int minute_tick_milli = tick_milli_from_scale(minute_pos, 60.0);
-    int hour_tick_milli = tick_milli_from_scale(hour_pos, 12.0);
+    int second_ms = tick_ms(second_pos, 60.0);
+    int minute_ms = tick_ms(minute_pos, 60.0);
+    int hour_ms = tick_ms(hour_pos, 12.0);
 
     int hour_len = (radius * 50) / 100;
     int minute_len = (radius * 70) / 100;
     int second_len = (radius * 78) / 100;
     int second_tail = (radius * 10) / 100;
 
-    draw_hand(fb, cx, cy, hour_len, hour_tick_milli, DRAW_WHITE);
-    draw_hand(fb, cx, cy, minute_len, minute_tick_milli, DRAW_GRAY_LIGHT);
-    draw_hand(fb, cx, cy, second_len, second_tick_milli, DRAW_RED);
-    draw_hand(fb, cx, cy, second_tail, second_tick_milli + 30000, DRAW_RED);
+    draw_hand(fb, cx, cy, hour_len, hour_ms, DRAW_WHITE);
+    draw_hand(fb, cx, cy, minute_len, minute_ms, DRAW_GRAY_LIGHT);
+    draw_hand(fb, cx, cy, second_len, second_ms, DRAW_RED);
+    draw_hand(fb, cx, cy, second_tail, second_ms + 30000, DRAW_RED);
 
     draw_rect(fb, cx - 1, cy - 1, 3, 3, DRAW_RED);
 
@@ -369,13 +369,11 @@ typedef struct {
     struct timespec mono_mark;
 } smooth_clock_state_t;
 
-static bool smooth_clock_sample(
-    time_t wall_sec,
-    smooth_clock_state_t *state,
-    time_t *display_sec_out,
-    double *second_fraction_out
-) {
-    if (!state || !display_sec_out || !second_fraction_out || wall_sec == (time_t)-1) {
+static bool
+sample_clock(time_t wall_sec, smooth_clock_state_t *state, time_t *display_sec_out, double *second_fraction_out) {
+    bool missing_out = !display_sec_out || !second_fraction_out;
+    bool bad_wall = wall_sec == (time_t)-1;
+    if (!state || missing_out || bad_wall) {
         return false;
     }
 
@@ -452,7 +450,7 @@ int main(int argc, char **argv) {
         double second_fraction = 0.0;
 
         if (opts.smooth && now != (time_t)-1) {
-            if (!smooth_clock_sample(now, &smooth_state, &display_sec, &second_fraction)) {
+            if (!sample_clock(now, &smooth_state, &display_sec, &second_fraction)) {
                 break;
             }
             redraw = true;
@@ -479,18 +477,23 @@ int main(int argc, char **argv) {
 
         ws_input_event_t event = { 0 };
 
-        int timeout_ms = opts.smooth ? k_clock_smooth_frame_ms : (redraw ? 0 : 100);
+        int timeout_ms = 100;
+        if (opts.smooth) {
+            timeout_ms = k_smooth_ms;
+        } else if (redraw) {
+            timeout_ms = 0;
+        }
 
-        int rc = window_wait_event(&window, &event, timeout_ms);
+        int event_status = window_wait_event(&window, &event, timeout_ms);
 
-        if (rc < 0) {
+        if (event_status < 0) {
             if (errno == EINTR || errno == EAGAIN) {
                 continue;
             }
             break;
         }
 
-        while (rc > 0) {
+        while (event_status > 0) {
             if (event.type == INPUT_EVENT_WINDOW_RESIZE) {
                 redraw = true;
             } else if (should_quit(&event)) {
@@ -498,9 +501,9 @@ int main(int argc, char **argv) {
                 break;
             }
 
-            rc = window_wait_event(&window, &event, 0);
+            event_status = window_wait_event(&window, &event, 0);
 
-            if (rc < 0) {
+            if (event_status < 0) {
                 if (errno == EINTR || errno == EAGAIN) {
                     break;
                 }

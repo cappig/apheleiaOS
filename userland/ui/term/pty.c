@@ -72,7 +72,7 @@ static void send_bytes(int fd, const char *bytes) {
     write_retry(fd, bytes, strlen(bytes));
 }
 
-static bool send_foreground_signal(int master_fd, int signum) {
+static bool signal_foreground(int master_fd, int signum) {
     if (master_fd < 0 || signum <= 0) {
         return false;
     }
@@ -107,7 +107,7 @@ void term_handle_key_event(int master_fd, const ws_input_event_t *event) {
 
     bool ctrl = (event->modifiers & INPUT_MOD_CTRL) != 0;
     if (ctrl && event->keycode == KBD_C) {
-        if (!send_foreground_signal(master_fd, SIGINT)) {
+        if (!signal_foreground(master_fd, SIGINT)) {
             const char intr = 0x03;
             write_retry(master_fd, &intr, 1);
         }
@@ -115,7 +115,7 @@ void term_handle_key_event(int master_fd, const ws_input_event_t *event) {
     }
 
     if (ctrl && event->keycode == KBD_Z) {
-        if (!send_foreground_signal(master_fd, SIGTSTP)) {
+        if (!signal_foreground(master_fd, SIGTSTP)) {
             const char susp = 0x1a;
             write_retry(master_fd, &susp, 1);
         }
@@ -182,6 +182,11 @@ bool term_set_winsize(int master_fd, size_t cols, size_t rows, u32 width, u32 he
         return false;
     }
 
+    if (cols > (u16)-1 || rows > (u16)-1 || width > (u16)-1 || height > (u16)-1) {
+        errno = EOVERFLOW;
+        return false;
+    }
+
     winsize_t ws = {
         .ws_col = (u16)cols,
         .ws_row = (u16)rows,
@@ -215,8 +220,10 @@ pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 h
     }
 
     if (!pid) {
-        setsid();
-        setpgid(0, 0);
+        if (setsid() < 0) {
+            fprintf(stderr, "term: setsid failed (%d: %s)\n", errno, strerror(errno));
+            _exit(127);
+        }
 
         int slave_fd = open(path, O_RDWR | O_CLOEXEC, 0);
         if (slave_fd < 0) {
@@ -225,14 +232,27 @@ pid_t term_spawn_shell(int master_fd, size_t cols, size_t rows, u32 width, u32 h
         }
 
         pid_t pgrp = getpid();
-        ioctl(slave_fd, TIOCSPGRP, &pgrp);
+        if (ioctl(slave_fd, TIOCSPGRP, &pgrp) < 0) {
+            fprintf(stderr, "term: failed to set foreground group (%d: %s)\n", errno, strerror(errno));
+            close(slave_fd);
+            _exit(127);
+        }
 
-        dup2(slave_fd, STDIN_FILENO);
-        dup2(slave_fd, STDOUT_FILENO);
-        dup2(slave_fd, STDERR_FILENO);
+        if (dup2(slave_fd, STDIN_FILENO) < 0 || dup2(slave_fd, STDOUT_FILENO) < 0 ||
+            dup2(slave_fd, STDERR_FILENO) < 0) {
+            fprintf(stderr, "term: failed to connect slave PTY (%d: %s)\n", errno, strerror(errno));
+            close(slave_fd);
+            _exit(127);
+        }
 
-        close(slave_fd);
-        close(master_fd);
+        if (slave_fd > STDERR_FILENO && close(slave_fd) < 0) {
+            fprintf(stderr, "term: failed to close slave PTY (%d: %s)\n", errno, strerror(errno));
+            _exit(127);
+        }
+        if (master_fd > STDERR_FILENO && close(master_fd) < 0) {
+            fprintf(stderr, "term: failed to close master PTY (%d: %s)\n", errno, strerror(errno));
+            _exit(127);
+        }
 
         char *argv[] = { "/bin/sh", NULL };
         execve("/bin/sh", argv, environ);

@@ -18,7 +18,7 @@
 #include "pty.h"
 #include "screen.h"
 
-static volatile sig_atomic_t term_exit_requested = 0;
+static volatile sig_atomic_t exit_requested = 0;
 
 enum {
     TERM_EVENT_BATCH = 32,
@@ -28,7 +28,7 @@ enum {
 
 static void term_exit_signal(int signum) {
     (void)signum;
-    term_exit_requested = 1;
+    exit_requested = 1;
 }
 
 static void term_log_errno(const char *message) {
@@ -239,7 +239,7 @@ static void signal_tty(int tty_index, int signum) {
     closedir(dir);
 }
 
-static bool teardown_targets_alive(int master_fd, pid_t sid) {
+static bool term_targets_alive(int master_fd, pid_t sid) {
     if (sid > 0 && session_alive(sid)) {
         return true;
     }
@@ -252,7 +252,7 @@ static bool teardown_targets_alive(int master_fd, pid_t sid) {
     return false;
 }
 
-static void signal_teardown_targets(int master_fd, pid_t sid, int signum) {
+static void signal_targets(int master_fd, pid_t sid, int signum) {
     if (signum <= 0) {
         return;
     }
@@ -274,8 +274,8 @@ static void stop_child(int master_fd, pid_t child) {
         kill(-fg_pgrp, SIGCONT);
     }
 
-    signal_teardown_targets(master_fd, child, SIGHUP);
-    signal_teardown_targets(master_fd, child, SIGCONT);
+    signal_targets(master_fd, child, SIGHUP);
+    signal_targets(master_fd, child, SIGCONT);
 
     if (child > 0) {
         kill(-child, SIGHUP);
@@ -283,27 +283,27 @@ static void stop_child(int master_fd, pid_t child) {
     }
 
     for (size_t i = 0; i < 20; i++) {
-        if (!teardown_targets_alive(master_fd, child)) {
+        if (!term_targets_alive(master_fd, child)) {
             return;
         }
 
         wait_ms(10);
     }
 
-    signal_teardown_targets(master_fd, child, SIGTERM);
+    signal_targets(master_fd, child, SIGTERM);
     if (child > 0) {
         kill(-child, SIGTERM);
     }
 
     for (size_t i = 0; i < 20; i++) {
-        if (!teardown_targets_alive(master_fd, child)) {
+        if (!term_targets_alive(master_fd, child)) {
             return;
         }
 
         wait_ms(10);
     }
 
-    signal_teardown_targets(master_fd, child, SIGKILL);
+    signal_targets(master_fd, child, SIGKILL);
     if (child > 0) {
         kill(-child, SIGKILL);
     }
@@ -352,10 +352,22 @@ static bool sync_screen_size(window_t *window, int master_fd) {
 }
 
 static bool is_modifier_key(u32 keycode) {
-    return keycode == KBD_LEFT_SHIFT || keycode == KBD_RIGHT_SHIFT || keycode == KBD_LEFT_CTRL ||
-           keycode == KBD_RIGHT_CTRL || keycode == KBD_LEFT_ALT || keycode == KBD_RIGHT_ALT ||
-           keycode == KBD_LEFT_SUPER || keycode == KBD_RIGHT_SUPER || keycode == KBD_CAPSLOCK ||
-           keycode == KBD_NUMLOCK || keycode == KBD_SCRLLOCK;
+    switch (keycode) {
+    case KBD_LEFT_SHIFT:
+    case KBD_RIGHT_SHIFT:
+    case KBD_LEFT_CTRL:
+    case KBD_RIGHT_CTRL:
+    case KBD_LEFT_ALT:
+    case KBD_RIGHT_ALT:
+    case KBD_LEFT_SUPER:
+    case KBD_RIGHT_SUPER:
+    case KBD_CAPSLOCK:
+    case KBD_NUMLOCK:
+    case KBD_SCRLLOCK:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static bool read_window(window_t *window, int master_fd) {
@@ -402,28 +414,28 @@ static bool read_window(window_t *window, int master_fd) {
                     int page_lines = page > 1 ? (int)(page - 1) : 1;
 
                     if (event->keycode == KBD_PAGEUP) {
-                        (void)term_screen_scroll_lines(page_lines);
+                        (void)term_screen_scroll(page_lines);
                         continue;
                     }
 
                     if (event->keycode == KBD_PAGEDOWN) {
-                        (void)term_screen_scroll_lines(-page_lines);
+                        (void)term_screen_scroll(-page_lines);
                         continue;
                     }
 
                     bool shift = (event->modifiers & INPUT_MOD_SHIFT) != 0;
                     if (shift && event->keycode == KBD_UP) {
-                        (void)term_screen_scroll_lines(TERM_SCROLL_STEP);
+                        (void)term_screen_scroll(TERM_SCROLL_STEP);
                         continue;
                     }
 
                     if (shift && event->keycode == KBD_DOWN) {
-                        (void)term_screen_scroll_lines(-TERM_SCROLL_STEP);
+                        (void)term_screen_scroll(-TERM_SCROLL_STEP);
                         continue;
                     }
 
-                    if (term_screen_scroll_offset() > 0 && !is_modifier_key(event->keycode)) {
-                        term_screen_scroll_bottom();
+                    if (term_screen_scroll_pos() > 0 && !is_modifier_key(event->keycode)) {
+                        term_screen_scroll_end();
                     }
                 }
 
@@ -432,7 +444,7 @@ static bool read_window(window_t *window, int master_fd) {
             }
 
             if (event->type == INPUT_EVENT_MOUSE_WHEEL && event->wheel) {
-                (void)term_screen_scroll_lines(-event->wheel * TERM_SCROLL_STEP);
+                (void)term_screen_scroll(-event->wheel * TERM_SCROLL_STEP);
             }
         }
 
@@ -455,82 +467,158 @@ static bool read_window(window_t *window, int master_fd) {
     return true;
 }
 
-int main(void) {
-    window_t window = { 0 };
-    if (window_init(&window, 800, 500, "term")) {
-        term_log_errno("failed to create window");
-        return 1;
+typedef struct {
+    window_t window;
+    int master_fd;
+    pid_t child;
+    struct pollfd pfds[2];
+    bool pending_flush;
+    u32 flush_x;
+    u32 flush_y;
+    u32 flush_w;
+    u32 flush_h;
+} term_app_t;
+
+static void term_app_deinit(term_app_t *app) {
+    if (app->master_fd >= 0 && app->child > 0) {
+        stop_child(app->master_fd, app->child);
     }
 
-    framebuffer_t *fb = window_buffer(&window);
+    if (app->master_fd >= 0) {
+        close(app->master_fd);
+    }
+
+    window_deinit(&app->window);
+}
+
+static bool term_app_init(term_app_t *app) {
+    memset(app, 0, sizeof(*app));
+    app->master_fd = -1;
+
+    if (window_init(&app->window, 800, 500, "term")) {
+        term_log_errno("failed to create window");
+        return false;
+    }
+
+    framebuffer_t *fb = window_buffer(&app->window);
     if (!fb || !fb->pixels) {
         term_log_errno("failed to acquire window framebuffer");
-        window_deinit(&window);
-        return 1;
+        return false;
     }
 
     if (!term_screen_init(fb)) {
         term_log_errno("failed to initialize terminal screen");
-        window_deinit(&window);
-        return 1;
+        return false;
     }
 
-    if (window_flush(&window) < 0) {
+    if (window_flush(&app->window) < 0) {
         term_log_errno("failed to flush initial frame");
-        window_deinit(&window);
-        return 1;
+        return false;
     }
 
-    int master_fd = open("/dev/ptmx", O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
-    if (master_fd < 0) {
+    app->master_fd = open("/dev/ptmx", O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
+    if (app->master_fd < 0) {
         term_log_errno("failed to open /dev/ptmx");
-        window_deinit(&window);
-        return 1;
+        return false;
     }
 
-    pid_t child = term_spawn_shell(master_fd, term_screen_cols(), term_screen_rows(), window.width, window.height);
-    if (child < 0) {
+    app->child = term_spawn_shell(
+        app->master_fd,
+        term_screen_cols(),
+        term_screen_rows(),
+        app->window.width,
+        app->window.height
+    );
+    if (app->child < 0) {
         term_log_errno("failed to spawn shell");
-        close(master_fd);
-        window_deinit(&window);
-        return 1;
+        return false;
     }
 
-    struct pollfd pfds[2] = {
-        {
-            .fd = master_fd,
-            .events = POLLIN,
-            .revents = 0,
-        },
-        {
-            .fd = window.ev_fd,
-            .events = POLLIN,
-            .revents = 0,
-        },
+    app->pfds[0] = (struct pollfd){
+        .fd = app->master_fd,
+        .events = POLLIN,
+        .revents = 0,
+    };
+    app->pfds[1] = (struct pollfd){
+        .fd = app->window.ev_fd,
+        .events = POLLIN,
+        .revents = 0,
     };
 
-    bool running = true;
-    bool pending_flush = false;
-    u32 flush_x = 0;
-    u32 flush_y = 0;
-    u32 flush_w = 0;
-    u32 flush_h = 0;
+    return true;
+}
+
+static bool term_handle_events(term_app_t *app, int ready) {
+    if (app->pfds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+        if (!(app->pfds[0].revents & POLLIN)) {
+            return false;
+        }
+    }
+
+    if (app->pfds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+        return false;
+    }
+
+    if (app->pfds[1].revents & POLLIN) {
+        if (!read_window(&app->window, app->master_fd) && errno == ENOENT) {
+            return false;
+        }
+    }
+
+    if ((app->pfds[0].revents & POLLIN) || !ready) {
+        if (!read_pty(app->master_fd)) {
+            return false;
+        }
+    }
+
+    app->pfds[0].revents = 0;
+    app->pfds[1].revents = 0;
+    return true;
+}
+
+static bool term_flush(term_app_t *app) {
+    if (!app->pending_flush) {
+        bool dirty = term_screen_render_rect(&app->flush_x, &app->flush_y, &app->flush_w, &app->flush_h);
+        if (!dirty) {
+            return true;
+        }
+
+        app->pending_flush = true;
+    }
+
+    if (window_flush_rect(&app->window, app->flush_x, app->flush_y, app->flush_w, app->flush_h) < 0) {
+        if (errno == ENOENT) {
+            return false;
+        }
+
+        if (errno == EAGAIN || errno == EINTR) {
+            return true;
+        }
+
+        // keep terminal alive through transient geometry/write races
+        app->pending_flush = false;
+        return true;
+    }
+
+    app->pending_flush = term_screen_render_rect(&app->flush_x, &app->flush_y, &app->flush_w, &app->flush_h);
+    return true;
+}
+
+int main(void) {
+    term_app_t app = { 0 };
+    if (!term_app_init(&app)) {
+        term_app_deinit(&app);
+        return 1;
+    }
 
     signal(SIGHUP, term_exit_signal);
     signal(SIGTERM, term_exit_signal);
     signal(SIGINT, term_exit_signal);
 
-    while (running) {
-        if (term_exit_requested) {
-            break;
-        }
+    while (!exit_requested && child_alive(app.child)) {
+        int timeout_ms = app.pending_flush ? 16 : -1;
+        int ready = poll(app.pfds, 2, timeout_ms);
 
-        if (!child_alive(child)) {
-            break;
-        }
-
-        int timeout_ms = pending_flush ? 16 : -1;
-        int ready = poll(pfds, 2, timeout_ms);
         if (ready < 0) {
             if (errno == EINTR) {
                 continue;
@@ -538,67 +626,15 @@ int main(void) {
             break;
         }
 
-        if (pfds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-            if (!(pfds[0].revents & POLLIN)) {
-                break;
-            }
-        }
-
-        if (pfds[1].revents & (POLLHUP | POLLERR | POLLNVAL)) {
-            running = false;
-            continue;
-        }
-
-        if (pfds[1].revents & POLLIN) {
-            if (!read_window(&window, master_fd)) {
-                if (errno == ENOENT) {
-                    running = false;
-                    continue;
-                }
-            }
-        }
-
-        if ((pfds[0].revents & POLLIN) || !ready) {
-            if (!read_pty(master_fd)) {
-                break;
-            }
-        }
-
-        pfds[0].revents = 0;
-        pfds[1].revents = 0;
-
-        if (term_exit_requested) {
+        if (!term_handle_events(&app, ready)) {
             break;
         }
 
-        if (!pending_flush && !term_screen_render_rect(&flush_x, &flush_y, &flush_w, &flush_h)) {
-            continue;
-        }
-
-        pending_flush = true;
-
-        if (window_flush_rect(&window, flush_x, flush_y, flush_w, flush_h) < 0) {
-            if (errno == ENOENT) {
-                break;
-            }
-            if (errno == EAGAIN || errno == EINTR) {
-                continue;
-            }
-            // keep terminal alive through transient geometry/write races
-            pending_flush = false;
-            continue;
-        }
-
-        pending_flush = false;
-
-        if (term_screen_render_rect(&flush_x, &flush_y, &flush_w, &flush_h)) {
-            pending_flush = true;
+        if (!exit_requested && !term_flush(&app)) {
+            break;
         }
     }
 
-    stop_child(master_fd, child);
-
-    close(master_fd);
-    window_deinit(&window);
+    term_app_deinit(&app);
     return 0;
 }
