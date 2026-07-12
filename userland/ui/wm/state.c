@@ -28,6 +28,16 @@ typedef struct {
     wm_palette_t palette;
 } wm_state_t;
 
+typedef struct {
+    pixel_t *frame;
+    u32 fb_width;
+    const wm_window_t *window;
+    const wm_rect_t *client;
+    const wm_rect_t *clip;
+    u32 copy_width;
+    u32 copy_height;
+} client_copy_t;
+
 static wm_state_t wm = {
     .order_dirty = true,
     .palette = {
@@ -60,7 +70,7 @@ static bool _index_decode(u64 encoded, size_t *index_out) {
     return true;
 }
 
-static void _window_index_clear(void) {
+static void _index_clear(void) {
     if (!wm.index) {
         return;
     }
@@ -68,7 +78,7 @@ static void _window_index_clear(void) {
     hashmap_clear(wm.index);
 }
 
-static void _window_index_remove(u32 id) {
+static void _index_remove(u32 id) {
     if (!wm.index) {
         return;
     }
@@ -76,7 +86,7 @@ static void _window_index_remove(u32 id) {
     hashmap_remove(wm.index, (u64)id);
 }
 
-static bool _window_index_set(u32 id, size_t index) {
+static bool _index_set(u32 id, size_t index) {
     if (!wm.index) {
         return true;
     }
@@ -84,7 +94,7 @@ static bool _window_index_set(u32 id, size_t index) {
     return hashmap_set(wm.index, (u64)id, _index_encode(index));
 }
 
-static bool _window_index_get(u32 id, size_t *index_out) {
+static bool _index_get(u32 id, size_t *index_out) {
     if (!wm.index || !index_out) {
         return false;
     }
@@ -97,25 +107,28 @@ static bool _window_index_get(u32 id, size_t *index_out) {
     return _index_decode(encoded, index_out);
 }
 
-static bool _window_find_index(const wm_window_t *window, size_t *index_out) {
-    if (!window || !wm.windows || !index_out || !wm.windows->data || !wm.windows->elem_size) {
+static bool _find_index(const wm_window_t *window, size_t *index_out) {
+    bool missing_window = !window || !index_out || !wm.windows;
+    bool missing_storage = wm.windows && (!wm.windows->data || !wm.windows->elem_size);
+
+    if (missing_window || missing_storage) {
         return false;
     }
 
     const u8 *base = wm.windows->data;
-    const u8 *ptr = (const u8 *)window;
+    const u8 *addr = (const u8 *)window;
     const u8 *end = base + (wm.windows->size * wm.windows->elem_size);
 
-    if (ptr < base || ptr >= end) {
+    if (addr < base || addr >= end) {
         return false;
     }
 
-    size_t off = (size_t)(ptr - base);
-    if (off % wm.windows->elem_size) {
+    size_t offset = (size_t)(addr - base);
+    if (offset % wm.windows->elem_size) {
         return false;
     }
 
-    size_t index = off / wm.windows->elem_size;
+    size_t index = offset / wm.windows->elem_size;
 
     if (index >= wm.windows->size) {
         return false;
@@ -125,7 +138,7 @@ static bool _window_find_index(const wm_window_t *window, size_t *index_out) {
     return true;
 }
 
-static void _window_index_rebuild_from(size_t start) {
+static void _rebuild_index(size_t start) {
     if (!wm.windows || !wm.index) {
         return;
     }
@@ -133,12 +146,12 @@ static void _window_index_rebuild_from(size_t start) {
     for (size_t i = start; i < wm.windows->size; i++) {
         wm_window_t *window = vec_at(wm.windows, i);
         if (window) {
-            _window_index_set(window->id, i);
+            _index_set(window->id, i);
         }
     }
 }
 
-static void _focused_window_revalidate(void) {
+static void _check_focus(void) {
     if (!wm.focus_valid || !wm.windows) {
         return;
     }
@@ -154,14 +167,14 @@ static void _focused_window_revalidate(void) {
     wm.focus_id = 0;
 }
 
-static void _window_cache_revalidate(size_t start) {
-    _window_index_rebuild_from(start);
+static void _refresh_cache(size_t start) {
+    _rebuild_index(start);
     wm.order_count = 0;
     wm.order_dirty = true;
-    _focused_window_revalidate();
+    _check_focus();
 }
 
-static void _window_remove_at(size_t index) {
+static void _remove_at(size_t index) {
     if (!wm.windows || index >= wm.windows->size) {
         return;
     }
@@ -181,14 +194,14 @@ static void _window_remove_at(size_t index) {
     }
 
     vec_pop(wm.windows, NULL);
-    _window_index_remove(removed_id);
+    _index_remove(removed_id);
 
     if (wm.focus_valid && wm.focus_id == removed_id) {
         wm.focus_valid = false;
         wm.focus_id = 0;
     }
 
-    _window_cache_revalidate(index);
+    _refresh_cache(index);
 }
 
 static framebuffer_t _wrap_framebuffer(pixel_t *pixels, u32 width, u32 height) {
@@ -279,8 +292,12 @@ static void _cleanup_window(wm_window_t *window) {
     window->surface_height = 0;
 }
 
-static bool _point_in_rect(i32 px, i32 py, i32 x, i32 y, i32 w, i32 h) {
-    return px >= x && py >= y && px < x + w && py < y + h;
+static bool _point_in_rect(i32 px, i32 py, const wm_rect_t *rect) {
+    if (!rect) {
+        return false;
+    }
+
+    return px >= rect->x && py >= rect->y && px < rect->x + rect->width && py < rect->y + rect->height;
 }
 
 static bool _point_in_window(const wm_window_t *window, i32 px, i32 py) {
@@ -288,10 +305,17 @@ static bool _point_in_window(const wm_window_t *window, i32 px, i32 py) {
         return false;
     }
 
-    return _point_in_rect(px, py, window->x, window->y, (i32)window->width, (i32)window->height + TITLE_H);
+    wm_rect_t bounds = {
+        .x = window->x,
+        .y = window->y,
+        .width = (i32)window->width,
+        .height = (i32)window->height + TITLE_H,
+    };
+
+    return _point_in_rect(px, py, &bounds);
 }
 
-static bool _window_title_rect(const wm_window_t *window, wm_rect_t *rect) {
+static bool _title_rect(const wm_window_t *window, wm_rect_t *rect) {
     if (!window || !rect) {
         return false;
     }
@@ -303,7 +327,7 @@ static bool _window_title_rect(const wm_window_t *window, wm_rect_t *rect) {
     return wm_rect_valid(rect);
 }
 
-static bool _window_client_rect(const wm_window_t *window, wm_rect_t *rect) {
+static bool _client_rect(const wm_window_t *window, wm_rect_t *rect) {
     if (!window || !rect) {
         return false;
     }
@@ -354,7 +378,7 @@ static void _sort_by_z(wm_window_t **arr, size_t count) {
     qsort(arr, count, sizeof(arr[0]), _compare_window_z);
 }
 
-static bool _render_order_ensure(size_t needed) {
+static bool ensure_render_order(size_t needed) {
     if (wm.order_cap >= needed) {
         return true;
     }
@@ -378,7 +402,7 @@ static bool _render_order_ensure(size_t needed) {
     return true;
 }
 
-static bool _render_order_refresh(void) {
+static bool refresh_render_order(void) {
     size_t count = wm.windows ? wm.windows->size : 0;
     if (!count) {
         wm.order_count = 0;
@@ -386,7 +410,7 @@ static bool _render_order_refresh(void) {
         return true;
     }
 
-    if (!_render_order_ensure(count)) {
+    if (!ensure_render_order(count)) {
         return false;
     }
 
@@ -510,7 +534,7 @@ static void _resize_surface(pixel_t *surface, u32 old_width, u32 old_height, u32
 }
 
 static void
-_surface_copy_overlap(pixel_t *dst, u32 dst_width, u32 dst_height, const pixel_t *src, u32 src_width, u32 src_height) {
+copy_surface(pixel_t *dst, u32 dst_width, u32 dst_height, const pixel_t *src, u32 src_width, u32 src_height) {
     if (!dst || !src || !dst_width || !dst_height || !src_width || !src_height) {
         return;
     }
@@ -524,7 +548,7 @@ _surface_copy_overlap(pixel_t *dst, u32 dst_width, u32 dst_height, const pixel_t
     }
 }
 
-static bool _window_surface_ensure(wm_window_t *window) {
+static bool _ensure_surface(wm_window_t *window) {
     if (!window) {
         return false;
     }
@@ -581,7 +605,7 @@ static bool _window_surface_ensure(wm_window_t *window) {
     }
 
     if (window->surface && window->surface_pixels && old_width && old_height) {
-        _surface_copy_overlap(surface, new_width, new_height, window->surface, old_width, old_height);
+        copy_surface(surface, new_width, new_height, window->surface, old_width, old_height);
     }
 
     free(window->surface);
@@ -593,7 +617,7 @@ static bool _window_surface_ensure(wm_window_t *window) {
     return true;
 }
 
-static void _window_mark_dirty(wm_window_t *window, u32 x, u32 y, u32 width, u32 height) {
+static void _mark_dirty(wm_window_t *window, u32 x, u32 y, u32 width, u32 height) {
     if (!window || !width || !height || !window->width || !window->height) {
         return;
     }
@@ -662,7 +686,118 @@ static bool _pread_full(int fd, void *buf, size_t len, off_t offset) {
     return done == len;
 }
 
-static bool _window_refresh_surface(wm_window_t *window) {
+static bool log_fb_failure(u32 failures) {
+    return failures <= 4 || (failures & (failures - 1U)) == 0U;
+}
+
+typedef struct {
+    u32 x;
+    u32 y;
+    u32 width;
+    u32 height;
+    u32 src_width;
+    u32 src_height;
+    u32 surface_width;
+    size_t row_bytes;
+} surface_read_t;
+
+static bool surface_read_rect(wm_window_t *window, surface_read_t *rect) {
+    rect->x = window->dirty_x;
+    rect->y = window->dirty_y;
+    rect->width = window->dirty_width;
+    rect->height = window->dirty_height;
+    rect->src_width = window->fb_width ? window->fb_width : window->width;
+    rect->src_height = window->fb_height ? window->fb_height : window->height;
+    rect->surface_width = window->surface_width ? window->surface_width : window->width;
+
+    window->surface_dirty = false;
+
+    if (!rect->width || !rect->height || !rect->src_width || !rect->src_height) {
+        return false;
+    }
+
+    if (rect->x >= rect->src_width || rect->y >= rect->src_height) {
+        return false;
+    }
+
+    if (rect->x + rect->width > rect->src_width) {
+        rect->width = rect->src_width - rect->x;
+    }
+
+    if (rect->y + rect->height > rect->src_height) {
+        rect->height = rect->src_height - rect->y;
+    }
+
+    rect->row_bytes = (size_t)rect->width * sizeof(pixel_t);
+    return rect->width && rect->height;
+}
+
+static bool read_surface_rows(wm_window_t *window, const surface_read_t *rect) {
+    if (window->fb_fd < 0) {
+        return false;
+    }
+
+    bool full_width = rect->x == 0 && rect->width == rect->src_width && rect->surface_width == rect->src_width;
+    if (full_width) {
+        size_t src_index = (size_t)rect->y * rect->src_width;
+        size_t dst_index = (size_t)rect->y * rect->surface_width;
+        off_t offset = (off_t)(src_index * sizeof(pixel_t));
+        size_t total = (size_t)rect->height * rect->row_bytes;
+        u8 *dst = (u8 *)(window->surface + dst_index);
+
+        return _pread_full(window->fb_fd, dst, total, offset);
+    }
+
+    for (u32 row = 0; row < rect->height; row++) {
+        u32 src_y = rect->y + row;
+        size_t src_index = (size_t)src_y * rect->src_width + rect->x;
+        size_t dst_index = (size_t)src_y * rect->surface_width + rect->x;
+        off_t offset = (off_t)(src_index * sizeof(pixel_t));
+        u8 *dst = (u8 *)(window->surface + dst_index);
+
+        if (!_pread_full(window->fb_fd, dst, rect->row_bytes, offset)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static void log_surface_error(wm_window_t *window, const surface_read_t *rect) {
+    window->fb_read_failures++;
+    if (!log_fb_failure(window->fb_read_failures)) {
+        return;
+    }
+
+    fprintf(
+        stderr,
+        "wm: fb read failed id=%u failures=%u rect=%u,%u %ux%u src=%ux%u\n",
+        (unsigned int)window->id,
+        (unsigned int)window->fb_read_failures,
+        (unsigned int)rect->x,
+        (unsigned int)rect->y,
+        (unsigned int)rect->width,
+        (unsigned int)rect->height,
+        (unsigned int)rect->src_width,
+        (unsigned int)rect->src_height
+    );
+}
+
+static void log_surface_recovered(wm_window_t *window) {
+    if (!window->fb_read_failures) {
+        return;
+    }
+
+    fprintf(
+        stderr,
+        "wm: fb read recovered id=%u after_failures=%u\n",
+        (unsigned int)window->id,
+        (unsigned int)window->fb_read_failures
+    );
+    window->fb_read_failures = 0;
+}
+
+static bool _refresh_surface(wm_window_t *window) {
     if (!window) {
         return false;
     }
@@ -671,9 +806,9 @@ static bool _window_refresh_surface(wm_window_t *window) {
         return true;
     }
 
-    if (!_window_surface_ensure(window)) {
+    if (!_ensure_surface(window)) {
         window->fb_read_failures++;
-        if (window->fb_read_failures <= 4 || (window->fb_read_failures & (window->fb_read_failures - 1U)) == 0U) {
+        if (log_fb_failure(window->fb_read_failures)) {
             fprintf(
                 stderr,
                 "wm: surface ensure failed id=%u failures=%u dims=%ux%u\n",
@@ -686,94 +821,22 @@ static bool _window_refresh_surface(wm_window_t *window) {
         return false;
     }
 
-    u32 x = window->dirty_x;
-    u32 y = window->dirty_y;
-    u32 width = window->dirty_width;
-    u32 height = window->dirty_height;
-    u32 src_width = window->fb_width ? window->fb_width : window->width;
-    u32 src_height = window->fb_height ? window->fb_height : window->height;
-    u32 surface_width = window->surface_width ? window->surface_width : window->width;
-
-    window->surface_dirty = false;
-
-    if (!width || !height || !src_width || !src_height) {
+    surface_read_t rect = { 0 };
+    if (!surface_read_rect(window, &rect)) {
         return true;
     }
 
-    if (x >= src_width || y >= src_height) {
-        return true;
-    }
-
-    if (x + width > src_width) {
-        width = src_width - x;
-    }
-
-    if (y + height > src_height) {
-        height = src_height - y;
-    }
-
-    if (!width || !height) {
-        return true;
-    }
-
-    size_t row_bytes = (size_t)width * sizeof(pixel_t);
-    bool had_error = false;
-
-    if (window->fb_fd >= 0 && x == 0 && width == src_width && surface_width == src_width) {
-        size_t src_index = (size_t)y * src_width;
-        size_t dst_index = (size_t)y * surface_width;
-        off_t offset = (off_t)(src_index * sizeof(pixel_t));
-        size_t total = (size_t)height * row_bytes;
-        u8 *dst = (u8 *)(window->surface + dst_index);
-
-        if (!_pread_full(window->fb_fd, dst, total, offset)) {
-            had_error = true;
-        }
+    if (!read_surface_rows(window, &rect)) {
+        log_surface_error(window, &rect);
+        _mark_dirty(window, rect.x, rect.y, rect.width, rect.height);
     } else {
-        for (u32 row = 0; row < height; row++) {
-            u32 src_y = y + row;
-            size_t src_index = (size_t)src_y * src_width + x;
-            size_t dst_index = (size_t)src_y * surface_width + x;
-            off_t offset = (off_t)(src_index * sizeof(pixel_t));
-            u8 *dst = (u8 *)(window->surface + dst_index);
-
-            if (window->fb_fd < 0 || !_pread_full(window->fb_fd, dst, row_bytes, offset)) {
-                had_error = true;
-            }
-        }
-    }
-
-    if (had_error) {
-        window->fb_read_failures++;
-        if (window->fb_read_failures <= 4 || (window->fb_read_failures & (window->fb_read_failures - 1U)) == 0U) {
-            fprintf(
-                stderr,
-                "wm: fb read failed id=%u failures=%u rect=%u,%u %ux%u src=%ux%u\n",
-                (unsigned int)window->id,
-                (unsigned int)window->fb_read_failures,
-                (unsigned int)x,
-                (unsigned int)y,
-                (unsigned int)width,
-                (unsigned int)height,
-                (unsigned int)src_width,
-                (unsigned int)src_height
-            );
-        }
-        _window_mark_dirty(window, x, y, width, height);
-    } else if (window->fb_read_failures) {
-        fprintf(
-            stderr,
-            "wm: fb read recovered id=%u after_failures=%u\n",
-            (unsigned int)window->id,
-            (unsigned int)window->fb_read_failures
-        );
-        window->fb_read_failures = 0;
+        log_surface_recovered(window);
     }
 
     return true;
 }
 
-static void _draw_window_title_region(
+static void _draw_title(
     pixel_t *frame,
     u32 fb_width,
     u32 fb_height,
@@ -786,7 +849,7 @@ static void _draw_window_title_region(
     }
 
     wm_rect_t title_rect = { 0 };
-    if (!_window_title_rect(window, &title_rect)) {
+    if (!_title_rect(window, &title_rect)) {
         return;
     }
 
@@ -846,21 +909,19 @@ static void _draw_window_title_region(
     }
 }
 
-static bool _copy_window_client_region(
-    pixel_t *frame,
-    u32 fb_width,
-    const wm_window_t *window,
-    const wm_rect_t *client_rect,
-    const wm_rect_t *clip_client,
-    u32 *copy_width_out,
-    u32 *copy_height_out
-) {
-    if (!frame || !window || !window->surface || !client_rect || !clip_client || !copy_width_out || !copy_height_out) {
+static bool _copy_client(client_copy_t *copy) {
+    bool missing_frame = !copy || !copy->frame || !copy->window || !copy->window->surface;
+    bool missing_rect = !copy || !copy->client || !copy->clip;
+
+    if (missing_frame || missing_rect) {
         return false;
     }
 
-    i32 src_x = clip_client->x - client_rect->x;
-    i32 src_y = clip_client->y - client_rect->y;
+    const wm_window_t *window = copy->window;
+    const wm_rect_t *clip_client = copy->clip;
+
+    i32 src_x = clip_client->x - copy->client->x;
+    i32 src_y = clip_client->y - copy->client->y;
     if (src_x < 0 || src_y < 0) {
         return false;
     }
@@ -914,19 +975,19 @@ static bool _copy_window_client_region(
         for (u32 row = 0; row < copy_height; row++) {
             size_t src_off = (size_t)(src_y + (i32)row) * surface_stride + (size_t)src_x;
 
-            size_t dst_off = (size_t)(clip_client->y + (i32)row) * fb_width + (size_t)clip_client->x;
+            size_t dst_off = (size_t)(clip_client->y + (i32)row) * copy->fb_width + (size_t)clip_client->x;
 
-            memcpy(frame + dst_off, window->surface + src_off, copy_bytes);
+            memcpy(copy->frame + dst_off, window->surface + src_off, copy_bytes);
         }
     }
 
-    *copy_width_out = copy_width;
-    *copy_height_out = copy_height;
+    copy->copy_width = copy_width;
+    copy->copy_height = copy_height;
 
     return true;
 }
 
-static void _fill_window_client_gap(framebuffer_t *fb, const wm_rect_t *clip_client, u32 copy_width, u32 copy_height) {
+static void _fill_client_gap(framebuffer_t *fb, const wm_rect_t *clip_client, u32 copy_width, u32 copy_height) {
     if (!fb || !clip_client) {
         return;
     }
@@ -1015,7 +1076,7 @@ static void _fill_window_client_gap(framebuffer_t *fb, const wm_rect_t *clip_cli
     }
 }
 
-static void _draw_window_client_region(
+static void _draw_client(
     pixel_t *frame,
     u32 fb_width,
     u32 fb_height,
@@ -1029,7 +1090,7 @@ static void _draw_window_client_region(
 
     framebuffer_t fb = _wrap_framebuffer(frame, fb_width, fb_height);
     wm_rect_t client_rect = { 0 };
-    if (!_window_client_rect(window, &client_rect)) {
+    if (!_client_rect(window, &client_rect)) {
         return;
     }
 
@@ -1049,7 +1110,7 @@ static void _draw_window_client_region(
         palette->border
     );
 
-    if (!_window_refresh_surface(window) || !window->surface) {
+    if (!_refresh_surface(window) || !window->surface) {
         draw_rect(
             &fb,
             clip_client.x,
@@ -1061,20 +1122,17 @@ static void _draw_window_client_region(
         return;
     }
 
-    u32 copy_width = 0;
-    u32 copy_height = 0;
+    client_copy_t copy = {
+        .frame = frame,
+        .fb_width = fb_width,
+        .window = window,
+        .client = &client_rect,
+        .clip = &clip_client,
+    };
 
-    bool copied_region = _copy_window_client_region(
-        frame,
-        fb_width,
-        window,
-        &client_rect,
-        &clip_client,
-        &copy_width,
-        &copy_height
-    );
+    bool copied = _copy_client(&copy);
 
-    if (!copied_region) {
+    if (!copied) {
         draw_rect(
             &fb,
             clip_client.x,
@@ -1086,11 +1144,10 @@ static void _draw_window_client_region(
         return;
     }
 
-    _fill_window_client_gap(&fb, &clip_client, copy_width, copy_height);
+    _fill_client_gap(&fb, &clip_client, copy.copy_width, copy.copy_height);
 }
 
-static void
-_blit_window_region(pixel_t *frame, u32 fb_width, u32 fb_height, wm_window_t *window, const wm_rect_t *clip) {
+static void blit_window(pixel_t *frame, u32 fb_width, u32 fb_height, wm_window_t *window, const wm_rect_t *clip) {
     if (!frame || !window || !wm_rect_valid(clip)) {
         return;
     }
@@ -1105,8 +1162,8 @@ _blit_window_region(pixel_t *frame, u32 fb_width, u32 fb_height, wm_window_t *wi
     }
 
     const wm_palette_t *palette = wm_palette_get();
-    _draw_window_title_region(frame, fb_width, fb_height, window, clip, palette);
-    _draw_window_client_region(frame, fb_width, fb_height, window, clip, palette);
+    _draw_title(frame, fb_width, fb_height, window, clip, palette);
+    _draw_client(frame, fb_width, fb_height, window, clip, palette);
 }
 
 void wm_init(void) {
@@ -1140,21 +1197,21 @@ wm_window_t *wm_window_by_id(u32 id) {
     }
 
     size_t cached_index = 0;
-    if (_window_index_get(id, &cached_index) && cached_index < wm.windows->size) {
+    if (_index_get(id, &cached_index) && cached_index < wm.windows->size) {
         wm_window_t *cached = vec_at(wm.windows, cached_index);
 
         if (cached && cached->id == id) {
             return cached;
         }
 
-        _window_index_remove(id);
+        _index_remove(id);
     }
 
     for (size_t i = 0; i < wm.windows->size; i++) {
         wm_window_t *window = vec_at(wm.windows, i);
 
         if (window->id == id) {
-            _window_index_set(id, i);
+            _index_set(id, i);
             return window;
         }
     }
@@ -1167,7 +1224,14 @@ bool wm_point_in_title(const wm_window_t *window, i32 px, i32 py) {
         return false;
     }
 
-    return _point_in_rect(px, py, window->x, window->y, (i32)window->width, TITLE_H);
+    wm_rect_t title = {
+        .x = window->x,
+        .y = window->y,
+        .width = (i32)window->width,
+        .height = TITLE_H,
+    };
+
+    return _point_in_rect(px, py, &title);
 }
 
 bool wm_point_in_close(const wm_window_t *window, i32 px, i32 py) {
@@ -1178,7 +1242,14 @@ bool wm_point_in_close(const wm_window_t *window, i32 px, i32 py) {
     i32 bx = window->x + (i32)window->width - CLOSE_BTN_SIZE - 3;
     i32 by = window->y + 3;
 
-    return _point_in_rect(px, py, bx, by, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE);
+    wm_rect_t close = {
+        .x = bx,
+        .y = by,
+        .width = CLOSE_BTN_SIZE,
+        .height = CLOSE_BTN_SIZE,
+    };
+
+    return _point_in_rect(px, py, &close);
 }
 
 bool wm_window_bounds_rect(const wm_window_t *window, wm_rect_t *rect) {
@@ -1232,7 +1303,7 @@ wm_window_t *wm_top_window_at(i32 px, i32 py) {
         return NULL;
     }
 
-    if (_render_order_refresh()) {
+    if (refresh_render_order()) {
         for (size_t i = wm.order_count; i > 0; i--) {
             wm_window_t *window = wm.order[i - 1];
 
@@ -1252,7 +1323,7 @@ wm_window_t *wm_top_window(void) {
         return NULL;
     }
 
-    if (_render_order_refresh()) {
+    if (refresh_render_order()) {
         return wm.order_count ? wm.order[wm.order_count - 1] : NULL;
     }
 
@@ -1275,13 +1346,13 @@ void wm_set_focus(ui_t *ui, wm_window_t *window, u32 *z_counter) {
     if (wm.focus_valid && wm.focus_id != window->id) {
         size_t focused_index = 0;
 
-        if (_window_index_get(wm.focus_id, &focused_index) && focused_index < wm.windows->size) {
+        if (_index_get(wm.focus_id, &focused_index) && focused_index < wm.windows->size) {
             wm_window_t *focused = vec_at(wm.windows, focused_index);
 
             if (focused && focused->id == wm.focus_id) {
                 focused->focused = false;
             } else {
-                _window_index_remove(wm.focus_id);
+                _index_remove(wm.focus_id);
                 wm.focus_valid = false;
             }
         } else {
@@ -1294,80 +1365,66 @@ void wm_set_focus(ui_t *ui, wm_window_t *window, u32 *z_counter) {
     wm.focus_id = window->id;
 }
 
-bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage) {
-    if (!event) {
+static bool _ws_event_closed(const ws_event_t *event, wm_window_t *window, wm_rect_t *damage) {
+    if (!window) {
         return false;
     }
 
     if (damage) {
-        memset(damage, 0, sizeof(*damage));
+        wm_window_bounds_rect(window, damage);
     }
 
-    wm_window_t *window = wm_window_by_id(event->id);
+    _cleanup_window(window);
 
-    if (event->type == WS_EVT_WINDOW_CLOSED) {
-        if (!window) {
-            return false;
-        }
-
-        if (damage) {
-            wm_window_bounds_rect(window, damage);
-        }
-
-        _cleanup_window(window);
-
-        size_t index = 0;
-        if (!_window_find_index(window, &index)) {
-            _window_index_remove(event->id);
-            return false;
-        }
-
-        _window_remove_at(index);
-        wm.order_dirty = true;
-
-        return true;
-    }
-
-    if (event->type == WS_EVT_WINDOW_DIRTY) {
-        if (!window || !event->width || !event->height) {
-            return false;
-        }
-
-        _window_mark_dirty(window, (u32)event->x, (u32)event->y, event->width, event->height);
-
-        if (damage) {
-            damage->x = window->x + event->x;
-            damage->y = window->y + TITLE_H + event->y;
-            damage->width = (i32)event->width;
-            damage->height = (i32)event->height;
-        }
-
-        return true;
-    }
-
-    if (event->type == WS_EVT_WINDOW_TITLE) {
-        if (!window) {
-            return false;
-        }
-
-        if (!strncmp(window->title, event->title, sizeof(window->title))) {
-            return false;
-        }
-
-        memset(window->title, 0, sizeof(window->title));
-        strncpy(window->title, event->title, sizeof(window->title) - 1);
-
-        if (damage) {
-            return _window_title_rect(window, damage);
-        }
-
-        return true;
-    }
-
-    if (event->type != WS_EVT_WINDOW_NEW) {
+    size_t index = 0;
+    if (!_find_index(window, &index)) {
+        _index_remove(event->id);
         return false;
     }
 
+    _remove_at(index);
+    wm.order_dirty = true;
+
+    return true;
+}
+
+static bool _ws_event_dirty(const ws_event_t *event, wm_window_t *window, wm_rect_t *damage) {
+    if (!window || !event->width || !event->height) {
+        return false;
+    }
+
+    _mark_dirty(window, (u32)event->x, (u32)event->y, event->width, event->height);
+
+    if (damage) {
+        damage->x = window->x + event->x;
+        damage->y = window->y + TITLE_H + event->y;
+        damage->width = (i32)event->width;
+        damage->height = (i32)event->height;
+    }
+
+    return true;
+}
+
+static bool _ws_event_title(const ws_event_t *event, wm_window_t *window, wm_rect_t *damage) {
+    if (!window) {
+        return false;
+    }
+
+    if (!strncmp(window->title, event->title, sizeof(window->title))) {
+        return false;
+    }
+
+    memset(window->title, 0, sizeof(window->title));
+    strncpy(window->title, event->title, sizeof(window->title) - 1);
+
+    if (damage) {
+        return _title_rect(window, damage);
+    }
+
+    return true;
+}
+
+static bool _ws_event_new(const ws_event_t *event, wm_window_t *window, wm_rect_t *damage) {
     wm_rect_t old_rect = { 0 };
     bool had_old = false;
 
@@ -1377,10 +1434,10 @@ bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage) {
         _cleanup_window(window);
 
         size_t index = 0;
-        if (_window_find_index(window, &index)) {
-            _window_remove_at(index);
+        if (_find_index(window, &index)) {
+            _remove_at(index);
         } else {
-            _window_index_remove(event->id);
+            _index_remove(event->id);
         }
     }
 
@@ -1415,11 +1472,11 @@ bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage) {
     }
 
     size_t added_index = wm.windows->size - 1;
-    _window_cache_revalidate(added_index);
+    _refresh_cache(added_index);
 
     wm_window_t *added = vec_at(wm.windows, added_index);
     if (added) {
-        _window_mark_dirty(added, 0, 0, added->width, added->height);
+        _mark_dirty(added, 0, 0, added->width, added->height);
     }
 
     if (damage) {
@@ -1436,6 +1493,31 @@ bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage) {
     return true;
 }
 
+bool wm_handle_ws_event(const ws_event_t *event, wm_rect_t *damage) {
+    if (!event) {
+        return false;
+    }
+
+    if (damage) {
+        memset(damage, 0, sizeof(*damage));
+    }
+
+    wm_window_t *window = wm_window_by_id(event->id);
+
+    switch (event->type) {
+    case WS_EVT_WINDOW_CLOSED:
+        return _ws_event_closed(event, window, damage);
+    case WS_EVT_WINDOW_DIRTY:
+        return _ws_event_dirty(event, window, damage);
+    case WS_EVT_WINDOW_TITLE:
+        return _ws_event_title(event, window, damage);
+    case WS_EVT_WINDOW_NEW:
+        return _ws_event_new(event, window, damage);
+    default:
+        return false;
+    }
+}
+
 void wm_render_damage(pixel_t *frame, u32 fb_width, u32 fb_height, const wm_rect_t *damage) {
     if (!frame || !wm_rect_valid(damage)) {
         return;
@@ -1450,15 +1532,7 @@ void wm_render_damage(pixel_t *frame, u32 fb_width, u32 fb_height, const wm_rect
         return;
     }
 
-    bool background_drawn = wm_background_draw_rect(
-        frame,
-        fb_width,
-        fb_height,
-        clip.x,
-        clip.y,
-        (u32)clip.width,
-        (u32)clip.height
-    );
+    bool background_drawn = wm_background_draw_rect(frame, fb_width, fb_height, &clip);
 
     if (!background_drawn) {
         draw_rect(&fb, clip.x, clip.y, (u32)clip.width, (u32)clip.height, palette->background);
@@ -1469,16 +1543,16 @@ void wm_render_damage(pixel_t *frame, u32 fb_width, u32 fb_height, const wm_rect
         return;
     }
 
-    if (!_render_order_refresh()) {
+    if (!refresh_render_order()) {
         for (size_t i = 0; i < count; i++) {
             wm_window_t *window = vec_at(wm.windows, i);
-            _blit_window_region(frame, fb_width, fb_height, window, &clip);
+            blit_window(frame, fb_width, fb_height, window, &clip);
         }
         return;
     }
 
     for (size_t i = 0; i < wm.order_count; i++) {
-        _blit_window_region(frame, fb_width, fb_height, wm.order[i], &clip);
+        blit_window(frame, fb_width, fb_height, wm.order[i], &clip);
     }
 }
 
@@ -1499,7 +1573,7 @@ void wm_cleanup_all_windows(void) {
     }
 
     vec_clear(wm.windows);
-    _window_index_clear();
+    _index_clear();
 
     wm.order_count = 0;
     wm.order_dirty = true;
