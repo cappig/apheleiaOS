@@ -49,6 +49,8 @@ def load_segments(elf: Path) -> list[tuple[int, int]]:
 def check_kernel_layout(
     kernel_elf: Path,
     image_base: int,
+    dtb_offset: int,
+    dtb_size: int,
     rootfs_offset: int,
     rootfs_size: int,
     scratch_offset: int,
@@ -58,9 +60,17 @@ def check_kernel_layout(
     kernel_start = min(addr for addr, _ in segs)
     kernel_end = max(addr + size for addr, size in segs)
 
+    dtb_start = image_base + dtb_offset if dtb_offset else 0
+    dtb_end = dtb_start + dtb_size if dtb_start else 0
     rootfs_start = image_base + rootfs_offset
     rootfs_end = rootfs_start + rootfs_size
     scratch_start = image_base + scratch_offset if scratch_offset else 0
+
+    if dtb_start and kernel_end > dtb_start and kernel_start < dtb_end:
+        raise RuntimeError(
+            f"kernel [{kernel_start:#x}, {kernel_end:#x}) overlaps "
+            f"DTB [{dtb_start:#x}, {dtb_end:#x})"
+        )
 
     if kernel_end > rootfs_start and kernel_start < rootfs_end:
         raise RuntimeError(
@@ -77,6 +87,12 @@ def check_kernel_layout(
     if scratch_start and kernel_end > scratch_start:
         raise RuntimeError(
             f"kernel [{kernel_start:#x}, {kernel_end:#x}) overlaps "
+            f"boot scratch [{scratch_start:#x}, ...)"
+        )
+
+    if scratch_start and dtb_start and dtb_end > scratch_start:
+        raise RuntimeError(
+            f"DTB [{dtb_start:#x}, {dtb_end:#x}) overlaps "
             f"boot scratch [{scratch_start:#x}, ...)"
         )
 
@@ -126,7 +142,15 @@ def main() -> None:
     if header_end > len(boot):
         raise RuntimeError("image header is outside boot binary")
 
-    check_kernel_layout(args.kernel_elf, image_base, rootfs_offset, len(rootfs), args.scratch_offset)
+    check_kernel_layout(
+        args.kernel_elf,
+        image_base,
+        dtb_offset,
+        len(dtb),
+        rootfs_offset,
+        len(rootfs),
+        args.scratch_offset,
+    )
 
     header = HEADER_STRUCT.pack(
         IMAGE_MAGIC,

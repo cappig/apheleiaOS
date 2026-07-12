@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import stat
@@ -17,6 +18,27 @@ SECTOR_SIZE = 512
 
 class BuildError(RuntimeError):
     pass
+
+
+def source_date_epoch() -> int | None:
+    value = os.environ.get("SOURCE_DATE_EPOCH")
+    if value is None:
+        return None
+
+    try:
+        epoch = int(value, 10)
+    except ValueError as exc:
+        raise BuildError("SOURCE_DATE_EPOCH must be an integer") from exc
+
+    if epoch < 0 or epoch > 0xFFFFFFFF:
+        raise BuildError("SOURCE_DATE_EPOCH is outside the supported ext2 range")
+
+    return epoch
+
+
+def build_timestamp() -> int:
+    epoch = source_date_epoch()
+    return epoch if epoch is not None else int(time.time())
 
 
 ROOT_OWNER = (0, 0)
@@ -43,10 +65,9 @@ ROOTFS_METADATA_OVERRIDES: dict[str, dict[str, int]] = {
     "etc/cozette.psf": _meta(0o644),
     "etc/font.psf": _meta(0o644),
     "boot/loader.conf": _meta(0o644),
-    "bin/su": _meta(0o4755),
 }
 
-ROOTFS_OWNER_PREFIX_OVERRIDES: dict[str, tuple[int, int]] = {
+ROOTFS_OWNER_OVERRIDES: dict[str, tuple[int, int]] = {
     "home/user": USER_OWNER,
     "home/john": JOHN_OWNER,
 }
@@ -178,15 +199,15 @@ def _node_rel_path(node: _Ext2Node) -> str:
 def _default_owner_for_rel_path(rel_path: str) -> tuple[int, int]:
     matches = [
         prefix
-        for prefix in ROOTFS_OWNER_PREFIX_OVERRIDES
+        for prefix in ROOTFS_OWNER_OVERRIDES
         if rel_path == prefix or rel_path.startswith(prefix + "/")
     ]
     if not matches:
         return ROOT_OWNER
-    return ROOTFS_OWNER_PREFIX_OVERRIDES[max(matches, key=len)]
+    return ROOTFS_OWNER_OVERRIDES[max(matches, key=len)]
 
 
-def _scan_tree(path: Path, parent: _Ext2Node | None, name: str) -> _Ext2Node:
+def _scan_tree(path: Path, parent: _Ext2Node | None, name: str, epoch: int | None) -> _Ext2Node:
     st = path.lstat()
     is_dir = stat.S_ISDIR(st.st_mode)
     if not is_dir and not stat.S_ISREG(st.st_mode):
@@ -200,13 +221,13 @@ def _scan_tree(path: Path, parent: _Ext2Node | None, name: str) -> _Ext2Node:
         mode=st.st_mode & 0x0FFF,
         uid=st.st_uid & 0xFFFF,
         gid=st.st_gid & 0xFFFF,
-        mtime=int(st.st_mtime),
+        mtime=epoch if epoch is not None else int(st.st_mtime),
     )
 
     if is_dir:
         for child_name in sorted(os.listdir(path)):
             child_path = path / child_name
-            child = _scan_tree(child_path, node, child_name)
+            child = _scan_tree(child_path, node, child_name, epoch)
             node.children.append(child)
     else:
         node.content = path.read_bytes()
@@ -337,8 +358,15 @@ def build_ext2_image(
 ) -> None:
     if block_size not in (1024, 2048, 4096):
         raise BuildError("ext2 builder currently supports block sizes 1024/2048/4096")
+    if growth_numerator <= 0 or growth_denominator <= 0:
+        raise BuildError("ext2 growth factors must be positive")
+    if extra_bytes < 0 or minimum_bytes < 0:
+        raise BuildError("ext2 size allowances cannot be negative")
+    if inode_count is not None and inode_count <= 0:
+        raise BuildError("ext2 inode count must be positive")
 
-    root = _scan_tree(root_tree, None, "")
+    epoch = source_date_epoch()
+    root = _scan_tree(root_tree, None, "", epoch)
     inode_map = _assign_inode_numbers(root)
 
     for node in inode_map.values():
@@ -364,14 +392,14 @@ def build_ext2_image(
         inode_count = align_up(max(256, min_inodes + 64), 128)
     if inode_count < min_inodes:
         inode_count = align_up(min_inodes, 128)
+    if inode_count > block_size * 8:
+        raise BuildError("ext2 image requires more than one inode group")
 
     inode_size = 128
     inode_table_blocks = div_round_up(inode_count * inode_size, block_size)
 
-    if block_size == 1024:
-        superblock_block = 1
-    else:
-        superblock_block = 0
+    first_data_block = 1 if block_size == 1024 else 0
+    superblock_block = first_data_block
     gdt_block = superblock_block + 1
     block_bitmap_block = gdt_block + 1
     inode_bitmap_block = block_bitmap_block + 1
@@ -514,15 +542,23 @@ def build_ext2_image(
         # Bitmaps
         block_bitmap = bytearray(block_size)
         for b in alloc.used_blocks:
-            if b >= total_blocks:
+            if b < first_data_block or b >= total_blocks:
                 continue
-            block_bitmap[b // 8] |= 1 << (b % 8)
+            idx = b - first_data_block
+            block_bitmap[idx // 8] |= 1 << (idx % 8)
+
+        group_blocks = total_blocks - first_data_block
+        for idx in range(group_blocks, block_size * 8):
+            block_bitmap[idx // 8] |= 1 << (idx % 8)
 
         inode_bitmap = bytearray(block_size)
         for ino in used_inodes:
             idx = ino - 1
             if idx >= inode_count:
                 continue
+            inode_bitmap[idx // 8] |= 1 << (idx % 8)
+
+        for idx in range(inode_count, block_size * 8):
             inode_bitmap[idx // 8] |= 1 << (idx % 8)
 
         alloc.image[
@@ -537,20 +573,19 @@ def build_ext2_image(
         dir_count = sum(1 for n in inode_map.values() if n.is_dir)
 
         # Group descriptor
-        gd = bytearray(38)
+        gd = bytearray(32)
         struct.pack_into("<I", gd, 0, block_bitmap_block)
         struct.pack_into("<I", gd, 4, inode_bitmap_block)
         struct.pack_into("<I", gd, 8, inode_table_block)
-        struct.pack_into("<I", gd, 12, free_blocks)
-        struct.pack_into("<I", gd, 16, free_inodes)
-        struct.pack_into("<I", gd, 20, dir_count)
+        struct.pack_into("<H", gd, 12, free_blocks)
+        struct.pack_into("<H", gd, 14, free_inodes)
+        struct.pack_into("<H", gd, 16, dir_count)
         gdt_off = gdt_block * block_size
         alloc.image[gdt_off : gdt_off + len(gd)] = gd
 
         # Superblock at offset 1024
         sb = bytearray(1024)
-        now = int(time.time())
-        first_data_block = 1 if block_size == 1024 else 0
+        now = epoch if epoch is not None else int(time.time())
         bs_shift = {1024: 0, 2048: 1, 4096: 2}[block_size]
 
         struct.pack_into("<I", sb, 0, inode_count)
@@ -561,10 +596,10 @@ def build_ext2_image(
         struct.pack_into("<I", sb, 20, first_data_block)
         struct.pack_into("<I", sb, 24, bs_shift)
         struct.pack_into("<I", sb, 28, bs_shift)
-        struct.pack_into("<I", sb, 32, total_blocks)
-        struct.pack_into("<I", sb, 36, total_blocks)
+        struct.pack_into("<I", sb, 32, max_blocks_one_group)
+        struct.pack_into("<I", sb, 36, max_blocks_one_group)
         struct.pack_into("<I", sb, 40, inode_count)
-        struct.pack_into("<I", sb, 44, now)
+        struct.pack_into("<I", sb, 44, 0)  # never mounted
         struct.pack_into("<I", sb, 48, now)
         struct.pack_into("<H", sb, 52, 0)
         struct.pack_into("<H", sb, 54, 0xFFFF)
@@ -582,9 +617,14 @@ def build_ext2_image(
         struct.pack_into("<H", sb, 88, inode_size)
         struct.pack_into("<H", sb, 90, 0)
         struct.pack_into("<I", sb, 92, 0)
-        struct.pack_into("<I", sb, 96, 0)
+        struct.pack_into("<I", sb, 96, 0x2)  # directory entries include file types
         struct.pack_into("<I", sb, 100, 0)
-        sb[104:120] = uuid.uuid4().bytes
+        if epoch is None:
+            fs_uuid = uuid.uuid4()
+        else:
+            digest = hashlib.sha256(alloc.image).hexdigest()
+            fs_uuid = uuid.uuid5(uuid.NAMESPACE_OID, digest)
+        sb[104:120] = fs_uuid.bytes
         sb[120:136] = b"APHELEIA".ljust(16, b"\x00")
 
         alloc.image[1024 : 1024 + 1024] = sb

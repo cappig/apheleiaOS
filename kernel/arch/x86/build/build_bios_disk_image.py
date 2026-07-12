@@ -81,6 +81,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except BuildError as e:
+    except (BuildError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         raise SystemExit(1)

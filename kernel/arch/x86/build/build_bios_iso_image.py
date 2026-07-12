@@ -16,6 +16,7 @@ from build_image_common import (
     BuildError,
     SECTOR_SIZE,
     build_ext2_image,
+    build_timestamp,
     div_round_up,
     prepare_root_tree,
     write_at,
@@ -418,7 +419,7 @@ def _write_iso(
     with output_iso.open("wb") as f:
         f.truncate(total_512_sectors * SECTOR_SIZE)
 
-    now = int(time.time())
+    now = build_timestamp()
     root_record, root_dir_blob, boot_dir_blob = _build_directories(layout, now)
 
     l_path_raw, m_path_raw, path_table_size = _build_path_tables(
@@ -514,6 +515,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (BuildError, RuntimeError) as e:
+    except (BuildError, OSError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         raise SystemExit(1)

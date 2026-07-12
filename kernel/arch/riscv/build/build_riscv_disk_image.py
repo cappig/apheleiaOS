@@ -19,6 +19,7 @@ from build_image_common import (
     write_file_to_lba,
 )
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create a RISC-V ext2 rootfs image."
@@ -52,9 +53,10 @@ def main() -> None:
 
         write_file_to_lba(args.output_img, ext2_img, 0)
 
+
 if __name__ == "__main__":
     try:
         main()
-    except BuildError as e:
+    except (BuildError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         raise SystemExit(1)
