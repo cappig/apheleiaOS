@@ -137,6 +137,23 @@ static const char *sh_color(const char *code) {
     return code;
 }
 
+static void sh_write_fd(int fd, const char *text, size_t len) {
+    while (text && len) {
+        ssize_t n = write(fd, text, len);
+        if (n > 0) {
+            text += n;
+            len -= (size_t)n;
+            continue;
+        }
+
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+
+        return;
+    }
+}
+
 static void sh_errorf(const char *format, ...) {
     if (!format) {
         return;
@@ -149,24 +166,20 @@ static void sh_errorf(const char *format, ...) {
     vsnprintf(line, sizeof(line), format, args);
     va_end(args);
 
-    if (sh.color && !sh.no_color) {
-        io_write_str(SH_C_RED);
-    }
-
     size_t len = strlen(line);
     bool newline = len > 0 && line[len - 1] == '\n';
-    if (newline) {
-        write(STDOUT_FILENO, line, len - 1);
-    } else {
-        io_write_str(line);
+    if (sh.color && !sh.no_color) {
+        sh_write_fd(STDERR_FILENO, SH_C_RED, strlen(SH_C_RED));
     }
+
+    sh_write_fd(STDERR_FILENO, line, newline ? len - 1 : len);
 
     if (sh.color && !sh.no_color) {
-        io_write_str(SH_C_RESET);
+        sh_write_fd(STDERR_FILENO, SH_C_RESET, strlen(SH_C_RESET));
     }
 
     if (newline) {
-        io_write_str("\n");
+        sh_write_fd(STDERR_FILENO, "\n", 1);
     }
 }
 
@@ -390,6 +403,18 @@ static bool pgrp_state(pid_t pgid, bool *stopped_out) {
     return any_alive;
 }
 
+static int wait_exit_status(int status) {
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+
+    if (WIFSIGNALED(status)) {
+        return 128 + WTERMSIG(status);
+    }
+
+    return 1;
+}
+
 static void reap_jobs(bool report) {
     for (size_t i = 0; i < sh.job_count;) {
         job_t *job = &sh.jobs[i];
@@ -464,7 +489,7 @@ static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
         return result;
     }
 
-    bool have_tracked_status = (tracked_pid <= 0);
+    bool got_status = (tracked_pid <= 0);
 
     for (;;) {
         int status = 0;
@@ -477,15 +502,8 @@ static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
             }
 
             if (tracked_pid > 0 && waited == tracked_pid) {
-                have_tracked_status = true;
-
-                if (WIFEXITED(status)) {
-                    result.exit_status = WEXITSTATUS(status);
-                } else if (WIFSIGNALED(status)) {
-                    result.exit_status = 128 + WTERMSIG(status);
-                } else {
-                    result.exit_status = 1;
-                }
+                got_status = true;
+                result.exit_status = wait_exit_status(status);
             }
 
             continue;
@@ -497,13 +515,33 @@ static sh_wait_result_t wait_foreground_pgrp(pid_t pgid, pid_t tracked_pid) {
         }
 
         if (errno == ECHILD) {
-            if (!have_tracked_status) {
+            if (!got_status && tracked_pid > 0) {
+                waited = waitpid(tracked_pid, &status, WUNTRACED);
+                if (waited > 0) {
+                    if (WIFSTOPPED(status)) {
+                        result.stopped = true;
+                        return result;
+                    }
+
+                    got_status = true;
+                    result.exit_status = wait_exit_status(status);
+
+                    continue;
+                }
+
+                if (waited < 0 && errno == EINTR) {
+                    reap_jobs(false);
+                    continue;
+                }
+            }
+
+            if (!got_status) {
                 result.exit_status = 1;
             }
             return result;
         }
 
-        if (!have_tracked_status) {
+        if (!got_status) {
             result.exit_status = 1;
         }
 
@@ -621,6 +659,10 @@ static bool env_set(const char *key, const char *value) {
         return false;
     }
 
+    if (strlen(key) >= SH_ENV_KEY_MAX || strlen(value) >= SH_ENV_VAL_MAX) {
+        return false;
+    }
+
     int index = env_find(key);
     sh_env_t *entry = NULL;
 
@@ -642,7 +684,7 @@ static bool env_set(const char *key, const char *value) {
 
     if (!strcmp(key, "NO_COLOR")) {
         sh.no_color = entry->value[0] != '\0';
-        complete_set_color_enabled(!sh.no_color);
+        complete_set_color(!sh.no_color);
     }
 
     return true;
@@ -667,7 +709,7 @@ static void env_unset(const char *key) {
 
     if (!strcmp(key, "NO_COLOR")) {
         sh.no_color = false;
-        complete_set_color_enabled(true);
+        complete_set_color(true);
     }
 }
 
@@ -748,61 +790,90 @@ static bool env_key_is_valid(const char *key, size_t len) {
     return true;
 }
 
-static bool apply_assignment_token(const char *token) {
+static int apply_assignment(const char *token) {
     if (!token || !token[0]) {
-        return false;
+        return 0;
     }
 
     const char *eq = strchr(token, '=');
     if (!eq) {
-        return false;
+        return 0;
     }
 
     size_t key_len = (size_t)(eq - token);
     if (!env_key_is_valid(token, key_len)) {
-        return false;
+        return 0;
+    }
+
+    if (key_len >= SH_ENV_KEY_MAX || strlen(eq + 1) >= SH_ENV_VAL_MAX) {
+        sh_errorf("sh: assignment is too long\n");
+        return -1;
     }
 
     char key[SH_ENV_KEY_MAX];
-    size_t copy_len = key_len;
-    if (copy_len >= sizeof(key)) {
-        copy_len = sizeof(key) - 1;
+    memcpy(key, token, key_len);
+    key[key_len] = '\0';
+
+    if (!env_set(key, eq + 1)) {
+        sh_errorf("sh: environment is full\n");
+        return -1;
     }
 
-    memcpy(key, token, copy_len);
-    key[copy_len] = '\0';
-
-    return env_set(key, eq + 1);
+    return 1;
 }
 
-static void expand_arg(const char *in, char *out, size_t out_len) {
+static bool expand_copy(char *out, size_t out_len, size_t *pos, const char *text, size_t len) {
+    if (!out || !out_len || !pos || *pos >= out_len || (!text && len) || len >= out_len - *pos) {
+        return false;
+    }
+
+    memcpy(out + *pos, text, len);
+    *pos += len;
+    return true;
+}
+
+static bool expand_arg(const char *in, char *out, size_t out_len) {
     if (!in || !out || !out_len) {
-        return;
+        return false;
     }
 
     size_t o = 0;
-    size_t i = 0;
+    bool in_single = false;
+    bool in_double = false;
 
-    if (in[0] == '~' && (in[1] == '\0' || in[1] == '/')) {
-        const char *home = env_get("HOME");
+    for (size_t i = 0; in[i]; i++) {
+        char ch = in[i];
 
-        if (home && home[0]) {
-            size_t home_len = strlen(home);
-
-            if (o + home_len >= out_len) {
-                home_len = out_len - o - 1;
+        if (!in_single && ch == '\\') {
+            if (!in[i + 1] || !expand_copy(out, out_len, &o, &in[++i], 1)) {
+                return false;
             }
-
-            memcpy(out + o, home, home_len);
-
-            o += home_len;
-            i = 1;
+            continue;
         }
-    }
 
-    for (; in[i] && o + 1 < out_len; i++) {
-        if (in[i] != '$') {
-            out[o++] = in[i];
+        if (!in_double && ch == '\'') {
+            in_single = !in_single;
+            continue;
+        }
+
+        if (!in_single && ch == '"') {
+            in_double = !in_double;
+            continue;
+        }
+
+        if (!in_single && i == 0 && ch == '~' && (in[1] == '\0' || in[1] == '/')) {
+            const char *home = env_get("HOME");
+            const char *value = home[0] ? home : "~";
+            if (!expand_copy(out, out_len, &o, value, strlen(value))) {
+                return false;
+            }
+            continue;
+        }
+
+        if (in_single || ch != '$') {
+            if (!expand_copy(out, out_len, &o, &in[i], 1)) {
+                return false;
+            }
             continue;
         }
 
@@ -817,6 +888,10 @@ static void expand_arg(const char *in, char *out, size_t out_len) {
             while (in[end] && in[end] != '}') {
                 end++;
             }
+
+            if (in[end] != '}') {
+                return false;
+            }
         } else if (in[start] == '?' || in[start] == '!' || in[start] == '$') {
             end = start + 1;
         } else {
@@ -826,13 +901,15 @@ static void expand_arg(const char *in, char *out, size_t out_len) {
         }
 
         if (end == start) {
-            out[o++] = '$';
+            if (!expand_copy(out, out_len, &o, "$", 1)) {
+                return false;
+            }
             continue;
         }
 
         size_t key_len = end - start;
         if (key_len >= sizeof(key)) {
-            key_len = sizeof(key) - 1;
+            return false;
         }
 
         memcpy(key, in + start, key_len);
@@ -858,14 +935,9 @@ static void expand_arg(const char *in, char *out, size_t out_len) {
             value = env_get(key);
         }
 
-        size_t value_len = strlen(value);
-
-        if (o + value_len >= out_len) {
-            value_len = out_len - o - 1;
+        if (!expand_copy(out, out_len, &o, value, strlen(value))) {
+            return false;
         }
-
-        memcpy(out + o, value, value_len);
-        o += value_len;
 
         if (in[i + 1] == '{' && in[end] == '}') {
             i = end;
@@ -874,7 +946,12 @@ static void expand_arg(const char *in, char *out, size_t out_len) {
         }
     }
 
+    if (in_single || in_double) {
+        return false;
+    }
+
     out[o] = '\0';
+    return true;
 }
 
 typedef struct {
@@ -927,7 +1004,7 @@ static sh_cont_state_t continuation_state(const char *line) {
     return state;
 }
 
-static int read_line_fd(int fd, char *buf, size_t len, bool interactive) {
+static int read_line_fd(int fd, char *buf, size_t len) {
     if (!buf || !len) {
         return -1;
     }
@@ -936,15 +1013,14 @@ static int read_line_fd(int fd, char *buf, size_t len, bool interactive) {
     bool cr_seen = false;
 
     while (pos + 1 < len) {
-        if (interactive && sh.got_sigint) {
-            sh.got_sigint = 0;
-            return -1;
-        }
-
         char ch = 0;
         ssize_t read_count = read(fd, &ch, 1);
 
         if (!read_count) {
+            if (!pos) {
+                buf[0] = '\0';
+                return 1;
+            }
             break;
         }
 
@@ -973,8 +1049,26 @@ static int read_line_fd(int fd, char *buf, size_t len, bool interactive) {
         }
     }
 
-    if (!pos && !interactive) {
-        return -1;
+    if (pos + 1 >= len && (!pos || buf[pos - 1] != '\n')) {
+        for (;;) {
+            char ch = 0;
+            ssize_t n = read(fd, &ch, 1);
+            if (n > 0) {
+                if (ch == '\n' || ch == '\r') {
+                    break;
+                }
+                continue;
+            }
+
+            if (n < 0 && errno == EINTR) {
+                continue;
+            }
+
+            break;
+        }
+
+        buf[0] = '\0';
+        return -2;
     }
 
     buf[pos] = '\0';
@@ -997,14 +1091,14 @@ static bool is_operator(const char *token) {
     return false;
 }
 
-static char *redir_target_or_error(char **tokens, int token_count, int *index_io, const char *error_text) {
+static char *redir_target(char **tokens, int token_count, int *index_io, const char *error_text) {
     if (!tokens || !index_io || !error_text) {
         return NULL;
     }
 
     int index = *index_io;
     if (index + 1 >= token_count || is_operator(tokens[index + 1])) {
-        io_write_str(error_text);
+        sh_errorf("%s", error_text);
         return NULL;
     }
 
@@ -1014,15 +1108,15 @@ static char *redir_target_or_error(char **tokens, int token_count, int *index_io
 
 static int tokenize(const char *line, char *storage, size_t storage_len, char **tokens, int max_tokens) {
     if (!line || !storage || !storage_len || !tokens || max_tokens <= 1) {
-        return 0;
+        return -1;
     }
 
     int count = 0;
     const char *src = line;
     char *dst = storage;
-    char *end = storage + storage_len - 1;
+    char *end = storage + storage_len;
 
-    while (*src && count < max_tokens - 1) {
+    while (*src) {
         while (*src && isspace((unsigned char)*src)) {
             src++;
         }
@@ -1031,31 +1125,34 @@ static int tokenize(const char *line, char *storage, size_t storage_len, char **
             break;
         }
 
-        if (*src == '|' || *src == '<' || *src == '>' || *src == '&') {
-            if (dst >= end) {
-                break;
-            }
+        if (count >= max_tokens - 1) {
+            sh_errorf("sh: too many tokens\n");
+            return -1;
+        }
 
+        if (*src == '|' || *src == '<' || *src == '>' || *src == '&') {
             tokens[count++] = dst;
 
             if (*src == '>' && src[1] == '>') {
-                if (dst + 2 > end) {
-                    break;
+                if ((size_t)(end - dst) < 3) {
+                    sh_errorf("sh: command is too long\n");
+                    return -1;
                 }
 
                 *dst++ = '>';
                 *dst++ = '>';
                 src += 2;
             } else {
+                if ((size_t)(end - dst) < 2) {
+                    sh_errorf("sh: command is too long\n");
+                    return -1;
+                }
+
                 *dst++ = *src++;
             }
 
             *dst++ = '\0';
             continue;
-        }
-
-        if (dst >= end) {
-            break;
         }
 
         tokens[count++] = dst;
@@ -1068,25 +1165,22 @@ static int tokenize(const char *line, char *storage, size_t storage_len, char **
 
             if (!in_single && ch == '"') {
                 in_double = !in_double;
-                src++;
-                continue;
-            }
-
-            if (!in_double && ch == '\'') {
+            } else if (!in_double && ch == '\'') {
                 in_single = !in_single;
-                src++;
-                continue;
             }
 
             if (ch == '\\' && !in_single) {
-                src++;
-                if (!*src) {
-                    break;
-                }
-                if (dst >= end) {
-                    break;
+                if (!src[1]) {
+                    sh_errorf("sh: trailing escape\n");
+                    return -1;
                 }
 
+                if ((size_t)(end - dst) < 3) {
+                    sh_errorf("sh: command is too long\n");
+                    return -1;
+                }
+
+                *dst++ = *src++;
                 *dst++ = *src++;
                 continue;
             }
@@ -1102,58 +1196,75 @@ static int tokenize(const char *line, char *storage, size_t storage_len, char **
                 }
             }
 
-            if (dst >= end) {
-                break;
+            if ((size_t)(end - dst) < 2) {
+                sh_errorf("sh: command is too long\n");
+                return -1;
             }
 
             *dst++ = ch;
             src++;
         }
 
+        if (in_single || in_double) {
+            sh_errorf("sh: unmatched quote\n");
+            return -1;
+        }
+
         if (dst >= end) {
-            break;
+            sh_errorf("sh: command is too long\n");
+            return -1;
         }
 
         *dst++ = '\0';
     }
 
-    *dst = '\0';
+    if (dst < end) {
+        *dst = '\0';
+    }
     tokens[count] = NULL;
     return count;
 }
 
-static int parse_pipeline(
-    const char *line,
-    sh_stage_t *stages,
-    int *stage_count_out,
-    bool *background_out,
-    char *token_store,
-    size_t token_store_len,
-    char **tokens,
-    int token_cap
-) {
-    if (!line || !stages || !stage_count_out || !background_out || !token_store || !token_store_len || !tokens ||
-        token_cap <= 1) {
+typedef struct {
+    sh_stage_t *stages;
+    int *stage_count;
+    bool *background;
+    char *tokens_buf;
+    size_t tokens_buf_len;
+    char **tokens;
+    int token_cap;
+} pipeline_parse_t;
+
+static int parse_pipeline(const char *line, pipeline_parse_t *parse) {
+    if (!line || !parse || !parse->stages || !parse->stage_count || !parse->background) {
         return -1;
     }
 
-    int token_count = tokenize(line, token_store, token_store_len, tokens, token_cap);
+    if (!parse->tokens_buf || !parse->tokens_buf_len || !parse->tokens || parse->token_cap <= 1) {
+        return -1;
+    }
 
-    if (token_count <= 0) {
+    int token_count = tokenize(line, parse->tokens_buf, parse->tokens_buf_len, parse->tokens, parse->token_cap);
+
+    if (token_count < 0) {
+        return -1;
+    }
+
+    if (!token_count) {
         return 0;
     }
 
-    memset(stages, 0, sizeof(sh_stage_t) * SH_MAX_STAGES);
+    memset(parse->stages, 0, sizeof(sh_stage_t) * SH_MAX_STAGES);
 
     int stage = 0;
     bool background = false;
 
     for (int i = 0; i < token_count; i++) {
-        const char *token = tokens[i];
+        const char *token = parse->tokens[i];
 
         if (!strcmp(token, "&")) {
             if (i != token_count - 1) {
-                io_write_str("sh: syntax error near '&'\n");
+                sh_errorf("sh: syntax error near '&'\n");
                 return -1;
             }
 
@@ -1162,8 +1273,8 @@ static int parse_pipeline(
         }
 
         if (!strcmp(token, "|")) {
-            if (!stages[stage].argc || stage + 1 >= SH_MAX_STAGES) {
-                io_write_str("sh: invalid pipeline\n");
+            if (!parse->stages[stage].argc || stage + 1 >= SH_MAX_STAGES) {
+                sh_errorf("sh: invalid pipeline\n");
                 return -1;
             }
             stage++;
@@ -1171,42 +1282,44 @@ static int parse_pipeline(
         }
 
         if (!strcmp(token, "<")) {
-            stages[stage].in_path = redir_target_or_error(tokens, token_count, &i, "sh: invalid input redirection\n");
-            if (!stages[stage].in_path) {
+            parse->stages[stage]
+                .in_path = redir_target(parse->tokens, token_count, &i, "sh: invalid input redirection\n");
+            if (!parse->stages[stage].in_path) {
                 return -1;
             }
             continue;
         }
 
         if (!strcmp(token, ">") || !strcmp(token, ">>")) {
-            stages[stage].out_path = redir_target_or_error(tokens, token_count, &i, "sh: invalid output redirection\n");
-            if (!stages[stage].out_path) {
+            parse->stages[stage]
+                .out_path = redir_target(parse->tokens, token_count, &i, "sh: invalid output redirection\n");
+            if (!parse->stages[stage].out_path) {
                 return -1;
             }
 
-            stages[stage].out_append = !strcmp(token, ">>");
+            parse->stages[stage].out_append = !strcmp(token, ">>");
             continue;
         }
 
-        if (stages[stage].argc >= SH_MAX_ARGS - 1) {
-            io_write_str("sh: too many arguments\n");
+        if (parse->stages[stage].argc >= SH_MAX_ARGS - 1) {
+            sh_errorf("sh: too many arguments\n");
             return -1;
         }
 
-        stages[stage].argv[stages[stage].argc++] = tokens[i];
+        parse->stages[stage].argv[parse->stages[stage].argc++] = parse->tokens[i];
     }
 
-    if (!stages[stage].argc) {
-        io_write_str("sh: empty command\n");
+    if (!parse->stages[stage].argc) {
+        sh_errorf("sh: empty command\n");
         return -1;
     }
 
     for (int i = 0; i <= stage; i++) {
-        stages[i].argv[stages[i].argc] = NULL;
+        parse->stages[i].argv[parse->stages[i].argc] = NULL;
     }
 
-    *stage_count_out = stage + 1;
-    *background_out = background;
+    *parse->stage_count = stage + 1;
+    *parse->background = background;
     return 1;
 }
 
@@ -1815,7 +1928,7 @@ static void release_start_gate(int gate[2]) {
     gate[1] = -1;
 }
 
-static int redirect_path_to_fd(const char *path, int open_flags, mode_t mode, int target_fd, const char *label) {
+static int open_redirect(const char *path, int open_flags, mode_t mode, int target_fd, const char *label) {
     int fd = open(path, open_flags, mode);
     if (fd < 0) {
         sh_errorf("sh: %s: %s: %s\n", label, path ? path : "", strerror(errno));
@@ -1824,7 +1937,7 @@ static int redirect_path_to_fd(const char *path, int open_flags, mode_t mode, in
 
     if (dup2(fd, target_fd) < 0) {
         close(fd);
-        io_write_str("sh: dup failed\n");
+        sh_errorf("sh: dup failed\n");
         return -1;
     }
 
@@ -1838,7 +1951,7 @@ static int open_redirection(const sh_stage_t *stage) {
     }
 
     if (stage->in_path && stage->in_path[0]) {
-        int input_rc = redirect_path_to_fd(stage->in_path, O_RDONLY, 0, STDIN_FILENO, "input");
+        int input_rc = open_redirect(stage->in_path, O_RDONLY, 0, STDIN_FILENO, "input");
         if (input_rc < 0) {
             return -1;
         }
@@ -1853,7 +1966,7 @@ static int open_redirection(const sh_stage_t *stage) {
             flags |= O_TRUNC;
         }
 
-        int redir_rc = redirect_path_to_fd(stage->out_path, flags, 0644, STDOUT_FILENO, "output");
+        int redir_rc = open_redirect(stage->out_path, flags, 0644, STDOUT_FILENO, "output");
 
         if (redir_rc < 0) {
             return -1;
@@ -1863,22 +1976,22 @@ static int open_redirection(const sh_stage_t *stage) {
     return 0;
 }
 
-static int restore_redirected_fd(int saved_fd, int target_fd) {
+static int restore_fd(int saved_fd, int target_fd) {
     if (saved_fd < 0) {
         return 0;
     }
 
-    int rc = 0;
+    int status = 0;
     if (dup2(saved_fd, target_fd) < 0) {
-        io_write_str("sh: failed to restore redirected fd\n");
-        rc = -1;
+        sh_errorf("sh: failed to restore redirected fd\n");
+        status = -1;
     }
 
     close(saved_fd);
-    return rc;
+    return status;
 }
 
-static int run_builtin_in_shell(const sh_stage_t *stage, int *status_out) {
+static int run_builtin(const sh_stage_t *stage, int *status_out) {
     if (!stage) {
         return -1;
     }
@@ -1889,7 +2002,7 @@ static int run_builtin_in_shell(const sh_stage_t *stage, int *status_out) {
     if (stage->in_path && stage->in_path[0]) {
         saved_stdin = dup(STDIN_FILENO);
         if (saved_stdin < 0) {
-            io_write_str("sh: failed to save stdin\n");
+            sh_errorf("sh: failed to save stdin\n");
             return -1;
         }
     }
@@ -1900,14 +2013,14 @@ static int run_builtin_in_shell(const sh_stage_t *stage, int *status_out) {
             if (saved_stdin >= 0) {
                 close(saved_stdin);
             }
-            io_write_str("sh: failed to save stdout\n");
+            sh_errorf("sh: failed to save stdout\n");
             return -1;
         }
     }
 
     if (open_redirection(stage) < 0) {
-        (void)restore_redirected_fd(saved_stdin, STDIN_FILENO);
-        (void)restore_redirected_fd(saved_stdout, STDOUT_FILENO);
+        (void)restore_fd(saved_stdin, STDIN_FILENO);
+        (void)restore_fd(saved_stdout, STDOUT_FILENO);
         return -1;
     }
 
@@ -1915,10 +2028,10 @@ static int run_builtin_in_shell(const sh_stage_t *stage, int *status_out) {
     bool handled = handle_builtin(stage->argc, stage->argv, &builtin_status);
 
     int restore_rc = 0;
-    if (restore_redirected_fd(saved_stdin, STDIN_FILENO) < 0) {
+    if (restore_fd(saved_stdin, STDIN_FILENO) < 0) {
         restore_rc = -1;
     }
-    if (restore_redirected_fd(saved_stdout, STDOUT_FILENO) < 0) {
+    if (restore_fd(saved_stdout, STDOUT_FILENO) < 0) {
         restore_rc = -1;
     }
 
@@ -1933,109 +2046,127 @@ static int run_builtin_in_shell(const sh_stage_t *stage, int *status_out) {
     return 0;
 }
 
-static int run_pipeline(sh_stage_t *stages, int stage_count, bool background, const char *cmdline) {
+typedef struct {
     int pipes[SH_MAX_STAGES - 1][2];
+    int start_gate[2];
+    bool gate_child_start;
+    pid_t pgid;
+    pid_t last_pid;
+} pipeline_run_t;
 
+static void pipeline_init(pipeline_run_t *run, bool background) {
     for (int i = 0; i < SH_MAX_STAGES - 1; i++) {
-        pipes[i][0] = -1;
-        pipes[i][1] = -1;
+        run->pipes[i][0] = -1;
+        run->pipes[i][1] = -1;
     }
 
-    int start_gate[2] = { -1, -1 };
-    bool gate_child_start = sh.interactive && !background;
-    if (gate_child_start && pipe(start_gate) < 0) {
-        io_write_str("sh: pipe failed\n");
+    run->start_gate[0] = -1;
+    run->start_gate[1] = -1;
+    run->gate_child_start = sh.interactive && !background;
+    run->pgid = 0;
+    run->last_pid = 0;
+}
+
+static int pipeline_open(pipeline_run_t *run, int stage_count) {
+    if (run->gate_child_start && pipe(run->start_gate) < 0) {
+        sh_errorf("sh: pipe failed\n");
         return -1;
     }
 
     for (int i = 0; i + 1 < stage_count; i++) {
-        if (pipe(pipes[i]) < 0) {
-            io_write_str("sh: pipe failed\n");
-            close_start_gate(start_gate);
-            close_pipe_fds(pipes, stage_count - 1);
+        if (pipe(run->pipes[i]) < 0) {
+            sh_errorf("sh: pipe failed\n");
+            close_start_gate(run->start_gate);
+            close_pipe_fds(run->pipes, stage_count - 1);
             return -1;
         }
     }
 
-    pid_t pgid = 0;
-    pid_t last_pid = 0;
+    return 0;
+}
+
+static void pipeline_child(pipeline_run_t *run, sh_stage_t *stage, int index, int stage_count) {
+    pid_t target_pgid = (!run->pgid) ? getpid() : run->pgid;
+
+    setpgid(0, target_pgid);
+
+    signal(SIGINT, SIG_DFL);
+    signal(SIGTSTP, SIG_DFL);
+    signal(SIGQUIT, SIG_DFL);
+    signal(SIGTTIN, SIG_DFL);
+    signal(SIGTTOU, SIG_DFL);
+    signal(SIGWINCH, SIG_DFL);
+
+    if (index > 0 && dup2(run->pipes[index - 1][0], STDIN_FILENO) < 0) {
+        _exit(1);
+    }
+
+    if (index + 1 < stage_count && dup2(run->pipes[index][1], STDOUT_FILENO) < 0) {
+        _exit(1);
+    }
+
+    close_pipe_fds(run->pipes, stage_count - 1);
+
+    if (open_redirection(stage) < 0) {
+        _exit(1);
+    }
+
+    if (run->gate_child_start) {
+        wait_start_gate(run->start_gate);
+    }
+
+    int builtin_status = 0;
+    if (handle_builtin(stage->argc, stage->argv, &builtin_status)) {
+        _exit(builtin_status);
+    }
+
+    char env_data[SH_ENV_MAX][SH_ENV_ENTRY_MAX];
+    char *envp[SH_ENV_MAX + 1];
+    env_build_exec(env_data, envp);
+
+    exec_in_path(stage->argv[0], stage->argv, envp);
+    print_exec_error(stage->argv[0], errno);
+
+    _exit(1);
+}
+
+static int pipeline_spawn(pipeline_run_t *run, sh_stage_t *stages, int stage_count) {
     for (int i = 0; i < stage_count; i++) {
         pid_t pid = fork();
 
         if (!pid) {
-            pid_t target_pgid = (!pgid) ? getpid() : pgid;
-
-            setpgid(0, target_pgid);
-
-            signal(SIGINT, SIG_DFL);
-            signal(SIGTSTP, SIG_DFL);
-            signal(SIGQUIT, SIG_DFL);
-            signal(SIGTTIN, SIG_DFL);
-            signal(SIGTTOU, SIG_DFL);
-            signal(SIGWINCH, SIG_DFL);
-
-            if (i > 0) {
-                if (dup2(pipes[i - 1][0], STDIN_FILENO) < 0) {
-                    _exit(1);
-                }
-            }
-
-            if (i + 1 < stage_count) {
-                if (dup2(pipes[i][1], STDOUT_FILENO) < 0) {
-                    _exit(1);
-                }
-            }
-
-            close_pipe_fds(pipes, stage_count - 1);
-
-            if (open_redirection(&stages[i]) < 0) {
-                _exit(1);
-            }
-
-            if (gate_child_start) {
-                wait_start_gate(start_gate);
-            }
-
-            int builtin_status = 0;
-            if (handle_builtin(stages[i].argc, stages[i].argv, &builtin_status)) {
-                _exit(builtin_status);
-            }
-
-            char env_data[SH_ENV_MAX][SH_ENV_ENTRY_MAX];
-            char *envp[SH_ENV_MAX + 1];
-            env_build_exec(env_data, envp);
-
-            exec_in_path(stages[i].argv[0], stages[i].argv, envp);
-            print_exec_error(stages[i].argv[0], errno);
-
-            _exit(1);
+            pipeline_child(run, &stages[i], i, stage_count);
         }
 
         if (pid < 0) {
-            io_write_str("sh: fork failed\n");
-            close_start_gate(start_gate);
-            close_pipe_fds(pipes, stage_count - 1);
+            sh_errorf("sh: fork failed\n");
+            close_start_gate(run->start_gate);
+            close_pipe_fds(run->pipes, stage_count - 1);
             return -1;
         }
 
-        if (!pgid) {
-            pgid = pid;
+        if (!run->pgid) {
+            run->pgid = pid;
         }
 
-        last_pid = pid;
-        setpgid(pid, pgid);
+        run->last_pid = pid;
+        setpgid(pid, run->pgid);
     }
 
-    close_pipe_fds(pipes, stage_count - 1);
+    close_pipe_fds(run->pipes, stage_count - 1);
+    return 0;
+}
 
+static int pipeline_finish(pipeline_run_t *run, bool background, const char *cmdline) {
     if (background) {
-        close_start_gate(start_gate);
-        sh.last_bg_pid = pgid;
+        close_start_gate(run->start_gate);
+        sh.last_bg_pid = run->pgid;
+
         if (sh.interactive) {
-            job_t *job = job_add(pgid, cmdline, JOB_RUNNING);
+            job_t *job = job_add(run->pgid, cmdline, JOB_RUNNING);
 
             if (job) {
-                sh_printf("[%d] %d\n", job->id, (int)pgid);
+                sh_printf("[%d] %d\n", job->id, (int)run->pgid);
             }
         }
 
@@ -2043,22 +2174,37 @@ static int run_pipeline(sh_stage_t *stages, int stage_count, bool background, co
     }
 
     if (sh.interactive) {
-        tty_set_pgrp(pgid);
+        tty_set_pgrp(run->pgid);
     }
 
-    release_start_gate(start_gate);
+    release_start_gate(run->start_gate);
 
-    sh_wait_result_t wait_result = wait_foreground_pgrp(pgid, last_pid);
+    sh_wait_result_t wait_result = wait_foreground_pgrp(run->pgid, run->last_pid);
     if (sh.interactive) {
         tty_set_pgrp(sh.pgid);
     }
 
     if (wait_result.stopped) {
-        job_add(pgid, cmdline, JOB_STOPPED);
+        job_add(run->pgid, cmdline, JOB_STOPPED);
         return 128 + SIGTSTP;
     }
 
     return wait_result.exit_status;
+}
+
+static int run_pipeline(sh_stage_t *stages, int stage_count, bool background, const char *cmdline) {
+    pipeline_run_t run = { 0 };
+    pipeline_init(&run, background);
+
+    if (pipeline_open(&run, stage_count) < 0) {
+        return -1;
+    }
+
+    if (pipeline_spawn(&run, stages, stage_count) < 0) {
+        return -1;
+    }
+
+    return pipeline_finish(&run, background, cmdline);
 }
 
 typedef struct {
@@ -2067,7 +2213,7 @@ typedef struct {
     char out_paths[SH_MAX_STAGES][SH_EXPAND_MAX];
 } sh_expand_t;
 
-static void expand_stages(
+static bool expand_stages(
     sh_stage_t *stages,
     int stage_count,
     char expanded[SH_MAX_STAGES][SH_MAX_ARGS][SH_EXPAND_MAX],
@@ -2076,22 +2222,33 @@ static void expand_stages(
 ) {
     for (int i = 0; i < stage_count; i++) {
         for (int a = 0; a < stages[i].argc; a++) {
-            expand_arg(stages[i].argv[a], expanded[i][a], sizeof(expanded[i][a]));
+            if (!expand_arg(stages[i].argv[a], expanded[i][a], sizeof(expanded[i][a]))) {
+                sh_errorf("sh: expansion is too long or malformed\n");
+                return false;
+            }
             stages[i].argv[a] = expanded[i][a];
         }
 
         stages[i].argv[stages[i].argc] = NULL;
 
         if (stages[i].in_path && stages[i].in_path[0]) {
-            expand_arg(stages[i].in_path, in_paths[i], sizeof(in_paths[i]));
+            if (!expand_arg(stages[i].in_path, in_paths[i], sizeof(in_paths[i]))) {
+                sh_errorf("sh: input path expansion is too long or malformed\n");
+                return false;
+            }
             stages[i].in_path = in_paths[i];
         }
 
         if (stages[i].out_path && stages[i].out_path[0]) {
-            expand_arg(stages[i].out_path, out_paths[i], sizeof(out_paths[i]));
+            if (!expand_arg(stages[i].out_path, out_paths[i], sizeof(out_paths[i]))) {
+                sh_errorf("sh: output path expansion is too long or malformed\n");
+                return false;
+            }
             stages[i].out_path = out_paths[i];
         }
     }
+
+    return true;
 }
 
 static bool strip_time_prefix(sh_stage_t *stages, int stage_count) {
@@ -2113,7 +2270,7 @@ static bool strip_time_prefix(sh_stage_t *stages, int stage_count) {
     return true;
 }
 
-static char *trim_ascii_whitespace(char *text) {
+static char *trim_space(char *text) {
     if (!text) {
         return NULL;
     }
@@ -2148,7 +2305,7 @@ static bool add_clause(sh_clause_t *clauses, int *count, int max_clauses, sh_cha
         return false;
     }
 
-    char *trimmed = trim_ascii_whitespace(text);
+    char *trimmed = trim_space(text);
     if (!trimmed || !trimmed[0]) {
         sh_errorf("sh: syntax error near '%s'\n", chain_op_text(op));
         return false;
@@ -2223,7 +2380,7 @@ static int split_command_list(char *line, sh_clause_t *clauses, int max_clauses)
 
         *cursor = '\0';
 
-        char *trimmed = trim_ascii_whitespace(start);
+        char *trimmed = trim_space(start);
         if (!trimmed || !trimmed[0]) {
             if (op == SH_CHAIN_ALWAYS && count > 0) {
                 start = cursor + op_len;
@@ -2245,7 +2402,7 @@ static int split_command_list(char *line, sh_clause_t *clauses, int max_clauses)
         cursor += op_len - 1;
     }
 
-    char *tail = trim_ascii_whitespace(start);
+    char *tail = trim_space(start);
     if (!tail || !tail[0]) {
         if (next_op == SH_CHAIN_ALWAYS) {
             return count;
@@ -2260,6 +2417,39 @@ static int split_command_list(char *line, sh_clause_t *clauses, int max_clauses)
     }
 
     return count;
+}
+
+static int run_simple_builtin(sh_stage_t *stage, bool *handled_out) {
+    if (!stage || !handled_out) {
+        return 1;
+    }
+
+    *handled_out = false;
+
+    if (stage->argc <= 0) {
+        return 0;
+    }
+
+    if (stage->argc == 1) {
+        int assignment = apply_assignment(stage->argv[0]);
+        if (assignment) {
+            *handled_out = true;
+            return assignment > 0 ? 0 : 1;
+        }
+    }
+
+    if (!is_builtin_name(stage->argv[0])) {
+        return 0;
+    }
+
+    int status = 0;
+    *handled_out = true;
+
+    if (run_builtin(stage, &status) == 0) {
+        return status;
+    }
+
+    return 1;
 }
 
 static int run_single_command(char *line) {
@@ -2285,16 +2475,17 @@ static int run_single_command(char *line) {
     int stage_count = 0;
     bool background = false;
 
-    int parse_ret = parse_pipeline(
-        line,
-        stages,
-        &stage_count,
-        &background,
-        token_store,
-        sizeof(token_store),
-        tokens,
-        SH_MAX_TOKENS
-    );
+    pipeline_parse_t parse = {
+        .stages = stages,
+        .stage_count = &stage_count,
+        .background = &background,
+        .tokens_buf = token_store,
+        .tokens_buf_len = sizeof(token_store),
+        .tokens = tokens,
+        .token_cap = SH_MAX_TOKENS,
+    };
+
+    int parse_ret = parse_pipeline(line, &parse);
 
     if (parse_ret < 0) {
         return 1;
@@ -2306,11 +2497,14 @@ static int run_single_command(char *line) {
 
     sh_expand_t *exp = malloc(sizeof(sh_expand_t));
     if (!exp) {
-        io_write_str("sh: out of memory\n");
+        sh_errorf("sh: out of memory\n");
         return -1;
     }
 
-    expand_stages(stages, stage_count, exp->expanded, exp->in_paths, exp->out_paths);
+    if (!expand_stages(stages, stage_count, exp->expanded, exp->in_paths, exp->out_paths)) {
+        free(exp);
+        return 1;
+    }
 
     bool timed = strip_time_prefix(stages, stage_count);
     if (timed && stages[0].argc == 0) {
@@ -2323,21 +2517,10 @@ static int run_single_command(char *line) {
     bool have_time = timed && sh_time_begin(&time_start);
 
     bool simple_builtin = stage_count == 1 && !background;
-
-    if (simple_builtin && stages[0].argc == 1) {
-        if (apply_assignment_token(stages[0].argv[0])) {
-            if (have_time) {
-                sh_print_time(&time_start);
-            }
-
-            free(exp);
-            return 0;
-        }
-    }
-
-    if (simple_builtin && is_builtin_name(stages[0].argv[0])) {
-        int builtin_status = 0;
-        if (run_builtin_in_shell(&stages[0], &builtin_status) == 0) {
+    if (simple_builtin) {
+        bool handled = false;
+        int builtin_status = run_simple_builtin(&stages[0], &handled);
+        if (handled) {
             if (have_time) {
                 sh_print_time(&time_start);
             }
@@ -2345,12 +2528,9 @@ static int run_single_command(char *line) {
             free(exp);
             return builtin_status;
         }
-
-        free(exp);
-        return 1;
     }
 
-    int ret = run_pipeline(stages, stage_count, background, cmdline);
+    int status = run_pipeline(stages, stage_count, background, cmdline);
 
     if (have_time) {
         sh_print_time(&time_start);
@@ -2358,11 +2538,11 @@ static int run_single_command(char *line) {
 
     free(exp);
 
-    if (ret < 0) {
+    if (status < 0) {
         return 1;
     }
 
-    return ret;
+    return status;
 }
 
 static int run_command(char *line) {
@@ -2375,7 +2555,7 @@ static int run_command(char *line) {
         line[line_len - 1] = '\0';
     }
 
-    char *trimmed = trim_ascii_whitespace(line);
+    char *trimmed = trim_space(line);
     if (!trimmed || !trimmed[0]) {
         return 0;
     }
@@ -2406,19 +2586,37 @@ static int run_command(char *line) {
 
 static int run_script(const char *path) {
     if (!path || !path[0]) {
-        return -1;
+        return 1;
     }
 
     int fd = open(path, O_RDONLY, 0);
 
     if (fd < 0) {
-        io_write_str("sh: failed to open script\n");
-        return -1;
+        sh_errorf("sh: %s: %s\n", path, strerror(errno));
+        return 1;
     }
 
     char line[SH_LINE_MAX];
+    int status = 0;
 
-    while (!read_line_fd(fd, line, sizeof(line), false)) {
+    for (;;) {
+        int read_status = read_line_fd(fd, line, sizeof(line));
+        if (read_status == 1) {
+            break;
+        }
+
+        if (read_status == -2) {
+            sh_errorf("sh: %s: line is too long\n", path);
+            status = 1;
+            continue;
+        }
+
+        if (read_status < 0) {
+            sh_errorf("sh: %s: read failed: %s\n", path, strerror(errno));
+            status = 1;
+            break;
+        }
+
         char *cursor = line;
 
         while (*cursor && isspace((unsigned char)*cursor)) {
@@ -2429,11 +2627,15 @@ static int run_script(const char *path) {
             continue;
         }
 
-        run_command(cursor);
+        status = run_command(cursor);
     }
 
-    close(fd);
-    return 0;
+    if (close(fd) < 0) {
+        sh_errorf("sh: %s: close failed: %s\n", path, strerror(errno));
+        return 1;
+    }
+
+    return status;
 }
 
 int main(int argc, char **argv) {
@@ -2457,7 +2659,7 @@ int main(int argc, char **argv) {
     input_set_sigint_flag(&sh.got_sigint);
     input_set_sigwinch_flag(&sh.got_sigwinch);
     input_set_sigchld_flag(&sh.got_sigchld);
-    input_set_sigchld_callback(reap_jobs_signal);
+    input_on_sigchld(reap_jobs_signal);
 
     env_set("PATH", "/bin");
     env_set("HOME", "/");
@@ -2479,7 +2681,11 @@ int main(int argc, char **argv) {
 
     if (argc > 2 && !strcmp(argv[1], "-c")) {
         char cmdline[SH_LINE_MAX];
-        snprintf(cmdline, sizeof(cmdline), "%s", argv[2]);
+        if (strlen(argv[2]) >= sizeof(cmdline)) {
+            sh_errorf("sh: command is too long\n");
+            return 1;
+        }
+        memcpy(cmdline, argv[2], strlen(argv[2]) + 1);
         return run_command(cmdline);
     }
 
@@ -2495,7 +2701,13 @@ int main(int argc, char **argv) {
         reap_jobs(true);
         build_prompt(prompt, sizeof(prompt));
 
-        if (read_line_interactive(prompt, line, sizeof(line), true) < 0) {
+        int read_status = read_line_interactive(prompt, line, sizeof(line), true);
+        if (read_status == -2) {
+            sh_errorf("sh: line is too long\n");
+            continue;
+        }
+
+        if (read_status < 0) {
             io_write_str("\n");
             continue;
         }
@@ -2519,11 +2731,18 @@ int main(int argc, char **argv) {
             }
 
             if (len + 2 >= sizeof(line)) {
-                io_write_str("sh: line too long\n");
+                sh_errorf("sh: line is too long\n");
+                line[0] = '\0';
                 break;
             }
 
             int read_rc = read_line_interactive("> ", line + len, sizeof(line) - len, false);
+
+            if (read_rc == -2) {
+                sh_errorf("sh: line is too long\n");
+                line[0] = '\0';
+                break;
+            }
 
             if (read_rc < 0) {
                 io_write_str("\n");

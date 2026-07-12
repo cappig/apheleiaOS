@@ -28,6 +28,33 @@ typedef struct {
     bool color;
 } sh_complete_state_t;
 
+typedef struct {
+    size_t token_start;
+    size_t token_len;
+    bool command;
+
+    char token[SH_PATH_MAX];
+    char dir_open[SH_PATH_MAX];
+    char typed_dir[SH_PATH_MAX];
+    char base_prefix[SH_PATH_MAX];
+} sh_complete_req_t;
+
+typedef struct {
+    char *dir_open;
+    size_t dir_open_len;
+    char *typed_dir;
+    size_t typed_dir_len;
+    char *base_prefix;
+    size_t base_prefix_len;
+} prefix_parts_t;
+
+typedef struct {
+    char *buf;
+    size_t cap;
+    size_t *len;
+    size_t *cursor;
+} line_edit_t;
+
 static sh_complete_state_t sh_complete = {
     .path = "/bin",
     .color = true,
@@ -47,15 +74,25 @@ void complete_set_path(const char *path) {
     snprintf(sh_complete.path, sizeof(sh_complete.path), "%s", path);
 }
 
-void complete_set_color_enabled(bool enabled) {
+void complete_set_color(bool enabled) {
     sh_complete.color = enabled;
 }
 
 static bool is_word_delim(char ch) {
-    return (
-        ch == '\0' || ch == ' ' || ch == '\t' || ch == '\n' || ch == '|' || ch == '&' || ch == '<' || ch == '>' ||
-        ch == ';'
-    );
+    switch (ch) {
+    case '\0':
+    case ' ':
+    case '\t':
+    case '\n':
+    case '|':
+    case '&':
+    case '<':
+    case '>':
+    case ';':
+        return true;
+    default:
+        return false;
+    }
 }
 
 static bool is_command_position(const char *buf, size_t token_start) {
@@ -143,7 +180,9 @@ static bool match_is_dir(const char *dir_path, const char *name) {
     }
 
     char full[SH_PATH_MAX];
-    fs_join_path(full, sizeof(full), dir_path, name);
+    if (!fs_join_path(full, sizeof(full), dir_path, name)) {
+        return false;
+    }
 
     struct stat st;
     if (stat(full, &st) < 0) {
@@ -159,7 +198,9 @@ static bool command_is_runnable(const char *dir_path, const char *name) {
     }
 
     char full[SH_PATH_MAX];
-    fs_join_path(full, sizeof(full), dir_path, name);
+    if (!fs_join_path(full, sizeof(full), dir_path, name)) {
+        return false;
+    }
 
     struct stat st;
     if (stat(full, &st) < 0) {
@@ -239,7 +280,7 @@ collect_matches(const char *dir_path, const char *prefix, bool include_hidden, s
     return count;
 }
 
-static size_t collect_command_matches(const char *prefix, bool include_hidden, sh_match_t *matches, size_t cap) {
+static size_t collect_commands(const char *prefix, bool include_hidden, sh_match_t *matches, size_t cap) {
     if (!prefix || !matches || !cap) {
         return 0;
     }
@@ -372,27 +413,18 @@ static bool build_candidate(char *out, size_t out_len, const char *typed_dir, co
         return false;
     }
 
-    int rc;
+    int length;
     if (is_dir) {
-        rc = snprintf(out, out_len, "%s%s/", typed_dir, name);
+        length = snprintf(out, out_len, "%s%s/", typed_dir, name);
     } else {
-        rc = snprintf(out, out_len, "%s%s", typed_dir, name);
+        length = snprintf(out, out_len, "%s%s", typed_dir, name);
     }
 
-    return rc >= 0 && (size_t)rc < out_len;
+    return length >= 0 && (size_t)length < out_len;
 }
 
-static void split_prefix(
-    const char *token,
-    size_t token_len,
-    char *dir_open,
-    size_t dir_open_len,
-    char *typed_dir,
-    size_t typed_dir_len,
-    char *base_prefix,
-    size_t base_prefix_len
-) {
-    if (!token || !dir_open || !typed_dir || !base_prefix) {
+static void split_prefix(const char *token, size_t token_len, prefix_parts_t *parts) {
+    if (!token || !parts || !parts->dir_open || !parts->typed_dir || !parts->base_prefix) {
         return;
     }
 
@@ -405,26 +437,160 @@ static void split_prefix(
     }
 
     if (slash < 0) {
-        snprintf(dir_open, dir_open_len, ".");
+        snprintf(parts->dir_open, parts->dir_open_len, ".");
 
-        if (typed_dir_len) {
-            typed_dir[0] = '\0';
+        if (parts->typed_dir_len) {
+            parts->typed_dir[0] = '\0';
         }
 
-        snprintf(base_prefix, base_prefix_len, "%.*s", (int)token_len, token);
+        snprintf(parts->base_prefix, parts->base_prefix_len, "%.*s", (int)token_len, token);
         return;
     }
 
     size_t typed_len = (size_t)slash + 1;
 
-    snprintf(typed_dir, typed_dir_len, "%.*s", (int)typed_len, token);
-    snprintf(base_prefix, base_prefix_len, "%.*s", (int)(token_len - typed_len), token + typed_len);
+    snprintf(parts->typed_dir, parts->typed_dir_len, "%.*s", (int)typed_len, token);
+    snprintf(parts->base_prefix, parts->base_prefix_len, "%.*s", (int)(token_len - typed_len), token + typed_len);
 
     if (!slash) {
-        snprintf(dir_open, dir_open_len, "/");
+        snprintf(parts->dir_open, parts->dir_open_len, "/");
     } else {
-        snprintf(dir_open, dir_open_len, "%.*s", (int)slash, token);
+        snprintf(parts->dir_open, parts->dir_open_len, "%.*s", (int)slash, token);
     }
+}
+
+static bool read_complete_req(const char *buf, size_t cursor, sh_complete_req_t *req) {
+    size_t token_start = cursor;
+    while (token_start > 0 && !is_word_delim(buf[token_start - 1])) {
+        token_start--;
+    }
+
+    if (cursor == token_start) {
+        return false;
+    }
+
+    size_t token_len = cursor - token_start;
+
+    if (token_len + 1 > sizeof(req->token)) {
+        return false;
+    }
+
+    memset(req, 0, sizeof(*req));
+    req->token_start = token_start;
+    req->token_len = token_len;
+
+    memcpy(req->token, buf + token_start, token_len);
+    req->token[token_len] = '\0';
+
+    req->command = !strchr(req->token, '/') && is_command_position(buf, token_start);
+    if (!req->command) {
+        prefix_parts_t parts = {
+            .dir_open = req->dir_open,
+            .dir_open_len = sizeof(req->dir_open),
+            .typed_dir = req->typed_dir,
+            .typed_dir_len = sizeof(req->typed_dir),
+            .base_prefix = req->base_prefix,
+            .base_prefix_len = sizeof(req->base_prefix),
+        };
+
+        split_prefix(req->token, req->token_len, &parts);
+    }
+
+    return true;
+}
+
+static size_t collect_req_matches(const sh_complete_req_t *req, sh_match_t *matches) {
+    if (req->command) {
+        bool include_hidden = req->token[0] == '.';
+        return collect_commands(req->token, include_hidden, matches, SH_MATCH_MAX);
+    }
+
+    bool include_hidden = req->base_prefix[0] == '.';
+    return collect_matches(req->dir_open, req->base_prefix, include_hidden, matches, SH_MATCH_MAX);
+}
+
+static bool command_completion(char *out, size_t out_len, const char *name) {
+    int length = snprintf(out, out_len, "%s", name);
+    return length >= 0 && (size_t)length < out_len;
+}
+
+static bool build_completion(
+    const sh_complete_req_t *req,
+    sh_match_t *matches,
+    size_t match_count,
+    char *completion,
+    sh_complete_result_t *result
+) {
+    if (match_count == 1) {
+        if (req->command) {
+            return command_completion(completion, SH_PATH_MAX, matches[0].name);
+        }
+
+        return build_candidate(completion, SH_PATH_MAX, req->typed_dir, matches[0].name, matches[0].is_dir);
+    }
+
+    size_t common = lcp_len(matches, match_count);
+    size_t base_len = req->command ? req->token_len : strlen(req->base_prefix);
+
+    if (common <= base_len) {
+        list_matches(matches, match_count);
+
+        if (result) {
+            result->listed = true;
+        }
+
+        return false;
+    }
+
+    char common_name[NAME_MAX + 1];
+    snprintf(common_name, sizeof(common_name), "%.*s", (int)common, matches[0].name);
+
+    if (req->command) {
+        return command_completion(completion, SH_PATH_MAX, common_name);
+    }
+
+    return build_candidate(completion, SH_PATH_MAX, req->typed_dir, common_name, false);
+}
+
+static bool apply_completion(
+    line_edit_t *line,
+    const sh_complete_req_t *req,
+    const char *completion,
+    sh_complete_result_t *result
+) {
+    if (!line || !line->buf || !line->len || !line->cursor || !req || !completion) {
+        return false;
+    }
+
+    size_t completion_len = strlen(completion);
+    size_t tail_len = *line->len - *line->cursor;
+    size_t replaced_len = *line->cursor - req->token_start;
+    size_t new_len = *line->len - replaced_len + completion_len;
+
+    if (new_len + 1 > line->cap) {
+        return false;
+    }
+
+    memmove(line->buf + req->token_start + completion_len, line->buf + *line->cursor, tail_len + 1);
+    memcpy(line->buf + req->token_start, completion, completion_len);
+
+    size_t old_cursor = *line->cursor;
+    *line->len = new_len;
+    *line->cursor = req->token_start + completion_len;
+
+    if (!result) {
+        return true;
+    }
+
+    result->changed = true;
+
+    if (completion_len > req->token_len && !strncmp(completion, req->token, req->token_len)) {
+        result->erase_valid = true;
+        result->erase_start = old_cursor;
+        result->erase_end = old_cursor + (completion_len - req->token_len);
+    }
+
+    return true;
 }
 
 void complete_line(char *buf, size_t cap, size_t *len, size_t *cursor, sh_complete_result_t *result) {
@@ -436,134 +602,34 @@ void complete_line(char *buf, size_t cap, size_t *len, size_t *cursor, sh_comple
         memset(result, 0, sizeof(*result));
     }
 
-    size_t token_start = *cursor;
-    while (token_start > 0 && !is_word_delim(buf[token_start - 1])) {
-        token_start--;
-    }
-
-    if (*cursor == token_start) {
+    sh_complete_req_t req = { 0 };
+    if (!read_complete_req(buf, *cursor, &req)) {
         return;
     }
-
-    char token[SH_PATH_MAX];
-    size_t token_len = *cursor - token_start;
-
-    if (token_len + 1 > sizeof(token)) {
-        return;
-    }
-
-    memcpy(token, buf + token_start, token_len);
-    token[token_len] = '\0';
 
     sh_match_t *matches = malloc(SH_MATCH_MAX * sizeof(sh_match_t));
     if (!matches) {
         return;
     }
 
-    bool command_mode = !strchr(token, '/') && is_command_position(buf, token_start);
-
-    bool include_hidden = token[0] == '.';
-    size_t match_count = 0;
-
-    char dir_open[SH_PATH_MAX] = { 0 };
-    char typed_dir[SH_PATH_MAX] = { 0 };
-    char base_prefix[SH_PATH_MAX] = { 0 };
-
-    if (command_mode) {
-        match_count = collect_command_matches(token, include_hidden, matches, SH_MATCH_MAX);
-    } else {
-        split_prefix(
-            token,
-            token_len,
-            dir_open,
-            sizeof(dir_open),
-            typed_dir,
-            sizeof(typed_dir),
-            base_prefix,
-            sizeof(base_prefix)
-        );
-
-        include_hidden = base_prefix[0] == '.';
-        match_count = collect_matches(dir_open, base_prefix, include_hidden, matches, SH_MATCH_MAX);
-    }
-
+    size_t match_count = collect_req_matches(&req, matches);
     if (!match_count) {
         free(matches);
         return;
     }
 
-    char candidate[SH_PATH_MAX];
-    bool have_candidate = false;
+    char completion[SH_PATH_MAX];
+    bool have_completion = build_completion(&req, matches, match_count, completion, result);
 
-    if (match_count == 1) {
-        if (command_mode) {
-            int rc = snprintf(candidate, sizeof(candidate), "%s", matches[0].name);
+    if (have_completion) {
+        line_edit_t line = {
+            .buf = buf,
+            .cap = cap,
+            .len = len,
+            .cursor = cursor,
+        };
 
-            have_candidate = rc >= 0 && (size_t)rc < sizeof(candidate);
-        } else {
-            have_candidate = build_candidate(
-                candidate,
-                sizeof(candidate),
-                typed_dir,
-                matches[0].name,
-                matches[0].is_dir
-            );
-        }
-    } else {
-        size_t common = lcp_len(matches, match_count);
-        size_t base_len = command_mode ? token_len : strlen(base_prefix);
-
-        if (common > base_len) {
-            char common_name[NAME_MAX + 1];
-            snprintf(common_name, sizeof(common_name), "%.*s", (int)common, matches[0].name);
-
-            if (command_mode) {
-                int rc = snprintf(candidate, sizeof(candidate), "%s", common_name);
-
-                have_candidate = rc >= 0 && (size_t)rc < sizeof(candidate);
-            } else {
-                have_candidate = build_candidate(candidate, sizeof(candidate), typed_dir, common_name, false);
-            }
-        } else {
-            list_matches(matches, match_count);
-
-            if (result) {
-                result->listed = true;
-            }
-            free(matches);
-            return;
-        }
-    }
-
-    if (!have_candidate) {
-        free(matches);
-        return;
-    }
-
-    size_t candidate_len = strlen(candidate);
-    size_t tail_len = *len - *cursor;
-    size_t replaced_len = *cursor - token_start;
-    size_t new_len = *len - replaced_len + candidate_len;
-
-    if (new_len + 1 > cap) {
-        return;
-    }
-
-    memmove(buf + token_start + candidate_len, buf + *cursor, tail_len + 1);
-    memcpy(buf + token_start, candidate, candidate_len);
-
-    size_t old_cursor = *cursor;
-    *len = new_len;
-    *cursor = token_start + candidate_len;
-
-    if (result) {
-        result->changed = true;
-
-        if (candidate_len > token_len && !strncmp(candidate, token, token_len)) {
-            result->erase_valid = true;
-            result->erase_start = old_cursor;
-            result->erase_end = old_cursor + (candidate_len - token_len);
-        }
+        (void)apply_completion(&line, &req, completion, result);
     }
 
     free(matches);

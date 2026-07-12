@@ -40,6 +40,23 @@ typedef struct {
     size_t prompt_cells;
 } sh_layout_ctx_t;
 
+typedef struct {
+    const char *prompt;
+    char *buf;
+    size_t capacity;
+    size_t length;
+    size_t cursor;
+    sh_render_state_t render;
+    sh_layout_ctx_t layout;
+    bool use_history;
+    int history_index;
+    bool completion_valid;
+    bool overflow;
+    size_t completion_start;
+    size_t completion_end;
+    char saved_line[SH_INPUT_LINE_MAX];
+} sh_editor_t;
+
 static void ansi_clear_to_eos(void) {
     io_write_str("\x1b[J");
 }
@@ -129,7 +146,7 @@ void input_set_sigchld_flag(volatile sig_atomic_t *flag) {
     sh_input.sigchld = flag;
 }
 
-void input_set_sigchld_callback(void (*callback)(void)) {
+void input_on_sigchld(void (*callback)(void)) {
     sh_input.sigchld_cb = callback;
 }
 
@@ -262,7 +279,7 @@ static void layout_line(
     *cursor_row_out = total_cursor_cells / cols;
 }
 
-static bool cursor_on_wrap_boundary(const sh_layout_ctx_t *ctx, const char *buf, size_t cursor) {
+static bool at_wrap_boundary(const sh_layout_ctx_t *ctx, const char *buf, size_t cursor) {
     if (!ctx || !buf || !cursor) {
         return false;
     }
@@ -273,7 +290,7 @@ static bool cursor_on_wrap_boundary(const sh_layout_ctx_t *ctx, const char *buf,
     return !((total % cols));
 }
 
-static size_t total_cells(const sh_layout_ctx_t *ctx, const char *buf, size_t cursor) {
+static size_t cursor_total(const sh_layout_ctx_t *ctx, const char *buf, size_t cursor) {
     if (!ctx || !buf) {
         return 0;
     }
@@ -292,7 +309,7 @@ static void ansi_move_down(size_t count) {
     io_write_str(seq);
 }
 
-static void move_left_from_total(size_t total, size_t cells, size_t cols) {
+static void move_left_from(size_t total, size_t cells, size_t cols) {
     while (cells > 0 && total > 0) {
         size_t col = total % cols;
         if (!col) {
@@ -315,7 +332,7 @@ static void move_left_from_total(size_t total, size_t cells, size_t cols) {
     }
 }
 
-static void move_right_from_total(size_t total, size_t cells, size_t cols) {
+static void move_right_from(size_t total, size_t cells, size_t cols) {
     while (cells > 0) {
         size_t col = total % cols;
 
@@ -401,24 +418,15 @@ void history_print(void) {
     }
 }
 
-static void load_history_line(
-    const char *prompt,
-    const sh_layout_ctx_t *layout,
-    sh_render_state_t *render,
-    const char *src,
-    char *buf,
-    size_t len,
-    size_t *pos,
-    size_t *cursor
-) {
-    if (!prompt || !layout || !render || !src || !buf || !len || !pos || !cursor) {
+static void editor_load_history(sh_editor_t *editor, const char *line) {
+    if (!editor || !line) {
         return;
     }
 
-    snprintf(buf, len, "%s", src);
-    *pos = strlen(buf);
-    *cursor = *pos;
-    redraw_line(prompt, layout, buf, *pos, *cursor, render);
+    snprintf(editor->buf, editor->capacity, "%s", line);
+    editor->length = strlen(editor->buf);
+    editor->cursor = editor->length;
+    redraw_line(editor->prompt, &editor->layout, editor->buf, editor->length, editor->cursor, &editor->render);
 }
 
 static bool read_escape_byte(char *out) {
@@ -433,8 +441,8 @@ static bool read_escape_byte(char *out) {
     };
 
     for (;;) {
-        int rc = poll(&pfd, 1, 20);
-        if (rc > 0) {
+        int ready = poll(&pfd, 1, 20);
+        if (ready > 0) {
             ssize_t n = read(STDIN_FILENO, out, 1);
             if (n == 1) {
                 return true;
@@ -447,7 +455,7 @@ static bool read_escape_byte(char *out) {
             return false;
         }
 
-        if (!rc) {
+        if (!ready) {
             return false;
         }
 
@@ -459,6 +467,271 @@ static bool read_escape_byte(char *out) {
     }
 }
 
+static void editor_layout(sh_editor_t *editor) {
+    layout_line(
+        &editor->layout,
+        editor->buf,
+        editor->length,
+        editor->cursor,
+        &editor->render.rows,
+        &editor->render.cursor_row
+    );
+}
+
+static void editor_redraw(sh_editor_t *editor) {
+    redraw_line(editor->prompt, &editor->layout, editor->buf, editor->length, editor->cursor, &editor->render);
+}
+
+static bool editor_handle_signals(sh_editor_t *editor) {
+    if (got_sigint()) {
+        clear_sigint();
+        return false;
+    }
+
+    if (got_sigwinch()) {
+        clear_sigwinch();
+        editor->layout.cols = normalize_cols(term_cols());
+        editor_redraw(editor);
+    }
+
+    if (got_sigchld()) {
+        clear_sigchld();
+
+        if (sh_input.sigchld_cb) {
+            sh_input.sigchld_cb();
+        }
+    }
+
+    return true;
+}
+
+static void editor_complete(sh_editor_t *editor) {
+    sh_complete_result_t result = { 0 };
+    complete_line(editor->buf, editor->capacity, &editor->length, &editor->cursor, &result);
+
+    if (result.changed) {
+        editor->history_index = -1;
+        editor->completion_valid = result.erase_valid;
+        editor->completion_start = result.erase_start;
+        editor->completion_end = result.erase_end;
+        editor_redraw(editor);
+    } else if (result.listed) {
+        editor->completion_valid = false;
+        editor_redraw(editor);
+    }
+}
+
+static bool editor_erase_completion(sh_editor_t *editor) {
+    bool at_end = editor->cursor == editor->length;
+    bool at_completion = editor->cursor == editor->completion_end;
+
+    if (!editor->completion_valid || !at_end || !at_completion) {
+        return false;
+    }
+
+    if (editor->completion_end <= editor->completion_start) {
+        return false;
+    }
+
+    memmove(
+        editor->buf + editor->completion_start,
+        editor->buf + editor->completion_end,
+        editor->length - editor->completion_end + 1
+    );
+
+    editor->length -= editor->completion_end - editor->completion_start;
+    editor->cursor = editor->completion_start;
+    editor->history_index = -1;
+    editor->completion_valid = false;
+    editor_redraw(editor);
+    return true;
+}
+
+static void editor_backspace(sh_editor_t *editor) {
+    if (editor_erase_completion(editor)) {
+        return;
+    }
+
+    editor->completion_valid = false;
+
+    if (!editor->cursor) {
+        return;
+    }
+
+    size_t old_cursor = editor->cursor;
+    size_t start = prev_char(editor->buf, old_cursor);
+    size_t removed_cells = display_cells(editor->buf + start, old_cursor - start);
+
+    if (!removed_cells) {
+        removed_cells = 1;
+    }
+
+    memmove(editor->buf + start, editor->buf + old_cursor, editor->length - old_cursor + 1);
+    editor->length -= old_cursor - start;
+    editor->cursor = start;
+    editor->history_index = -1;
+
+    bool simple_erase = editor->cursor == editor->length;
+    simple_erase = simple_erase && !at_wrap_boundary(&editor->layout, editor->buf, old_cursor);
+
+    if (simple_erase) {
+        for (size_t i = 0; i < removed_cells; i++) {
+            io_write_str("\b \b");
+        }
+
+        editor_layout(editor);
+        return;
+    }
+
+    size_t old_total = cursor_total(&editor->layout, editor->buf, old_cursor);
+    move_left_from(old_total, removed_cells, editor->layout.cols);
+
+    size_t tail_bytes = editor->length - editor->cursor;
+    if (tail_bytes) {
+        write(STDOUT_FILENO, editor->buf + editor->cursor, tail_bytes);
+    }
+
+    io_write_str(" ");
+
+    size_t tail_cells = display_cells(editor->buf + editor->cursor, tail_bytes);
+    size_t start_total = cursor_total(&editor->layout, editor->buf, editor->cursor);
+    size_t end_total = start_total + tail_cells + 1;
+
+    move_left_from(end_total, tail_cells + 1, editor->layout.cols);
+    editor_layout(editor);
+}
+
+static void editor_history_up(sh_editor_t *editor) {
+    if (!editor->use_history || !sh_input.history_count) {
+        return;
+    }
+
+    if (editor->history_index < 0) {
+        snprintf(editor->saved_line, sizeof(editor->saved_line), "%s", editor->buf);
+        editor->history_index = (int)sh_input.history_count - 1;
+    } else if (editor->history_index > 0) {
+        editor->history_index--;
+    }
+
+    editor_load_history(editor, sh_input.history[editor->history_index]);
+}
+
+static void editor_history_down(sh_editor_t *editor) {
+    if (!editor->use_history || editor->history_index < 0) {
+        return;
+    }
+
+    if ((size_t)(editor->history_index + 1) < sh_input.history_count) {
+        editor->history_index++;
+        editor_load_history(editor, sh_input.history[editor->history_index]);
+        return;
+    }
+
+    editor->history_index = -1;
+    editor_load_history(editor, editor->saved_line);
+}
+
+static void editor_move_right(sh_editor_t *editor) {
+    if (editor->cursor >= editor->length) {
+        return;
+    }
+
+    size_t old_total = cursor_total(&editor->layout, editor->buf, editor->cursor);
+    editor->cursor = next_char(editor->buf, editor->length, editor->cursor);
+    size_t new_total = cursor_total(&editor->layout, editor->buf, editor->cursor);
+
+    move_right_from(old_total, new_total - old_total, editor->layout.cols);
+    editor_layout(editor);
+}
+
+static void editor_move_left(sh_editor_t *editor) {
+    if (!editor->cursor) {
+        return;
+    }
+
+    size_t old_cursor = editor->cursor;
+    size_t old_total = cursor_total(&editor->layout, editor->buf, old_cursor);
+    editor->cursor = prev_char(editor->buf, editor->cursor);
+
+    size_t move_cells = display_cells(editor->buf + editor->cursor, old_cursor - editor->cursor);
+    if (!move_cells) {
+        move_cells = 1;
+    }
+
+    move_left_from(old_total, move_cells, editor->layout.cols);
+    editor_layout(editor);
+}
+
+static void editor_escape(sh_editor_t *editor) {
+    editor->completion_valid = false;
+
+    char prefix = 0;
+    char key = 0;
+
+    if (!read_escape_byte(&prefix) || !read_escape_byte(&key)) {
+        return;
+    }
+
+    if (prefix != '[' && prefix != 'O') {
+        return;
+    }
+
+    switch (key) {
+    case 'A':
+        editor_history_up(editor);
+        break;
+    case 'B':
+        editor_history_down(editor);
+        break;
+    case 'C':
+        editor_move_right(editor);
+        break;
+    case 'D':
+        editor_move_left(editor);
+        break;
+    }
+}
+
+static void editor_insert(sh_editor_t *editor, char ch) {
+    if ((unsigned char)ch < 0x20 || editor->length + 1 >= editor->capacity) {
+        if ((unsigned char)ch >= 0x20) {
+            editor->overflow = true;
+        }
+        return;
+    }
+
+    editor->history_index = -1;
+    editor->completion_valid = false;
+
+    if (editor->cursor == editor->length) {
+        editor->buf[editor->length++] = ch;
+        editor->cursor = editor->length;
+        editor->buf[editor->length] = '\0';
+
+        write(STDOUT_FILENO, &ch, 1);
+        editor_layout(editor);
+        return;
+    }
+
+    size_t old_cursor = editor->cursor;
+    memmove(editor->buf + old_cursor + 1, editor->buf + old_cursor, editor->length - old_cursor + 1);
+
+    editor->buf[old_cursor] = ch;
+    editor->length++;
+    editor->cursor++;
+
+    size_t rewrite_len = editor->length - old_cursor;
+    write(STDOUT_FILENO, editor->buf + old_cursor, rewrite_len);
+
+    size_t tail_cells = display_cells(editor->buf + editor->cursor, editor->length - editor->cursor);
+    if (tail_cells) {
+        size_t end_total = cursor_total(&editor->layout, editor->buf, editor->length);
+        move_left_from(end_total, tail_cells, editor->layout.cols);
+    }
+
+    editor_layout(editor);
+}
+
 int read_line_interactive(const char *prompt, char *buf, size_t len, bool use_history) {
     if (!prompt || !buf || len < 2) {
         return -1;
@@ -468,263 +741,49 @@ int read_line_interactive(const char *prompt, char *buf, size_t len, bool use_hi
         return -1;
     }
 
-    size_t pos = 0;
-    size_t cursor = 0;
-    sh_render_state_t render = { 1, 0 };
-    sh_layout_ctx_t layout = {
-        .cols = normalize_cols(term_cols()),
-        .prompt_cells = display_cells(prompt, strlen(prompt)),
+    sh_editor_t editor = {
+        .prompt = prompt,
+        .buf = buf,
+        .capacity = len,
+        .render = { 1, 0 },
+        .layout = {
+            .cols = normalize_cols(term_cols()),
+            .prompt_cells = display_cells(prompt, strlen(prompt)),
+        },
+        .use_history = use_history,
+        .history_index = -1,
     };
-    int history_cursor = -1;
-    bool tab_erase_valid = false;
-    size_t tab_erase_start = 0;
-    size_t tab_erase_end = 0;
-    char scratch[SH_INPUT_LINE_MAX] = { 0 };
-    buf[0] = '\0';
 
+    buf[0] = '\0';
     io_write_str(prompt);
 
     for (;;) {
-        if (got_sigint()) {
-            clear_sigint();
+        if (!editor_handle_signals(&editor)) {
             tty_set_line_mode(false);
             return -1;
         }
 
-        if (got_sigwinch()) {
-            clear_sigwinch();
-            layout.cols = normalize_cols(term_cols());
-            redraw_line(prompt, &layout, buf, pos, cursor, &render);
-        }
-
-        if (got_sigchld()) {
-            clear_sigchld();
-
-            if (sh_input.sigchld_cb) {
-                sh_input.sigchld_cb();
-            }
-        }
-
         char ch = 0;
-        ssize_t n = read(STDIN_FILENO, &ch, 1);
-        if (n <= 0) {
+        ssize_t bytes = read(STDIN_FILENO, &ch, 1);
+        if (bytes <= 0) {
             continue;
         }
 
         if (ch == '\r' || ch == '\n') {
             io_write_str("\n");
-            buf[pos] = '\0';
+            editor.buf[editor.length] = '\0';
             tty_set_line_mode(false);
-            return 0;
+            return editor.overflow ? -2 : 0;
         }
 
         if (ch == '\t') {
-            sh_complete_result_t complete = { 0 };
-            complete_line(buf, len, &pos, &cursor, &complete);
-
-            if (complete.changed) {
-                history_cursor = -1;
-                tab_erase_valid = complete.erase_valid;
-                tab_erase_start = complete.erase_start;
-                tab_erase_end = complete.erase_end;
-                redraw_line(prompt, &layout, buf, pos, cursor, &render);
-            } else if (complete.listed) {
-                tab_erase_valid = false;
-                redraw_line(prompt, &layout, buf, pos, cursor, &render);
-            }
-
-            continue;
-        }
-
-        if (ch == '\b' || (unsigned char)ch == 0x7f) {
-            if (tab_erase_valid && cursor == pos && cursor == tab_erase_end && tab_erase_end > tab_erase_start) {
-                memmove(buf + tab_erase_start, buf + tab_erase_end, pos - tab_erase_end + 1);
-
-                pos -= tab_erase_end - tab_erase_start;
-                cursor = tab_erase_start;
-                history_cursor = -1;
-                tab_erase_valid = false;
-
-                redraw_line(prompt, &layout, buf, pos, cursor, &render);
-
-                continue;
-            }
-
-            tab_erase_valid = false;
-
-            if (cursor > 0) {
-                size_t old_cursor = cursor;
-                size_t start = prev_char(buf, old_cursor);
-
-                size_t removed_cells = display_cells(buf + start, old_cursor - start);
-
-                if (!removed_cells) {
-                    removed_cells = 1;
-                }
-
-                memmove(buf + start, buf + old_cursor, pos - old_cursor + 1);
-                pos -= old_cursor - start;
-                cursor = start;
-                history_cursor = -1;
-                size_t cols = layout.cols;
-
-                if (cursor == pos && !cursor_on_wrap_boundary(&layout, buf, old_cursor)) {
-                    for (size_t i = 0; i < removed_cells; i++) {
-                        io_write_str("\b \b");
-                    }
-
-                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
-                } else {
-                    size_t old_total = total_cells(&layout, buf, old_cursor);
-                    move_left_from_total(old_total, removed_cells, cols);
-
-                    size_t tail_bytes = pos - cursor;
-                    if (tail_bytes) {
-                        write(STDOUT_FILENO, buf + cursor, tail_bytes);
-                    }
-
-                    io_write_str(" ");
-
-                    size_t tail_cells = display_cells(buf + cursor, tail_bytes);
-                    size_t start_total = total_cells(&layout, buf, cursor);
-                    size_t end_total = start_total + tail_cells + 1;
-
-                    move_left_from_total(end_total, tail_cells + 1, cols);
-
-                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
-                }
-            }
-            continue;
-        }
-
-        if (ch == '\x1b') {
-            tab_erase_valid = false;
-
-            char seq1 = 0;
-            char seq2 = 0;
-
-            if (!read_escape_byte(&seq1)) {
-                continue;
-            }
-            if (!read_escape_byte(&seq2)) {
-                continue;
-            }
-
-            if (seq1 != '[' && seq1 != 'O') {
-                continue;
-            }
-
-            if (seq2 == 'A' && use_history) {
-                if (!sh_input.history_count) {
-                    continue;
-                }
-
-                if (history_cursor < 0) {
-                    snprintf(scratch, sizeof(scratch), "%s", buf);
-                    history_cursor = (int)sh_input.history_count - 1;
-                } else if (history_cursor > 0) {
-                    history_cursor--;
-                }
-
-                load_history_line(prompt, &layout, &render, sh_input.history[history_cursor], buf, len, &pos, &cursor);
-            } else if (seq2 == 'B' && use_history) {
-                if (history_cursor < 0) {
-                    continue;
-                }
-
-                if ((size_t)(history_cursor + 1) < sh_input.history_count) {
-                    history_cursor++;
-                    load_history_line(
-                        prompt,
-                        &layout,
-                        &render,
-                        sh_input.history[history_cursor],
-                        buf,
-                        len,
-                        &pos,
-                        &cursor
-                    );
-                } else {
-                    history_cursor = -1;
-                    load_history_line(prompt, &layout, &render, scratch, buf, len, &pos, &cursor);
-                }
-            } else if (seq2 == 'C') {
-                if (cursor < pos) {
-                    size_t cols = layout.cols;
-                    size_t old_total = total_cells(&layout, buf, cursor);
-                    size_t next = next_char(buf, pos, cursor);
-
-                    cursor = next;
-                    size_t new_total = total_cells(&layout, buf, cursor);
-
-                    move_right_from_total(old_total, new_total - old_total, cols);
-
-                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
-                }
-            } else if (seq2 == 'D') {
-                if (cursor > 0) {
-                    size_t cols = layout.cols;
-
-                    size_t old_cursor = cursor;
-                    size_t old_total = total_cells(&layout, buf, old_cursor);
-                    size_t prev = prev_char(buf, cursor);
-
-                    cursor = prev;
-
-                    size_t move_cells = display_cells(buf + prev, old_cursor - prev);
-
-                    if (!move_cells) {
-                        move_cells = 1;
-                    }
-
-                    move_left_from_total(old_total, move_cells, cols);
-                    layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
-                }
-            }
-
-            continue;
-        }
-
-        if ((unsigned char)ch < 0x20) {
-            continue;
-        }
-
-        if (pos + 1 >= len) {
-            continue;
-        }
-
-        history_cursor = -1;
-        tab_erase_valid = false;
-
-        if (cursor == pos) {
-            buf[pos++] = ch;
-            cursor = pos;
-            buf[pos] = '\0';
-
-            write(STDOUT_FILENO, &ch, 1);
-
-            layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
+            editor_complete(&editor);
+        } else if (ch == '\b' || (unsigned char)ch == 0x7f) {
+            editor_backspace(&editor);
+        } else if (ch == '\x1b') {
+            editor_escape(&editor);
         } else {
-            size_t old_cursor = cursor;
-
-            memmove(buf + old_cursor + 1, buf + old_cursor, pos - old_cursor + 1);
-
-            buf[old_cursor] = ch;
-            pos++;
-            cursor++;
-
-            size_t cols = layout.cols;
-
-            size_t rewrite_len = pos - old_cursor;
-            write(STDOUT_FILENO, buf + old_cursor, rewrite_len);
-
-            size_t tail_cells = display_cells(buf + cursor, pos - cursor);
-            if (tail_cells) {
-                size_t end_total = total_cells(&layout, buf, pos);
-                move_left_from_total(end_total, tail_cells, cols);
-            }
-
-            layout_line(&layout, buf, pos, cursor, &render.rows, &render.cursor_row);
+            editor_insert(&editor, ch);
         }
     }
 }
