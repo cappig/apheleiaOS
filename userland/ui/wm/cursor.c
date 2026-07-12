@@ -116,9 +116,18 @@ static const wm_cursor_t *_cursor_pick(wm_cursor_kind_t kind) {
     return NULL;
 }
 
-static bool _cursor_uses_center_hotspot(wm_cursor_kind_t kind) {
-    return kind == WM_CURSOR_RESIZE_EW || kind == WM_CURSOR_RESIZE_NS || kind == WM_CURSOR_RESIZE_NW ||
-           kind == WM_CURSOR_RESIZE_SE || kind == WM_CURSOR_RESIZE_SW || kind == WM_CURSOR_MOVE;
+static bool _center_hotspot(wm_cursor_kind_t kind) {
+    switch (kind) {
+    case WM_CURSOR_RESIZE_EW:
+    case WM_CURSOR_RESIZE_NS:
+    case WM_CURSOR_RESIZE_NW:
+    case WM_CURSOR_RESIZE_SE:
+    case WM_CURSOR_RESIZE_SW:
+    case WM_CURSOR_MOVE:
+        return true;
+    default:
+        return false;
+    }
 }
 
 void wm_cursor_unload(void) {
@@ -138,7 +147,13 @@ bool wm_cursor_load_kind(wm_cursor_kind_t kind, const char *path) {
 bool wm_cursor_draw_kind(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32 y, wm_cursor_kind_t kind) {
     const wm_cursor_t *cursor = _cursor_pick(kind);
 
-    if (!frame || !cursor || !cursor->pixels || !cursor->width || !cursor->height || !fb_width || !fb_height) {
+    bool valid_fb = fb_width && fb_height;
+
+    if (!frame || !cursor || !cursor->pixels || !valid_fb) {
+        return false;
+    }
+
+    if (!cursor->width || !cursor->height) {
         return false;
     }
 
@@ -147,7 +162,7 @@ bool wm_cursor_draw_kind(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32
     i32 hot_x = 0;
     i32 hot_y = 0;
 
-    if (has_exact_cursor && _cursor_uses_center_hotspot(kind)) {
+    if (has_exact_cursor && _center_hotspot(kind)) {
         hot_x = (i32)(cursor->width / 2);
         hot_y = (i32)(cursor->height / 2);
     }

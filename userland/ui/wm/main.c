@@ -31,14 +31,14 @@ typedef struct {
 } wm_config_t;
 
 enum wm_cfg_palette_mask {
-    WM_CFG_PAL_BACKGROUND = 1u << 0,
-    WM_CFG_PAL_BORDER = 1u << 1,
-    WM_CFG_PAL_TITLE = 1u << 2,
-    WM_CFG_PAL_TITLE_FOCUS = 1u << 3,
-    WM_CFG_PAL_CLIENT_BG = 1u << 4,
-    WM_CFG_PAL_TITLE_TEXT = 1u << 5,
-    WM_CFG_PAL_CLOSE_BG = 1u << 6,
-    WM_CFG_PAL_CLOSE_FG = 1u << 7,
+    WM_CFG_BACKGROUND = 1u << 0,
+    WM_CFG_BORDER = 1u << 1,
+    WM_CFG_TITLE = 1u << 2,
+    WM_CFG_TITLE_FOCUS = 1u << 3,
+    WM_CFG_CLIENT_BG = 1u << 4,
+    WM_CFG_TITLE_TEXT = 1u << 5,
+    WM_CFG_CLOSE_BG = 1u << 6,
+    WM_CFG_CLOSE_FG = 1u << 7,
 };
 
 typedef struct {
@@ -52,7 +52,7 @@ static void _on_signal(int signum) {
     exit_requested = 1;
 }
 
-static bool _cfg_set_palette_color(wm_config_t *cfg, const char *key, const char *value) {
+static bool set_palette_color(wm_config_t *cfg, const char *key, const char *value) {
     if (!cfg || !key || !value) {
         return false;
     }
@@ -64,53 +64,148 @@ static bool _cfg_set_palette_color(wm_config_t *cfg, const char *key, const char
 
     if (!strcmp(key, "color.background")) {
         cfg->palette.background = color;
-        cfg->palette_mask |= WM_CFG_PAL_BACKGROUND;
+        cfg->palette_mask |= WM_CFG_BACKGROUND;
         return true;
     }
 
     if (!strcmp(key, "color.border")) {
         cfg->palette.border = color;
-        cfg->palette_mask |= WM_CFG_PAL_BORDER;
+        cfg->palette_mask |= WM_CFG_BORDER;
         return true;
     }
 
     if (!strcmp(key, "color.title")) {
         cfg->palette.title = color;
-        cfg->palette_mask |= WM_CFG_PAL_TITLE;
+        cfg->palette_mask |= WM_CFG_TITLE;
         return true;
     }
 
     if (!strcmp(key, "color.title_focus")) {
         cfg->palette.title_focus = color;
-        cfg->palette_mask |= WM_CFG_PAL_TITLE_FOCUS;
+        cfg->palette_mask |= WM_CFG_TITLE_FOCUS;
         return true;
     }
 
     if (!strcmp(key, "color.client_bg")) {
         cfg->palette.client_bg = color;
-        cfg->palette_mask |= WM_CFG_PAL_CLIENT_BG;
+        cfg->palette_mask |= WM_CFG_CLIENT_BG;
         return true;
     }
 
     if (!strcmp(key, "color.title_text")) {
         cfg->palette.title_text = color;
-        cfg->palette_mask |= WM_CFG_PAL_TITLE_TEXT;
+        cfg->palette_mask |= WM_CFG_TITLE_TEXT;
         return true;
     }
 
     if (!strcmp(key, "color.close_bg")) {
         cfg->palette.close_bg = color;
-        cfg->palette_mask |= WM_CFG_PAL_CLOSE_BG;
+        cfg->palette_mask |= WM_CFG_CLOSE_BG;
         return true;
     }
 
     if (!strcmp(key, "color.close_fg")) {
         cfg->palette.close_fg = color;
-        cfg->palette_mask |= WM_CFG_PAL_CLOSE_FG;
+        cfg->palette_mask |= WM_CFG_CLOSE_FG;
         return true;
     }
 
     return false;
+}
+
+typedef struct {
+    char key[64];
+    char *value;
+    size_t value_len;
+} wm_cfg_pair_t;
+
+static bool parse_config_line(char *line, wm_cfg_pair_t *pair) {
+    if (!line || !pair) {
+        return false;
+    }
+
+    while (*line && isspace((unsigned char)*line)) {
+        line++;
+    }
+
+    if (!line[0] || line[0] == '#') {
+        return false;
+    }
+
+    char *eq = strchr(line, '=');
+    if (!eq) {
+        return false;
+    }
+
+    char *key_start = line;
+    char *key_end = eq;
+
+    while (key_end > key_start && isspace((unsigned char)key_end[-1])) {
+        key_end--;
+    }
+
+    size_t key_len = (size_t)(key_end - key_start);
+    if (!key_len || key_len >= sizeof(pair->key)) {
+        return false;
+    }
+
+    char *value = eq + 1;
+    while (*value && isspace((unsigned char)*value)) {
+        value++;
+    }
+
+    char *value_end = value + strlen(value);
+    while (value_end > value && isspace((unsigned char)value_end[-1])) {
+        value_end--;
+    }
+
+    size_t value_len = (size_t)(value_end - value);
+    if (!value_len) {
+        return false;
+    }
+
+    memcpy(pair->key, key_start, key_len);
+    pair->key[key_len] = '\0';
+    pair->value = value;
+    pair->value_len = value_len;
+
+    return true;
+}
+
+static void copy_config_path(char *dst, size_t dst_len, const wm_cfg_pair_t *pair) {
+    size_t len = pair->value_len;
+    if (len >= dst_len) {
+        len = dst_len - 1;
+    }
+
+    memcpy(dst, pair->value, len);
+    dst[len] = '\0';
+}
+
+static void apply_config_pair(wm_config_t *cfg, const wm_cfg_pair_t *pair) {
+    if (!strcmp(pair->key, "background")) {
+        copy_config_path(cfg->background, sizeof(cfg->background), pair);
+        return;
+    }
+
+    if (!strcmp(pair->key, "cursors")) {
+        copy_config_path(cfg->cursors, sizeof(cfg->cursors), pair);
+        return;
+    }
+
+    if (!strcmp(pair->key, "font")) {
+        copy_config_path(cfg->font, sizeof(cfg->font), pair);
+        return;
+    }
+
+    char value[64];
+    if (pair->value_len >= sizeof(value)) {
+        return;
+    }
+
+    memcpy(value, pair->value, pair->value_len);
+    value[pair->value_len] = '\0';
+    set_palette_color(cfg, pair->key, value);
 }
 
 static void _load_wm_config(wm_config_t *cfg) {
@@ -146,80 +241,12 @@ static void _load_wm_config(wm_config_t *cfg) {
             pos += strlen(pos);
         }
 
-        while (*line && isspace((unsigned char)*line)) {
-            line++;
-        }
-
-        if (!line[0] || line[0] == '#') {
+        wm_cfg_pair_t pair = { 0 };
+        if (!parse_config_line(line, &pair)) {
             continue;
         }
 
-        char *eq = strchr(line, '=');
-        if (!eq) {
-            continue;
-        }
-
-        char *key_start = line;
-        char *key_end = eq;
-
-        while (key_end > key_start && isspace((unsigned char)key_end[-1])) {
-            key_end--;
-        }
-
-        char *value_start = eq + 1;
-        while (*value_start && isspace((unsigned char)*value_start)) {
-            value_start++;
-        }
-
-        char *value_end = value_start + strlen(value_start);
-        while (value_end > value_start && isspace((unsigned char)value_end[-1])) {
-            value_end--;
-        }
-        size_t value_len = (size_t)(value_end - value_start);
-        if (!value_len) {
-            continue;
-        }
-
-        size_t key_len = (size_t)(key_end - key_start);
-        char key[64];
-
-        if (!key_len || key_len >= sizeof(key)) {
-            continue;
-        }
-
-        memcpy(key, key_start, key_len);
-        key[key_len] = '\0';
-
-        char *out = NULL;
-        size_t out_len = 0;
-        char value_buf[64];
-
-        if (!strcmp(key, "background")) {
-            out = cfg->background;
-            out_len = sizeof(cfg->background);
-        } else if (!strcmp(key, "cursors")) {
-            out = cfg->cursors;
-            out_len = sizeof(cfg->cursors);
-        } else if (!strcmp(key, "font")) {
-            out = cfg->font;
-            out_len = sizeof(cfg->font);
-        } else if (value_len < sizeof(value_buf)) {
-            memcpy(value_buf, value_start, value_len);
-            value_buf[value_len] = '\0';
-
-            if (_cfg_set_palette_color(cfg, key, value_buf)) {
-                continue;
-            }
-        } else {
-            continue;
-        }
-
-        if (value_len >= out_len) {
-            value_len = out_len - 1;
-        }
-
-        memcpy(out, value_start, value_len);
-        out[value_len] = '\0';
+        apply_config_pair(cfg, &pair);
     }
 }
 
@@ -288,27 +315,27 @@ static bool _parse_args(int argc, char **argv, wm_startup_t *startup) {
     return true;
 }
 
-static void _warn_background_failed(const char *path) {
+static void warn_bg_failed(const char *path) {
     if (!path || !path[0]) {
         return;
     }
 
     char line[PATH_MAX + 96];
-    snprintf(line, sizeof(line), "wm: failed to load background '%s', using solid fallback\\n", path);
+    snprintf(line, sizeof(line), "wm: failed to load background '%s', using solid fallback\n", path);
     io_write_str(line);
 }
 
-static void _warn_cursor_failed(const char *path) {
+static void warn_cursor_failed(const char *path) {
     if (!path || !path[0]) {
         return;
     }
 
     char line[PATH_MAX + 80];
-    snprintf(line, sizeof(line), "wm: failed to load cursor '%s'\\n", path);
+    snprintf(line, sizeof(line), "wm: failed to load cursor '%s'\n", path);
     io_write_str(line);
 }
 
-static bool _cursor_path_join(char *out, size_t out_len, const char *dir, const char *name) {
+static bool join_cursor_path(char *out, size_t out_len, const char *dir, const char *name) {
     if (!out || !out_len || !dir || !dir[0] || !name || !name[0]) {
         return false;
     }
@@ -324,37 +351,263 @@ static bool _cursor_path_join(char *out, size_t out_len, const char *dir, const 
     return n > 0 && (size_t)n < out_len;
 }
 
-static const char *
-_cursor_path_or_fallback(char *path_buf, size_t path_buf_len, const char *dir, const char *name, const char *fallback) {
-    if (path_buf && path_buf_len && dir && dir[0] && name && name[0] &&
-        _cursor_path_join(path_buf, path_buf_len, dir, name)) {
-        return path_buf;
+static const char *find_cursor(char *path, size_t path_size, const char *dir, const char *name) {
+    if (!path || !path_size || !dir || !dir[0] || !name || !name[0]) {
+        return NULL;
     }
 
-    return fallback;
+    return join_cursor_path(path, path_size, dir, name) ? path : NULL;
 }
 
-static void
-_load_cursor_variant(wm_cursor_kind_t kind, const char *cursors_dir, const char *name, const char *fallback) {
-    char path[PATH_MAX];
-    const char *load_path = _cursor_path_or_fallback(path, sizeof(path), cursors_dir, name, fallback);
+static void load_cursor(wm_cursor_kind_t kind, const char *cursor_dir, const char *name, const char *fallback) {
+    char path_buf[PATH_MAX];
+    const char *path = find_cursor(path_buf, sizeof(path_buf), cursor_dir, name);
+    if (!path) {
+        path = fallback;
+    }
 
-    if (load_path && !wm_cursor_load_kind(kind, load_path)) {
-        _warn_cursor_failed(load_path);
+    if (path && !wm_cursor_load_kind(kind, path)) {
+        warn_cursor_failed(path);
+    }
+}
+
+static void apply_palette(const wm_config_t *cfg) {
+    wm_palette_t palette = *wm_palette_get();
+
+    if (cfg->palette_mask & WM_CFG_BACKGROUND) {
+        palette.background = cfg->palette.background;
+    }
+    if (cfg->palette_mask & WM_CFG_BORDER) {
+        palette.border = cfg->palette.border;
+    }
+    if (cfg->palette_mask & WM_CFG_TITLE) {
+        palette.title = cfg->palette.title;
+    }
+    if (cfg->palette_mask & WM_CFG_TITLE_FOCUS) {
+        palette.title_focus = cfg->palette.title_focus;
+    }
+    if (cfg->palette_mask & WM_CFG_CLIENT_BG) {
+        palette.client_bg = cfg->palette.client_bg;
+    }
+    if (cfg->palette_mask & WM_CFG_TITLE_TEXT) {
+        palette.title_text = cfg->palette.title_text;
+    }
+    if (cfg->palette_mask & WM_CFG_CLOSE_BG) {
+        palette.close_bg = cfg->palette.close_bg;
+    }
+    if (cfg->palette_mask & WM_CFG_CLOSE_FG) {
+        palette.close_fg = cfg->palette.close_fg;
+    }
+
+    wm_palette_set(&palette);
+}
+
+static const char *pick_background(const wm_startup_t *startup, const wm_config_t *cfg) {
+    if (startup->bg_override && startup->bg_override[0]) {
+        return startup->bg_override;
+    }
+
+    return cfg->background[0] ? cfg->background : NULL;
+}
+
+static const char *pick_cursor(const wm_startup_t *startup, const char *cursor_dir, char *path, size_t path_size) {
+    if (startup->cursor_override && startup->cursor_override[0]) {
+        return startup->cursor_override;
+    }
+
+    if (join_cursor_path(path, path_size, cursor_dir, "pointer.ppm")) {
+        return path;
+    }
+
+    return NULL;
+}
+
+static void load_resize_cursors(const char *cursor_dir, const char *fallback) {
+    static const struct {
+        wm_cursor_kind_t kind;
+        const char *name;
+    } specs[] = {
+        {
+            .kind = WM_CURSOR_RESIZE_EW,
+            .name = "resize_ew.ppm",
+        },
+        {
+            .kind = WM_CURSOR_RESIZE_NS,
+            .name = "resize_ns.ppm",
+        },
+        {
+            .kind = WM_CURSOR_RESIZE_NW,
+            .name = "resize_nw.ppm",
+        },
+        {
+            .kind = WM_CURSOR_RESIZE_SE,
+            .name = "resize_se.ppm",
+        },
+        {
+            .kind = WM_CURSOR_RESIZE_SW,
+            .name = "resize_sw.ppm",
+        },
+    };
+
+    for (size_t i = 0; i < sizeof(specs) / sizeof(specs[0]); i++) {
+        load_cursor(specs[i].kind, cursor_dir, specs[i].name, fallback);
+    }
+}
+
+static void load_assets(const wm_startup_t *startup, const wm_config_t *cfg, u32 width, u32 height) {
+    const char *background = pick_background(startup, cfg);
+    if (background && !wm_background_load(width, height, background)) {
+        warn_bg_failed(background);
+    }
+
+    const char *cursor_dir = cfg->cursors[0] ? cfg->cursors : "/etc/cursors";
+
+    char cursor_path[PATH_MAX];
+    const char *normal_cursor = pick_cursor(startup, cursor_dir, cursor_path, sizeof(cursor_path));
+
+    if (normal_cursor && !wm_cursor_load_kind(WM_CURSOR_NORMAL, normal_cursor)) {
+        warn_cursor_failed(normal_cursor);
+    }
+
+    load_cursor(WM_CURSOR_POINTER, cursor_dir, "pointer_interact.ppm", normal_cursor);
+    load_cursor(WM_CURSOR_MOVE, cursor_dir, "move.ppm", normal_cursor);
+
+    char resize_path[PATH_MAX];
+    const char *resize_cursor = find_cursor(resize_path, sizeof(resize_path), cursor_dir, "resize.ppm");
+
+    load_resize_cursors(cursor_dir, resize_cursor);
+}
+
+typedef struct {
+    int fb_fd;
+    pixel_t *frame_store;
+    ui_t ui;
+    bool wm_inited;
+    bool fb_acquired;
+    bool mgr_claimed;
+    fb_info_t fb_info;
+    size_t frame_bytes;
+} wm_app_t;
+
+static bool open_framebuffer(wm_app_t *app, const wm_startup_t *startup) {
+    if (startup->fb_fd >= 0) {
+        app->fb_fd = startup->fb_fd;
+    } else {
+        app->fb_fd = open("/dev/fb", O_RDWR, 0);
+        if (app->fb_fd < 0) {
+            io_write_str("wm: open /dev/fb failed\n");
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool setup_ui(wm_app_t *app) {
+    if (ui_open(&app->ui, UI_OPEN_INPUT)) {
+        io_write_str("wm: failed to open wsctl/keyboard/mouse\n");
+        return false;
+    }
+
+    if (ui_mgr_claim(&app->ui)) {
+        io_write_str("wm: failed to claim ws manager\n");
+        return false;
+    }
+
+    app->mgr_claimed = true;
+    return true;
+}
+
+static bool setup_framebuffer(wm_app_t *app) {
+    memset(&app->fb_info, 0, sizeof(app->fb_info));
+
+    if (ioctl(app->fb_fd, FBIOGETINFO, &app->fb_info) || !app->fb_info.available || app->fb_info.bpp != 32) {
+        io_write_str("wm: unsupported framebuffer\n");
+        return false;
+    }
+
+    size_t width = app->fb_info.width;
+    size_t height = app->fb_info.height;
+    if (!width || !height || width > WM_MAX_FB_W || height > WM_MAX_FB_H || width > SIZE_MAX / sizeof(pixel_t) ||
+        height > SIZE_MAX / width) {
+        io_write_str("wm: invalid framebuffer dimensions\n");
+        return false;
+    }
+
+    size_t packed_row_bytes = width * sizeof(pixel_t);
+    if (!app->fb_info.pitch || (size_t)app->fb_info.pitch < packed_row_bytes) {
+        io_write_str("wm: invalid framebuffer pitch\n");
+        return false;
+    }
+
+    size_t frame_pixels = width * height;
+    if (frame_pixels > WM_MAX_FB_PIX || frame_pixels > SIZE_MAX / sizeof(pixel_t)) {
+        io_write_str("wm: framebuffer too large\n");
+        return false;
+    }
+
+    app->frame_bytes = frame_pixels * sizeof(pixel_t);
+
+    if (ioctl(app->fb_fd, FBIOACQUIRE, NULL)) {
+        io_write_str("wm: failed to acquire framebuffer\n");
+        return false;
+    }
+
+    app->fb_acquired = true;
+
+    app->frame_store = calloc(frame_pixels, sizeof(pixel_t));
+    if (!app->frame_store) {
+        io_write_str("wm: failed to allocate frame buffer\n");
+        return false;
+    }
+
+    return true;
+}
+
+static void setup_wm(wm_app_t *app, const wm_startup_t *startup, wm_config_t *cfg) {
+    _load_wm_config(cfg);
+
+    if (cfg->font[0] && !draw_set_font_path(cfg->font)) {
+        io_write_str("wm: invalid font path in config\n");
+    }
+
+    apply_palette(cfg);
+
+    wm_init();
+    app->wm_inited = true;
+
+    load_assets(startup, cfg, app->fb_info.width, app->fb_info.height);
+}
+
+static void wm_app_cleanup(wm_app_t *app) {
+    wm_background_unload();
+    wm_cursor_unload();
+
+    if (app->mgr_claimed) {
+        ui_mgr_release(&app->ui);
+    }
+
+    if (app->wm_inited) {
+        wm_cleanup_all_windows();
+        wm_destroy();
+    }
+
+    ui_close(&app->ui);
+
+    if (app->fb_acquired) {
+        ioctl(app->fb_fd, FBIORELEASE, NULL);
+    }
+
+    if (app->fb_fd >= 0) {
+        close(app->fb_fd);
+    }
+
+    if (app->frame_store) {
+        free(app->frame_store);
     }
 }
 
 int main(int argc, char **argv) {
-    int ret = 1;
-    int fb_fd = -1;
-    pixel_t *frame_store = NULL;
-
-    ui_t ui = { 0 };
-
-    bool wm_inited = false;
-    bool fb_acquired = false;
-    bool mgr_claimed = false;
-
     wm_startup_t startup = { 0 };
     if (!_parse_args(argc, argv, &startup)) {
         return 1;
@@ -366,190 +619,31 @@ int main(int argc, char **argv) {
     signal(SIGTERM, _on_signal);
     signal(SIGHUP, _on_signal);
 
-    if (startup.fb_fd >= 0) {
-        fb_fd = startup.fb_fd;
-    } else {
-        fb_fd = open("/dev/fb", O_RDWR, 0);
-        if (fb_fd < 0) {
-            io_write_str("wm: open /dev/fb failed\n");
-            goto out;
-        }
-    }
-    if (ui_open(&ui, UI_OPEN_INPUT)) {
-        io_write_str("wm: failed to open wsctl/keyboard/mouse\n");
-        goto out;
-    }
-
-    if (ui_mgr_claim(&ui)) {
-        io_write_str("wm: failed to claim ws manager\n");
-        goto out;
-    }
-
-    mgr_claimed = true;
-
-    fb_info_t fb_info = { 0 };
-    if (ioctl(fb_fd, FBIOGETINFO, &fb_info) || !fb_info.available || fb_info.bpp != 32) {
-        io_write_str("wm: unsupported framebuffer\n");
-        goto out;
-    }
-
-    size_t packed_row_bytes = (size_t)fb_info.width * 4;
-    if (!fb_info.pitch || (size_t)fb_info.pitch < packed_row_bytes) {
-        io_write_str("wm: invalid framebuffer pitch\n");
-        goto out;
-    }
-
-    if (ioctl(fb_fd, FBIOACQUIRE, NULL)) {
-        io_write_str("wm: failed to acquire framebuffer\n");
-        goto out;
-    }
-
-    fb_acquired = true;
-
-    size_t frame_pixels = (size_t)fb_info.width * (size_t)fb_info.height;
-    size_t frame_bytes = frame_pixels * sizeof(pixel_t);
-
-    if (frame_pixels > WM_MAX_FB_PIX) {
-        io_write_str("wm: framebuffer too large\n");
-        goto out;
-    }
-
-    frame_store = calloc(frame_pixels, sizeof(pixel_t));
-    if (!frame_store) {
-        io_write_str("wm: failed to allocate frame buffer\n");
-        goto out;
-    }
-    wm_config_t cfg = { 0 };
-    _load_wm_config(&cfg);
-
-    if (cfg.font[0] && !draw_set_font_path(cfg.font)) {
-        io_write_str("wm: invalid font path in config\n");
-    }
-
-    wm_palette_t palette = *wm_palette_get();
-
-    if (cfg.palette_mask & WM_CFG_PAL_BACKGROUND) {
-        palette.background = cfg.palette.background;
-    }
-    if (cfg.palette_mask & WM_CFG_PAL_BORDER) {
-        palette.border = cfg.palette.border;
-    }
-    if (cfg.palette_mask & WM_CFG_PAL_TITLE) {
-        palette.title = cfg.palette.title;
-    }
-    if (cfg.palette_mask & WM_CFG_PAL_TITLE_FOCUS) {
-        palette.title_focus = cfg.palette.title_focus;
-    }
-    if (cfg.palette_mask & WM_CFG_PAL_CLIENT_BG) {
-        palette.client_bg = cfg.palette.client_bg;
-    }
-    if (cfg.palette_mask & WM_CFG_PAL_TITLE_TEXT) {
-        palette.title_text = cfg.palette.title_text;
-    }
-    if (cfg.palette_mask & WM_CFG_PAL_CLOSE_BG) {
-        palette.close_bg = cfg.palette.close_bg;
-    }
-    if (cfg.palette_mask & WM_CFG_PAL_CLOSE_FG) {
-        palette.close_fg = cfg.palette.close_fg;
-    }
-
-    wm_palette_set(&palette);
-
-    const char *bg_path = NULL;
-    if (startup.bg_override && startup.bg_override[0]) {
-        bg_path = startup.bg_override;
-    } else if (cfg.background[0]) {
-        bg_path = cfg.background;
-    }
-
-    const char *cursors_dir = cfg.cursors[0] ? cfg.cursors : "/etc/cursors";
-
-    char cursor_default_path[PATH_MAX];
-    const char *cursor_path = NULL;
-
-    if (startup.cursor_override && startup.cursor_override[0]) {
-        cursor_path = startup.cursor_override;
-    } else {
-        bool have_default_cursor = _cursor_path_join(
-            cursor_default_path,
-            sizeof(cursor_default_path),
-            cursors_dir,
-            "pointer.ppm"
-        );
-
-        if (have_default_cursor) {
-            cursor_path = cursor_default_path;
-        }
-    }
-    wm_init();
-    wm_inited = true;
-
-    if (bg_path && !wm_background_load(fb_info.width, fb_info.height, bg_path)) {
-        _warn_background_failed(bg_path);
-    }
-
-    if (cursor_path) {
-        if (!wm_cursor_load_kind(WM_CURSOR_NORMAL, cursor_path)) {
-            _warn_cursor_failed(cursor_path);
-        }
-    }
-
-    _load_cursor_variant(WM_CURSOR_POINTER, cursors_dir, "pointer_interact.ppm", cursor_path);
-    _load_cursor_variant(WM_CURSOR_MOVE, cursors_dir, "move.ppm", cursor_path);
-
-    char resize_fallback_path[PATH_MAX];
-    const char *resize_fallback = _cursor_path_or_fallback(
-        resize_fallback_path,
-        sizeof(resize_fallback_path),
-        cursors_dir,
-        "resize.ppm",
-        NULL
-    );
-
-    typedef struct {
-        wm_cursor_kind_t kind;
-        const char *name;
-    } resize_cursor_spec_t;
-
-    const resize_cursor_spec_t resize_specs[] = {
-        { WM_CURSOR_RESIZE_EW, "resize_ew.ppm" }, { WM_CURSOR_RESIZE_NS, "resize_ns.ppm" },
-        { WM_CURSOR_RESIZE_NW, "resize_nw.ppm" }, { WM_CURSOR_RESIZE_SE, "resize_se.ppm" },
-        { WM_CURSOR_RESIZE_SW, "resize_sw.ppm" },
+    wm_app_t app = {
+        .fb_fd = -1,
     };
+    int exit_status = 1;
 
-    for (size_t i = 0; i < (sizeof(resize_specs) / sizeof(resize_specs[0])); i++) {
-        _load_cursor_variant(resize_specs[i].kind, cursors_dir, resize_specs[i].name, resize_fallback);
+    if (!open_framebuffer(&app, &startup)) {
+        goto out;
     }
 
-    wm_loop(&ui, fb_fd, &fb_info, frame_store, frame_bytes, &exit_requested);
-    ret = 0;
+    if (!setup_ui(&app)) {
+        goto out;
+    }
+
+    if (!setup_framebuffer(&app)) {
+        goto out;
+    }
+
+    wm_config_t cfg = { 0 };
+    setup_wm(&app, &startup, &cfg);
+
+    wm_loop(&app.ui, app.fb_fd, &app.fb_info, app.frame_store, app.frame_bytes, &exit_requested);
+    exit_status = 0;
 
 out:
-    wm_background_unload();
-    wm_cursor_unload();
+    wm_app_cleanup(&app);
 
-    if (mgr_claimed) {
-        ui_mgr_release(&ui);
-    }
-
-    if (wm_inited) {
-        wm_cleanup_all_windows();
-        wm_destroy();
-    }
-
-    ui_close(&ui);
-
-    if (fb_acquired) {
-        ioctl(fb_fd, FBIORELEASE, NULL);
-    }
-
-    if (fb_fd >= 0) {
-        close(fb_fd);
-    }
-
-    if (frame_store) {
-        free(frame_store);
-    }
-
-    return ret;
+    return exit_status;
 }

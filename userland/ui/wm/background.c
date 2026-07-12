@@ -8,7 +8,7 @@
 #include "color.h"
 #include "file.h"
 
-#define WM_BG_MAX_FILE_BYTES (64U * 1024U * 1024U)
+#define BG_FILE_MAX (64U * 1024U * 1024U)
 
 typedef struct {
     pixel_t *pixels;
@@ -112,7 +112,7 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
 
     u8 *file_data = NULL;
     size_t file_len = 0;
-    if (!wm_file_read_all(path, WM_BG_MAX_FILE_BYTES, &file_data, &file_len)) {
+    if (!wm_file_read_all(path, BG_FILE_MAX, &file_data, &file_len)) {
         goto fail;
     }
 
@@ -169,7 +169,8 @@ fail:
 }
 
 bool wm_background_draw(pixel_t *frame, u32 fb_width, u32 fb_height) {
-    if (!frame || !background.pixels || background.width != fb_width || background.height != fb_height) {
+    bool size_ok = background.width == fb_width && background.height == fb_height;
+    if (!frame || !background.pixels || !size_ok) {
         return false;
     }
 
@@ -186,16 +187,19 @@ bool wm_background_draw(pixel_t *frame, u32 fb_width, u32 fb_height) {
     return true;
 }
 
-bool wm_background_draw_rect(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32 y, u32 width, u32 height) {
-    if (!frame || !background.pixels || background.width != fb_width || background.height != fb_height || !width ||
-        !height) {
+bool wm_background_draw_rect(pixel_t *frame, u32 fb_width, u32 fb_height, const wm_rect_t *rect) {
+    bool missing_frame = !frame || !background.pixels;
+    bool wrong_size = background.width != fb_width || background.height != fb_height;
+    bool empty_rect = !rect || !rect->width || !rect->height;
+
+    if (missing_frame || wrong_size || empty_rect) {
         return false;
     }
 
-    i32 x0 = x;
-    i32 y0 = y;
-    i32 x1 = x + (i32)width;
-    i32 y1 = y + (i32)height;
+    i32 x0 = rect->x;
+    i32 y0 = rect->y;
+    i32 x1 = rect->x + rect->width;
+    i32 y1 = rect->y + rect->height;
 
     if (x0 < 0) {
         x0 = 0;
