@@ -413,11 +413,11 @@ static bool open_source(int argc, char **argv, doc_t *doc, int *fd, bool *close_
 
 static int pick_input_fd(int src_fd, bool *close_input) {
     bool stdin_is_tty = isatty(STDIN_FILENO);
-    bool needs_separate_input = src_fd == STDIN_FILENO;
+    bool reading_stdin = src_fd == STDIN_FILENO;
 
     *close_input = false;
 
-    if (stdin_is_tty && !needs_separate_input) {
+    if (stdin_is_tty && !reading_stdin) {
         return STDIN_FILENO;
     }
 
@@ -517,7 +517,7 @@ int main(int argc, char **argv) {
     int input_fd = STDIN_FILENO;
     bool close_src = false;
     bool close_input = false;
-    int rc = 0;
+    int exit_code = 0;
 
     if (!open_source(argc, argv, &doc, &src_fd, &close_src)) {
         return 1;
@@ -525,7 +525,7 @@ int main(int argc, char **argv) {
 
     if (!read_all_fd(src_fd, &doc.data, &doc.len)) {
         (void)write_all(STDERR_FILENO, "less: failed to read input\n", 27);
-        rc = 1;
+        exit_code = 1;
         goto out;
     }
 
@@ -543,7 +543,7 @@ int main(int argc, char **argv) {
 
     if (!build_line_index(&doc)) {
         (void)write_all(STDERR_FILENO, "less: out of memory\n", 20);
-        rc = 1;
+        exit_code = 1;
         goto out;
     }
 
@@ -564,7 +564,7 @@ int main(int argc, char **argv) {
     }
 
     probe_terminal_size(input_fd);
-    rc = run_pager(&doc, input_fd);
+    exit_code = run_pager(&doc, input_fd);
 
 out:
     tty_leave_raw(&tty);
@@ -579,5 +579,5 @@ out:
     }
     free(doc.line_offsets);
     free(doc.data);
-    return rc;
+    return exit_code;
 }

@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <limits.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -9,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 #include <term_size.h>
 #include <termios.h>
 #include <unistd.h>
@@ -156,11 +158,7 @@ static bool ensure_row_scratch(size_t cols) {
     return true;
 }
 
-static bool ensure_frame_cache(size_t cols, size_t rows, bool *resized_out) {
-    if (resized_out) {
-        *resized_out = false;
-    }
-
+static bool ensure_frame_cache(size_t cols, size_t rows) {
     if (app.frame_cache && app.frame_cache_cols == cols && app.frame_cache_rows == rows) {
         return true;
     }
@@ -172,10 +170,6 @@ static bool ensure_frame_cache(size_t cols, size_t rows, bool *resized_out) {
         app.frame_cache = NULL;
         app.frame_cache_cols = 0;
         app.frame_cache_rows = 0;
-
-        if (resized_out) {
-            *resized_out = true;
-        }
 
         return true;
     }
@@ -191,10 +185,6 @@ static bool ensure_frame_cache(size_t cols, size_t rows, bool *resized_out) {
     app.frame_cache_rows = rows;
 
     memset(app.frame_cache, 0xff, total);
-
-    if (resized_out) {
-        *resized_out = true;
-    }
 
     app.editor.repaint = true;
     return true;
@@ -236,7 +226,10 @@ static bool out_add(const char *text) {
 }
 
 static bool draw_row_if_changed(size_t row, const char *data) {
-    if (!data || !app.frame_cache || row >= app.frame_cache_rows || app.editor.cols != app.frame_cache_cols) {
+    bool have_cache = app.frame_cache && row < app.frame_cache_rows;
+    bool same_width = app.editor.cols == app.frame_cache_cols;
+
+    if (!data || !have_cache || !same_width) {
         return false;
     }
 
@@ -284,10 +277,17 @@ static void set_errno_msg(const char *op) {
 }
 
 static bool is_nav_key(int key) {
-    return (
-        key == VI_KEY_LEFT || key == VI_KEY_RIGHT || key == VI_KEY_UP || key == VI_KEY_DOWN || key == VI_KEY_HOME ||
-        key == VI_KEY_END
-    );
+    switch (key) {
+    case VI_KEY_LEFT:
+    case VI_KEY_RIGHT:
+    case VI_KEY_UP:
+    case VI_KEY_DOWN:
+    case VI_KEY_HOME:
+    case VI_KEY_END:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static void clear_cmd(void) {
@@ -383,8 +383,8 @@ static bool read_key_byte(char *out_ch, int timeout_ms) {
         };
 
         for (;;) {
-            int rc = poll(&pfd, 1, timeout_ms);
-            if (rc < 0 && errno == EINTR) {
+            int ready = poll(&pfd, 1, timeout_ms);
+            if (ready < 0 && errno == EINTR) {
                 if (app.got_sigwinch) {
                     return false;
                 }
@@ -392,7 +392,7 @@ static bool read_key_byte(char *out_ch, int timeout_ms) {
                 continue;
             }
 
-            if (rc <= 0 || !(pfd.revents & POLLIN)) {
+            if (ready <= 0 || !(pfd.revents & POLLIN)) {
                 return false;
             }
 
@@ -608,7 +608,7 @@ static void index_to_rowcol(size_t idx, size_t *row, size_t *col) {
     }
 }
 
-static size_t line_visual_col_at_index(size_t start, size_t idx) {
+static size_t visual_col_at(size_t start, size_t idx) {
     if (idx < start) {
         idx = start;
     }
@@ -626,7 +626,7 @@ static size_t line_visual_col_at_index(size_t start, size_t idx) {
     return col;
 }
 
-static size_t line_index_from_visual_col(size_t start, size_t target_col) {
+static size_t index_at_visual_col(size_t start, size_t target_col) {
     size_t end = line_end(start);
     size_t idx = start;
     size_t col = 0;
@@ -717,13 +717,13 @@ static bool insert_char(size_t at, char ch) {
     return true;
 }
 
-static void wrap_insert_line_if_needed(void) {
+static void wrap_insert_line(void) {
     if (!app.editor.cols || app.editor.mode != VI_INSERT) {
         return;
     }
 
     size_t start = line_start(app.editor.cursor);
-    size_t col = line_visual_col_at_index(start, app.editor.cursor);
+    size_t col = visual_col_at(start, app.editor.cursor);
 
     if (col < app.editor.cols) {
         return;
@@ -739,7 +739,7 @@ static void insert_and_advance(char ch) {
         app.editor.cursor++;
 
         if (ch != '\n') {
-            wrap_insert_line_if_needed();
+            wrap_insert_line();
         }
     }
 }
@@ -806,7 +806,7 @@ static void delete_current_line(void) {
 static void move_cursor(int key) {
     size_t start = line_start(app.editor.cursor);
     size_t end = line_end(start);
-    size_t col = line_visual_col_at_index(start, app.editor.cursor);
+    size_t col = visual_col_at(start, app.editor.cursor);
 
     switch (key) {
     case VI_KEY_LEFT:
@@ -832,7 +832,7 @@ static void move_cursor(int key) {
 
         size_t prev_end = start - 1;
         size_t prev_start = line_start(prev_end);
-        app.editor.cursor = line_index_from_visual_col(prev_start, col);
+        app.editor.cursor = index_at_visual_col(prev_start, col);
         break;
     }
     case VI_KEY_DOWN: {
@@ -841,7 +841,7 @@ static void move_cursor(int key) {
         }
 
         size_t next_start = end + 1;
-        app.editor.cursor = line_index_from_visual_col(next_start, col);
+        app.editor.cursor = index_at_visual_col(next_start, col);
         break;
     }
     default:
@@ -857,8 +857,49 @@ static bool save_file(void) {
         return false;
     }
 
-    int fd = open(app.editor.path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    char temp_path[PATH_MAX];
+    int path_len = snprintf(temp_path, sizeof(temp_path), "%s.XXXXXX", app.editor.path);
+    if (path_len < 0 || (size_t)path_len >= sizeof(temp_path)) {
+        errno = ENAMETOOLONG;
+        set_errno_msg("write");
+        return false;
+    }
+
+    mode_t mode = 0644;
+    struct stat info;
+    if (!lstat(app.editor.path, &info) && (info.st_mode & S_IFMT) == S_IFLNK) {
+        errno = ELOOP;
+        set_errno_msg("write");
+        return false;
+    }
+
+    if (!stat(app.editor.path, &info)) {
+        if ((info.st_mode & S_IFMT) != S_IFREG) {
+            errno = EINVAL;
+            set_errno_msg("write");
+            return false;
+        }
+        mode = info.st_mode & 07777;
+    } else if (errno != ENOENT) {
+        set_errno_msg("write");
+        return false;
+    } else {
+        mode_t mask = umask(0);
+        (void)umask(mask);
+        mode = 0666 & ~mask;
+    }
+
+    int fd = mkstemp(temp_path);
     if (fd < 0) {
+        set_errno_msg("write");
+        return false;
+    }
+
+    if (chmod(temp_path, mode) < 0) {
+        int saved = errno;
+        close(fd);
+        unlink(temp_path);
+        errno = saved;
         set_errno_msg("write");
         return false;
     }
@@ -866,15 +907,52 @@ static bool save_file(void) {
     size_t off = 0;
     while (off < app.editor.len) {
         ssize_t n = write(fd, app.editor.buf + off, app.editor.len - off);
-        if (n <= 0) {
-            close(fd);
-            set_errno_msg("write");
-            return false;
+        if (n > 0) {
+            off += (size_t)n;
+            continue;
         }
-        off += (size_t)n;
+
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+
+        if (!n) {
+            errno = EIO;
+        }
+
+        int saved = errno;
+        close(fd);
+        unlink(temp_path);
+        errno = saved;
+        set_errno_msg("write");
+        return false;
     }
 
-    close(fd);
+    if (fsync(fd) < 0 && errno != ENOSYS) {
+        int saved = errno;
+        close(fd);
+        unlink(temp_path);
+        errno = saved;
+        set_errno_msg("write");
+        return false;
+    }
+
+    if (close(fd) < 0) {
+        int saved = errno;
+        unlink(temp_path);
+        errno = saved;
+        set_errno_msg("write");
+        return false;
+    }
+
+    if (rename(temp_path, app.editor.path) < 0) {
+        int saved = errno;
+        unlink(temp_path);
+        errno = saved;
+        set_errno_msg("write");
+        return false;
+    }
+
     app.editor.dirty = false;
 
     char msg[VI_MSG_MAX];
@@ -904,7 +982,7 @@ static bool load_file(void) {
     for (;;) {
         if (!vi_grow(app.editor.len + 4096)) {
             close(fd);
-            set_msg("app.out of memory");
+            set_msg("out of memory");
             return false;
         }
 
@@ -1022,13 +1100,16 @@ static size_t build_status_row(size_t row, size_t col, char *dst) {
     return left_max;
 }
 
-static bool redraw_screen(void) {
+typedef struct {
+    size_t row;
+    size_t col;
+} vi_pos_t;
+
+static bool begin_redraw(void) {
     update_screen_size();
     keep_cursor_visible();
 
-    bool resized = false;
-    if (!ensure_row_scratch(app.editor.cols) ||
-        !ensure_frame_cache(app.editor.cols, app.editor.edit_rows + 1, &resized)) {
+    if (!ensure_row_scratch(app.editor.cols) || !ensure_frame_cache(app.editor.cols, app.editor.edit_rows + 1)) {
         return false;
     }
 
@@ -1037,19 +1118,12 @@ static bool redraw_screen(void) {
         return false;
     }
 
-    if (resized) {
-        memset(app.frame_cache, 0xff, app.frame_cache_cols * app.frame_cache_rows);
-    }
+    return out_add("\x1b[H");
+}
 
-    if (!out_add("\x1b[H")) {
-        return false;
-    }
-
-    size_t row = 0;
-    size_t col = 0;
-    index_to_rowcol(app.editor.cursor, &row, &col);
-
+static bool draw_editor_rows(void) {
     size_t idx = row_to_index(app.editor.rowoff);
+
     for (size_t screen_row = 0; screen_row < app.editor.edit_rows; screen_row++) {
         build_editor_row(&idx, app.row_scratch);
 
@@ -1058,11 +1132,19 @@ static bool redraw_screen(void) {
         }
     }
 
-    size_t command_limit = build_status_row(row, col, app.row_scratch);
-    if (!draw_row_if_changed(app.editor.edit_rows, app.row_scratch)) {
+    return true;
+}
+
+static bool draw_status(vi_pos_t cursor, size_t *command_limit) {
+    if (!command_limit) {
         return false;
     }
 
+    *command_limit = build_status_row(cursor.row, cursor.col, app.row_scratch);
+    return draw_row_if_changed(app.editor.edit_rows, app.row_scratch);
+}
+
+static vi_pos_t screen_cursor(vi_pos_t cursor, size_t command_limit) {
     size_t x = 1;
     size_t y = 1;
 
@@ -1078,14 +1160,14 @@ static bool redraw_screen(void) {
             x = 2;
         }
     } else {
-        if (row >= app.editor.rowoff) {
-            y = (row - app.editor.rowoff) + 1;
+        if (cursor.row >= app.editor.rowoff) {
+            y = (cursor.row - app.editor.rowoff) + 1;
         }
 
-        if (col < app.editor.coloff) {
+        if (cursor.col < app.editor.coloff) {
             x = 1;
         } else {
-            x = (col - app.editor.coloff) + 1;
+            x = (cursor.col - app.editor.coloff) + 1;
         }
     }
 
@@ -1105,9 +1187,36 @@ static bool redraw_screen(void) {
         y = app.editor.edit_rows + 1;
     }
 
+    return (vi_pos_t){
+        .row = y,
+        .col = x,
+    };
+}
+
+static bool place_cursor(vi_pos_t cursor) {
     char seq[32];
-    snprintf(seq, sizeof(seq), "\x1b[%u;%uH", (unsigned)y, (unsigned)x);
-    if (!out_add(seq) || !out_add("\x1b[?25h")) {
+    snprintf(seq, sizeof(seq), "\x1b[%u;%uH", (unsigned)cursor.row, (unsigned)cursor.col);
+    return out_add(seq) && out_add("\x1b[?25h");
+}
+
+static bool redraw_screen(void) {
+    if (!begin_redraw()) {
+        return false;
+    }
+
+    vi_pos_t cursor = { 0 };
+    index_to_rowcol(app.editor.cursor, &cursor.row, &cursor.col);
+
+    if (!draw_editor_rows()) {
+        return false;
+    }
+
+    size_t command_limit = 0;
+    if (!draw_status(cursor, &command_limit)) {
+        return false;
+    }
+
+    if (!place_cursor(screen_cursor(cursor, command_limit))) {
         return false;
     }
 
@@ -1145,8 +1254,10 @@ static void run_command(void) {
 
         if (!name[0]) {
             set_msg("missing file name");
+        } else if (strlen(name) >= sizeof(app.editor.path_buf)) {
+            set_msg("file name too long");
         } else {
-            snprintf(app.editor.path_buf, sizeof(app.editor.path_buf), "%s", name);
+            memcpy(app.editor.path_buf, name, strlen(name) + 1);
             app.editor.path = app.editor.path_buf;
             save_file();
         }
@@ -1304,7 +1415,7 @@ static void sigwinch_handler(int signum) {
     app.got_sigwinch = 1;
 }
 
-static void install_signal_handlers(void) {
+static void install_signals(void) {
     signal(SIGWINCH, sigwinch_handler);
     signal(SIGSEGV, fatal_signal_handler);
     signal(SIGILL, fatal_signal_handler);
@@ -1319,7 +1430,7 @@ int main(int argc, char *argv[]) {
     app.out.data = malloc(VI_OUT_INIT);
 
     if (!app.editor.buf || !app.out.data) {
-        io_write_str("app.editor: app.out of memory\n");
+        io_write_str("vi: out of memory\n");
         return 1;
     }
 
@@ -1344,7 +1455,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (!raw_mode_on()) {
-        io_write_str("app.editor: failed to enter raw mode\n");
+        io_write_str("vi: failed to enter raw mode\n");
         free(app.editor.buf);
         free(app.out.data);
         free(app.row_scratch);
@@ -1352,7 +1463,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    install_signal_handlers();
+    install_signals();
 
     screen_enter();
     detect_screen_size();

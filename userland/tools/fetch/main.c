@@ -19,8 +19,11 @@ static const char *owl[] = {
 };
 
 static void print_row(const char *left, const char *right) {
+    const char *left_text = left ? left : "";
+    const char *right_text = right ? right : "";
+
     char line[256];
-    snprintf(line, sizeof(line), "%-12s %s\n", left ? left : "", right ? right : "");
+    snprintf(line, sizeof(line), "%-12s %s\n", left_text, right_text);
     write(STDOUT_FILENO, line, strlen(line));
 }
 
