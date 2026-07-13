@@ -392,6 +392,10 @@ static bool ata_wait_drq(ata_device_t *dev, u32 *seq) {
             return true;
         }
 
+        if (ata_poll(dev)) {
+            return true;
+        }
+
         if (!ata_wait_irq_event(dev, seq)) {
             return false;
         }
@@ -423,6 +427,10 @@ static bool ata_wait_ready_event(ata_device_t *dev, u32 *seq) {
         }
 
         if (!(status & ATA_SR_BUSY) && (status & ATA_SR_READY)) {
+            return true;
+        }
+
+        if (ata_wait_ready(dev)) {
             return true;
         }
 
