@@ -111,6 +111,9 @@ else
 endif
 
 ifeq ($(DOOM_RECURSE),1)
+DOOM_DEP := $(SUPPORT_OBJ:.o=.d) $(DOOM_OBJ:.o=.d)
+-include $(DOOM_DEP)
+
 .SECONDEXPANSION:
 $(OUT_BIN): $(SUPPORT_OBJ) $$(DOOM_OBJ) $(CRT_OBJ) $(USER_LIBGCC) | $(UPSTREAM_STAMP)
 	@mkdir -p $(@D)
@@ -119,7 +122,10 @@ $(OUT_BIN): $(SUPPORT_OBJ) $$(DOOM_OBJ) $(CRT_OBJ) $(USER_LIBGCC) | $(UPSTREAM_S
 		$(ST) $(USER_STRIP_FLAGS) $@; \
 	fi
 else
-$(OUT_BIN): | $(UPSTREAM_STAMP)
+.PHONY: doom-build-check
+doom-build-check:
+
+$(OUT_BIN): doom-build-check | $(UPSTREAM_STAMP)
 	@$(MAKE) --no-print-directory DOOM_RECURSE=1 $(OUT_BIN)
 endif
 
@@ -131,7 +137,7 @@ $(OUT_BUNDLE_WAD): $(WAD_FILE)
 	@mkdir -p "$(BUNDLE_DIR)"
 	@cp -f "$(WAD_FILE)" "$(OUT_BUNDLE_WAD)"
 
-$(USER_STAGE_DIR)/doom: $(OUT_BUNDLE_BIN)
+$(USER_STAGE_DIR)/doom: $(OUT_BUNDLE_BIN) $(USER_STAGE_BIN_STAMP)
 	@mkdir -p $(@D)
 	@cp -f $< $@
 
