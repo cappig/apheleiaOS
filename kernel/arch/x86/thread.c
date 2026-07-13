@@ -183,8 +183,11 @@ static bool arch_state_is_valid(const arch_int_state_t *state) {
         return false;
     }
 
-    // bit 1 of FLAGS/EFLAGS/RFLAGS is architecturally reserved and must be 1
-    if ((arch_state_flags(state) & 0x2) == 0) {
+    arch_word_t flags = arch_state_flags(state);
+
+    // Bit 1 is fixed. Restoring IOPL, NT, or VM would create an invalid or
+    // privileged return context; RF, DF, TF, AC, and ID remain valid here.
+    if ((flags & 0x2) == 0 || (flags & 0x27000) != 0) {
         return false;
     }
 

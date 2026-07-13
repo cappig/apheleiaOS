@@ -11,7 +11,7 @@ static bool ctx_stack_valid(const sched_thread_t *thread, size_t need_bytes) {
     uintptr_t stack_end = stack_base + thread->stack_size;
     uintptr_t ctx = thread->context;
 
-    if (ctx < stack_base || ctx >= stack_end) {
+    if (stack_end < stack_base || ctx < stack_base || ctx >= stack_end) {
         return false;
     }
 
@@ -39,17 +39,15 @@ bool ctx_state_valid(const sched_thread_t *thread, const arch_int_state_t *state
         return false;
     }
 
-    if (!arch_signal_is_user(state)) {
-        return true;
+    if (arch_signal_is_user(state)) {
+        size_t user_frame_need = sregs_off + sizeof(state->s_regs);
+
+        if ((size_t)(stack_end - ctx) < user_frame_need) {
+            return false;
+        }
     }
 
-    size_t user_frame_need = sregs_off + sizeof(state->s_regs);
-
-    if ((size_t)(stack_end - ctx) < user_frame_need) {
-        return false;
-    }
-
-    return true;
+    return arch_state_flags_sane(state);
 }
 
 bool ctx_valid(const sched_thread_t *thread) {
@@ -72,6 +70,17 @@ bool ctx_valid(const sched_thread_t *thread) {
         return false;
     }
 
+    if (user_frame) {
+        size_t user_frame_need = sregs_off + sizeof(state->s_regs);
+        if (!ctx_stack_valid(thread, user_frame_need)) {
+            return false;
+        }
+    }
+
+    if (!arch_state_flags_sane(state)) {
+        return false;
+    }
+
     if (!user_frame && arch_kernel_vaddr_base() && ip < arch_kernel_vaddr_base()) {
         return false;
     }
@@ -81,18 +90,9 @@ bool ctx_valid(const sched_thread_t *thread) {
             return false;
         }
 
-        size_t user_frame_need = sregs_off + sizeof(state->s_regs);
-        if (!ctx_stack_valid(thread, user_frame_need)) {
-            return false;
-        }
-
         arch_word_t sp = arch_state_sp(state);
 
         if (!sp) {
-            return false;
-        }
-
-        if (!arch_state_flags_sane(state)) {
             return false;
         }
 

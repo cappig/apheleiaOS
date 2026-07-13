@@ -2,6 +2,9 @@ bits 32
 section .text
 
 %define ISR_COUNT 256
+%define FRAME_EIP    52
+%define FRAME_CS     56
+%define FRAME_EFLAGS 60
 
 %macro generate_int_stub 1
 isr_stub_%+%1:
@@ -92,15 +95,31 @@ isr_common_stub:
     mov esp, ebx
 
     mov eax, esp
-    cmp dword [esp + 56], 0x8
-    jne .resume_frame
-    mov edx, [esp + 52]
+    mov edx, [esp + FRAME_EIP]
+    mov ecx, [esp + FRAME_CS]
+
+    test dword [esp + FRAME_EFLAGS], 0x2
+    jz .bad_frame
+    test dword [esp + FRAME_EFLAGS], 0x27000
+    jnz .bad_frame
+
+    cmp ecx, 0x8
+    je .kernel_frame
+    cmp ecx, 0x1b
+    jne .bad_frame
+
+    test edx, edx
+    jz .bad_frame
+    cmp edx, 0xb0000000
+    jb .resume_frame
+    jmp .bad_frame
+
+.kernel_frame:
     cmp edx, 0xc0000000
     jb .bad_frame
     cmp edx, __kernel_end
     jb .resume_frame
 .bad_frame:
-    mov ecx, [esp + 56]
     push ecx
     push edx
     push eax

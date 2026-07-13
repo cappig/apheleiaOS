@@ -1602,7 +1602,7 @@ NORETURN void arch_bad_switch_frame(uintptr_t ctx, u32 eip, u32 cs) {
     }
 
     panic(
-        "bad i386 kernel return frame ctx=%#lx eip=%#x cs=%#x"
+        "bad i386 return frame ctx=%#lx eip=%#x cs=%#x"
         " current=%#lx pid=%d name=%s current_ctx=%#lx stack=%#lx stack_size=%zu",
         (unsigned long)ctx,
         (unsigned int)eip,
