@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <ui.h>
 #include <unistd.h>
 
@@ -37,6 +38,7 @@ extern char **environ;
 #define INPUT_EVENT_BATCH    32
 #define WS_EVENT_BUDGET      512
 #define INPUT_EVENT_BUDGET   512
+#define WM_FRAME_NS          16666667ULL
 
 typedef enum {
     WM_DRAG_NONE = 0,
@@ -74,6 +76,38 @@ typedef struct {
     bool term_hotkey;
     wm_cursor_kind_t cursor_kind;
 } wm_runtime_t;
+
+static u64 monotonic_ns(void) {
+    struct timespec now = { 0 };
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0 || now.tv_sec < 0 || now.tv_nsec < 0) {
+        return 0;
+    }
+
+    return (u64)now.tv_sec * 1000000000ULL + (u64)now.tv_nsec;
+}
+
+static u64 next_frame_deadline(void) {
+    u64 now = monotonic_ns();
+    return now ? now + WM_FRAME_NS : 0;
+}
+
+static int frame_wait_ms(u64 deadline) {
+    if (!deadline) {
+        return 0;
+    }
+
+    u64 now = monotonic_ns();
+    if (!now) {
+        return 0;
+    }
+
+    if (now >= deadline) {
+        return 0;
+    }
+
+    u64 remaining = deadline - now;
+    return (int)((remaining + 999999ULL) / 1000000ULL);
+}
 
 static bool _rect_clip_to_fb(wm_rect_t *rect, const fb_info_t *fb_info) {
     if (!rect || !wm_rect_valid(rect) || !fb_info) {
@@ -1218,13 +1252,13 @@ static void draw_initial_frame(
     }
 }
 
-static int loop_timeout(const wm_runtime_t *rt, bool needs_redraw) {
-    if (rt->drag_id >= 0) {
-        return WM_POLL_DRAG_MS;
+static int loop_timeout(const wm_runtime_t *rt, bool needs_redraw, u64 frame_deadline) {
+    if (needs_redraw) {
+        return frame_wait_ms(frame_deadline);
     }
 
-    if (needs_redraw) {
-        return WM_POLL_FRAME_MS;
+    if (rt->drag_id >= 0) {
+        return WM_POLL_DRAG_MS;
     }
 
     return -1;
@@ -1274,6 +1308,7 @@ void wm_loop(
 
     wm_rect_t damage = { 0 };
     draw_initial_frame(fb_fd, fb_info, frame_store, &rt, &damage);
+    u64 frame_deadline = next_frame_deadline();
 
     for (;;) {
         if (*exit_requested) {
@@ -1281,7 +1316,7 @@ void wm_loop(
         }
 
         bool needs_redraw = wm_rect_valid(&damage);
-        int timeout_ms = loop_timeout(&rt, needs_redraw);
+        int timeout_ms = loop_timeout(&rt, needs_redraw, frame_deadline);
 
         int pr = poll(pfds, 3, timeout_ms);
 
@@ -1324,7 +1359,12 @@ void wm_loop(
 
         mark_cursor_damage(&rt, &damage);
 
+        if (wm_rect_valid(&damage) && frame_wait_ms(frame_deadline) > 0) {
+            continue;
+        }
+
         int present = present_damage(fb_fd, fb_info, frame_store, &rt, &damage);
+        frame_deadline = next_frame_deadline();
         if (present != 0) {
             continue;
         }

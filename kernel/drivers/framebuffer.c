@@ -38,6 +38,7 @@ typedef struct {
     u32 width;
     u32 height;
     u32 fb_width;
+    u32 vram_y;
     u32 pitch;
     u32 bpp_bytes;
     pixel_format_t fmt;
@@ -199,25 +200,41 @@ static bool _clip_present_rect(
     return *width && *height;
 }
 
-static bool _fb_frame_ok(const framebuffer_info_t *fb, const pixel_t *frame) {
-    if (!fb || !fb->available || !frame) {
+static bool _fb_frame_ok(const framebuffer_info_t *fb, const pixel_t *frame, u32 x, u32 y, u32 width, u32 height) {
+    if (!fb || !fb->available || !frame || !width || !height) {
         return false;
     }
 
-    size_t width = fb->width;
-    size_t height = fb->height;
-
-    if (!width || !height || width > (size_t)-1 / height) {
+    if (x >= fb->width || y >= fb->height || width > fb->width - x || height > fb->height - y) {
         return false;
     }
 
-    size_t pixels = width * height;
-    if (pixels > (size_t)-1 / sizeof(pixel_t)) {
+    size_t max_size = (size_t)-1;
+    if ((size_t)y > max_size / fb->width || (size_t)(height - 1U) > max_size / fb->width) {
         return false;
     }
 
+    size_t first_row = (size_t)y * fb->width;
+    size_t span_rows = (size_t)(height - 1U) * fb->width;
+    if (first_row > max_size - x || span_rows > max_size - width) {
+        return false;
+    }
+
+    size_t first = first_row + x;
+    size_t span = span_rows + width;
+    if (first > (size_t)-1 / sizeof(pixel_t) || span > (size_t)-1 / sizeof(pixel_t)) {
+        return false;
+    }
+
+    size_t byte_offset = first * sizeof(pixel_t);
+    uintptr_t base = (uintptr_t)frame;
+    if (base > UINTPTR_MAX - byte_offset) {
+        return false;
+    }
+
+    const void *start = (const void *)(base + byte_offset);
     sched_thread_t *current = sched_current();
-    return user_range_ok(current, frame, pixels * sizeof(pixel_t), false);
+    return user_range_ok(current, start, span * sizeof(pixel_t), false);
 }
 
 static void present_copy_fast(const fb_present_t *present) {
@@ -233,7 +250,8 @@ static void present_copy_fast(const fb_present_t *present) {
         for (u32 r = 0; r < rows; r++) {
             u32 src_y = present->y + row + r;
             const u32 *src = present->src + (size_t)src_y * present->fb_width + present->x;
-            u8 *dst = (u8 *)present->vram + (size_t)src_y * present->pitch + (size_t)present->x * present->bpp_bytes;
+            size_t dst_y = (size_t)(src_y - present->vram_y);
+            u8 *dst = (u8 *)present->vram + dst_y * present->pitch + (size_t)present->x * present->bpp_bytes;
 
             memcpy(dst, src, row_bytes);
         }
@@ -255,7 +273,8 @@ static void present_copy_convert(const fb_present_t *present) {
         for (u32 r = 0; r < rows; r++) {
             u32 src_y = present->y + row + r;
             const u32 *src = present->src + (size_t)src_y * present->fb_width + present->x;
-            u8 *dst = (u8 *)present->vram + (size_t)src_y * present->pitch + (size_t)present->x * present->bpp_bytes;
+            size_t dst_y = (size_t)(src_y - present->vram_y);
+            u8 *dst = (u8 *)present->vram + dst_y * present->pitch + (size_t)present->x * present->bpp_bytes;
 
             for (u32 col = 0; col < present->width; col++) {
                 u32 packed = pixel_pack_rgb888(src[col], &present->fmt);
@@ -283,7 +302,7 @@ static ssize_t present_rect(const framebuffer_info_t *fb, const fb_present_rect_
 
     u32 bpp_bytes = fb->bpp / 8;
 
-    if (!bpp_bytes) {
+    if (!bpp_bytes || !fb->pitch) {
         return -EINVAL;
     }
 
@@ -300,23 +319,49 @@ static ssize_t present_rect(const framebuffer_info_t *fb, const fb_present_rect_
 
     mutex_lock(&fb_driver.present_lock);
 
-    bool transient_map = false;
-    void *vram = fb_driver.present_vram;
-    if (!vram) {
-        vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
-        transient_map = true;
-    }
-
-    if (!vram) {
-        mutex_unlock(&fb_driver.present_lock);
-        return -EIO;
-    }
-
     if (fb_driver.force_full_present) {
         x = 0;
         y = 0;
         width = fb->width;
         height = fb->height;
+    }
+
+    if (!_fb_frame_ok(fb, req->frame, x, y, width, height)) {
+        mutex_unlock(&fb_driver.present_lock);
+        return -EFAULT;
+    }
+
+    bool transient_map = false;
+    void *vram = fb_driver.present_vram;
+    size_t map_size = fb->size;
+    u32 vram_y = 0;
+
+    if (!vram) {
+        if ((size_t)y > (size_t)-1 / fb->pitch || height > (size_t)-1 / fb->pitch) {
+            mutex_unlock(&fb_driver.present_lock);
+            return -EOVERFLOW;
+        }
+
+        size_t map_offset = (size_t)y * fb->pitch;
+        map_size = (size_t)height * fb->pitch;
+        if (map_offset > fb->size || map_size > fb->size - map_offset) {
+            mutex_unlock(&fb_driver.present_lock);
+            return -EOVERFLOW;
+        }
+
+        if ((u64)map_offset > UINT64_MAX - fb->paddr) {
+            mutex_unlock(&fb_driver.present_lock);
+            return -EOVERFLOW;
+        }
+
+        vram = arch_phys_map(fb->paddr + map_offset, map_size, PHYS_MAP_WC);
+        transient_map = true;
+        vram_y = y;
+    }
+
+    if (!vram) {
+        mutex_unlock(&fb_driver.present_lock);
+        return -EIO;
     }
 
     fb_present_t present = {
@@ -325,6 +370,7 @@ static ssize_t present_rect(const framebuffer_info_t *fb, const fb_present_rect_
         .width = width,
         .height = height,
         .fb_width = fb->width,
+        .vram_y = vram_y,
         .pitch = fb->pitch,
         .bpp_bytes = bpp_bytes,
         .fmt = fmt,
@@ -340,10 +386,12 @@ static ssize_t present_rect(const framebuffer_info_t *fb, const fb_present_rect_
         present_copy_convert(&present);
     }
 
+    __sync_synchronize();
+
     fb_driver.force_full_present = false;
 
     if (transient_map) {
-        arch_phys_unmap(vram, fb->size);
+        arch_phys_unmap(vram, map_size);
     }
 
     mutex_unlock(&fb_driver.present_lock);
@@ -441,10 +489,6 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
             return -EAGAIN;
         }
 
-        if (fb && fb->available && !_fb_frame_ok(fb, args)) {
-            return -EFAULT;
-        }
-
         return _dev_fb_present(fb, args);
     }
     case FBIOPRESENT_RECT: {
@@ -461,10 +505,6 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
         ssize_t owner_screen = console_fb_owner_screen();
         if (owner_screen != TTY_NONE && tty_current_screen() != (size_t)owner_screen) {
             return -EAGAIN;
-        }
-
-        if (fb && fb->available && !_fb_frame_ok(fb, req.frame)) {
-            return -EFAULT;
         }
 
         return present_rect(fb, &req);
