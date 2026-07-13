@@ -369,27 +369,6 @@ static inline bool thread_is_owned(const sched_thread_t *thread) {
     return thread_on_local_cpu(thread) || thread_in_handoff(thread);
 }
 
-static inline bool sched_reclaim_handoff(sched_thread_t *thread) {
-    int running_cpu = thread_cpu(thread);
-
-    if (!thread || running_cpu < 0 || (size_t)running_cpu >= MAX_CORES) {
-        return false;
-    }
-
-    size_t cpu_id = (size_t)running_cpu;
-    sched_thread_t *handoff = __atomic_load_n(&sched_state.cpus.cpu[cpu_id].handoff_ready, __ATOMIC_ACQUIRE);
-
-    if (handoff != thread) {
-        return false;
-    }
-
-    __atomic_store_n(&sched_state.cpus.cpu[cpu_id].handoff_ready, NULL, __ATOMIC_RELEASE);
-
-    thread_unclaim(thread);
-
-    return true;
-}
-
 void sched_nudge_thread(sched_thread_t *thread);
 void enqueue_ipi(sched_thread_t *thread, bool allow_remote_ipi);
 
@@ -402,13 +381,6 @@ static inline bool sched_repair_thread(sched_thread_t *thread, bool send_ipi) {
         return false;
     }
 
-    if (sched_reclaim_handoff(thread)) {
-        thread_set_state(thread, THREAD_READY);
-        enqueue_ipi(thread, send_ipi);
-
-        return true;
-    }
-
     if (thread_on_local_cpu(thread)) {
         sched_nudge_thread(thread);
 
@@ -416,6 +388,7 @@ static inline bool sched_repair_thread(sched_thread_t *thread, bool send_ipi) {
     }
 
     if (thread_in_handoff(thread)) {
+        sched_nudge_thread(thread);
         return true;
     }
 

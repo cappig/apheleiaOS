@@ -21,19 +21,6 @@ static void wake_waiter(sched_thread_t *thread) {
     thread->wait_deadline_tick = 0;
     thread->wait_result = (u8)SCHED_WAIT_WOKEN;
 
-    if (sched_reclaim_handoff(thread)) {
-        thread_state_t state = thread_get_state(thread);
-
-        if (state == THREAD_ZOMBIE || state == THREAD_STOPPED) {
-            return;
-        }
-
-        thread_set_state(thread, THREAD_READY);
-        enqueue_thread(thread);
-
-        return;
-    }
-
     if (thread_in_handoff(thread)) {
         thread_state_t state = thread_get_state(thread);
 

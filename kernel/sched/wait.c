@@ -29,9 +29,9 @@ void wake_sleepers(u64 now) {
             thread->wait_result = (u8)SCHED_WAIT_TIMEOUT;
             __atomic_fetch_add(&sched_state.metrics.wait_timeout_count, 1, __ATOMIC_RELAXED);
 
-            if (sched_reclaim_handoff(thread)) {
+            if (thread_in_handoff(thread)) {
                 thread_set_state(thread, THREAD_READY);
-                enqueue_ipi(thread, true);
+                sched_nudge_thread(thread);
                 continue;
             }
 
@@ -237,9 +237,9 @@ void sched_make_runnable(sched_thread_t *thread) {
     thread->wait_deadline_tick = 0;
     thread->wait_result = (u8)SCHED_WAIT_WOKEN;
 
-    if (sched_reclaim_handoff(thread)) {
+    if (thread_in_handoff(thread)) {
         thread_set_state(thread, THREAD_READY);
-        enqueue_thread(thread);
+        sched_nudge_thread(thread);
         sched_lock_restore(flags);
         return;
     }
@@ -294,9 +294,9 @@ void sched_unblock_thread(sched_thread_t *thread) {
             thread->wait_result = SCHED_WAIT_WOKEN;
         }
 
-        if (sched_reclaim_handoff(thread)) {
+        if (thread_in_handoff(thread)) {
             thread_set_state(thread, THREAD_READY);
-            enqueue_thread(thread);
+            sched_nudge_thread(thread);
             sched_lock_restore(flags);
             return;
         }
@@ -331,6 +331,7 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
     }
 
     bool self = thread == sched_local_current();
+    bool owned = thread_is_owned(thread);
     int cpu = thread_cpu(thread);
     bool remote = false;
 
@@ -362,7 +363,7 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
     thread->stop_signal = signum;
     thread->stop_reported = false;
 
-    if (!self) {
+    if (!self && !owned) {
         thread_unclaim(thread);
     }
 
@@ -376,6 +377,10 @@ void sched_stop_thread(sched_thread_t *thread, int signum) {
     }
 
     sched_lock_restore(flags);
+
+    if (owned) {
+        sched_nudge_thread(thread);
+    }
 
     if (self && sched_running_get()) {
         sched_yield();
@@ -393,10 +398,17 @@ void sched_continue_thread(sched_thread_t *thread) {
         return;
     }
 
-    thread_unclaim(thread);
     thread_set_state(thread, THREAD_READY);
     thread->stop_signal = 0;
     thread->stop_reported = false;
+
+    if (thread_is_owned(thread)) {
+        sched_nudge_thread(thread);
+        sched_lock_restore(flags);
+        return;
+    }
+
+    thread_unclaim(thread);
     enqueue_thread(thread);
 
     sched_lock_restore(flags);

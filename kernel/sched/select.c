@@ -144,6 +144,10 @@ void sched_publish_handoff(sched_thread_t *thread, size_t owner_cpu) {
         return;
     }
 
+    if (owner_cpu != sched_cpu_id()) {
+        panic("remote scheduler handoff publish");
+    }
+
     thread_unclaim(thread);
 
     if (thread_get_state(thread) == THREAD_RUNNING) {
@@ -199,12 +203,12 @@ void sched_flush_handoff(size_t cpu_id) {
 
     sched_cpu_t *local = &sched_state.cpus.cpu[cpu_id];
 
-    sched_thread_t *pending = local->handoff_ready;
+    sched_thread_t *pending = __atomic_load_n(&local->handoff_ready, __ATOMIC_ACQUIRE);
     if (!pending) {
         return;
     }
 
-    local->handoff_ready = NULL;
+    __atomic_store_n(&local->handoff_ready, NULL, __ATOMIC_RELEASE);
     sched_publish_handoff(pending, cpu_id);
 }
 

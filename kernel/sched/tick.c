@@ -122,15 +122,15 @@ static void stage_switch_away(sched_thread_t *thread, size_t cpu_id) {
         return;
     }
 
-    sched_thread_t *pending = sched_local()->handoff_ready;
+    sched_thread_t *pending = __atomic_load_n(&sched_local()->handoff_ready, __ATOMIC_ACQUIRE);
 
     if (pending && pending != thread) {
-        sched_local()->handoff_ready = NULL;
+        __atomic_store_n(&sched_local()->handoff_ready, NULL, __ATOMIC_RELEASE);
         sched_publish_handoff(pending, cpu_id);
     }
 
     thread_set_cpu(thread, (int)cpu_id);
-    sched_local()->handoff_ready = thread;
+    __atomic_store_n(&sched_local()->handoff_ready, thread, __ATOMIC_RELEASE);
 }
 
 static void
