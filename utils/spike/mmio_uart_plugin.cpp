@@ -279,6 +279,6 @@ class ns16550a_plugin_t {
     uint8_t dlm_ = 0;
 };
 
-mmio_plugin_registration_t<ns16550a_plugin_t> reg_ns16550a_plugin("ns16550a");
+mmio_plugin_registration_t<ns16550a_plugin_t> ns16550a_reg("ns16550a");
 
 } // namespace

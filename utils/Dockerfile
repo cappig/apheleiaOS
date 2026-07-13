@@ -1,21 +1,21 @@
-FROM alpine:3.20
+FROM alpine:3.24
 
 WORKDIR /usr/src/apheleia
 
 RUN apk add --no-cache \
-    binutils~2 \
-    binutils-riscv-none-elf~2 \
+    binutils \
+    binutils-riscv-none-elf \
     clang18~18 \
-    curl~8 \
-    dtc~1 \
-    gcc~13 \
-    gcc-riscv-none-elf~14 \
-    git~2 \
-    lld~17 \
+    curl \
+    dtc \
+    gcc \
+    gcc-riscv-none-elf \
+    git \
+    lld \
     llvm18~18 \
-    make~4 \
-    mingw-w64-gcc~13 \
-    mingw-w64-binutils~2 \
-    nasm~2 \
-    python3~3 \
-    xorriso~1
+    make \
+    mingw-w64-binutils \
+    mingw-w64-gcc \
+    nasm \
+    python3 \
+    xorriso

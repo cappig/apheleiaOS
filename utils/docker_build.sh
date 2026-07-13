@@ -11,6 +11,7 @@ profile=$7
 riscv_frisc=${8:-}
 riscv_uart_stride=${9:-}
 userland=${10:-}
+source_date_epoch=${11:-}
 
 set -- \
     ARCH="$arch" \
@@ -28,6 +29,10 @@ fi
 
 if [ -n "$userland" ]; then
     set -- "$@" USERLAND="$userland"
+fi
+
+if [ -n "$source_date_epoch" ]; then
+    set -- "$@" SOURCE_DATE_EPOCH="$source_date_epoch"
 fi
 
 set -- "$@" \

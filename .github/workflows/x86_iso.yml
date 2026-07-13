@@ -1,4 +1,4 @@
-name: x86_builds
+name: build
 
 on:
   push:
@@ -9,8 +9,57 @@ permissions:
   contents: read
 
 jobs:
+  source_check:
+    name: source-check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format e2fsprogs
+
+      - name: check formatting
+        run: git ls-files -z '*.c' '*.h' | xargs -0 clang-format --dry-run --Werror
+
+      - name: check scripts
+        run: |
+          python3 -m compileall -q kernel utils
+          for script in utils/*.sh; do
+            sh -n "$script"
+          done
+
+      - name: check image builder
+        run: |
+          image_one=$(mktemp)
+          image_two=$(mktemp)
+          export SOURCE_DATE_EPOCH=1767225600
+          build_image() {
+            python3 - "$1" <<'PY'
+          import sys
+          from pathlib import Path
+
+          from kernel.build_image_common import build_ext2_image
+
+          build_ext2_image(
+              Path("root"),
+              Path(sys.argv[1]),
+              growth_numerator=1,
+              growth_denominator=1,
+              minimum_bytes=0,
+          )
+          PY
+          }
+          build_image "$image_one"
+          build_image "$image_two"
+          e2fsck -fn "$image_one"
+          cmp "$image_one" "$image_two"
+
   build_test:
     name: build-test (${{ matrix.arch }})
+    needs: source_check
     runs-on: ubuntu-latest
     env:
       GNU_CC_x86_32: gcc
@@ -43,6 +92,7 @@ jobs:
 
   build_riscv:
     name: build-riscv (${{ matrix.arch }})
+    needs: source_check
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -67,6 +117,7 @@ jobs:
 
   build_iso:
     name: iso (${{ matrix.arch }})
+    needs: source_check
     runs-on: ubuntu-latest
     env:
       GNU_CC_x86_32: gcc
@@ -98,7 +149,6 @@ jobs:
         run: make ARCH=${{ matrix.arch }} IMAGE_FORMAT=iso
 
       - name: upload iso
-        if: ${{ env.ACTIONS_RUNTIME_TOKEN != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: apheleia-${{ matrix.arch }}-iso

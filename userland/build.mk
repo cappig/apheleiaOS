@@ -6,7 +6,7 @@ USER_STAGE_ROOT_DIR         := $(USER_OBJ_DIR)/root
 USER_STAGE_DIR              := $(USER_STAGE_ROOT_DIR)/bin
 USER_STAGE_HOME_USER_DIR    := $(USER_STAGE_ROOT_DIR)/home/user
 USER_STAGE_USR_DIR          := $(USER_STAGE_ROOT_DIR)/usr
-USER_STAGE_USR_INCLUDE_DIR  := $(USER_STAGE_USR_DIR)/include
+USER_INCLUDE_DIR            := $(USER_STAGE_USR_DIR)/include
 USER_STAGE_USR_LIB_DIR      := $(USER_STAGE_USR_DIR)/lib
 USER_STAGE_STAMP_DIR        := $(USER_OBJ_DIR)/stage-stamps
 
@@ -149,17 +149,17 @@ else
 USERLAND_SELECTED_NAMES := $(USERLAND_DEFAULT_NAMES) $(USERLAND_WORDS)
 endif
 
-USER_TOOLS_SELECTED_NAMES := $(filter $(USER_TOOLS_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
-USER_UI_SELECTED_NAMES    := $(filter $(USER_UI_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
-USER_EXTRA_SELECTED_NAMES := $(filter $(USER_EXTRA_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
-USER_GAMES_SELECTED_NAMES := $(filter $(USER_GAMES_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
+USER_TOOL_NAMES  := $(filter $(USER_TOOLS_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
+USER_UI_NAMES    := $(filter $(USER_UI_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
+USER_EXTRA_NAMES := $(filter $(USER_EXTRA_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
+USER_GAME_NAMES  := $(filter $(USER_GAMES_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
 
-ROOTFS_EXTRA_BYTES ?= $(if $(filter tcc,$(USER_EXTRA_SELECTED_NAMES)),4194304,0)
+ROOTFS_EXTRA_BYTES ?= $(if $(filter tcc,$(USER_EXTRA_NAMES)),8388608,4194304)
 
-USER_TOOLS_PROG_DIRS := $(filter $(addprefix userland/tools/,$(USER_TOOLS_SELECTED_NAMES)),$(USER_TOOLS_ALL_DIRS))
-USER_UI_PROG_DIRS    := $(filter $(addprefix userland/ui/,$(USER_UI_SELECTED_NAMES)),$(USER_UI_ALL_DIRS))
-USER_EXTRA_PROG_DIRS := $(filter $(addprefix userland/extra/,$(USER_EXTRA_SELECTED_NAMES)),$(USER_EXTRA_ALL_DIRS))
-USER_GAMES_PROG_DIRS := $(filter $(addprefix userland/games/,$(USER_GAMES_SELECTED_NAMES)),$(USER_GAMES_ALL_DIRS))
+USER_TOOLS_PROG_DIRS := $(filter $(addprefix userland/tools/,$(USER_TOOL_NAMES)),$(USER_TOOLS_ALL_DIRS))
+USER_UI_PROG_DIRS    := $(filter $(addprefix userland/ui/,$(USER_UI_NAMES)),$(USER_UI_ALL_DIRS))
+USER_EXTRA_PROG_DIRS := $(filter $(addprefix userland/extra/,$(USER_EXTRA_NAMES)),$(USER_EXTRA_ALL_DIRS))
+USER_GAMES_PROG_DIRS := $(filter $(addprefix userland/games/,$(USER_GAME_NAMES)),$(USER_GAMES_ALL_DIRS))
 
 USER_PROG_DIRS := $(sort \
 	$(USER_CORE_PROG_DIRS) \
@@ -187,7 +187,7 @@ USER_TERM_OBJ   := $(patsubst %.c, $(USER_OBJ_DIR)/%.c.o, $(USER_TERM_SRC))
 USER_PARSE_OBJ  := $(patsubst %.c, $(USER_OBJ_DIR)/%.c.o, $(USER_PARSE_SRC))
 USER_APP_OBJ    := $(patsubst %.c, $(USER_OBJ_DIR)/%.c.o, $(USER_APP_SRC))
 
-USER_USR_INCLUDE_HEADERS := \
+USER_INCLUDE_HEADERS := \
 	$(wildcard libs/arch/*.h) \
 	$(wildcard libs/arch/riscv/*.h) \
 	$(wildcard libs/arch/x86/*.h) \
@@ -204,8 +204,8 @@ USER_USR_CRTN_OBJ    := $(USER_USR_OBJ_DIR)/crtn.o
 USER_USR_RUNTIME_OBJ := $(USER_USR_LIBC_A) $(USER_USR_CRT1_OBJ) \
 	$(USER_USR_CRTI_OBJ) $(USER_USR_CRTN_OBJ)
 
-USER_STAGE_USR_INCLUDE_STAMP := $(USER_STAGE_STAMP_DIR)/usr-headers
-USER_STAGE_USR_LIB_STAMP     := $(USER_STAGE_STAMP_DIR)/usr-runtime
+USER_INCLUDE_STAMP       := $(USER_STAGE_STAMP_DIR)/usr-headers
+USER_LIB_STAMP := $(USER_STAGE_STAMP_DIR)/usr-runtime
 
 $(USER_USR_LIBC_A): $(USER_LIBC_OBJ)
 	@mkdir -p $(@D)
@@ -224,26 +224,26 @@ $(USER_USR_CRTN_OBJ): $(USER_CRTN_OBJ)
 	@mkdir -p $(@D)
 	@cp $< $@
 
-$(USER_STAGE_USR_INCLUDE_STAMP): $(USER_USR_INCLUDE_HEADERS)
+$(USER_INCLUDE_STAMP): $(USER_INCLUDE_HEADERS)
 	@mkdir -p "$(@D)" \
-		"$(USER_STAGE_USR_INCLUDE_DIR)/arch" \
-		"$(USER_STAGE_USR_INCLUDE_DIR)/arch/riscv" \
-		"$(USER_STAGE_USR_INCLUDE_DIR)/arch/x86" \
-		"$(USER_STAGE_USR_INCLUDE_DIR)/sys" \
-		"$(USER_STAGE_USR_INCLUDE_DIR)/libc_usr" \
-		"$(USER_STAGE_USR_INCLUDE_DIR)/libc_ext"
+		"$(USER_INCLUDE_DIR)/arch" \
+		"$(USER_INCLUDE_DIR)/arch/riscv" \
+		"$(USER_INCLUDE_DIR)/arch/x86" \
+		"$(USER_INCLUDE_DIR)/sys" \
+		"$(USER_INCLUDE_DIR)/libc_usr" \
+		"$(USER_INCLUDE_DIR)/libc_ext"
 	@rm -f "$(USER_STAGE_USR_DIR)/.apheleia_no_headers" \
-		"$(USER_STAGE_USR_INCLUDE_DIR)/.apheleia_headers"
-	@cp -f libs/libc/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/"
-	@cp -f libs/libc/sys/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/sys/"
-	@cp -f libs/arch/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/arch/"
-	@cp -f libs/arch/riscv/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/arch/riscv/"
-	@cp -f libs/arch/x86/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/arch/x86/"
-	@cp -f libs/libc_usr/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/libc_usr/"
-	@cp -f libs/libc_ext/*.h "$(USER_STAGE_USR_INCLUDE_DIR)/libc_ext/"
+		"$(USER_INCLUDE_DIR)/.apheleia_headers"
+	@cp -f libs/libc/*.h "$(USER_INCLUDE_DIR)/"
+	@cp -f libs/libc/sys/*.h "$(USER_INCLUDE_DIR)/sys/"
+	@cp -f libs/arch/*.h "$(USER_INCLUDE_DIR)/arch/"
+	@cp -f libs/arch/riscv/*.h "$(USER_INCLUDE_DIR)/arch/riscv/"
+	@cp -f libs/arch/x86/*.h "$(USER_INCLUDE_DIR)/arch/x86/"
+	@cp -f libs/libc_usr/*.h "$(USER_INCLUDE_DIR)/libc_usr/"
+	@cp -f libs/libc_ext/*.h "$(USER_INCLUDE_DIR)/libc_ext/"
 	@touch $@
 
-$(USER_STAGE_USR_LIB_STAMP): $(USER_USR_RUNTIME_OBJ) $(USER_LINK_STAMP)
+$(USER_LIB_STAMP): $(USER_USR_RUNTIME_OBJ) $(USER_LINK_STAMP)
 	@mkdir -p "$(@D)" "$(USER_STAGE_USR_LIB_DIR)"
 	@rm -f "$(USER_STAGE_USR_LIB_DIR)/.apheleia_runtime"
 	@cp "$(USER_USR_LIBC_A)" "$(USER_STAGE_USR_LIB_DIR)/libc.a"
@@ -262,19 +262,19 @@ USER_SHARED_OBJ := $(USER_CRT_OBJ) $(USER_LIBC_OBJ) $(USER_COMMON_OBJ) \
 USER_PROGS_BIN := $(addprefix $(USER_BIN_DIR)/,$(USER_PROGS))
 USER_STAGE_BIN_STAMP := $(USER_STAGE_DIR)/.apheleia_bins
 USER_BINARIES  := $(USER_STAGE_BIN_STAMP)
-USER_BINARIES  += $(USER_STAGE_USR_LIB_STAMP)
-USER_BINARIES  += $(USER_STAGE_USR_INCLUDE_STAMP)
+USER_BINARIES  += $(USER_LIB_STAMP)
+USER_BINARIES  += $(USER_INCLUDE_STAMP)
 
-USER_SELECTED_EXTRA_DIRS := $(addprefix userland/extra/,$(USER_EXTRA_SELECTED_NAMES))
-USER_SELECTED_GAME_DIRS  := $(addprefix userland/games/,$(USER_GAMES_SELECTED_NAMES))
+USER_EXTRA_MAKE_DIRS := $(addprefix userland/extra/,$(USER_EXTRA_NAMES))
+USER_GAME_MAKE_DIRS  := $(addprefix userland/games/,$(USER_GAME_NAMES))
 
 USERLAND_INTEGRATION := true
 USER_PROG_MAKEFILES := $(sort $(wildcard \
 	$(USER_CORE_PROG_DIRS:%=%/Makefile) \
 	$(USER_UI_PROG_DIRS:%=%/Makefile) \
 	$(USER_TOOLS_PROG_DIRS:%=%/Makefile) \
-	$(USER_SELECTED_EXTRA_DIRS:%=%/Makefile) \
-	$(USER_SELECTED_GAME_DIRS:%=%/Makefile) \
+	$(USER_EXTRA_MAKE_DIRS:%=%/Makefile) \
+	$(USER_GAME_MAKE_DIRS:%=%/Makefile) \
 ))
 -include $(USER_PROG_MAKEFILES)
 

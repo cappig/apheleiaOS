@@ -1,7 +1,7 @@
 NAME    := apheleia
-VERSION := beta-3.0
+VERSION := 1.0
 
-BUILD_DATE       ?= $(shell date -u +%Y-%m-%d)
+BUILD_DATE       ?= $(shell date -u $(if $(SOURCE_DATE_EPOCH),--date=@$(SOURCE_DATE_EPOCH)) +%Y-%m-%d)
 GIT_COMMIT_SHORT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 ARCH             := x86_64

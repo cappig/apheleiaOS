@@ -31,7 +31,7 @@ SPIKE_MMIO_UART_CXX    ?= c++
 SPIKE_REAL_TIME_CLINT  ?= false
 
 SPIKE_MMIO_UART_ENABLED := $(filter true,$(SPIKE_MMIO_UART))
-SPIKE_REAL_TIME_CLINT_ENABLED := $(filter true,$(SPIKE_REAL_TIME_CLINT))
+SPIKE_RT_CLINT_ON := $(filter true,$(SPIKE_REAL_TIME_CLINT))
 SPIKE_MMIO_UART_DEPS :=
 SPIKE_MMIO_UART_FLAGS :=
 SPIKE_CLINT_FLAGS :=
@@ -40,7 +40,7 @@ SPIKE_MMIO_UART_DEPS += $(SPIKE_MMIO_UART_PLUGIN)
 SPIKE_MMIO_UART_FLAGS += --extlib="$(SPIKE_MMIO_UART_PLUGIN)"
 SPIKE_MMIO_UART_FLAGS += --device=$(SPIKE_MMIO_UART_DEVICE),$(SPIKE_MMIO_UART_BASE),$(SPIKE_MMIO_UART_ARGS)
 endif
-ifeq ($(SPIKE_REAL_TIME_CLINT_ENABLED),true)
+ifeq ($(SPIKE_RT_CLINT_ON),true)
 SPIKE_CLINT_FLAGS += --real-time-clint
 endif
 
@@ -164,7 +164,7 @@ run-spike: all $(SPIKE_MMIO_UART_DEPS)
 	else \
 		echo "Spike MMIO UART disabled (SPIKE_MMIO_UART=false); kernel will run without UART console if UART base is 0."; \
 	fi
-	@if [ "$(SPIKE_REAL_TIME_CLINT_ENABLED)" = "true" ]; then \
+	@if [ "$(SPIKE_RT_CLINT_ON)" = "true" ]; then \
 		echo "Spike CLINT time: real-time (--real-time-clint)"; \
 	fi
 	@if [ "$(SPIKE_MMIO_UART_ARGS)" = "tty" ]; then \

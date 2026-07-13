@@ -21,12 +21,14 @@ rm -rf "$stage_dir"
 mkdir -p "$boot_dir"
 
 cp -f "$kernel_elf" "$boot_dir/"
-cp -r root/* "$stage_dir"
+cp -a root/. "$stage_dir"/
 cp -a "$user_root"/. "$stage_dir"/
 mkdir -p "$stage_dir/tmp"
 chmod 1777 "$stage_dir/tmp"
 
 if [ "$mode" = "riscv" ]; then
+    # ttyS0 is an alias of tty0 on RISC-V, so it must not run a second getty.
+    sed -i '\|^/dev/ttyS0[[:space:]]|d' "$stage_dir/etc/ttys"
     rm -rf "$stage_dir/etc/cursors"
     rm -f "$stage_dir/home/user/wall.ppm"
 fi

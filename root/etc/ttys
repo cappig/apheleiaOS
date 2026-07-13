@@ -3,3 +3,4 @@
 /dev/tty1
 /dev/tty2
 /dev/tty3
+/dev/ttyS0 optional
