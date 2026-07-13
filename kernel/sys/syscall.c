@@ -1602,6 +1602,18 @@ static bool _file_seekable(const sched_file_t *file) {
     return type == VFS_FILE || type == VFS_DIR || type == VFS_BLOCKDEV;
 }
 
+static bool _file_allows_positional_io(const sched_file_t *file) {
+    if (_file_seekable(file)) {
+        return true;
+    }
+
+    if (!file || file->kind != SCHED_FD_VFS || !file->node || !file->node->interface) {
+        return false;
+    }
+
+    return file->node->interface->positional_io;
+}
+
 static bool _fd_advance_offset(sched_fd_t *entry, size_t offset, size_t amount) {
     if (!entry || !entry->file || amount > SIZE_MAX - offset) {
         return false;
@@ -1897,7 +1909,7 @@ static ssize_t _read_fd(int fd, void *buf, size_t len, off_t offset, bool positi
         }
 
         bool seekable = _file_seekable(file);
-        if (positional && !seekable) {
+        if (positional && !_file_allows_positional_io(file)) {
             return -ESPIPE;
         }
 
@@ -2012,7 +2024,7 @@ static ssize_t _write_fd(int fd, const void *buf, size_t len, off_t offset, bool
         }
 
         bool seekable = _file_seekable(file);
-        if (positional && !seekable) {
+        if (positional && !_file_allows_positional_io(file)) {
             return -ESPIPE;
         }
 

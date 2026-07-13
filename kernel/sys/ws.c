@@ -181,6 +181,7 @@ static void _window_slot_reinit(ws_window_t *window) {
     linked_list_t *ev_wait_list = window->ev_wait.list;
     u32 id = window->id;
 
+    mutex_destroy(&window->fb_io_lock);
     free(window->fb);
     ring_queue_destroy(window->ev_queue);
 
@@ -1632,6 +1633,7 @@ static bool ws_register_devfs(vfs_node_t *dev_dir) {
         return false;
     }
 
+    ws_state.ws_fb_if->positional_io = true;
     ws_state.ws_fb_if->poll = _dev_ws_fb_poll;
     ws_state.ws_ev_if->poll = _dev_ws_ev_poll;
     ws_state.ws_ev_if->wait_queue = ws_ev_wait;
@@ -1904,7 +1906,9 @@ static ssize_t _ws_fb_read_as(const ws_io_t *io) {
         .write = false,
     };
 
+    mutex_lock(&window->fb_io_lock);
     _copy_store(window, &copy);
+    mutex_unlock(&window->fb_io_lock);
 
     mutex_lock(&ws_state.lock);
     _window_release_io(io->id, window);
@@ -1976,7 +1980,9 @@ static ssize_t _ws_fb_write_as(const ws_io_t *io) {
         .write = true,
     };
 
+    mutex_lock(&window->fb_io_lock);
     _copy_store(window, &copy);
+    mutex_unlock(&window->fb_io_lock);
 
     mutex_lock(&ws_state.lock);
     _queue_dirty_write(io->id, window, io->offset, copy_len, view_width);

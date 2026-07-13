@@ -66,6 +66,7 @@ typedef ssize_t (*vfs_rename_fn)(
 
 struct vfs_interface {
     u32 refcount;
+    bool positional_io;
 
     // operations on the node itself
     vfs_io_fn read;

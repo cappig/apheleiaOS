@@ -737,12 +737,13 @@ static bool read_surface_rows(wm_window_t *window, const surface_read_t *rect) {
         return false;
     }
 
-    bool full_width = rect->x == 0 && rect->width == rect->src_width && rect->surface_width == rect->src_width;
-    if (full_width) {
-        size_t src_index = (size_t)rect->y * rect->src_width;
-        size_t dst_index = (size_t)rect->y * rect->surface_width;
+    bool same_stride = rect->surface_width == rect->src_width;
+    if (same_stride) {
+        size_t src_index = (size_t)rect->y * rect->src_width + rect->x;
+        size_t dst_index = (size_t)rect->y * rect->surface_width + rect->x;
         off_t offset = (off_t)(src_index * sizeof(pixel_t));
-        size_t total = (size_t)rect->height * rect->row_bytes;
+        size_t span = (size_t)(rect->height - 1U) * rect->src_width + rect->width;
+        size_t total = span * sizeof(pixel_t);
         u8 *dst = (u8 *)(window->surface + dst_index);
 
         return _pread_full(window->fb_fd, dst, total, offset);

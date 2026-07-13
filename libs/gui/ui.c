@@ -1078,13 +1078,13 @@ int window_flush_rect(window_t *window, u32 x, u32 y, u32 width, u32 height) {
         clip_h = window->height - y;
     }
 
-    bool full_width = x == 0 && clip_w == window->width;
     bool packed_rows = window->stride == window->width * sizeof(pixel_t);
-    if (full_width && packed_rows) {
-        const u8 *src = (const u8 *)(window->pixels + (size_t)y * window->width);
-
-        size_t total = (size_t)clip_h * (size_t)window->width * sizeof(pixel_t);
-        off_t dst_off = (off_t)((size_t)y * window->stride);
+    if (packed_rows) {
+        size_t start = (size_t)y * window->width + x;
+        size_t span = (size_t)(clip_h - 1U) * window->width + clip_w;
+        const u8 *src = (const u8 *)(window->pixels + start);
+        size_t total = span * sizeof(pixel_t);
+        off_t dst_off = (off_t)((size_t)y * window->stride + (size_t)x * sizeof(pixel_t));
 
         return window_flush_row(window, src, total, dst_off);
     }
