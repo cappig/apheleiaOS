@@ -125,12 +125,10 @@ static inline bool ext2_features_supported(const ext2_superblock_t *sb) {
 typedef struct PACKED {
     u32 usage_bitmap_offset;
     u32 inode_bitmap_offset;
-
     u32 inode_table_offset;
 
     u16 unallocated_block_count;
     u16 unallocated_inode_count;
-
     u16 directory_count;
     u16 _padding0;
 

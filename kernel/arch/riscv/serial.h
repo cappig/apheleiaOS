@@ -12,6 +12,8 @@
 
 void serial_set_reg_stride(uintptr_t stride);
 uintptr_t serial_reg_stride(void);
+void serial_set_reg_io_width(uintptr_t width);
+uintptr_t serial_reg_io_width(void);
 
 void send_serial(uintptr_t base, char c);
 char receive_serial(uintptr_t base);

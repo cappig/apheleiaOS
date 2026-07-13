@@ -48,7 +48,8 @@ LD_BIOS := \
 OC_BIOS := -O binary
 
 BOOT_FLAG_STAMP := bin/boot/.compile-flags
-BOOT_BUILD_CONFIG := $(CC) $(AS) $(CC_BASE) $(AS_BASE) $(CC_BOOT) $(AS_BOOT)
+BOOT_BUILD_CONFIG := $(CC) $(AS) $(CC_BASE) $(AS_BASE) $(CC_BOOT) $(AS_BOOT) \
+	$(TOOLCHAIN_CONFIG)
 
 $(eval $(call flag_stamp,$(BOOT_FLAG_STAMP),BOOT_BUILD_CONFIG))
 

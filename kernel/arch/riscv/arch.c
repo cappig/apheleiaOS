@@ -228,6 +228,23 @@ static void _append_boot_log(const boot_info_t *info) {
     spin_unlock_irqrestore(&klog.lock, irq_flags);
 }
 
+static void _replay_bootloader_log_serial(const boot_info_t *info) {
+    if (!info || !info->boot_log_paddr || !info->boot_log_len || !uart_console_base()) {
+        return;
+    }
+
+    size_t len = info->boot_log_len;
+    if (info->boot_log_cap && len > info->boot_log_cap) {
+        len = info->boot_log_cap;
+    }
+
+    if (!len) {
+        return;
+    }
+
+    send_serial_buf(uart_console_base(), (const char *)(uintptr_t)info->boot_log_paddr, len);
+}
+
 static void _log_write_early(const char *s, size_t len) {
     if (!s || !len) {
         return;
@@ -939,7 +956,20 @@ static ssize_t _boot_rootfs_read(disk_dev_t *dev, void *dest, size_t offset, siz
         return -EINVAL;
     }
 
-    memcpy(dest, (void *)(uintptr_t)(ram->paddr + offset), bytes);
+    void *src = arch_phys_map(ram->paddr + offset, bytes, 0);
+    if (!src) {
+        log_warn(
+            "boot rootfs read map failed paddr=%#llx offset=%zu bytes=%zu size=%zu",
+            (unsigned long long)(ram->paddr + offset),
+            offset,
+            bytes,
+            ram->size
+        );
+        return -EIO;
+    }
+
+    memcpy(dest, src, bytes);
+    arch_phys_unmap(src, bytes);
     return (ssize_t)bytes;
 }
 
@@ -949,7 +979,20 @@ static ssize_t _boot_rootfs_write(disk_dev_t *dev, void *src, size_t offset, siz
         return -EINVAL;
     }
 
-    memcpy((void *)(uintptr_t)(ram->paddr + offset), src, bytes);
+    void *dest = arch_phys_map(ram->paddr + offset, bytes, 0);
+    if (!dest) {
+        log_warn(
+            "boot rootfs write map failed paddr=%#llx offset=%zu bytes=%zu size=%zu",
+            (unsigned long long)(ram->paddr + offset),
+            offset,
+            bytes,
+            ram->size
+        );
+        return -EIO;
+    }
+
+    memcpy(dest, src, bytes);
+    arch_phys_unmap(dest, bytes);
     return (ssize_t)bytes;
 }
 
@@ -1054,6 +1097,20 @@ static uintptr_t _uart_stride(const void *dtb) {
     }
 
     return RISCV_UART_STRIDE;
+}
+
+static uintptr_t _uart_io_width(const void *dtb) {
+    if (!dtb || !fdt_valid(dtb)) {
+        return 1;
+    }
+
+    u32 width = 0;
+    if (fdt_find_u32(dtb, "ns16550a", "reg-io-width", &width) &&
+        (width == 1 || width == 2 || width == 4 || width == 8)) {
+        return width;
+    }
+
+    return 1;
 }
 
 static void _init_platform(void) {
@@ -1161,7 +1218,9 @@ static uintptr_t _load_boot_state(boot_info_t *info) {
 
 static u32 _init_uart(const boot_info_t *info, uintptr_t uart_phys) {
     serial_set_reg_stride(_uart_stride(boot.dtb));
+    serial_set_reg_io_width(_uart_io_width(boot.dtb));
     uart_console_set_base(uart_phys);
+    _replay_bootloader_log_serial(info);
     log_init(_log_puts);
     log_set_lvl(info->args.debug == DEBUG_NONE ? LOG_INFO : LOG_DEBUG);
 
@@ -1192,10 +1251,11 @@ static u32 _init_uart(const boot_info_t *info, uintptr_t uart_phys) {
     }
 
     log_debug(
-        "UART phys=%#lx irq=%u stride=%lu",
+        "UART phys=%#lx irq=%u stride=%lu io_width=%lu",
         (unsigned long)uart_phys,
         (unsigned int)uart_irq,
-        (unsigned long)serial_reg_stride()
+        (unsigned long)serial_reg_stride(),
+        (unsigned long)serial_reg_io_width()
     );
 
     mmio.count = 0;

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Sequence
 
 SECTOR_SIZE = 512
+EXT2_REQUIRED_FEATURE_DIR_HAS_TYPE = 1 << 1
 
 
 class BuildError(RuntimeError):
@@ -415,12 +416,13 @@ def build_ext2_image(
     block_count = div_round_up(target_bytes, block_size)
 
     max_blocks_one_group = block_size * 8
-    if block_count > max_blocks_one_group:
-        block_count = max_blocks_one_group
-
     min_blocks = data_start_block + 64
     if block_count < min_blocks:
         block_count = min_blocks
+    block_count = align_up(block_count, 8)
+
+    if block_count > max_blocks_one_group:
+        block_count = max_blocks_one_group
 
     class Alloc:
         def __init__(self, total_blocks: int):
@@ -557,7 +559,6 @@ def build_ext2_image(
             if idx >= inode_count:
                 continue
             inode_bitmap[idx // 8] |= 1 << (idx % 8)
-
         for idx in range(inode_count, block_size * 8):
             inode_bitmap[idx // 8] |= 1 << (idx % 8)
 
@@ -617,7 +618,7 @@ def build_ext2_image(
         struct.pack_into("<H", sb, 88, inode_size)
         struct.pack_into("<H", sb, 90, 0)
         struct.pack_into("<I", sb, 92, 0)
-        struct.pack_into("<I", sb, 96, 0x2)  # directory entries include file types
+        struct.pack_into("<I", sb, 96, EXT2_REQUIRED_FEATURE_DIR_HAS_TYPE)
         struct.pack_into("<I", sb, 100, 0)
         if epoch is None:
             fs_uuid = uuid.uuid4()

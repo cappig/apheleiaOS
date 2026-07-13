@@ -67,6 +67,16 @@ Successful builds write images to:
 bin/apheleia_<version>_<arch>.<format>
 ```
 
+CI builds and uploads all supported images on every push, pull request, and manual run. Download them from the [images workflow artifacts](https://github.com/cappig/apheleiaOS/actions/workflows/images.yml):
+
+- `apheleia-x86_64-img`
+- `apheleia-x86_32-img`
+- `apheleia-x86_64-iso`
+- `apheleia-x86_32-iso`
+- `apheleia-riscv_64-img`
+- `apheleia-riscv_32-img`
+- `apheleia-riscv_32-frisc-img`
+
 ### License
 
 This entire repo is released under the terms of the GPLv3 (see `license`). Feel free to reuse, build upon or reference this code as long as your projects respect the GPL i.e. are free software themselves.

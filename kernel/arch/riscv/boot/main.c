@@ -525,6 +525,20 @@ static uintptr_t find_stride(const void *dtb) {
     return RISCV_UART_STRIDE;
 }
 
+static uintptr_t find_io_width(const void *dtb) {
+    if (!dtb || !fdt_valid(dtb)) {
+        return 1;
+    }
+
+    u32 width = 0;
+    if (fdt_find_u32(dtb, "ns16550a", "reg-io-width", &width) &&
+        (width == 1 || width == 2 || width == 4 || width == 8)) {
+        return width;
+    }
+
+    return 1;
+}
+
 static fdt_reg_t find_memory(const void *dtb) {
     fdt_reg_t reg = {
         .addr = RISCV_KERNEL_BASE,
@@ -840,6 +854,7 @@ typedef struct {
     layout_t layout;
     uintptr_t uart;
     uintptr_t stride;
+    uintptr_t io_width;
 } boot_setup_t;
 
 static boot_setup_t make_setup(const void *dtb) {
@@ -854,12 +869,14 @@ static boot_setup_t make_setup(const void *dtb) {
     setup.layout = make_layout(setup.memory, setup.header);
     setup.uart = find_uart(setup.dtb);
     setup.stride = find_stride(setup.dtb);
+    setup.io_width = find_io_width(setup.dtb);
 
     return setup;
 }
 
 static void setup_serial(const boot_setup_t *setup) {
     serial_set_reg_stride(setup->stride);
+    serial_set_reg_io_width(setup->io_width);
     tty_set_uart_base(setup->uart);
 }
 
@@ -881,13 +898,14 @@ static void log_setup(uintptr_t hartid, const void *raw_dtb, const boot_setup_t 
         (unsigned long)setup->layout.memory_end
     );
     log_info(
-        "layout image=%#lx rootfs=%#lx stack=%#lx scratch=%#lx uart=%#lx stride=%lu",
+        "layout image=%#lx rootfs=%#lx stack=%#lx scratch=%#lx uart=%#lx stride=%lu io_width=%lu",
         (unsigned long)setup->layout.image_base,
         (unsigned long)(uintptr_t)setup->layout.rootfs,
         (unsigned long)(uintptr_t)&__stack_top,
         (unsigned long)setup->layout.scratch_base,
         (unsigned long)setup->uart,
-        (unsigned long)setup->stride
+        (unsigned long)setup->stride,
+        (unsigned long)setup->io_width
     );
 
     if (setup->layout.header) {
