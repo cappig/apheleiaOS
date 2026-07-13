@@ -83,3 +83,4 @@ u32 lapic_id(void);
 bool lapic_send_init(u32 dest_apic);
 bool lapic_send_startup(u32 dest_apic, u8 vector);
 bool lapic_send_fixed(u32 dest_apic, u8 vector);
+bool lapic_send_nmi(u32 dest_apic);

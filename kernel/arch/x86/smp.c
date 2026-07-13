@@ -20,6 +20,7 @@
 
 #define AP_STACK_SIZE        (16 * 1024)
 #define AP_START_TIMEOUT_MS  250
+#define TLB_RETRY_MS         10
 #define TLB_TIMEOUT_MS       5000
 #define TLB_MAX_TARGETS      64
 #define TRAMPOLINE_PAGE_SIZE 0x1000U
@@ -156,10 +157,6 @@ NORETURN static void _smp_ap_entry(void *arg) {
         arch_cpu_relax();
     }
 
-    if (smp_online_count() > 1) {
-        smp.shootdown_enabled = true;
-    }
-
     scheduler_start_cpu();
     enable_interrupts();
     cpu_halt();
@@ -258,7 +255,7 @@ static bool _start_ap(const cpu_core_t *core, u8 vector) {
     return init_ok && (sipi1_ok || sipi2_ok);
 }
 
-static void _tlb_ipi_handler(UNUSED int_state_t *state) {
+static void flush_tlb_local(void) {
     uintptr_t addr = __atomic_load_n(&smp.tlb_addr, __ATOMIC_ACQUIRE);
 
     if (addr) {
@@ -273,8 +270,10 @@ static void _tlb_ipi_handler(UNUSED int_state_t *state) {
     if (core && core->id < TLB_MAX_TARGETS) {
         __atomic_or_fetch(&smp.tlb_acks, 1ULL << core->id, __ATOMIC_SEQ_CST);
     }
+}
 
-    lapic_end_int();
+static void _tlb_nmi_handler(UNUSED int_state_t *state) {
+    flush_tlb_local();
 }
 
 static void resched_ipi(UNUSED int_state_t *state) {
@@ -296,7 +295,7 @@ void smp_init(void) {
     }
 
     smp.started = true;
-    set_int_handler(SMP_IPI_TLB_VECTOR, _tlb_ipi_handler);
+    set_int_handler(INT_NON_MASKABLE, _tlb_nmi_handler);
     set_int_handler(SMP_IPI_RESCHED_VECTOR, resched_ipi);
 
     if (core_count <= 1) {
@@ -427,14 +426,16 @@ static u64 tlb_targets(cpu_core_t *self, uintptr_t addr) {
 }
 
 static void send_tlb_ipis(u64 targets) {
+    // A TLB invalidation cannot wait for a target CPU to re-enable maskable
+    // interrupts while it holds stale mappings to reclaimed kernel memory.
     for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
         if (!(targets & (1ULL << i))) {
             continue;
         }
 
         cpu_core_t *core = &cores_local[i];
-        if (!lapic_send_fixed(core->lapic_id, SMP_IPI_TLB_VECTOR)) {
-            panic("failed to send TLB shootdown IPI");
+        if (!lapic_send_nmi(core->lapic_id)) {
+            panic("failed to send TLB shootdown NMI");
         }
     }
 }
@@ -454,14 +455,26 @@ static void panic_tlb_timeout(cpu_core_t *self) {
 
 static void wait_tlb_acks(cpu_core_t *self, u64 targets) {
     u64 deadline = timeout_deadline(TLB_TIMEOUT_MS);
+    u64 retry_deadline = timeout_deadline(TLB_RETRY_MS);
     size_t fallback = (size_t)(4000000ULL * TLB_TIMEOUT_MS);
+    size_t retry_fallback = (size_t)(4000000ULL * TLB_RETRY_MS);
 
     while (true) {
         u64 acked = __atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE);
-        u64 active = __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE);
 
-        if ((acked & active) == targets) {
+        if ((acked & targets) == targets) {
             return;
+        }
+
+        bool retry = retry_deadline && _tsc_timed_out(retry_deadline);
+        if (!retry_deadline && !retry_fallback--) {
+            retry = true;
+        }
+
+        if (retry) {
+            send_tlb_ipis(targets & ~acked);
+            retry_deadline = timeout_deadline(TLB_RETRY_MS);
+            retry_fallback = (size_t)(4000000ULL * TLB_RETRY_MS);
         }
 
         if (deadline && _tsc_timed_out(deadline)) {

@@ -3,7 +3,6 @@
 #include <base/types.h>
 #include <x86/boot.h>
 
-#define SMP_IPI_TLB_VECTOR      0xF0
 #define SMP_IPI_RESCHED_VECTOR  0xF1
 #define SMP_SOFT_RESCHED_VECTOR 0xF2
 
