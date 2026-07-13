@@ -138,9 +138,19 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
     u32 src_h = ppm_blob.height;
     _build_cover_map(src_w, src_h, fb_width, fb_height, x_map, y_map);
 
+    u32 prev_src_y = 0;
+    bool have_prev_row = false;
+
     for (u32 y = 0; y < fb_height; y++) {
         size_t dst_row = (size_t)y * fb_width;
-        size_t src_row = (size_t)y_map[y] * (size_t)src_w * 3U;
+        u32 src_y = y_map[y];
+
+        if (have_prev_row && src_y == prev_src_y) {
+            memcpy(dst + dst_row, dst + dst_row - fb_width, (size_t)fb_width * sizeof(*dst));
+            continue;
+        }
+
+        size_t src_row = (size_t)src_y * (size_t)src_w * 3U;
 
         for (u32 x = 0; x < fb_width; x++) {
             size_t src_off = src_row + (size_t)x_map[x] * 3U;
@@ -149,6 +159,9 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
             u8 b = raster[src_off + 2];
             dst[dst_row + x] = ((u32)r << 16) | ((u32)g << 8) | (u32)b;
         }
+
+        prev_src_y = src_y;
+        have_prev_row = true;
     }
 
     free(x_map);

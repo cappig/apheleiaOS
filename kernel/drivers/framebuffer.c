@@ -64,28 +64,8 @@ static size_t _chunk_rows(size_t row_bytes) {
     return rows;
 }
 
-static void _fb_handoff_clear(const framebuffer_info_t *fb) {
-    if (!fb || !fb->available || !fb->size) {
-        return;
-    }
-
+static void _fb_handoff_begin(void) {
     mutex_lock(&fb_driver.present_lock);
-
-    bool transient_map = false;
-    void *vram = fb_driver.present_vram;
-    if (!vram) {
-        vram = arch_phys_map(fb->paddr, fb->size, PHYS_MAP_WC);
-        transient_map = true;
-    }
-
-    if (vram) {
-        memset(vram, 0, fb->size);
-        if (transient_map) {
-            arch_phys_unmap(vram, fb->size);
-        }
-    }
-
-    // ensure the first frame after acquire repaints the entire display
     fb_driver.force_full_present = true;
     mutex_unlock(&fb_driver.present_lock);
 }
@@ -466,7 +446,7 @@ static ssize_t _dev_fb_ioctl(vfs_node_t *node, u64 request, void *args) {
 
         int status = console_fb_acquire(current->pid, screen);
         if (!status) {
-            _fb_handoff_clear(fb);
+            _fb_handoff_begin();
         }
 
         return status;

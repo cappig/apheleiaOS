@@ -548,19 +548,22 @@ static bool setup_framebuffer(wm_app_t *app) {
 
     app->frame_bytes = frame_pixels * sizeof(pixel_t);
 
-    if (ioctl(app->fb_fd, FBIOACQUIRE, NULL)) {
-        io_write_str("wm: failed to acquire framebuffer\n");
-        return false;
-    }
-
-    app->fb_acquired = true;
-
     app->frame_store = calloc(frame_pixels, sizeof(pixel_t));
     if (!app->frame_store) {
         io_write_str("wm: failed to allocate frame buffer\n");
         return false;
     }
 
+    return true;
+}
+
+static bool acquire_framebuffer(wm_app_t *app) {
+    if (ioctl(app->fb_fd, FBIOACQUIRE, NULL)) {
+        io_write_str("wm: failed to acquire framebuffer\n");
+        return false;
+    }
+
+    app->fb_acquired = true;
     return true;
 }
 
@@ -638,6 +641,10 @@ int main(int argc, char **argv) {
 
     wm_config_t cfg = { 0 };
     setup_wm(&app, &startup, &cfg);
+
+    if (!acquire_framebuffer(&app)) {
+        goto out;
+    }
 
     wm_loop(&app.ui, app.fb_fd, &app.fb_info, app.frame_store, app.frame_bytes, &exit_requested);
     exit_status = 0;
