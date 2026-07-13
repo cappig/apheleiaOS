@@ -86,7 +86,11 @@ static bool set_mode(u16 mode_index) {
 
     bios_call(0x10, &r, &r);
 
-    return r.al == 0x4f && r.ah == 0;
+    bool ready = r.al == 0x4f && r.ah == 0;
+    if (ready) {
+        tty_disable_bios_output();
+    }
+    return ready;
 }
 
 static vesa_mode_t pick_mode(u16 max_width, u16 max_height, u16 max_bpp) {
