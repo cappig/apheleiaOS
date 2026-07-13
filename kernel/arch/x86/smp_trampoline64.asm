@@ -3,6 +3,8 @@ section .text
 
 global smp_trampoline64_start
 global smp_trampoline64_end
+global smp_trampoline64_cr0
+global smp_trampoline64_cr4
 global smp_trampoline64_cr3
 global smp_trampoline64_efer
 global smp_trampoline64_entry
@@ -63,8 +65,7 @@ tramp64_pm32:
 
     mov ebx, dword [OFF(tramp64_base)]
 
-    mov eax, cr4
-    or eax, (1 << 5)
+    mov eax, dword [OFF(smp_trampoline64_cr4)]
     mov cr4, eax
 
     mov ecx, 0xC0000080
@@ -75,8 +76,7 @@ tramp64_pm32:
     mov eax, dword [OFF(smp_trampoline64_cr3)]
     mov cr3, eax
 
-    mov eax, cr0
-    or eax, 0x80000001
+    mov eax, dword [OFF(smp_trampoline64_cr0)]
     mov cr0, eax
 
     lea eax, [ebx + OFF(tramp64_lm64)]
@@ -149,6 +149,10 @@ tramp64_gdt_end:
 
 align 8
 tramp64_base:
+    dd 0
+smp_trampoline64_cr0:
+    dd 0
+smp_trampoline64_cr4:
     dd 0
 smp_trampoline64_cr3:
     dd 0

@@ -3,6 +3,8 @@ section .text
 
 global smp_trampoline32_start
 global smp_trampoline32_end
+global smp_trampoline32_cr0
+global smp_trampoline32_cr4
 global smp_trampoline32_cr3
 global smp_trampoline32_entry
 global smp_trampoline32_arg
@@ -65,12 +67,10 @@ tramp32_pm32:
     mov eax, dword [OFF(smp_trampoline32_cr3)]
     mov cr3, eax
 
-    mov eax, cr4
-    or eax, (1 << 5)
+    mov eax, dword [OFF(smp_trampoline32_cr4)]
     mov cr4, eax
 
-    mov eax, cr0
-    or eax, 0x80000001
+    mov eax, dword [OFF(smp_trampoline32_cr0)]
     mov cr0, eax
 
     lea eax, [ebx + OFF(tramp32_flat32)]
@@ -142,6 +142,10 @@ tramp32_gdt_end:
 
 align 8
 tramp32_base:
+    dd 0
+smp_trampoline32_cr0:
+    dd 0
+smp_trampoline32_cr4:
     dd 0
 smp_trampoline32_cr3:
     dd 0

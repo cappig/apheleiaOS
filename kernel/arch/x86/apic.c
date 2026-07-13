@@ -27,7 +27,6 @@
 
 #define LAPIC_ICR_DELIVERY_SHIFT   8
 #define LAPIC_ICR_DELIVERY_FIXED   (0U << LAPIC_ICR_DELIVERY_SHIFT)
-#define LAPIC_ICR_DELIVERY_NMI     (4U << LAPIC_ICR_DELIVERY_SHIFT)
 #define LAPIC_ICR_DELIVERY_INIT    (5U << LAPIC_ICR_DELIVERY_SHIFT)
 #define LAPIC_ICR_DELIVERY_STARTUP (6U << LAPIC_ICR_DELIVERY_SHIFT)
 #define LAPIC_ICR_DELIVERY_PENDING (1U << 12)
@@ -831,8 +830,4 @@ bool lapic_send_startup(u32 dest_apic, u8 vector) {
 bool lapic_send_fixed(u32 dest_apic, u8 vector) {
     u32 low = LAPIC_ICR_DELIVERY_FIXED | (u32)vector;
     return _lapic_send_ipi(dest_apic, low);
-}
-
-bool lapic_send_nmi(u32 dest_apic) {
-    return _lapic_send_ipi(dest_apic, LAPIC_ICR_DELIVERY_NMI);
 }

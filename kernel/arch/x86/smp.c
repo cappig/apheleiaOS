@@ -36,7 +36,8 @@ typedef struct {
     spinlock_t tlb_lock;
     volatile uintptr_t tlb_addr;
     volatile u64 tlb_targets ALIGNED(8);
-    volatile u64 tlb_acks ALIGNED(8);
+    volatile u64 tlb_seq ALIGNED(8);
+    volatile u64 tlb_seen[TLB_MAX_TARGETS] ALIGNED(8);
 } smp_state_t;
 
 static smp_state_t smp = {
@@ -46,6 +47,8 @@ static smp_state_t smp = {
 #if defined(__x86_64__)
 extern const u8 smp_trampoline64_start;
 extern const u8 smp_trampoline64_end;
+extern const u8 smp_trampoline64_cr0;
+extern const u8 smp_trampoline64_cr4;
 extern const u8 smp_trampoline64_cr3;
 extern const u8 smp_trampoline64_efer;
 extern const u8 smp_trampoline64_entry;
@@ -54,6 +57,8 @@ extern const u8 smp_trampoline64_stack;
 #else
 extern const u8 smp_trampoline32_start;
 extern const u8 smp_trampoline32_end;
+extern const u8 smp_trampoline32_cr0;
+extern const u8 smp_trampoline32_cr4;
 extern const u8 smp_trampoline32_cr3;
 extern const u8 smp_trampoline32_entry;
 extern const u8 smp_trampoline32_arg;
@@ -143,6 +148,7 @@ NORETURN static void _smp_ap_entry(void *arg) {
 
     cpu_set_current(core);
     _fpu_enable_local();
+    pat_init();
 
     gdt_init();
     tss_init(_read_stack_ptr());
@@ -157,8 +163,8 @@ NORETURN static void _smp_ap_entry(void *arg) {
         arch_cpu_relax();
     }
 
-    scheduler_start_cpu();
     enable_interrupts();
+    scheduler_start_cpu();
     cpu_halt();
 }
 
@@ -193,23 +199,31 @@ static void _patch_trampoline(void *trampoline_base, const cpu_core_t *core) {
     u64 stack_top = (u64)(uintptr_t)(smp.ap_stacks[core->id] + ARRAY_LEN(smp.ap_stacks[0]));
 
 #if defined(__x86_64__)
+    size_t off_cr0 = _trampoline_offset(&smp_trampoline64_cr0);
+    size_t off_cr4 = _trampoline_offset(&smp_trampoline64_cr4);
     size_t off_cr3 = _trampoline_offset(&smp_trampoline64_cr3);
     size_t off_efer = _trampoline_offset(&smp_trampoline64_efer);
     size_t off_entry = _trampoline_offset(&smp_trampoline64_entry);
     size_t off_arg = _trampoline_offset(&smp_trampoline64_arg);
     size_t off_stack = _trampoline_offset(&smp_trampoline64_stack);
 
+    _write32(trampoline_base, off_cr0, (u32)read_cr0());
+    _write32(trampoline_base, off_cr4, (u32)read_cr4());
     _write32(trampoline_base, off_cr3, (u32)read_cr3());
     _write32(trampoline_base, off_efer, (u32)read_msr(EFER_MSR));
     _write64(trampoline_base, off_entry, (u64)(uintptr_t)_smp_ap_entry);
     _write64(trampoline_base, off_arg, (u64)core->id);
     _write64(trampoline_base, off_stack, stack_top);
 #else
+    size_t off_cr0 = _trampoline_offset(&smp_trampoline32_cr0);
+    size_t off_cr4 = _trampoline_offset(&smp_trampoline32_cr4);
     size_t off_cr3 = _trampoline_offset(&smp_trampoline32_cr3);
     size_t off_entry = _trampoline_offset(&smp_trampoline32_entry);
     size_t off_arg = _trampoline_offset(&smp_trampoline32_arg);
     size_t off_stack = _trampoline_offset(&smp_trampoline32_stack);
 
+    _write32(trampoline_base, off_cr0, (u32)read_cr0());
+    _write32(trampoline_base, off_cr4, (u32)read_cr4());
     _write32(trampoline_base, off_cr3, (u32)read_cr3());
     _write32(trampoline_base, off_entry, (u32)(uintptr_t)_smp_ap_entry);
     _write32(trampoline_base, off_arg, (u32)core->id);
@@ -255,25 +269,52 @@ static bool _start_ap(const cpu_core_t *core, u8 vector) {
     return init_ok && (sipi1_ok || sipi2_ok);
 }
 
-static void flush_tlb_local(void) {
-    uintptr_t addr = __atomic_load_n(&smp.tlb_addr, __ATOMIC_ACQUIRE);
-
-    if (addr) {
-#if defined(__x86_64__)
-        tlb_flush((u64)addr);
-#else
-        tlb_flush((u32)addr);
-#endif
+static void service_tlb_local(void) {
+    cpu_core_t *core = cpu_current();
+    if (!core || core->id >= TLB_MAX_TARGETS) {
+        return;
     }
 
-    cpu_core_t *core = cpu_current();
-    if (core && core->id < TLB_MAX_TARGETS) {
-        __atomic_or_fetch(&smp.tlb_acks, 1ULL << core->id, __ATOMIC_SEQ_CST);
+    u64 bit = 1ULL << core->id;
+    u64 seq = __atomic_load_n(&smp.tlb_seq, __ATOMIC_ACQUIRE);
+    u64 seen = __atomic_load_n(&smp.tlb_seen[core->id], __ATOMIC_ACQUIRE);
+    if (!seq || seen >= seq) {
+        return;
+    }
+
+    u64 targets = __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE);
+    if (!(targets & bit)) {
+        return;
+    }
+
+    uintptr_t addr = __atomic_load_n(&smp.tlb_addr, __ATOMIC_ACQUIRE);
+
+#if defined(__x86_64__)
+    tlb_flush((u64)addr);
+#else
+    tlb_flush((u32)addr);
+#endif
+
+    // Never let a delayed request overwrite a newer acknowledgement.
+    while (seen < seq) {
+        bool updated = __atomic_compare_exchange_n(
+            &smp.tlb_seen[core->id],
+            &seen,
+            seq,
+            false,
+            __ATOMIC_RELEASE,
+            __ATOMIC_ACQUIRE
+        );
+
+        if (updated) {
+            break;
+        }
     }
 }
 
-static void _tlb_nmi_handler(UNUSED int_state_t *state) {
-    flush_tlb_local();
+static void _tlb_ipi_handler(UNUSED int_state_t *state) {
+    service_tlb_local();
+    lapic_end_int();
 }
 
 static void resched_ipi(UNUSED int_state_t *state) {
@@ -295,7 +336,7 @@ void smp_init(void) {
     }
 
     smp.started = true;
-    set_int_handler(INT_NON_MASKABLE, _tlb_nmi_handler);
+    set_int_handler(SMP_IPI_TLB_VECTOR, _tlb_ipi_handler);
     set_int_handler(SMP_IPI_RESCHED_VECTOR, resched_ipi);
 
     if (core_count <= 1) {
@@ -392,30 +433,13 @@ bool smp_send_resched(size_t core_id) {
     return lapic_send_fixed(target->lapic_id, SMP_IPI_RESCHED_VECTOR);
 }
 
-static bool same_user_vm(size_t core_id, arch_vm_space_t *vm) {
-    sched_thread_t *remote = sched_current_core(core_id);
-    arch_vm_space_t *remote_vm = remote ? remote->vm_space : NULL;
-
-    return vm && remote_vm == vm;
-}
-
-static u64 tlb_targets(cpu_core_t *self, uintptr_t addr) {
-    arch_word_t user_top = arch_user_stack_top();
-    bool user_addr = user_top && addr < (uintptr_t)user_top;
-
-    sched_thread_t *self_thread = sched_current();
-    arch_vm_space_t *self_vm = self_thread ? self_thread->vm_space : NULL;
-
+static u64 tlb_targets(cpu_core_t *self) {
     u64 targets = 0;
 
     for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
         cpu_core_t *core = &cores_local[i];
 
         if (!core->valid || !core->online || i == self->id) {
-            continue;
-        }
-
-        if (user_addr && !same_user_vm(i, self_vm)) {
             continue;
         }
 
@@ -426,43 +450,55 @@ static u64 tlb_targets(cpu_core_t *self, uintptr_t addr) {
 }
 
 static void send_tlb_ipis(u64 targets) {
-    // A TLB invalidation cannot wait for a target CPU to re-enable maskable
-    // interrupts while it holds stale mappings to reclaimed kernel memory.
     for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
         if (!(targets & (1ULL << i))) {
             continue;
         }
 
         cpu_core_t *core = &cores_local[i];
-        if (!lapic_send_nmi(core->lapic_id)) {
-            panic("failed to send TLB shootdown NMI");
+        if (!lapic_send_fixed(core->lapic_id, SMP_IPI_TLB_VECTOR)) {
+            panic("failed to send TLB shootdown IPI");
         }
     }
 }
 
-static void panic_tlb_timeout(cpu_core_t *self) {
-    u64 acks = __atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE);
+static u64 tlb_seen_mask(u64 targets, u64 seq) {
+    u64 seen = 0;
+
+    for (size_t i = 0; i < core_count && i < TLB_MAX_TARGETS; i++) {
+        u64 bit = 1ULL << i;
+        if ((targets & bit) && __atomic_load_n(&smp.tlb_seen[i], __ATOMIC_ACQUIRE) >= seq) {
+            seen |= bit;
+        }
+    }
+
+    return seen;
+}
+
+static void panic_tlb_timeout(cpu_core_t *self, u64 seq) {
     u64 pending = __atomic_load_n(&smp.tlb_targets, __ATOMIC_ACQUIRE);
+    u64 seen = tlb_seen_mask(pending, seq);
 
     panic(
-        "TLB shootdown timeout (self=%zu targets=%#" PRIx64 " acks=%#" PRIx64 " online=%zu)",
+        "TLB shootdown timeout (self=%zu seq=%" PRIu64 " targets=%#" PRIx64 " seen=%#" PRIx64 " online=%zu)",
         self->id,
+        seq,
         pending,
-        acks,
+        seen,
         smp_online_count()
     );
 }
 
-static void wait_tlb_acks(cpu_core_t *self, u64 targets) {
+static void wait_tlb_seen(cpu_core_t *self, u64 targets, u64 seq) {
     u64 deadline = timeout_deadline(TLB_TIMEOUT_MS);
     u64 retry_deadline = timeout_deadline(TLB_RETRY_MS);
     size_t fallback = (size_t)(4000000ULL * TLB_TIMEOUT_MS);
     size_t retry_fallback = (size_t)(4000000ULL * TLB_RETRY_MS);
 
     while (true) {
-        u64 acked = __atomic_load_n(&smp.tlb_acks, __ATOMIC_ACQUIRE);
+        u64 seen = tlb_seen_mask(targets, seq);
 
-        if ((acked & targets) == targets) {
+        if ((seen & targets) == targets) {
             return;
         }
 
@@ -472,19 +508,29 @@ static void wait_tlb_acks(cpu_core_t *self, u64 targets) {
         }
 
         if (retry) {
-            send_tlb_ipis(targets & ~acked);
+            send_tlb_ipis(targets & ~seen);
             retry_deadline = timeout_deadline(TLB_RETRY_MS);
             retry_fallback = (size_t)(4000000ULL * TLB_RETRY_MS);
         }
 
         if (deadline && _tsc_timed_out(deadline)) {
-            panic_tlb_timeout(self);
+            panic_tlb_timeout(self, seq);
         }
 
         if (!deadline && !fallback--) {
-            panic_tlb_timeout(self);
+            panic_tlb_timeout(self, seq);
         }
 
+        arch_cpu_relax();
+    }
+}
+
+static void lock_tlb(void) {
+    while (!spin_try_lock(&smp.tlb_lock)) {
+        // A caller can arrive with interrupts disabled while another CPU is
+        // waiting for its fixed IPI acknowledgement. Service that published
+        // request directly so both shootdowns can make forward progress.
+        service_tlb_local();
         arch_cpu_relax();
     }
 }
@@ -503,14 +549,11 @@ void smp_tlb_shootdown(uintptr_t addr) {
         return;
     }
 
-    // Keep interrupts enabled while waiting for the serializer. Otherwise two
-    // CPUs can deadlock when one waits for this CPU's IPI acknowledgement while
-    // this CPU spins on the lock with interrupts disabled.
     sched_preempt_disable();
-    spin_lock(&smp.tlb_lock);
+    lock_tlb();
     unsigned long irq_flags = arch_irq_save();
 
-    u64 targets = tlb_targets(self, addr);
+    u64 targets = tlb_targets(self);
     if (!targets) {
         spin_unlock(&smp.tlb_lock);
         arch_irq_restore(irq_flags);
@@ -520,12 +563,18 @@ void smp_tlb_shootdown(uintptr_t addr) {
 
     __atomic_store_n(&smp.tlb_addr, addr, __ATOMIC_RELEASE);
     __atomic_store_n(&smp.tlb_targets, targets, __ATOMIC_RELEASE);
-    __atomic_store_n(&smp.tlb_acks, 0, __ATOMIC_RELEASE);
+    u64 seq = __atomic_load_n(&smp.tlb_seq, __ATOMIC_RELAXED) + 1;
+    if (!seq) {
+        panic("TLB shootdown sequence exhausted");
+    }
+
+    // Publish the sequence last. Delayed IPIs identify the request they
+    // serviced through the per-CPU seen sequence and cannot ACK a later one.
+    __atomic_store_n(&smp.tlb_seq, seq, __ATOMIC_RELEASE);
 
     send_tlb_ipis(targets);
-    wait_tlb_acks(self, targets);
+    wait_tlb_seen(self, targets, seq);
 
-    __atomic_store_n(&smp.tlb_acks, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&smp.tlb_targets, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&smp.tlb_addr, 0, __ATOMIC_RELEASE);
 
