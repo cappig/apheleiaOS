@@ -1,3 +1,4 @@
+#include <base/macros.h>
 #include <data/hashmap.h>
 #include <draw.h>
 #include <errno.h>
@@ -42,13 +43,13 @@ static wm_state_t wm = {
     .order_dirty = true,
     .palette = {
         .background = 0x00202020U,
-        .border = 0x00c0c0c0U,
-        .title = 0x0020364aU,
-        .title_focus = 0x005fa9d8U,
+        .border = 0x00737d7aU,
+        .title = 0x00606b6bU,
+        .title_focus = 0x00315f70U,
         .client_bg = 0x00000000U,
-        .title_text = 0x00f0f0f0U,
-        .close_bg = 0x00b04040U,
-        .close_fg = 0x00ffffffU,
+        .title_text = 0x00f2f1e8U,
+        .close_bg = 0x00b7bbb6U,
+        .close_fg = 0x00252a2aU,
     },
 };
 
@@ -252,22 +253,67 @@ static void _draw_pixel(pixel_t *frame, u32 fb_width, u32 fb_height, i32 x, i32 
     frame[(size_t)y * fb_width + (size_t)x] = color;
 }
 
-static void _draw_close_button(pixel_t *frame, u32 fb_width, u32 fb_height, const wm_window_t *window, bool focused) {
+static u8 _clip8(i32 value) {
+    if (value < 0) {
+        return 0;
+    }
+    if (value > 255) {
+        return 255;
+    }
+    return (u8)value;
+}
+
+static pixel_t _shade(pixel_t color, i32 amount) {
+    u8 red = _clip8((i32)((color >> 16) & 0xffU) + amount);
+    u8 green = _clip8((i32)((color >> 8) & 0xffU) + amount);
+    u8 blue = _clip8((i32)(color & 0xffU) + amount);
+    return ((pixel_t)red << 16) | ((pixel_t)green << 8) | blue;
+}
+
+static void _draw_bevel(framebuffer_t *fb, i32 x, i32 y, u32 width, u32 height, pixel_t color) {
+    if (!fb || !width || !height) {
+        return;
+    }
+
+    draw_rect(fb, x, y, width, height, color);
+
+    pixel_t light = _shade(color, 24);
+    pixel_t dark = _shade(color, -38);
+    draw_rect(fb, x, y, width, 1, light);
+    draw_rect(fb, x, y, 1, height, light);
+    draw_rect(fb, x, y + (i32)height - 1, width, 1, dark);
+    draw_rect(fb, x + (i32)width - 1, y, 1, height, dark);
+}
+
+static bool _close_rect(const wm_window_t *window, wm_rect_t *rect) {
+    if (!window || !rect) {
+        return false;
+    }
+
+    rect->x = window->x + (i32)window->width - CLOSE_BTN_SIZE - 3;
+    rect->y = window->y + 3;
+    rect->width = CLOSE_BTN_SIZE;
+    rect->height = CLOSE_BTN_SIZE;
+    return true;
+}
+
+static void _draw_close_button(pixel_t *frame, u32 fb_width, u32 fb_height, const wm_window_t *window) {
     if (!window) {
         return;
     }
 
     const wm_palette_t *palette = wm_palette_get();
-    i32 bx = window->x + (i32)window->width - CLOSE_BTN_SIZE - 3;
-    i32 by = window->y + 3;
-    u32 bg = focused ? palette->close_bg : palette->title;
+    wm_rect_t rect = { 0 };
+    if (!_close_rect(window, &rect)) {
+        return;
+    }
+
     framebuffer_t fb = _wrap_framebuffer(frame, fb_width, fb_height);
+    _draw_bevel(&fb, rect.x, rect.y, (u32)rect.width, (u32)rect.height, palette->close_bg);
 
-    draw_rect(&fb, bx, by, CLOSE_BTN_SIZE, CLOSE_BTN_SIZE, bg);
-
-    for (i32 i = 2; i < CLOSE_BTN_SIZE - 2; i++) {
-        _draw_pixel(frame, fb_width, fb_height, bx + i, by + i, palette->close_fg);
-        _draw_pixel(frame, fb_width, fb_height, bx + i, by + (i32)CLOSE_BTN_SIZE - 1 - i, palette->close_fg);
+    for (i32 i = 3; i < CLOSE_BTN_SIZE - 3; i++) {
+        _draw_pixel(frame, fb_width, fb_height, rect.x + i, rect.y + i, palette->close_fg);
+        _draw_pixel(frame, fb_width, fb_height, rect.x + i, rect.y + (i32)CLOSE_BTN_SIZE - 1 - i, palette->close_fg);
     }
 }
 
@@ -860,23 +906,13 @@ static void _draw_title(
     }
 
     framebuffer_t fb = _wrap_framebuffer(frame, fb_width, fb_height);
-    draw_rect(
-        &fb,
-        title_rect.x,
-        title_rect.y,
-        (u32)title_rect.width,
-        (u32)title_rect.height,
-        window->focused ? palette->title_focus : palette->title
-    );
+    pixel_t title_color = window->focused ? palette->title_focus : palette->title;
+    _draw_bevel(&fb, title_rect.x, title_rect.y, (u32)title_rect.width, (u32)title_rect.height, title_color);
 
-    wm_rect_t close_rect = {
-        .x = window->x + (i32)window->width - CLOSE_BTN_SIZE - 3,
-        .y = window->y + 3,
-        .width = CLOSE_BTN_SIZE,
-        .height = CLOSE_BTN_SIZE,
-    };
+    wm_rect_t close_rect = { 0 };
+    _close_rect(window, &close_rect);
     if (_rect_intersect(&close_rect, &clip_title, NULL)) {
-        _draw_close_button(frame, fb_width, fb_height, window, window->focused);
+        _draw_close_button(frame, fb_width, fb_height, window);
     }
 
     u32 title_font_w = draw_font_width();
@@ -900,7 +936,7 @@ static void _draw_title(
     }
 
     wm_rect_t text_rect = {
-        .x = window->x + 6,
+        .x = window->x + 7,
         .y = text_y,
         .width = (i32)(title_len * title_font_w),
         .height = (i32)title_font_h,
@@ -1100,17 +1136,6 @@ static void _draw_client(
         return;
     }
 
-    draw_rect(&fb, window->x, window->y + TITLE_H, BORDER_W, window->height, palette->border);
-
-    draw_rect(
-        &fb,
-        window->x + (i32)window->width - BORDER_W,
-        window->y + TITLE_H,
-        BORDER_W,
-        window->height,
-        palette->border
-    );
-
     if (!_refresh_surface(window) || !window->surface) {
         draw_rect(
             &fb,
@@ -1120,32 +1145,52 @@ static void _draw_client(
             (u32)clip_client.height,
             palette->client_bg
         );
-        return;
+    } else {
+        client_copy_t copy = {
+            .frame = frame,
+            .fb_width = fb_width,
+            .window = window,
+            .client = &client_rect,
+            .clip = &clip_client,
+        };
+
+        bool copied = _copy_client(&copy);
+
+        if (!copied) {
+            draw_rect(
+                &fb,
+                clip_client.x,
+                clip_client.y,
+                (u32)clip_client.width,
+                (u32)clip_client.height,
+                palette->client_bg
+            );
+        } else {
+            _fill_client_gap(&fb, &clip_client, copy.copy_width, copy.copy_height);
+        }
     }
 
-    client_copy_t copy = {
-        .frame = frame,
-        .fb_width = fb_width,
-        .window = window,
-        .client = &client_rect,
-        .clip = &clip_client,
+    pixel_t dark = _shade(palette->border, -34);
+    i32 right = window->x + (i32)window->width;
+    i32 bottom = window->y + TITLE_H + (i32)window->height;
+    wm_rect_t edges[] = {
+        { window->x, window->y + TITLE_H, 1, (i32)window->height },
+        { window->x + 1, window->y + TITLE_H, BORDER_W - 1, (i32)window->height },
+        { right - BORDER_W, window->y + TITLE_H, BORDER_W - 1, (i32)window->height },
+        { right - 1, window->y + TITLE_H, 1, (i32)window->height },
+        { window->x, bottom - BORDER_W, (i32)window->width, BORDER_W - 1 },
+        { window->x, bottom - 1, (i32)window->width, 1 },
+    };
+    pixel_t colors[] = {
+        dark, palette->border, palette->border, dark, palette->border, dark,
     };
 
-    bool copied = _copy_client(&copy);
-
-    if (!copied) {
-        draw_rect(
-            &fb,
-            clip_client.x,
-            clip_client.y,
-            (u32)clip_client.width,
-            (u32)clip_client.height,
-            palette->client_bg
-        );
-        return;
+    for (size_t i = 0; i < ARRAY_LEN(edges); i++) {
+        wm_rect_t edge = { 0 };
+        if (_rect_intersect(&edges[i], &clip_client, &edge)) {
+            draw_rect(&fb, edge.x, edge.y, (u32)edge.width, (u32)edge.height, colors[i]);
+        }
     }
-
-    _fill_client_gap(&fb, &clip_client, copy.copy_width, copy.copy_height);
 }
 
 static void blit_window(pixel_t *frame, u32 fb_width, u32 fb_height, wm_window_t *window, const wm_rect_t *clip) {
@@ -1236,19 +1281,10 @@ bool wm_point_in_title(const wm_window_t *window, i32 px, i32 py) {
 }
 
 bool wm_point_in_close(const wm_window_t *window, i32 px, i32 py) {
-    if (!window) {
+    wm_rect_t close = { 0 };
+    if (!_close_rect(window, &close)) {
         return false;
     }
-
-    i32 bx = window->x + (i32)window->width - CLOSE_BTN_SIZE - 3;
-    i32 by = window->y + 3;
-
-    wm_rect_t close = {
-        .x = bx,
-        .y = by,
-        .width = CLOSE_BTN_SIZE,
-        .height = CLOSE_BTN_SIZE,
-    };
 
     return _point_in_rect(px, py, &close);
 }

@@ -8,7 +8,7 @@
 #include <ui.h>
 
 #define TITLE_H        18
-#define BORDER_W       1
+#define BORDER_W       2
 #define CLOSE_BTN_SIZE 12
 
 #define WM_MAX_FB_W   2048

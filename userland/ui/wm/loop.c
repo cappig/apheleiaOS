@@ -39,6 +39,8 @@ extern char **environ;
 #define WS_EVENT_BUDGET      512
 #define INPUT_EVENT_BUDGET   512
 #define WM_FRAME_NS          16666667ULL
+#define PLACE_STEP           22
+#define PLACE_SLOTS          6
 
 typedef enum {
     WM_DRAG_NONE = 0,
@@ -75,6 +77,7 @@ typedef struct {
     int focused_id;
     bool term_hotkey;
     wm_cursor_kind_t cursor_kind;
+    u32 place_slot;
 } wm_runtime_t;
 
 static u64 monotonic_ns(void) {
@@ -339,7 +342,7 @@ static bool _title_rect(const wm_window_t *window, wm_rect_t *rect) {
     return wm_rect_valid(rect);
 }
 
-static bool _center_on_screen(ui_t *ui, const fb_info_t *fb_info, wm_window_t *window, wm_rect_t *damage) {
+static bool _place_window(ui_t *ui, const fb_info_t *fb_info, wm_window_t *window, wm_rect_t *damage, u32 slot) {
     if (!ui || !fb_info || !window || !damage) {
         return false;
     }
@@ -358,6 +361,15 @@ static bool _center_on_screen(ui_t *ui, const fb_info_t *fb_info, wm_window_t *w
     if (win_h < frame_h) {
         y = (frame_h - win_h) / 2;
     }
+
+    i32 offset = (i32)(slot % PLACE_SLOTS) * PLACE_STEP - ((PLACE_SLOTS - 1) * PLACE_STEP / 2);
+    x += offset;
+    y += offset;
+
+    i32 max_x = frame_w > win_w ? frame_w - win_w : 0;
+    i32 max_y = frame_h > win_h ? frame_h - win_h : 0;
+    x = x < 0 ? 0 : (x > max_x ? max_x : x);
+    y = y < 0 ? 0 : (y > max_y ? max_y : y);
 
     wm_rect_t rect = _geometry_rect(x, y, window->width, window->height);
     bool applied = _apply_geometry(window, damage, &rect);
@@ -894,7 +906,7 @@ static int _handle_ws_events(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_inf
             if (events[i].type == WS_EVT_WINDOW_NEW) {
                 wm_window_t *window = wm_window_by_id(events[i].id);
                 if (window) {
-                    _center_on_screen(ui, fb_info, window, damage);
+                    _place_window(ui, fb_info, window, damage, rt->place_slot++);
                     _focus_window(ui, rt, window, damage);
                 } else {
                     rt->focused_id = -1;
@@ -1215,6 +1227,7 @@ static wm_runtime_t runtime_init(const fb_info_t *fb_info) {
         .focused_id = -1,
         .term_hotkey = false,
         .cursor_kind = WM_CURSOR_NORMAL,
+        .place_slot = 0,
     };
 
     return rt;

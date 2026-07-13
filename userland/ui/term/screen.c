@@ -20,6 +20,8 @@
 #define SCROLLBAR_TRACK     0x00262626U
 #define SCROLLBAR_THUMB     0x00545454U
 #define SCROLLBAR_ACTIVE    0x007a7a7aU
+#define TEXT_PAD_X          4
+#define TEXT_PAD_Y          2
 
 typedef struct {
     u32 codepoint;
@@ -1016,8 +1018,17 @@ static bool term_screen_layout(
     }
 
     u32 text_width = width - scrollbar_width;
+    if (text_width > TEXT_PAD_X * 2) {
+        text_width -= TEXT_PAD_X * 2;
+    }
+
+    u32 text_height = height;
+    if (text_height > TEXT_PAD_Y * 2) {
+        text_height -= TEXT_PAD_Y * 2;
+    }
+
     size_t cols = text_width / term_screen.cell_width;
-    size_t rows = height / term_screen.cell_height;
+    size_t rows = text_height / term_screen.cell_height;
 
     if (!cols) {
         cols = 1;
@@ -1210,8 +1221,8 @@ static void render_cells(size_t x0, size_t y0, size_t x1, size_t y1) {
         }
 
         for (size_t col = x0; col < x1; col++) {
-            size_t px = col * term_screen.cell_width;
-            size_t py = row * term_screen.cell_height;
+            size_t px = TEXT_PAD_X + col * term_screen.cell_width;
+            size_t py = TEXT_PAD_Y + row * term_screen.cell_height;
 
             const term_cell_t *cell = &line[col];
             u32 fg = ansi_color_rgb(cell->fg);
@@ -1230,8 +1241,8 @@ static void render_cursor(void) {
         return;
     }
 
-    size_t px = term_screen.cursor_x * term_screen.cell_width;
-    size_t py = term_screen.cursor_y * term_screen.cell_height;
+    size_t px = TEXT_PAD_X + term_screen.cursor_x * term_screen.cell_width;
+    size_t py = TEXT_PAD_Y + term_screen.cursor_y * term_screen.cell_height;
 
     term_cell_t *cell = cell_at(term_screen.cursor_x, term_screen.cursor_y);
     u32 fg = ansi_color_rgb(cell->fg);
@@ -1248,17 +1259,19 @@ static void render_cursor(void) {
 
 static rect_t dirty_rect(size_t x0, size_t y0, size_t x1, size_t y1) {
     rect_t rect = {
-        .x = (u32)(x0 * term_screen.cell_width),
-        .y = (u32)(y0 * term_screen.cell_height),
+        .x = TEXT_PAD_X + (u32)(x0 * term_screen.cell_width),
+        .y = TEXT_PAD_Y + (u32)(y0 * term_screen.cell_height),
         .width = (u32)((x1 - x0) * term_screen.cell_width),
         .height = (u32)((y1 - y0) * term_screen.cell_height),
     };
 
     if (x0 == 0 && x1 == term_screen.cols) {
+        rect.x = 0;
         rect.width = term_screen.width;
     }
 
     if (y0 == 0 && y1 == term_screen.rows) {
+        rect.y = 0;
         rect.height = term_screen.height;
     }
 
