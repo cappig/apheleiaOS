@@ -27,6 +27,7 @@ typedef struct PACKED {
 int read_disk(void *dest, size_t offset, size_t bytes);
 
 void disk_init(u16 disk);
+bool bios_boot_is_optical(void);
 bool bios_boot_root_hint(boot_root_hint_t *out);
 
 void *read_rootfs(const char *path, size_t *out_size);

@@ -63,6 +63,10 @@ NORETURN void _load_entry(u16 boot_disk) {
     log_debug("reading loader config");
     parse_config(&info.args);
 
+    if (bios_boot_is_optical()) {
+        info.args.stage_rootfs = 1;
+    }
+
     u64 rootfs_paddr = 0;
     u64 rootfs_size = 0;
 

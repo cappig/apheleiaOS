@@ -31,6 +31,7 @@ typedef struct {
     size_t root_size;
 
     bool root_found;
+    bool optical;
     u8 root_part;
 
     boot_ext2_t fs;
@@ -170,6 +171,7 @@ static void detect_sector(void) {
 
 void disk_init(u16 drive) {
     bios_disk.drive = drive;
+    bios_disk.optical = drive >= 0xe0;
 
     detect_sector();
     log_debug("boot disk=%#x sector=%u", bios_disk.drive, bios_disk.sector_size);
@@ -207,6 +209,10 @@ void disk_init(u16 drive) {
     }
 }
 
+bool bios_boot_is_optical(void) {
+    return bios_disk.optical;
+}
+
 bool bios_boot_root_hint(boot_root_hint_t *out) {
     if (!out) {
         return false;
@@ -220,8 +226,8 @@ bool bios_boot_root_hint(boot_root_hint_t *out) {
 
     out->valid = 1;
 
-    out->media = BOOT_MEDIA_DISK;
-    out->transport = BOOT_TRANSPORT_ATA;
+    out->media = bios_disk.optical ? BOOT_MEDIA_OPTICAL : BOOT_MEDIA_DISK;
+    out->transport = bios_disk.optical ? BOOT_TRANSPORT_ATAPI : BOOT_TRANSPORT_ATA;
     out->part_style = BOOT_PARTSTYLE_MBR;
     out->part_index = (u8)(bios_disk.root_part + 1);
     out->bios_drive = (u8)(bios_disk.drive & 0xffU);
