@@ -890,7 +890,11 @@ static bool mbrot_init(mbrot_app_t *app, mbrot_fractal_t fractal) {
     app->pass_step = 1U;
     view_reset(&app->view, fractal);
 
-    if (window_init(&app->window, 760, 500, fractal_profile(fractal)->title)) {
+    ws_hints_t hints = {
+        .min_width = 320,
+        .min_height = 240,
+    };
+    if (window_init_ex(&app->window, 760, 500, fractal_profile(fractal)->title, &hints)) {
         printf("mbrot: use --term or -t to draw in the terminal\n");
         return false;
     }

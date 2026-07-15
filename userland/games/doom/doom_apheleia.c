@@ -299,7 +299,11 @@ void DG_Init(void) {
     doom.window_closed = false;
     doom.close_key_sent = false;
 
-    if (window_init(&doom.window, DOOMGENERIC_RESX, DOOMGENERIC_RESY, "doom")) {
+    ws_hints_t hints = {
+        .min_width = 320,
+        .min_height = 200,
+    };
+    if (window_init_ex(&doom.window, DOOMGENERIC_RESX, DOOMGENERIC_RESY, "doom", &hints)) {
         fprintf(stderr, "doom: failed to create window (%d: %s)\n", errno, strerror(errno));
         exit(1);
     }

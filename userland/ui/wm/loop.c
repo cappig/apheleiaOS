@@ -76,6 +76,7 @@ typedef struct {
     bool drag_sync_valid;
     int focused_id;
     bool term_hotkey;
+    bool switch_hotkey;
     wm_cursor_kind_t cursor_kind;
     u32 place_slot;
 } wm_runtime_t;
@@ -549,7 +550,7 @@ static void _begin_drag(wm_runtime_t *rt, const wm_window_t *window) {
 }
 
 static u32 _resize_hit_edges(const wm_window_t *window, i32 px, i32 py) {
-    if (!window) {
+    if (!window || (window->flags & WS_WINDOW_FIXED)) {
         return 0;
     }
 
@@ -573,6 +574,7 @@ static u32 _resize_hit_edges(const wm_window_t *window, i32 px, i32 py) {
 
     bool near_left_edge = (px - left) < RESIZE_EDGE_MARGIN;
     bool near_right_edge = (right - px) < RESIZE_EDGE_MARGIN;
+    bool near_top_edge = (py - top) < RESIZE_EDGE_MARGIN;
     bool near_bottom_edge = (bottom - py) < RESIZE_EDGE_MARGIN;
 
     bool near_left_corner = (px - left) < RESIZE_CORNER_MARGIN;
@@ -585,7 +587,7 @@ static u32 _resize_hit_edges(const wm_window_t *window, i32 px, i32 py) {
     }
 
     if (near_right_corner && near_top_corner) {
-        return 0;
+        return WM_RESIZE_RIGHT | WM_RESIZE_TOP;
     }
 
     if (near_left_corner && near_bottom_corner) {
@@ -605,6 +607,10 @@ static u32 _resize_hit_edges(const wm_window_t *window, i32 px, i32 py) {
         edges |= WM_RESIZE_RIGHT;
     }
 
+    if (near_top_edge) {
+        edges |= WM_RESIZE_TOP;
+    }
+
     if (near_bottom_edge) {
         edges |= WM_RESIZE_BOTTOM;
     }
@@ -620,6 +626,10 @@ static wm_cursor_kind_t _cursor_for_edges(u32 edges) {
 
     if (top && left) {
         return WM_CURSOR_RESIZE_NW;
+    }
+
+    if (top && right) {
+        return WM_CURSOR_RESIZE_SW;
     }
 
     if (bottom && left) {
@@ -750,19 +760,21 @@ static void _clamp_axis(wm_resize_axis_t *axis, i32 min_size, i32 frame_size, bo
 
 static bool _resize_geometry(
     const wm_runtime_t *rt,
+    const wm_window_t *window,
     const fb_info_t *fb_info,
     i32 delta_x,
     i32 delta_y,
     wm_resize_geometry_t *out
 ) {
-    if (!rt || !fb_info || !out) {
+    if (!rt || !window || !fb_info || !out || (window->flags & WS_WINDOW_FIXED)) {
         return false;
     }
 
     i32 frame_w = (i32)fb_info->width;
     i32 frame_h = (i32)fb_info->height;
-    i32 min_w = MIN_CLIENT_WIDTH;
-    i32 min_total_h = TITLE_H + MIN_CLIENT_HEIGHT;
+    i32 min_w = max(MIN_CLIENT_WIDTH, (i32)window->min_width);
+    i32 min_h = max(MIN_CLIENT_HEIGHT, (i32)window->min_height);
+    i32 min_total_h = TITLE_H + min_h;
 
     bool left = (rt->drag_edges & WM_RESIZE_LEFT) != 0;
     bool right = (rt->drag_edges & WM_RESIZE_RIGHT) != 0;
@@ -842,7 +854,7 @@ static bool _apply_drag(ui_t *ui, wm_runtime_t *rt, const fb_info_t *fb_info, wm
     }
 
     wm_resize_geometry_t geometry = { 0 };
-    if (!_resize_geometry(rt, fb_info, delta_x, delta_y, &geometry)) {
+    if (!_resize_geometry(rt, window, fb_info, delta_x, delta_y, &geometry)) {
         return false;
     }
 
@@ -1056,9 +1068,16 @@ _handle_mouse_button(ui_t *ui, wm_runtime_t *rt, const input_event_t *event, wm_
     return changed;
 }
 
-static bool _handle_key(ui_t *ui, wm_runtime_t *rt, input_event_t *event, volatile sig_atomic_t *exit_requested) {
+static bool _handle_key(
+    ui_t *ui,
+    wm_runtime_t *rt,
+    input_event_t *event,
+    wm_rect_t *damage,
+    volatile sig_atomic_t *exit_requested
+) {
     bool ctrl = (event->modifiers & INPUT_MOD_CTRL) != 0;
     bool alt = (event->modifiers & INPUT_MOD_ALT) != 0;
+    bool shift = (event->modifiers & INPUT_MOD_SHIFT) != 0;
 
     bool quit_key = event->keycode == KBD_BACKSPACE || event->keycode == KBD_Q;
     if (event->action && ctrl && alt && quit_key) {
@@ -1076,10 +1095,37 @@ static bool _handle_key(ui_t *ui, wm_runtime_t *rt, input_event_t *event, volati
         }
     }
 
+    if (event->keycode == KBD_TAB) {
+        bool was_switching = rt->switch_hotkey;
+
+        if (!event->action) {
+            rt->switch_hotkey = false;
+            if (was_switching) {
+                return true;
+            }
+        } else if (alt && !rt->switch_hotkey) {
+            rt->switch_hotkey = true;
+
+            wm_window_t *current = NULL;
+            if (rt->focused_id >= 0) {
+                current = wm_window_by_id((u32)rt->focused_id);
+            }
+
+            wm_window_t *next = wm_cycle_window(current, shift);
+            if (next) {
+                _focus_window(ui, rt, next, damage);
+            }
+            return true;
+        }
+    }
+
     if (event->action && ctrl && event->keycode == KBD_W && rt->focused_id >= 0) {
-        ui_mgr_close(ui, (u32)rt->focused_id);
-        rt->focused_id = -1;
-        return true;
+        wm_window_t *window = wm_window_by_id((u32)rt->focused_id);
+        if (window) {
+            ui_mgr_close(ui, window->id);
+            rt->focused_id = -1;
+            return true;
+        }
     }
 
     return false;
@@ -1147,7 +1193,7 @@ static int handle_input(
             } else if (event->type == INPUT_EVENT_KEY) {
                 *changed = true;
 
-                if (_handle_key(ui, rt, event, exit_requested)) {
+                if (_handle_key(ui, rt, event, damage, exit_requested)) {
                     key_handled = true;
                 }
             }
@@ -1226,6 +1272,7 @@ static wm_runtime_t runtime_init(const fb_info_t *fb_info) {
         .drag_sync_valid = false,
         .focused_id = -1,
         .term_hotkey = false,
+        .switch_hotkey = false,
         .cursor_kind = WM_CURSOR_NORMAL,
         .place_slot = 0,
     };

@@ -14,7 +14,8 @@ static bool should_quit(const ws_input_event_t *event) {
 int main(void) {
     // open a window
     window_t window = { 0 };
-    if (window_init(&window, 640, 420, "wdemo")) {
+    ws_hints_t hints = { .flags = WS_WINDOW_FIXED };
+    if (window_init_ex(&window, 640, 420, "wdemo", &hints)) {
         return 1;
     }
 

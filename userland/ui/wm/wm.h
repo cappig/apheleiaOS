@@ -42,6 +42,9 @@ typedef struct {
     u32 fb_width;
     u32 fb_height;
     u32 z;
+    u32 flags;
+    u32 min_width;
+    u32 min_height;
     bool focused;
     int fb_fd;
     pixel_t *surface;
@@ -66,6 +69,7 @@ const wm_palette_t *wm_palette_get(void);
 wm_window_t *wm_window_by_id(u32 id);
 wm_window_t *wm_top_window_at(i32 px, i32 py);
 wm_window_t *wm_top_window(void);
+wm_window_t *wm_cycle_window(const wm_window_t *current, bool reverse);
 bool wm_point_in_title(const wm_window_t *window, i32 px, i32 py);
 bool wm_point_in_close(const wm_window_t *window, i32 px, i32 py);
 bool wm_window_bounds_rect(const wm_window_t *window, wm_rect_t *rect);

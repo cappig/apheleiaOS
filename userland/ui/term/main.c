@@ -495,7 +495,11 @@ static bool term_app_init(term_app_t *app) {
     memset(app, 0, sizeof(*app));
     app->master_fd = -1;
 
-    if (window_init(&app->window, 800, 500, "term")) {
+    ws_hints_t hints = {
+        .min_width = 320,
+        .min_height = 160,
+    };
+    if (window_init_ex(&app->window, 800, 500, "term", &hints)) {
         term_log_errno("failed to create window");
         return false;
     }

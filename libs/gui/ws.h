@@ -16,7 +16,14 @@ enum ws_event_type {
 enum ws_window_flags {
     WS_WINDOW_MAPPED = 1 << 0,
     WS_WINDOW_FOCUSED = 1 << 1,
+    WS_WINDOW_FIXED = 1 << 2,
 };
+
+typedef struct ws_hints {
+    u32 flags;
+    u32 min_width;
+    u32 min_height;
+} ws_hints_t;
 
 typedef struct ws_input_event {
     u64 timestamp_ms;
@@ -42,6 +49,9 @@ typedef struct ws_event {
     i32 y;
     u32 width;
     u32 height;
+    u32 flags;
+    u32 min_width;
+    u32 min_height;
     char title[WS_TITLE_MAX];
 } ws_event_t;
 
@@ -53,6 +63,8 @@ typedef struct ws_cmd {
     u32 height;
     u32 stride;
     u32 flags;
+    u32 min_width;
+    u32 min_height;
     pid_t pid;
     char title[WS_TITLE_MAX];
     ws_input_event_t input;

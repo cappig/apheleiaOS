@@ -1367,6 +1367,21 @@ wm_window_t *wm_top_window(void) {
     return _top_window_linear(false, 0, 0);
 }
 
+wm_window_t *wm_cycle_window(const wm_window_t *current, bool reverse) {
+    if (!wm.windows || !wm.windows->size) {
+        return NULL;
+    }
+
+    size_t index = 0;
+    if (!_find_index(current, &index)) {
+        return wm_top_window();
+    }
+
+    size_t count = wm.windows->size;
+    size_t next = reverse ? (index + 1) % count : (index + count - 1) % count;
+    return vec_at(wm.windows, next);
+}
+
 void wm_set_focus(ui_t *ui, wm_window_t *window, u32 *z_counter) {
     if (!window) {
         return;
@@ -1487,6 +1502,9 @@ static bool _ws_event_new(const ws_event_t *event, wm_window_t *window, wm_rect_
         .fb_width = event->width,
         .fb_height = event->height,
         .z = event->id,
+        .flags = event->flags,
+        .min_width = event->min_width,
+        .min_height = event->min_height,
         .focused = false,
         .fb_fd = _open_ws_fb(event->id),
         .surface = NULL,

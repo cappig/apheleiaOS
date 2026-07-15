@@ -41,6 +41,8 @@ typedef struct {
 
     u32 z;
     u32 flags;
+    u32 min_width;
+    u32 min_height;
 
     u8 *fb;
     u32 fb_store_width;
@@ -521,6 +523,9 @@ static void queue_mgr_event(u32 type, u32 id, const ws_window_t *window) {
         event.y = window->y;
         event.width = window->width;
         event.height = window->height;
+        event.flags = window->flags;
+        event.min_width = window->min_width;
+        event.min_height = window->min_height;
         strncpy(event.title, window->title, sizeof(event.title) - 1);
     }
 
@@ -740,6 +745,8 @@ static void fill_cmd(ws_cmd_t *cmd, u32 id) {
     cmd->height = 0;
     cmd->stride = 0;
     cmd->flags = 0;
+    cmd->min_width = 0;
+    cmd->min_height = 0;
 
     ws_window_t *window = _window_slot(id);
     if (!window || !window->allocated) {
@@ -752,6 +759,8 @@ static void fill_cmd(ws_cmd_t *cmd, u32 id) {
     cmd->height = window->height;
     cmd->stride = window->stride;
     cmd->flags = window->flags;
+    cmd->min_width = window->min_width;
+    cmd->min_height = window->min_height;
 }
 
 static int _window_lookup(u32 id, pid_t caller_pid, ws_window_t **out) {
@@ -1058,7 +1067,13 @@ _init_window_from_cmd(ws_window_t *window, u32 id, pid_t caller_pid, ws_cmd_t *c
     window->fb_store_stride = stride;
     window->fb_store_size = fb_size;
     window->z = id;
-    window->flags = cmd->flags | WS_WINDOW_MAPPED;
+    window->flags = (cmd->flags & WS_WINDOW_FIXED) | WS_WINDOW_MAPPED;
+    window->min_width = cmd->min_width;
+    window->min_height = cmd->min_height;
+    if (window->flags & WS_WINDOW_FIXED) {
+        window->min_width = window->width;
+        window->min_height = window->height;
+    }
     window->fb_size = fb_size;
     window->io_fb_size = fb_size;
     window->fb_capacity = fb_size;
@@ -1073,6 +1088,10 @@ static int _handle_alloc(pid_t caller_pid, ws_cmd_t *cmd) {
 
     if (!ws_state.manager_pid) {
         return -EPIPE;
+    }
+
+    if (cmd->min_width > cmd->width || cmd->min_height > cmd->height) {
+        return -EINVAL;
     }
 
     u32 stride = 0;
@@ -1267,6 +1286,14 @@ static int _handle_set_size(u32 id, ws_window_t *window, ws_cmd_t *cmd) {
     if (cmd->width == window->width && cmd->height == window->height) {
         fill_cmd(cmd, id);
         return 0;
+    }
+
+    if (window->flags & WS_WINDOW_FIXED) {
+        return -EPERM;
+    }
+
+    if (cmd->width < window->min_width || cmd->height < window->min_height) {
+        return -EINVAL;
     }
 
     if (window->io_refs) {

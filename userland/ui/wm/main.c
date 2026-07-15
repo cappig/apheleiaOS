@@ -1,5 +1,6 @@
 #include <ctype.h>
 #include <draw.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <gui/fb.h>
 #include <limits.h>
@@ -9,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <ui.h>
 #include <unistd.h>
 #include <user/io.h>
@@ -50,6 +52,14 @@ typedef struct {
 static void _on_signal(int signum) {
     (void)signum;
     exit_requested = 1;
+}
+
+static void _on_child(int signum) {
+    (void)signum;
+
+    int saved_errno = errno;
+    while (waitpid(-1, NULL, WNOHANG) > 0) {}
+    errno = saved_errno;
 }
 
 static bool set_palette_color(wm_config_t *cfg, const char *key, const char *value) {
@@ -619,6 +629,7 @@ int main(int argc, char **argv) {
     signal(SIGINT, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
     signal(SIGQUIT, SIG_IGN);
+    signal(SIGCHLD, _on_child);
     signal(SIGTERM, _on_signal);
     signal(SIGHUP, _on_signal);
 

@@ -435,7 +435,11 @@ int main(int argc, char **argv) {
     }
 
     window_t window = { 0 };
-    if (window_init(&window, 320, 360, "clock")) {
+    ws_hints_t hints = {
+        .min_width = 180,
+        .min_height = 220,
+    };
+    if (window_init_ex(&window, 320, 360, "clock", &hints)) {
         return 1;
     }
 

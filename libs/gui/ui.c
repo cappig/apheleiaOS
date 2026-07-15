@@ -353,6 +353,9 @@ static void window_reset(window_t *window, ui_t *ui) {
     window->width = 0;
     window->height = 0;
     window->stride = 0;
+    window->flags = 0;
+    window->min_width = 0;
+    window->min_height = 0;
     sync_framebuffer(window);
 }
 
@@ -594,7 +597,7 @@ int ui_mgr_send(ui_t *ui, u32 id, const input_event_t *event) {
     return ioctl(ui->ctl_fd, WSIOCSINPUT, &cmd);
 }
 
-static int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const char *title) {
+static int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const char *title, const ws_hints_t *hints) {
     if (!ui || !window) {
         errno = EINVAL;
         return -1;
@@ -605,6 +608,9 @@ static int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const
     ws_cmd_t cmd = { 0 };
     cmd.width = width;
     cmd.height = height;
+    cmd.flags = hints ? hints->flags : 0;
+    cmd.min_width = hints ? hints->min_width : 0;
+    cmd.min_height = hints ? hints->min_height : 0;
 
     if (title) {
         snprintf(cmd.title, sizeof(cmd.title), "%s", title);
@@ -621,6 +627,9 @@ static int window_alloc(ui_t *ui, window_t *window, u32 width, u32 height, const
     window->width = cmd.width;
     window->height = cmd.height;
     window->stride = cmd.stride;
+    window->flags = cmd.flags;
+    window->min_width = cmd.min_width;
+    window->min_height = cmd.min_height;
     sync_framebuffer(window);
 
     if (!window_open_fds(window)) {
@@ -712,7 +721,7 @@ static ssize_t window_blit(window_t *window, const void *pixels, size_t len, siz
     return pwrite(window->fb_fd, pixels, len, (off_t)offset);
 }
 
-int window_init(window_t *window, u32 width, u32 height, const char *title) {
+int window_init_ex(window_t *window, u32 width, u32 height, const char *title, const ws_hints_t *hints) {
     if (!window) {
         errno = EINVAL;
         return -1;
@@ -740,7 +749,7 @@ int window_init(window_t *window, u32 width, u32 height, const char *title) {
     }
 
     int env_saved = errno;
-    if (!window_alloc(window->ui, window, width, height, title)) {
+    if (!window_alloc(window->ui, window, width, height, title, hints)) {
         return 0;
     }
 
@@ -762,6 +771,10 @@ int window_init(window_t *window, u32 width, u32 height, const char *title) {
 
     errno = saved;
     return -1;
+}
+
+int window_init(window_t *window, u32 width, u32 height, const char *title) {
+    return window_init_ex(window, width, height, title, NULL);
 }
 
 void window_deinit(window_t *window) {
