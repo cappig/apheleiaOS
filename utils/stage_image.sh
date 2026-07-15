@@ -31,7 +31,7 @@ if [ "$mode" = "riscv" ] || [ "$mode" = "frisc" ]; then
     # ttyS0 is an alias of tty0 on RISC-V, so it must not run a second getty.
     sed -i '\|^/dev/ttyS0[[:space:]]|d' "$stage_dir/etc/ttys"
     rm -rf "$stage_dir/etc/cursors"
-    rm -f "$stage_dir/etc/wm.conf" "$stage_dir/home/user/wall.ppm"
+    rm -f "$stage_dir/etc/wm.conf" "$stage_dir/home/user/wall.qoi"
 fi
 
 if [ "$mode" = "frisc" ] && [ "$keep_sdk" != "true" ]; then

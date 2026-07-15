@@ -1,12 +1,11 @@
 #include "cursor.h"
 
-#include <parse/ppm.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "file.h"
+#include "image.h"
 
 #define CURSOR_MAX_BYTES (1U * 1024U * 1024U)
 #define CURSOR_WIDTH     16U
@@ -44,62 +43,21 @@ static bool _cursor_load_into(wm_cursor_t *cursor, const char *path) {
         return false;
     }
 
-    u8 *file_data = NULL;
-    size_t file_len = 0;
-
-    bool read_ok = wm_file_read_all(path, CURSOR_MAX_BYTES, &file_data, &file_len);
-
-    if (!read_ok) {
+    wm_image_t image = { 0 };
+    if (!wm_image_load(path, CURSOR_MAX_BYTES, CURSOR_WIDTH * CURSOR_HEIGHT, &image)) {
         return false;
     }
 
-    ppm_p6_blob_t ppm_blob = { 0 };
-    if (!ppm_parse_p6_blob(file_data, file_len, &ppm_blob)) {
-        free(file_data);
+    if (image.width != CURSOR_WIDTH || image.height != CURSOR_HEIGHT) {
+        wm_image_release(&image);
         return false;
     }
 
-    u32 width = ppm_blob.width;
-    u32 height = ppm_blob.height;
-
-    if (width != CURSOR_WIDTH || height != CURSOR_HEIGHT) {
-        free(file_data);
-        return false;
-    }
-
-    size_t pixel_count = (size_t)width * (size_t)height;
-    if (height && pixel_count / height != width) {
-        free(file_data);
-        return false;
-    }
-
-    size_t size_max = (size_t)-1;
-    if (pixel_count > size_max / sizeof(pixel_t)) {
-        free(file_data);
-        return false;
-    }
-
-    pixel_t *pixels = malloc(pixel_count * sizeof(pixel_t));
-    if (!pixels) {
-        free(file_data);
-        return false;
-    }
-
-    const u8 *raster = ppm_blob.raster;
-    for (size_t i = 0; i < pixel_count; i++) {
-        u8 r = raster[i * 3 + 0];
-        u8 g = raster[i * 3 + 1];
-        u8 b = raster[i * 3 + 2];
-        u32 color = ((u32)r << 16) | ((u32)g << 8) | (u32)b;
-
-        pixels[i] = color;
-    }
-
-    free(file_data);
-
-    cursor->width = width;
-    cursor->height = height;
-    cursor->pixels = pixels;
+    cursor->width = image.width;
+    cursor->height = image.height;
+    cursor->pixels = image.pixels;
+    image.pixels = NULL;
+    wm_image_release(&image);
 
     return true;
 }

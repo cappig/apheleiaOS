@@ -425,7 +425,7 @@ static const char *pick_cursor(const wm_startup_t *startup, const char *cursor_d
         return startup->cursor_override;
     }
 
-    if (join_cursor_path(path, path_size, cursor_dir, "pointer.ppm")) {
+    if (join_cursor_path(path, path_size, cursor_dir, "pointer.qoi")) {
         return path;
     }
 
@@ -439,23 +439,23 @@ static void load_resize_cursors(const char *cursor_dir, const char *fallback) {
     } specs[] = {
         {
             .kind = WM_CURSOR_RESIZE_EW,
-            .name = "resize_ew.ppm",
+            .name = "resize_ew.qoi",
         },
         {
             .kind = WM_CURSOR_RESIZE_NS,
-            .name = "resize_ns.ppm",
+            .name = "resize_ns.qoi",
         },
         {
             .kind = WM_CURSOR_RESIZE_NW,
-            .name = "resize_nw.ppm",
+            .name = "resize_nw.qoi",
         },
         {
             .kind = WM_CURSOR_RESIZE_SE,
-            .name = "resize_se.ppm",
+            .name = "resize_se.qoi",
         },
         {
             .kind = WM_CURSOR_RESIZE_SW,
-            .name = "resize_sw.ppm",
+            .name = "resize_sw.qoi",
         },
     };
 
@@ -479,11 +479,11 @@ static void load_assets(const wm_startup_t *startup, const wm_config_t *cfg, u32
         warn_cursor_failed(normal_cursor);
     }
 
-    load_cursor(WM_CURSOR_POINTER, cursor_dir, "pointer_interact.ppm", normal_cursor);
-    load_cursor(WM_CURSOR_MOVE, cursor_dir, "move.ppm", normal_cursor);
+    load_cursor(WM_CURSOR_POINTER, cursor_dir, "pointer_interact.qoi", normal_cursor);
+    load_cursor(WM_CURSOR_MOVE, cursor_dir, "move.qoi", normal_cursor);
 
     char resize_path[PATH_MAX];
-    const char *resize_cursor = find_cursor(resize_path, sizeof(resize_path), cursor_dir, "resize.ppm");
+    const char *resize_cursor = find_cursor(resize_path, sizeof(resize_path), cursor_dir, "resize.qoi");
 
     load_resize_cursors(cursor_dir, resize_cursor);
 }

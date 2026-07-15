@@ -1,14 +1,14 @@
 #include "background.h"
 
-#include <parse/ppm.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "color.h"
-#include "file.h"
+#include "image.h"
 
-#define BG_FILE_MAX (64U * 1024U * 1024U)
+#define BG_FILE_MAX  (64U * 1024U * 1024U)
+#define BG_PIXEL_MAX (16U * 1024U * 1024U)
 
 typedef struct {
     pixel_t *pixels;
@@ -110,14 +110,8 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
         return true;
     }
 
-    u8 *file_data = NULL;
-    size_t file_len = 0;
-    if (!wm_file_read_all(path, BG_FILE_MAX, &file_data, &file_len)) {
-        goto fail;
-    }
-
-    ppm_p6_blob_t ppm_blob = { 0 };
-    if (!ppm_parse_p6_blob(file_data, file_len, &ppm_blob)) {
+    wm_image_t source = { 0 };
+    if (!wm_image_load(path, BG_FILE_MAX, BG_PIXEL_MAX, &source)) {
         goto fail;
     }
 
@@ -133,9 +127,8 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
         goto fail;
     }
 
-    const u8 *raster = ppm_blob.raster;
-    u32 src_w = ppm_blob.width;
-    u32 src_h = ppm_blob.height;
+    u32 src_w = source.width;
+    u32 src_h = source.height;
     _build_cover_map(src_w, src_h, fb_width, fb_height, x_map, y_map);
 
     u32 prev_src_y = 0;
@@ -150,14 +143,10 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
             continue;
         }
 
-        size_t src_row = (size_t)src_y * (size_t)src_w * 3U;
+        size_t src_row = (size_t)src_y * (size_t)src_w;
 
         for (u32 x = 0; x < fb_width; x++) {
-            size_t src_off = src_row + (size_t)x_map[x] * 3U;
-            u8 r = raster[src_off + 0];
-            u8 g = raster[src_off + 1];
-            u8 b = raster[src_off + 2];
-            dst[dst_row + x] = ((u32)r << 16) | ((u32)g << 8) | (u32)b;
+            dst[dst_row + x] = source.pixels[src_row + x_map[x]];
         }
 
         prev_src_y = src_y;
@@ -166,17 +155,14 @@ bool wm_background_load(u32 fb_width, u32 fb_height, const char *path) {
 
     free(x_map);
     free(y_map);
-    free(file_data);
+    wm_image_release(&source);
 
     background.width = fb_width;
     background.height = fb_height;
     return true;
 
 fail:
-    if (file_data) {
-        free(file_data);
-    }
-
+    wm_image_release(&source);
     wm_background_unload();
     return false;
 }

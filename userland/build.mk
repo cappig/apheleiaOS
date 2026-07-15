@@ -19,7 +19,7 @@ USER_COMMON_SRC := $(wildcard libs/user/*.c)
 USER_DATA_SRC   := $(wildcard libs/data/*.c)
 USER_GUI_SRC    := $(wildcard libs/gui/*.c)
 USER_TERM_SRC   := $(wildcard libs/term/*.c)
-USER_PARSE_SRC  := libs/parse/psf.c libs/parse/ppm.c libs/parse/textdb.c
+USER_PARSE_SRC  := libs/parse/psf.c libs/parse/ppm.c libs/parse/qoi.c libs/parse/textdb.c
 
 ifeq ($(ARCH_TREE), riscv)
 USER_CRT_SRC  := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crt0.S
