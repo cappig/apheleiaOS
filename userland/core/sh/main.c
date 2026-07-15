@@ -21,6 +21,9 @@
 
 #include "complete.h"
 #include "input.h"
+#include "script.h"
+#include "syntax.h"
+#include "test.h"
 
 #define SH_ENV_MAX       32
 #define SH_ENV_KEY_MAX   32
@@ -50,6 +53,7 @@ typedef enum {
 typedef struct {
     int id;
     pid_t pid;
+    pid_t last_pid;
     job_state_t state;
     char cmd[SH_CMD_MAX];
 } job_t;
@@ -105,6 +109,9 @@ typedef struct {
     pid_t pgid;
     int last_status;
     pid_t last_bg_pid;
+    const char *arg0;
+    const char *args[SH_MAX_ARGS];
+    int arg_count;
     bool interactive;
     bool color;
     bool no_color;
@@ -113,6 +120,9 @@ typedef struct {
 static sh_state_t sh = {
     .next_job_id = 1,
 };
+
+static int run_command(char *line);
+static int run_script_path(const char *path);
 
 static void sh_printf(const char *format, ...) {
     if (!format) {
@@ -315,7 +325,7 @@ static void job_remove_index(size_t index) {
     sh.job_count--;
 }
 
-static job_t *job_add(pid_t pid, const char *cmd, job_state_t state) {
+static job_t *job_add(pid_t pid, pid_t last_pid, const char *cmd, job_state_t state) {
     if (sh.job_count >= SH_MAX_JOBS) {
         return NULL;
     }
@@ -325,6 +335,7 @@ static job_t *job_add(pid_t pid, const char *cmd, job_state_t state) {
     memset(job, 0, sizeof(*job));
     job->id = sh.next_job_id++;
     job->pid = pid;
+    job->last_pid = last_pid;
     job->state = state;
     snprintf(job->cmd, sizeof(job->cmd), "%s", cmd ? cmd : "");
 
@@ -604,14 +615,15 @@ static int fg(int argc, char *const argv[]) {
         return 1;
     }
 
-    tty_set_pgrp(job->pid);
-    sh_wait_result_t wait_result = wait_foreground_pgrp(job->pid, 0);
+    job_t foreground = *job;
+    job_remove_index(index);
+
+    tty_set_pgrp(foreground.pid);
+    sh_wait_result_t wait_result = wait_foreground_pgrp(foreground.pid, foreground.last_pid);
     tty_set_pgrp(sh.pgid);
 
     if (wait_result.stopped) {
-        job->state = JOB_STOPPED;
-    } else if (index < sh.job_count) {
-        job_remove_index(index);
+        job_add(foreground.pid, foreground.last_pid, foreground.cmd, JOB_STOPPED);
     }
 
     return wait_result.stopped ? (128 + SIGTSTP) : wait_result.exit_status;
@@ -822,6 +834,74 @@ static int apply_assignment(const char *token) {
     return 1;
 }
 
+static bool capture_command(const char *command, char *out, size_t out_len) {
+    if (!command || !out || out_len < 2) {
+        return false;
+    }
+
+    int fds[2];
+    if (pipe(fds) < 0) {
+        return false;
+    }
+
+    pid_t pid = fork();
+    if (!pid) {
+        close(fds[0]);
+        if (dup2(fds[1], STDOUT_FILENO) < 0) {
+            _exit(1);
+        }
+        close(fds[1]);
+        sh.interactive = false;
+        _exit(script_run(command));
+    }
+
+    close(fds[1]);
+    if (pid < 0) {
+        close(fds[0]);
+        return false;
+    }
+
+    size_t used = 0;
+    bool fits = true;
+    bool read_ok = true;
+    for (;;) {
+        char chunk[64];
+        ssize_t count = read(fds[0], chunk, sizeof(chunk));
+        if (count > 0) {
+            size_t copy = (size_t)count;
+            if (copy >= out_len - used) {
+                copy = out_len - used - 1;
+                fits = false;
+            }
+            if (copy) {
+                memcpy(out + used, chunk, copy);
+                used += copy;
+            }
+            continue;
+        }
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        if (count < 0) {
+            read_ok = false;
+        }
+        break;
+    }
+
+    close(fds[0]);
+    int status = 0;
+    pid_t waited = 0;
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+
+    while (used && out[used - 1] == '\n') {
+        used--;
+    }
+    out[used] = '\0';
+    return fits && read_ok && waited == pid;
+}
+
 static bool expand_copy(char *out, size_t out_len, size_t *pos, const char *text, size_t len) {
     if (!out || !out_len || !pos || *pos >= out_len || (!text && len) || len >= out_len - *pos) {
         return false;
@@ -877,6 +957,26 @@ static bool expand_arg(const char *in, char *out, size_t out_len) {
             continue;
         }
 
+        if (in[i + 1] == '(') {
+            size_t span = syntax_sub_len(in + i);
+            if (!span || span - 3 >= SH_LINE_MAX) {
+                return false;
+            }
+
+            char command[SH_LINE_MAX];
+            memcpy(command, in + i + 2, span - 3);
+            command[span - 3] = '\0';
+
+            char captured[SH_EXPAND_MAX];
+            if (!capture_command(command, captured, sizeof(captured)) ||
+                !expand_copy(out, out_len, &o, captured, strlen(captured))) {
+                return false;
+            }
+
+            i += span - 1;
+            continue;
+        }
+
         size_t start = i + 1;
         size_t end = start;
         char key[SH_ENV_KEY_MAX] = { 0 };
@@ -892,7 +992,10 @@ static bool expand_arg(const char *in, char *out, size_t out_len) {
             if (in[end] != '}') {
                 return false;
             }
-        } else if (in[start] == '?' || in[start] == '!' || in[start] == '$') {
+        } else if (
+            in[start] == '?' || in[start] == '!' || in[start] == '$' || in[start] == '#' || in[start] == '*' ||
+            in[start] == '@' || isdigit((unsigned char)in[start])
+        ) {
             end = start + 1;
         } else {
             while (isalnum((unsigned char)in[end]) || in[end] == '_') {
@@ -915,7 +1018,7 @@ static bool expand_arg(const char *in, char *out, size_t out_len) {
         memcpy(key, in + start, key_len);
         key[key_len] = '\0';
 
-        char special[32] = { 0 };
+        char special[SH_EXPAND_MAX] = { 0 };
         const char *value = NULL;
 
         if (!strcmp(key, "?")) {
@@ -930,6 +1033,24 @@ static bool expand_arg(const char *in, char *out, size_t out_len) {
             }
         } else if (!strcmp(key, "$")) {
             snprintf(special, sizeof(special), "%ld", (long)sh.pgid);
+            value = special;
+        } else if (!strcmp(key, "#")) {
+            snprintf(special, sizeof(special), "%d", sh.arg_count);
+            value = special;
+        } else if (!strcmp(key, "0")) {
+            value = sh.arg0 ? sh.arg0 : "sh";
+        } else if (isdigit((unsigned char)key[0])) {
+            int index = key[0] - '0';
+            value = index > 0 && index <= sh.arg_count ? sh.args[index - 1] : "";
+        } else if (!strcmp(key, "*") || !strcmp(key, "@")) {
+            size_t used = 0;
+            for (int arg = 0; arg < sh.arg_count; arg++) {
+                int written = snprintf(special + used, sizeof(special) - used, "%s%s", arg ? " " : "", sh.args[arg]);
+                if (written < 0 || (size_t)written >= sizeof(special) - used) {
+                    return false;
+                }
+                used += (size_t)written;
+            }
             value = special;
         } else {
             value = env_get(key);
@@ -1162,6 +1283,22 @@ static int tokenize(const char *line, char *storage, size_t storage_len, char **
 
         while (*src) {
             char ch = *src;
+
+            if (!in_single && ch == '$' && src[1] == '(') {
+                size_t span = syntax_sub_len(src);
+                if (!span) {
+                    sh_errorf("sh: unmatched command substitution\n");
+                    return -1;
+                }
+                if (span >= (size_t)(end - dst)) {
+                    sh_errorf("sh: command is too long\n");
+                    return -1;
+                }
+                memcpy(dst, src, span);
+                dst += span;
+                src += span;
+                continue;
+            }
 
             if (!in_single && ch == '"') {
                 in_double = !in_double;
@@ -1504,8 +1641,8 @@ static bool parse_umask(const char *text, mode_t *out) {
 }
 
 static const char *sh_builtin_names[] = {
-    "help",    "echo", "exit", "set", "export", "unset", "env",  "cd", "umask",
-    "history", "jobs", "fg",   "bg",  "time",   "where", "type", NULL,
+    "help", "echo", "exit", "set",  "export", "unset", "env",  "cd", "umask", "history", "jobs", "fg",
+    "bg",   "wait", "read", "exec", "source", ".",     "test", "[",  "time",  "where",   "type", NULL,
 };
 
 static bool is_builtin_name(const char *name) {
@@ -1519,7 +1656,7 @@ static bool is_builtin_name(const char *name) {
         }
     }
 
-    return false;
+    return script_has_function(name);
 }
 
 static int builtin_where(int argc, char *const argv[]) {
@@ -1604,6 +1741,9 @@ static void builtin_help(void) {
         "  %-10s %s\n"
         "  %-10s %s\n"
         "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
+        "  %-10s %s\n"
         "  %-10s %s\n",
         sh_color(SH_C_CYAN),
         sh_color(SH_C_RESET),
@@ -1621,6 +1761,12 @@ static void builtin_help(void) {
         "show command history",
         "jobs fg bg",
         "manage stopped/background jobs",
+        "read wait",
+        "read input or wait for background work",
+        "exec source",
+        "replace the shell or load another script",
+        "test [",
+        "evaluate strings, integers, and file properties",
         "time",
         "measure a command's elapsed wall time",
         "; && ||",
@@ -1672,10 +1818,7 @@ static void builtin_unset(int argc, char *const argv[], int *status) {
 
 static void builtin_echo(int argc, char *const argv[]) {
     for (int i = 1; i < argc; i++) {
-        char expanded[SH_EXPAND_MAX] = { 0 };
-
-        expand_arg(argv[i], expanded, sizeof(expanded));
-        io_write_str(expanded);
+        io_write_str(argv[i]);
 
         if (i + 1 < argc) {
             io_write_str(" ");
@@ -1778,6 +1921,227 @@ static void builtin_umask(int argc, char *const argv[], int *status) {
     set_status(status, 1);
 }
 
+typedef struct {
+    const char *args[SH_MAX_ARGS];
+    int count;
+} sh_arg_frame_t;
+
+static sh_arg_frame_t args_save(void) {
+    sh_arg_frame_t frame = {
+        .count = sh.arg_count,
+    };
+
+    for (int i = 0; i < sh.arg_count; i++) {
+        frame.args[i] = sh.args[i];
+    }
+
+    return frame;
+}
+
+static void args_set(int argc, char *const argv[]) {
+    sh.arg_count = argc > SH_MAX_ARGS ? SH_MAX_ARGS : argc;
+    for (int i = 0; i < sh.arg_count; i++) {
+        sh.args[i] = argv[i];
+    }
+}
+
+static void args_restore(const sh_arg_frame_t *frame) {
+    sh.arg_count = frame ? frame->count : 0;
+    for (int i = 0; frame && i < frame->count; i++) {
+        sh.args[i] = frame->args[i];
+    }
+}
+
+static void builtin_read(int argc, char *const argv[], int *status) {
+    bool raw = false;
+    int first_name = 1;
+    if (argc > 1 && !strcmp(argv[1], "-r")) {
+        raw = true;
+        first_name++;
+    }
+
+    char line[SH_LINE_MAX];
+    int read_status = read_line_fd(STDIN_FILENO, line, sizeof(line));
+    if (read_status != 0) {
+        set_status(status, 1);
+        return;
+    }
+
+    size_t len = strlen(line);
+    while (len && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+        line[--len] = '\0';
+    }
+
+    if (!raw) {
+        char *src = line;
+        char *dst = line;
+        while (*src) {
+            if (*src == '\\' && src[1]) {
+                src++;
+            }
+            *dst++ = *src++;
+        }
+        *dst = '\0';
+    }
+
+    const char *default_name = "REPLY";
+    int name_count = argc - first_name;
+    if (name_count <= 0) {
+        name_count = 1;
+    }
+
+    char *cursor = line;
+    for (int i = 0; i < name_count; i++) {
+        const char *name = argc > first_name ? argv[first_name + i] : default_name;
+        if (!env_key_is_valid(name, strlen(name))) {
+            sh_errorf("read: %s: invalid variable name\n", name);
+            set_status(status, 1);
+            return;
+        }
+
+        while (*cursor == ' ' || *cursor == '\t') {
+            cursor++;
+        }
+
+        char *value = cursor;
+        if (i + 1 < name_count) {
+            while (*cursor && *cursor != ' ' && *cursor != '\t') {
+                cursor++;
+            }
+            if (*cursor) {
+                *cursor++ = '\0';
+            }
+        } else {
+            char *end = cursor + strlen(cursor);
+            while (end > cursor && (end[-1] == ' ' || end[-1] == '\t')) {
+                *--end = '\0';
+            }
+        }
+
+        if (!env_set(name, value)) {
+            sh_errorf("read: value is too long\n");
+            set_status(status, 1);
+            return;
+        }
+    }
+}
+
+static int wait_job(size_t index) {
+    if (index >= sh.job_count) {
+        return 127;
+    }
+
+    job_t job = sh.jobs[index];
+    job_remove_index(index);
+    sh_wait_result_t result = wait_foreground_pgrp(job.pid, job.last_pid);
+    if (result.stopped) {
+        job_add(job.pid, job.last_pid, job.cmd, JOB_STOPPED);
+    }
+
+    return result.stopped ? 128 + SIGTSTP : result.exit_status;
+}
+
+static int wait_target(const char *target) {
+    if (target[0] == '%') {
+        job_t *job = job_find_by_id(parse_job_id(target));
+        if (!job) {
+            sh_errorf("wait: %s: no such job\n", target);
+            return 127;
+        }
+        return wait_job((size_t)(job - sh.jobs));
+    }
+
+    char *end = NULL;
+    long value = strtol(target, &end, 10);
+    if (!end || *end || value <= 0) {
+        sh_errorf("wait: %s: invalid pid\n", target);
+        return 2;
+    }
+
+    for (size_t i = 0; i < sh.job_count; i++) {
+        if (sh.jobs[i].pid == (pid_t)value || sh.jobs[i].last_pid == (pid_t)value) {
+            return wait_job(i);
+        }
+    }
+
+    int child_status = 0;
+    pid_t waited = 0;
+    do {
+        waited = waitpid((pid_t)value, &child_status, 0);
+    } while (waited < 0 && errno == EINTR);
+
+    if (waited < 0) {
+        sh_errorf("wait: %s: not a child\n", target);
+        return 127;
+    }
+    return wait_exit_status(child_status);
+}
+
+static void builtin_wait(int argc, char *const argv[], int *status) {
+    int result = 0;
+
+    if (argc == 1) {
+        while (sh.job_count) {
+            result = wait_job(0);
+            if (result == 128 + SIGTSTP) {
+                break;
+            }
+        }
+    } else {
+        for (int i = 1; i < argc; i++) {
+            result = wait_target(argv[i]);
+        }
+    }
+
+    set_status(status, result);
+}
+
+static void builtin_test(int argc, char *const argv[], int *status) {
+    const char *error = NULL;
+    int result = test_run(argc, argv, &error);
+    if (error) {
+        sh_errorf("%s: %s\n", argv[0], error);
+    }
+    set_status(status, result);
+}
+
+static void builtin_exec(int argc, char *const argv[], int *status) {
+    if (argc < 2) {
+        return;
+    }
+
+    char env_data[SH_ENV_MAX][SH_ENV_ENTRY_MAX];
+    char *envp[SH_ENV_MAX + 1];
+    env_build_exec(env_data, envp);
+    exec_in_path(argv[1], argv + 1, envp);
+    int exec_error = errno;
+    print_exec_error(argv[1], exec_error);
+    set_status(status, exec_error == ENOENT ? 127 : 126);
+}
+
+static void builtin_source(int argc, char *const argv[], int *status) {
+    if (argc < 2) {
+        sh_errorf("%s: usage: %s FILE [ARG...]\n", argv[0], argv[0]);
+        set_status(status, 2);
+        return;
+    }
+
+    sh_arg_frame_t frame = args_save();
+    if (argc > 2) {
+        args_set(argc - 2, argv + 2);
+    }
+    set_status(status, run_script_path(argv[1]));
+    args_restore(&frame);
+}
+
+static int run_shell_function(int argc, char *const argv[]) {
+    sh_arg_frame_t frame = args_save();
+    args_set(argc - 1, argv + 1);
+    int status = script_call(argv[0]);
+    args_restore(&frame);
+    return status;
+}
+
 static bool handle_builtin(int argc, char *const argv[], int *status) {
     set_status(status, 0);
 
@@ -1835,6 +2199,31 @@ static bool handle_builtin(int argc, char *const argv[], int *status) {
         return true;
     }
 
+    if (!strcmp(argv[0], "wait")) {
+        builtin_wait(argc, argv, status);
+        return true;
+    }
+
+    if (!strcmp(argv[0], "read")) {
+        builtin_read(argc, argv, status);
+        return true;
+    }
+
+    if (!strcmp(argv[0], "exec")) {
+        builtin_exec(argc, argv, status);
+        return true;
+    }
+
+    if (!strcmp(argv[0], "source") || !strcmp(argv[0], ".")) {
+        builtin_source(argc, argv, status);
+        return true;
+    }
+
+    if (!strcmp(argv[0], "test") || !strcmp(argv[0], "[")) {
+        builtin_test(argc, argv, status);
+        return true;
+    }
+
     if (!strcmp(argv[0], "time")) {
         sh_errorf("time: usage: time COMMAND [ARG...]\n");
         set_status(status, 1);
@@ -1858,6 +2247,11 @@ static bool handle_builtin(int argc, char *const argv[], int *status) {
 
     if (!strcmp(argv[0], "where") || !strcmp(argv[0], "type")) {
         set_status(status, builtin_where(argc, argv));
+        return true;
+    }
+
+    if (script_has_function(argv[0])) {
+        set_status(status, run_shell_function(argc, argv));
         return true;
     }
 
@@ -2096,6 +2490,7 @@ static void pipeline_child(pipeline_run_t *run, sh_stage_t *stage, int index, in
     signal(SIGTTIN, SIG_DFL);
     signal(SIGTTOU, SIG_DFL);
     signal(SIGWINCH, SIG_DFL);
+    sh.interactive = false;
 
     if (index > 0 && dup2(run->pipes[index - 1][0], STDIN_FILENO) < 0) {
         _exit(1);
@@ -2163,7 +2558,7 @@ static int pipeline_finish(pipeline_run_t *run, bool background, const char *cmd
         sh.last_bg_pid = run->pgid;
 
         if (sh.interactive) {
-            job_t *job = job_add(run->pgid, cmdline, JOB_RUNNING);
+            job_t *job = job_add(run->pgid, run->last_pid, cmdline, JOB_RUNNING);
 
             if (job) {
                 sh_printf("[%d] %d\n", job->id, (int)run->pgid);
@@ -2185,7 +2580,7 @@ static int pipeline_finish(pipeline_run_t *run, bool background, const char *cmd
     }
 
     if (wait_result.stopped) {
-        job_add(run->pgid, cmdline, JOB_STOPPED);
+        job_add(run->pgid, run->last_pid, cmdline, JOB_STOPPED);
         return 128 + SIGTSTP;
     }
 
@@ -2345,6 +2740,16 @@ static int split_command_list(char *line, sh_clause_t *clauses, int max_clauses)
 
         if (!in_single && ch == '\\') {
             escape = true;
+            continue;
+        }
+
+        if (!in_single && ch == '$' && cursor[1] == '(') {
+            size_t span = syntax_sub_len(cursor);
+            if (!span) {
+                sh_errorf("sh: unmatched command substitution\n");
+                return -1;
+            }
+            cursor += span - 1;
             continue;
         }
 
@@ -2584,7 +2989,38 @@ static int run_command(char *line) {
     return status;
 }
 
-static int run_script(const char *path) {
+static int script_command(const char *command) {
+    if (!command || strlen(command) >= SH_LINE_MAX) {
+        sh_errorf("sh: command is too long\n");
+        return 1;
+    }
+
+    char line[SH_LINE_MAX];
+    snprintf(line, sizeof(line), "%s", command);
+    return run_command(line);
+}
+
+static bool script_expand(const char *word, char *out, size_t out_len) {
+    return expand_arg(word, out, out_len);
+}
+
+static bool script_set(const char *name, const char *value) {
+    return env_set(name, value);
+}
+
+static int script_arg_count(void) {
+    return sh.arg_count;
+}
+
+static const char *script_arg_at(int index) {
+    return index > 0 && index <= sh.arg_count ? sh.args[index - 1] : "";
+}
+
+static void script_error(const char *message) {
+    sh_errorf("sh: %s\n", message ? message : "script error");
+}
+
+static int run_script_path(const char *path) {
     if (!path || !path[0]) {
         return 1;
     }
@@ -2596,45 +3032,56 @@ static int run_script(const char *path) {
         return 1;
     }
 
-    char line[SH_LINE_MAX];
-    int status = 0;
-
-    for (;;) {
-        int read_status = read_line_fd(fd, line, sizeof(line));
-        if (read_status == 1) {
-            break;
-        }
-
-        if (read_status == -2) {
-            sh_errorf("sh: %s: line is too long\n", path);
-            status = 1;
-            continue;
-        }
-
-        if (read_status < 0) {
-            sh_errorf("sh: %s: read failed: %s\n", path, strerror(errno));
-            status = 1;
-            break;
-        }
-
-        char *cursor = line;
-
-        while (*cursor && isspace((unsigned char)*cursor)) {
-            cursor++;
-        }
-
-        if (!*cursor || *cursor == '#') {
-            continue;
-        }
-
-        status = run_command(cursor);
-    }
-
-    if (close(fd) < 0) {
-        sh_errorf("sh: %s: close failed: %s\n", path, strerror(errno));
+    size_t cap = 4096;
+    size_t used = 0;
+    char *source = malloc(cap);
+    if (!source) {
+        close(fd);
+        sh_errorf("sh: out of memory\n");
         return 1;
     }
 
+    for (;;) {
+        if (used + 1024 + 1 > cap) {
+            size_t next_cap = cap * 2;
+            char *next = realloc(source, next_cap);
+            if (!next) {
+                free(source);
+                close(fd);
+                sh_errorf("sh: %s: script is too large\n", path);
+                return 1;
+            }
+            source = next;
+            cap = next_cap;
+        }
+
+        ssize_t count = read(fd, source + used, cap - used - 1);
+        if (count > 0) {
+            used += (size_t)count;
+            continue;
+        }
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        if (count < 0) {
+            sh_errorf("sh: %s: read failed: %s\n", path, strerror(errno));
+            free(source);
+            close(fd);
+            return 1;
+        }
+        break;
+    }
+
+    source[used] = '\0';
+
+    if (close(fd) < 0) {
+        sh_errorf("sh: %s: close failed: %s\n", path, strerror(errno));
+        free(source);
+        return 1;
+    }
+
+    int status = script_run(source);
+    free(source);
     return status;
 }
 
@@ -2679,19 +3126,33 @@ int main(int argc, char **argv) {
     env_set("PWD", "/");
     update_pwd();
 
+    sh_script_ops_t script_callbacks = {
+        .run_command = script_command,
+        .expand_word = script_expand,
+        .set_var = script_set,
+        .arg_count = script_arg_count,
+        .arg_at = script_arg_at,
+        .report_error = script_error,
+    };
+    script_init(&script_callbacks);
+
     if (argc > 2 && !strcmp(argv[1], "-c")) {
-        char cmdline[SH_LINE_MAX];
-        if (strlen(argv[2]) >= sizeof(cmdline)) {
-            sh_errorf("sh: command is too long\n");
-            return 1;
+        sh.arg0 = argc > 3 ? argv[3] : "sh";
+        if (argc > 4) {
+            args_set(argc - 4, argv + 4);
         }
-        memcpy(cmdline, argv[2], strlen(argv[2]) + 1);
-        return run_command(cmdline);
+        return script_run(argv[2]);
     }
 
     if (argc > 1) {
-        return run_script(argv[1]);
+        sh.arg0 = argv[1];
+        if (argc > 2) {
+            args_set(argc - 2, argv + 2);
+        }
+        return run_script_path(argv[1]);
     }
+
+    sh.arg0 = "sh";
 
     tty_set_pgrp(sh.pgid);
 
@@ -2715,7 +3176,8 @@ int main(int argc, char **argv) {
         while (1) {
             sh_cont_state_t cont = continuation_state(line);
 
-            if (!cont.quote_open && !cont.trailing_escape) {
+            bool needs_script_line = script_needs_more(line);
+            if (!cont.quote_open && !cont.trailing_escape && !needs_script_line) {
                 break;
             }
 
@@ -2728,6 +3190,9 @@ int main(int argc, char **argv) {
                 if (len > 0 && line[len - 1] == '\\') {
                     line[--len] = '\0';
                 }
+            } else {
+                line[len++] = '\n';
+                line[len] = '\0';
             }
 
             if (len + 2 >= sizeof(line)) {
@@ -2756,7 +3221,7 @@ int main(int argc, char **argv) {
         }
 
         history_add(line);
-        run_command(line);
+        sh.last_status = script_run(line);
     }
 
     return 0;
