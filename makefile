@@ -3,7 +3,12 @@ VERSION := 1.0
 
 ARCH             := x86_64
 TOOLCHAIN        ?= gnu
+RISCV_FRISC      ?= false
+ifeq ($(RISCV_FRISC),true)
+PROFILE          ?= small
+else
 PROFILE          ?= fast
+endif
 IMAGE_FORMAT     ?= img
 TRACEABLE_KERNEL ?= true
 BOOT_LOG_COLOR   ?= true

@@ -55,11 +55,12 @@ BOOT_ENTRY_ELF     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.elf
 BOOT_ENTRY_BIN     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.bin
 ROOTFS_IMAGE       := bin/$(IMAGE_NAME).rootfs.img
 
-RISCV_UART0   := 0x10000000UL
-RISCV_FRISC   ?= false
+RISCV_UART0      := 0x10000000UL
+RISCV_STAGE_MODE := riscv
 
 ifeq ($(RISCV_FRISC),true)
 RISCV_UART_STRIDE ?= 4
+RISCV_STAGE_MODE  := frisc
 else
 RISCV_UART_STRIDE ?= 1
 endif
@@ -212,7 +213,8 @@ endif
 $(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) \
 	$(IMAGE_ROOT_DEPS)
 	@utils/stage_image.sh "$(IMAGE_STAGE_DIR)" "$(IMAGE_BOOT_DIR)" \
-		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root" riscv
+		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root" "$(RISCV_STAGE_MODE)" \
+		"$(if $(filter tcc,$(USER_EXTRA_NAMES)),true,false)"
 	@python3 kernel/arch/riscv/build/build_riscv_disk_image.py \
 		--extra-bytes $(ROOTFS_EXTRA_BYTES) $@ $(IMAGE_STAGE_DIR)
 	@printf "%-3s  %s\n" "IM" "$@"

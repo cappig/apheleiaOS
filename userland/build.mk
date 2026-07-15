@@ -109,20 +109,23 @@ USER_GAMES_OPTION_NAMES := $(sort \
 )
 
 USER_EXTRA_DEFAULT_SKIP := tcc
-USERLAND_MODE_NAMES := all core default
+USER_WM_ONLY            := clock doom term wdemo wm
+USERLAND_MODE_NAMES     := all core default
 
 comma := ,
 empty :=
 space := $(empty) $(empty)
 
-ifeq ($(ARCH_TREE), riscv)
-USERLAND_DEFAULT_NAMES := $(USER_TOOLS_OPTION_NAMES)
-else
-USERLAND_DEFAULT_NAMES := \
+USER_DEFAULT_NAMES := \
 	$(USER_TOOLS_OPTION_NAMES) \
 	$(USER_UI_OPTION_NAMES) \
 	$(USER_GAMES_OPTION_NAMES) \
 	$(filter-out $(USER_EXTRA_DEFAULT_SKIP),$(USER_EXTRA_OPTION_NAMES))
+
+ifeq ($(ARCH_TREE), riscv)
+USERLAND_DEFAULT_NAMES := $(filter-out $(USER_WM_ONLY),$(USER_DEFAULT_NAMES))
+else
+USERLAND_DEFAULT_NAMES := $(USER_DEFAULT_NAMES)
 endif
 
 USERLAND_ALL_NAMES := \
@@ -154,7 +157,11 @@ USER_UI_NAMES    := $(filter $(USER_UI_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
 USER_EXTRA_NAMES := $(filter $(USER_EXTRA_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
 USER_GAME_NAMES  := $(filter $(USER_GAMES_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
 
+ifeq ($(RISCV_FRISC),true)
+ROOTFS_EXTRA_BYTES ?= $(if $(filter tcc,$(USER_EXTRA_NAMES)),8388608,0)
+else
 ROOTFS_EXTRA_BYTES ?= $(if $(filter tcc,$(USER_EXTRA_NAMES)),8388608,4194304)
+endif
 
 USER_TOOLS_PROG_DIRS := $(filter $(addprefix userland/tools/,$(USER_TOOL_NAMES)),$(USER_TOOLS_ALL_DIRS))
 USER_UI_PROG_DIRS    := $(filter $(addprefix userland/ui/,$(USER_UI_NAMES)),$(USER_UI_ALL_DIRS))
