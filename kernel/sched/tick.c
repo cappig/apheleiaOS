@@ -471,13 +471,18 @@ static void reparent_children(sched_thread_t *parent) {
 }
 
 void sched_exit(void) {
-    arch_irq_save();
     sched_thread_t *self = sched_local_current();
     pid_t exited_pid = 0;
 
     if (sched_thread_is_idle(self)) {
         panic("idle thread attempted to exit");
     }
+
+    if (self) {
+        sched_fd_close_all(self);
+    }
+
+    arch_irq_save();
 
     unsigned long flags = sched_lock_save();
 
