@@ -1123,6 +1123,11 @@ static uintptr_t _uart_io_width(const void *dtb) {
     return 1;
 }
 
+static bool _use_asids(void) {
+    // Current FRISC boards need a full TLB flush when changing page tables.
+    return !boot.dtb || !fdt_has_compatible(boot.dtb, "fer,friscv-refsoc");
+}
+
 static void _init_platform(void) {
     timer.timebase_hz = DEFAULT_TIMEBASE_HZ;
     timer.cpu_hz = DEFAULT_TIMEBASE_HZ;
@@ -1358,7 +1363,7 @@ static void _init_memory(boot_limits_t limits, u32 uart_irq) {
     trap_init();
     log_debug("trap handler installed");
 
-    vm_init_kernel(mmio.root);
+    vm_init_kernel(mmio.root, _use_asids());
     log_debug("kernel VM ready");
 
     uart_console_set_base(mmio.uart_virt);

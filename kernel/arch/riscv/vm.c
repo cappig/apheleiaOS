@@ -21,6 +21,7 @@ typedef struct {
     u16 current_asid[MAX_CORES];
     bitmap_word_t asids[DIV_ROUND_UP(RISCV_ASID_COUNT, BITMAP_WORD_SIZE)];
     spinlock_t asid_lock;
+    bool use_asids;
 } vm_state_t;
 
 static vm_state_t vm = { .asid_lock = SPINLOCK_INIT };
@@ -35,6 +36,10 @@ static bool _leaf_pte(page_t entry) {
 }
 
 static u16 _asid_alloc(void) {
+    if (!vm.use_asids) {
+        return 0;
+    }
+
     size_t index = 0;
     unsigned long flags = spin_lock_irqsave(&vm.asid_lock);
     bool found = bitmap_find_first_clear(vm.asids, RISCV_ASID_COUNT, &index);
@@ -61,9 +66,10 @@ static void _asid_free(u16 asid) {
     spin_unlock_irqrestore(&vm.asid_lock, flags);
 }
 
-void vm_init_kernel(page_t *root) {
+void vm_init_kernel(page_t *root, bool use_asids) {
     vm.kernel.root = root;
     vm.kernel.asid = 0;
+    vm.use_asids = use_asids;
     bitmap_set(vm.asids, 0);
 }
 
