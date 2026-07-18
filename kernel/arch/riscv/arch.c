@@ -784,12 +784,39 @@ static void _early_map_page(page_t *root, u64 vaddr, u64 paddr, u64 flags) {
     *entry |= pte_leaf_flags(flags);
 }
 
+#if __riscv_xlen == 32
+static bool _early_map_superpage(page_t *root, u64 vaddr, u64 paddr, u64 flags) {
+    if ((vaddr | paddr) & (PAGE_4MIB - 1)) {
+        return false;
+    }
+
+    page_t *entry = &root[GET_LVL2_INDEX(vaddr)];
+    if (*entry & PT_PRESENT) {
+        return false;
+    }
+
+    page_set_paddr(entry, paddr);
+    *entry |= pte_leaf_flags(flags);
+    return true;
+}
+#endif
+
 static void _early_map_range(page_t *root, u64 vaddr, u64 paddr, u64 size, u64 flags) {
     u64 base = ALIGN_DOWN(paddr, PAGE_4KIB);
     u64 end = ALIGN(paddr + size, PAGE_4KIB);
 
-    for (u64 addr = base; addr < end; addr += PAGE_4KIB) {
-        _early_map_page(root, vaddr + (addr - base), addr, flags);
+    for (u64 addr = base; addr < end;) {
+        u64 mapped_vaddr = vaddr + (addr - base);
+
+#if __riscv_xlen == 32
+        if (end - addr >= PAGE_4MIB && _early_map_superpage(root, mapped_vaddr, addr, flags)) {
+            addr += PAGE_4MIB;
+            continue;
+        }
+#endif
+
+        _early_map_page(root, mapped_vaddr, addr, flags);
+        addr += PAGE_4KIB;
     }
 }
 

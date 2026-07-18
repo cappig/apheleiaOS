@@ -25,6 +25,7 @@ typedef u32 page_t;
 
 #define PAGE_4KIB (4 * KIB)
 #define PAGE_2MIB (2 * MIB)
+#define PAGE_4MIB (4 * MIB)
 
 #define PT_PRESENT  (1ULL << 0)
 #define PT_READ     (1ULL << 1)
