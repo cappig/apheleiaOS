@@ -1,23 +1,29 @@
 #include <arch/arch.h>
 #include <arch/paging.h>
 #include <base/macros.h>
+#include <data/bitmap.h>
 #include <riscv/asm.h>
 #include <riscv/mm/physical.h>
 #include <riscv/vm.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/cpu.h>
+#include <sys/lock.h>
 
 struct arch_vm_space {
     page_t *root;
+    u16 asid;
 };
 
 typedef struct {
     struct arch_vm_space kernel;
     page_t *current_root[MAX_CORES];
+    u16 current_asid[MAX_CORES];
+    bitmap_word_t asids[DIV_ROUND_UP(RISCV_ASID_COUNT, BITMAP_WORD_SIZE)];
+    spinlock_t asid_lock;
 } vm_state_t;
 
-static vm_state_t vm = { 0 };
+static vm_state_t vm = { .asid_lock = SPINLOCK_INIT };
 
 static size_t _current_cpu_id(void) {
     cpu_core_t *core = cpu_current();
@@ -28,8 +34,37 @@ static bool _leaf_pte(page_t entry) {
     return (entry & (PT_READ | PT_WRITE | PT_EXECUTE)) != 0;
 }
 
+static u16 _asid_alloc(void) {
+    size_t index = 0;
+    unsigned long flags = spin_lock_irqsave(&vm.asid_lock);
+    bool found = bitmap_find_first_clear(vm.asids, RISCV_ASID_COUNT, &index);
+
+    if (found) {
+        bitmap_set(vm.asids, index);
+    }
+
+    spin_unlock_irqrestore(&vm.asid_lock, flags);
+
+    // ASID 0 remains a safe flush-on-switch fallback while the pool is busy.
+    return found ? (u16)index : 0;
+}
+
+static void _asid_free(u16 asid) {
+    if (!asid) {
+        return;
+    }
+
+    sfence_vma_asid(asid);
+
+    unsigned long flags = spin_lock_irqsave(&vm.asid_lock);
+    bitmap_clear(vm.asids, asid);
+    spin_unlock_irqrestore(&vm.asid_lock, flags);
+}
+
 void vm_init_kernel(page_t *root) {
     vm.kernel.root = root;
+    vm.kernel.asid = 0;
+    bitmap_set(vm.asids, 0);
 }
 
 arch_vm_space_t *arch_vm_kernel(void) {
@@ -49,6 +84,8 @@ arch_vm_space_t *arch_vm_create_user(void) {
     }
 
     memset(space->root, 0, PAGE_4KIB);
+
+    space->asid = _asid_alloc();
 
 #if __riscv_xlen == 64
     memcpy(
@@ -126,6 +163,14 @@ void arch_vm_destroy(arch_vm_space_t *space) {
     _free_tables_32(space->root);
 #endif
 
+    for (size_t cpu = 0; cpu < MAX_CORES; cpu++) {
+        if (vm.current_root[cpu] == space->root && vm.current_asid[cpu] == space->asid) {
+            vm.current_root[cpu] = NULL;
+            vm.current_asid[cpu] = 0;
+        }
+    }
+
+    _asid_free(space->asid);
     free_frames(space->root, 1);
     free(space);
 }
@@ -136,12 +181,18 @@ void arch_vm_switch(arch_vm_space_t *space) {
     }
 
     size_t cpu_id = _current_cpu_id();
-    if (vm.current_root[cpu_id] == space->root) {
+    if (vm.current_root[cpu_id] == space->root && vm.current_asid[cpu_id] == space->asid) {
         return;
     }
 
+    bool first_switch = !vm.current_root[cpu_id];
     vm.current_root[cpu_id] = space->root;
-    riscv_write_satp((uintptr_t)space->root, RISCV_PAGING_MODE);
+    vm.current_asid[cpu_id] = space->asid;
+    riscv_write_satp((uintptr_t)space->root, RISCV_PAGING_MODE, space->asid);
+
+    if (first_switch || !space->asid) {
+        sfence_vma();
+    }
 }
 
 void *arch_vm_root(arch_vm_space_t *space) {

@@ -56,6 +56,10 @@ static inline void sfence_vma(void) {
     asm volatile("sfence.vma zero, zero" ::: "memory");
 }
 
+static inline void sfence_vma_asid(uintptr_t asid) {
+    asm volatile("sfence.vma zero, %0" : : "r"(asid) : "memory");
+}
+
 static inline unsigned long riscv_read_sstatus(void) {
     unsigned long value = 0;
     asm volatile("csrr %0, sstatus" : "=r"(value));
@@ -250,14 +254,12 @@ static inline bool riscv_mtimer_read(u64 *value) {
     return true;
 }
 
-static inline void riscv_write_satp(uintptr_t root, u64 mode) {
+static inline void riscv_write_satp(uintptr_t root, u64 mode, uintptr_t asid) {
 #if __riscv_xlen == 64
-    u64 value = (mode << 60) | ((u64)root >> 12);
+    u64 value = (mode << 60) | ((u64)asid << 44) | ((u64)root >> 12);
     asm volatile("csrw satp, %0" : : "r"(value) : "memory");
 #else
-    u32 value = (u32)((mode << 31) | ((u32)root >> 12));
+    u32 value = ((u32)mode << 31) | ((u32)asid << 22) | ((u32)root >> 12);
     asm volatile("csrw satp, %0" : : "r"(value) : "memory");
 #endif
-    // satp switches are visible only after the address translation fence
-    sfence_vma();
 }

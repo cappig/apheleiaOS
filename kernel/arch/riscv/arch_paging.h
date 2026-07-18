@@ -8,6 +8,7 @@
 typedef u64 page_t;
 
 #define RISCV_PAGING_MODE    8ULL
+#define RISCV_ASID_BITS      16
 #define RISCV_MMIO_BASE      0xffffffc000000000ULL
 #define GET_LVL3_INDEX(addr) (((u64)(addr) >> 30) & 0x1ff)
 #define GET_LVL2_INDEX(addr) (((u64)(addr) >> 21) & 0x1ff)
@@ -16,10 +17,13 @@ typedef u64 page_t;
 typedef u32 page_t;
 
 #define RISCV_PAGING_MODE    1ULL
+#define RISCV_ASID_BITS      9
 #define RISCV_MMIO_BASE      0xff000000UL
 #define GET_LVL2_INDEX(addr) (((u32)(addr) >> 22) & 0x3ff)
 #define GET_LVL1_INDEX(addr) (((u32)(addr) >> 12) & 0x3ff)
 #endif
+
+#define RISCV_ASID_COUNT (1UL << RISCV_ASID_BITS)
 
 #define RISCV_KERNEL_BASE 0x80000000ULL
 
