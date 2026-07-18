@@ -78,20 +78,6 @@ ifeq ($(RISCV_FRISC),true)
 RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr_zifencei_zmmul -mabi=ilp32
 endif
 
-RISCV_FAST_FLAGS :=
-RISCV_FAST_SRC   :=
-
-ifeq ($(RISCV_FRISC),true)
-# Keep overrides kernel-only. LLVM -O2 userspace runtime code can
-# stall current FRISC boards during login.
-RISCV_FAST_FLAGS := -O2
-RISCV_FAST_SRC := \
-	libs/data/bitmap.c \
-	kernel/arch/riscv/mm/physical.c
-endif
-
-riscv_cc_flags = $(if $(filter $(1),$(RISCV_FAST_SRC)),$(RISCV_FAST_FLAGS))
-
 KERNEL_CC_COMMON := \
 	-I$(ARCH_DIR) \
 	-D_KERNEL \
@@ -171,14 +157,8 @@ KERNEL_OBJ := $(patsubst %, $(KERNEL_OBJ_DIR)/%.o, $(KERNEL_SRC))
 
 KERNEL_FLAG_STAMP     := $(KERNEL_OBJ_DIR)/.compile-flags
 BOOT_ENTRY_FLAG_STAMP := $(BOOT_ENTRY_OBJ_DIR)/.compile-flags
-KERNEL_BUILD_CONFIG := \
-	$(CC) $(CC_BASE) $(KERNEL_CC_FLAGS) \
-	$(RISCV_FAST_FLAGS) $(RISCV_FAST_SRC) \
-	$(TOOLCHAIN_CONFIG)
-BOOT_ENTRY_CONFIG := \
-	$(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) \
-	$(RISCV_FAST_FLAGS) $(RISCV_FAST_SRC) \
-	$(TOOLCHAIN_CONFIG)
+KERNEL_BUILD_CONFIG   := $(CC) $(CC_BASE) $(KERNEL_CC_FLAGS) $(TOOLCHAIN_CONFIG)
+BOOT_ENTRY_CONFIG     := $(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) $(TOOLCHAIN_CONFIG)
 
 $(eval $(call flag_stamp,$(KERNEL_FLAG_STAMP),KERNEL_BUILD_CONFIG))
 $(eval $(call flag_stamp,$(BOOT_ENTRY_FLAG_STAMP),BOOT_ENTRY_CONFIG))
@@ -205,7 +185,7 @@ $(KERNEL_OBJ_DIR)/%.S.o: %.S $(KERNEL_FLAG_STAMP)
 
 $(KERNEL_OBJ_DIR)/%.c.o: %.c $(KERNEL_FLAG_STAMP)
 	@mkdir -p $(@D)
-	$(call cc, $(KERNEL_CC_FLAGS) $(call riscv_cc_flags,$<), $@, $<)
+	$(call cc, $(KERNEL_CC_FLAGS), $@, $<)
 
 $(KERNEL_ELF): $(KERNEL_OBJ) $(call LIBGCC, $(KERNEL_CC_FLAGS)) \
 	$(ARCH_DIR)/build/linker$(ARCH_VARIANT).ld
