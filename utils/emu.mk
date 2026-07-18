@@ -19,7 +19,7 @@ QEMU := qemu-system-$(QEMU_ARCH)
 # spike settings
 # ---------------------------
 SPIKE                  ?= spike
-SPIKE_ISA              ?= rv$(ARCH_VARIANT)ima_zicsr
+SPIKE_ISA              ?= rv$(ARCH_VARIANT)ima_zicsr_zifencei
 SPIKE_RAM_MB           ?= 256
 SPIKE_INITRD           ?= bin/$(IMAGE_NAME).rootfs.img
 SPIKE_MMIO_UART        ?= true

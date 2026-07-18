@@ -70,8 +70,13 @@ RISCV_SCRATCH_OFFSET := 50331648
 RISCV_FRISC_DTS := $(ARCH_DIR)/dts/friscv.dts
 RISCV_FRISC_DTB := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
 
-RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr -mabi=lp64
-RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr -mabi=ilp32
+RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr_zifencei -mabi=lp64
+RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr_zifencei -mabi=ilp32
+
+# Current FRISC cores can lose a JAL immediately after DIV or REM.
+ifeq ($(RISCV_FRISC),true)
+RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr_zifencei_zmmul -mabi=ilp32
+endif
 
 KERNEL_CC_COMMON := \
 	-I$(ARCH_DIR) \

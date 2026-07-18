@@ -146,8 +146,12 @@ static void flatten_blocks(boot_ext2_t *fs, u32 *blocks, u32 block_num, size_t i
 static void get_inode(boot_ext2_t *fs, u32 num, ext2_inode_t *inode) {
     u32 block_size = ext2_block_size(&fs->superblock);
 
-    if (!num || !fs->superblock.inodes_in_group) {
-        panic("invalid inode number");
+    if (!num) {
+        panic("zero inode number");
+    }
+
+    if (!fs->superblock.inodes_in_group) {
+        panic("zero inodes per group");
     }
 
     u32 group = (num - 1) / fs->superblock.inodes_in_group;

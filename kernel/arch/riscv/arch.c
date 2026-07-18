@@ -1615,6 +1615,10 @@ void arch_tlb_flush(uintptr_t addr) {
     sfence_vma();
 }
 
+void arch_code_sync(void) {
+    asm volatile("fence.i" ::: "memory");
+}
+
 void arch_cpu_set_local(void *ptr) {
     cpu_local_ptr = (uintptr_t)ptr;
     riscv_write_tp((uintptr_t)ptr);

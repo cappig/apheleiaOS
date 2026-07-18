@@ -1298,6 +1298,7 @@ sched_thread_t *user_spawn(const char *path) {
 
     arch_vm_switch(thread->vm_space);
     stack_top = build_stack_args(stack_top, &args, &env);
+    arch_code_sync();
     arch_vm_switch(arch_vm_kernel());
 
     thread_prepare_user(thread, entry, stack_top);
@@ -1497,6 +1498,7 @@ int user_exec(
 
     arch_vm_switch(thread->vm_space);
     stack_top = build_stack_args(stack_top, &plan.args, &plan.env);
+    arch_code_sync();
     sched_signal_exec(thread);
     sched_fd_close_cloexec(thread);
 

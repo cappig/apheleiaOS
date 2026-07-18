@@ -1258,6 +1258,10 @@ void arch_tlb_flush(uintptr_t addr) {
     smp_tlb_shootdown(addr);
 }
 
+void arch_code_sync(void) {
+    asm volatile("" ::: "memory");
+}
+
 void arch_cpu_set_local(void *ptr) {
 #if defined(__x86_64__)
     if (ptr) {

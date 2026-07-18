@@ -37,6 +37,7 @@ void arch_vm_switch(arch_vm_space_t *space);
 void *arch_vm_root(arch_vm_space_t *space);
 
 void arch_tlb_flush(uintptr_t addr);
+void arch_code_sync(void);
 
 void arch_cpu_set_local(void *ptr);
 void *arch_cpu_get_local(void);
