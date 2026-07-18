@@ -143,6 +143,7 @@ static struct {
 static struct {
     uintptr_t virt;
     bool ready;
+    bool uart_irq;
     fdt_irq_context_t contexts[PLIC_MAX_CONTEXTS];
     size_t context_count;
     irq_slot_t table[PLIC_MAX_IRQS];
@@ -681,6 +682,7 @@ static void _plic_init(u32 uart_irq) {
 
     log_debug("registering UART IRQ %u", (unsigned int)uart_irq);
     if (irq_register(uart_irq, _uart_irq_handler, NULL)) {
+        plic.uart_irq = true;
         serial_set_rx_interrupt(uart_console_base(), true);
         log_debug("UART RX interrupt enabled");
     } else {
@@ -1371,6 +1373,7 @@ static void _init_memory(boot_limits_t limits, u32 uart_irq) {
     log_debug("kernel address space active");
 
     _plic_init(uart_irq);
+    tty_input_set_polling(!plic.uart_irq);
 
     if (limits.pmm_limit <= boot.mem_paddr) {
         panic("RISC-V PMM has no allocatable RAM");

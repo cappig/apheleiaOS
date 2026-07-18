@@ -31,6 +31,13 @@ typedef struct {
 } tty_input_state_t;
 
 static tty_input_state_t tty_state[TTY_SCREEN_COUNT] = { 0 };
+static bool tty_polling = false;
+
+static void _wake_input(size_t screen) {
+    if (!tty_polling) {
+        sched_wake_one(&tty_state[screen].wait);
+    }
+}
 
 
 static void _signal_flush(size_t screen, ring_buffer_t *buffer, const termios_t *tos) {
@@ -355,7 +362,7 @@ static void _flush_line(size_t screen, ring_buffer_t *buffer, bool add_newline, 
         tty_state[screen].pending_newlines++;
     }
 
-    sched_wake_one(&tty_state[screen].wait);
+    _wake_input(screen);
 }
 
 static sched_wait_result_t _wait_input(size_t screen, u32 seq) {
@@ -443,7 +450,7 @@ static ssize_t _input_read_raw(size_t screen, ring_buffer_t *buffer, void *buf, 
             return -EINTR;
         }
 
-        if (!arch_timer_ticks()) {
+        if (tty_polling || !arch_timer_ticks()) {
             arch_cpu_wait();
             sched_yield();
             continue;
@@ -514,6 +521,10 @@ void tty_input_set_current(size_t screen) {
     }
 
     _input_buffer(screen);
+}
+
+void tty_input_set_polling(bool polling) {
+    tty_polling = polling;
 }
 
 static void _send_signal_char(size_t screen, ring_buffer_t *buffer, const termios_t *tos, char ch, bool canon) {
@@ -679,7 +690,7 @@ static void _push_eof(size_t screen, ring_buffer_t *buffer) {
         unsigned long flags = spin_lock_irqsave(&tty_state[screen].lock);
         ring_buffer_push(buffer, 0);
         spin_unlock_irqrestore(&tty_state[screen].lock, flags);
-        sched_wake_one(&tty_state[screen].wait);
+        _wake_input(screen);
         return;
     }
 
@@ -692,7 +703,7 @@ static void _push_raw_char(size_t screen, ring_buffer_t *buffer, const termios_t
     spin_unlock_irqrestore(&tty_state[screen].lock, flags);
 
     _echo_char(screen, tos, ch, ch == '\n');
-    sched_wake_one(&tty_state[screen].wait);
+    _wake_input(screen);
 }
 
 static void _input_push_impl(char ch) {
@@ -868,7 +879,7 @@ ssize_t tty_input_read(size_t screen, void *buf, size_t len) {
             return -EINTR;
         }
 
-        if (!arch_timer_ticks()) {
+        if (tty_polling || !arch_timer_ticks()) {
             arch_cpu_wait();
             sched_yield();
             continue;

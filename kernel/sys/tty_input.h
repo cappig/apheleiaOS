@@ -12,6 +12,7 @@ struct sched_wait_queue;
 
 void tty_input_init(void);
 void tty_input_set_current(size_t screen);
+void tty_input_set_polling(bool polling);
 ssize_t tty_input_read(size_t screen, void *buf, size_t len);
 void tty_input_push(char ch);
 
