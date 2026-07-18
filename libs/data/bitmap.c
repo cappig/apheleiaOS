@@ -16,16 +16,61 @@ void bitmap_clear(bitmap_word_t *bitmap, size_t index) {
     bitmap[word] &= ~((bitmap_word_t)1U << bit);
 }
 
-void bitmap_set_region(bitmap_word_t *bitmap, size_t index, size_t blocks) {
-    for (size_t i = 0; i < blocks; i++) {
-        bitmap_set(bitmap, index + i);
+static bitmap_word_t low_mask(size_t bits) {
+    if (bits >= BITMAP_WORD_SIZE) {
+        return (bitmap_word_t)-1;
+    }
+
+    return ((bitmap_word_t)1U << bits) - 1U;
+}
+
+static void write_region(bitmap_word_t *bitmap, size_t index, size_t blocks, bool set) {
+    if (!blocks) {
+        return;
+    }
+
+    size_t word = index / BITMAP_WORD_SIZE;
+    size_t bit = index % BITMAP_WORD_SIZE;
+
+    if (bit) {
+        size_t count = BITMAP_WORD_SIZE - bit;
+        if (count > blocks) {
+            count = blocks;
+        }
+
+        bitmap_word_t mask = low_mask(count) << bit;
+        if (set) {
+            bitmap[word] |= mask;
+        } else {
+            bitmap[word] &= ~mask;
+        }
+
+        blocks -= count;
+        word++;
+    }
+
+    bitmap_word_t fill = set ? (bitmap_word_t)-1 : 0;
+    while (blocks >= BITMAP_WORD_SIZE) {
+        bitmap[word++] = fill;
+        blocks -= BITMAP_WORD_SIZE;
+    }
+
+    if (blocks) {
+        bitmap_word_t mask = low_mask(blocks);
+        if (set) {
+            bitmap[word] |= mask;
+        } else {
+            bitmap[word] &= ~mask;
+        }
     }
 }
 
+void bitmap_set_region(bitmap_word_t *bitmap, size_t index, size_t blocks) {
+    write_region(bitmap, index, blocks, true);
+}
+
 void bitmap_clear_region(bitmap_word_t *bitmap, size_t index, size_t blocks) {
-    for (size_t i = 0; i < blocks; i++) {
-        bitmap_clear(bitmap, index + i);
-    }
+    write_region(bitmap, index, blocks, false);
 }
 
 bool bitmap_get(bitmap_word_t *bitmap, size_t index) {

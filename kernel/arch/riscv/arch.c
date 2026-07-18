@@ -228,23 +228,6 @@ static void _append_boot_log(const boot_info_t *info) {
     spin_unlock_irqrestore(&klog.lock, irq_flags);
 }
 
-static void _replay_bootloader_log_serial(const boot_info_t *info) {
-    if (!info || !info->boot_log_paddr || !info->boot_log_len || !uart_console_base()) {
-        return;
-    }
-
-    size_t len = info->boot_log_len;
-    if (info->boot_log_cap && len > info->boot_log_cap) {
-        len = info->boot_log_cap;
-    }
-
-    if (!len) {
-        return;
-    }
-
-    send_serial_buf(uart_console_base(), (const char *)(uintptr_t)info->boot_log_paddr, len);
-}
-
 static void _log_write_early(const char *s, size_t len) {
     if (!s || !len) {
         return;
@@ -1247,9 +1230,8 @@ static u32 _init_uart(const boot_info_t *info, uintptr_t uart_phys) {
     serial_set_reg_stride(_uart_stride(boot.dtb));
     serial_set_reg_io_width(_uart_io_width(boot.dtb));
     uart_console_set_base(uart_phys);
-    _replay_bootloader_log_serial(info);
     log_init(_log_puts);
-    log_set_lvl(info->args.debug == DEBUG_NONE ? LOG_INFO : LOG_DEBUG);
+    log_set_lvl(info->args.debug == DEBUG_ALL ? LOG_DEBUG : LOG_INFO);
 
 #if __riscv_xlen == 64
     log_info("apheleiaOS kernel (riscv_64) booting");

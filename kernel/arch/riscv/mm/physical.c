@@ -41,6 +41,23 @@ static void _pmm_ref_set_range(void *ptr, size_t blocks, u16 value) {
     }
 }
 
+static void _pmm_ref_seed(u16 *refs, size_t count) {
+    for (size_t word = 0; word < pmm.frames.word_count; word++) {
+        bitmap_word_t bits = pmm.frames.bitmap[word];
+
+        while (bits) {
+            size_t bit = (size_t)__builtin_ctz(bits);
+            size_t index = word * BITMAP_WORD_SIZE + bit;
+            if (index >= count) {
+                return;
+            }
+
+            refs[index] = 1;
+            bits &= bits - 1;
+        }
+    }
+}
+
 void pmm_init(u64 mem_base, u64 mem_size, u64 reserved_end) {
     mem_base = ALIGN(mem_base, PAGE_4KIB);
     u64 mem_top = ALIGN_DOWN(mem_base + mem_size, PAGE_4KIB);
@@ -122,12 +139,7 @@ void pmm_ref_init(void) {
 
     pmm.refs = refs;
     pmm.ref_count = pmm.frames.block_count;
-
-    for (size_t i = 0; i < pmm.frames.block_count; i++) {
-        if (bitmap_get(pmm.frames.bitmap, i)) {
-            pmm.refs[i] = 1;
-        }
-    }
+    _pmm_ref_seed(pmm.refs, pmm.ref_count);
 
     pmm.refs_ready = true;
     spin_unlock_irqrestore(&pmm.lock, irq_flags);

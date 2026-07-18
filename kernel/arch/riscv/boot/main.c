@@ -964,7 +964,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     setup_serial(&setup);
 
     log_init(log_sink);
-    log_set_lvl(LOG_DEBUG);
+    log_set_lvl(BOOT_DEFAULT_DEBUG == DEBUG_ALL ? LOG_DEBUG : LOG_INFO);
     log_set_options(log_opts());
 
     log_setup(hartid, dtb, &setup);
