@@ -82,11 +82,11 @@ RISCV_FAST_FLAGS :=
 RISCV_FAST_SRC   :=
 
 ifeq ($(RISCV_FRISC),true)
+# Keep overrides kernel-only. LLVM -O2 userspace runtime code can
+# stall current FRISC boards during login.
 RISCV_FAST_FLAGS := -O2
 RISCV_FAST_SRC := \
 	libs/data/bitmap.c \
-	libs/libc/div64.c \
-	libs/libc/string.c \
 	kernel/arch/riscv/mm/physical.c
 endif
 
@@ -189,7 +189,7 @@ $(BOOT_ENTRY_OBJ_DIR)/%.S.o: %.S $(BOOT_ENTRY_FLAG_STAMP)
 
 $(BOOT_ENTRY_OBJ_DIR)/%.c.o: %.c $(BOOT_ENTRY_FLAG_STAMP)
 	@mkdir -p $(@D)
-	$(call cc, $(BOOT_ENTRY_CFLAGS) $(call riscv_cc_flags,$<), $@, $<)
+	$(call cc, $(BOOT_ENTRY_CFLAGS), $@, $<)
 
 $(BOOT_ENTRY_ELF): $(BOOT_ENTRY_OBJ) $(call LIBGCC, $(BOOT_ENTRY_CFLAGS)) | $(BOOT_ENTRY_LINKER)
 	@mkdir -p $(@D)

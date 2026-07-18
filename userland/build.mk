@@ -305,10 +305,7 @@ endif
 
 USER_COMPILE_STAMP := $(USER_OBJ_DIR)/.compile-flags
 USER_LINK_STAMP    := $(USER_OBJ_DIR)/.link-flags
-USER_COMPILE_CONFIG := \
-	$(CC) $(CC_BASE) $(USER_CC) \
-	$(RISCV_FAST_FLAGS) $(RISCV_FAST_SRC) \
-	$(TOOLCHAIN_CONFIG)
+USER_COMPILE_CONFIG := $(CC) $(CC_BASE) $(USER_CC) $(TOOLCHAIN_CONFIG)
 USER_LINK_CONFIG    := $(LD) $(LD_BASE) $(USER_LD) $(ST) \
 	$(STRIP_USER) $(USER_STRIP_FLAGS) $(TOOLCHAIN_CONFIG)
 
@@ -325,7 +322,7 @@ endef
 
 $(USER_OBJ_DIR)/%.c.o: %.c $(USER_COMPILE_STAMP)
 	@mkdir -p $(@D)
-	$(call cc, $(USER_CC) $(call riscv_cc_flags,$<), $@, $<)
+	$(call cc, $(USER_CC), $@, $<)
 
 $(USER_OBJ_DIR)/%.S.o: %.S $(USER_COMPILE_STAMP)
 	@mkdir -p $(@D)
