@@ -55,12 +55,12 @@ BOOT_ENTRY_ELF     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.elf
 BOOT_ENTRY_BIN     := $(BOOT_ENTRY_OBJ_DIR)/riscv_boot.bin
 ROOTFS_IMAGE       := bin/$(IMAGE_NAME).rootfs.img
 
-RISCV_UART0      := 0x10000000UL
-RISCV_STAGE_MODE := riscv
+RISCV_UART0        := 0x10000000UL
+RISCV_STRIP_UI     := true
+RISCV_ROOT_OVERLAY := config/arch/riscv
 
 ifeq ($(RISCV_FRISC),true)
 RISCV_UART_STRIDE ?= 4
-RISCV_STAGE_MODE  := frisc
 else
 RISCV_UART_STRIDE ?= 1
 endif
@@ -73,9 +73,9 @@ RISCV_FRISC_DTB := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
 RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr_zifencei -mabi=lp64
 RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr_zifencei -mabi=ilp32
 
-# Current FRISC cores can lose a JAL immediately after DIV or REM.
+# Avoid the FRISC core's hardware multiply and divide unit for stability.
 ifeq ($(RISCV_FRISC),true)
-RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr_zifencei_zmmul -mabi=ilp32
+RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr_zifencei -mabi=ilp32
 endif
 
 KERNEL_CC_COMMON := \
@@ -199,7 +199,7 @@ IMAGE_SCRIPT_DEPS := \
 	kernel/arch/riscv/build/build_flat_image.py \
 	kernel/arch/riscv/build/build_riscv_disk_image.py
 
-IMAGE_ROOT_DEPS := $(shell find root -type f -o -type l)
+IMAGE_ROOT_DEPS := $(shell find root $(RISCV_ROOT_OVERLAY) -type f -o -type l)
 
 $(RISCV_FRISC_DTB): $(RISCV_FRISC_DTS)
 	@mkdir -p $(@D)
@@ -218,8 +218,9 @@ endif
 $(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) \
 	$(IMAGE_ROOT_DEPS)
 	@utils/stage_image.sh "$(IMAGE_STAGE_DIR)" "$(IMAGE_BOOT_DIR)" \
-		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root" "$(RISCV_STAGE_MODE)" \
-		"$(if $(filter tcc,$(USER_EXTRA_NAMES)),true,false)"
+		"$(KERNEL_ELF)" "bin/user/$(ARCH)/root" "$(RISCV_STRIP_UI)" \
+		"$(if $(filter tcc,$(USER_EXTRA_NAMES)),true,false)" \
+		"$(RISCV_ROOT_OVERLAY)" "$(RISCV_FRISC)"
 	@python3 kernel/arch/riscv/build/build_riscv_disk_image.py \
 		--extra-bytes $(ROOTFS_EXTRA_BYTES) $@ $(IMAGE_STAGE_DIR)
 	@printf "%-3s  %s\n" "IM" "$@"

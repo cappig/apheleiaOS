@@ -35,18 +35,6 @@ static void set_getty_slot(getty_slot_t *slot, const char *path, bool optional) 
     slot->optional = optional;
 }
 
-static size_t default_ttys(getty_slot_t *slots, size_t max_slots) {
-    if (!slots || max_slots < 4) {
-        return 0;
-    }
-
-    set_getty_slot(&slots[0], "/dev/tty0", false);
-    set_getty_slot(&slots[1], "/dev/tty1", false);
-    set_getty_slot(&slots[2], "/dev/tty2", false);
-    set_getty_slot(&slots[3], "/dev/tty3", false);
-    return 4;
-}
-
 static char *skip_space(char *s) {
     while (*s == ' ' || *s == '\t') {
         s++;
@@ -112,25 +100,21 @@ static size_t parse_ttys(char *buf, getty_slot_t *slots, size_t max_slots) {
 static size_t load_ttys(const char *path, getty_slot_t *slots, size_t max_slots) {
     int fd = open(path, O_RDONLY, 0);
     if (fd < 0) {
-        return default_ttys(slots, max_slots);
+        write_str("init: failed to open tty configuration\n");
+        return 0;
     }
 
     char buf[512];
     ssize_t n = read(fd, buf, sizeof(buf) - 1);
     close(fd);
 
-    if (n <= 0) {
-        return default_ttys(slots, max_slots);
+    if (n < 0) {
+        write_str("init: failed to read tty configuration\n");
+        return 0;
     }
 
     buf[n] = '\0';
-
-    size_t count = parse_ttys(buf, slots, max_slots);
-    if (!count) {
-        count = default_ttys(slots, max_slots);
-    }
-
-    return count;
+    return parse_ttys(buf, slots, max_slots);
 }
 
 static bool attach_stdio(const char *path) {
@@ -263,6 +247,9 @@ int main(int argc, char **argv) {
     getty_slot_t slots[INIT_MAX_TTYS] = { 0 };
     size_t slot_count = load_ttys("/etc/ttys", slots, INIT_MAX_TTYS);
 
+    (void)run_script_sync("/etc/rc");
+    run_optional_script("/etc/rc.local");
+
     for (size_t i = 0; i < slot_count; i++) {
         slots[i].pid = spawn_getty(slots[i].tty_path);
         if (slots[i].pid < 0) {
@@ -273,13 +260,13 @@ int main(int argc, char **argv) {
         }
     }
 
-    (void)run_script_sync("/etc/rc");
-    run_optional_script("/etc/rc.local");
-
     for (;;) {
         int status = 0;
         pid_t pid = waitpid(-1, &status, 0);
         if (pid < 0) {
+            if (errno != EINTR) {
+                sleep(1);
+            }
             continue;
         }
 
