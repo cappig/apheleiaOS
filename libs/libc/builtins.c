@@ -204,6 +204,35 @@ WEAK_ATTR i64 __ashrdi3(i64 value, u32 shift) {
     return value;
 }
 
+WEAK_ATTR i32 __ctzdi2(u64 value) {
+    if (!value) {
+        return 64;
+    }
+
+    i32 count = 0;
+    while (!(value & 1ULL)) {
+        value >>= 1;
+        count++;
+    }
+
+    return count;
+}
+
+WEAK_ATTR i32 __clzdi2(u64 value) {
+    if (!value) {
+        return 64;
+    }
+
+    i32 count = 0;
+    u64 bit = 1ULL << 63;
+    while (!(value & bit)) {
+        bit >>= 1;
+        count++;
+    }
+
+    return count;
+}
+
 WEAK_ATTR i32 __ucmpdi2(u64 lhs, u64 rhs) {
     if (lhs < rhs) {
         return 0;
