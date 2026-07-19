@@ -26,26 +26,6 @@ TCC_STAGE_INC_STAMP  := $(USER_STAGE_STAMP_DIR)/tcc-include
 
 HOST_CC ?= cc
 
-ifeq ($(ARCH),x86_32)
-TCC_TARGET_NAME := i386
-TCC_TARGET_DEFS := -DTCC_TARGET_I386
-TCC_TARGET_TRIPLET := i386-apheleia
-else ifeq ($(ARCH),x86_64)
-TCC_TARGET_NAME := x86_64
-TCC_TARGET_DEFS := -DTCC_TARGET_X86_64
-TCC_TARGET_TRIPLET := x86_64-apheleia
-else ifeq ($(ARCH),riscv_32)
-TCC_TARGET_NAME := riscv32
-TCC_TARGET_DEFS := -DTCC_TARGET_RISCV32 -DTCC_RISCV_ilp32
-TCC_TARGET_TRIPLET := riscv32-apheleia
-else ifeq ($(ARCH),riscv_64)
-TCC_TARGET_NAME := riscv64
-TCC_TARGET_DEFS := -DTCC_TARGET_RISCV64
-TCC_TARGET_TRIPLET := riscv64-apheleia
-else
-$(error TCC does not know how to target ARCH=$(ARCH))
-endif
-
 TCC_CFLAGS := \
 	$(CC_BASE) \
 	$(USER_CC) \

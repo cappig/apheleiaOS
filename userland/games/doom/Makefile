@@ -36,6 +36,7 @@ LDFLAGS        := $(LD_BASE) $(USER_LD)
 ASFLAGS        := $(AS_BASE) $(USER_AS)
 
 SUPPORT_SRC := \
+	$(wildcard $(ROOT_DIR)/libs/arch/$(ARCH_TREE)/*.c) \
 	$(wildcard $(ROOT_DIR)/libs/libc/*.c) \
 	$(wildcard $(ROOT_DIR)/libs/libc_ext/*.c) \
 	$(wildcard $(ROOT_DIR)/libs/libc_usr/*.c) \
@@ -104,11 +105,7 @@ $(OBJ_DIR)/port/%.o: $(DOOM_DIR)/%.c
 
 $(CRT_OBJ): $(USER_CRT_SRC)
 	@mkdir -p $(@D)
-ifeq ($(ARCH_TREE),riscv)
-	$(CC) $(CFLAGS_SUPPORT) -c $< -o $@
-else
-	$(AS) $(ASFLAGS) -o $@ $<
-endif
+	$(if $(filter %.S,$<),$(CC) $(CFLAGS_SUPPORT) -c $< -o $@,$(AS) $(ASFLAGS) -o $@ $<)
 
 ifeq ($(DOOM_RECURSE),1)
 DOOM_DEP := $(SUPPORT_OBJ:.o=.d) $(DOOM_OBJ:.o=.d)

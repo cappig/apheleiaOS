@@ -5,11 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <unistd.h>
-
-#ifndef ARCH_NAME
-#define ARCH_NAME "unknown"
-#endif
 
 static const char *owl[] = {
     "    ,___,   ",
@@ -148,7 +145,7 @@ int main(void) {
     char sep[96];
 
     char os_name[32] = "apheleiaOS";
-    char os_arch[32] = ARCH_NAME;
+    char os_arch[32] = "unknown";
     char cpu_model[64] = "<unknown>";
     unsigned long long installed_kib = 0;
     unsigned long long used_kib = 0;
@@ -158,6 +155,11 @@ int main(void) {
     char os_kv[256] = { 0 };
     char mem_kv[256] = { 0 };
     char cpu_kv[256] = { 0 };
+
+    struct utsname uts = { 0 };
+    if (!uname(&uts)) {
+        snprintf(os_arch, sizeof(os_arch), "%s", uts.machine);
+    }
 
     int os_fd = open("/dev/os", O_RDONLY, 0);
     if (os_fd >= 0 && kv_read_fd(os_fd, os_kv, sizeof(os_kv)) > 0) {

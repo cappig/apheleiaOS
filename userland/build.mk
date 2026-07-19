@@ -10,6 +10,8 @@ USER_INCLUDE_DIR            := $(USER_STAGE_USR_DIR)/include
 USER_STAGE_USR_LIB_DIR      := $(USER_STAGE_USR_DIR)/lib
 USER_STAGE_STAMP_DIR        := $(USER_OBJ_DIR)/stage-stamps
 
+USER_WM_ONLY := clock doom term wdemo wm
+
 USER_LIBC_SRC := \
 	$(wildcard libs/libc/*.c) \
 	$(wildcard libs/libc_ext/*.c) \
@@ -21,53 +23,9 @@ USER_GUI_SRC    := $(wildcard libs/gui/*.c)
 USER_TERM_SRC   := $(wildcard libs/term/*.c)
 USER_PARSE_SRC  := libs/parse/psf.c libs/parse/ppm.c libs/parse/qoi.c libs/parse/textdb.c
 
-ifeq ($(ARCH_TREE), riscv)
-USER_CRT_SRC  := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crt0.S
-USER_CRTI_SRC := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crti.S
-USER_CRTN_SRC := libs/libc_usr/arch/riscv_$(ARCH_VARIANT)/crtn.S
-USER_LD_SCRIPT := userland/linker_riscv$(ARCH_VARIANT).ld
+include userland/arch/$(ARCH_TREE)/build.mk
 
-USER_RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr_zifencei -mabi=lp64
-USER_RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr_zifencei -mabi=ilp32
-
-# Current FRISC cores can lose a JAL immediately after DIV or REM.
-ifeq ($(RISCV_FRISC),true)
-USER_RISCV_32_ISA_FLAGS := -march=rv32ia_zicsr_zifencei_zmmul -mabi=ilp32
-endif
-
-ifeq ($(ARCH_VARIANT), 64)
-USER_ARCH_NAME := riscv_64
-USER_LD_EMU    := -melf64lriscv
-USER_ARCH_CFLAGS := \
-	$(USER_RISCV_64_ISA_FLAGS) \
-	-mcmodel=medlow
-else ifeq ($(ARCH_VARIANT), 32)
-USER_ARCH_NAME := riscv_32
-USER_LD_EMU    := -melf32lriscv
-USER_ARCH_CFLAGS := \
-	$(USER_RISCV_32_ISA_FLAGS) \
-	-mcmodel=medlow
-else
-$(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
-endif
-else
-USER_CRT_SRC  := libs/libc_usr/arch/x86_$(ARCH_VARIANT)/crt0.asm
-USER_CRTI_SRC := libs/libc_usr/arch/x86_$(ARCH_VARIANT)/crti.asm
-USER_CRTN_SRC := libs/libc_usr/arch/x86_$(ARCH_VARIANT)/crtn.asm
-USER_LD_SCRIPT := userland/linker$(ARCH_VARIANT).ld
-
-ifeq ($(ARCH_VARIANT), 64)
-USER_ARCH_NAME := x86_64
-USER_LD_EMU    := -melf_x86_64
-USER_ARCH_CFLAGS := -m64
-else ifeq ($(ARCH_VARIANT), 32)
-USER_ARCH_NAME := x86_32
-USER_LD_EMU    := -melf_i386
-USER_ARCH_CFLAGS := -m32
-else
-$(error Unsupported ARCH_VARIANT '$(ARCH_VARIANT)')
-endif
-endif
+USER_LIBC_SRC += $(wildcard libs/arch/$(ARCH_TREE)/*.c)
 
 USER_CC := \
 	-nostdlib \
@@ -77,10 +35,7 @@ USER_CC := \
 	-Ilibs/user \
 	-Ilibs/gui \
 	$(USER_ARCH_CFLAGS) \
-	-DARCH_NAME=\"$(USER_ARCH_NAME)\" \
 	-DVERSION=\"$(VERSION)\"
-
-USER_AS := -felf$(ARCH_VARIANT)
 
 USER_LD := \
 	--gc-sections \
@@ -114,7 +69,6 @@ USER_GAMES_OPTION_NAMES := $(sort \
 )
 
 USER_EXTRA_DEFAULT_SKIP := tcc
-USER_WM_ONLY            := clock doom term wdemo wm
 USERLAND_MODE_NAMES     := all core default
 
 comma := ,
@@ -127,11 +81,7 @@ USER_DEFAULT_NAMES := \
 	$(USER_GAMES_OPTION_NAMES) \
 	$(filter-out $(USER_EXTRA_DEFAULT_SKIP),$(USER_EXTRA_OPTION_NAMES))
 
-ifeq ($(ARCH_TREE), riscv)
-USERLAND_DEFAULT_NAMES := $(filter-out $(USER_WM_ONLY),$(USER_DEFAULT_NAMES))
-else
-USERLAND_DEFAULT_NAMES := $(USER_DEFAULT_NAMES)
-endif
+USERLAND_DEFAULT_NAMES := $(filter-out $(USER_ARCH_DEFAULT_SKIP),$(USER_DEFAULT_NAMES))
 
 USERLAND_ALL_NAMES := \
 	$(USER_TOOLS_OPTION_NAMES) \
@@ -162,11 +112,7 @@ USER_UI_NAMES    := $(filter $(USER_UI_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
 USER_EXTRA_NAMES := $(filter $(USER_EXTRA_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
 USER_GAME_NAMES  := $(filter $(USER_GAMES_OPTION_NAMES),$(USERLAND_SELECTED_NAMES))
 
-ifeq ($(RISCV_FRISC),true)
-ROOTFS_EXTRA_BYTES ?= $(if $(filter tcc,$(USER_EXTRA_NAMES)),8388608,0)
-else
 ROOTFS_EXTRA_BYTES ?= $(if $(filter tcc,$(USER_EXTRA_NAMES)),8388608,4194304)
-endif
 
 USER_TOOLS_PROG_DIRS := $(filter $(addprefix userland/tools/,$(USER_TOOL_NAMES)),$(USER_TOOLS_ALL_DIRS))
 USER_UI_PROG_DIRS    := $(filter $(addprefix userland/ui/,$(USER_UI_NAMES)),$(USER_UI_ALL_DIRS))
