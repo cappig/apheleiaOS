@@ -60,6 +60,7 @@ ROOTFS_METADATA_OVERRIDES: dict[str, dict[str, int]] = {
     "tmp": _meta(0o1777),
     "home/user": _meta(0o755, USER_OWNER),
     "home/john": _meta(0o755, JOHN_OWNER),
+    "bin/su": _meta(0o4755),
     "etc/passwd": _meta(0o644),
     "etc/group": _meta(0o644),
     "etc/shadow": _meta(0o600),
