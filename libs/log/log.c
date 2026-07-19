@@ -5,29 +5,34 @@
 #include <stdio.h>
 #include <string.h>
 
-#define LOG_LEVEL_WIDTH 5
+#define LOG_TIME_WIDTH 5
 
-static const char *lvl_strings[6] = {
-    "none", "debug", "info", "warn", "error", "fatal",
+static const char *lvl_strings[5] = {
+    "debug", "info", "warn", "error", "fatal",
 };
 
-static const char *lvl_colors[6] = {
-    "37", "36", "32", "33", "31", "41;97",
+static const char *lvl_colors[5] = {
+    "36;1", "32;1", "33;1", "31;1", "41;97;1",
 };
 
 typedef struct {
     int min_level;
     unsigned int options;
+    char format[LOG_FORMAT_SIZE];
     puts_fn sink;
+    log_clock_fn clock;
+    uint64_t clock_rate;
+    uint64_t clock_start;
 } log_state_t;
 
 static log_state_t log_state = {
-    .min_level = LOG_DEBUG,
+    .min_level = LOG_INFO,
     .options = LOG_OPT_DEFAULT,
+    .format = LOG_DEFAULT_FORMAT,
 };
 
 static bool _valid_level(int lvl) {
-    if (lvl < LOG_NONE) {
+    if (lvl < LOG_DEBUG) {
         return false;
     }
 
@@ -53,94 +58,168 @@ static void _log_puts(char *buf, size_t *pos, const char *s) {
     }
 }
 
-static void _log_put_dec(char *buf, size_t *pos, unsigned int value) {
-    char digits[10];
+static void _log_put_uint(char *buf, size_t *pos, uint64_t value, size_t width, char pad) {
+    char digits[20];
     size_t len = 0;
 
     do {
-        digits[len++] = (char)('0' + (value % 10U));
-        value /= 10U;
+        digits[len++] = (char)('0' + (value % 10));
+        value /= 10;
     } while (value != 0 && len < sizeof(digits));
+
+    while (len < width) {
+        _log_putc(buf, pos, pad);
+        width--;
+    }
 
     while (len) {
         _log_putc(buf, pos, digits[--len]);
     }
 }
 
-static size_t _log_level_prefix(char *buf, int lvl) {
-    size_t pos = 0;
-    const char *name = lvl_strings[lvl];
-
+static void _log_color(char *buf, size_t *pos, const char *color) {
     if (log_state.options & LOG_OPT_COLOR) {
-        _log_puts(buf, &pos, "\x1b[");
-        _log_puts(buf, &pos, lvl_colors[lvl]);
-        _log_puts(buf, &pos, ";1m");
+        _log_puts(buf, pos, "\x1b[");
+        _log_puts(buf, pos, color);
+        _log_putc(buf, pos, 'm');
     }
-
-    _log_puts(buf, &pos, name);
-
-    size_t name_len = strlen(name);
-    while (name_len < LOG_LEVEL_WIDTH) {
-        _log_putc(buf, &pos, ' ');
-        name_len++;
-    }
-
-    if (log_state.options & LOG_OPT_COLOR) {
-        _log_puts(buf, &pos, "\x1b[0m");
-    }
-
-    _log_putc(buf, &pos, ' ');
-    return pos;
 }
 
-void vslog(char *restrict buf, int lvl, char *file, int line, char *fmt, va_list args) {
+static void _log_reset_color(char *buf, size_t *pos) {
+    if (log_state.options & LOG_OPT_COLOR) {
+        _log_puts(buf, pos, "\x1b[0m");
+    }
+}
+
+static void _log_level(char *buf, size_t *pos, int lvl) {
+    _log_color(buf, pos, lvl_colors[lvl]);
+    _log_puts(buf, pos, lvl_strings[lvl]);
+    _log_reset_color(buf, pos);
+}
+
+static void _log_location(char *buf, size_t *pos, const char *text) {
+    if (!(log_state.options & LOG_OPT_LOCATION)) {
+        return;
+    }
+
+    _log_puts(buf, pos, text);
+}
+
+static void _log_line(char *buf, size_t *pos, int line) {
+    if (!(log_state.options & LOG_OPT_LOCATION)) {
+        return;
+    }
+
+    _log_put_uint(buf, pos, (unsigned int)line, 0, '0');
+}
+
+static void _log_time(char *buf, size_t *pos) {
+    uint64_t elapsed = 0;
+
+    if (!log_state.clock || !log_state.clock_rate) {
+        _log_put_uint(buf, pos, 0, LOG_TIME_WIDTH, ' ');
+        _log_puts(buf, pos, ".000000");
+        return;
+    }
+
+    uint64_t now = log_state.clock();
+    if (now >= log_state.clock_start) {
+        elapsed = now - log_state.clock_start;
+    }
+
+    uint64_t seconds = elapsed / log_state.clock_rate;
+    uint64_t remainder = elapsed % log_state.clock_rate;
+    uint64_t micros = (remainder * 1000000ULL) / log_state.clock_rate;
+
+    _log_put_uint(buf, pos, seconds, LOG_TIME_WIDTH, ' ');
+    _log_putc(buf, pos, '.');
+    _log_put_uint(buf, pos, micros, 6, '0');
+}
+
+static void _log_layout(char *buf, int lvl, const char *file, int line, const char *message) {
+    size_t pos = 0;
+    const char *format = log_state.format;
+    bool location_color = false;
+
+    buf[0] = '\0';
+
+    while (*format) {
+        if (*format != '%') {
+            _log_putc(buf, &pos, *format++);
+            continue;
+        }
+
+        format++;
+
+        bool location = (*format == 's' || *format == 'n') && (log_state.options & LOG_OPT_LOCATION);
+        if (location && !location_color) {
+            _log_color(buf, &pos, "90");
+            location_color = true;
+        } else if (!location && location_color) {
+            _log_reset_color(buf, &pos);
+            location_color = false;
+        }
+
+        switch (*format) {
+        case '%':
+            _log_putc(buf, &pos, '%');
+            break;
+        case 'l':
+            _log_level(buf, &pos, lvl);
+            break;
+        case 'm':
+            _log_puts(buf, &pos, message);
+            break;
+        case 'n':
+            _log_line(buf, &pos, line);
+            break;
+        case 's':
+            _log_location(buf, &pos, file);
+            break;
+        case 't':
+            _log_time(buf, &pos);
+            break;
+        case '\0':
+            _log_putc(buf, &pos, '%');
+            continue;
+        default:
+            _log_putc(buf, &pos, '%');
+            _log_putc(buf, &pos, *format);
+            break;
+        }
+
+        format++;
+    }
+
+    if (location_color) {
+        _log_reset_color(buf, &pos);
+    }
+
+    if (pos >= LOG_BUF_SIZE - 1) {
+        pos = LOG_BUF_SIZE - 2;
+    }
+
+    buf[pos++] = '\n';
+    buf[pos] = '\0';
+}
+
+void vslog(char *restrict buf, int lvl, const char *file, int line, const char *fmt, va_list args) {
     if (!buf) {
         return;
     }
 
-    if (!_valid_level(lvl)) {
+    buf[0] = '\0';
+    if (!_valid_level(lvl) || !fmt) {
         return;
     }
 
-    size_t prefix = _log_level_prefix(buf, lvl);
+    char message[LOG_BUF_SIZE] = { 0 };
+    vsnprintf(message, sizeof(message), fmt, args);
 
-    if (log_state.options & LOG_OPT_LOCATION) {
-        if (log_state.options & LOG_OPT_COLOR) {
-            _log_puts(buf, &prefix, "\x1b[90m");
-        }
-
-        _log_puts(buf, &prefix, file);
-        _log_putc(buf, &prefix, ':');
-        _log_put_dec(buf, &prefix, (unsigned int)line);
-
-        if (log_state.options & LOG_OPT_COLOR) {
-            _log_puts(buf, &prefix, "\x1b[0m");
-        }
-
-        _log_putc(buf, &prefix, ' ');
-    }
-
-    size_t avail = LOG_BUF_SIZE - prefix;
-    if (!avail) {
-        return;
-    }
-
-    int printed = vsnprintf(&buf[prefix], avail, fmt, args);
-    size_t end = prefix;
-
-    if (printed >= 0) {
-        end += (size_t)printed;
-    }
-
-    if (end >= LOG_BUF_SIZE - 1) {
-        end = LOG_BUF_SIZE - 2;
-    }
-
-    buf[end++] = '\n';
-    buf[end] = '\0';
+    _log_layout(buf, lvl, file, line, message);
 }
 
-void slog(char *restrict buf, int lvl, char *file, int line, char *fmt, ...) {
+void slog(char *restrict buf, int lvl, const char *file, int line, const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
 
@@ -149,7 +228,7 @@ void slog(char *restrict buf, int lvl, char *file, int line, char *fmt, ...) {
     va_end(args);
 }
 
-void log(int lvl, char *file, int line, char *fmt, ...) {
+void log(int lvl, const char *file, int line, const char *fmt, ...) {
     if (!_valid_level(lvl)) {
         return;
     }
@@ -175,9 +254,27 @@ void log_init(puts_fn sink) {
 }
 
 void log_set_lvl(int lvl) {
-    log_state.min_level = lvl;
+    if (lvl >= LOG_DEBUG && lvl <= LOG_NONE) {
+        log_state.min_level = lvl;
+    }
 }
 
 void log_set_options(unsigned int options) {
     log_state.options = options;
+}
+
+bool log_set_format(const char *format) {
+    if (!format || !*format || strlen(format) >= sizeof(log_state.format)) {
+        return false;
+    }
+
+    strncpy(log_state.format, format, sizeof(log_state.format) - 1);
+    log_state.format[sizeof(log_state.format) - 1] = '\0';
+    return true;
+}
+
+void log_set_clock(log_clock_fn clock, uint64_t rate) {
+    log_state.clock = clock;
+    log_state.clock_rate = rate;
+    log_state.clock_start = clock && rate ? clock() : 0;
 }
