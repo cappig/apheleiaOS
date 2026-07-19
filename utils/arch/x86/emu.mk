@@ -1,0 +1,8 @@
+ifeq ($(ARCH_VARIANT),32)
+QEMU_ARCH := i386
+else
+QEMU_ARCH := x86_64
+endif
+
+QEMU_ISO_SUPPORTED := true
+QEMU_IMAGE_LOADER  :=
