@@ -145,8 +145,12 @@ typedef struct sched_thread {
     pid_t pgid;
     pid_t sid;
     bool did_exec;
-    uid_t uid;
-    gid_t gid;
+    uid_t ruid;
+    uid_t uid; // effective UID used for access checks
+    uid_t suid;
+    gid_t rgid;
+    gid_t gid; // effective GID used for access checks
+    gid_t sgid;
     gid_t groups[SCHED_GROUP_MAX];
     size_t group_count;
     mode_t umask;
@@ -230,7 +234,11 @@ typedef struct {
     pid_t pgid;
     pid_t sid;
     uid_t uid;
+    uid_t euid;
+    uid_t suid;
     gid_t gid;
+    gid_t egid;
+    gid_t sgid;
     mode_t umask;
     u32 signal_pending;
     u32 signal_mask;
@@ -266,10 +274,14 @@ int sched_get_affinity(pid_t pid, u64 *mask_out);
 pid_t sched_getpid(void);
 pid_t sched_getppid(void);
 uid_t sched_getuid(void);
+uid_t sched_geteuid(void);
 gid_t sched_getgid(void);
+gid_t sched_getegid(void);
 mode_t sched_getumask(void);
 int sched_setuid(uid_t uid);
+int sched_seteuid(uid_t uid);
 int sched_setgid(gid_t gid);
+int sched_setegid(gid_t gid);
 int sched_setgroups(const gid_t *groups, size_t group_count);
 int sched_setumask(mode_t mask);
 int sched_getgroups(gid_t *groups, size_t max_groups, size_t *group_count_out);

@@ -39,8 +39,12 @@ bool sched_proc_snapshot(pid_t pid, sched_proc_snapshot_t *out) {
         out->ppid = thread->ppid;
         out->pgid = thread->pgid;
         out->sid = thread->sid;
-        out->uid = thread->uid;
-        out->gid = thread->gid;
+        out->uid = thread->ruid;
+        out->euid = thread->uid;
+        out->suid = thread->suid;
+        out->gid = thread->rgid;
+        out->egid = thread->gid;
+        out->sgid = thread->sgid;
         out->umask = thread->umask & 0777;
         out->signal_pending = __atomic_load_n(&thread->signal_pending, __ATOMIC_ACQUIRE);
         out->signal_mask = __atomic_load_n(&thread->signal_mask, __ATOMIC_ACQUIRE);

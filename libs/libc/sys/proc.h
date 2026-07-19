@@ -35,7 +35,11 @@ typedef struct {
     pid_t pgid;
     pid_t sid;
     uid_t uid;
+    uid_t euid;
+    uid_t suid;
     gid_t gid;
+    gid_t egid;
+    gid_t sgid;
     mode_t umask;
     uint32_t signal_pending;
     uint32_t signal_mask;

@@ -83,10 +83,30 @@ static bool _stat_signed_field(proc_stat_t *out, const char *key, const char *va
         if (_parse_i64(value, &parsed)) {
             out->uid = (uid_t)parsed;
         }
+    } else if (!strcmp(key, "euid")) {
+        long long parsed = 0;
+        if (_parse_i64(value, &parsed)) {
+            out->euid = (uid_t)parsed;
+        }
+    } else if (!strcmp(key, "suid")) {
+        long long parsed = 0;
+        if (_parse_i64(value, &parsed)) {
+            out->suid = (uid_t)parsed;
+        }
     } else if (!strcmp(key, "gid")) {
         long long parsed = 0;
         if (_parse_i64(value, &parsed)) {
             out->gid = (gid_t)parsed;
+        }
+    } else if (!strcmp(key, "egid")) {
+        long long parsed = 0;
+        if (_parse_i64(value, &parsed)) {
+            out->egid = (gid_t)parsed;
+        }
+    } else if (!strcmp(key, "sgid")) {
+        long long parsed = 0;
+        if (_parse_i64(value, &parsed)) {
+            out->sgid = (gid_t)parsed;
         }
     } else if (!strcmp(key, "core")) {
         long long parsed = 0;

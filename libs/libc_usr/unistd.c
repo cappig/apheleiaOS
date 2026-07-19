@@ -591,6 +591,15 @@ uid_t getuid(void) {
     return stat.uid;
 }
 
+uid_t geteuid(void) {
+    proc_stat_t stat = { 0 };
+    if (_read_self_stat(&stat) < 0) {
+        return (uid_t)-1;
+    }
+
+    return stat.euid;
+}
+
 gid_t getgid(void) {
     proc_stat_t stat = { 0 };
     if (_read_self_stat(&stat) < 0) {
@@ -600,12 +609,29 @@ gid_t getgid(void) {
     return stat.gid;
 }
 
+gid_t getegid(void) {
+    proc_stat_t stat = { 0 };
+    if (_read_self_stat(&stat) < 0) {
+        return (gid_t)-1;
+    }
+
+    return stat.egid;
+}
+
 int setuid(uid_t uid) {
     return _write_proc_value("/proc/self/uid", (long long)uid);
 }
 
+int seteuid(uid_t uid) {
+    return _write_proc_value("/proc/self/euid", (long long)uid);
+}
+
 int setgid(gid_t gid) {
     return _write_proc_value("/proc/self/gid", (long long)gid);
+}
+
+int setegid(gid_t gid) {
+    return _write_proc_value("/proc/self/egid", (long long)gid);
 }
 
 int getgroups(int size, gid_t list[]) {

@@ -1209,10 +1209,12 @@ static void apply_identity(sched_thread_t *thread, const vfs_node_t *node) {
     if (node->mode & S_ISGID) {
         thread->gid = node->gid;
     }
+    thread->sgid = thread->gid;
 
     if (node->mode & S_ISUID) {
         thread->uid = node->uid;
     }
+    thread->suid = thread->uid;
 
     thread->did_exec = true;
 }

@@ -21,7 +21,9 @@ typedef enum {
     PROC_FIELD_PID,
     PROC_FIELD_PPID,
     PROC_FIELD_UID,
+    PROC_FIELD_EUID,
     PROC_FIELD_GID,
+    PROC_FIELD_EGID,
     PROC_FIELD_UMASK,
     PROC_FIELD_PGID,
     PROC_FIELD_SID,
@@ -420,8 +422,8 @@ static bool _owner_for_pid(pid_t pid, uid_t *uid_out, gid_t *gid_out) {
         return false;
     }
 
-    *uid_out = snapshot.uid;
-    *gid_out = snapshot.gid;
+    *uid_out = snapshot.euid;
+    *gid_out = snapshot.egid;
     return true;
 }
 
@@ -494,7 +496,11 @@ static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_
         "pgid=%lld\n"
         "sid=%lld\n"
         "uid=%lld\n"
+        "euid=%lld\n"
+        "suid=%lld\n"
         "gid=%lld\n"
+        "egid=%lld\n"
+        "sgid=%lld\n"
         "umask=%o\n"
         "sig_pending=%u\n"
         "sig_mask=%u\n"
@@ -514,7 +520,11 @@ static ssize_t _proc_stat_read(vfs_node_t *node, void *buf, size_t offset, size_
         (long long)snapshot.pgid,
         (long long)snapshot.sid,
         (long long)snapshot.uid,
+        (long long)snapshot.euid,
+        (long long)snapshot.suid,
         (long long)snapshot.gid,
+        (long long)snapshot.egid,
+        (long long)snapshot.sgid,
         (unsigned int)(snapshot.umask & 0777),
         (unsigned int)snapshot.signal_pending,
         (unsigned int)snapshot.signal_mask,
@@ -581,8 +591,14 @@ static ssize_t _proc_value_read(vfs_node_t *node, void *buf, size_t offset, size
     case PROC_FIELD_UID:
         value = (long long)snapshot.uid;
         break;
+    case PROC_FIELD_EUID:
+        value = (long long)snapshot.euid;
+        break;
     case PROC_FIELD_GID:
         value = (long long)snapshot.gid;
+        break;
+    case PROC_FIELD_EGID:
+        value = (long long)snapshot.egid;
         break;
     case PROC_FIELD_UMASK:
         value = (long long)(snapshot.umask & 0777);
@@ -766,12 +782,26 @@ static ssize_t _proc_value_write(vfs_node_t *node, void *buf, size_t offset, siz
 
         status = sched_setuid((uid_t)value);
         break;
+    case PROC_FIELD_EUID:
+        if (path_pid != 0 || value < 0) {
+            return -EPERM;
+        }
+
+        status = sched_seteuid((uid_t)value);
+        break;
     case PROC_FIELD_GID:
         if (path_pid != 0 || value < 0) {
             return -EPERM;
         }
 
         status = sched_setgid((gid_t)value);
+        break;
+    case PROC_FIELD_EGID:
+        if (path_pid != 0 || value < 0) {
+            return -EPERM;
+        }
+
+        status = sched_setegid((gid_t)value);
         break;
     case PROC_FIELD_UMASK:
         if (path_pid != 0 || value < 0) {
@@ -902,7 +932,9 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
 
     bool built = true;
     mode_t uid_mode = self ? 0666 : 0444;
+    mode_t euid_mode = self ? 0666 : 0444;
     mode_t gid_mode = self ? 0666 : 0444;
+    mode_t egid_mode = self ? 0666 : 0444;
     mode_t umask_mode = self ? 0666 : 0444;
     mode_t sid_mode = self ? 0666 : 0444;
     mode_t groups_mode = self ? 0666 : 0444;
@@ -915,7 +947,9 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
     built &= _upsert_file(dir, "pid", 0444, PROC_FIELD_PID, pid);
     built &= _upsert_file(dir, "ppid", 0444, PROC_FIELD_PPID, pid);
     built &= _upsert_file(dir, "uid", uid_mode, PROC_FIELD_UID, pid);
+    built &= _upsert_file(dir, "euid", euid_mode, PROC_FIELD_EUID, pid);
     built &= _upsert_file(dir, "gid", gid_mode, PROC_FIELD_GID, pid);
+    built &= _upsert_file(dir, "egid", egid_mode, PROC_FIELD_EGID, pid);
     built &= _upsert_file(dir, "umask", umask_mode, PROC_FIELD_UMASK, pid);
     built &= _upsert_file(dir, "pgid", pgid_mode, PROC_FIELD_PGID, pid);
     built &= _upsert_file(dir, "sid", sid_mode, PROC_FIELD_SID, pid);

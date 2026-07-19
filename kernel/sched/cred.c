@@ -44,10 +44,30 @@ uid_t sched_getuid(void) {
         return (uid_t)-EINVAL;
     }
 
+    return thread->ruid;
+}
+
+uid_t sched_geteuid(void) {
+    sched_thread_t *thread = sched_local_current();
+
+    if (!thread) {
+        return (uid_t)-EINVAL;
+    }
+
     return thread->uid;
 }
 
 gid_t sched_getgid(void) {
+    sched_thread_t *thread = sched_local_current();
+
+    if (!thread) {
+        return (gid_t)-EINVAL;
+    }
+
+    return thread->rgid;
+}
+
+gid_t sched_getegid(void) {
     sched_thread_t *thread = sched_local_current();
 
     if (!thread) {
@@ -108,7 +128,28 @@ int sched_setuid(uid_t uid) {
         return -EINVAL;
     }
 
-    if (thread->uid != 0 && uid != thread->uid) {
+    if (thread->uid == 0) {
+        thread->ruid = uid;
+        thread->uid = uid;
+        thread->suid = uid;
+        return 0;
+    }
+
+    if (uid != thread->ruid && uid != thread->uid && uid != thread->suid) {
+        return -EPERM;
+    }
+
+    thread->uid = uid;
+    return 0;
+}
+
+int sched_seteuid(uid_t uid) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    if (thread->uid != 0 && uid != thread->ruid && uid != thread->uid && uid != thread->suid) {
         return -EPERM;
     }
 
@@ -122,11 +163,15 @@ int sched_setgid(gid_t gid) {
         return -EINVAL;
     }
 
-    if (thread->uid != 0 && gid != thread->gid) {
+    if (thread->uid == 0) {
+        thread->rgid = gid;
+        thread->gid = gid;
+        thread->sgid = gid;
+    } else if (gid == thread->rgid || gid == thread->gid || gid == thread->sgid) {
+        thread->gid = gid;
+    } else {
         return -EPERM;
     }
-
-    thread->gid = gid;
 
     for (size_t i = 0; i < thread->group_count;) {
         if (thread->groups[i] != gid) {
@@ -141,6 +186,20 @@ int sched_setgid(gid_t gid) {
         thread->group_count--;
     }
 
+    return 0;
+}
+
+int sched_setegid(gid_t gid) {
+    sched_thread_t *thread = sched_local_current();
+    if (!thread) {
+        return -EINVAL;
+    }
+
+    if (thread->uid != 0 && gid != thread->rgid && gid != thread->gid && gid != thread->sgid) {
+        return -EPERM;
+    }
+
+    thread->gid = gid;
     return 0;
 }
 

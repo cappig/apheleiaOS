@@ -353,8 +353,12 @@ sched_thread_t *create_thread(
         thread->sid = 0;
     }
 
+    thread->ruid = parent ? parent->ruid : 0;
     thread->uid = parent ? parent->uid : 0;
+    thread->suid = parent ? parent->suid : 0;
+    thread->rgid = parent ? parent->rgid : 0;
     thread->gid = parent ? parent->gid : 0;
+    thread->sgid = parent ? parent->sgid : 0;
     thread->group_count = parent ? parent->group_count : 0;
     if (parent && parent->group_count) {
         memcpy(thread->groups, parent->groups, sizeof(thread->groups));
