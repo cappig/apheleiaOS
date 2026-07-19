@@ -1599,10 +1599,14 @@ static bool _file_seekable(const sched_file_t *file) {
     }
 
     u32 type = file->node->type;
-    return type == VFS_FILE || type == VFS_DIR || type == VFS_BLOCKDEV;
+    if (type == VFS_FILE || type == VFS_DIR || type == VFS_BLOCKDEV) {
+        return true;
+    }
+
+    return file->node->interface && file->node->interface->seekable;
 }
 
-static bool _file_allows_positional_io(const sched_file_t *file) {
+static bool _file_uses_offset(const sched_file_t *file) {
     if (_file_seekable(file)) {
         return true;
     }
@@ -1908,12 +1912,12 @@ static ssize_t _read_fd(int fd, void *buf, size_t len, off_t offset, bool positi
             return _pipe_read(file->pipe, buf, len, nonblock);
         }
 
-        bool seekable = _file_seekable(file);
-        if (positional && !_file_allows_positional_io(file)) {
+        bool uses_offset = _file_uses_offset(file);
+        if (positional && !uses_offset) {
             return -ESPIPE;
         }
 
-        if (!positional && seekable) {
+        if (!positional && uses_offset) {
             mutex_lock(&file->offset_lock);
             read_offset = file->offset;
         }
@@ -1924,12 +1928,12 @@ static ssize_t _read_fd(int fd, void *buf, size_t len, off_t offset, bool positi
             .buf = buf,
             .len = len,
             .offset = read_offset,
-            .advance_offset = !positional && seekable,
+            .advance_offset = !positional && uses_offset,
             .wrong_kind_error = positional ? -ESPIPE : -EBADF,
         };
 
         ssize_t result = _fd_read_vfs(&io);
-        if (!positional && seekable) {
+        if (!positional && uses_offset) {
             mutex_unlock(&file->offset_lock);
         }
         return result;
@@ -2023,12 +2027,12 @@ static ssize_t _write_fd(int fd, const void *buf, size_t len, off_t offset, bool
             return _pipe_write(file->pipe, buf, len, nonblock);
         }
 
-        bool seekable = _file_seekable(file);
-        if (positional && !_file_allows_positional_io(file)) {
+        bool uses_offset = _file_uses_offset(file);
+        if (positional && !uses_offset) {
             return -ESPIPE;
         }
 
-        if (!positional && seekable) {
+        if (!positional && uses_offset) {
             mutex_lock(&file->offset_lock);
             write_offset = file->offset;
         }
@@ -2039,13 +2043,13 @@ static ssize_t _write_fd(int fd, const void *buf, size_t len, off_t offset, bool
             .buf = buf,
             .len = len,
             .offset = write_offset,
-            .append_mode = !positional && seekable,
-            .advance_offset = !positional && seekable,
+            .append_mode = !positional && uses_offset,
+            .advance_offset = !positional && uses_offset,
             .wrong_kind_error = positional ? -ESPIPE : -EBADF,
         };
 
         ssize_t result = _fd_write_vfs(&io);
-        if (!positional && seekable) {
+        if (!positional && uses_offset) {
             mutex_unlock(&file->offset_lock);
         }
         return result;

@@ -66,6 +66,9 @@ typedef ssize_t (*vfs_rename_fn)(
 
 struct vfs_interface {
     u32 refcount;
+    // Seekable nodes support descriptor offsets, lseek, pread, and pwrite.
+    bool seekable;
+    // Positional devices support offsets, pread, and pwrite, but not lseek.
     bool positional_io;
 
     // operations on the node itself

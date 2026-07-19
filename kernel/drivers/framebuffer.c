@@ -520,6 +520,7 @@ static bool _register_devfs(vfs_node_t *dev_dir) {
         return false;
     }
 
+    fb_if->positional_io = true;
     fb_if->ioctl = _dev_fb_ioctl;
 
     if (!devfs_register_node(dev_dir, "fb", VFS_CHARDEV, FB_DEV_MODE, fb_if, NULL)) {

@@ -643,6 +643,16 @@ static bool add_builtin_node(vfs_node_t *dev_dir, const char *name, mode_t mode,
     return true;
 }
 
+static vfs_interface_t *text_interface(vfs_io_fn read) {
+    vfs_interface_t *interface = vfs_create_interface(read, NULL, NULL);
+
+    if (interface) {
+        interface->seekable = true;
+    }
+
+    return interface;
+}
+
 static bool register_builtin(vfs_node_t *dev_dir) {
     bool registered = true;
 
@@ -656,12 +666,12 @@ static bool register_builtin(vfs_node_t *dev_dir) {
         registered = false;
     }
 
-    vfs_interface_t *os_if = vfs_create_interface(_dev_os_read, NULL, NULL);
+    vfs_interface_t *os_if = text_interface(_dev_os_read);
     if (!add_builtin_node(dev_dir, "os", 0444, os_if)) {
         registered = false;
     }
 
-    vfs_interface_t *clock_if = vfs_create_interface(_dev_clock_read, NULL, NULL);
+    vfs_interface_t *clock_if = text_interface(_dev_clock_read);
     if (clock_if) {
         clock_if->ioctl = _dev_clock_ioctl;
     }
@@ -670,22 +680,22 @@ static bool register_builtin(vfs_node_t *dev_dir) {
         registered = false;
     }
 
-    vfs_interface_t *mem_if = vfs_create_interface(_dev_meminfo_read, NULL, NULL);
+    vfs_interface_t *mem_if = text_interface(_dev_meminfo_read);
     if (!add_builtin_node(dev_dir, "meminfo", 0444, mem_if)) {
         registered = false;
     }
 
-    vfs_interface_t *cpu_if = vfs_create_interface(_dev_cpu_read, NULL, NULL);
+    vfs_interface_t *cpu_if = text_interface(_dev_cpu_read);
     if (!add_builtin_node(dev_dir, "cpu", 0444, cpu_if)) {
         registered = false;
     }
 
-    vfs_interface_t *sched_if = vfs_create_interface(_dev_sched_read, NULL, NULL);
+    vfs_interface_t *sched_if = text_interface(_dev_sched_read);
     if (!add_builtin_node(dev_dir, "sched", 0444, sched_if)) {
         registered = false;
     }
 
-    vfs_interface_t *syscalls_if = vfs_create_interface(_dev_syscalls_read, NULL, NULL);
+    vfs_interface_t *syscalls_if = text_interface(_dev_syscalls_read);
     if (!add_builtin_node(dev_dir, "syscalls", 0444, syscalls_if)) {
         registered = false;
     }
