@@ -503,18 +503,23 @@ static void _select_log_level(const boot_info_t *info) {
         return;
     }
 
-    switch (info->args.debug) {
-    case DEBUG_NONE:
-        log_set_lvl(LOG_INFO);
-        break;
-    case DEBUG_MINIMAL:
-        log_set_lvl(LOG_INFO);
-        break;
-    case DEBUG_ALL:
-        log_set_lvl(LOG_DEBUG);
-        break;
-    default:
-        break;
+    log_set_lvl(info->args.log_level);
+}
+
+static void _select_log_layout(const boot_info_t *info) {
+    if (!info) {
+        return;
+    }
+
+    unsigned int options = LOG_OPT_LOCATION;
+    if (info->args.log_color) {
+        options |= LOG_OPT_COLOR;
+    }
+
+    log_set_options(options);
+    if (!log_set_format(info->args.log_format)) {
+        log_set_format(LOG_DEFAULT_FORMAT);
+        log_warn("invalid log.format, using default");
     }
 }
 
@@ -1127,6 +1132,7 @@ const kernel_args_t *arch_init(void *boot_info) {
     _setup_logs(info);
     log_init(_log_puts);
 
+    _select_log_layout(info);
     _select_log_level(info);
     _detect_cpu_name();
 
@@ -1191,6 +1197,7 @@ const kernel_args_t *arch_init(void *boot_info) {
     acpi_init(info->acpi_root_ptr);
     tsc_init();
     irq_init();
+    log_set_clock(arch_timer_ticks, arch_timer_hz());
 
     pci_init();
 
@@ -1208,7 +1215,7 @@ const kernel_args_t *arch_init(void *boot_info) {
         driver_load_stage(DRIVER_STAGE_ARCH_EARLY);
     }
 
-    if (info->args.debug == DEBUG_ALL) {
+    if (info->args.log_level == LOG_DEBUG) {
         dump_pci_devices();
     }
 

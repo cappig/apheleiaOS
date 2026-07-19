@@ -3,16 +3,11 @@
 #include <base/attributes.h>
 #include <base/types.h>
 #include <base/units.h>
+#include <log/log.h>
 
 #ifndef BOOT_LOG_CAP
 #define BOOT_LOG_CAP (4 * KIB)
 #endif
-
-typedef enum {
-    DEBUG_NONE = 0,
-    DEBUG_MINIMAL = 1,
-    DEBUG_ALL = 2,
-} debug_levels_t;
 
 typedef enum {
     VIDEO_NONE = 0,
@@ -21,13 +16,16 @@ typedef enum {
 } video_mode_t;
 
 // -1 means that the bootloader will attempt to autodetect
-#define BOOT_DEFAULT_DEBUG        DEBUG_MINIMAL
+#define BOOT_DEFAULT_LOG_LEVEL    LOG_INFO
 #define BOOT_DEFAULT_VIDEO        VIDEO_TEXT
 #define BOOT_DEFAULT_VESA_WIDTH   -1
 #define BOOT_DEFAULT_VESA_HEIGHT  -1
 #define BOOT_DEFAULT_VESA_BPP     32
 #define BOOT_DEFAULT_FONT         "/etc/ter-116n.psf"
 #define BOOT_DEFAULT_STAGE_ROOTFS 0
+#define BOOT_DEFAULT_LOG_FORMAT   LOG_DEFAULT_FORMAT
+
+#define BOOT_LOG_FORMAT_SIZE LOG_FORMAT_SIZE
 
 #define BOOT_KERNEL_PATH_32 "/boot/kernel32.elf"
 #define BOOT_KERNEL_PATH_64 "/boot/kernel64.elf"
@@ -37,8 +35,9 @@ static inline const char *boot_kernel_path(bool is_64) {
 }
 
 typedef struct PACKED {
-    u8 debug;
+    u8 log_level;
     u8 stage_rootfs;
+    u8 log_color;
 
     u8 video;
 
@@ -48,4 +47,5 @@ typedef struct PACKED {
 
     char console[128];
     char font[128];
+    char log_format[BOOT_LOG_FORMAT_SIZE];
 } kernel_args_t;

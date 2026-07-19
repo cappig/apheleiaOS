@@ -1,5 +1,6 @@
 #include <base/attributes.h>
 #include <base/units.h>
+#include <common/boot_config.h>
 #include <common/elf.h>
 #include <common/ext2.h>
 #include <lib/boot.h>
@@ -128,6 +129,42 @@ static unsigned int log_opts(void) {
     return LOG_OPT_LOCATION | LOG_OPT_COLOR;
 #else
     return LOG_OPT_LOCATION;
+#endif
+}
+
+static void apply_log_config(const kernel_args_t *args) {
+    unsigned int options = LOG_OPT_LOCATION;
+    if (args->log_color) {
+        options |= LOG_OPT_COLOR;
+    }
+
+    log_set_options(options);
+    log_set_lvl(args->log_level);
+    if (!log_set_format(args->log_format)) {
+        log_warn("invalid log.format, using default");
+    }
+}
+
+static uint64_t log_ticks(void) {
+    if (!boot_timer.ready || !boot_timer.time) {
+        return 0;
+    }
+
+#if __riscv_xlen == 64
+    return *(volatile u64 *)boot_timer.time;
+#else
+    volatile u32 *time = (volatile u32 *)boot_timer.time;
+    u32 high = 0;
+    u32 low = 0;
+    u32 check = 0;
+
+    do {
+        high = time[1];
+        low = time[0];
+        check = time[1];
+    } while (high != check);
+
+    return ((u64)high << 32) | low;
 #endif
 }
 
@@ -553,22 +590,6 @@ static fdt_reg_t find_memory(const void *dtb) {
     return reg;
 }
 
-static void init_args(kernel_args_t *args) {
-    memset(args, 0, sizeof(*args));
-
-    args->debug = BOOT_DEFAULT_DEBUG;
-    args->stage_rootfs = 1;
-
-    args->video = BOOT_DEFAULT_VIDEO;
-
-    args->vesa_width = (u16)BOOT_DEFAULT_VESA_WIDTH;
-    args->vesa_height = (u16)BOOT_DEFAULT_VESA_HEIGHT;
-    args->vesa_bpp = BOOT_DEFAULT_VESA_BPP;
-
-    strncpy(args->console, "/dev/ttyS0,/dev/console", sizeof(args->console) - 1);
-    strncpy(args->font, BOOT_DEFAULT_FONT, sizeof(args->font) - 1);
-}
-
 static bool read_image(void *dest, size_t offset, size_t bytes, void *ctx) {
     const u8 *image = (const u8 *)ctx;
 
@@ -758,6 +779,21 @@ static void mount_rootfs(boot_ext2_t *rootfs, const u8 *image, size_t limit, boo
     );
 }
 
+static void load_config(boot_ext2_t *rootfs, kernel_args_t *args) {
+    boot_config_init(args, BOOT_LOG_COLOR);
+    args->stage_rootfs = 1;
+    strncpy(args->console, "/dev/ttyS0,/dev/console", sizeof(args->console) - 1);
+
+    char *config = boot_ext2_read_file(rootfs, "/boot/loader.conf", NULL);
+    if (!config) {
+        log_warn("/boot/loader.conf not found, using defaults");
+        return;
+    }
+
+    boot_config_parse(config, args);
+    free(config);
+}
+
 static const char *kernel_file(void) {
 #if __riscv_xlen == 64
     return boot_kernel_path(true);
@@ -766,14 +802,14 @@ static const char *kernel_file(void) {
 #endif
 }
 
-static boot_info_t *make_info(const boot_desc_t *desc) {
+static boot_info_t *make_info(const boot_desc_t *desc, const kernel_args_t *args) {
     boot_info_t *info = boot_alloc_aligned(sizeof(*info), 16, true);
     if (!info) {
         panic("failed to allocate boot info");
     }
 
     info->magic = BOOT_INFO_MAGIC;
-    init_args(&info->args);
+    memcpy(&info->args, args, sizeof(info->args));
 
     info->hartid = desc->hartid;
     info->dtb_paddr = (uintptr_t)desc->dtb;
@@ -964,7 +1000,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     setup_serial(&setup);
 
     log_init(log_sink);
-    log_set_lvl(BOOT_DEFAULT_DEBUG == DEBUG_ALL ? LOG_DEBUG : LOG_INFO);
+    log_set_lvl(BOOT_DEFAULT_LOG_LEVEL);
     log_set_options(log_opts());
 
     log_setup(hartid, dtb, &setup);
@@ -985,12 +1021,19 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
     }
 
     const char *timer_kind = setup_timer(setup.dtb, hartid);
+    if (boot_timer.ready) {
+        log_set_clock(log_ticks, boot_timer.hz);
+    }
     log_timer(timer_kind);
 
     range_t heap = make_heap_range(&rootfs_src, &setup.layout);
     boot_heap_init(heap.start, heap.end);
 
     mount_rootfs(&rootfs, rootfs_src.image, rootfs_src.limit, rootfs_src.from_initrd);
+
+    kernel_args_t args;
+    load_config(&rootfs, &args);
+    apply_log_config(&args);
 
     size_t kernel_size = 0;
     void *kernel_blob = read_kernel(&rootfs, &kernel_size);
@@ -1012,7 +1055,7 @@ NORETURN void boot_main(uintptr_t hartid, const void *dtb) {
         .uart = setup.uart,
     };
 
-    boot_info_t *info = make_info(&desc);
+    boot_info_t *info = make_info(&desc, &args);
 
     enter_supervisor(elf_entry, info);
 }

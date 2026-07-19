@@ -34,10 +34,23 @@ static unsigned int log_opts(void) {
 #endif
 }
 
+static void apply_log_config(const kernel_args_t *args) {
+    unsigned int options = LOG_OPT_LOCATION;
+    if (args->log_color) {
+        options |= LOG_OPT_COLOR;
+    }
+
+    log_set_options(options);
+    log_set_lvl(args->log_level);
+    if (!log_set_format(args->log_format)) {
+        log_warn("invalid log.format, using default");
+    }
+}
+
 NORETURN void _load_entry(u16 boot_disk) {
     init_serial(SERIAL_COM1, SERIAL_DEFAULT_LINE, SERIAL_DEFAULT_BAUD);
     log_init(log_sink);
-    log_set_lvl(LOG_DEBUG);
+    log_set_lvl(BOOT_DEFAULT_LOG_LEVEL);
     log_set_options(log_opts());
 
     log_info("BIOS boot started");
@@ -61,7 +74,8 @@ NORETURN void _load_entry(u16 boot_disk) {
     bios_boot_root_hint(&info.boot_root_hint);
 
     log_debug("reading loader config");
-    parse_config(&info.args);
+    parse_config(&info.args, BOOT_LOG_COLOR);
+    apply_log_config(&info.args);
 
     if (bios_boot_is_optical()) {
         info.args.stage_rootfs = 1;

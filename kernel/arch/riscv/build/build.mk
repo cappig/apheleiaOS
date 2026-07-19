@@ -46,7 +46,9 @@ BOOT_ENTRY_SRC := \
 	libs/libc/stdlib.c \
 	libs/libc/string.c \
 	libs/libc_ext/stdlib.c \
+	libs/libc_ext/string.c \
 	libs/log/log.c \
+	libs/parse/cfg.c \
 	libs/parse/fdt.c
 
 BOOT_ENTRY_OBJ_DIR := bin/boot/$(ARCH)

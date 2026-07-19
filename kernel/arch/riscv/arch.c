@@ -1238,7 +1238,18 @@ static u32 _init_uart(const boot_info_t *info, uintptr_t uart_phys) {
     serial_set_reg_io_width(_uart_io_width(boot.dtb));
     uart_console_set_base(uart_phys);
     log_init(_log_puts);
-    log_set_lvl(info->args.debug == DEBUG_ALL ? LOG_DEBUG : LOG_INFO);
+    log_set_lvl(info->args.log_level);
+
+    unsigned int options = LOG_OPT_LOCATION;
+    if (info->args.log_color) {
+        options |= LOG_OPT_COLOR;
+    }
+
+    log_set_options(options);
+    if (!log_set_format(info->args.log_format)) {
+        log_set_format(LOG_DEFAULT_FORMAT);
+        log_warn("invalid log.format, using default");
+    }
 
 #if __riscv_xlen == 64
     log_info("apheleiaOS kernel (riscv_64) booting");
@@ -1433,6 +1444,7 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
     uintptr_t reserved_end = _init_boot_cpu(info);
 
     _init_platform();
+    log_set_clock(arch_timer_ticks, arch_timer_hz());
 
     boot_limits_t limits = _boot_limits(reserved_end);
     _init_memory(limits, uart_irq);

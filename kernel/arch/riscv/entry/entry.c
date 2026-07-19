@@ -97,14 +97,16 @@ static void init_boot_args(kernel_args_t *args) {
     }
 
     memset(args, 0, sizeof(*args));
-    args->debug = BOOT_DEFAULT_DEBUG;
+    args->log_level = BOOT_DEFAULT_LOG_LEVEL;
     args->stage_rootfs = 1;
+    args->log_color = true;
     args->video = BOOT_DEFAULT_VIDEO;
     args->vesa_width = (u16)BOOT_DEFAULT_VESA_WIDTH;
     args->vesa_height = (u16)BOOT_DEFAULT_VESA_HEIGHT;
     args->vesa_bpp = BOOT_DEFAULT_VESA_BPP;
     strncpy(args->console, "/dev/ttyS0,/dev/console", sizeof(args->console) - 1);
     strncpy(args->font, BOOT_DEFAULT_FONT, sizeof(args->font) - 1);
+    strncpy(args->log_format, BOOT_DEFAULT_LOG_FORMAT, sizeof(args->log_format) - 1);
 }
 
 static bool boot_info_valid(const boot_info_t *info) {
