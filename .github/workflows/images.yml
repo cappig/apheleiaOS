@@ -23,16 +23,15 @@ jobs:
 
       - name: Check sources
         run: |
-          git ls-files -z '*.c' '*.h' | \
+          git ls-files -z '*.c' '*.h' '*.cpp' | \
             docker run --rm -i \
               -v "$PWD:/src" \
               -w /src \
               alpine:3.24.1 \
               sh -c 'apk add --no-cache clang22-extra-tools >/dev/null && xargs -0 clang-format --dry-run --Werror'
           python3 -m compileall -q kernel utils
-          for script in utils/*.sh; do
-            sh -n "$script"
-          done
+          python3 utils/arch/check_boundary.py
+          find utils -type f -name '*.sh' -exec sh -n {} +
 
       - name: Check image builder
         run: |
