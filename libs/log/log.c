@@ -203,13 +203,9 @@ static void _log_layout(char *buf, int lvl, const char *file, int line, const ch
     buf[pos] = '\0';
 }
 
-void vslog(char *restrict buf, int lvl, const char *file, int line, const char *fmt, va_list args) {
-    if (!buf) {
-        return;
-    }
-
+static void _format_entry(char *buf, int lvl, const char *file, int line, const char *fmt, va_list args) {
     buf[0] = '\0';
-    if (!_valid_level(lvl) || !fmt) {
+    if (!fmt) {
         return;
     }
 
@@ -217,15 +213,6 @@ void vslog(char *restrict buf, int lvl, const char *file, int line, const char *
     vsnprintf(message, sizeof(message), fmt, args);
 
     _log_layout(buf, lvl, file, line, message);
-}
-
-void slog(char *restrict buf, int lvl, const char *file, int line, const char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-
-    vslog(buf, lvl, file, line, fmt, args);
-
-    va_end(args);
 }
 
 void log(int lvl, const char *file, int line, const char *fmt, ...) {
@@ -242,7 +229,7 @@ void log(int lvl, const char *file, int line, const char *fmt, ...) {
 
     char buf[LOG_BUF_SIZE];
 
-    vslog(buf, lvl, file, line, fmt, args);
+    _format_entry(buf, lvl, file, line, fmt, args);
 
     log_state.sink(buf);
 

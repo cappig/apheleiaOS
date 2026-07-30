@@ -42,4 +42,3 @@ void *mmap_alloc_inner(e820_map_t *mmap, size_t bytes, u32 type, u32 alignment, 
 bool mmap_free_inner(e820_map_t *map, void *ptr);
 
 char *mem_map_type_string(e820_type_t type);
-void dump_map(e820_map_t *map);

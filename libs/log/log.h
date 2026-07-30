@@ -33,11 +33,6 @@ typedef uint64_t (*log_clock_fn)(void);
 #define log_error(...) log(LOG_ERROR, __FILE__, __LINE__, __VA_ARGS__)
 #define log_fatal(...) log(LOG_FATAL, __FILE__, __LINE__, __VA_ARGS__)
 
-
-void vslog(char *restrict buf, int lvl, const char *file, int line, const char *fmt, va_list args);
-
-void slog(char *restrict buf, int lvl, const char *file, int line, const char *fmt, ...)
-    __attribute__((format(printf, 5, 6)));
 void log(int lvl, const char *file, int line, const char *fmt, ...) __attribute__((format(printf, 4, 5)));
 
 void log_init(puts_fn sink);

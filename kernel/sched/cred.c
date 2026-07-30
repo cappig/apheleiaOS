@@ -27,73 +27,6 @@ pid_t sched_getpid(void) {
     return thread->pid;
 }
 
-pid_t sched_getppid(void) {
-    sched_thread_t *thread = sched_local_current();
-
-    if (!thread) {
-        return -EINVAL;
-    }
-
-    return thread->ppid;
-}
-
-uid_t sched_getuid(void) {
-    sched_thread_t *thread = sched_local_current();
-
-    if (!thread) {
-        return (uid_t)-EINVAL;
-    }
-
-    return thread->ruid;
-}
-
-uid_t sched_geteuid(void) {
-    sched_thread_t *thread = sched_local_current();
-
-    if (!thread) {
-        return (uid_t)-EINVAL;
-    }
-
-    return thread->uid;
-}
-
-gid_t sched_getgid(void) {
-    sched_thread_t *thread = sched_local_current();
-
-    if (!thread) {
-        return (gid_t)-EINVAL;
-    }
-
-    return thread->rgid;
-}
-
-gid_t sched_getegid(void) {
-    sched_thread_t *thread = sched_local_current();
-
-    if (!thread) {
-        return (gid_t)-EINVAL;
-    }
-
-    return thread->gid;
-}
-
-static size_t _copy_groups(const sched_thread_t *thread, gid_t *groups, size_t max_groups) {
-    if (!thread || !groups || !max_groups) {
-        return 0;
-    }
-
-    size_t count = thread->group_count;
-    if (count > max_groups) {
-        count = max_groups;
-    }
-
-    if (count) {
-        memcpy(groups, thread->groups, count * sizeof(gid_t));
-    }
-
-    return count;
-}
-
 static bool _has_group(const sched_thread_t *thread, gid_t gid) {
     if (!thread) {
         return false;
@@ -110,16 +43,6 @@ static bool _has_group(const sched_thread_t *thread, gid_t gid) {
     }
 
     return false;
-}
-
-mode_t sched_getumask(void) {
-    sched_thread_t *thread = sched_local_current();
-
-    if (!thread) {
-        return (mode_t)-EINVAL;
-    }
-
-    return thread->umask & 0777;
 }
 
 int sched_setuid(uid_t uid) {
@@ -245,21 +168,6 @@ int sched_setgroups(const gid_t *groups, size_t group_count) {
     }
 
     thread->group_count = out_count;
-    return 0;
-}
-
-int sched_getgroups(gid_t *groups, size_t max_groups, size_t *group_count_out) {
-    sched_thread_t *thread = sched_local_current();
-    if (!thread || !group_count_out) {
-        return -EINVAL;
-    }
-
-    *group_count_out = thread->group_count;
-
-    if (groups && max_groups) {
-        _copy_groups(thread, groups, max_groups);
-    }
-
     return 0;
 }
 
@@ -398,26 +306,6 @@ int sched_setumask(mode_t mask) {
     return 0;
 }
 
-pid_t sched_getpgid(pid_t pid) {
-    sched_thread_t *thread = sched_local_current();
-    if (!thread) {
-        return -EINVAL;
-    }
-
-    if (!pid) {
-        return thread->pgid;
-    }
-
-    unsigned long flags = sched_lock_save();
-
-    sched_thread_t *target = find_thread(pid);
-    pid_t pgid = target ? target->pgid : (pid_t)-ESRCH;
-
-    sched_lock_restore(flags);
-
-    return pgid;
-}
-
 int sched_setpgid(pid_t pid, pid_t pgid) {
     sched_thread_t *self = sched_local_current();
 
@@ -530,63 +418,6 @@ pid_t sched_setsid(void) {
     sched_lock_restore(flags);
 
     return thread->sid;
-}
-
-bool sched_process_is_child(pid_t child_pid, pid_t parent_pid) {
-    if (child_pid <= 0 || parent_pid <= 0) {
-        return false;
-    }
-
-    unsigned long flags = sched_lock_save();
-
-    sched_thread_t *thread = find_thread(child_pid);
-    bool is_child = thread && thread->ppid == parent_pid;
-
-    sched_lock_restore(flags);
-
-    return is_child;
-}
-
-bool sched_is_group_leader(pid_t pid) {
-    if (pid <= 0) {
-        return false;
-    }
-
-    unsigned long flags = sched_lock_save();
-
-    sched_thread_t *thread = find_thread(pid);
-    bool is_leader = thread && thread->pgid == pid;
-
-    sched_lock_restore(flags);
-
-    return is_leader;
-}
-
-bool sched_pgrp_exists(pid_t pgid) {
-    if (pgid <= 0 || !sched_state.procs.all_list) {
-        return false;
-    }
-
-    bool found = false;
-    unsigned long flags = sched_lock_save();
-
-    ll_foreach(node, sched_state.procs.all_list) {
-        sched_thread_t *thread = node->data;
-
-        if (!thread) {
-            continue;
-        }
-
-        if (thread->pgid != pgid) {
-            continue;
-        }
-
-        found = true;
-        break;
-    }
-
-    sched_lock_restore(flags);
-    return found;
 }
 
 bool sched_pgrp_in_session(pid_t pgid, pid_t sid) {

@@ -272,19 +272,12 @@ void thread_put(sched_thread_t *thread);
 int sched_set_affinity(pid_t pid, u64 mask);
 int sched_get_affinity(pid_t pid, u64 *mask_out);
 pid_t sched_getpid(void);
-pid_t sched_getppid(void);
-uid_t sched_getuid(void);
-uid_t sched_geteuid(void);
-gid_t sched_getgid(void);
-gid_t sched_getegid(void);
-mode_t sched_getumask(void);
 int sched_setuid(uid_t uid);
 int sched_seteuid(uid_t uid);
 int sched_setgid(gid_t gid);
 int sched_setegid(gid_t gid);
 int sched_setgroups(const gid_t *groups, size_t group_count);
 int sched_setumask(mode_t mask);
-int sched_getgroups(gid_t *groups, size_t max_groups, size_t *group_count_out);
 bool sched_gid_matches_cred(uid_t uid, gid_t gid, gid_t target_gid);
 int sched_getgroups_pid(
     pid_t pid,
@@ -293,12 +286,8 @@ int sched_getgroups_pid(
     size_t max_groups,
     size_t *group_count_out
 );
-pid_t sched_getpgid(pid_t pid);
 int sched_setpgid(pid_t pid, pid_t pgid);
 pid_t sched_setsid(void);
-bool sched_process_is_child(pid_t child_pid, pid_t parent_pid);
-bool sched_is_group_leader(pid_t pid);
-bool sched_pgrp_exists(pid_t pgid);
 bool sched_pgrp_in_session(pid_t pgid, pid_t sid);
 sched_thread_t *sched_spawn_kernel(const char *name, thread_entry_t entry, void *arg);
 sched_thread_t *sched_create_user_thread(const char *name);
@@ -306,7 +295,6 @@ pid_t sched_fork(arch_int_state_t *state);
 pid_t sched_wait(pid_t pid, int *status);
 pid_t sched_waitpid(pid_t pid, int *status, int options);
 void thread_prepare_user(sched_thread_t *thread, uintptr_t entry, uintptr_t user_stack_top);
-bool sched_save_user_context(sched_thread_t *thread, const arch_int_state_t *state);
 void sched_discard_thread(sched_thread_t *thread);
 void sched_make_runnable(sched_thread_t *thread);
 void sched_unblock_thread(sched_thread_t *thread);
