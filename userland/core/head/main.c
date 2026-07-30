@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <user/io.h>
 
 #define HEAD_BUF_SIZE 256
 
@@ -24,18 +25,6 @@ static bool parse_count(const char *text, int *out) {
     return true;
 }
 
-static int write_all(int fd, const char *buf, size_t len) {
-    size_t off = 0;
-    while (off < len) {
-        ssize_t wrote = write(fd, buf + off, len - off);
-        if (wrote <= 0) {
-            return -1;
-        }
-        off += (size_t)wrote;
-    }
-    return 0;
-}
-
 static int head_fd(int fd, int lines) {
     char buf[HEAD_BUF_SIZE];
     int remaining = lines;
@@ -47,7 +36,7 @@ static int head_fd(int fd, int lines) {
         }
 
         for (ssize_t i = 0; i < read_len && remaining > 0; i++) {
-            if (write_all(STDOUT_FILENO, &buf[i], 1) < 0) {
+            if (!io_write_all(STDOUT_FILENO, &buf[i], 1)) {
                 return -1;
             }
             if (buf[i] == '\n') {

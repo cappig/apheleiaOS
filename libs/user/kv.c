@@ -1,5 +1,6 @@
 #include "kv.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -28,6 +29,22 @@ ssize_t kv_read_fd(int fd, char *out, size_t out_len) {
     out[off] = '\0';
 
     return (ssize_t)off;
+}
+
+ssize_t kv_read_file(const char *path, char *out, size_t out_len) {
+    if (!path) {
+        return -1;
+    }
+
+    int fd = open(path, O_RDONLY, 0);
+    if (fd < 0) {
+        return -1;
+    }
+
+    ssize_t len = kv_read_fd(fd, out, out_len);
+    close(fd);
+
+    return len;
 }
 
 bool kv_read_string(const char *text, const char *key, char *out, size_t out_len) {

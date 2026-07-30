@@ -8,6 +8,7 @@
 #include <term_size.h>
 #include <termios.h>
 #include <unistd.h>
+#include <user/io.h>
 
 enum {
     KEY_NONE = -1,
@@ -39,21 +40,6 @@ typedef struct {
 } key_push_t;
 
 static key_push_t key_push = { 0 };
-
-static int write_all(int fd, const char *buf, size_t len) {
-    size_t off = 0;
-    while (off < len) {
-        ssize_t n = write(fd, buf + off, len - off);
-        if (n < 0 && errno == EINTR) {
-            continue;
-        }
-        if (n <= 0) {
-            return -1;
-        }
-        off += (size_t)n;
-    }
-    return 0;
-}
 
 static bool read_all_fd(int fd, char **out_data, size_t *out_len) {
     if (!out_data || !out_len) {
@@ -332,14 +318,14 @@ static int read_key(int input_fd) {
 
 static int render_page(const doc_t *doc, size_t rows, size_t cols, size_t top_line) {
     size_t page_rows = rows > 1 ? rows - 1 : 1;
-    if (write_all(STDOUT_FILENO, "\x1b[H\x1b[2J", 7) < 0) {
+    if (!io_write_all(STDOUT_FILENO, "\x1b[H\x1b[2J", 7)) {
         return -1;
     }
 
     for (size_t i = 0; i < page_rows; i++) {
         size_t line = top_line + i;
         if (line >= doc->line_count) {
-            if (write_all(STDOUT_FILENO, "~\x1b[K\r\n", 6) < 0) {
+            if (!io_write_all(STDOUT_FILENO, "~\x1b[K\r\n", 6)) {
                 return -1;
             }
             continue;
@@ -352,10 +338,10 @@ static int render_page(const doc_t *doc, size_t rows, size_t cols, size_t top_li
             len = cols;
         }
 
-        if (len && write_all(STDOUT_FILENO, doc->data + start, len) < 0) {
+        if (len && !io_write_all(STDOUT_FILENO, doc->data + start, len)) {
             return -1;
         }
-        if (write_all(STDOUT_FILENO, "\x1b[K\r\n", 5) < 0) {
+        if (!io_write_all(STDOUT_FILENO, "\x1b[K\r\n", 5)) {
             return -1;
         }
     }
@@ -374,11 +360,11 @@ static int render_page(const doc_t *doc, size_t rows, size_t cols, size_t top_li
     if (len > cols) {
         len = cols;
     }
-    if (len && write_all(STDOUT_FILENO, status, len) < 0) {
+    if (len && !io_write_all(STDOUT_FILENO, status, len)) {
         return -1;
     }
     for (size_t i = len; i < cols; i++) {
-        if (write_all(STDOUT_FILENO, " ", 1) < 0) {
+        if (!io_write_all(STDOUT_FILENO, " ", 1)) {
             return -1;
         }
     }
@@ -387,7 +373,7 @@ static int render_page(const doc_t *doc, size_t rows, size_t cols, size_t top_li
 
 static bool open_source(int argc, char **argv, doc_t *doc, int *fd, bool *close_fd) {
     if (argc > 2) {
-        (void)write_all(STDERR_FILENO, "usage: less [file]\n", 19);
+        (void)io_write_all(STDERR_FILENO, "usage: less [file]\n", 19);
         return false;
     }
 
@@ -401,7 +387,7 @@ static bool open_source(int argc, char **argv, doc_t *doc, int *fd, bool *close_
         if (*fd < 0) {
             char msg[256];
             snprintf(msg, sizeof(msg), "less: failed to open %s\n", doc->name);
-            (void)write_all(STDERR_FILENO, msg, strlen(msg));
+            (void)io_write_all(STDERR_FILENO, msg, strlen(msg));
             return false;
         }
 
@@ -524,7 +510,7 @@ int main(int argc, char **argv) {
     }
 
     if (!read_all_fd(src_fd, &doc.data, &doc.len)) {
-        (void)write_all(STDERR_FILENO, "less: failed to read input\n", 27);
+        (void)io_write_all(STDERR_FILENO, "less: failed to read input\n", 27);
         exit_code = 1;
         goto out;
     }
@@ -536,13 +522,13 @@ int main(int argc, char **argv) {
 
     if (!isatty(STDOUT_FILENO)) {
         if (doc.len) {
-            (void)write_all(STDOUT_FILENO, doc.data, doc.len);
+            (void)io_write_all(STDOUT_FILENO, doc.data, doc.len);
         }
         goto out;
     }
 
     if (!build_line_index(&doc)) {
-        (void)write_all(STDERR_FILENO, "less: out of memory\n", 20);
+        (void)io_write_all(STDERR_FILENO, "less: out of memory\n", 20);
         exit_code = 1;
         goto out;
     }
@@ -550,7 +536,7 @@ int main(int argc, char **argv) {
     input_fd = pick_input_fd(src_fd, &close_input);
     if (input_fd < 0) {
         if (doc.len) {
-            (void)write_all(STDOUT_FILENO, doc.data, doc.len);
+            (void)io_write_all(STDOUT_FILENO, doc.data, doc.len);
         }
 
         goto out;
@@ -558,7 +544,7 @@ int main(int argc, char **argv) {
 
     if (!tty_enter_raw(&tty, input_fd)) {
         if (doc.len) {
-            (void)write_all(STDOUT_FILENO, doc.data, doc.len);
+            (void)io_write_all(STDOUT_FILENO, doc.data, doc.len);
         }
         goto out;
     }
@@ -569,7 +555,7 @@ int main(int argc, char **argv) {
 out:
     tty_leave_raw(&tty);
     if (isatty(STDOUT_FILENO)) {
-        (void)write_all(STDOUT_FILENO, "\x1b[0m\r\n", 6);
+        (void)io_write_all(STDOUT_FILENO, "\x1b[0m\r\n", 6);
     }
     if (close_src) {
         close(src_fd);

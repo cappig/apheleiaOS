@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <user/io.h>
 
 #define INIT_MAX_TTYS     8
 #define INIT_TTY_PATH_MAX 64
@@ -15,14 +16,6 @@ typedef struct {
     pid_t pid;
     bool optional;
 } getty_slot_t;
-
-static void write_str(const char *str) {
-    if (!str) {
-        return;
-    }
-
-    write(STDOUT_FILENO, str, strlen(str));
-}
 
 static void set_getty_slot(getty_slot_t *slot, const char *path, bool optional) {
     if (!slot || !path) {
@@ -100,7 +93,7 @@ static size_t parse_ttys(char *buf, getty_slot_t *slots, size_t max_slots) {
 static size_t load_ttys(const char *path, getty_slot_t *slots, size_t max_slots) {
     int fd = open(path, O_RDONLY, 0);
     if (fd < 0) {
-        write_str("init: failed to open tty configuration\n");
+        io_write_str("init: failed to open tty configuration\n");
         return 0;
     }
 
@@ -109,7 +102,7 @@ static size_t load_ttys(const char *path, getty_slot_t *slots, size_t max_slots)
     close(fd);
 
     if (n < 0) {
-        write_str("init: failed to read tty configuration\n");
+        io_write_str("init: failed to read tty configuration\n");
         return 0;
     }
 
@@ -166,12 +159,12 @@ static int run_script_sync(const char *path) {
     if (!pid) {
         char *args[] = { "sh", (char *)path, NULL };
         execve("/bin/sh", args, NULL);
-        write_str("init: failed to exec startup script\n");
+        io_write_str("init: failed to exec startup script\n");
         _exit(127);
     }
 
     if (pid < 0) {
-        write_str("init: failed to fork startup script\n");
+        io_write_str("init: failed to fork startup script\n");
         return -1;
     }
 
@@ -181,20 +174,20 @@ static int run_script_sync(const char *path) {
             continue;
         }
 
-        write_str("init: waitpid failed for startup script\n");
+        io_write_str("init: waitpid failed for startup script\n");
         return -1;
     }
 
     if (WIFEXITED(status)) {
         int code = WEXITSTATUS(status);
         if (code) {
-            write_str("init: startup script exited with failure\n");
+            io_write_str("init: startup script exited with failure\n");
         }
 
         return code;
     }
 
-    write_str("init: startup script terminated abnormally\n");
+    io_write_str("init: startup script terminated abnormally\n");
     return -1;
 }
 
@@ -205,7 +198,7 @@ static void run_optional_script(const char *path) {
 
     if (access(path, R_OK) < 0) {
         if (errno != ENOENT) {
-            write_str("init: optional startup script not accessible\n");
+            io_write_str("init: optional startup script not accessible\n");
         }
         return;
     }
@@ -228,7 +221,7 @@ static pid_t spawn_getty(const char *tty_path) {
         char *args[] = { "getty", (char *)tty_path, "/bin/login", NULL };
 
         if (execve("/bin/getty", args, NULL) < 0) {
-            write_str("init: exec failed\n");
+            io_write_str("init: exec failed\n");
             _exit(1);
         }
     }
@@ -254,7 +247,7 @@ int main(int argc, char **argv) {
         slots[i].pid = spawn_getty(slots[i].tty_path);
         if (slots[i].pid < 0) {
             if (!slots[i].optional) {
-                write_str("init: failed to start getty\n");
+                io_write_str("init: failed to start getty\n");
                 sleep(1);
             }
         }
@@ -279,7 +272,7 @@ int main(int argc, char **argv) {
 
             if (slots[i].pid < 0) {
                 if (!slots[i].optional) {
-                    write_str("init: failed to restart getty\n");
+                    io_write_str("init: failed to restart getty\n");
                     sleep(1);
                 }
             }

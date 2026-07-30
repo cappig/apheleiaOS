@@ -1,5 +1,8 @@
+#include <errno.h>
 #include <parse/textdb.h>
 #include <string.h>
+
+#define TEXTDB_LINE_MAX 256
 
 const char *textdb_next_field(const char *cursor, char *out, size_t out_len) {
     size_t len = 0;
@@ -25,8 +28,26 @@ const char *textdb_next_field(const char *cursor, char *out, size_t out_len) {
     return cursor;
 }
 
-int textdb_find_line(const char *text, char *line_buf, size_t line_buf_len, textdb_line_match_fn match, void *ctx) {
-    if (!text || !line_buf || line_buf_len < 2 || !match) {
+int textdb_copy_field(char **cursor, size_t *left, char **out, const char *src) {
+    if (!cursor || !left || !out || !src) {
+        return ERANGE;
+    }
+
+    size_t len = strlen(src) + 1;
+    if (len > *left) {
+        return ERANGE;
+    }
+
+    memcpy(*cursor, src, len);
+    *out = *cursor;
+    *cursor += len;
+    *left -= len;
+
+    return 0;
+}
+
+int textdb_scan(const char *text, textdb_line_match_fn match, void *ctx) {
+    if (!text || !match) {
         return -1;
     }
 
@@ -40,19 +61,16 @@ int textdb_find_line(const char *text, char *line_buf, size_t line_buf_len, text
         }
 
         size_t line_len = (size_t)(cursor - line);
-
         if (*cursor == '\n') {
             cursor++;
         }
 
-        if (!line_len || line[0] == '#') {
+        // a truncated record could match the wrong entry, so drop it whole
+        if (!line_len || line[0] == '#' || line_len >= TEXTDB_LINE_MAX) {
             continue;
         }
 
-        if (line_len >= line_buf_len) {
-            line_len = line_buf_len - 1;
-        }
-
+        char line_buf[TEXTDB_LINE_MAX];
         memcpy(line_buf, line, line_len);
         line_buf[line_len] = '\0';
 

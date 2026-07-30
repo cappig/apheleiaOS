@@ -1,67 +1,69 @@
 #include <errno.h>
-#include <fcntl.h>
 #include <libc_usr/grp.h>
 #include <parse/textdb.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <user/kv.h>
 
 #define GROUP_PATH "/etc/group"
 
-static int copy_field(char **cursor, size_t *left, char **out, const char *src) {
-    if (!cursor || !left || !out || !src) {
-        return ERANGE;
-    }
+typedef struct {
+    gid_t gid;
+    struct group *grp;
+    char *buf;
+    size_t buflen;
+    int status;
+    bool found;
+} group_lookup_t;
 
-    size_t n = strlen(src) + 1;
-    if (n > *left) {
-        return ERANGE;
-    }
-
-    memcpy(*cursor, src, n);
-    *out = *cursor;
-    *cursor += n;
-    *left -= n;
-
-    return 0;
-}
-
-static int parse_group_line(const char *line, struct group *grp, char *buf, size_t buflen) {
-    if (!line || !grp || !buf || !buflen) {
-        return EINVAL;
-    }
-
+static int parse_line(const char *line, struct group *grp, char *buf, size_t buflen) {
     char gr_name[64] = { 0 };
     char gr_passwd[64] = { 0 };
-    char gid_buf[32] = { 0 };
+    char gid_text[32] = { 0 };
 
-    const char *cursor = line;
-    cursor = textdb_next_field(cursor, gr_name, sizeof(gr_name));
+    const char *cursor = textdb_next_field(line, gr_name, sizeof(gr_name));
     cursor = textdb_next_field(cursor, gr_passwd, sizeof(gr_passwd));
-    cursor = textdb_next_field(cursor, gid_buf, sizeof(gid_buf));
-    (void)cursor;
+    textdb_next_field(cursor, gid_text, sizeof(gid_text));
 
     char *end = NULL;
-    long gid = strtol(gid_buf, &end, 10);
-    if (end == gid_buf || *end != '\0' || gid < 0) {
+    long gid = strtol(gid_text, &end, 10);
+    if (end == gid_text || *end != '\0' || gid < 0) {
         return EINVAL;
     }
 
     memset(grp, 0, sizeof(*grp));
     grp->gr_gid = (gid_t)gid;
-    grp->gr_mem = NULL;
 
     char *dst = buf;
     size_t left = buflen;
 
-    int status = copy_field(&dst, &left, &grp->gr_name, gr_name);
-
+    int status = textdb_copy_field(&dst, &left, &grp->gr_name, gr_name);
     if (!status) {
-        status = copy_field(&dst, &left, &grp->gr_passwd, gr_passwd);
+        status = textdb_copy_field(&dst, &left, &grp->gr_passwd, gr_passwd);
     }
 
     return status;
+}
+
+static bool match_gid(const char *line, void *ctx) {
+    group_lookup_t *lookup = ctx;
+    struct group parsed = { 0 };
+
+    int status = parse_line(line, &parsed, lookup->buf, lookup->buflen);
+    if (status == EINVAL) {
+        return false;
+    }
+    if (status) {
+        lookup->status = status;
+        return true;
+    }
+    if (parsed.gr_gid != lookup->gid) {
+        return false;
+    }
+
+    *lookup->grp = parsed;
+    lookup->found = true;
+    return true;
 }
 
 int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen, struct group **result) {
@@ -69,53 +71,21 @@ int getgrgid_r(gid_t gid, struct group *grp, char *buf, size_t buflen, struct gr
         return EINVAL;
     }
 
-    char file_buf[4096];
-    int fd = open(GROUP_PATH, O_RDONLY, 0);
-    if (fd < 0) {
-        return ENOENT;
+    group_lookup_t lookup = {
+        .gid = gid,
+        .grp = grp,
+        .buf = buf,
+        .buflen = buflen,
+    };
+
+    char text[4096];
+    if (kv_read_file(GROUP_PATH, text, sizeof(text)) > 0) {
+        textdb_scan(text, match_gid, &lookup);
     }
 
-    ssize_t len = kv_read_fd(fd, file_buf, sizeof(file_buf));
-    close(fd);
-    if (len <= 0) {
-        return ENOENT;
-    }
+    *result = lookup.found ? grp : NULL;
 
-    const char *line = file_buf;
-    while (*line) {
-        const char *next = strchr(line, '\n');
-        size_t line_len = next ? (size_t)(next - line) : strlen(line);
-
-        if (line_len) {
-            char line_copy[256];
-            if (line_len >= sizeof(line_copy)) {
-                return ERANGE;
-            }
-
-            memcpy(line_copy, line, line_len);
-            line_copy[line_len] = '\0';
-
-            struct group parsed = { 0 };
-            int status = parse_group_line(line_copy, &parsed, buf, buflen);
-            if (status && status != EINVAL) {
-                return status;
-            }
-
-            if (!status && parsed.gr_gid == gid) {
-                *grp = parsed;
-                *result = grp;
-                return 0;
-            }
-        }
-
-        if (!next) {
-            break;
-        }
-        line = next + 1;
-    }
-
-    *result = NULL;
-    return 0;
+    return lookup.status;
 }
 
 struct group *getgrgid(gid_t gid) {
@@ -123,7 +93,6 @@ struct group *getgrgid(gid_t gid) {
     static char buf[256];
 
     struct group *result = NULL;
-
     int status = getgrgid_r(gid, &grp, buf, sizeof(buf), &result);
 
     if (status || !result) {

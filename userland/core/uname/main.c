@@ -23,13 +23,7 @@ static void load_info(uname_info_t *info) {
     snprintf(info->arch, sizeof(info->arch), "unknown");
 
     char os_text[256] = { 0 };
-    int fd = open("/dev/os", O_RDONLY, 0);
-    if (fd < 0) {
-        return;
-    }
-
-    ssize_t len = kv_read_fd(fd, os_text, sizeof(os_text));
-    close(fd);
+    ssize_t len = kv_read_file("/dev/os", os_text, sizeof(os_text));
     if (len <= 0) {
         return;
     }

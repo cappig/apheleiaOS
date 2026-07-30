@@ -7,24 +7,7 @@
 #include <termios.h>
 #include <unistd.h>
 
-static bool write_all(int fd, const char *buf, size_t len) {
-    size_t off = 0;
-
-    while (off < len) {
-        ssize_t n = write(fd, buf + off, len - off);
-        if (n < 0 && errno == EINTR) {
-            continue;
-        }
-
-        if (n <= 0) {
-            return false;
-        }
-
-        off += (size_t)n;
-    }
-
-    return true;
-}
+#include "io.h"
 
 static bool read_byte_default(int fd, char *out, int timeout_ms, void *ctx) {
     (void)ctx;
@@ -182,7 +165,7 @@ bool term_probe_size(
                          "7\x1b[999;999H\x1b[6n\x1b"
                          "8";
     // ask the terminal for the cursor position after clamping to the lower right corner
-    if (!write_all(output_fd, query, sizeof(query) - 1)) {
+    if (!io_write_all(output_fd, query, sizeof(query) - 1)) {
         return false;
     }
 

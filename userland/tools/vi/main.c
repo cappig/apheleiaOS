@@ -103,31 +103,12 @@ static void raw_mode_off(void) {
     ioctl(STDIN_FILENO, TCSETS, &app.editor.saved_tty);
 }
 
-static bool write_all_fd(int fd, const char *buf, size_t len) {
-    size_t off = 0;
-
-    while (off < len) {
-        ssize_t n = write(fd, buf + off, len - off);
-        if (n < 0 && errno == EINTR) {
-            continue;
-        }
-
-        if (n <= 0) {
-            return false;
-        }
-
-        off += (size_t)n;
-    }
-
-    return true;
-}
-
 static void vi_write_literal(const char *text) {
     if (!text) {
         return;
     }
 
-    (void)write_all_fd(STDERR_FILENO, text, strlen(text));
+    (void)io_write_all(STDERR_FILENO, text, strlen(text));
 }
 
 static void fatal_signal_handler(int signum) {
@@ -255,7 +236,7 @@ static bool draw_row_if_changed(size_t row, const char *data) {
 }
 
 static bool out_flush(void) {
-    return write_all_fd(STDOUT_FILENO, app.out.data, app.out.len);
+    return io_write_all(STDOUT_FILENO, app.out.data, app.out.len);
 }
 
 static void set_msg(const char *text) {
@@ -304,13 +285,13 @@ static void screen_enter(void) {
                        "\x1b[?1049h"
                        "\x1b[?25l\x1b[H\x1b[2J\x1b[3J\x1b[H";
 
-    (void)write_all_fd(STDOUT_FILENO, seq, sizeof(seq) - 1);
+    (void)io_write_all(STDOUT_FILENO, seq, sizeof(seq) - 1);
     app.editor.repaint = true;
 }
 
 static void screen_leave(void) {
     const char seq[] = "\x1b[?25h\x1b[0m\x1b[?1049l\r\x1b[K";
-    (void)write_all_fd(STDOUT_FILENO, seq, sizeof(seq) - 1);
+    (void)io_write_all(STDOUT_FILENO, seq, sizeof(seq) - 1);
 }
 
 static void enter_mode(vi_mode_t mode) {

@@ -12,3 +12,7 @@ size_t account_groups(const char *name, gid_t primary_gid, gid_t *groups, size_t
 
 // populates the environment a freshly entered session expects
 bool account_set_env(const struct passwd *pwd, const char *shell);
+
+// prompts for a password with terminal echo disabled and checks it against the
+// account database. the typed secret never leaves this call
+bool account_verify_password(const char *prompt, const char *name);

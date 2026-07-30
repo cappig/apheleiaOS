@@ -229,13 +229,7 @@ static void _load_wm_config(wm_config_t *cfg) {
     cfg->palette_mask = 0;
 
     char cfg_text[2048];
-    int fd = open("/etc/wm.conf", O_RDONLY, 0);
-    if (fd < 0) {
-        return;
-    }
-
-    ssize_t len = kv_read_fd(fd, cfg_text, sizeof(cfg_text));
-    close(fd);
+    ssize_t len = kv_read_file("/etc/wm.conf", cfg_text, sizeof(cfg_text));
     if (len <= 0) {
         return;
     }

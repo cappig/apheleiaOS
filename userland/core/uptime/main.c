@@ -1,4 +1,3 @@
-#include <fcntl.h>
 #include <kv.h>
 #include <stdio.h>
 #include <string.h>
@@ -10,13 +9,7 @@ static bool read_uptime(unsigned long long *sec_out) {
     }
 
     char buf[256] = { 0 };
-    int fd = open("/dev/clock", O_RDONLY, 0);
-    if (fd < 0) {
-        return false;
-    }
-
-    ssize_t len = kv_read_fd(fd, buf, sizeof(buf));
-    close(fd);
+    ssize_t len = kv_read_file("/dev/clock", buf, sizeof(buf));
     if (len <= 0) {
         return false;
     }

@@ -1,7 +1,6 @@
 #include "draw.h"
 
 #include <ctype.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <psf.h>
 #include <stdlib.h>
@@ -364,13 +363,7 @@ static void resolve_font_path(void) {
     font_cache.path_ready = true;
 
     char cfg_text[WM_CONFIG_BUF_SIZE];
-    int cfg_fd = open(WM_CONFIG_PATH, O_RDONLY, 0);
-    if (cfg_fd < 0) {
-        return;
-    }
-
-    ssize_t cfg_len = kv_read_fd(cfg_fd, cfg_text, sizeof(cfg_text));
-    close(cfg_fd);
+    ssize_t cfg_len = kv_read_file(WM_CONFIG_PATH, cfg_text, sizeof(cfg_text));
     if (cfg_len <= 0) {
         return;
     }

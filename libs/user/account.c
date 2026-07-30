@@ -2,7 +2,6 @@
 
 #include <crypt.h>
 #include <ctype.h>
-#include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
 #include <shadow.h>
@@ -10,7 +9,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
+#include <user/io.h>
 #include <user/kv.h>
 
 #define GROUP_PATH "/etc/group"
@@ -152,6 +154,47 @@ bool account_auth(const char *name, const char *password) {
     return secure_equal(crypt(password, shadow->sp_pwdp), shadow->sp_pwdp);
 }
 
+static bool set_echo(bool enabled) {
+    termios_t attr = { 0 };
+
+    if (ioctl(STDIN_FILENO, TCGETS, &attr) < 0) {
+        return false;
+    }
+
+    if (enabled) {
+        attr.c_lflag |= ECHO;
+    } else {
+        attr.c_lflag &= ~ECHO;
+    }
+
+    return ioctl(STDIN_FILENO, TCSETS, &attr) == 0;
+}
+
+bool account_verify_password(const char *prompt, const char *name) {
+    char password[256] = { 0 };
+
+    io_write_str(prompt);
+
+    // never read the secret if the terminal would echo it back
+    if (!set_echo(false)) {
+        io_write_str("cannot disable terminal echo\n");
+        return false;
+    }
+
+    ssize_t len = io_read_line(STDIN_FILENO, password, sizeof(password));
+    bool echo_restored = set_echo(true);
+    io_write_char('\n');
+
+    bool valid = len >= 0 && echo_restored && account_auth(name, password);
+
+    volatile char *wipe = password;
+    for (size_t i = 0; i < sizeof(password); i++) {
+        wipe[i] = '\0';
+    }
+
+    return valid;
+}
+
 bool account_set_env(const struct passwd *pwd, const char *shell) {
     if (!pwd || !pwd->pw_name || !pwd->pw_name[0] || !shell || !shell[0]) {
         return false;
@@ -169,14 +212,7 @@ size_t account_groups(const char *name, gid_t primary_gid, gid_t *groups, size_t
     }
 
     char text[4096];
-    int fd = open(GROUP_PATH, O_RDONLY, 0);
-    if (fd < 0) {
-        return 0;
-    }
-
-    ssize_t len = kv_read_fd(fd, text, sizeof(text));
-    close(fd);
-    if (len <= 0) {
+    if (kv_read_file(GROUP_PATH, text, sizeof(text)) <= 0) {
         return 0;
     }
 
