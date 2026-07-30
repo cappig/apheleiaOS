@@ -5,12 +5,12 @@
 #include <string.h>
 
 char *syntax_trim(char *text) {
-    while (text && *text && isspace((unsigned char)*text)) {
-        text++;
-    }
-
     if (!text) {
         return NULL;
+    }
+
+    while (*text && isspace((unsigned char)*text)) {
+        text++;
     }
 
     size_t len = strlen(text);

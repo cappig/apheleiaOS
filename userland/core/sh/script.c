@@ -36,7 +36,6 @@ static int function_count;
 static int call_count;
 
 static script_result_t run_range(script_list_t *list, int start, int end, int loop_depth, bool in_function);
-static script_result_t run_snippet(const char *source, int loop_depth, bool in_function);
 
 static script_result_t result_make(int status, flow_t flow) {
     script_result_t result = {
@@ -606,7 +605,7 @@ static script_result_t run_range(script_list_t *list, int start, int end, int lo
     return result;
 }
 
-static script_result_t run_snippet(const char *source, int loop_depth, bool in_function) {
+static script_result_t run_source(const char *source, bool in_function) {
     script_list_t list;
     if (!syntax_split(source, &list, report_error)) {
         syntax_free(&list);
@@ -619,13 +618,9 @@ static script_result_t run_snippet(const char *source, int loop_depth, bool in_f
         return result_make(2, FLOW_NONE);
     }
 
-    script_result_t result = run_range(&list, 0, list.count, loop_depth, in_function);
+    script_result_t result = run_range(&list, 0, list.count, 0, in_function);
     syntax_free(&list);
     return result;
-}
-
-static script_result_t run_source(const char *source, bool in_function) {
-    return run_snippet(source, 0, in_function);
 }
 
 void script_init(const sh_script_ops_t *ops) {

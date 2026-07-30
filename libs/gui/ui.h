@@ -62,8 +62,8 @@ int window_set_title(window_t *window, const char *title);
 void window_close(window_t *window);
 ssize_t window_events(window_t *window, ws_input_event_t *events, size_t count);
 
-int window_init(window_t *window, u32 width, u32 height, const char *title);
-int window_init_ex(window_t *window, u32 width, u32 height, const char *title, const ws_hints_t *hints);
+// hints may be NULL to accept the compositor defaults
+int window_init(window_t *window, u32 width, u32 height, const char *title, const ws_hints_t *hints);
 void window_deinit(window_t *window);
 framebuffer_t *window_buffer(window_t *window);
 int window_flush(window_t *window);

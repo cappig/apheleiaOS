@@ -499,7 +499,7 @@ static bool term_app_init(term_app_t *app) {
         .min_width = 320,
         .min_height = 160,
     };
-    if (window_init_ex(&app->window, 800, 500, "term", &hints)) {
+    if (window_init(&app->window, 800, 500, "term", &hints)) {
         term_log_errno("failed to create window");
         return false;
     }

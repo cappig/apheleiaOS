@@ -930,32 +930,24 @@ static bool _ensure_proc_entry(vfs_node_t *dir, pid_t pid, bool self) {
         return false;
     }
 
+    // a process may retune its own credentials; other processes only read them
+    mode_t own_mode = self ? 0666 : 0444;
     bool built = true;
-    mode_t uid_mode = self ? 0666 : 0444;
-    mode_t euid_mode = self ? 0666 : 0444;
-    mode_t gid_mode = self ? 0666 : 0444;
-    mode_t egid_mode = self ? 0666 : 0444;
-    mode_t umask_mode = self ? 0666 : 0444;
-    mode_t sid_mode = self ? 0666 : 0444;
-    mode_t groups_mode = self ? 0666 : 0444;
-    mode_t sigmask_mode = self ? 0666 : 0444;
-    mode_t pgid_mode = 0666;
-    mode_t affinity_mode = 0644;
 
     built &= _upsert_file(dir, "stat", 0444, PROC_FIELD_STAT, pid);
     built &= _upsert_file(dir, "cwd", 0444, PROC_FIELD_CWD, pid);
     built &= _upsert_file(dir, "pid", 0444, PROC_FIELD_PID, pid);
     built &= _upsert_file(dir, "ppid", 0444, PROC_FIELD_PPID, pid);
-    built &= _upsert_file(dir, "uid", uid_mode, PROC_FIELD_UID, pid);
-    built &= _upsert_file(dir, "euid", euid_mode, PROC_FIELD_EUID, pid);
-    built &= _upsert_file(dir, "gid", gid_mode, PROC_FIELD_GID, pid);
-    built &= _upsert_file(dir, "egid", egid_mode, PROC_FIELD_EGID, pid);
-    built &= _upsert_file(dir, "umask", umask_mode, PROC_FIELD_UMASK, pid);
-    built &= _upsert_file(dir, "pgid", pgid_mode, PROC_FIELD_PGID, pid);
-    built &= _upsert_file(dir, "sid", sid_mode, PROC_FIELD_SID, pid);
-    built &= _upsert_file(dir, "groups", groups_mode, PROC_FIELD_GROUPS, pid);
-    built &= _upsert_file(dir, "sigmask", sigmask_mode, PROC_FIELD_SIGMASK, pid);
-    built &= _upsert_file(dir, "affinity", affinity_mode, PROC_FIELD_AFFINITY, pid);
+    built &= _upsert_file(dir, "uid", own_mode, PROC_FIELD_UID, pid);
+    built &= _upsert_file(dir, "euid", own_mode, PROC_FIELD_EUID, pid);
+    built &= _upsert_file(dir, "gid", own_mode, PROC_FIELD_GID, pid);
+    built &= _upsert_file(dir, "egid", own_mode, PROC_FIELD_EGID, pid);
+    built &= _upsert_file(dir, "umask", own_mode, PROC_FIELD_UMASK, pid);
+    built &= _upsert_file(dir, "pgid", 0666, PROC_FIELD_PGID, pid);
+    built &= _upsert_file(dir, "sid", own_mode, PROC_FIELD_SID, pid);
+    built &= _upsert_file(dir, "groups", own_mode, PROC_FIELD_GROUPS, pid);
+    built &= _upsert_file(dir, "sigmask", own_mode, PROC_FIELD_SIGMASK, pid);
+    built &= _upsert_file(dir, "affinity", 0644, PROC_FIELD_AFFINITY, pid);
 
     return built;
 }

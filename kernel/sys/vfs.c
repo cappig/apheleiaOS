@@ -1263,51 +1263,40 @@ vfs_node_t *vfs_resolve_node(vfs_node_t *node) {
 }
 
 static bool _node_access(vfs_node_t *vnode, uid_t uid, gid_t gid, int mode) {
-    int perm = 0;
-
     if (!vnode) {
         return false;
     }
 
+    // root may do anything, except run a file that nobody is allowed to run
     if (!uid) {
         mode_t execute = S_IXUSR | S_IXGRP | S_IXOTH;
-        if ((mode & X_OK) && vnode->type == VFS_FILE && !(vnode->mode & execute)) {
-            return false;
-        }
-
-        return true;
+        return !(mode & X_OK) || vnode->type != VFS_FILE || (vnode->mode & execute);
     }
 
+    // only the first matching class applies, even when it denies access
+    mode_t readable = S_IROTH;
+    mode_t writable = S_IWOTH;
+    mode_t executable = S_IXOTH;
+
     if (uid == vnode->uid) {
-        if (mode & R_OK) {
-            perm |= (vnode->mode & S_IRUSR) ? R_OK : 0;
-        }
-        if (mode & W_OK) {
-            perm |= (vnode->mode & S_IWUSR) ? W_OK : 0;
-        }
-        if (mode & X_OK) {
-            perm |= (vnode->mode & S_IXUSR) ? X_OK : 0;
-        }
+        readable = S_IRUSR;
+        writable = S_IWUSR;
+        executable = S_IXUSR;
     } else if (sched_gid_matches_cred(uid, gid, vnode->gid)) {
-        if (mode & R_OK) {
-            perm |= (vnode->mode & S_IRGRP) ? R_OK : 0;
-        }
-        if (mode & W_OK) {
-            perm |= (vnode->mode & S_IWGRP) ? W_OK : 0;
-        }
-        if (mode & X_OK) {
-            perm |= (vnode->mode & S_IXGRP) ? X_OK : 0;
-        }
-    } else {
-        if (mode & R_OK) {
-            perm |= (vnode->mode & S_IROTH) ? R_OK : 0;
-        }
-        if (mode & W_OK) {
-            perm |= (vnode->mode & S_IWOTH) ? W_OK : 0;
-        }
-        if (mode & X_OK) {
-            perm |= (vnode->mode & S_IXOTH) ? X_OK : 0;
-        }
+        readable = S_IRGRP;
+        writable = S_IWGRP;
+        executable = S_IXGRP;
+    }
+
+    int perm = 0;
+    if (vnode->mode & readable) {
+        perm |= R_OK;
+    }
+    if (vnode->mode & writable) {
+        perm |= W_OK;
+    }
+    if (vnode->mode & executable) {
+        perm |= X_OK;
     }
 
     return (perm & mode) == mode;

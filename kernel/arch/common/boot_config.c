@@ -68,7 +68,7 @@ static void handle_log_level(char *value, void *data) {
 
 static void handle_stage_rootfs(char *value, void *data) {
     kernel_args_t *args = data;
-    bool enabled = args->stage_rootfs != 0;
+    bool enabled = false;
 
     if (parse_bool(value, &enabled)) {
         args->stage_rootfs = enabled;
@@ -77,7 +77,7 @@ static void handle_stage_rootfs(char *value, void *data) {
 
 static void handle_log_color(char *value, void *data) {
     kernel_args_t *args = data;
-    bool enabled = args->log_color != 0;
+    bool enabled = false;
 
     if (parse_bool(value, &enabled)) {
         args->log_color = enabled;

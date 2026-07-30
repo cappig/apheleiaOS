@@ -303,7 +303,7 @@ void DG_Init(void) {
         .min_width = 320,
         .min_height = 200,
     };
-    if (window_init_ex(&doom.window, DOOMGENERIC_RESX, DOOMGENERIC_RESY, "doom", &hints)) {
+    if (window_init(&doom.window, DOOMGENERIC_RESX, DOOMGENERIC_RESY, "doom", &hints)) {
         fprintf(stderr, "doom: failed to create window (%d: %s)\n", errno, strerror(errno));
         exit(1);
     }

@@ -721,7 +721,7 @@ static ssize_t window_blit(window_t *window, const void *pixels, size_t len, siz
     return pwrite(window->fb_fd, pixels, len, (off_t)offset);
 }
 
-int window_init_ex(window_t *window, u32 width, u32 height, const char *title, const ws_hints_t *hints) {
+int window_init(window_t *window, u32 width, u32 height, const char *title, const ws_hints_t *hints) {
     if (!window) {
         errno = EINVAL;
         return -1;
@@ -771,10 +771,6 @@ int window_init_ex(window_t *window, u32 width, u32 height, const char *title, c
 
     errno = saved;
     return -1;
-}
-
-int window_init(window_t *window, u32 width, u32 height, const char *title) {
-    return window_init_ex(window, width, height, title, NULL);
 }
 
 void window_deinit(window_t *window) {

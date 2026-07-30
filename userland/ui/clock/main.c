@@ -439,7 +439,7 @@ int main(int argc, char **argv) {
         .min_width = 180,
         .min_height = 220,
     };
-    if (window_init_ex(&window, 320, 360, "clock", &hints)) {
+    if (window_init(&window, 320, 360, "clock", &hints)) {
         return 1;
     }
 
