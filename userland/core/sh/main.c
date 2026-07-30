@@ -3118,9 +3118,15 @@ int main(int argc, char **argv) {
         env_set("NO_COLOR", no_color);
     }
 
+    // the account database is the source of truth here, so these hold even when
+    // the shell was started without a login program preparing the environment
     struct passwd *pwd = getpwuid(getuid());
     if (pwd && pwd->pw_dir && pwd->pw_dir[0]) {
         env_set("HOME", pwd->pw_dir);
+    }
+    if (pwd && pwd->pw_name && pwd->pw_name[0]) {
+        env_set("USER", pwd->pw_name);
+        env_set("LOGNAME", pwd->pw_name);
     }
 
     env_set("PWD", "/");

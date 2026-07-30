@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include <user/account.h>
 
+extern char **environ;
+
 #define LOGIN_GROUP_MAX 16
 
 static ssize_t write_str(const char *str) {
@@ -166,11 +168,9 @@ int main(int argc, char **argv) {
             continue;
         }
 
+        // an unknown name still gets a password prompt and the same failure
+        // message, so the prompt cannot be used to enumerate accounts
         struct passwd *pwd = getpwnam(login_name);
-        if (!pwd) {
-            write_str("login: unknown user\n");
-            continue;
-        }
 
         write_str("password: ");
         if (!tty_set_echo(false)) {
@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
 
         strip_newline(pass);
 
-        bool authenticated = account_auth(login_name, pass);
+        bool authenticated = pwd && account_auth(login_name, pass);
         clear_secret(pass, sizeof(pass));
         if (!authenticated) {
             write_str("login: authentication failed\n");
@@ -208,19 +208,11 @@ int main(int argc, char **argv) {
         gid_t groups[LOGIN_GROUP_MAX] = { 0 };
         size_t group_count = account_groups(login_name, pwd->pw_gid, groups, sizeof(groups) / sizeof(groups[0]));
 
-        if (setgroups(group_count, groups) < 0) {
+        // a half applied credential change must never fall back to the prompt:
+        // give up and let init respawn a fresh login on this terminal
+        if (setgroups(group_count, groups) < 0 || setgid(pwd->pw_gid) < 0 || setuid(pwd->pw_uid) < 0) {
             write_str("login: failed to set credentials\n");
-            continue;
-        }
-
-        if (setgid(pwd->pw_gid) < 0) {
-            write_str("login: failed to set credentials\n");
-            continue;
-        }
-
-        if (setuid(pwd->pw_uid) < 0) {
-            write_str("login: failed to set credentials\n");
-            continue;
+            _exit(1);
         }
 
         if (pwd->pw_dir && pwd->pw_dir[0]) {
@@ -228,9 +220,13 @@ int main(int argc, char **argv) {
         }
 
         const char *shell = (pwd->pw_shell && pwd->pw_shell[0]) ? pwd->pw_shell : "/bin/sh";
+        if (!account_set_env(pwd, shell)) {
+            write_str("login: failed to prepare environment\n");
+            _exit(1);
+        }
 
         char *args[] = { (char *)shell, NULL };
-        execve(shell, args, NULL);
+        execve(shell, args, environ);
 
         write_str("login: exec failed\n");
         _exit(1);

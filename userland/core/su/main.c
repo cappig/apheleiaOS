@@ -1,7 +1,6 @@
 #include <errno.h>
 #include <pwd.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -102,21 +101,6 @@ static bool authenticate(const char *name) {
     return valid;
 }
 
-static bool set_environment(const struct passwd *pwd, const char *shell) {
-    if (!pwd || !shell) {
-        return false;
-    }
-
-    const char *home = pwd->pw_dir && pwd->pw_dir[0] ? pwd->pw_dir : "/";
-    const char *name = pwd->pw_name && pwd->pw_name[0] ? pwd->pw_name : "root";
-
-    if (setenv("HOME", home, 1) < 0 || setenv("USER", name, 1) < 0 || setenv("LOGNAME", name, 1) < 0) {
-        return false;
-    }
-
-    return setenv("SHELL", shell, 1) == 0 && setenv("PATH", "/bin", 1) == 0;
-}
-
 int main(int argc, char **argv) {
     const char *target_name = "root";
 
@@ -147,7 +131,7 @@ int main(int argc, char **argv) {
     }
 
     const char *shell = (pwd->pw_shell && pwd->pw_shell[0]) ? pwd->pw_shell : "/bin/sh";
-    if (!set_environment(pwd, shell)) {
+    if (!account_set_env(pwd, shell)) {
         write_str("su: failed to prepare environment\n");
         return 1;
     }

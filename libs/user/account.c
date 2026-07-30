@@ -152,6 +152,17 @@ bool account_auth(const char *name, const char *password) {
     return secure_equal(crypt(password, shadow->sp_pwdp), shadow->sp_pwdp);
 }
 
+bool account_set_env(const struct passwd *pwd, const char *shell) {
+    if (!pwd || !pwd->pw_name || !pwd->pw_name[0] || !shell || !shell[0]) {
+        return false;
+    }
+
+    const char *home = pwd->pw_dir && pwd->pw_dir[0] ? pwd->pw_dir : "/";
+
+    return setenv("HOME", home, 1) == 0 && setenv("USER", pwd->pw_name, 1) == 0 &&
+           setenv("LOGNAME", pwd->pw_name, 1) == 0 && setenv("SHELL", shell, 1) == 0 && setenv("PATH", "/bin", 1) == 0;
+}
+
 size_t account_groups(const char *name, gid_t primary_gid, gid_t *groups, size_t max_groups) {
     if (!name || !name[0] || !groups || !max_groups) {
         return 0;
