@@ -109,9 +109,8 @@ bool ppm_parse_p6_blob(const void *data, size_t size, ppm_p6_blob_t *out) {
         return false;
     }
 
-    // exactly one whitespace byte separates the header from the raster, so it
-    // must be stepped over rather than skipped: raster bytes may themselves
-    // hold whitespace or '#' values that belong to the image
+    // exactly one byte separates header from raster; raster bytes may look
+    // like whitespace or a comment, so skipping runs of them would eat pixels
     if (reader.pos >= reader.size || !isspace((unsigned char)reader.data[reader.pos])) {
         return false;
     }

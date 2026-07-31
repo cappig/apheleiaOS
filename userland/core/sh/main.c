@@ -3118,8 +3118,7 @@ int main(int argc, char **argv) {
         env_set("NO_COLOR", no_color);
     }
 
-    // the account database is the source of truth here, so these hold even when
-    // the shell was started without a login program preparing the environment
+    // set here too, so they hold for shells started without a login program
     struct passwd *pwd = getpwuid(getuid());
     if (pwd && pwd->pw_dir && pwd->pw_dir[0]) {
         env_set("HOME", pwd->pw_dir);

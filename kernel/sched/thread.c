@@ -4,6 +4,8 @@ u64 _pid_index_key(pid_t pid) {
     return (u64)(u32)pid;
 }
 
+// the index can outlive the thread it names, so every hit is re-checked
+// against the live list and stale entries are dropped on the way past
 sched_thread_t *pid_get(pid_t pid) {
     if (!sched_state.procs.pid_index || pid <= 0) {
         return NULL;
@@ -191,6 +193,9 @@ void thread_put(sched_thread_t *thread) {
     }
 
     u32 old_refs = __atomic_fetch_sub(&thread->refcount, 1, __ATOMIC_ACQ_REL);
+
+    // an unbalanced put would wrap the count and free a live thread, so put the
+    // borrowed reference back instead
     if (!old_refs) {
         __atomic_fetch_add(&thread->refcount, 1, __ATOMIC_RELAXED);
         return;
@@ -200,6 +205,8 @@ void thread_put(sched_thread_t *thread) {
         return;
     }
 
+    // the last reference may be dropped from the thread's own stack, so the
+    // free is deferred to the reaper; the flag keeps it queued exactly once
     u32 old_flags = __atomic_fetch_or(&thread->lifecycle_flags, SCHED_DEFER_QUEUED, __ATOMIC_ACQ_REL);
 
     if (old_flags & SCHED_DEFER_QUEUED) {

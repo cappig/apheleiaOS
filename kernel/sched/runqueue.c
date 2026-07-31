@@ -1,5 +1,7 @@
 #include "internal.h"
 
+// orders the heap by virtual runtime, so the thread that has had the least cpu
+// runs next; the later keys only break ties so the order stays total and stable
 static inline bool rq_less(const sched_thread_t *a, const sched_thread_t *b) {
     if (!a) {
         return false;

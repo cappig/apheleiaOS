@@ -7,7 +7,6 @@
 
 #define ID_GROUP_MAX 32
 
-// writes "<prefix><id>(<name>)", dropping the parentheses when the id has no name
 static void print_id(const char *prefix, unsigned long long value, const char *name) {
     char text[64];
 
@@ -32,7 +31,7 @@ int main(int argc, char **argv) {
     struct passwd *pwd = getpwuid(uid);
     const char *user_name = (pwd && pwd->pw_name && pwd->pw_name[0]) ? pwd->pw_name : "";
 
-    // the primary group leads, then the supplementary ones it is not part of
+    // the primary group leads, then the supplementary ones
     gid_t groups[ID_GROUP_MAX] = { 0 };
     size_t count = 1;
     groups[0] = gid;

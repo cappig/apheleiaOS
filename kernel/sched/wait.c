@@ -40,6 +40,8 @@ void wake_sleepers(u64 now) {
                 continue;
             }
 
+            // owned by another core, so release it before handing it back to
+            // the run queue or that core could pick it up mid-migration
             thread_unclaim(thread);
             thread_set_state(thread, THREAD_READY);
 
@@ -56,6 +58,8 @@ void wake_sleepers(u64 now) {
 }
 
 void sched_wake_sleepers(u64 now) {
+    // runs from the timer interrupt, so it gives up rather than spin on the
+    // lock; the next tick retries and sleepers only wake slightly later
     unsigned long flags = 0;
     if (!sched_lock_try_save(&flags)) {
         return;
@@ -102,6 +106,8 @@ static bool wq_unlink(sched_wait_queue_t *queue, sched_thread_t *thread) {
         return true;
     }
 
+    // the fast unlink above only works while the node still belongs to this
+    // queue; otherwise fall back to a scan in case the node was recycled
     for (list_node_t *it = queue->list->head; it; it = it->next) {
         if (it != target && it->data != thread) {
             continue;
@@ -172,6 +178,8 @@ bool wait_running(sched_thread_t *self) {
         return false;
     }
 
+    // one reschedule is enough to get the thread moving; after that just spin
+    // until the switch lands, since the context is not ours to touch yet
     bool resched_kicked = false;
 
     for (;;) {

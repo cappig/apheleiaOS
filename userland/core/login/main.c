@@ -57,8 +57,7 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        // the prompt runs even for an unknown name, and both paths report the
-        // same failure, so it cannot be used to enumerate accounts
+        // unknown names still get a prompt, so this cannot enumerate accounts
         struct passwd *pwd = getpwnam(login_name);
         bool authenticated = account_verify_password("password: ", login_name) && pwd;
         if (!authenticated) {
@@ -69,8 +68,7 @@ int main(int argc, char **argv) {
         gid_t groups[LOGIN_GROUP_MAX] = { 0 };
         size_t group_count = account_groups(login_name, pwd->pw_gid, groups, sizeof(groups) / sizeof(groups[0]));
 
-        // a half applied credential change must never fall back to the prompt:
-        // give up and let init respawn a fresh login on this terminal
+        // never return to the prompt holding half of the new credentials
         if (setgroups(group_count, groups) < 0 || setgid(pwd->pw_gid) < 0 || setuid(pwd->pw_uid) < 0) {
             io_write_str("login: failed to set credentials\n");
             _exit(1);

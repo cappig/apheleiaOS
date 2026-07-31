@@ -142,6 +142,8 @@ static bool poll_wait_linked(const sched_wait_queue_t *queue) {
     return queue->poll_link && sched_state.wait.poll_wait_queue.list;
 }
 
+// blocking while holding a lock or with preemption disabled would deadlock the
+// core, so callers in that state have to fall back to polling
 static bool wait_can_block(void) {
     sched_cpu_t *local = sched_local();
 
@@ -232,6 +234,8 @@ wait_attach_locked(sched_wait_queue_t *queue, sched_thread_t *thread, u64 deadli
     return wait_arm_deadline_locked(queue, thread, deadline_tick);
 }
 
+// a waker always publishes a result; if none arrived the wakeup raced with a
+// signal or the deadline, so work out which of the two it was
 static sched_wait_result_t wait_result(sched_thread_t *thread, u64 deadline_tick, sched_wait_flags_t flags) {
     sched_wait_result_t result = (sched_wait_result_t)__atomic_load_n(&thread->wait_result, __ATOMIC_ACQUIRE);
 

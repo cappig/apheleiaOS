@@ -15,7 +15,7 @@ int main(int argc, char **argv) {
     struct passwd *pwd = getpwuid(getuid());
     const char *user_name = (pwd && pwd->pw_name && pwd->pw_name[0]) ? pwd->pw_name : "";
 
-    // the primary group leads, then the supplementary ones it is not part of
+    // the primary group leads, then the supplementary ones
     gid_t groups[GROUPS_MAX] = { 0 };
     size_t count = 1;
     groups[0] = gid;

@@ -17,6 +17,8 @@ static void fd_reset(sched_fd_t *fd) {
     fd->fd_flags = 0;
 }
 
+// a pipe outlives its last fd while a sleeping reader or writer still holds a
+// wake reference, so every release path ends here and only the last one frees
 static void pipe_try_destroy(sched_pipe_t *pipe) {
     if (!pipe) {
         return;
@@ -105,6 +107,8 @@ void sched_pipe_get_writer(sched_pipe_t *pipe) {
     spin_unlock_irqrestore(&pipe->lock, flags);
 }
 
+// pins a pipe across a blocking wait; fails once teardown has started so a
+// late waiter cannot resurrect a pipe that is already being freed
 bool sched_pipe_begin(sched_pipe_t *pipe) {
     if (!pipe) {
         return false;
@@ -262,6 +266,8 @@ static void file_put(sched_file_t *file) {
         return;
     }
 
+    // acquire-release pairs with the other droppers so the teardown below only
+    // runs once, after every other core is done touching the file
     if (__atomic_fetch_sub(&file->refs, 1, __ATOMIC_ACQ_REL) != 1) {
         return;
     }

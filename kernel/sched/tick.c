@@ -1,5 +1,7 @@
 #include "internal.h"
 
+// the idle thread yields the moment anything is runnable; a real thread keeps
+// the cpu until its slice is spent or a thread with less runtime shows up
 static bool should_preempt(sched_thread_t *thread, size_t cpu_id) {
     size_t rq_depth = sched_rq_depth(cpu_id);
 
@@ -52,6 +54,8 @@ static void charge_thread_tick(sched_thread_t *thread, const arch_int_state_t *s
     }
 }
 
+// a thread picked from the queue may still be mid-teardown on another cpu;
+// switching to a half built context would jump to garbage
 static bool invalid_switch_target(sched_thread_t *next, sched_thread_t *current) {
     if (!next || next == current || !thread_ctx_ok(next)) {
         return false;
@@ -117,6 +121,8 @@ static sched_thread_t *pick_switch_to(sched_thread_t *current, bool preempted, s
     return next;
 }
 
+// the outgoing thread stays owned by this cpu until its registers are saved,
+// so it is published for stealing only once the switch has actually happened
 static void stage_switch_away(sched_thread_t *thread, size_t cpu_id) {
     if (!thread) {
         return;
