@@ -65,9 +65,13 @@ else
 QEMU_IMAGE_ARGS := -drive format=raw,file=bin/$(IMAGE_NAME).img
 endif
 
-.PHONY: run
+.PHONY: run smoke
 
 run: all
 	@if tty -s; then exec </dev/tty >/dev/tty 2>/dev/tty; fi; $(QEMU) $(QEMU_ARGS) $(QEMU_BOOT_ARGS) $(QEMU_IMAGE_ARGS)
+
+# boots the image and drives a login shell; fails if userland stops working
+smoke: all
+	@python3 utils/smoke_test.py bin/$(IMAGE_NAME).$(IMAGE_FORMAT) --arch $(ARCH)
 
 include utils/arch/$(ARCH_TREE)/emu_targets.mk

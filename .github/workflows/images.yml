@@ -116,6 +116,19 @@ jobs:
             IMAGE_FORMAT=${{ matrix.image_format }} \
             RISCV_FRISC=${{ matrix.riscv_frisc }}
 
+      - name: Smoke test
+        if: matrix.image_format == 'img' && matrix.riscv_frisc != 'true'
+        run: |
+          sudo apt-get update
+          if [ "${{ startsWith(matrix.arch, 'x86') }}" = "true" ]; then
+            sudo apt-get install -y qemu-system-x86
+          else
+            sudo apt-get install -y qemu-system-misc
+          fi
+          python3 utils/smoke_test.py \
+            bin/apheleia_*_${{ matrix.arch }}.img \
+            --arch ${{ matrix.arch }}
+
       - name: Upload image
         uses: actions/upload-artifact@v7
         with:
