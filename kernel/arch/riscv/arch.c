@@ -144,6 +144,7 @@ static struct {
     uintptr_t virt;
     bool ready;
     bool uart_irq;
+    u32 irq_count;
     fdt_irq_context_t contexts[PLIC_MAX_CONTEXTS];
     size_t context_count;
     irq_slot_t table[PLIC_MAX_IRQS];
@@ -397,17 +398,29 @@ static bool _plic_context(size_t cpu_id, u32 *out) {
     return false;
 }
 
+// Enable bits are packed one per source, so only the words covering the
+// sources the controller implements are backed by registers
+static u32 _plic_enable_words(void) {
+    u32 count = plic.irq_count ? plic.irq_count : PLIC_MAX_IRQS - 1;
+
+    if (count > PLIC_MAX_IRQS - 1) {
+        count = PLIC_MAX_IRQS - 1;
+    }
+
+    return (count + 1 + PLIC_WORD_BITS - 1) / PLIC_WORD_BITS;
+}
+
 static bool _plic_map_span(u64 reg_size, size_t *out) {
     if (!out || reg_size > (u64)(size_t)-1) {
         return false;
     }
 
-    u64 span = PLIC_PRIORITY_BASE + (u64)PLIC_MAX_IRQS * PLIC_PRIORITY_STRIDE;
+    u64 span = PLIC_PRIORITY_BASE + (u64)_plic_enable_words() * PLIC_WORD_BITS * PLIC_PRIORITY_STRIDE;
 
     for (size_t i = 0; i < plic.context_count; i++) {
         u64 ctx = plic.contexts[i].context;
         u64 context_end = PLIC_CONTEXT_BASE + ctx * PLIC_CONTEXT_STRIDE + PLIC_CLAIM_OFFSET + sizeof(u32);
-        u64 enable_end = PLIC_ENABLE_BASE + ctx * PLIC_ENABLE_STRIDE + (PLIC_MAX_IRQS / PLIC_WORD_BITS) * sizeof(u32);
+        u64 enable_end = PLIC_ENABLE_BASE + ctx * PLIC_ENABLE_STRIDE + _plic_enable_words() * sizeof(u32);
 
         if (context_end > span) {
             span = context_end;
@@ -540,7 +553,7 @@ static void _plic_init_context(size_t cpu_id) {
 
     uintptr_t enable_base = plic.virt + PLIC_ENABLE_BASE + ctx * PLIC_ENABLE_STRIDE;
 
-    for (size_t i = 0; i < PLIC_MAX_IRQS / PLIC_WORD_BITS; i++) {
+    for (u32 i = 0; i < _plic_enable_words(); i++) {
         *(volatile u32 *)(enable_base + i * sizeof(u32)) = 0;
     }
 
@@ -611,6 +624,13 @@ static bool _plic_prepare(void) {
         (unsigned long long)reg.addr,
         (unsigned long long)reg.size
     );
+
+    plic.irq_count = 0;
+    if (fdt_find_u32(boot.dtb, compatible, "riscv,ndev", &plic.irq_count)) {
+        log_debug("PLIC implements %u sources", (unsigned int)plic.irq_count);
+    } else {
+        log_debug("PLIC has no riscv,ndev, assuming %u sources", PLIC_MAX_IRQS - 1);
+    }
 
     if (!fdt_find_irq_contexts(boot.dtb, compatible, plic.contexts, ARRAY_LEN(plic.contexts), &plic.context_count)) {
         log_warn("PLIC has no valid interrupts-extended contexts");
