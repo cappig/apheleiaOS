@@ -8,7 +8,7 @@ UPSTREAM_REF   ?= fc601639494e089702a1ada082eb51aaafc03722
 UPSTREAM_DIR   ?= $(DOOM_DIR)/.local/upstream
 UPSTREAM_STAMP := $(UPSTREAM_DIR)/.apheleia_sync
 
-WAD_URL   ?= https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad
+WAD_URL   ?= https://cdn.jsdelivr.net/gh/Doom-Utils/shareware-collection@6591a922701e5769b32278e9c555b1bf93f5714c/Doom%201.9/doom1.wad
 WAD_SHA1  ?= 5b2e249b9c5133ec987b3ea77596381dc0d6bc1d
 ASSET_DIR ?= $(DOOM_DIR)/.local/assets
 WAD_FILE  := $(ASSET_DIR)/doom1.wad
