@@ -25,18 +25,30 @@ static u32 _umul32(u32 lhs, u32 rhs) {
 }
 
 static u64 _umul64(u64 lhs, u64 rhs) {
-    u64 result = 0;
+    // Keep the loop in 32-bit operations. On RV32, a conditional 64-bit add
+    // may otherwise be lowered to __muldi3 and recurse back into this helper.
+    u32 lhs_lo = (u32)lhs;
+    u32 lhs_hi = (u32)(lhs >> 32);
+    u32 rhs_lo = (u32)rhs;
+    u32 rhs_hi = (u32)(rhs >> 32);
+    u32 result_lo = 0;
+    u32 result_hi = 0;
 
-    while (rhs) {
-        if (rhs & 1ULL) {
-            result += lhs;
+    while (rhs_lo || rhs_hi) {
+        if (rhs_lo & 1U) {
+            u32 old_lo = result_lo;
+
+            result_lo += lhs_lo;
+            result_hi += lhs_hi + (result_lo < old_lo);
         }
 
-        lhs <<= 1;
-        rhs >>= 1;
+        lhs_hi = (lhs_hi << 1) | (lhs_lo >> 31);
+        lhs_lo <<= 1;
+        rhs_lo = (rhs_lo >> 1) | (rhs_hi << 31);
+        rhs_hi >>= 1;
     }
 
-    return result;
+    return ((u64)result_hi << 32) | result_lo;
 }
 
 #if defined(__SIZEOF_INT128__)

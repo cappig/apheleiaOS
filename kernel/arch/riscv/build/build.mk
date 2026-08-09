@@ -69,8 +69,11 @@ endif
 
 RISCV_SCRATCH_OFFSET := 50331648
 
-RISCV_FRISC_DTS := $(ARCH_DIR)/dts/friscv.dts
-RISCV_FRISC_DTB := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
+RISCV_DTS_DIR     := $(ARCH_DIR)/dts
+RISCV_DTS_COMMON  := $(RISCV_DTS_DIR)/friscv.dtsi
+RISCV_FRISC_DTB   := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
+RISCV_QEMU_DTB    := $(BOOT_ENTRY_OBJ_DIR)/friscv-qemu.dtb
+RISCV_SMOKE_IMAGE := bin/smoke/$(IMAGE_NAME).img
 
 RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr_zifencei -mabi=lp64
 RISCV_32_ISA_FLAGS := -march=rv32ima_zicsr_zifencei -mabi=ilp32
@@ -203,17 +206,17 @@ IMAGE_SCRIPT_DEPS := \
 
 IMAGE_ROOT_DEPS := $(shell find root $(RISCV_ROOT_OVERLAY) -type f -o -type l)
 
-$(RISCV_FRISC_DTB): $(RISCV_FRISC_DTS)
+$(BOOT_ENTRY_OBJ_DIR)/%.dtb: $(RISCV_DTS_DIR)/%.dts $(RISCV_DTS_COMMON)
 	@mkdir -p $(@D)
 	@command -v dtc >/dev/null 2>&1 || { \
-		echo "dtc is required for RISCV_FRISC=true"; \
+		echo "dtc is required to build RISC-V device trees"; \
 		exit 1; \
 	}
 	@dtc -I dts -O dtb -o $@ $<
 	@printf "%-3s  %s\n" "DTB" "$@"
 
 ifeq ($(RISCV_FRISC),true)
-RISCV_IMAGE_DTB_DEPS := $(RISCV_FRISC_DTB)
+RISCV_IMAGE_DEPS     := $(RISCV_FRISC_DTB) $(RISCV_SMOKE_IMAGE)
 RISCV_IMAGE_DTB_ARGS := --dtb $(RISCV_FRISC_DTB)
 endif
 
@@ -227,7 +230,7 @@ $(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) \
 		--extra-bytes $(ROOTFS_EXTRA_BYTES) $@ $(IMAGE_STAGE_DIR)
 	@printf "%-3s  %s\n" "IM" "$@"
 
-bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE) $(RISCV_IMAGE_DTB_DEPS)
+bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE) $(RISCV_IMAGE_DEPS)
 	@mkdir -p $(@D)
 	@python3 kernel/arch/riscv/build/build_flat_image.py \
 		--boot-elf $(BOOT_ENTRY_ELF) \
@@ -237,4 +240,16 @@ bin/$(IMAGE_NAME).img: $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE) $(RISCV_IMAGE_DTB_DEPS)
 		--output $@ \
 		--scratch-offset $(RISCV_SCRATCH_OFFSET) \
 		$(RISCV_IMAGE_DTB_ARGS)
+	@printf "%-3s  %s\n" "IM" "$@"
+
+$(RISCV_SMOKE_IMAGE): $(BOOT_ENTRY_BIN) $(ROOTFS_IMAGE) $(RISCV_QEMU_DTB)
+	@mkdir -p $(@D)
+	@python3 kernel/arch/riscv/build/build_flat_image.py \
+		--boot-elf $(BOOT_ENTRY_ELF) \
+		--boot-bin $(BOOT_ENTRY_BIN) \
+		--kernel-elf $(KERNEL_ELF) \
+		--rootfs $(ROOTFS_IMAGE) \
+		--output $@ \
+		--scratch-offset $(RISCV_SCRATCH_OFFSET) \
+		--dtb $(RISCV_QEMU_DTB)
 	@printf "%-3s  %s\n" "IM" "$@"

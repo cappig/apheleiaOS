@@ -1,0 +1,12 @@
+/dts-v1/;
+/include/ "friscv.dtsi"
+
+&plic {
+    riscv,ndev = <95>;
+};
+
+&uart0 {
+    reg-shift = <0>;
+    reg-io-width = <1>;
+    interrupts = <10>;
+};

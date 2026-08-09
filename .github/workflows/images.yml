@@ -117,7 +117,7 @@ jobs:
             RISCV_FRISC=${{ matrix.riscv_frisc }}
 
       - name: Smoke test
-        if: matrix.image_format == 'img' && matrix.riscv_frisc != 'true'
+        if: matrix.image_format == 'img'
         run: |
           sudo apt-get update
           if [ "${{ startsWith(matrix.arch, 'x86') }}" = "true" ]; then
@@ -125,8 +125,12 @@ jobs:
           else
             sudo apt-get install -y qemu-system-misc
           fi
+          image=bin/apheleia_*_${{ matrix.arch }}.img
+          if [ "${{ matrix.riscv_frisc }}" = "true" ]; then
+            image=bin/smoke/apheleia_*_${{ matrix.arch }}.img
+          fi
           python3 utils/smoke_test.py \
-            bin/apheleia_*_${{ matrix.arch }}.img \
+            $image \
             --arch ${{ matrix.arch }}
 
       - name: Upload image
