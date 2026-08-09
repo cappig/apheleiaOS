@@ -2,9 +2,6 @@
 #include <limits.h>
 #include <string.h>
 
-extern char __heap_start;
-extern char __heap_end;
-
 typedef struct {
     uintptr_t cursor;
     uintptr_t limit;
@@ -24,10 +21,6 @@ void boot_heap_init(uintptr_t start, uintptr_t end) {
 void *boot_alloc_aligned(size_t size, size_t align, bool zero) {
     if (!size) {
         return NULL;
-    }
-
-    if (!boot_heap.cursor) {
-        boot_heap_init((uintptr_t)&__heap_start, (uintptr_t)&__heap_end);
     }
 
     if (!align) {

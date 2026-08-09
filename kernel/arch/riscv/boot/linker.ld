@@ -39,12 +39,8 @@ SECTIONS
         __bss_end = .;
     } : data_segment
 
-    .boot_heap : ALIGN(16) {
-        __heap_start = .;
-        . += 1024 * 1024;
-        __heap_end = .;
-    } : data_segment
-
+    /* the boot heap is placed in high RAM at runtime (see make_heap_range), so
+     * nothing is reserved here and the image stays small */
     . = ALIGN(16);
     . += 64 * 1024;
     __stack_top = .;
