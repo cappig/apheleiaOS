@@ -1737,7 +1737,7 @@ void arch_cpu_relax(void) {
 }
 
 void arch_resched_self(void) {
-    trap_resched();
+    riscv_set_sip_bits(SIP_SSIP);
 }
 
 bool arch_resched_cpu(size_t cpu_id) {
@@ -1936,12 +1936,6 @@ void trap_handle(arch_int_state_t *frame) {
 
     switch (cause) {
     case EXC_BREAK:
-        if (!arch_signal_is_user(frame) && (uintptr_t)frame->s_regs.sepc == (uintptr_t)trap_resched) {
-            frame->s_regs.sepc += 4;
-            sched_resched_softirq(frame);
-            return;
-        }
-
         if (arch_signal_is_user(frame)) {
             frame->s_regs.sepc += 4;
             if (_handle_user_signal(SIGTRAP, frame)) {

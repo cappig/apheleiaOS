@@ -57,7 +57,6 @@ _Static_assert(sizeof(arch_int_state_t) % 16 == 0, "RISC-V trap frame must prese
 
 void trap_init(void);
 void trap_handle(arch_int_state_t *state);
-void trap_resched(void);
 
 extern void trap_entry(void);
 extern uintptr_t kernel_sp;

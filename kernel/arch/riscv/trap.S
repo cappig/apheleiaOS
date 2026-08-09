@@ -146,13 +146,6 @@ trap_entry:
     call trap_handle
     j 3f
 
-.globl trap_resched
-.balign 4
-.type trap_resched, @function
-trap_resched:
-    ebreak
-    ret
-
 .globl arch_context_switch
 .balign 4
 .type arch_context_switch, @function
