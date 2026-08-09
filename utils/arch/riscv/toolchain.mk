@@ -64,4 +64,9 @@ LLVM_LD_riscv_32 ?= ld.lld
 LLVM_OC_riscv_32 ?= llvm-objcopy
 LLVM_ST_riscv_32 ?= llvm-strip
 
-LIBGCC_FALLBACK_CC := $(GNU_CC_$(ARCH)) $(GNU_CC_CANDIDATES_$(ARCH))
+LIBGCC_FALLBACK_CC := $(GNU_CC_$(ARCH))
+
+# Avoid Clang auto-detecting a GCC archive for the wrong RISC-V ABI.
+ifeq ($(TOOLCHAIN),llvm)
+RTLIB_FLAGS := --rtlib=compiler-rt
+endif

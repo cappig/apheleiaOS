@@ -11,6 +11,7 @@ ARCH_TREE    := $(word 1, $(subst _, ,$(ARCH)))
 ARCH_VARIANT := $(word 2, $(subst _, ,$(ARCH)))
 
 LIBGCC_FALLBACK_CC ?=
+RTLIB_FLAGS ?=
 
 include utils/arch/$(ARCH_TREE)/toolchain.mk
 
@@ -179,7 +180,7 @@ CC_BASE := \
 # Some Clang packages report a compiler-rt path they do not ship. Target
 # configuration may provide fallback compilers for the runtime archive.
 LIBGCC = $(if $(strip $(CC)),$(shell \
-	lib=$$($(CC) $(CC_BASE) $(1) -print-libgcc-file-name 2>/dev/null); \
+	lib=$$($(CC) $(CC_BASE) $(1) $(RTLIB_FLAGS) -print-libgcc-file-name 2>/dev/null); \
 	if [ -f "$$lib" ]; then echo "$$lib"; exit 0; fi; \
 	for cc in $(LIBGCC_FALLBACK_CC); do \
 		if ! command -v "$$cc" >/dev/null 2>&1; then continue; fi; \
