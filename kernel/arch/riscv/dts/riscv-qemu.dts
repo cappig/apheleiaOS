@@ -1,0 +1,38 @@
+/dts-v1/;
+
+/ {
+    #address-cells = <1>;
+    #size-cells = <1>;
+    model = "QEMU RISC-V Virtual Machine";
+    compatible = "riscv-virtio";
+
+    chosen {
+        bootargs = "earlycon=sbi console=ttyS0,115200";
+        stdout-path = &uart0;
+    };
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        timebase-frequency = <10000000>;
+    };
+
+    memory@80000000 {
+        device_type = "memory";
+        reg = <0x80000000 0x10000000>;
+    };
+
+    clint@2000000 {
+        compatible = "riscv,clint0";
+        reg = <0x02000000 0x10000>;
+    };
+
+    uart0: serial@10000000 {
+        compatible = "ns16550a";
+        reg = <0x10000000 0x100>;
+        reg-shift = <0>;
+        reg-io-width = <1>;
+        clock-frequency = <3686400>;
+        current-speed = <115200>;
+    };
+};

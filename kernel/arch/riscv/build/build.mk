@@ -75,6 +75,7 @@ RISCV_DTS_DIR     := $(ARCH_DIR)/dts
 RISCV_DTS_COMMON  := $(RISCV_DTS_DIR)/friscv.dtsi
 RISCV_FRISC_DTB   := $(BOOT_ENTRY_OBJ_DIR)/friscv.dtb
 RISCV_QEMU_DTB    := $(BOOT_ENTRY_OBJ_DIR)/friscv-qemu.dtb
+RISCV_GENERIC_DTB := $(BOOT_ENTRY_OBJ_DIR)/riscv-qemu.dtb
 RISCV_SMOKE_IMAGE := bin/smoke/$(IMAGE_NAME).img
 
 RISCV_64_ISA_FLAGS := -march=rv64ima_zicsr_zifencei -mabi=lp64
@@ -210,7 +211,9 @@ IMAGE_SCRIPT_DEPS := \
 
 IMAGE_ROOT_DEPS := $(shell find root $(RISCV_ROOT_OVERLAY) -type f -o -type l)
 
-$(BOOT_ENTRY_OBJ_DIR)/%.dtb: $(RISCV_DTS_DIR)/%.dts $(RISCV_DTS_COMMON)
+$(RISCV_FRISC_DTB) $(RISCV_QEMU_DTB): $(RISCV_DTS_COMMON)
+
+$(BOOT_ENTRY_OBJ_DIR)/%.dtb: $(RISCV_DTS_DIR)/%.dts
 	@mkdir -p $(@D)
 	@command -v dtc >/dev/null 2>&1 || { \
 		echo "dtc is required to build RISC-V device trees"; \
@@ -226,6 +229,9 @@ $(BOOT_ENTRY_OBJ_DIR)/%.dtb: $(RISCV_DTS_DIR)/%.dts $(RISCV_DTS_COMMON)
 ifeq ($(RISCV_FRISC),true)
 RISCV_IMAGE_DEPS     := $(RISCV_FRISC_DTB) $(RISCV_SMOKE_IMAGE)
 RISCV_IMAGE_DTB_ARGS := --dtb $(RISCV_FRISC_DTB)
+else
+RISCV_IMAGE_DEPS     := $(RISCV_GENERIC_DTB)
+RISCV_IMAGE_DTB_ARGS := --dtb $(RISCV_GENERIC_DTB)
 endif
 
 $(ROOTFS_IMAGE): $(BOOT_ENTRY_ELF) $(KERNEL_ELF) $(IMAGE_SCRIPT_DEPS) \

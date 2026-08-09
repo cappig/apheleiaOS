@@ -1237,8 +1237,8 @@ static uintptr_t _load_boot_state(boot_info_t *info) {
         boot.dtb = (const void *)(uintptr_t)info->dtb_paddr;
     }
 
-    boot.mem_paddr = info->memory_paddr ? info->memory_paddr : RISCV_KERNEL_BASE;
-    boot.mem_size = info->memory_size ? info->memory_size : 256ULL * MIB;
+    boot.mem_paddr = info->memory_paddr;
+    boot.mem_size = info->memory_size;
     boot.rootfs_paddr = info->boot_rootfs_paddr;
     boot.rootfs_size = info->boot_rootfs_size <= (u64)(size_t)-1 ? (size_t)info->boot_rootfs_size : 0;
 
@@ -1461,6 +1461,11 @@ const kernel_args_t *arch_init(void *boot_info_ptr) {
 
     uintptr_t uart_phys = _load_boot_state(info);
     u32 uart_irq = _init_uart(info, uart_phys);
+
+    if (!boot.mem_paddr || !boot.mem_size) {
+        panic("boot memory range missing");
+    }
+
     uintptr_t reserved_end = _init_boot_cpu(info);
 
     _init_platform();

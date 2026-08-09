@@ -31,8 +31,6 @@ extern char __image_start;
 #define CLINT_BASE          0x02000000ULL
 #define MTIMECMP_OFFSET     0x00004000ULL
 #define MTIME_OFFSET        0x0000BFF8ULL
-#define DTB_LOW_LIMIT       (16ULL * MIB)
-#define DTB_RAM_WINDOW      (256ULL * MIB)
 
 #ifndef BOOT_LOG_COLOR
 #define BOOT_LOG_COLOR true
@@ -243,18 +241,10 @@ static bool load_elf(const u8 *blob, size_t blob_size, uintptr_t *out_entry) {
     return true;
 }
 
-// accept only pointers that look like firmware dtbs in low memory or ram
 static const void *valid_dtb(const void *dtb) {
     uintptr_t addr = (uintptr_t)dtb;
 
     if (!addr || (addr & 0x3U) != 0) {
-        return NULL;
-    }
-
-    bool low_window = addr >= BOOT_PAGE_SIZE && addr < DTB_LOW_LIMIT;
-    bool ram_window = addr >= RISCV_KERNEL_BASE && addr < (RISCV_KERNEL_BASE + DTB_RAM_WINDOW);
-
-    if (!low_window && !ram_window) {
         return NULL;
     }
 
@@ -577,14 +567,9 @@ static uintptr_t find_io_width(const void *dtb) {
 }
 
 static fdt_reg_t find_memory(const void *dtb) {
-    fdt_reg_t reg = {
-        .addr = RISCV_KERNEL_BASE,
-        .size = 256ULL * MIB,
-    };
-
-    fdt_reg_t probed = { 0 };
-    if (dtb && fdt_find_memory_reg(dtb, &probed) && probed.addr && probed.size) {
-        reg = probed;
+    fdt_reg_t reg = { 0 };
+    if (dtb) {
+        (void)fdt_find_memory_reg(dtb, &reg);
     }
 
     return reg;
@@ -902,6 +887,9 @@ static boot_setup_t make_setup(const void *dtb) {
     setup.dtb = pick_dtb(setup.entry_dtb, setup.flat_dtb);
     setup.dtb_size = dtb_len(setup.dtb);
     setup.memory = find_memory(setup.dtb);
+    if (!setup.memory.addr || !setup.memory.size) {
+        panic("RISC-V DTB memory range missing");
+    }
     setup.layout = make_layout(setup.memory, setup.header);
     setup.uart = find_uart(setup.dtb);
     setup.stride = find_stride(setup.dtb);

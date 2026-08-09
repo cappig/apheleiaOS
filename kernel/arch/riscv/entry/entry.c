@@ -1,5 +1,3 @@
-#include <arch/paging.h>
-#include <base/units.h>
 #include <kernel.h>
 #include <parse/fdt.h>
 #include <riscv/arch_paging.h>
@@ -15,27 +13,17 @@ static bool boot_info_ptr_plausible(uintptr_t addr) {
         return false;
     }
 
-    uintptr_t window_start = (uintptr_t)RISCV_KERNEL_BASE;
-    uintptr_t window_end = window_start + 256ULL * MIB;
-
-    if (window_end <= window_start || addr < window_start) {
+    if (addr < (uintptr_t)RISCV_KERNEL_BASE) {
         return false;
     }
 
-    return addr <= window_end - sizeof(boot_info_t);
+    return addr <= (uintptr_t)-1 - sizeof(boot_info_t);
 }
 
 static const void *sanitize_dtb_ptr(const void *dtb) {
     uintptr_t addr = (uintptr_t)dtb;
 
     if (!addr || (addr & 0x3U) != 0) {
-        return NULL;
-    }
-
-    bool low_window = addr >= PAGE_4KIB && addr < (16ULL * MIB);
-    bool ram_window = addr >= RISCV_KERNEL_BASE && addr < (RISCV_KERNEL_BASE + 256ULL * MIB);
-
-    if (!low_window && !ram_window) {
         return NULL;
     }
 
@@ -66,15 +54,10 @@ static uintptr_t detect_uart_base(const void *dtb) {
 }
 
 static fdt_reg_t detect_memory(const void *dtb) {
-    fdt_reg_t reg = {
-        .addr = RISCV_KERNEL_BASE,
-        .size = 256ULL * MIB,
-    };
-
+    fdt_reg_t reg = { 0 };
     dtb = sanitize_dtb_ptr(dtb);
-    fdt_reg_t probed = { 0 };
-    if (dtb && fdt_find_memory_reg(dtb, &probed) && probed.addr && probed.size) {
-        reg = probed;
+    if (dtb) {
+        (void)fdt_find_memory_reg(dtb, &reg);
     }
 
     return reg;
@@ -149,6 +132,7 @@ static boot_info_t *build_direct_info(uintptr_t hartid, const void *dtb) {
     memset(&direct_boot_info, 0, sizeof(direct_boot_info));
     init_boot_args(&direct_boot_info.args);
 
+    direct_boot_info.magic = BOOT_INFO_MAGIC;
     direct_boot_info.hartid = hartid;
     direct_boot_info.dtb_paddr = (uintptr_t)dtb;
     direct_boot_info.dtb_size = dtb ? fdt_size(dtb) : 0;
