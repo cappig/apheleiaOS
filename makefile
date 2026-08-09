@@ -1,5 +1,5 @@
 NAME    := apheleia
-VERSION := 1.0
+VERSION := 1.0.1
 
 ARCH             := x86_64
 TOOLCHAIN        ?= gnu

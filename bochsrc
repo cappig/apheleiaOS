@@ -2,7 +2,7 @@ cpu: model=corei7_icelake_u, count=1, ips=50000000, reset_on_triple_fault=1
 megs: 128
 
 ata0: enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
-ata0-master: type=disk, path="bin/apheleia_1.0_x86_64.img", mode=flat
+ata0-master: type=disk, path="bin/apheleia_1.0.1_x86_64.img", mode=flat
 
 boot: disk
 
