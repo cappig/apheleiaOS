@@ -9,7 +9,7 @@ PHDRS
 
 SECTIONS
 {
-    . = 0x82000000;
+    . = KERNEL_BASE;
 
     .text : ALIGN(16) {
         KEEP(*(.text.entry))

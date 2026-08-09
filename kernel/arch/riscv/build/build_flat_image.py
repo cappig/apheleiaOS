@@ -20,6 +20,10 @@ def align(value: int, size: int = PAGE_SIZE) -> int:
     return (value + size - 1) & ~(size - 1)
 
 
+def integer(value: str) -> int:
+    return int(value, 0)
+
+
 def symbol_addr(elf: Path, name: str) -> int:
     out = subprocess.check_output(["readelf", "-Ws", str(elf)], text=True)
 
@@ -46,6 +50,56 @@ def load_segments(elf: Path) -> list[tuple[int, int]]:
     return segs
 
 
+def fdt_words(dtb: Path, node: str, prop: str) -> list[int]:
+    out = subprocess.check_output(
+        ["fdtget", "-t", "x", str(dtb), node, prop], text=True
+    )
+    return [int(word, 16) for word in out.split()]
+
+
+def words_value(words: list[int]) -> int:
+    value = 0
+    for word in words:
+        value = (value << 32) | word
+    return value
+
+
+def memory_range(dtb: Path) -> tuple[int, int]:
+    addr_cells = fdt_words(dtb, "/", "#address-cells")[0]
+    size_cells = fdt_words(dtb, "/", "#size-cells")[0]
+    children = subprocess.check_output(
+        ["fdtget", "-l", str(dtb), "/"], text=True
+    )
+
+    for child in children.splitlines():
+        node = f"/{child}"
+        try:
+            device_type = subprocess.check_output(
+                ["fdtget", str(dtb), node, "device_type"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except subprocess.CalledProcessError:
+            continue
+
+        if device_type != "memory":
+            continue
+
+        reg = fdt_words(dtb, node, "reg")
+        cells = addr_cells + size_cells
+        if len(reg) < cells:
+            raise RuntimeError(f"invalid memory reg property in {dtb}")
+
+        start = words_value(reg[:addr_cells])
+        size = words_value(reg[addr_cells:cells])
+        if not size:
+            raise RuntimeError(f"empty memory range in {dtb}")
+
+        return start, start + size
+
+    raise RuntimeError(f"memory node not found in {dtb}")
+
+
 def check_kernel_layout(
     kernel_elf: Path,
     image_base: int,
@@ -53,6 +107,7 @@ def check_kernel_layout(
     dtb_size: int,
     rootfs_offset: int,
     rootfs_size: int,
+    ram: tuple[int, int] | None,
     scratch_offset: int,
 ) -> None:
     segs = load_segments(kernel_elf)
@@ -65,6 +120,25 @@ def check_kernel_layout(
     rootfs_start = image_base + rootfs_offset
     rootfs_end = rootfs_start + rootfs_size
     scratch_start = image_base + scratch_offset if scratch_offset else 0
+
+    if ram:
+        ram_start, ram_end = ram
+        for name, start, end in (
+            ("kernel", kernel_start, kernel_end),
+            ("rootfs", rootfs_start, rootfs_end),
+            ("DTB", dtb_start, dtb_end),
+        ):
+            if start and (start < ram_start or end > ram_end):
+                raise RuntimeError(
+                    f"{name} [{start:#x}, {end:#x}) is outside "
+                    f"RAM [{ram_start:#x}, {ram_end:#x})"
+                )
+
+        if scratch_start and not ram_start <= scratch_start < ram_end:
+            raise RuntimeError(
+                f"boot scratch start {scratch_start:#x} is outside "
+                f"RAM [{ram_start:#x}, {ram_end:#x})"
+            )
 
     if dtb_start and kernel_end > dtb_start and kernel_start < dtb_end:
         raise RuntimeError(
@@ -112,7 +186,7 @@ def main() -> None:
     parser.add_argument("--kernel-elf", type=Path, required=True)
     parser.add_argument("--rootfs", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--scratch-offset", type=int, default=0)
+    parser.add_argument("--scratch-offset", type=integer, default=0)
     parser.add_argument("--dtb", type=Path)
     args = parser.parse_args()
 
@@ -127,6 +201,7 @@ def main() -> None:
     boot = bytearray(args.boot_bin.read_bytes())
     rootfs = args.rootfs.read_bytes()
     dtb = args.dtb.read_bytes() if args.dtb else b""
+    ram = memory_range(args.dtb) if args.dtb else None
 
     boot_footprint = stack_top - image_base
     first_payload = align(max(len(boot), boot_footprint))
@@ -149,6 +224,7 @@ def main() -> None:
         len(dtb),
         rootfs_offset,
         len(rootfs),
+        ram,
         args.scratch_offset,
     )
 

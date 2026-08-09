@@ -63,11 +63,13 @@ RISCV_ROOT_OVERLAY := config/arch/riscv
 
 ifeq ($(RISCV_FRISC),true)
 RISCV_UART_STRIDE ?= 4
+RISCV_KERNEL_ADDR    ?= 0x80400000
+RISCV_SCRATCH_OFFSET ?= 8388608
 else
 RISCV_UART_STRIDE ?= 1
+RISCV_KERNEL_ADDR    ?= 0x82000000
+RISCV_SCRATCH_OFFSET ?= 50331648
 endif
-
-RISCV_SCRATCH_OFFSET := 50331648
 
 RISCV_DTS_DIR     := $(ARCH_DIR)/dts
 RISCV_DTS_COMMON  := $(RISCV_DTS_DIR)/friscv.dtsi
@@ -93,7 +95,9 @@ KERNEL_CC_COMMON := \
 	-ffunction-sections \
 	-fno-omit-frame-pointer
 
-KERNEL_LD_COMMON := --gc-sections
+KERNEL_LD_COMMON := \
+	--gc-sections \
+	--defsym=KERNEL_BASE=$(RISCV_KERNEL_ADDR)
 
 # flags shared by both the 64-bit and 32-bit boot stub builds
 # the arch-specific ISA flags are appended per-variant below
@@ -162,7 +166,7 @@ KERNEL_OBJ := $(patsubst %, $(KERNEL_OBJ_DIR)/%.o, $(KERNEL_SRC))
 
 KERNEL_FLAG_STAMP     := $(KERNEL_OBJ_DIR)/.compile-flags
 BOOT_ENTRY_FLAG_STAMP := $(BOOT_ENTRY_OBJ_DIR)/.compile-flags
-KERNEL_BUILD_CONFIG   := $(CC) $(CC_BASE) $(KERNEL_CC_FLAGS) $(TOOLCHAIN_CONFIG)
+KERNEL_BUILD_CONFIG   := $(CC) $(CC_BASE) $(KERNEL_CC_FLAGS) $(KERNEL_LD_FLAGS) $(TOOLCHAIN_CONFIG)
 BOOT_ENTRY_CONFIG     := $(CC) $(CC_BASE) $(BOOT_ENTRY_CFLAGS) $(TOOLCHAIN_CONFIG)
 
 $(eval $(call flag_stamp,$(KERNEL_FLAG_STAMP),KERNEL_BUILD_CONFIG))
@@ -210,6 +214,10 @@ $(BOOT_ENTRY_OBJ_DIR)/%.dtb: $(RISCV_DTS_DIR)/%.dts $(RISCV_DTS_COMMON)
 	@mkdir -p $(@D)
 	@command -v dtc >/dev/null 2>&1 || { \
 		echo "dtc is required to build RISC-V device trees"; \
+		exit 1; \
+	}
+	@command -v fdtget >/dev/null 2>&1 || { \
+		echo "fdtget is required to inspect RISC-V device trees"; \
 		exit 1; \
 	}
 	@dtc -I dts -O dtb -o $@ $<

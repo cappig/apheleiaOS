@@ -126,12 +126,15 @@ jobs:
             sudo apt-get install -y qemu-system-misc
           fi
           image=bin/apheleia_*_${{ matrix.arch }}.img
+          memory=256M
           if [ "${{ matrix.riscv_frisc }}" = "true" ]; then
             image=bin/smoke/apheleia_*_${{ matrix.arch }}.img
+            memory=16M
           fi
           python3 utils/smoke_test.py \
             $image \
-            --arch ${{ matrix.arch }}
+            --arch ${{ matrix.arch }} \
+            --memory $memory
 
       - name: Upload image
         uses: actions/upload-artifact@v7

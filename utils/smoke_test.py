@@ -61,7 +61,14 @@ def wait_for_login(log: Path, deadline: float) -> bool:
     return False
 
 
-def run(image: Path, arch: str, step_delay: float, boot_timeout: float, verbose: bool) -> int:
+def run(
+    image: Path,
+    arch: str,
+    memory: str,
+    step_delay: float,
+    boot_timeout: float,
+    verbose: bool,
+) -> int:
     qemu = QEMU_FOR_ARCH[arch]
     log = ROOT / "bin" / f"smoke_{arch}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +78,7 @@ def run(image: Path, arch: str, step_delay: float, boot_timeout: float, verbose:
         qemu,
         "-no-reboot",
         "-cpu", "max",
-        "-m", "256M",
+        "-m", memory,
         "-smp", "2",
         "-display", "none",
         "-serial", "stdio",
@@ -132,6 +139,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("image", type=Path)
     parser.add_argument("--arch", default="x86_64", choices=sorted(QEMU_FOR_ARCH))
+    parser.add_argument("--memory", default="256M", help="guest RAM exposed by QEMU")
     parser.add_argument("--step-delay", type=float, help="seconds to wait after each command")
     parser.add_argument("--boot-timeout", type=float, help="seconds to wait for the login prompt")
     parser.add_argument("--verbose", action="store_true")
@@ -146,7 +154,7 @@ def main() -> int:
     step_delay = args.step_delay if args.step_delay is not None else (2.0 if slow else 1.2)
     boot_timeout = args.boot_timeout if args.boot_timeout is not None else (90.0 if slow else 45.0)
 
-    return run(args.image, args.arch, step_delay, boot_timeout, args.verbose)
+    return run(args.image, args.arch, args.memory, step_delay, boot_timeout, args.verbose)
 
 
 if __name__ == "__main__":
